@@ -18,86 +18,131 @@ pub(super) fn build_masterpage_refs(section: &Section, masterpage_offset: usize)
     xml
 }
 
-/// Generates masterpage XML files for a section's master pages.
+/// `<hp:subList textWidth>` written for a master page whose Core
+/// [`text_width`](hwpforge_core::section::MasterPage::text_width) is 0 (not
+/// given) — the value every master page had before the size was carried.
+const MASTER_PAGE_DEFAULT_TEXT_WIDTH: u32 = 42520;
+/// `<hp:subList textHeight>` counterpart of [`MASTER_PAGE_DEFAULT_TEXT_WIDTH`].
+const MASTER_PAGE_DEFAULT_TEXT_HEIGHT: u32 = 65762;
+
+/// Generates the masterpage parts for a section's master pages.
 ///
-/// Returns `(ZIP path, XML content)` pairs for each master page.
+/// Returns `(ZIP path, XML content)` pairs. Each master page is a part of its
+/// own (`Contents/masterpage{N}.xml`, `N` = `masterpage_offset` + index), so
+/// it is written the way a header's sublist is — through the common
+/// paragraph encoder — and then gets the per-part steps the section part
+/// gets: marker replacement and the XML-forbidden character scan. Its
+/// warnings carry its own part name and a `section[s].masterpage[N]` path and
+/// remain in the shared document context.
+///
+/// # Errors
+///
+/// Propagates paragraph encoding, serialization and marker replacement
+/// failures.
 pub(super) fn build_masterpage_entries(
     section: &Section,
+    section_index: usize,
     masterpage_offset: usize,
-) -> Vec<(String, String)> {
+    options: EncodeOptions,
+    sink: &mut DocumentEncodeContext,
+) -> HwpxResult<Vec<(String, String)>> {
+    use hwpforge_core::section::MasterPageSpecial;
     use std::fmt::Write as _;
     let Some(ref masters) = section.master_pages else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    masters
-        .iter()
-        .enumerate()
-        .map(|(i, mp)| {
-            let idx = masterpage_offset + i;
-            let mp_id = format!("masterpage{idx}");
-            let apply_type = match mp.apply_page_type {
-                hwpforge_foundation::ApplyPageType::Both => "BOTH",
-                hwpforge_foundation::ApplyPageType::Even => "EVEN",
-                hwpforge_foundation::ApplyPageType::Odd => "ODD",
-                _ => "BOTH",
-            };
-
-            let mut xml = String::with_capacity(1024);
-            let _ = write!(xml, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#);
-            // Root element uses NO namespace prefix (like real 한글 output).
-            // All 15 xmlns declarations are required.
-            let _ = write!(
-                xml,
-                r#"<masterPage{} id="{mp_id}" type="{apply_type}" pageNumber="0" pageDuplicate="0" pageFront="0">"#,
-                crate::encoder::package::XMLNS_DECLS,
-            );
-            // subList uses hp: prefix (NOT hm:)
-            let _ = write!(
-                xml,
-                r#"<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="42520" textHeight="65762" hasTextRef="0" hasNumRef="0">"#,
-            );
-
-            for (pidx, para) in mp.paragraphs.iter().enumerate() {
-                let _ = write!(
-                    xml,
-                    r#"<hp:p id="{pidx}" paraPrIDRef="{}" styleIDRef="{}" pageBreak="0" columnBreak="0" merged="0">"#,
-                    para.para_shape_id.get(),
-                    para.style_id.map_or(0, |s| s.get()),
+    let mut entries = Vec::with_capacity(masters.len());
+    for (i, mp) in masters.iter().enumerate() {
+        let idx = masterpage_offset + i;
+        let saved_path = std::mem::replace(
+            &mut sink.path,
+            vec![
+                crate::decoder::PathSeg::Section(section_index),
+                crate::decoder::PathSeg::MasterPage(idx),
+            ],
+        );
+        let saved_part = std::mem::replace(&mut sink.part, format!("Contents/masterpage{idx}.xml"));
+        sink.in_master_page = true;
+        let saved_caches = std::mem::take(&mut sink.dropped_caches);
+        let (apply_type, page_number) = match mp.special {
+            None => (
+                match mp.apply_page_type {
+                    hwpforge_foundation::ApplyPageType::Even => "EVEN",
+                    hwpforge_foundation::ApplyPageType::Odd => "ODD",
+                    _ => "BOTH",
+                },
+                0,
+            ),
+            Some(MasterPageSpecial::LastPage) => ("LAST_PAGE", 0),
+            Some(MasterPageSpecial::OptionalPage { page_number }) => ("OPTIONAL_PAGE", page_number),
+            Some(_) => {
+                // 이 버전이 모르는 미래 범위 — 모든 쪽으로 번지지 않게 알린다.
+                sink.content_lost(
+                    "master_page_apply_type",
+                    "master page scope unknown to this encoder; written as BOTH".to_string(),
                 );
-                for run in &para.runs {
-                    // Master page paragraphs emit a stripped-down
-                    // run-with-text element. `InlineText` falls
-                    // through to its tab-attribute-preserving builder
-                    // so a master page that contains rich tabs (rare
-                    // but possible after the HWPX decoder Phase 3
-                    // carry) survives encode. See debug doc §3a-B11.
-                    match &run.content {
-                        RunContent::Text(text) => {
-                            let _ = write!(
-                                xml,
-                                r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
-                                run.char_shape_id.get(),
-                                super::escape_xml(text),
-                            );
-                        }
-                        RunContent::InlineText(it) => {
-                            let _ = write!(
-                                xml,
-                                r#"<hp:run charPrIDRef="{}">{}</hp:run>"#,
-                                run.char_shape_id.get(),
-                                build_inline_text_element_xml(it),
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                xml.push_str("</hp:p>");
+                ("BOTH", 0)
             }
+        };
+        let vert_align = match mp.vert_align {
+            hwpforge_foundation::VerticalAlign::Center => "CENTER",
+            hwpforge_foundation::VerticalAlign::Bottom => "BOTTOM",
+            _ => "TOP",
+        };
 
-            xml.push_str("</hp:subList></masterPage>");
-            (format!("Contents/masterpage{idx}.xml"), xml)
-        })
-        .collect()
+        let mut replacements: Vec<(String, String)> = Vec::new();
+        let mut sub_list = crate::encoder::section::encode_paragraphs_to_sublist_with_align(
+            &mp.paragraphs,
+            0,
+            vert_align,
+            &mut replacements,
+            options,
+            sink,
+        )?;
+        sub_list.text_width = match u32::try_from(mp.text_width.as_i32()) {
+            Ok(0) | Err(_) => MASTER_PAGE_DEFAULT_TEXT_WIDTH,
+            Ok(w) => w,
+        };
+        sub_list.text_height = match u32::try_from(mp.text_height.as_i32()) {
+            Ok(0) | Err(_) => MASTER_PAGE_DEFAULT_TEXT_HEIGHT,
+            Ok(h) => h,
+        };
+        #[allow(clippy::disallowed_methods)] // normalized on the next line
+        let sub_xml = quick_xml::se::to_string(&sub_list)
+            .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
+        let sub_xml = crate::wire_xml::normalize_attr_control_whitespace(&sub_xml);
+        let sub_xml = sub_xml.replacen("<HxSubList", "<hp:subList", 1);
+        let sub_xml = sub_xml.replacen("</HxSubList>", "</hp:subList>", 1);
+
+        let mut xml = String::with_capacity(sub_xml.len() + 1024);
+        xml.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#);
+        // Root element uses NO namespace prefix (like real 한글 output).
+        // All 15 xmlns declarations are required.
+        let _ = write!(
+            xml,
+            r#"<masterPage{} id="masterpage{idx}" type="{apply_type}" pageNumber="{page_number}" pageDuplicate="{}" pageFront="{}">"#,
+            crate::encoder::package::XMLNS_DECLS,
+            u8::from(mp.page_duplicate),
+            u8::from(mp.page_front),
+        );
+        xml.push_str(&sub_xml);
+        xml.push_str("</masterPage>");
+
+        let xml = apply_run_xml_replacements(xml, &replacements)?;
+        let part = sink.part().to_string();
+        let (clean, sites) = crate::wire_xml::strip_xml_forbidden_chars(&xml);
+        let xml = match clean {
+            std::borrow::Cow::Owned(clean) => clean,
+            std::borrow::Cow::Borrowed(_) => xml,
+        };
+        sink.warnings.extend(crate::encoder::forbidden_char_warnings(&part, sites));
+        sink.path = saved_path;
+        sink.part = saved_part;
+        sink.in_master_page = false;
+        sink.dropped_caches = saved_caches;
+        entries.push((part, xml));
+    }
+    Ok(entries)
 }
 
 /// Injects header, footer, and page number `<hp:ctrl>` blocks into
@@ -107,13 +152,56 @@ pub(super) fn build_masterpage_entries(
 /// - `<hp:ctrl><hp:header><hp:p>...</hp:p></hp:header></hp:ctrl>`
 /// - `<hp:ctrl><hp:footer><hp:p>...</hp:p></hp:footer></hp:ctrl>`
 /// - `<hp:ctrl><hp:autoNum numType="PAGE" ...></hp:ctrl>`
+///
+/// Headers/footers anchored to a later body paragraph
+/// ([`HeaderFooter::anchor_paragraph`](hwpforge_core::section::HeaderFooter::anchor_paragraph))
+/// go into that paragraph instead: `build_section` put a placeholder run in
+/// front of it ([`super::AnchorRun`]) and this registers the run's
+/// replacement — a run holding the `<hp:ctrl>` blocks, headers before
+/// footers, each in list order.
 pub(super) fn inject_header_footer_pagenum(
     xml: &mut String,
     section: &Section,
+    anchor_runs: &[super::AnchorRun],
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<()> {
+    // Header — emit each `<hp:header>` element preserving the HWPX
+    // multi-cardinality wire shape (ADR-002) — into the paragraph it is
+    // anchored to (§19.17 F2).
+    let mut by_paragraph: std::collections::BTreeMap<usize, String> =
+        std::collections::BTreeMap::new();
+    for (i, header) in section.headers.iter().enumerate() {
+        sink.enter(crate::decoder::PathSeg::Header(i));
+        let xml_result = build_header_xml(header, "header", hyperlink_entries, options, sink);
+        sink.leave();
+        by_paragraph.entry(super::header_footer_anchor(header)).or_default().push_str(&xml_result?);
+    }
+
+    // Footer — same cardinality model.
+    for (i, footer) in section.footers.iter().enumerate() {
+        sink.enter(crate::decoder::PathSeg::Footer(i));
+        let xml_result = build_header_xml(footer, "footer", hyperlink_entries, options, sink);
+        sink.leave();
+        by_paragraph.entry(super::header_footer_anchor(footer)).or_default().push_str(&xml_result?);
+    }
+
+    for anchor in anchor_runs {
+        let ctrls = by_paragraph.remove(&anchor.paragraph).unwrap_or_default();
+        hyperlink_entries.push((
+            anchor.key.clone(),
+            format!(r#"<hp:run charPrIDRef="{}">{ctrls}</hp:run>"#, anchor.char_pr_id_ref),
+        ));
+    }
+    let mut injection = by_paragraph.remove(&0).unwrap_or_default();
+    if let Some((&paragraph, _)) = by_paragraph.iter().next() {
+        // build_section 이 같은 앵커 표로 자리표시 run 을 만들었으므로 도달 불가.
+        return Err(HwpxError::InvalidStructure {
+            detail: format!("encoder bug: no placeholder run for headers/footers anchored to paragraph {paragraph}"),
+        });
+    }
+
     // Find insertion point: after the last </hp:ctrl> that contains colPr
     // (or after </hp:secPr> if no colPr).
     // We inject after the colPr ctrl block.
@@ -122,27 +210,10 @@ pub(super) fn inject_header_footer_pagenum(
         return Ok(()); // no suitable injection point found
     }
 
-    let mut injection = String::new();
-
-    // Header — emit each `<hp:header>` element preserving the HWPX
-    // multi-cardinality wire shape (ADR-002).
-    for (i, header) in section.headers.iter().enumerate() {
-        sink.enter(crate::decoder::PathSeg::Header(i));
-        let xml_result = build_header_xml(header, "header", hyperlink_entries, options, sink);
-        sink.leave();
-        injection.push_str(&xml_result?);
-    }
-
-    // Footer — same cardinality model.
-    for (i, footer) in section.footers.iter().enumerate() {
-        sink.enter(crate::decoder::PathSeg::Footer(i));
-        let xml_result = build_header_xml(footer, "footer", hyperlink_entries, options, sink);
-        sink.leave();
-        injection.push_str(&xml_result?);
-    }
-
     // Page number
-    if let Some(ref page_number) = section.page_number {
+    if let Some(page_number) =
+        section.page_number.as_ref().filter(|_| section.needs_page_number_injection())
+    {
         injection.push_str(&build_page_number_xml(page_number));
     }
 
@@ -186,7 +257,7 @@ pub(super) fn build_header_xml(
     tag_name: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     use std::fmt::Write as _;
 
@@ -348,7 +419,7 @@ mod tests {
                 "header",
                 &mut entries,
                 EncodeOptions::default(),
-                &mut EncodeSink::new(0),
+                &mut DocumentEncodeContext::new(0),
             )
             .unwrap();
             assert!(xml.contains(&format!(r#"applyPageType="{want}""#)), "{want}: {xml}");
@@ -369,7 +440,7 @@ mod tests {
             "footer",
             &mut entries,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(xml.contains(r#"vertAlign="BOTTOM""#), "{xml}");
@@ -397,6 +468,9 @@ mod tests {
     fn masterpage_refs_empty_without_masters() {
         let section = Section::new(hwpforge_core::PageSettings::a4());
         assert!(build_masterpage_refs(&section, 0).is_empty());
-        assert!(build_masterpage_entries(&section, 0).is_empty());
+        let mut sink = DocumentEncodeContext::new(0);
+        let entries =
+            build_masterpage_entries(&section, 0, 0, EncodeOptions::default(), &mut sink).unwrap();
+        assert!(entries.is_empty());
     }
 }

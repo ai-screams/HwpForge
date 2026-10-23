@@ -259,22 +259,98 @@ impl Default for BeginNum {
 /// A master page (background/watermark page) for a section.
 ///
 /// Master pages provide background content rendered behind the main body.
-/// Maps to `<masterPage>` elements inside `<hp:secPr>`.
+/// In HWPX each one is its own part (`Contents/masterpage{N}.xml`) referenced
+/// from `<hp:secPr>`.
 ///
-/// In HWPX, each master page has an `applyPageType` attribute
-/// (`BOTH`, `EVEN`, or `ODD`) and contains its own paragraphs.
+/// Which pages it covers is [`apply_page_type`](Self::apply_page_type)
+/// (`BOTH`, `EVEN`, `ODD`) unless [`special`](Self::special) names the last
+/// page or one chosen page. HWPX writes the two in one `type` attribute, so a
+/// special scope requires `apply_page_type == Both` (checked by validation).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::section::{MasterPage, MasterPageSpecial};
+/// use hwpforge_core::paragraph::Paragraph;
+/// use hwpforge_foundation::{ApplyPageType, ParaShapeIndex};
+///
+/// let mut mp = MasterPage::new(ApplyPageType::Both, vec![Paragraph::new(ParaShapeIndex::new(0))]);
+/// mp.special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+/// assert!(!mp.page_front);
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct MasterPage {
     /// Which pages this master page applies to.
     pub apply_page_type: ApplyPageType,
     /// Paragraphs composing the master page content.
     pub paragraphs: Vec<Paragraph>,
+    /// A scope other than both/even/odd pages: the last page, or one chosen
+    /// page. `None` = [`apply_page_type`](Self::apply_page_type) decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub special: Option<MasterPageSpecial>,
+    /// Hancom "앞 바탕쪽과 겹침": also draw the master pages that would
+    /// otherwise give way to this one on its pages (HWPX `pageDuplicate`).
+    #[serde(default)]
+    pub page_duplicate: bool,
+    /// Hancom "바탕쪽 앞으로": draw this master page in front of the body
+    /// instead of behind it (HWPX `pageFront`).
+    #[serde(default)]
+    pub page_front: bool,
+    /// Vertical alignment of the content area (HWPX `<hp:subList vertAlign>`).
+    #[serde(default)]
+    pub vert_align: hwpforge_foundation::VerticalAlign,
+    /// Width of the content area (HWPX `<hp:subList textWidth>`).
+    ///
+    /// Hancom writes the page's text area. 0 = not given; the encoder then
+    /// writes its own default.
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub text_width: HwpUnit,
+    /// Height of the content area (HWPX `<hp:subList textHeight>`).
+    ///
+    /// 0 = not given, as for [`text_width`](Self::text_width).
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub text_height: HwpUnit,
+}
+
+/// A master page scope that the both/even/odd [`ApplyPageType`] cannot say.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::section::MasterPageSpecial;
+///
+/// let scope = MasterPageSpecial::OptionalPage { page_number: 2 };
+/// assert_ne!(scope, MasterPageSpecial::LastPage);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum MasterPageSpecial {
+    /// Only the last page of the section (HWPX `type="LAST_PAGE"`).
+    LastPage,
+    /// Only one chosen page (HWPX `type="OPTIONAL_PAGE"`).
+    OptionalPage {
+        /// The chosen page number (HWPX `pageNumber`).
+        page_number: u32,
+    },
 }
 
 impl MasterPage {
     /// Creates a new master page with the given page type and paragraphs.
+    ///
+    /// The other fields start at their defaults: no special scope, not
+    /// overlapping, behind the body, top-aligned, area size not given.
     pub fn new(apply_page_type: ApplyPageType, paragraphs: Vec<Paragraph>) -> Self {
-        Self { apply_page_type, paragraphs }
+        Self {
+            apply_page_type,
+            paragraphs,
+            special: None,
+            page_duplicate: false,
+            page_front: false,
+            vert_align: hwpforge_foundation::VerticalAlign::default(),
+            text_width: HwpUnit::ZERO,
+            text_height: HwpUnit::ZERO,
+        }
     }
 }
 
@@ -331,6 +407,22 @@ pub struct HeaderFooter {
     /// 전이므로 렌더는 fail-closed 로 다룬다 (W5-a).
     #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
     pub text_height: HwpUnit,
+    /// The body paragraph this header/footer is anchored to: the index into
+    /// [`Section::paragraphs`] of the **top-level** paragraph the control
+    /// sits in. A header/footer written inside a table cell is anchored to
+    /// the top-level paragraph that holds the table.
+    ///
+    /// Hancom applies a header/footer from the page that paragraph starts on,
+    /// not to earlier pages, and a later header/footer of the same page type
+    /// replaces an earlier one. `None` means the first paragraph (index 0),
+    /// which is how every header/footer was written before this field
+    /// existed — decoders write `None` for paragraph 0 too.
+    ///
+    /// The index goes stale when paragraphs are inserted or removed before
+    /// it; [`Document::validate`](crate::Document::validate) rejects an index
+    /// that is out of range. `Some(0)` means the same as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_paragraph: Option<usize>,
 }
 
 impl HeaderFooter {
@@ -345,6 +437,7 @@ impl HeaderFooter {
             vert_align: hwpforge_foundation::VerticalAlign::default(),
             text_width: HwpUnit::ZERO,
             text_height: HwpUnit::ZERO,
+            anchor_paragraph: None,
         }
     }
 
@@ -416,6 +509,26 @@ pub struct PageNumber {
 }
 
 impl PageNumber {
+    /// Derives the legacy section summary from positioned controls. The run
+    /// remains the authoritative value and location when encoding.
+    pub fn first_in(paragraphs: &[Paragraph]) -> Option<Self> {
+        let mut first = None;
+        for p in paragraphs {
+            p.for_each_paragraph(|q| {
+                for run in &q.runs {
+                    if let crate::run::RunContent::Control(c) = &run.content {
+                        if let crate::control::Control::PageNumber { number } = c.as_ref() {
+                            if first.is_none() {
+                                first = Some(number.clone());
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        first
+    }
+
     /// Creates a new page number with no decoration.
     pub fn new(position: PageNumberPosition, number_format: NumberFormatType) -> Self {
         Self { position, number_format, decoration: String::new() }
@@ -526,7 +639,10 @@ pub struct Section {
     /// See `headers` for the cardinality rationale.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footers: Vec<HeaderFooter>,
-    /// Optional page number settings for this section.
+    /// Legacy section-wide page number settings. Decoders derive this summary
+    /// from the first positioned `Control::PageNumber`; positioned controls
+    /// carry the authoritative values and locations. With no positioned
+    /// controls, the encoder emits this setting at the section start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number: Option<PageNumber>,
     /// Multi-column layout. `None` = single column (default).
@@ -557,6 +673,11 @@ pub struct Section {
 }
 
 impl Section {
+    /// Whether the legacy page-number setting needs a default anchor.
+    pub fn needs_page_number_injection(&self) -> bool {
+        self.page_number.is_some() && PageNumber::first_in(&self.paragraphs).is_none()
+    }
+
     /// 이 섹션의 문단을 문서 순서로 방문한다 — 본문 → 머리말 → 꼬리말 →
     /// 바탕쪽, 각 문단은 자신을 먼저 방문한 뒤 run 안으로 내려간다.
     ///
@@ -584,6 +705,42 @@ impl Section {
                 }
             }
         }
+    }
+
+    /// Visits every table in this section — body,
+    /// headers, footers and master pages, nested containers and run picture
+    /// captions included (see [`Paragraph::for_each_table`]).
+    pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
+        for p in self.all_top_paragraphs() {
+            p.walk_tables(&mut f);
+        }
+    }
+
+    /// [`Self::for_each_table`] 의 가변판 — 방문 대상·순서 동일.
+    pub fn for_each_table_mut<F: FnMut(&mut crate::table::Table)>(&mut self, mut f: F) {
+        for p in &mut self.paragraphs {
+            p.walk_tables_mut(&mut f);
+        }
+        for hf in self.headers.iter_mut().chain(self.footers.iter_mut()) {
+            for p in &mut hf.paragraphs {
+                p.walk_tables_mut(&mut f);
+            }
+        }
+        for mp in self.master_pages.iter_mut().flatten() {
+            for p in &mut mp.paragraphs {
+                p.walk_tables_mut(&mut f);
+            }
+        }
+    }
+
+    /// Body, header, footer and master-page paragraphs, in that order.
+    fn all_top_paragraphs(&self) -> impl Iterator<Item = &Paragraph> {
+        self.paragraphs
+            .iter()
+            .chain(
+                self.headers.iter().chain(self.footers.iter()).flat_map(|hf| hf.paragraphs.iter()),
+            )
+            .chain(self.master_pages.iter().flatten().flat_map(|mp| mp.paragraphs.iter()))
     }
 
     /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서와 재귀
@@ -879,6 +1036,25 @@ mod tests {
     // HeaderFooter tests
     // -----------------------------------------------------------------------
 
+    // 이것을 실패시키는 것: `skip_serializing_if` 를 빼기(첫 문단 머리말 JSON 에
+    // `"anchor_paragraph":null` 이 생김). (옛 JSON 읽기는 serde 가 `Option`
+    // 결측을 `None` 으로 읽어 `#[serde(default)]` 없이도 통과한다 — 그 속성은
+    // 다른 필드와의 일관성.)
+    #[test]
+    fn header_footer_anchor_json_is_absent_for_the_first_paragraph() {
+        let hf = HeaderFooter::all_pages(vec![]);
+        let json = serde_json::to_string(&hf).unwrap();
+        assert!(!json.contains("anchor_paragraph"), "{json}");
+        let old: HeaderFooter =
+            serde_json::from_str(r#"{"paragraphs":[],"apply_page_type":"Both"}"#).unwrap();
+        assert_eq!(old.anchor_paragraph, None);
+        let mut anchored = HeaderFooter::all_pages(vec![]);
+        anchored.anchor_paragraph = Some(14);
+        let json = serde_json::to_string(&anchored).unwrap();
+        assert!(json.contains(r#""anchor_paragraph":14"#), "{json}");
+        assert_eq!(serde_json::from_str::<HeaderFooter>(&json).unwrap(), anchored);
+    }
+
     #[test]
     fn header_footer_new() {
         let hf =
@@ -903,6 +1079,35 @@ mod tests {
         let s = hf.to_string();
         assert!(s.contains("1 paragraph"), "display: {s}");
         assert!(s.contains("Both"), "display: {s}");
+    }
+
+    // 이것을 실패시키는 것: 새 필드 중 하나의 `#[serde(default)]` 를 지우기
+    // (0.16.10 JSON 에는 그 키가 없다).
+    #[test]
+    fn master_page_reads_json_without_the_new_fields() {
+        let old = r#"{"apply_page_type":"Even","paragraphs":[]}"#;
+        let mp: MasterPage = serde_json::from_str(old).unwrap();
+        assert_eq!(mp, MasterPage::new(ApplyPageType::Even, vec![]));
+    }
+
+    // 이것을 실패시키는 것: 새 필드 하나를 직렬화에서 빼기(`skip`), 또는
+    // `special` 의 `skip_serializing_if` 를 거꾸로 두기.
+    #[test]
+    fn master_page_serde_roundtrip_keeps_every_field() {
+        let mut mp = MasterPage::new(ApplyPageType::Both, vec![simple_paragraph()]);
+        mp.special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+        mp.page_duplicate = true;
+        mp.page_front = true;
+        mp.vert_align = hwpforge_foundation::VerticalAlign::Bottom;
+        mp.text_width = HwpUnit::new(48190).unwrap();
+        mp.text_height = HwpUnit::new(67181).unwrap();
+        let json = serde_json::to_string(&mp).unwrap();
+        assert!(json.contains(r#""special":{"OptionalPage":{"page_number":3}}"#), "{json}");
+        let back: MasterPage = serde_json::from_str(&json).unwrap();
+        assert_eq!(mp, back);
+
+        let plain = serde_json::to_string(&MasterPage::new(ApplyPageType::Odd, vec![])).unwrap();
+        assert!(!plain.contains("special"), "{plain}");
     }
 
     #[test]

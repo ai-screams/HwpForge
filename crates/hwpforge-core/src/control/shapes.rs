@@ -12,6 +12,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 
+/// The defining geometry of an arc, independent of closure, rotation and parent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ArcDefinition {
+    /// An ellipse and four sweep points: all seven points define the arc.
+    /// This is the meaning of `Control::arc()` and of a missing serde field.
+    #[default]
+    EllipseSweep,
+    /// Center and two axis endpoints define the arc. The remaining four
+    /// sweep points are unused, even when their stored values are nonzero.
+    AxisEndpoints,
+}
+
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
 ///
 /// Uses `i32` (not `HwpUnit`) because shape geometry points are raw
@@ -109,6 +121,10 @@ impl std::str::FromStr for LineStyle {
 
 /// Arrowhead style for line endpoints.
 ///
+/// `Some(ArrowStyle { arrow_type: ArrowType::None, .. })` draws no arrowhead,
+/// but preserves size and fill values Hancom uses for subsequent editing.
+/// An absent endpoint with the Hancom defaults (Medium, filled) needs no style.
+///
 /// # Examples
 ///
 /// ```
@@ -129,6 +145,21 @@ pub struct ArrowStyle {
     pub size: ArrowSize,
     /// Whether the arrowhead is filled (true) or outlined (false).
     pub filled: bool,
+}
+
+impl ArrowStyle {
+    /// Omit only an absent arrowhead with Hancom's default size and fill.
+    ///
+    /// Decoders must validate wire values before calling this function. A
+    /// non-default size or fill is retained even when `arrow_type` is `None`,
+    /// because Hancom uses the stored size when an arrowhead is later selected.
+    pub fn into_nondefault(self) -> Option<Self> {
+        if self.arrow_type == ArrowType::None && self.size == ArrowSize::Medium && self.filled {
+            None
+        } else {
+            Some(self)
+        }
+    }
 }
 
 /// Fill specification for shapes.
@@ -159,6 +190,26 @@ pub enum Fill {
         angle: i32,
         /// Color stops: (color, position 0-100).
         colors: Vec<(Color, u32)>,
+        /// Horizontal centre in percent of the shape (HWPX `centerX`).
+        ///
+        /// `None` = the value encoders wrote before this field existed: 0 for
+        /// [`GradientType::Linear`], 50 for the other kinds. Decoders store
+        /// the wire value as `Some` even when it equals that default, so a
+        /// decoded gradient round-trips exactly.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center_x: Option<i32>,
+        /// Vertical centre in percent of the shape (HWPX `centerY`). `None`
+        /// as for [`Fill::Gradient::center_x`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center_y: Option<i32>,
+        /// Number of colour steps (HWPX `step`, Hancom writes 1–255). `None`
+        /// = 255.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<u32>,
+        /// Where the middle step sits, in percent (HWPX `stepCenter`). `None`
+        /// = 50.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step_center: Option<u32>,
     },
     /// Hatch pattern fill.
     Pattern {
@@ -176,6 +227,12 @@ pub enum Fill {
         /// Image fill mode (tile, stretch, etc.).
         mode: ImageFillMode,
     },
+    /// No fill: the shape's interior is left transparent (HWPX: the shape has
+    /// no `<hc:fillBrush>`).
+    ///
+    /// Distinct from [`ShapeStyle::fill`] being `None`, which leaves the fill
+    /// to the encoder's default (white).
+    None,
 }
 
 /// Visual style overrides for drawing shapes.
@@ -209,17 +266,49 @@ pub struct ShapeStyle {
     /// Line drawing style (solid, dash, dot, etc.).
     pub line_style: Option<LineStyle>,
     /// Rotation angle in degrees (0-360). `None` means no rotation.
+    /// Positive turns clockwise on the page, about the box centre, after
+    /// the flip (full definition: `hwpforge_core::control::geometry`).
     pub rotation: Option<f32>,
-    /// Flip/mirror state. `None` means no flip.
+    /// Flip/mirror state. `None` means no flip. Applied about the box
+    /// centre, before the rotation.
     pub flip: Option<Flip>,
     /// Arrowhead at the start of a line. Only meaningful for `Control::Line`.
     pub head_arrow: Option<ArrowStyle>,
     /// Arrowhead at the end of a line. Only meaningful for `Control::Line`.
     pub tail_arrow: Option<ArrowStyle>,
-    /// Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.
+    /// Advanced fill (gradient, pattern, image) or explicitly no fill
+    /// ([`Fill::None`]). Overrides `fill_color` when present.
     pub fill: Option<Fill>,
     /// Drop cap style for the shape (HWPX `dropcapstyle` attribute).
     /// Controls whether the shape participates in a drop-cap layout.
     #[serde(default)]
     pub drop_cap_style: DropCapStyle,
+    /// Corner rounding of a rectangle or text box, in percent of the shorter
+    /// side (HWPX `<hp:rect ratio>`, HWP5 rectangle record byte 0): 0 =
+    /// square corners, 50 = semicircular ends. Only meaningful for
+    /// `Control::Rect` and `Control::TextBox`. `None` = 0.
+    /// [`Document::validate`](crate::Document::validate) rejects a value
+    /// above 50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 50))]
+    pub corner_ratio: Option<u8>,
+}
+
+#[cfg(test)]
+mod gradient_json_tests {
+    use super::*;
+
+    // S13: 필드 없는 옛 JSON 은 `None` 으로 읽고, `None` 은 쓰지 않는다.
+    // 이것을 실패시키는 것: `skip_serializing_if` 를 빼기(옛 그러데이션 JSON 에
+    // `null` 넷이 생김).
+    #[test]
+    fn gradient_without_center_fields_round_trips_as_old_json() {
+        let old = r#"{"Gradient":{"gradient_type":"Radial","angle":0,"colors":[]}}"#;
+        let fill: Fill = serde_json::from_str(old).unwrap();
+        let Fill::Gradient { center_x, center_y, step, step_center, .. } = &fill else {
+            panic!("{fill:?}")
+        };
+        assert_eq!((center_x, center_y, step, step_center), (&None, &None, &None, &None));
+        assert_eq!(serde_json::to_string(&fill).unwrap(), old);
+    }
 }

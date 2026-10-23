@@ -3,7 +3,7 @@
 //! Export address projection, discovery surfaces, and cell editing must all
 //! agree on what "table N" means. This module owns that definition so the
 //! three surfaces cannot drift: **depth-first pre-order** over the same
-//! containers the fill/patch visitors cover (`fill::visit_section_fields`
+//! containers the fill/patch visitors cover (the Core field inventory
 //! mirror — body paragraphs, table captions and cells, image captions,
 //! text-box/shape paragraphs and captions, footnotes and endnotes). A table's
 //! ordinal is assigned when it is first encountered; its caption is visited
@@ -307,6 +307,28 @@ fn walk_paragraphs_mut(
     }
 }
 
+/// Shared Core address of a table discovered by the JSON inventory.
+pub(crate) fn core_path(entry: &TableEntry<'_>) -> hwpforge_core::node_path::CorePath {
+    let mut path = render_path("", &entry.path)
+        .replace(".content.Table", ".table")
+        .replace(".content.Image", ".image");
+    for (from, to) in [
+        ("TextBox", "textbox"),
+        ("Ellipse", "ellipse"),
+        ("Polygon", "polygon"),
+        ("Footnote", "footnote"),
+        ("Endnote", "endnote"),
+        ("Rect", "rect"),
+        ("Line", "line"),
+        ("Arc", "arc"),
+        ("Curve", "curve"),
+        ("ConnectLine", "connect_line"),
+    ] {
+        path = path.replace(&format!(".content.Control.{from}"), &format!(".control.{to}"));
+    }
+    hwpforge_core::node_path::CorePath::new(entry.section, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +380,8 @@ mod tests {
         host.add_run(Run::table(caption_host, CharShapeIndex::new(0)));
 
         let textbox = Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![{
                 let mut p = Paragraph::new(ParaShapeIndex::new(0));
                 p.add_run(Run::table(
@@ -453,6 +477,7 @@ mod tests {
         ));
         controls.add_run(Run::control(
             Control::Rect {
+                frame: hwpforge_core::ObjectFrame::new(),
                 width,
                 height: width,
                 placement: None,

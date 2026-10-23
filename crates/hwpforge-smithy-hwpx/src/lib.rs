@@ -49,6 +49,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(unsafe_code)]
 
+mod cache_flow;
 pub mod cell_edit;
 mod color;
 pub mod decoder;
@@ -60,11 +61,18 @@ pub mod error;
 pub mod exchange;
 mod fill;
 pub mod grid_addr;
+#[doc(hidden)]
+pub mod header_references;
 mod inline_text;
 mod layout_carry;
+pub mod layout_edit;
 mod list_bridge;
+mod package_path;
+mod package_xml;
+pub mod paragraph_measure;
 mod patch;
 pub mod presets;
+mod raw_package;
 mod read;
 mod registry_bridge;
 mod schema;
@@ -76,13 +84,16 @@ pub mod style_store;
 mod table_inventory;
 mod wire_text_map;
 mod wire_xml;
+mod work;
 
 pub use cell_edit::{
     apply_set_cells, CellEditError, CellEditResult, CellResolution, CellSpec, CellTarget,
     HwpxCellEditor, SetCellOutcome, SetCellResult,
 };
 pub use decoder::package::{PackageEntryInfo, PackageReader};
-pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg};
+pub use decoder::{
+    master_page_part_paths, DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg,
+};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use diagnostics::{WithCodecWarnings, WithDecodeWarnings, WithEncodeWarnings};
 pub use diff::{
@@ -95,8 +106,8 @@ pub use encoder::{
 };
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
-    ExportedDocument, ExportedSection, PreservedTextSlot, SectionPreservation, TextLocator,
-    SECTION_PRESERVATION_VERSION,
+    ExportedDocument, ExportedSection, ExportedStyles, PreservedTextSlot, SectionPreservation,
+    TextLocator, FORMAT_VERSION, SECTION_PRESERVATION_VERSION,
 };
 pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
 pub use patch::HwpxPatcher;
@@ -116,5 +127,12 @@ pub use structural::{
 };
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
-    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore, HwpxSubstFont,
 };
+
+#[cfg(test)]
+mod reading_order_edits;
+
+#[cfg(test)]
+mod package_name_policy_tests;

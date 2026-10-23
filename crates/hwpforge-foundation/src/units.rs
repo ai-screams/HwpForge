@@ -284,7 +284,9 @@ impl Div<i32> for HwpUnit {
 /// assert!(a4.width.as_i32() > 0);
 /// assert!(a4.height.as_i32() > 0);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct Size {
     /// Horizontal extent.
     pub width: HwpUnit,
@@ -455,7 +457,10 @@ impl schemars::JsonSchema for HwpUnit {
     }
 
     fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<i32>()
+        let mut schema = gen.subschema_for::<i32>();
+        schema.insert("minimum".into(), Self::MIN_VALUE.into());
+        schema.insert("maximum".into(), Self::MAX_VALUE.into());
+        schema
     }
 }
 

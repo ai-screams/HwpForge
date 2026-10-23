@@ -38,7 +38,15 @@
 //!
 //! ```no_run
 //! # use hwpforge::core::{Document, Draft};
-//! # let doc = Document::<Draft>::new();
+//! # // 이것을 실패시키는 것: 유효한 문단 설정 제거(문서 예제 실제 실행).
+//! # let mut doc = Document::<Draft>::new();
+//! # doc.add_section(hwpforge::core::Section::with_paragraphs(
+//! #     vec![hwpforge::core::Paragraph::with_runs(
+//! #         vec![hwpforge::core::Run::text("", hwpforge::foundation::CharShapeIndex::new(0))],
+//! #         hwpforge::foundation::ParaShapeIndex::new(0),
+//! #     )],
+//! #     hwpforge::core::PageSettings::a4(),
+//! # ));
 //! use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
 //! use hwpforge::core::ImageStore;
 //!

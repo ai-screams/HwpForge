@@ -41,6 +41,15 @@ use hwpforge_foundation::FoundationError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CoreError {
+    /// Paragraph measures have different units.
+    #[error("paragraph measure unit mismatch")]
+    MeasureUnitMismatch,
+    /// Value exceeds the measure's semantic range.
+    #[error("paragraph measure overflow")]
+    MeasureOverflow,
+    /// Character count is outside the exact 1/500 ch grid.
+    #[error("character count is not on the 1/500 ch grid")]
+    MeasureOffGrid,
     /// Document validation failed.
     #[error("Document validation failed: {0}")]
     Validation(#[from] ValidationError),
@@ -78,6 +87,16 @@ pub enum CoreError {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ValidationError {
+    /// Invalid field boundaries in an independent text flow.
+    #[error("Invalid field boundary in section {section_index} at {path}: {reason}")]
+    InvalidFieldBoundary {
+        /// Section index.
+        section_index: usize,
+        /// Semantic run path.
+        path: String,
+        /// Pairing failure.
+        reason: String,
+    },
     /// The document contains zero sections.
     #[error("Empty document: at least 1 section required")]
     EmptyDocument,
@@ -278,7 +297,9 @@ pub enum ValidationError {
         cell_index: usize,
     },
 
-    /// A header row appears after a non-header row.
+    /// Legacy error for a header row after a non-header row.
+    /// Retained for API compatibility; validation now normalizes row flags
+    /// from effective cell markers instead of emitting this error.
     #[error("Table header row is not part of the leading header block (section {section_index}, paragraph {paragraph_index}, run {run_index}, row {row_index})")]
     NonLeadingTableHeaderRow {
         /// Zero-based section index.
@@ -303,6 +324,96 @@ pub enum ValidationError {
         run_index: usize,
         /// The offending token.
         token: String,
+    },
+
+    /// A master page has a special scope (last page or one chosen page) but
+    /// its `apply_page_type` is not `Both`.
+    ///
+    /// HWPX writes both in the single `type` attribute, so a special scope
+    /// leaves no room for an even/odd restriction.
+    #[error("Master page with a special scope must apply to both page types (section {section_index}, master page {master_page_index})")]
+    InvalidMasterPageScope {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based master page index within the section.
+        master_page_index: usize,
+    },
+
+    /// A rectangle or text box has a corner ratio above 50
+    /// ([`ShapeStyle::corner_ratio`](crate::control::ShapeStyle::corner_ratio)),
+    /// anywhere in the section — a table cell, a text box, a header/footer
+    /// or a master page included. Its code is
+    /// [`CoreErrorCode::InvalidShapeDimension`].
+    #[error("Corner ratio {ratio} above 50 (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidCornerRatio {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based index of the paragraph holding the shape: the
+        /// top-level body paragraph, or for a header, footer or master page
+        /// the paragraph within it.
+        paragraph_index: usize,
+        /// Zero-based index of that paragraph's run holding the shape.
+        run_index: usize,
+        /// The ratio given.
+        ratio: u8,
+    },
+
+    /// An object's [`ObjectFrame`](crate::frame::ObjectFrame) cannot be
+    /// written: a negative original size, an original axis of zero under a
+    /// displayed axis that is not, or an original size on a table (which
+    /// has no original box). Anywhere in the section, like
+    /// [`Self::InvalidCornerRatio`]. Its code is
+    /// [`CoreErrorCode::InvalidShapeDimension`].
+    #[error("Invalid {field} of {kind}: {reason} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidObjectFrame {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based index of the paragraph holding the object (as for
+        /// [`Self::InvalidCornerRatio`]).
+        paragraph_index: usize,
+        /// Zero-based index of that paragraph's run holding the object.
+        run_index: usize,
+        /// The object's kind (`"ellipse"`, `"picture"`, `"table"`, …).
+        kind: &'static str,
+        /// The frame field (`"original_size"`).
+        field: &'static str,
+        /// Why it cannot be written.
+        reason: &'static str,
+    },
+
+    /// A table cell zone ([`Table::cell_zones`](crate::table::Table::cell_zones))
+    /// starts past its end or ends outside the table grid. Its code is
+    /// [`CoreErrorCode::InvalidSpan`] (no new code).
+    #[error("Invalid cell zone {zone_index}: {reason} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidCellZone {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based index of the paragraph holding the table (as for
+        /// [`Self::InvalidSpan`]).
+        paragraph_index: usize,
+        /// Zero-based index of that paragraph's run holding the table.
+        run_index: usize,
+        /// Zero-based index of the zone in the table's list.
+        zone_index: usize,
+        /// Why it cannot be written (`"start past end"`, `"outside the table"`).
+        reason: &'static str,
+    },
+
+    /// A header or footer is anchored to a paragraph the section does not
+    /// have ([`HeaderFooter::anchor_paragraph`](crate::section::HeaderFooter::anchor_paragraph)
+    /// is past the last body paragraph).
+    #[error("{kind} {index} in section {section_index} is anchored to paragraph {anchor_paragraph}, but the section has {paragraph_count} paragraph(s)")]
+    HeaderFooterAnchorOutOfRange {
+        /// Zero-based section index.
+        section_index: usize,
+        /// `"header"` or `"footer"`.
+        kind: &'static str,
+        /// Zero-based index within the section's headers or footers.
+        index: usize,
+        /// The anchor that is out of range.
+        anchor_paragraph: usize,
+        /// Number of body paragraphs in the section.
+        paragraph_count: usize,
     },
 }
 
@@ -364,6 +475,10 @@ pub enum CoreErrorCode {
     // are retired (E6 slice C); the gap is intentional — do NOT renumber.
     /// A Group control has a non-shape child.
     InvalidGroupChild = 2020,
+    /// A master page combines a special scope with an even/odd restriction.
+    InvalidMasterPageScope = 2021,
+    /// A header or footer is anchored past the section's last paragraph.
+    HeaderFooterAnchorOutOfRange = 2022,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -378,6 +493,7 @@ impl ValidationError {
     /// Returns the numeric error code for this validation error.
     pub fn code(&self) -> CoreErrorCode {
         match self {
+            Self::InvalidFieldBoundary { .. } => CoreErrorCode::InvalidStructure,
             Self::EmptyDocument => CoreErrorCode::EmptyDocument,
             Self::EmptySection { .. } => CoreErrorCode::EmptySection,
             Self::EmptyParagraph { .. } => CoreErrorCode::EmptyParagraph,
@@ -397,6 +513,18 @@ impl ValidationError {
             Self::MismatchedSeriesLengths { .. } => CoreErrorCode::MismatchedSeriesLengths,
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
+            Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
+            // A shape geometry value out of range: the existing shape code
+            // (review r1 — a new `CoreErrorCode` variant is a breaking
+            // change outside the approved API).
+            Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidShapeDimension,
+            // Same reason: no new `CoreErrorCode` variant.
+            Self::InvalidObjectFrame { .. } => CoreErrorCode::InvalidShapeDimension,
+            // A cell-range error like a span: no new `CoreErrorCode` variant.
+            Self::InvalidCellZone { .. } => CoreErrorCode::InvalidSpan,
+            Self::HeaderFooterAnchorOutOfRange { .. } => {
+                CoreErrorCode::HeaderFooterAnchorOutOfRange
+            }
         }
     }
 }

@@ -11,13 +11,15 @@ pub(super) fn build_table(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTable> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
         });
     }
+    // Diagnostic slot before the cells (document order, review W2 r1 LOW).
+    let id_slot = super::super::object_ids::reserve();
 
     // Guard the lenient placement scan before it allocates per-position
     // state: pathological spans (e.g. 65535×65535) cover billions of grid
@@ -45,6 +47,10 @@ pub(super) fn build_table(
     let col_cnt = placements.cols;
 
     let table_border_fill_id = table.border_fill_id.unwrap_or(TABLE_BORDER_FILL_ID);
+    // The caption is written before the cells but encoded after them: its
+    // diagnostic records go here (review S22 r1 LOW).
+    let caption_at = super::super::object_ids::mark();
+    let header_rows = table.header_row_count();
     let rows = table
         .rows
         .iter()
@@ -53,6 +59,7 @@ pub(super) fn build_table(
             build_table_row(
                 row,
                 row_idx as u32,
+                row_idx < header_rows,
                 &cell_addrs[row_idx],
                 table_border_fill_id,
                 table.in_margin,
@@ -71,15 +78,32 @@ pub(super) fn build_table(
             .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
     });
 
+    // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
+    // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
+    // 없으면 sequential fallback — drawn after the cells and before the
+    // caption, the order this encoder has always drawn it in (S22 r2).
+    // 이것을 실패시키는 것: 이 줄을 캡션 인코딩 뒤로
+    // (`drawn_ids_keep_the_table_before_its_caption`).
+    let id = super::super::object_ids::core_or_drawn_at(id_slot, "table", table.inst_id);
+    let caption_from = super::super::object_ids::mark();
+    let caption = table
+        .caption
+        .as_ref()
+        .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
+        .transpose()?;
+    // 이것을 실패시키는 것: 이 이동 삭제(캡션 수식과 셀 각주의 id 충돌 경고가
+    // "footnote, equation" 으로, `shared_core_id_is_kept_and_reported`).
+    super::super::object_ids::move_since(caption_from, caption_at);
+
+    // §19.6 A: `None` = the placement this encoder has always written.
+    // 이것을 실패시키는 것: 고정값 복귀(`table_placement_round_trips`).
+    let placement = table.placement.clone().unwrap_or_else(table_default_placement);
     Ok(HxTable {
-        // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
-        // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
-        // 없으면 sequential fallback.
-        id: table.inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
+        id,
         z_order: 0,
         numbering_type: "TABLE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
+        text_wrap: placement.text_wrap.as_hwpx_str().into_owned(),
+        text_flow: placement.text_flow.as_hwpx_str().into_owned(),
         lock: 0,
         dropcap_style: DropCapStyle::None.to_string(),
         page_break: encode_table_page_break(table.page_break).to_string(),
@@ -95,38 +119,68 @@ pub(super) fn build_table(
             },
         )?,
         border_fill_id_ref: table_border_fill_id,
-        no_adjust: 0,
+        // E: fixed cell sizes. 이것을 실패시키는 것: 상수 0 으로 되돌리기
+        // (`table_no_adjust_and_protect_round_trip`).
+        no_adjust: u32::from(table.no_adjust),
         sz: Some(HxTableSz {
             width: table_width,
             width_rel_to: "ABSOLUTE".to_string(),
             height: 0,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            // S20: the table's size lock (`Table::frame`).
+            // 이것을 실패시키는 것: 상수 0 으로 되돌리기(`picture_and_table_protect_round_trip`).
+            protect: u32::from(table.frame.size_protect),
         }),
         pos: Some(HxTablePos {
-            treat_as_char: 0,
-            affect_l_spacing: 0,
-            flow_with_text: 1,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "COLUMN".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
+            treat_as_char: u32::from(placement.treat_as_char),
+            affect_l_spacing: u32::from(placement.affect_line_spacing),
+            flow_with_text: u32::from(placement.flow_with_text),
+            allow_overlap: u32::from(placement.allow_overlap),
+            hold_anchor_and_so: u32::from(placement.hold_anchor_and_so),
+            vert_rel_to: placement.vert_rel_to.as_hwpx_str().into_owned(),
+            horz_rel_to: placement.horz_rel_to.as_hwpx_str().into_owned(),
+            vert_align: placement.vert_align.as_hwpx_str().to_string(),
+            horz_align: placement.horz_align.as_hwpx_str().to_string(),
+            vert_offset: placement.vert_offset.as_i32(),
+            horz_offset: placement.horz_offset.as_i32(),
         }),
         // Core 승격값 우선 (W3a-2 의도된 delta) — None(우리 API 저작)은 기존
         // 기본값 유지로 바이트 불변.
         out_margin: Some(table.out_margin.map(encode_table_margin).unwrap_or(DEFAULT_OUT_MARGIN)),
-        caption: table
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
-            .transpose()?,
+        caption,
         in_margin: Some(table.in_margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
+        // F: the cell zones, only when there are any.
+        // 이것을 실패시키는 것: 미방출 · 행·열 뒤바꿈(`cell_zones_round_trip`).
+        cell_zone_list: (!table.cell_zones.is_empty()).then(|| HxCellZoneList {
+            zones: table
+                .cell_zones
+                .iter()
+                .map(|z| HxCellZone {
+                    start_row_addr: u32::from(z.start_row),
+                    start_col_addr: u32::from(z.start_col),
+                    end_row_addr: u32::from(z.end_row),
+                    end_col_addr: u32::from(z.end_col),
+                    border_fill_id_ref: z.border_fill_id,
+                })
+                .collect(),
+        }),
         rows,
     })
+}
+
+/// The placement written for a table whose [`Table::placement`] is `None`:
+/// not treated as a character, flowing with the text, no overlap, anchored
+/// to the paragraph vertically and the column horizontally, zero offsets,
+/// top/left, top-and-bottom wrap, both-sides flow. The decoder folds a wire
+/// placement equal to this back to `None`.
+pub(crate) fn table_default_placement() -> ObjectPlacement {
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
+    ObjectPlacement::new(
+        ObjectTextWrap::TopAndBottom,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Column,
+    )
+    .with_flow_with_text(true)
 }
 
 /// Builds `HxTableRow` from a Core `TableRow`.
@@ -137,13 +191,14 @@ pub(super) fn build_table(
 fn build_table_row(
     row: &TableRow,
     row_idx: u32,
+    row_is_header: bool,
     col_addrs: &[u32],
     table_border_fill_id: u32,
     table_in_margin: Option<TableMargin>,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTableRow> {
     let row_fallback_height =
         (!row.cells.iter().any(|cell| cell.height.is_some())).then_some(row.height).flatten();
@@ -159,7 +214,7 @@ fn build_table_row(
                 TableCellBuildContext {
                     col_idx: col_addr,
                     row_idx,
-                    row_is_header: row.is_header,
+                    row_is_header,
                     row_height: row_fallback_height,
                     table_border_fill_id,
                     table_in_margin,
@@ -197,24 +252,37 @@ fn build_table_cell(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTableCell> {
     Ok(HxTableCell {
         name: String::new(),
-        header: u32::from(ctx.row_is_header),
+        header: u32::from(cell.effective_header(ctx.row_is_header)),
         has_margin: u32::from(cell.margin.is_some()),
         protect: 0,
         editable: 0,
         dirty: 0,
         border_fill_id_ref: cell.border_fill_id.unwrap_or(ctx.table_border_fill_id),
-        sub_list: Some(build_sublist(
-            &cell.paragraphs,
-            depth,
-            encode_table_vertical_align(cell.vertical_align.unwrap_or(TableVerticalAlign::Center)),
-            hyperlink_entries,
-            options,
-            sink,
-        )?),
+        sub_list: Some({
+            let mut sub_list = build_sublist(
+                &cell.paragraphs,
+                depth,
+                encode_table_vertical_align(
+                    cell.vertical_align.unwrap_or(TableVerticalAlign::Center),
+                ),
+                hyperlink_entries,
+                options,
+                sink,
+            )?;
+            // §19.22 D3: the cell's line wrap, not a fixed `BREAK`.
+            // 이것을 실패시키는 것: 고정 BREAK 복귀(`cell_line_wrap_round_trips`).
+            sub_list.line_wrap = match cell.line_wrap {
+                hwpforge_core::table::CellLineWrap::Squeeze => "SQUEEZE",
+                hwpforge_core::table::CellLineWrap::Keep => "KEEP",
+                _ => "BREAK",
+            }
+            .to_string();
+            sub_list
+        }),
         cell_addr: Some(HxCellAddr { col_addr: ctx.col_idx, row_addr: ctx.row_idx }),
         cell_span: Some(HxCellSpan {
             col_span: cell.col_span as u32,
@@ -224,10 +292,13 @@ fn build_table_cell(
             width: cell.width.as_i32(),
             height: cell.height.or(ctx.row_height).unwrap_or(HwpUnit::ZERO).as_i32(),
         }),
-        // hasMargin=0 이어도 한컴은 실효값을 element 로 쓴다 (H5) — 셀
-        // 오버라이드 → 표 inMargin → 기본값 순.
+        // 셀 오버라이드 → (hasMargin=0 이면) 칸이 지닌 휴면 값(S19 — 한컴은
+        // HWP5 에서 온 칸의 자기 값을 그대로 둔다) → 표 inMargin → 기본값 순.
+        // 이것을 실패시키는 것: 휴면 값을 쓰지 않기
+        // (`dormant_cell_margins_round_trip`).
         cell_margin: Some(
             cell.margin
+                .or(cell.dormant_margin)
                 .or(ctx.table_in_margin)
                 .map(encode_table_margin)
                 .unwrap_or(DEFAULT_CELL_MARGIN),
@@ -269,7 +340,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let out = hx.out_margin.expect("outMargin");
@@ -291,7 +362,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(hx.out_margin.expect("outMargin"), DEFAULT_OUT_MARGIN);
@@ -312,7 +383,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(hx.sz.expect("sz").height, 0, "decode-only cache must not reach the wire");
@@ -327,7 +398,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let cell = &hx.rows[0].cells[0];

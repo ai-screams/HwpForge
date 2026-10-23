@@ -553,6 +553,9 @@ pub struct Hwp5SemanticNamedStyleRef {
 /// Semantic section content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hwp5SemanticSection {
+    /// Section-owned master lists in wire order, separate from Body aggregates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_pages: Vec<Hwp5SemanticMasterPage>,
     /// Stable semantic-local section identifier.
     pub section_id: Hwp5SemanticSectionId,
     /// Zero-based section index.
@@ -563,6 +566,54 @@ pub struct Hwp5SemanticSection {
     pub paragraphs: Vec<Hwp5SemanticParagraph>,
     /// Controls anchored to the section.
     pub controls: Vec<Hwp5SemanticControlNode>,
+}
+
+/// Parser-backed master-list metadata; unknown scope remains unresolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Hwp5SemanticMasterPage {
+    /// Section-local list identifier, also used by MasterPageSubList.
+    pub index: usize,
+    /// True for a section-end extended list.
+    pub extended: bool,
+    /// Zero-based record ordinal in the section stream.
+    pub record_index: usize,
+    /// Original list payload, including unverified properties.
+    pub raw: Vec<u8>,
+    /// Confirmed Core metadata, without content; absent for unverified scopes.
+    pub scope: Option<Hwp5SemanticMasterPageScope>,
+}
+
+/// Confirmed master scope shared with the existing Core projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Hwp5SemanticMasterPageScope {
+    /// Page selection.
+    pub apply_page_type: hwpforge_foundation::ApplyPageType,
+    /// Optional special page selection.
+    pub special: Option<hwpforge_core::section::MasterPageSpecial>,
+    /// Overlap the preceding master.
+    pub page_duplicate: bool,
+    /// Paint in front of body content.
+    pub page_front: bool,
+    /// List vertical alignment.
+    pub vert_align: hwpforge_foundation::VerticalAlign,
+    /// Text area width in HWPUNIT.
+    pub text_width: i32,
+    /// Text area height in HWPUNIT.
+    pub text_height: i32,
+}
+
+impl From<&hwpforge_core::section::MasterPage> for Hwp5SemanticMasterPageScope {
+    fn from(master: &hwpforge_core::section::MasterPage) -> Self {
+        Self {
+            apply_page_type: master.apply_page_type,
+            special: master.special,
+            page_duplicate: master.page_duplicate,
+            page_front: master.page_front,
+            vert_align: master.vert_align,
+            text_width: master.text_width.as_i32(),
+            text_height: master.text_height.as_i32(),
+        }
+    }
 }
 
 /// Minimal page-definition payload preserved on a semantic section.
@@ -1034,6 +1085,8 @@ impl Hwp5SemanticContainerPath {
 pub enum Hwp5SemanticContainerKind {
     /// Main section body.
     Body,
+    /// Section-owned master list, identified by its section-local ordinal.
+    MasterPageSubList(usize),
     /// Header subtree rooted at `header/subList`.
     HeaderSubList,
     /// Footer subtree rooted at `footer/subList`.
@@ -1056,6 +1109,7 @@ impl Hwp5SemanticContainerKind {
     pub fn audit_key(&self) -> String {
         match self {
             Self::Body => "body".to_string(),
+            Self::MasterPageSubList(index) => format!("masterpage[{index}]/subList"),
             Self::HeaderSubList => "header/subList".to_string(),
             Self::FooterSubList => "footer/subList".to_string(),
             Self::TableCellSubList => "table/tc/subList".to_string(),
@@ -1407,6 +1461,7 @@ mod tests {
 
         let mut document = Hwp5SemanticDocument::new(package_meta);
         document.sections.push(Hwp5SemanticSection {
+            master_pages: Vec::new(),
             section_id: Hwp5SemanticSectionId::new(0),
             index: 0,
             page_def: None,
@@ -1568,6 +1623,7 @@ mod tests {
 
         let mut document = Hwp5SemanticDocument::new(package_meta);
         document.sections.push(Hwp5SemanticSection {
+            master_pages: Vec::new(),
             section_id: Hwp5SemanticSectionId::new(0),
             index: 0,
             page_def: None,
@@ -1775,6 +1831,7 @@ mod tests {
             },
             doc_info: Hwp5SemanticDocInfo::default(),
             sections: vec![Hwp5SemanticSection {
+                master_pages: Vec::new(),
                 section_id: Hwp5SemanticSectionId::new(0),
                 index: 0,
                 page_def: None,
@@ -1866,6 +1923,7 @@ mod tests {
             },
             doc_info: Hwp5SemanticDocInfo::default(),
             sections: vec![Hwp5SemanticSection {
+                master_pages: Vec::new(),
                 section_id,
                 index: 0,
                 page_def: Some(sample_page_def(true)),
@@ -1988,6 +2046,7 @@ mod tests {
             },
             doc_info: Hwp5SemanticDocInfo::default(),
             sections: vec![Hwp5SemanticSection {
+                master_pages: Vec::new(),
                 section_id: known_section_id,
                 index: 0,
                 page_def: None,

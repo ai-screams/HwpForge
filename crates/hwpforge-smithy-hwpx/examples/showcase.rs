@@ -54,8 +54,11 @@ fn build_style_store() -> HwpxStyleStore {
     let mut store: HwpxStyleStore = HwpxStyleStore::new();
 
     // Fonts
-    store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
-    store.push_font(HwpxFont::new(1, "Arial", "LATIN"));
+    // 이것을 실패시키는 것: 언어별 원본 글꼴 등록을 HANGUL/LATIN 일부로 되돌리기(실제 example 실행).
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+        store.push_font(HwpxFont::new(1, "Arial", lang));
+    }
 
     // CharShape 0: Normal (10pt, black)
     let cs0: HwpxCharShape = HwpxCharShape::default();
@@ -93,10 +96,10 @@ fn build_style_store() -> HwpxStyleStore {
     // ParaShape 2: Justify with indent
     let mut ps2: HwpxParaShape = HwpxParaShape::default();
     ps2.alignment = Alignment::Justify;
-    ps2.indent = HwpUnit::new(400).unwrap();
+    ps2.indent = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(400).unwrap());
     ps2.line_spacing = 180;
     ps2.line_spacing_type = LineSpacingType::Percentage;
-    ps2.spacing_after = HwpUnit::new(200).unwrap();
+    ps2.spacing_after = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap());
     store.push_para_shape(ps2);
 
     store
@@ -215,6 +218,8 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
+                    text_margin: None,
                     paragraphs: vec![
                         text_para("글상자 제목", 1, 1),
                         text_para(
@@ -238,6 +243,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Line {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     start: ShapePoint::new(0, 0),
                     end: ShapePoint::new(14000, 0),
                     width: HwpUnit::new(14000).unwrap(),
@@ -254,6 +260,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(5000, 5000),
                     axis1: ShapePoint::new(10000, 5000),
                     axis2: ShapePoint::new(5000, 8000),
@@ -273,6 +280,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Polygon {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     vertices: vec![
                         ShapePoint::new(5000, 0),
                         ShapePoint::new(10000, 8000),

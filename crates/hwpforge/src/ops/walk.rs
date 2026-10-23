@@ -68,7 +68,7 @@
 //! shared.
 
 use hwpforge_core::caption::Caption;
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::Section;
@@ -207,7 +207,15 @@ fn visit_control_for_objects(control: &Control, counts: &mut ObjectCounts) {
             // exactly the policy [`ControlDescent::Group`]'s own doc says a
             // caller must apply for itself.
             for child in children {
-                visit_control_for_objects(child, counts);
+                match child {
+                    GroupChild::Picture(image) => {
+                        counts.all_images += 1;
+                        visit_caption_for_objects(image.caption.as_ref(), counts);
+                    }
+                    GroupChild::Shape(control) => visit_control_for_objects(control, counts),
+                    // `GroupChild` is `#[non_exhaustive]`.
+                    _ => {}
+                }
             }
         }
         ControlDescent::Memo { content, anchor_runs } => {
@@ -254,7 +262,7 @@ pub(crate) enum ControlDescent<'a> {
     /// rather than getting one from this enum, because the two callers'
     /// policies genuinely differ and neither is "more correct" for the
     /// other's purpose.
-    Group(&'a [Control]),
+    Group(&'a [GroupChild]),
     /// A memo's visible content, plus its `anchor_runs` — the latter is a
     /// run list, not a paragraph list, because the encoder flattens it to
     /// plain text and never recurses into a non-text run there (see
@@ -269,6 +277,12 @@ pub(crate) enum ControlDescent<'a> {
 /// policy [`object_counts`] and `exchange::first_layout_cache_path` both
 /// build on. See [`ControlDescent`]'s own doc for what each arm means.
 pub(crate) fn control_descent(control: &Control) -> ControlDescent<'_> {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return ControlDescent::Memo {
+            content,
+            anchor_runs: hwpforge_core::field_view::anchor_runs(control),
+        };
+    }
     match control {
         Control::TextBox { paragraphs, caption, .. }
         | Control::Ellipse { paragraphs, caption, .. }
@@ -283,7 +297,6 @@ pub(crate) fn control_descent(control: &Control) -> ControlDescent<'_> {
         Control::Footnote { paragraphs, .. } => ControlDescent::Footnote(paragraphs),
         Control::Endnote { paragraphs, .. } => ControlDescent::Endnote(paragraphs),
         Control::Group { children, .. } => ControlDescent::Group(children),
-        Control::Memo { content, anchor_runs, .. } => ControlDescent::Memo { content, anchor_runs },
         // `Control` is `#[non_exhaustive]`; every caller needs a wildcard
         // regardless of Core's own match coverage.
         _ => ControlDescent::None,
@@ -369,13 +382,19 @@ fn run_has_visible_text(run: &Run) -> bool {
 }
 
 fn control_has_visible_text(control: &Control) -> bool {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return content.iter().any(paragraph_has_visible_text)
+            || hwpforge_core::field_view::anchor_runs(control).iter().any(run_has_visible_text);
+    }
+    if let Some(text) = hwpforge_core::field_view::scalar_text(control) {
+        return !text.trim().is_empty();
+    }
     match control {
         Control::TextBox { paragraphs, .. }
         | Control::Footnote { paragraphs, .. }
         | Control::Endnote { paragraphs, .. }
         | Control::Ellipse { paragraphs, .. }
         | Control::Polygon { paragraphs, .. } => paragraphs.iter().any(paragraph_has_visible_text),
-        Control::Memo { content, .. } => content.iter().any(paragraph_has_visible_text),
         Control::Hyperlink { text, .. } => !text.trim().is_empty(),
         _ => false,
     }
@@ -428,25 +447,29 @@ fn count_runs_non_empty_paragraphs_narrow(run: &Run) -> usize {
 }
 
 fn count_control_paragraphs_narrow(control: &Control) -> usize {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return count_paragraphs_narrow(content);
+    }
     match control {
         Control::TextBox { paragraphs, .. }
         | Control::Footnote { paragraphs, .. }
         | Control::Endnote { paragraphs, .. }
         | Control::Ellipse { paragraphs, .. }
         | Control::Polygon { paragraphs, .. } => count_paragraphs_narrow(paragraphs),
-        Control::Memo { content, .. } => count_paragraphs_narrow(content),
         _ => 0,
     }
 }
 
 fn count_control_non_empty_paragraphs_narrow(control: &Control) -> usize {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return count_non_empty_paragraphs_narrow(content);
+    }
     match control {
         Control::TextBox { paragraphs, .. }
         | Control::Footnote { paragraphs, .. }
         | Control::Endnote { paragraphs, .. }
         | Control::Ellipse { paragraphs, .. }
         | Control::Polygon { paragraphs, .. } => count_non_empty_paragraphs_narrow(paragraphs),
-        Control::Memo { content, .. } => count_non_empty_paragraphs_narrow(content),
         _ => 0,
     }
 }
@@ -658,6 +681,7 @@ mod tests {
         let mut para = text_para("host");
         para.add_run(Run::control(
             Control::Rect {
+                frame: hwpforge_core::ObjectFrame::new(),
                 width: HwpUnit::new(1000).unwrap(),
                 height: HwpUnit::new(1000).unwrap(),
                 placement: None,
@@ -668,6 +692,8 @@ mod tests {
         ));
         para.add_run(Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
+                text_margin: None,
                 paragraphs: vec![text_para("inside box")],
                 width: HwpUnit::new(1000).unwrap(),
                 height: HwpUnit::new(1000).unwrap(),
@@ -705,5 +731,45 @@ mod tests {
         // `top_level_paragraphs` measures, so this is a subset count and can
         // never exceed it. Only the visibility probe reaches deeper.
         assert!(counts.top_level_non_empty_paragraphs <= section.paragraphs.len());
+    }
+
+    /// `all_images` counts a group's pictures, as the section's XML holds
+    /// them, and a group picture's caption is visited (its table counts).
+    ///
+    /// 이것을 실패시키는 것: `visit_control_for_objects` 의 Picture 갈래에서 `all_images`
+    /// 증가 삭제 / 캡션 방문 삭제.
+    #[test]
+    fn group_pictures_count_in_all_images() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::control::{Control, GroupChild};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::page::PageSettings;
+        use hwpforge_core::section::Section;
+        use hwpforge_core::table::{Table, TableCell, TableRow};
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        let w = HwpUnit::new(1000).unwrap();
+        let cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], w);
+        let mut caption_para = Paragraph::new(ParaShapeIndex::new(0));
+        caption_para.add_run(Run::table(
+            Table::new(vec![TableRow::new(vec![cell])]),
+            CharShapeIndex::new(0),
+        ));
+        let captioned = Image::new("BinData/a.png", w, w, ImageFormat::Png)
+            .with_caption(Caption::new(vec![caption_para], CaptionSide::Bottom));
+        let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
+            children: vec![
+                GroupChild::Picture(captioned),
+                GroupChild::Picture(Image::new("BinData/b.png", w, w, ImageFormat::Png)),
+            ],
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let mut host = Paragraph::new(ParaShapeIndex::new(0));
+        host.add_run(Run::control(group, CharShapeIndex::new(0)));
+        let counts = object_counts(&Section::with_paragraphs(vec![host], PageSettings::a4()));
+        assert_eq!((counts.all_images, counts.all_tables), (2, 1));
     }
 }

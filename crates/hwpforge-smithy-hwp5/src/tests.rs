@@ -191,9 +191,8 @@ fn join_hwp5_image_assets_decompresses_full_report_png_payload() {
     let image_assets = join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED)
         .expect("image assets should join")
         .0;
-    let first_asset = image_assets
-        .asset_for_binary_data_id(1)
-        .expect("full_report should expose binary image id 1");
+    let first_asset =
+        image_assets.asset_for_reference(1).expect("full_report should expose binary image id 1");
 
     assert!(
         first_asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -472,6 +471,7 @@ fn compressed_bmp_record() -> Hwp5BinDataRecordSummary {
         data_type: "Embedding".to_string(),
         compression: "Compress".to_string(),
         should_decompress: true,
+        reference_ordinal: 1,
     }
 }
 
@@ -546,4 +546,365 @@ fn every_entry_point_charges_image_decompression_to_the_budget() {
         );
         decode(MAX_TOTAL_DECOMPRESSED).unwrap_or_else(|err| panic!("{name}: full budget: {err}"));
     }
+}
+
+/// A group holding a text box with a table and a picture in its text: the
+/// picture's own `ShapeComponent`/`ShapePicture` records and the table
+/// cells' paragraphs sit deeper than the text box's own records. Read as
+/// the text box's own, the picture made it a two-payload `Unknown` (the
+/// whole text box dropped) and the cell text overwrote its paragraphs.
+///
+/// 이것을 실패시키는 것: 자식 도형 기록을 자기 수준으로 제한하지 않는 것(글상자가
+/// 사라짐), 문단 기록을 자기 수준으로 제한하지 않는 것(표 칸 글자가 둘째 문단을
+/// 덮음).
+#[test]
+fn grouped_text_box_keeps_its_own_records_only() {
+    use hwpforge_core::control::Control;
+    use hwpforge_core::run::RunContent;
+    let bytes = std::fs::read(fixture_path("shapes/group-f2-textbox-table.hwp")).unwrap();
+    let doc = decode_hwp5_with_images(&bytes).unwrap();
+    let group = doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .find_map(|r| match &r.content {
+            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
+            _ => None,
+        })
+        .expect("a group");
+    let Control::Group { children, .. } = &group else { unreachable!() };
+    let texts: Vec<Vec<String>> = children
+        .iter()
+        .filter_map(|c| match c {
+            hwpforge_core::control::GroupChild::Shape(Control::TextBox { paragraphs, .. }) => Some(
+                paragraphs
+                    .iter()
+                    .map(|p| {
+                        p.runs
+                            .iter()
+                            .filter_map(|r| match &r.content {
+                                RunContent::Text(t) => Some(t.as_str()),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, [["글상자 안 표", "", "글상자 안 그림", ""]]);
+}
+
+/// Hancom's object-link record (`CtrlData`) as saved under a logo picture.
+const LINK_RECORD: &str = "1b02010000006f0200806f0201000000650201001b0068007400740070005c003a002f002f007700770077002e006b006f007200650061002e006b0072003b0031003b0030003b0030003b00";
+
+/// One TLV record: header (tag, level, size) then the payload.
+fn tlv(tag: u16, level: u16, data: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(data.len()).unwrap();
+    let mut out = (u32::from(tag) | (u32::from(level) << 10) | (size << 20)).to_le_bytes().to_vec();
+    out.extend_from_slice(data);
+    out
+}
+
+/// Section 0's records of an HWP5 file, as `(tag, level, payload)`.
+fn section0_records(bytes: &[u8]) -> Vec<(u16, u16, Vec<u8>)> {
+    use std::io::Read;
+    let raw = read_cfb_stream(bytes, "/BodyText/Section0");
+    let mut inflated = Vec::new();
+    flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut inflated).unwrap();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 4 <= inflated.len() {
+        let h = u32::from_le_bytes(inflated[i..i + 4].try_into().unwrap());
+        i += 4;
+        let (tag, level) = ((h & 0x3ff) as u16, ((h >> 10) & 0x3ff) as u16);
+        let mut size = (h >> 20) as usize;
+        if size == 0xfff {
+            size = u32::from_le_bytes(inflated[i..i + 4].try_into().unwrap()) as usize;
+            i += 4;
+        }
+        out.push((tag, level, inflated[i..i + size].to_vec()));
+        i += size;
+    }
+    out
+}
+
+/// F3a with a link record added under the group's own component and under
+/// the first picture's component, each one level below it.
+fn f3a_with_links() -> Vec<u8> {
+    let bytes = std::fs::read(fixture_path("shapes/group-f3a-logo.hwp")).unwrap();
+    let link: Vec<u8> = (0..LINK_RECORD.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&LINK_RECORD[i..i + 2], 16).unwrap())
+        .collect();
+    let mut stream = Vec::new();
+    let (mut group_done, mut pic_done) = (false, false);
+    for (tag, level, data) in section0_records(&bytes) {
+        stream.extend(tlv(tag, level, &data));
+        if tag == 0x4C && !group_done && data.windows(4).any(|w| w == b"noc$") {
+            stream.extend(tlv(0x57, level + 1, &link));
+            group_done = true;
+        } else if tag == 0x4C && group_done && !pic_done && data.windows(4).any(|w| w == b"cip$") {
+            stream.extend(tlv(0x57, level + 1, &link));
+            pic_done = true;
+        }
+    }
+    assert!(group_done && pic_done, "F3a has a group of pictures");
+    replace_cfb_stream(bytes, "/BodyText/Section0", &deflate(&stream))
+}
+
+/// A picture's link record inside a group is read into the picture's
+/// hyperlink, and the group's own link record is reported as lost: the
+/// group-child and group record paths of the decoder.
+///
+/// 이것을 실패시키는 것: 묶음 자식 빌더의 `CtrlData` 갈래 삭제(그림 링크가 사라진다) /
+/// 묶음 빌더의 자기 수준 `CtrlData` 갈래 삭제(묶음 링크 경고가 사라진다).
+#[test]
+fn group_and_group_picture_links_are_read() {
+    use hwpforge_core::control::{Control, GroupChild};
+    use hwpforge_core::run::RunContent;
+    let doc = decode_hwp5_with_images(&f3a_with_links()).unwrap();
+    let lost: Vec<&str> = doc
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ContentLost { kind, .. } => Some(kind.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lost, ["group_hyperlink"]);
+    let group = doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .find_map(|r| match &r.content {
+            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
+            _ => None,
+        })
+        .expect("a group");
+    let Control::Group { children, .. } = &group else { unreachable!() };
+    let links: Vec<Option<&str>> = children
+        .iter()
+        .map(|c| match c {
+            GroupChild::Picture(image) => image.hyperlink.as_deref(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(links, [Some("http://www.korea.kr"), None, None]);
+}
+
+// ── BinData references are DocInfo positions (§19 C) ─────────────────
+
+/// One level-0 `DocInfo` record: TLV header (tag, level 0, size) + payload.
+fn doc_info_record(tag: u16, payload: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(payload.len()).expect("small record");
+    assert!(size < 0xFFF, "test records stay under the extended-size marker");
+    let header = u32::from(tag) | (size << 20);
+    let mut out = header.to_le_bytes().to_vec();
+    out.extend_from_slice(payload);
+    out
+}
+
+/// An embedded `BIN_DATA` payload storing `id` and `extension`.
+fn embedded_bin_data(id: u16, extension: &str) -> Vec<u8> {
+    let mut out = 0x0001_u16.to_le_bytes().to_vec();
+    out.extend_from_slice(&id.to_le_bytes());
+    let units: Vec<u16> = extension.encode_utf16().collect();
+    out.extend_from_slice(&u16::try_from(units.len()).expect("short").to_le_bytes());
+    units.iter().for_each(|unit| out.extend_from_slice(&unit.to_le_bytes()));
+    out
+}
+
+/// An external-link `BIN_DATA` payload (type 0): two length-prefixed
+/// UTF-16 paths, no id or extension.
+fn link_bin_data(absolute: &str, relative: &str) -> Vec<u8> {
+    let mut out = 0x0000_u16.to_le_bytes().to_vec();
+    for path in [absolute, relative] {
+        let units: Vec<u16> = path.encode_utf16().collect();
+        out.extend_from_slice(&u16::try_from(units.len()).expect("short").to_le_bytes());
+        units.iter().for_each(|unit| out.extend_from_slice(&unit.to_le_bytes()));
+    }
+    out
+}
+
+fn reference_and_id(records: &[Hwp5BinDataRecordSummary]) -> Vec<(u16, u16)> {
+    records.iter().map(|record| (record.reference_ordinal, record.binary_data_id)).collect()
+}
+
+/// C-T2: a `BIN_DATA` record that fails to parse still uses up its
+/// position, so the records after it keep the reference numbers pictures use.
+///
+/// 이것을 실패시키는 것: 위치를 파싱 뒤에 매기는 것(`enumerate` 를
+/// `filter_map` 뒤로) — 셋째 레코드가 순번 2 가 된다.
+#[test]
+fn a_bin_data_record_that_fails_to_parse_keeps_its_position() {
+    let doc_info = [
+        doc_info_record(0x12, &embedded_bin_data(1, "png")),
+        doc_info_record(0x12, &[0x01, 0x00]),
+        doc_info_record(0x12, &embedded_bin_data(2, "png")),
+    ]
+    .concat();
+    let records = summarize_doc_info_bin_data_records(&doc_info, false).expect("summary");
+    assert_eq!(reference_and_id(&records), [(1, 1), (3, 2)]);
+}
+
+/// C-T3 (record level): an external link stores two paths, not an id and
+/// an extension. It takes its position but names no stream — before, the
+/// absolute path's length was read as its id and the path's characters as
+/// its extension.
+///
+/// 이것을 실패시키는 것: 링크 갈래를 지우는 것 — 경로 길이(10)가 id 가 되고
+/// 저장 이름이 `BIN000A.…` 로 지어진다.
+#[test]
+fn an_external_link_takes_a_position_but_names_no_stream() {
+    let doc_info = [
+        doc_info_record(0x12, &link_bin_data("C:\\a\\b.jpg", "b.jpg")),
+        doc_info_record(0x12, &embedded_bin_data(1, "png")),
+    ]
+    .concat();
+    let records = summarize_doc_info_bin_data_records(&doc_info, false).expect("summary");
+    assert_eq!(reference_and_id(&records), [(1, 0), (2, 1)]);
+    assert_eq!(records[0].data_type, "Link");
+    assert_eq!(records[0].storage_name, "");
+    assert_eq!(records[0].extension, "");
+    assert_eq!(records[1].storage_name, "BIN0001.png");
+}
+
+/// C-T1 (join level): image assets and the size hint taken from the
+/// pictures are both keyed by reference. The F17 fixture's three records
+/// are re-presented as stored ids `[3, 1, 2]`, so reference 1 is
+/// `BIN0003.png`; each picture gets its own width.
+///
+/// 이것을 실패시키는 것: 자산 맵 키를 저장 id 로 되돌리는 것(참조 1 이
+/// `BIN0001.png`), 크기 힌트를 저장 id 로 찾는 것(참조 1 의 힌트가 참조 3
+/// 그림의 너비).
+#[test]
+fn image_assets_and_size_hints_are_keyed_by_reference() {
+    let bytes = std::fs::read(fixture_path("images/f17-caption-numbering.hwp")).expect("fixture");
+    let mut intermediate = crate::decoder::decode_intermediate(&bytes).expect("intermediate");
+    let originals = intermediate.bin_data_records.clone();
+    assert_eq!(reference_and_id(&originals), [(1, 1), (2, 2), (3, 3)], "fixture as made");
+    intermediate.bin_data_records = [2, 0, 1]
+        .into_iter()
+        .zip(1..)
+        .map(|(source, reference_ordinal)| Hwp5BinDataRecordSummary {
+            reference_ordinal,
+            ..originals[source].clone()
+        })
+        .collect();
+    let mut width_of_reference = BTreeMap::new();
+    let mut next_width = 1000_u32;
+    for paragraph in &mut intermediate.sections[0].paragraphs {
+        for control in &mut paragraph.controls {
+            if let crate::decoder::section::Hwp5Control::Image(image) = control {
+                image.geometry.width = next_width;
+                width_of_reference.insert(image.binary_data_id, next_width);
+                next_width += 1000;
+            }
+        }
+    }
+    assert_eq!(width_of_reference.len(), 3, "the three pictures reference 1, 2, 3");
+
+    let plan =
+        join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED).expect("join").0;
+    for (reference, storage_name) in [(1, "BIN0003.png"), (2, "BIN0001.png"), (3, "BIN0002.png")] {
+        let asset = plan.asset_for_reference(reference).expect("asset");
+        assert_eq!(asset.payload.storage_name, storage_name, "reference {reference}");
+        let width = i32::try_from(width_of_reference[&reference]).expect("small");
+        assert_eq!(asset.payload.width_hwp, Some(width), "reference {reference}");
+    }
+}
+
+fn summary(
+    reference_ordinal: u16,
+    binary_data_id: u16,
+    storage_name: &str,
+) -> Hwp5BinDataRecordSummary {
+    Hwp5BinDataRecordSummary {
+        binary_data_id,
+        storage_name: storage_name.to_string(),
+        extension: storage_name.rsplit_once('.').map_or("", |(_, ext)| ext).to_string(),
+        data_type: if storage_name.is_empty() { "Link" } else { "Embedding" }.to_string(),
+        compression: "Default".to_string(),
+        should_decompress: false,
+        reference_ordinal,
+    }
+}
+
+/// C-T5 (plan level): the OLE reading check covers every `BIN_DATA` slot,
+/// external links included, and spells out both readings.
+///
+/// 이것을 실패시키는 것: 비교를 로드된 OLE 자산으로만 좁히는 것(순번 3 의
+/// 링크는 자산이 아니어서 빠진다), 외부 링크를 id 0 의 저장 레코드로 세는
+/// 것(이유 문구가 바뀐다).
+#[test]
+fn ole_reference_ambiguity_covers_every_slot() {
+    let records = [
+        summary(1, 1, "BIN0001.png"),
+        summary(2, 2, "BIN0002.png"),
+        summary(3, 0, ""),
+        summary(4, 3, "BIN0003.OLE"),
+    ];
+    let ambiguities = reference_ambiguities(&records);
+    assert_eq!(
+        ambiguities.get(&3).map(String::as_str),
+        Some("ordinal 3 → external link, storage id 3 → BIN0003.OLE")
+    );
+    assert_eq!(
+        ambiguities.get(&4).map(String::as_str),
+        Some("ordinal 4 → BIN0003.OLE, storage id 4 → no parsed record")
+    );
+    assert!(!ambiguities.contains_key(&1) && !ambiguities.contains_key(&2), "{ambiguities:?}");
+}
+
+/// The OLE reading check indexes both readings once, so the records it
+/// looks at grow with the number of records, not with its square: counted,
+/// not timed (65,535 records — the most a document can name — are visited
+/// once each).
+///
+/// 이것을 실패시키는 것: 참조마다 레코드 전체를 다시 훑는 것(방문 수가
+/// 레코드 수의 제곱으로 는다).
+#[test]
+fn ole_reference_ambiguity_is_linear_in_the_records() {
+    let visits_for = |count: u16| {
+        let records: Vec<Hwp5BinDataRecordSummary> =
+            (1..=count).map(|ordinal| summary(ordinal, 0, "")).collect();
+        RECORD_VISITS.with(|visits| visits.set(0));
+        let ambiguities = reference_ambiguities(&records);
+        assert_eq!(ambiguities.len(), usize::from(count), "every link slot has no id reading");
+        RECORD_VISITS.with(std::cell::Cell::get)
+    };
+    let count = u16::MAX;
+    assert!(visits_for(count) <= 2 * u64::from(count), "{} visits", visits_for(count));
+}
+
+// 이것을 실패시키는 것: master geometry 누락 / 본문→master 단순 연결로 first-wins 순서 변경.
+#[test]
+fn master_image_geometry_keeps_wire_first_wins() {
+    use crate::decoder::section::Hwp5Control;
+    let bytes = std::fs::read(fixture_path("master_pages/f5f-shapes.hwp")).unwrap();
+    let mut decoded = crate::decoder::decode_intermediate(&bytes).unwrap();
+    let section = &mut decoded.sections[0];
+    let master = &mut section.master_pages[0];
+    let image = master
+        .paragraphs
+        .iter()
+        .flat_map(|p| &p.controls)
+        .find_map(|c| if let Hwp5Control::Image(image) = c { Some(image.clone()) } else { None })
+        .unwrap();
+    let mut body_image = image.clone();
+    body_image.geometry.width = image.geometry.width + 100;
+    section.paragraphs[0].controls = vec![Hwp5Control::Image(body_image.clone())];
+    master.body_paragraph_index = 0;
+    master.body_control_index = 0;
+    assert_eq!(
+        collect_image_geometry_hints(&decoded.sections)[&image.binary_data_id].width_hwp,
+        image.geometry.width as i32
+    );
+    decoded.sections[0].master_pages[0].body_control_index = 1;
+    assert_eq!(
+        collect_image_geometry_hints(&decoded.sections)[&image.binary_data_id].width_hwp,
+        body_image.geometry.width as i32
+    );
 }

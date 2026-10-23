@@ -1,6 +1,6 @@
 # Grid and Paragraph Edits (`set-cell`, `insert-para`, `delete-para`)
 
-These surfaces edit cells and top-level paragraphs without a JSON round-trip and preserve every other byte. They re-encode the package, so **a 한컴-saved document is refused** (`INPUT_ENTRIES_NOT_CARRIED` / `UNCARRIED_ZIP_ENTRIES`, exit 1) — use `fill` or `to-json --section N` → `patch` there ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output. Write to a new file and run the verify loop in SKILL.md after each.
+These surfaces edit cells and top-level paragraphs without a JSON round-trip and preserve every other byte. They re-encode the package, so **a 한컴-saved document is refused** (`INPUT_ENTRIES_NOT_CARRIED` / `UNCARRIED_ZIP_ENTRIES`, exit 1) — use `fill` or `to-json --section N` → `patch` there ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; `set-cell` refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — text inside a bookmark span or a memo field), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
 
 ## `set-cell` — table cells by grid address
 
@@ -53,12 +53,12 @@ Deleting a paragraph that holds an index mark succeeds with an advisory in `warn
 
 ## Reading the diff of a paragraph edit
 
-`diff` first strips the paragraphs that are identical at the start and at the end of the section, then compares the remaining middle by position. Paragraphs compare equal only when their layout cache is equal too, so the report depends on the input (measured on `plain_inserted.hwp` converted with and without `--carry-layout-cache`, inserting after paragraph 1 and deleting paragraph 2):
+`diff` first strips the paragraphs that are identical at the start and at the end of the section, then compares the remaining middle by position. Paragraphs compare equal only when their layout cache is equal too, so the report depends on the input (measured on `plain_inserted.hwp` converted with and without the layout cache — `convert-hwp5` carries it by default, `--no-layout-cache` leaves it out — inserting after paragraph 1 and deleting paragraph 2):
 
-| Input                                                   | `insert-para` shows                                                                                                  | `delete-para` shows                                              |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| no layout cache (HwpForge output, plain `convert-hwp5`) | one `added` at the new index                                                                                         | one `removed` at the deleted index                               |
-| with layout cache                                       | the paragraphs after the edit point as `changed` (their neighbour's text in their slot), then one `added` at the end | the later paragraphs as `changed`, then one `removed` at the end |
+| Input                                                               | `insert-para` shows                                                                                                  | `delete-para` shows                                              |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| no layout cache (HwpForge output, `convert-hwp5 --no-layout-cache`) | one `added` at the new index                                                                                         | one `removed` at the deleted index                               |
+| with layout cache (a 한컴-saved file, default `convert-hwp5`)       | the paragraphs after the edit point as `changed` (their neighbour's text in their slot), then one `added` at the end | the later paragraphs as `changed`, then one `removed` at the end |
 
 Both carry a `structure` entry such as `section 0 paragraphs 5 → 6`. In the second case the edit strips the caches after the edit point, so the tail no longer matches. Check that the `changed` texts are the old ones shifted by the number inserted or deleted. For batch edits at several places, do not expect a particular shape; check the `structure` count and that every inserted text appears and every deleted text is gone.
 

@@ -24,13 +24,13 @@ resolved fails the render rather than being guessed at. `to_pdf(degraded=True)` 
 and renders the missing face with a fallback, which changes how the page looks.
 
 Rendering replays a layout stored in the document, so `to_pdf` needs a document that carries
-one. Two do: an HWPX Hancom saved, and an HWPX converted from HWP5 with the layout carried
-across — `hwpforge.convert_hwp5(data, carry_layout_cache=True).document.to_pdf(...)`. A document
+one. Two do: an HWPX Hancom saved, and an HWPX converted from HWP5, which carries the layout
+across by default — `hwpforge.convert_hwp5(data).document.to_pdf(...)`. A document
 this library generated from Markdown or JSON carries no layout and is refused with
 `PDF_RENDER_FAILED`.
 
-A layout carried over from HWP5 is for PDF replay and comparison only; do not treat such an
-HWPX as one to reopen in Hancom.
+A paragraph whose line starts cannot be carried over exactly loses its layout and is reported
+as `LAYOUT_CACHE_DROPPED`; `convert_hwp5(data, carry_layout_cache=False)` leaves the layout out.
 
 ## Install
 
@@ -107,7 +107,7 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 | `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                                    |
 | `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                                    |
 | `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                             |
-| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"` refuses to lose anything)                                       |
+| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"`: see the note below)                                            |
 | `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                                |
 | `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                                       |
 | `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                   |
@@ -116,6 +116,11 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 | `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                              |
 | `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                                |
 | `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                         |
+
+`to_md(mode="lossless")` keeps what the preservation scope lists, raises `ENCODE_FAILED` for
+an object the scope lists as refused, and may leave out anything else (paragraph styles,
+headers and footers …) without an error — the scope is the "Lossless 보존 범위" section of the
+[Markdown bridge guide](https://ai-scream.ai/HwpForge/guide/markdown-bridge.html#lossless-보존-범위).
 
 Constructors and accessors beside these: `Document.open(path)` (bounded at 100 MB, raising
 `INPUT_TOO_LARGE` beyond it), `Document.from_bytes(data)` (no bound — the caller already holds
@@ -132,7 +137,7 @@ such a document.
 | ------------------------------------------------------ | ----------------------------------- | ----------------------- |
 | `convert_md(text, *, preset="default", base_dir=None)` | `DocumentResult[ConvertMdReport]`   | `PRESET_NOT_FOUND`      |
 | `from_json(text, *, base=None)`                        | `DocumentResult[EncodeReport]`      | `JSON_PARSE_FAILED`     |
-| `convert_hwp5(data, *, carry_layout_cache=False)`      | `DocumentResult[ConvertHwp5Report]` | `HWP5_DECODE_FAILED`    |
+| `convert_hwp5(data, *, carry_layout_cache=True)`       | `DocumentResult[ConvertHwp5Report]` | `HWP5_DECODE_FAILED`    |
 | `templates()`                                          | `TemplatesReport`                   | —                       |
 | `schema(*, kind="document")`                           | `SchemaReport`                      | —                       |
 

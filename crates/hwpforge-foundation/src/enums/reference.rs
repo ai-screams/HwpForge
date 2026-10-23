@@ -84,7 +84,7 @@ impl schemars::JsonSchema for BookmarkType {
 // ---------------------------------------------------------------------------
 
 /// Type of a press-field (누름틀) or SUMMERY auto-field carried in
-/// [`Control::Field`].
+/// `Control::Field`.
 ///
 /// `ClickHere` is the press-field (user-fillable form). The rest are
 /// SUMMERY-family auto-fields (HWPX `<hp:fieldBegin type="SUMMERY">`,
@@ -92,7 +92,7 @@ impl schemars::JsonSchema for BookmarkType {
 ///
 /// Wave 12n (2026-06-02) breaking: legacy `Date`/`Time`/`DocSummary`/`UserInfo`
 /// variants were renamed to match the actual HWPX `Command` token and 한컴
-/// menu item, and `PageNum` was moved out to [`Control::InlinePageNumber`]
+/// menu item, and `PageNum` was moved out to `Control::InlinePageNumber`
 /// because the wire family is `atno`, not SUMMERY/fieldBegin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
@@ -101,13 +101,13 @@ pub enum FieldType {
     /// Click-here placeholder press-field (default). 한컴 누름틀. HWP5 `%clk`.
     #[default]
     ClickHere = 0,
-    /// SUMMERY `$author` — 만든 사람 (was [`FieldType::DocSummary`]).
+    /// SUMMERY `$author` — 만든 사람 (was `FieldType::DocSummary`).
     Author = 1,
-    /// SUMMERY `$lastsaveby` — 마지막 저장한 사람 (was [`FieldType::UserInfo`]).
+    /// SUMMERY `$lastsaveby` — 마지막 저장한 사람 (was `FieldType::UserInfo`).
     LastSavedBy = 2,
-    /// SUMMERY `$createtime` — 만든 날짜 (was [`FieldType::Time`]).
+    /// SUMMERY `$createtime` — 만든 날짜 (was `FieldType::Time`).
     CreatedTime = 3,
-    /// SUMMERY `$modifiedtime` — 마지막 저장한 날짜 (was [`FieldType::Date`]).
+    /// SUMMERY `$modifiedtime` — 마지막 저장한 날짜 (was `FieldType::Date`).
     ModifiedTime = 4,
     /// SUMMERY `$title` — 문서 제목 (NEW in Wave 12n).
     Title = 5,
@@ -130,7 +130,7 @@ impl FieldType {
 
     /// Parses a SUMMERY `$token` (`$author`, `$createtime`, …) into a
     /// matching [`FieldType`]. Returns `None` for unknown tokens; callers
-    /// should carry the raw token via [`Control::UnknownSummary`] instead.
+    /// should carry the raw token via `Control::UnknownSummary` instead.
     #[must_use]
     pub fn from_summary_token(token: &str) -> Option<Self> {
         match token {

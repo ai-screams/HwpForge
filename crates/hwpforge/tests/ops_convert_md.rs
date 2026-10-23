@@ -393,3 +393,26 @@ mod base64_shim {
         assert_eq!(encode(b"foobar"), "Zm9vYmFy");
     }
 }
+
+#[test]
+fn w2_notes_lists_and_continuation_use_physical_measures() {
+    let markdown =
+        "본문[^n]\n\n- [ ] 첫 항목\n\n  계속 문단\n\n  - [x] 안쪽 항목\n\n[^n]: 각주 본문\n";
+    let out = convert_md(markdown, None, &ConvertMdOptions::default()).unwrap();
+    let decoded = HwpxDecoder::decode(&out.bytes).unwrap();
+    let mut note_found = false;
+    decoded.document.for_each_paragraph(|p| {
+        let shape = decoded.style_store.para_shape(p.para_shape_id).unwrap();
+        assert!(shape.margin_left.as_hwp_unit().is_some());
+        assert!(shape.indent.as_hwp_unit().is_some());
+        if p.text_content().contains("각주 본문") {
+            note_found = true;
+            assert_eq!(shape.indent.as_hwp_unit().unwrap().as_i32(), -655);
+        }
+    });
+    assert!(note_found);
+    let md = hwpforge::ops::to_md(&out.bytes, &hwpforge::ops::MdExportOptions::default()).unwrap();
+    assert!(md.markdown.contains("\n\n  계속 문단"), "{}", md.markdown);
+    assert!(md.markdown.contains("  - [x] 안쪽 항목"), "{}", md.markdown);
+    assert!(md.warnings.iter().any(|w| w.info().code == "PARAGRAPH_MEASURE_LOST"));
+}

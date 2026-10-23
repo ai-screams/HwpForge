@@ -24,6 +24,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::FoundationError;
+
 /// A color stored in BGR format, matching the HWP binary specification.
 ///
 /// Internally a `u32` with `repr(transparent)` for zero overhead.
@@ -141,6 +143,30 @@ impl Color {
     #[allow(clippy::wrong_self_convention)]
     pub fn to_hex_rgb(&self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.red(), self.green(), self.blue())
+    }
+
+    /// Parses an RGB hex string in exactly `#RRGGBB` form (either case).
+    /// The result always has its upper byte zero.
+    ///
+    /// # Errors
+    ///
+    /// [`FoundationError::InvalidColor`] for anything else.
+    ///
+    /// # Examples
+    /// ```
+    /// use hwpforge_foundation::Color;
+    /// assert_eq!(Color::from_hex_rgb("#123456").unwrap(), Color::from_rgb(0x12, 0x34, 0x56));
+    /// assert!(Color::from_hex_rgb("#12345").is_err());
+    /// ```
+    pub fn from_hex_rgb(s: &str) -> Result<Self, FoundationError> {
+        let invalid =
+            || FoundationError::InvalidColor { component: "hex".to_string(), value: s.to_string() };
+        let hex = s.strip_prefix('#').ok_or_else(invalid)?;
+        if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| invalid());
+        Ok(Self::from_rgb(byte(0)?, byte(2)?, byte(4)?))
     }
 }
 
@@ -299,6 +325,17 @@ mod tests {
     fn color_debug_format() {
         let c = Color::from_rgb(0x11, 0x22, 0x33);
         assert_eq!(format!("{c:?}"), "Color(#112233)");
+    }
+
+    /// 이것을 실패시키는 것: 바이트 순서를 BGR 로 읽는 것, `#` 없이·5 자리·잘못된 글자를 받는 것.
+    #[test]
+    fn from_hex_rgb_is_strict_rgb() {
+        let c = Color::from_hex_rgb("#123456").unwrap();
+        assert_eq!((c.red(), c.green(), c.blue()), (0x12, 0x34, 0x56));
+        assert_eq!(Color::from_hex_rgb("#abcdef").unwrap(), Color::from_rgb(0xAB, 0xCD, 0xEF));
+        for bad in ["123456", "#12345", "#1234567", "#GG0000", "none", ""] {
+            assert!(Color::from_hex_rgb(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

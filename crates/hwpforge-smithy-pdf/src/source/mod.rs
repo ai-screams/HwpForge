@@ -52,6 +52,9 @@ pub struct LineImage {
     pub width: i32,
     /// 표시 높이 (HWPUNIT).
     pub height: i32,
+    /// 보이는 부분 — 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]`(0–1).
+    /// `None` = 그림 전체. 이 부분이 표시 상자를 채운다 (`picture_crop`).
+    pub crop: Option<[f64; 4]>,
 }
 
 /// 줄 안 인라인(글자취급) 글상자 원자 (W4 w2).
@@ -71,7 +74,7 @@ pub struct LineImage {
 ///    넘친 줄을 캐시에 방출하고 렌더에서 절단)이라 상시 clip.
 /// 3. **내부 줄 replay**: [`Self::inner_lines`] 각 줄을 **박스 원점 +
 ///    textMargin(기본 283, gotcha #29) + vertAlign 시프트** 를 더해 절대
-///    배치한다 (셀 replay 선례 — [`crate::source::table`]). 내부 캐시 v축은
+///    배치한다 (셀 replay 선례 — `crate::source::table`). 내부 캐시 v축은
 ///    문단 경계를 넘어 연속이다 (§8a). 각 줄의 `seg`([`hwpforge_core::layout::LineSeg`])·
 ///    `alignment`·`is_last_line` 이 텍스트/이미지 배치와 JUSTIFY 규칙을 준다.
 /// 4. **vertAlign 시프트**: 내부 캐시는 vertAlign 을 반영하지 않는다(3종
@@ -152,7 +155,7 @@ pub struct LaidLine {
     /// 줄 상자 높이 (HWPUNIT — `seg.vertsize`). sub-line 인라인 이미지의 세로
     /// 배치 공식이 쓰는 줄 높이다 (§10c-2): 이미지가 줄 높이보다 작으면
     /// baseline 에 얹혀 이미지 자체 descent 만큼 내려앉는다. baseline =
-    /// `baseline_y − top_y` 와 함께 [`crate::render`] 가 이미지 top 을 유도한다.
+    /// `baseline_y − top_y` 와 함께 `crate::render` 가 이미지 top 을 유도한다.
     pub vertsize: i32,
     /// 줄 가로 상자 (HWPUNIT — body 좌변 반영, 정렬 미적용 상태).
     pub line_box: LineBox,
@@ -240,7 +243,7 @@ pub struct LaidPageNumber {
 pub struct LaidAnchoredImage {
     /// 위치 보고용 경로 (`s{섹션}/p{문단}` — 진단·오류 payload).
     pub location: String,
-    /// canonical 스토어 키 ([`crate::render`] 의 `image_data` 조회 키).
+    /// canonical 스토어 키 (`crate::render` 의 `image_data` 조회 키).
     pub canonical_key: String,
     /// 좌상단 x (HWPUNIT, 쪽 좌상단 원점).
     pub x: i32,
@@ -250,6 +253,8 @@ pub struct LaidAnchoredImage {
     pub width: i32,
     /// 표시 높이 (HWPUNIT).
     pub height: i32,
+    /// 보이는 부분 — [`LineImage::crop`] 과 같다.
+    pub crop: Option<[f64; 4]>,
 }
 
 /// 한 쪽의 배치 결과.
@@ -313,6 +318,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
         let first_page = pages.len();
         let mut events: Vec<PageNumberEvent> = Vec::new();
         let mut hides: Vec<PageHideEvent> = Vec::new();
+        let mut para_pages: Vec<Option<usize>> = vec![None; section.paragraphs.len()];
         replay_section(
             input,
             options,
@@ -321,6 +327,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             &mut pages,
             &mut events,
             &mut hides,
+            &mut para_pages,
             &mut warnings,
         )?;
         overlay_headers_footers(
@@ -330,6 +337,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             section_idx,
             first_page,
             &hides,
+            &para_pages,
             &mut pages,
             &mut warnings,
         )?;
@@ -552,7 +560,15 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
     let Some(p) = img.placement.as_ref() else {
         return false;
     };
+    // §19.20 PDF-v3 (P16): 앵커 렌더러는 정렬을 계산하지 않는다 — 정렬이
+    // top/left 가 아니거나 두 플래그가 켜진 앵커 그림은 거부.
+    // 이것을 실패시키는 것: 이 네 조건을 지우기
+    // (`anchored_image_with_alignment_is_rejected`).
     !p.treat_as_char
+        && p.vert_align == hwpforge_core::placement::VertAlign::Top
+        && p.horz_align == hwpforge_core::placement::HorzAlign::Left
+        && !p.affect_line_spacing
+        && !p.hold_anchor_and_so
         && p.vert_rel_to == ObjectRelativeTo::Para
         && matches!(p.horz_rel_to, ObjectRelativeTo::Para | ObjectRelativeTo::Column)
         && matches!(
@@ -701,6 +717,11 @@ fn collect_anchored_images(
             y,
             width: img.width.as_i32(),
             height: img.height.as_i32(),
+            crop: {
+                refuse_caption_number(img.caption.as_ref(), location)?;
+                refuse_object_out_margin(img.placement.as_ref(), location)?;
+                picture_crop(img, location)?
+            },
         }],
         marker_idx,
     ))
@@ -741,21 +762,26 @@ pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32)
     Ok(box_height.max(with_margins))
 }
 
-/// 렌더 replay(`collect_page_events`)가 실제 소비하는 0폭 marker 인지.
+/// 렌더 replay 가 소비하는 0폭 marker 또는 본문과 분리된 필드 경계인지.
+/// 필드 경계는 그릴 글자가 없고, 표시값은 인접한 일반 run 이 이미 담는다.
 ///
 /// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
 /// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
 /// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
+/// Positioned PageNumber is consumed by emit_page_numbers via the derived
+/// section summary and has no body glyph.
 /// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
-    matches!(content, RunContent::Control(c)
-    if matches!(
-        **c,
-        hwpforge_core::control::Control::NewNumber {
-            kind: hwpforge_core::control::NewNumberKind::Page,
-            ..
-        } | hwpforge_core::control::Control::PageHiding { .. }
-    ))
+    hwpforge_core::field_view::is_boundary(content)
+        || matches!(content, RunContent::Control(c)
+        if matches!(
+            **c,
+            hwpforge_core::control::Control::NewNumber {
+                kind: hwpforge_core::control::NewNumberKind::Page,
+                ..
+            } | hwpforge_core::control::Control::PageHiding { .. }
+              | hwpforge_core::control::Control::PageNumber { .. }
+        ))
 }
 
 /// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
@@ -836,12 +862,30 @@ fn overlay_headers_footers(
     section_idx: usize,
     first_page: usize,
     hides: &[PageHideEvent],
+    para_pages: &[Option<usize>],
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
     if section.headers.is_empty() && section.footers.is_empty() {
         return Ok(());
     }
+    // §19.17 F2 (X4): 머리말/꼬리말은 앵커 문단이 놓인 쪽부터 적용된다 —
+    // 앞 쪽에는 없다(x4b). 앵커 문단의 쪽을 재생이 정하지 못했으면(캐시 없는
+    // 문단) 근사하지 않고 거부한다.
+    let start_page = |kind: &'static str,
+                      i: usize,
+                      hf: &hwpforge_core::section::HeaderFooter|
+     -> PdfResult<usize> {
+        match hf.anchor_paragraph.unwrap_or(0) {
+            0 => Ok(first_page),
+            anchor => para_pages.get(anchor).copied().flatten().ok_or_else(|| {
+                PdfError::UnsupportedContent {
+                    kind: "header/footer anchored to a paragraph with no replayed page",
+                    location: format!("s{section_idx}/{kind}{i} -> p{anchor}"),
+                }
+            }),
+        }
+    };
     let ps = &section.page_settings;
     let page_height = ps.height.as_i32();
     let body_left = ps.margin_left.as_i32();
@@ -884,22 +928,19 @@ fn overlay_headers_footers(
         // 같은 항목이 매 쪽 반복되므로 초과/정렬 경고는 항목당 1회.
         let mut warned_overflow = vec![false; list.len()];
         let mut warned_valign = vec![false; list.len()];
-        for (offset, page) in pages[first_page..].iter_mut().enumerate() {
-            let physical = first_page + offset + 1;
-            let odd = physical % 2 == 1;
-            let matched: Vec<usize> = list
-                .iter()
-                .enumerate()
-                .filter(|(_, h)| match h.apply_page_type {
-                    ApplyPageType::Both => true,
-                    ApplyPageType::Odd => odd,
-                    ApplyPageType::Even => !odd,
-                    // non_exhaustive 미래 variant — 디코더가 미지값을 BOTH 로
-                    // 경고 폴백하므로 여기 도달 불가. 도달하면 미매치 처리.
-                    _ => false,
-                })
-                .map(|(i, _)| i)
-                .collect();
+        let starts: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .map(|(i, hf)| start_page(kind, i, hf))
+            .collect::<PdfResult<_>>()?;
+        let kinds: Vec<ApplyPageType> = list.iter().map(|hf| hf.apply_page_type).collect();
+        let mut comparisons = 0usize;
+        let selections =
+            band_selections(&starts, &kinds, first_page, pages.len(), &mut comparisons);
+        for (offset, (page, matched)) in pages[first_page..].iter_mut().zip(selections).enumerate()
+        {
+            let page_idx = first_page + offset;
+            let physical = page_idx + 1;
             if matched.len() > 1 {
                 let kinds: Vec<ApplyPageType> =
                     matched.iter().map(|&i| list[i].apply_page_type).collect();
@@ -939,6 +980,66 @@ fn overlay_headers_footers(
     Ok(())
 }
 
+/// 쪽마다 적용되는 머리말/꼬리말 후보 (쪽 `first_page..page_count` 순서).
+///
+/// 후보 = 그 쪽까지 시작했고(`starts[i] <= 쪽`) 쪽 종류(`kinds[i]`: 양쪽·홀·짝)가
+/// 맞는 항목 중, 같은 종류에서 가장 늦게 시작한 것(x4a: 3쪽부터 B). 시작 쪽이
+/// 같은 같은 종류 항목은 둘 다 남는다 — 호출부가 모호성으로 거부한다. 홀수
+/// 쪽 번호는 물리 쪽(1부터) 기준.
+///
+/// 시작 쪽 순으로 한 번 훑으며 종류별 "가장 늦은 시작" 집합을 갱신하므로
+/// 비교는 O(쪽 + 항목) 이다(리뷰 r1: 쪽마다 전 후보를 다시 뒤지면 O(P·H²)).
+/// `comparisons` 는 그 비교 횟수 — 테스트가 시간 대신 센다.
+/// 이것을 실패시키는 것: 시작 쪽 조건 삭제(x4b 1쪽에 머리말) / 늦은 시작
+/// 대체를 지우기(x4a 3쪽 = 모호성 거부).
+fn band_selections(
+    starts: &[usize],
+    kinds: &[ApplyPageType],
+    first_page: usize,
+    page_count: usize,
+    comparisons: &mut usize,
+) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..starts.len()).collect();
+    order.sort_by_key(|&i| starts[i]);
+    // 종류별 (가장 늦은 시작 쪽, 그 항목들): 0 = 양쪽, 1 = 홀, 2 = 짝.
+    let mut latest: [Option<(usize, Vec<usize>)>; 3] = [None, None, None];
+    let slot = |kind: ApplyPageType| match kind {
+        ApplyPageType::Both => Some(0),
+        ApplyPageType::Odd => Some(1),
+        ApplyPageType::Even => Some(2),
+        // non_exhaustive 미래 variant — 디코더가 미지값을 BOTH 로 경고
+        // 폴백하므로 도달 불가. 도달하면 미매치.
+        _ => None,
+    };
+    let mut next = 0;
+    let mut out = Vec::with_capacity(page_count.saturating_sub(first_page));
+    for page_idx in first_page..page_count {
+        while next < order.len() && starts[order[next]] <= page_idx {
+            let i = order[next];
+            next += 1;
+            *comparisons += 1;
+            let Some(k) = slot(kinds[i]) else { continue };
+            match &mut latest[k] {
+                Some((start, items)) if *start == starts[i] => items.push(i),
+                entry => *entry = Some((starts[i], vec![i])),
+            }
+        }
+        let odd = (page_idx + 1) % 2 == 1;
+        let mut matched: Vec<usize> = Vec::new();
+        for (k, applies) in [(0, true), (1, odd), (2, !odd)] {
+            *comparisons += 1;
+            if applies {
+                if let Some((_, items)) = &latest[k] {
+                    matched.extend(items);
+                }
+            }
+        }
+        matched.sort_unstable();
+        out.push(matched);
+    }
+    out
+}
+
 /// 밴드 재생 기하 (인자 다발 — [`replay_band_item`] 전용).
 struct BandGeom {
     kind: &'static str,
@@ -970,6 +1071,8 @@ fn replay_band_item(
         warnings.push(PdfWarning::VertAlignFallback { location: item_location.clone() });
     }
     for (para_idx, para) in hf.paragraphs.iter().enumerate() {
+        let expanded = hwpforge_core::field_view::expand_memos(para);
+        let para = expanded.as_ref();
         let location = format!("{item_location}/p{para_idx}");
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             if options.partial_cache == PartialCachePolicy::Reject {
@@ -981,7 +1084,9 @@ fn replay_band_item(
         // W1b admission (§1g v5 변경 1): 밴드는 대응 consumer 가 없어
         // allowlist 가 **비어 있다** — 문단 전체에서 비텍스트 run 은 전부
         // W2(밴드 이미지 렌더) 전 InvalidCache.
-        if para.runs.iter().any(|r| r.content.plain_text().is_none()) {
+        if para.runs.iter().any(|r| {
+            r.content.plain_text().is_none() && !hwpforge_core::field_view::is_boundary(&r.content)
+        }) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{location}: non-text run in band paragraph is not renderable \
@@ -1029,6 +1134,7 @@ fn replay_section(
     pages: &mut Vec<PageLayout>,
     events: &mut Vec<PageNumberEvent>,
     hides: &mut Vec<PageHideEvent>,
+    para_pages: &mut [Option<usize>],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
     let ps = &section.page_settings;
@@ -1062,6 +1168,8 @@ fn replay_section(
     let mut pending_table_anchor: Option<(i32, i32, String)> = None;
 
     for (para_idx, para) in section.paragraphs.iter().enumerate() {
+        let expanded = hwpforge_core::field_view::expand_memos(para);
+        let para = expanded.as_ref();
         let location = format!("s{section_idx}/p{para_idx}");
 
         // W2/W3 이벤트는 **cache admission 과 무관하게** 문단 진입 시 수집한다
@@ -1119,6 +1227,21 @@ fn replay_section(
                     location,
                 });
             }
+            // S22 r1: a placement the replay does not support is refused
+            // before a missing host cache — re-saving in Hancom would write
+            // the cache but leave the table unrenderable.
+            // 이것을 실패시키는 것: 이 검사를 캐시 검사 뒤로
+            // (`unsupported_table_placement_is_reported_before_a_missing_cache`).
+            let hosted = para.runs.iter().find_map(|r| match &r.content {
+                RunContent::Table(t) => Some(t.as_ref()),
+                _ => None,
+            });
+            if hosted.is_some_and(|t| !table::placement_is_default_flow(t)) {
+                return Err(PdfError::UnsupportedContent {
+                    kind: "non-default table position",
+                    location,
+                });
+            }
             let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
                 return Err(PdfError::MissingLayoutCache { count: 1, first: location });
             };
@@ -1133,6 +1256,7 @@ fn replay_section(
             // 독립 리뷰 High #4: `[marker, Table]` host 문단의 재시작/감춤은
             // host lineseg 가 귀속된 쪽(표 재생 전 현재 쪽)에 앵커한다.
             let host_page = pages.len() - 1;
+            para_pages[para_idx] = Some(host_page);
             for &(_, number) in &restarts {
                 events.push(PageNumberEvent { page: host_page, number });
             }
@@ -1341,6 +1465,9 @@ fn replay_section(
                 }
             }
             prev_v = Some(v);
+            if line_idx == 0 {
+                para_pages[para_idx] = Some(pages.len() - 1);
+            }
 
             // W5 w1b + §10i: 앵커 이미지는 **마커 소속 줄**이 안착한 쪽에
             // 배경으로 붙인다 (y 는 collect_anchored_images 가 그 줄의
@@ -1622,6 +1749,95 @@ pub(crate) fn build_inline_object_line_atoms(
     Ok(atoms)
 }
 
+/// 그림 원자 — 자르기를 비율로 싣는다 ([`picture_crop`]).
+fn line_image(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<LineImage> {
+    refuse_caption_number(img.caption.as_ref(), location)?;
+    refuse_object_out_margin(img.placement.as_ref(), location)?;
+    Ok(LineImage {
+        canonical_key: img.path.clone(),
+        width: img.width.as_i32(),
+        height: img.height.as_i32(),
+        crop: picture_crop(img, location)?,
+    })
+}
+
+/// An object with an outer margin (S18) is refused: Hancom keeps that space
+/// around it (a treat-as-char object with a bottom margin sits that much
+/// higher on its line) and this layout does not.
+/// 이것을 실패시키는 것: 세 경로의 호출을 각각 지우기
+/// (`object_with_an_outer_margin_is_refused`).
+fn refuse_object_out_margin(
+    placement: Option<&hwpforge_core::placement::ObjectPlacement>,
+    location: &str,
+) -> PdfResult<()> {
+    let margin = placement.and_then(|p| p.out_margin);
+    if margin.is_some_and(|m| [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != 0)) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "object with an outer margin",
+            location: location.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// A caption that holds a caption number (`Control::AutoNumber`) is
+/// refused (§19.16 J, review r1): captions of pictures and text boxes are
+/// not drawn, so the number would vanish from a successful render.
+/// 이것을 실패시키는 것: 이 거부를 지우기(`caption_number_in_a_caption_is_refused`).
+pub(crate) fn refuse_caption_number(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    location: &str,
+) -> PdfResult<()> {
+    // The Core paragraph walk does not enter a picture's caption, so a
+    // picture inside the caption has its own caption looked at here
+    // (review r2: caption → picture → caption → number passed).
+    // 이것을 실패시키는 것: 그림 캡션으로 재귀하지 않기
+    // (`caption_number_in_a_caption_is_refused`).
+    fn holds_number(caption: &hwpforge_core::caption::Caption) -> bool {
+        let mut found = false;
+        for p in &caption.paragraphs {
+            p.for_each_paragraph(|q| {
+                found |= q.runs.iter().any(|r| match &r.content {
+                    RunContent::Control(c) => {
+                        matches!(**c, hwpforge_core::control::Control::AutoNumber { .. })
+                    }
+                    RunContent::Image(img) => img.caption.as_ref().is_some_and(holds_number),
+                    _ => false,
+                });
+            });
+        }
+        found
+    }
+    let Some(caption) = caption else { return Ok(()) };
+    if holds_number(caption) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "caption number",
+            location: location.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// 그림의 자르기를 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]` 로 (§19.20
+/// PDF-v3, P18). 자르기는 그림 좌표계(`image_extent`)에 있으므로 범위를
+/// 모르면 사상할 수 없어 거부한다 — 화소 크기로 대신하지 않는다(`imgDim` ≠
+/// 화소×75 가 대부분). 빈 자르기도 거부. 이것을 실패시키는 것: 범위 나눗셈을
+/// 지우기 / 범위 모름 거부를 지우기 (`picture_crop_fractions`).
+fn picture_crop(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<Option<[f64; 4]>> {
+    let Some(crop) = img.crop else { return Ok(None) };
+    let refuse = |kind| Err(PdfError::UnsupportedContent { kind, location: location.to_string() });
+    let Some((ew, eh)) = img.image_extent else {
+        return refuse("cropped picture without its image size");
+    };
+    let (ew, eh) = (f64::from(ew.as_i32()), f64::from(eh.as_i32()));
+    let [l, t, r, b] =
+        [crop.left, crop.top, crop.right, crop.bottom].map(|v| f64::from(v.as_i32()));
+    if ew <= 0.0 || eh <= 0.0 || r <= l || b <= t {
+        return refuse("cropped picture with an empty crop");
+    }
+    Ok(Some([l / ew, t / eh, r / ew, b / eh]))
+}
+
 /// 인라인 이미지 문단의 원자를 캐시 줄별로 귀속한다 (W2b §4 D2).
 ///
 /// [`build_inline_object_line_atoms`] 에 이미지 classifier(기대 높이 =
@@ -1636,11 +1852,7 @@ pub(crate) fn build_inline_image_line_atoms(
             RunContent::Image(img) => Some(ClassifiedObject {
                 height: img.height.as_i32(),
                 sub_line_capable: true,
-                atom: LineAtom::Image(LineImage {
-                    canonical_key: img.path.clone(),
-                    width: img.width.as_i32(),
-                    height: img.height.as_i32(),
-                }),
+                atom: LineAtom::Image(line_image(img, location)?),
             }),
             _ => None,
         })
@@ -1661,11 +1873,7 @@ pub(crate) fn build_cell_image_line_atoms(
             RunContent::Image(img) => Some(ClassifiedObject {
                 height: img.height.as_i32(),
                 sub_line_capable: false,
-                atom: LineAtom::Image(LineImage {
-                    canonical_key: img.path.clone(),
-                    width: img.width.as_i32(),
-                    height: img.height.as_i32(),
-                }),
+                atom: LineAtom::Image(line_image(img, location)?),
             }),
             _ => None,
         })
@@ -1733,11 +1941,7 @@ pub(crate) fn build_textbox_inner_line_atoms(
             Ok(Some(ClassifiedObject {
                 height: img.height.as_i32(),
                 sub_line_capable: true,
-                atom: LineAtom::Image(LineImage {
-                    canonical_key: img.path.clone(),
-                    width: img.width.as_i32(),
-                    height: img.height.as_i32(),
-                }),
+                atom: LineAtom::Image(line_image(img, location)?),
             }))
         }
         RunContent::Image(_) => Err(PdfError::UnsupportedContent {
@@ -1770,6 +1974,9 @@ fn build_line_text_box(
         height,
         style,
         text_vertical_align,
+        caption,
+        text_margin,
+        placement,
         ..
     } = ctrl
     else {
@@ -1777,6 +1984,19 @@ fn build_line_text_box(
             detail: format!("{location}: build_line_text_box called on non-TextBox control"),
         });
     };
+    refuse_caption_number(caption.as_ref(), location)?;
+    refuse_object_out_margin(placement.as_ref(), location)?;
+    // §19.22 D4: the layout uses `TEXTBOX_TEXT_MARGIN` (283) on every side;
+    // another margin would put the text in the wrong place.
+    // 이것을 실패시키는 것: 이 거부를 지우기(`text_box_margin_other_than_283_is_refused`).
+    if text_margin.is_some_and(|m| {
+        [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != TEXTBOX_TEXT_MARGIN)
+    }) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "text box with a text margin other than 283",
+            location: location.to_string(),
+        });
+    }
     let mut inner_lines = Vec::new();
     for (pi, para) in paragraphs.iter().enumerate() {
         let inner_loc = format!("{location}/tb/p{pi}");
@@ -1811,7 +2031,7 @@ fn build_line_text_box(
                 }
             }
             inner_lines.push(TextBoxLine {
-                seg: *seg,
+                seg: seg.clone(),
                 atoms: line_atoms,
                 alignment,
                 is_last_line: li + 1 == line_count,
@@ -1828,6 +2048,29 @@ fn build_line_text_box(
     // 확장 시 interior == extent 라 vertAlign 시프트는 단일 공식에서 0 이
     // 자동으로 나온다 (§11b F1 — CENTER/BOTTOM 별도 분기 불요).
     let extent = textbox_content_extent(&inner_lines, location)?;
+    // §19.21 H2: 무늬·그러데이션·그림 채우기는 증류가 버린다(원색만 그림) —
+    // 단색으로 그리면 가짜 지원이므로 거부한다(렌더는 후속).
+    // 이것을 실패시키는 것: 이 거부를 지우기(무늬 상자가 단색으로 그려짐,
+    // `text_box_with_a_fill_paint_cannot_draw_is_refused`).
+    if let Some(fill) = style.as_ref().and_then(|s| s.fill.as_ref()) {
+        use hwpforge_core::control::Fill;
+        if matches!(fill, Fill::Pattern { .. } | Fill::Gradient { .. } | Fill::Image { .. }) {
+            return Err(PdfError::UnsupportedContent {
+                kind: "text box with a pattern, gradient or picture fill",
+                location: location.to_string(),
+            });
+        }
+    }
+    // §19.20 PDF-v3 (P17): 테두리·채움은 각진 사각형으로만 그린다 — 둥근
+    // 모서리 글상자는 거부(렌더는 후속).
+    // 이것을 실패시키는 것: 이 거부를 지우기
+    // (`text_box_with_round_corners_is_refused`).
+    if style.as_ref().and_then(|s| s.corner_ratio).is_some_and(|r| r > 0) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "text box with rounded corners",
+            location: location.to_string(),
+        });
+    }
     Ok(LineTextBox {
         width: width.as_i32(),
         height: textbox_expected_host_height(height.as_i32(), extent)?,
@@ -1839,10 +2082,20 @@ fn build_line_text_box(
 
 /// Core `ShapeStyle` 에서 [`TextBoxStyle`] 로 원색·굵기만 증류한다
 /// (dash/rotation 등은 Paint `Line` 이 실선만 그리므로 제외 — §8g w4).
+///
+/// `fill` 이 `fill_color` 를 덮는다는 Core 계약대로, [`Fill::None`](hwpforge_core::control::Fill::None)
+/// (채우기 없음)이면 `fill_color` 가 있어도 채우지 않는다.
 fn distill_textbox_style(style: &hwpforge_core::control::ShapeStyle) -> TextBoxStyle {
+    // 이것을 실패시키는 것: 이 판정을 지우고 `fill_color` 를 그대로 쓰기
+    // (`distill_drops_fill_color_when_fill_is_none`).
+    let no_fill = matches!(style.fill, Some(hwpforge_core::control::Fill::None));
+    // 선 종류 "없음"은 테두리가 없다(색·굵기가 있어도 — HWP5 r6 안쪽 상자).
+    // 이것을 실패시키는 것: 이 판정을 지우기(없는 테두리를 그림,
+    // `distill_drops_the_border_when_the_line_is_none`).
+    let no_line = matches!(style.line_style, Some(hwpforge_core::control::LineStyle::None));
     TextBoxStyle {
-        line_color: style.line_color,
-        fill_color: style.fill_color,
+        line_color: if no_line { None } else { style.line_color },
+        fill_color: if no_fill { None } else { style.fill_color },
         line_width: style.line_width.map_or(0, |w| w.min(i32::MAX as u32) as i32),
     }
 }
@@ -1914,16 +2167,18 @@ mod tests {
     impl StyleLookup for NoopStyles {}
 
     fn seg(textpos: u32, vertpos: i32) -> LineSeg {
-        LineSeg {
-            textpos,
-            vertpos,
-            vertsize: 1000,
-            textheight: 1000,
-            baseline: 850,
-            spacing: 600,
-            horzpos: 0,
-            horzsize: 48188,
-            flags: 0,
+        {
+            let mut lineseg = LineSeg::default();
+            lineseg.textpos = textpos;
+            lineseg.vertpos = vertpos;
+            lineseg.vertsize = 1000;
+            lineseg.textheight = 1000;
+            lineseg.baseline = 850;
+            lineseg.spacing = 600;
+            lineseg.horzpos = 0;
+            lineseg.horzsize = 48188;
+            lineseg.flags = 0;
+            lineseg
         }
     }
 
@@ -1932,6 +2187,35 @@ mod tests {
     /// 글상자 원자가 박스 크기·스타일·vertAlign 과 내부 줄(lineseg + 재귀
     /// 원자)을 손실 없이 나르고, 호스트 줄의 텍스트 run 으로 새지 않는지
     /// 잠근다 — w3 이 이 형태를 소비한다.
+    #[test]
+    fn distill_drops_fill_color_when_fill_is_none() {
+        use hwpforge_core::control::{Fill, ShapeStyle};
+        let both = ShapeStyle {
+            fill_color: Some(Color::from_rgb(255, 0, 0)),
+            fill: Some(Fill::None),
+            ..Default::default()
+        };
+        assert_eq!(distill_textbox_style(&both).fill_color, None);
+        let plain =
+            ShapeStyle { fill_color: Some(Color::from_rgb(255, 0, 0)), ..Default::default() };
+        assert_eq!(distill_textbox_style(&plain).fill_color, Some(Color::from_rgb(255, 0, 0)));
+    }
+
+    // 이것을 실패시키는 것: `no_line` 판정을 지우기.
+    #[test]
+    fn distill_drops_the_border_when_the_line_is_none() {
+        use hwpforge_core::control::{LineStyle, ShapeStyle};
+        let none = ShapeStyle {
+            line_color: Some(Color::from_rgb(222, 158, 23)),
+            line_width: Some(283),
+            line_style: Some(LineStyle::None),
+            ..Default::default()
+        };
+        assert_eq!(distill_textbox_style(&none).line_color, None);
+        let solid = ShapeStyle { line_style: Some(LineStyle::Solid), ..none };
+        assert_eq!(distill_textbox_style(&solid).line_color, Some(Color::from_rgb(222, 158, 23)));
+    }
+
     #[test]
     fn line_text_box_carries_size_style_and_recursive_inner_atoms() {
         let inner_text = TextBoxLine {
@@ -1951,6 +2235,7 @@ mod tests {
                 canonical_key: "BinData/inner.png".to_string(),
                 width: 500,
                 height: 500,
+                crop: None,
             })],
             alignment: Alignment::Center,
             is_last_line: true,
@@ -2002,7 +2287,12 @@ mod tests {
     // ── W2b c2: body admission·높이 profile (§4 D1/D2) ──────────
 
     fn img_seg(textpos: u32, vertpos: i32) -> LineSeg {
-        LineSeg { vertsize: 2000, textheight: 2000, ..seg(textpos, vertpos) }
+        {
+            let mut lineseg = (seg(textpos, vertpos)).clone();
+            lineseg.vertsize = 2000;
+            lineseg.textheight = 2000;
+            lineseg
+        }
     }
 
     #[test]
@@ -2096,6 +2386,202 @@ mod tests {
         placement.horz_offset = HwpUnit::new(horz_offset).unwrap();
         image.placement = Some(placement);
         Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
+    }
+
+    /// The page-by-page header choice: the latest start of each page kind
+    /// wins (x4a), nothing before the first start (x4b), odd/even pages take
+    /// their own kind, an equal start is kept twice (for the ambiguity
+    /// refusal). Every page starting a new header — P = H = 300 — costs a
+    /// number of comparisons linear in pages + headers (review r1: the old
+    /// per-page rescan was O(P·H²)).
+    ///
+    /// 이것을 실패시키는 것: 시작 쪽 조건 삭제 / 늦은 시작 대체 삭제 / 홀짝
+    /// 판정을 뒤집기 / 쪽마다 전 후보를 다시 훑기(비교 횟수 상한 초과).
+    #[test]
+    fn band_selections_pick_the_latest_start_in_one_pass() {
+        use hwpforge_foundation::ApplyPageType::{Both, Even, Odd};
+        let mut n = 0;
+        assert_eq!(
+            band_selections(&[0, 2], &[Both, Both], 0, 4, &mut n),
+            [vec![0], vec![0], vec![1], vec![1]]
+        );
+        assert_eq!(band_selections(&[1], &[Both], 0, 3, &mut n), [vec![], vec![0], vec![0]]);
+        assert_eq!(
+            band_selections(&[0, 0], &[Odd, Even], 0, 3, &mut n),
+            [vec![0], vec![1], vec![0]]
+        );
+        assert_eq!(band_selections(&[1, 1], &[Both, Both], 1, 3, &mut n), [vec![0, 1], vec![0, 1]]);
+
+        let count = 300;
+        let starts: Vec<usize> = (0..count).collect();
+        let kinds = vec![Both; count];
+        let mut comparisons = 0;
+        let picks = band_selections(&starts, &kinds, 0, count, &mut comparisons);
+        assert!(picks.iter().enumerate().all(|(page, m)| m == &[page]));
+        assert!(comparisons <= 4 * (count + count), "{comparisons}");
+    }
+
+    /// P16 (PDF-v3): 정렬이 top/left 가 아니거나 두 플래그가 켜진 앵커 그림은
+    /// 거부, 기본이면 허용. 이것을 실패시키는 것: 앵커 admission 의 네 조건 중
+    /// 하나를 지우기(각각).
+    #[test]
+    fn anchored_image_with_alignment_is_rejected() {
+        use hwpforge_core::placement::{HorzAlign, VertAlign};
+        let doc_with = |edit: &dyn Fn(&mut hwpforge_core::placement::ObjectPlacement)| {
+            let mut run = anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            );
+            if let RunContent::Image(img) = &mut run.content {
+                edit(img.placement.as_mut().unwrap());
+            }
+            let mut para = Paragraph::with_runs(
+                vec![run, Run::text("본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            replay(&doc_of(vec![para]), &PdfOptions::default())
+        };
+        assert!(doc_with(&|_| {}).is_ok());
+        for edit in [
+            &(|p: &mut hwpforge_core::placement::ObjectPlacement| p.vert_align = VertAlign::Center)
+                as &dyn Fn(&mut hwpforge_core::placement::ObjectPlacement),
+            &|p| p.horz_align = HorzAlign::Right,
+            &|p| p.affect_line_spacing = true,
+            &|p| p.hold_anchor_and_so = true,
+        ] {
+            assert!(doc_with(edit).is_err());
+        }
+    }
+
+    /// P18 (PDF-v3): every path that draws a picture — inline, in a cell,
+    /// in a text box, anchored — carries its crop as fractions of the whole
+    /// image (crop / image extent); a crop whose image size is unknown, or
+    /// an empty one, is refused; no crop = `None`.
+    ///
+    /// 이것을 실패시키는 것: 범위 나눗셈을 지우기 / 범위 모름·빈 자르기 거부를
+    /// 지우기 / 앵커 그림에 자르기를 싣지 않는 것.
+    #[test]
+    fn picture_crop_fractions() {
+        use hwpforge_core::image::ImageCrop;
+        let u = |v: i32| HwpUnit::new(v).unwrap();
+        let with = |mut run: Run, crop: Option<[i32; 4]>, extent: Option<(i32, i32)>| {
+            if let RunContent::Image(img) = &mut run.content {
+                img.crop = crop.map(|[l, t, r, b]| ImageCrop {
+                    left: u(l),
+                    top: u(t),
+                    right: u(r),
+                    bottom: u(b),
+                });
+                img.image_extent = extent.map(|(w, h)| (u(w), u(h)));
+            }
+            run
+        };
+        let para = |run: Run| {
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("가", CharShapeIndex::new(0)), run],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            p
+        };
+        let crop_of = |r: PdfResult<Vec<Vec<LineAtom>>>| -> PdfResult<Option<[f64; 4]>> {
+            Ok(r?
+                .into_iter()
+                .flatten()
+                .find_map(|a| match a {
+                    LineAtom::Image(img) => Some(img.crop),
+                    _ => None,
+                })
+                .expect("image atom"))
+        };
+        type Build = fn(&Paragraph, &LayoutCache, &str) -> PdfResult<Vec<Vec<LineAtom>>>;
+        let builds: [Build; 3] = [
+            build_inline_image_line_atoms,
+            build_cell_image_line_atoms,
+            build_textbox_inner_line_atoms,
+        ];
+        let quarter = Some([1000, 0, 3000, 2000]);
+        for (n, build) in builds.into_iter().enumerate() {
+            let run = |c, e| with(inline_img("BinData/a.png"), c, e);
+            let atoms = |c, e| {
+                let p = para(run(c, e));
+                build(&p, p.layout_cache.as_ref().unwrap(), "s0/p0")
+            };
+            assert_eq!(
+                crop_of(atoms(quarter, Some((4000, 4000)))).unwrap(),
+                Some([0.25, 0.0, 0.75, 0.5]),
+                "{n}"
+            );
+            assert_eq!(crop_of(atoms(None, None)).unwrap(), None, "{n}");
+            assert!(
+                matches!(
+                    crop_of(atoms(quarter, None)),
+                    Err(PdfError::UnsupportedContent {
+                        kind: "cropped picture without its image size",
+                        ..
+                    })
+                ),
+                "{n}"
+            );
+            assert!(
+                matches!(
+                    crop_of(atoms(Some([3000, 0, 3000, 2000]), Some((4000, 4000)))),
+                    Err(PdfError::UnsupportedContent {
+                        kind: "cropped picture with an empty crop",
+                        ..
+                    })
+                ),
+                "{n}"
+            );
+        }
+        let run = with(
+            anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            ),
+            quarter,
+            Some((4000, 4000)),
+        );
+        let mut p = Paragraph::with_runs(
+            vec![run, Run::text("본문", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let layout = replay(&doc_of(vec![p]), &PdfOptions::default()).unwrap();
+        assert_eq!(layout.pages[0].anchored_images[0].crop, Some([0.25, 0.0, 0.75, 0.5]));
+    }
+
+    /// P19: a caption number (`Control::AutoNumber`) is not drawn yet — the
+    /// paragraph that holds it is refused, not rendered without the number.
+    ///
+    /// 이것을 실패시키는 것: `AutoNumber` 를 재생 소비 marker 로 허용하는 것(번호
+    /// 없이 그려짐).
+    #[test]
+    fn caption_number_paragraph_is_refused() {
+        use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
+        let number = Control::AutoNumber {
+            kind: AutoNumberKind::Picture,
+            num: 3,
+            format: AutoNumberFormat::default(),
+        };
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::text("그림 ", CharShapeIndex::new(0)),
+                Run::control(number, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        assert!(replay(&doc_of(vec![p]), &PdfOptions::default()).is_err());
     }
 
     fn a4_body_top_left() -> (i32, i32) {
@@ -2454,7 +2940,12 @@ mod tests {
 
     /// vertsize·textheight 를 지정하는 host 줄 seg (원자 지배 profile 검사용).
     fn sized_seg(textpos: u32, vertpos: i32, size: i32) -> LineSeg {
-        LineSeg { vertsize: size, textheight: size, ..seg(textpos, vertpos) }
+        {
+            let mut lineseg = (seg(textpos, vertpos)).clone();
+            lineseg.vertsize = size;
+            lineseg.textheight = size;
+            lineseg
+        }
     }
 
     /// 글상자 내부 문단 하나 — 조판 캐시 + 텍스트 run (텍스트 길이 ≥ 최대
@@ -2477,6 +2968,8 @@ mod tests {
         use hwpforge_core::control::Control;
         Run {
             content: RunContent::Control(Box::new(Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
+                text_margin: None,
                 paragraphs: inner,
                 width: HwpUnit::new(width).unwrap(),
                 height: HwpUnit::new(height).unwrap(),
@@ -2487,6 +2980,305 @@ mod tests {
             })),
             char_shape_id: CharShapeIndex::new(0),
         }
+    }
+
+    /// §19.21 H2 (x6 F1·F3·F5): 무늬·그러데이션·그림 채우기 글상자는 거부,
+    /// 단색(F2)은 그린다. 이것을 실패시키는 것: 거부를 지우기(무늬가 단색으로).
+    #[test]
+    fn text_box_with_a_fill_paint_cannot_draw_is_refused() {
+        use hwpforge_core::control::{Control, Fill, ShapeStyle};
+        use hwpforge_foundation::{GradientType, ImageFillMode, PatternType, VerticalAlign};
+        let red = Color::from_rgb(255, 0, 0);
+        let with_fill = |fill: Option<Fill>| {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::TextBox { style, .. } = c.as_mut() {
+                    *style = Some(ShapeStyle { fill_color: Some(red), fill, ..Default::default() });
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            replay(&doc_of(vec![host]), &PdfOptions::default())
+        };
+        for fill in [
+            Fill::Pattern { pattern_type: PatternType::Slash, fg_color: red, bg_color: red },
+            Fill::Gradient {
+                gradient_type: GradientType::Linear,
+                angle: 45,
+                colors: vec![(red, 0), (red, 0)],
+                center_x: None,
+                center_y: None,
+                step: None,
+                step_center: None,
+            },
+            Fill::Image { image_id: "BinData/BIN0001.png".into(), mode: ImageFillMode::Stretch },
+        ] {
+            let err = with_fill(Some(fill.clone())).unwrap_err();
+            assert!(matches!(err, PdfError::UnsupportedContent { .. }), "{fill:?}: {err:?}");
+        }
+        assert!(with_fill(None).is_ok(), "a plain colour fill renders");
+    }
+
+    /// P17: 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
+    /// S18: a picture (inline and anchored) or a text box with an outer
+    /// margin is refused; the same objects without one are not refused for
+    /// it.
+    ///
+    /// 이것을 실패시키는 것: 세 경로의 바깥 여백 거부를 각각 지우기.
+    #[test]
+    fn object_with_an_outer_margin_is_refused() {
+        use hwpforge_core::placement::ObjectPlacement;
+        use hwpforge_core::table::TableMargin;
+        use hwpforge_foundation::VerticalAlign;
+        let margin = |bottom: i32| {
+            let u = |v| HwpUnit::new(v).unwrap();
+            Some(TableMargin { left: u(0), right: u(0), top: u(0), bottom: u(bottom) })
+        };
+        let refused = |r: &PdfResult<()>| {
+            matches!(
+                r,
+                Err(PdfError::UnsupportedContent { kind: "object with an outer margin", .. })
+            )
+        };
+        for bottom in [140, 0] {
+            // Inline picture.
+            let mut run = inline_img("BinData/a.png");
+            if let RunContent::Image(img) = &mut run.content {
+                let mut p =
+                    img.placement.clone().unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
+                p.out_margin = margin(bottom);
+                img.placement = Some(p);
+            }
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("가", CharShapeIndex::new(0)), run],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = build_inline_image_line_atoms(&p, p.layout_cache.as_ref().unwrap(), "s0/p0")
+                .map(|_| ());
+            assert_eq!(refused(&r), bottom != 0, "inline {bottom}: {r:?}");
+            // Anchored picture.
+            let mut run = anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            );
+            if let RunContent::Image(img) = &mut run.content {
+                if let Some(p) = img.placement.as_mut() {
+                    p.out_margin = margin(bottom);
+                }
+            }
+            let mut p = Paragraph::with_runs(
+                vec![run, Run::text("본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = replay(&doc_of(vec![p]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), bottom != 0, "anchored {bottom}: {r:?}");
+            // Text box.
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let hwpforge_core::control::Control::TextBox { placement, .. } = c.as_mut() {
+                    let mut p =
+                        placement.clone().unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
+                    p.out_margin = margin(bottom);
+                    *placement = Some(p);
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            let r = replay(&doc_of(vec![host]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), bottom != 0, "text box {bottom}: {r:?}");
+        }
+    }
+
+    /// §19.22 D4: a text box whose margin is not 283 on every side is
+    /// refused (the layout uses 283); 283 on every side, carried as `Some`
+    /// by the decoders, is drawn.
+    ///
+    /// 이것을 실패시키는 것: 거부를 지우기 / 한 변만 보기.
+    #[test]
+    fn text_box_margin_other_than_283_is_refused() {
+        use hwpforge_core::table::TableMargin;
+        use hwpforge_foundation::VerticalAlign;
+        let u = |v| HwpUnit::new(v).unwrap();
+        let render = |margin: Option<TableMargin>| {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let hwpforge_core::control::Control::TextBox { text_margin, .. } = c.as_mut() {
+                    *text_margin = margin;
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            replay(&doc_of(vec![host]), &PdfOptions::default()).map(|_| ())
+        };
+        let refused = |r: &PdfResult<()>| matches!(r, Err(PdfError::UnsupportedContent { kind, .. }) if kind.contains("text margin"));
+        for (l, r, t, b) in [(850, 283, 283, 283), (283, 283, 283, 400)] {
+            let res =
+                render(Some(TableMargin { left: u(l), right: u(r), top: u(t), bottom: u(b) }));
+            assert!(refused(&res), "{l} {r} {t} {b}: {res:?}");
+        }
+        let all_283 = TableMargin { left: u(283), right: u(283), top: u(283), bottom: u(283) };
+        assert!(!refused(&render(Some(all_283))));
+        assert!(!refused(&render(None)));
+    }
+
+    /// P19 (review r1): a caption number in a picture's or a text box's
+    /// caption — captions are not drawn — is refused on the inline, the
+    /// anchored and the text-box paths; the same caption without the
+    /// number is not refused for it.
+    ///
+    /// 이것을 실패시키는 것: 세 경로의 `refuse_caption_number` 호출을 각각 지우기 /
+    /// 캡션 속 그림의 캡션으로 재귀하지 않기.
+    #[test]
+    fn caption_number_in_a_caption_is_refused() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
+        use hwpforge_foundation::VerticalAlign;
+        let caption = |numbered: bool| {
+            let mut runs = vec![Run::text("그림 ", CharShapeIndex::new(0))];
+            if numbered {
+                runs.push(Run::control(
+                    Control::AutoNumber {
+                        kind: AutoNumberKind::Picture,
+                        num: 3,
+                        format: AutoNumberFormat::default(),
+                    },
+                    CharShapeIndex::new(0),
+                ));
+            }
+            Caption::new(
+                vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))],
+                CaptionSide::Bottom,
+            )
+        };
+        let refused = |r: &PdfResult<()>| {
+            matches!(r, Err(PdfError::UnsupportedContent { kind: "caption number", .. }))
+        };
+        // A caption whose picture has the numbered caption (review r2).
+        let nested = |numbered: bool| {
+            let size = HwpUnit::new(1000).unwrap();
+            let inner = hwpforge_core::image::Image::new(
+                "BinData/b.png",
+                size,
+                size,
+                hwpforge_core::image::ImageFormat::Png,
+            )
+            .with_caption(caption(numbered));
+            Caption::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::image(inner, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                CaptionSide::Bottom,
+            )
+        };
+        for numbered in [true, false] {
+            let r = refuse_caption_number(Some(&nested(numbered)), "s0/p0");
+            assert_eq!(refused(&r), numbered, "nested {numbered}: {r:?}");
+        }
+        // Inline picture.
+        for numbered in [true, false] {
+            let mut run = inline_img("BinData/a.png");
+            if let RunContent::Image(img) = &mut run.content {
+                img.caption = Some(caption(numbered));
+            }
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("가", CharShapeIndex::new(0)), run],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = build_inline_image_line_atoms(&p, p.layout_cache.as_ref().unwrap(), "s0/p0")
+                .map(|_| ());
+            assert_eq!(refused(&r), numbered, "inline {numbered}: {r:?}");
+        }
+        // Anchored picture.
+        for numbered in [true, false] {
+            let mut run = anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            );
+            if let RunContent::Image(img) = &mut run.content {
+                img.caption = Some(caption(numbered));
+            }
+            let mut p = Paragraph::with_runs(
+                vec![run, Run::text("본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = replay(&doc_of(vec![p]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), numbered, "anchored {numbered}: {r:?}");
+        }
+        // Text box.
+        for numbered in [true, false] {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::TextBox { caption: slot, .. } = c.as_mut() {
+                    *slot = Some(caption(numbered));
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            let r = replay(&doc_of(vec![host]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), numbered, "text box {numbered}: {r:?}");
+        }
+    }
+
+    #[test]
+    fn text_box_with_round_corners_is_refused() {
+        use hwpforge_core::control::{Control, ShapeStyle};
+        use hwpforge_foundation::VerticalAlign;
+        let with_ratio = |ratio: Option<u8>| {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::TextBox { style, .. } = c.as_mut() {
+                    *style = Some(ShapeStyle { corner_ratio: ratio, ..Default::default() });
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            replay(&doc_of(vec![host]), &PdfOptions::default())
+        };
+        assert!(matches!(
+            with_ratio(Some(20)).unwrap_err(),
+            PdfError::UnsupportedContent { kind: "text box with rounded corners", .. }
+        ));
+        assert!(with_ratio(None).is_ok());
+        // A ratio of 0 is a square box (review r1: `is_some()` would refuse it).
+        assert!(with_ratio(Some(0)).is_ok());
     }
 
     /// 순수 산술 잠금 — fixture 실측(§8f ①): basic 11339(=box.height) ·
@@ -2745,6 +3537,8 @@ mod tests {
         placement.treat_as_char = false;
         let run = Run {
             content: RunContent::Control(Box::new(Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
+                text_margin: None,
                 paragraphs: vec![tb_inner(vec![seg(0, 0)], "가")],
                 width: HwpUnit::new(17008).unwrap(),
                 height: HwpUnit::new(7087).unwrap(),
@@ -2941,7 +3735,12 @@ mod tests {
     }
 
     fn tall_seg(textpos: u32, vertpos: i32, h: i32) -> LineSeg {
-        LineSeg { vertsize: h, textheight: h, ..seg(textpos, vertpos) }
+        {
+            let mut lineseg = (seg(textpos, vertpos)).clone();
+            lineseg.vertsize = h;
+            lineseg.textheight = h;
+            lineseg
+        }
     }
 
     fn img_with_height(key: &str, h: i32) -> Run {
@@ -3066,7 +3865,12 @@ mod tests {
         // img_h > vertsize (이미지가 줄보다 큼): 거부.
         assert!(!line_admits_image(&seg(0, 0), 1001));
         // vertsize != textheight (미측정 profile): 거부.
-        let mixed = LineSeg { vertsize: 1000, textheight: 900, ..seg(0, 0) };
+        let mixed = {
+            let mut lineseg = (seg(0, 0)).clone();
+            lineseg.vertsize = 1000;
+            lineseg.textheight = 900;
+            lineseg
+        };
         assert!(!line_admits_image(&mixed, 500));
     }
 
@@ -3391,6 +4195,80 @@ mod tests {
         assert!(matches!(err, PdfError::AmbiguousHeaderFooter { kind: "header", .. }), "{err:?}");
     }
 
+    fn anchored(mut hf: HeaderFooter, index: usize) -> HeaderFooter {
+        hf.anchor_paragraph = Some(index);
+        hf
+    }
+
+    fn header_texts_per_page(layout: &ReplayLayout) -> Vec<Vec<String>> {
+        layout
+            .pages
+            .iter()
+            .map(|p| {
+                p.lines
+                    .iter()
+                    .filter(|l| l.location.contains("/h"))
+                    .map(|l| l.text_runs().next().unwrap().text.clone())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// X4 x4b: a header anchored to a later paragraph starts on that
+    /// paragraph's page. 이것을 실패시키는 것: 시작 쪽 조건 삭제(1쪽에도 머리말).
+    #[test]
+    fn anchored_header_starts_on_its_paragraph_page() {
+        let doc = doc_with_bands(
+            body_pages(3),
+            vec![anchored(hf_item(ApplyPageType::Both, &["C"]), 1)],
+            vec![],
+        );
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(header_texts_per_page(&layout), [vec![], vec!["C"], vec!["C"]]);
+    }
+
+    /// X4 x4a: a later header of the same page type replaces the earlier
+    /// one from its page on. 이것을 실패시키는 것: 대체 규칙 삭제(3쪽 모호성
+    /// 거부) / 시작 쪽 비교를 `>=` 로(같은 쪽 시작도 대체).
+    #[test]
+    fn later_anchored_header_replaces_the_earlier_one() {
+        let doc = doc_with_bands(
+            body_pages(3),
+            vec![
+                hf_item(ApplyPageType::Both, &["A"]),
+                anchored(hf_item(ApplyPageType::Both, &["B"]), 2),
+            ],
+            vec![],
+        );
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(header_texts_per_page(&layout), [vec!["A"], vec!["A"], vec!["B"]]);
+
+        // 시작 쪽이 같으면 우선순위 미실측 — 지금처럼 거부.
+        let same = doc_with_bands(
+            body_pages(1),
+            vec![hf_item(ApplyPageType::Both, &["A"]), hf_item(ApplyPageType::Both, &["B"])],
+            vec![],
+        );
+        let err = replay(&same, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::AmbiguousHeaderFooter { kind: "header", .. }), "{err:?}");
+    }
+
+    /// An anchor whose paragraph got no page (no layout cache) is refused,
+    /// not placed on a guessed page. 이것을 실패시키는 것: 쪽이 없는 앵커를
+    /// 구역 첫 쪽으로 대체하기.
+    #[test]
+    fn header_anchored_to_an_unplaced_paragraph_is_refused() {
+        let mut body = body_pages(2);
+        body.push(Paragraph::with_runs(
+            vec![Run::text("무캐시", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ));
+        let doc =
+            doc_with_bands(body, vec![anchored(hf_item(ApplyPageType::Both, &["H"]), 2)], vec![]);
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::UnsupportedContent { .. }), "{err:?}");
+    }
+
     #[test]
     fn multi_paragraph_header_accumulates_vertpos() {
         // rules-header-multi 실측: 문단2 vertpos=1600 — 밴드-상대 누적 재생.
@@ -3555,6 +4433,22 @@ mod tests {
 
     fn bottom_digit() -> PageNumber {
         PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
+    }
+
+    /// 이것을 실패시키는 것: 위치 있는 쪽번호를 본문 비텍스트 장애물로 취급하기.
+    #[test]
+    fn positioned_page_number_is_a_zero_width_replay_marker() {
+        let mut body = body_pages(2);
+        body[1].runs.push(Run::control(
+            hwpforge_core::Control::PageNumber { number: bottom_digit() },
+            CharShapeIndex::new(0),
+        ));
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body, bottom_digit()));
+        let doc = doc.validate().unwrap();
+        let layout = replay(&doc, &PdfOptions::default()).unwrap();
+        assert_eq!(layout.pages.len(), 2);
+        assert_eq!(layout.pages[1].page_number.as_ref().unwrap().text, "2");
     }
 
     #[test]
@@ -4326,12 +5220,74 @@ mod tests {
         assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
     }
 
+    /// S22 r1: a cacheless table host is refused for its placement first —
+    /// a re-save writes the cache, not a supported placement — and only a
+    /// default-flow table is refused for the missing cache.
+    #[test]
+    fn unsupported_table_placement_is_reported_before_a_missing_cache() {
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+        let cacheless = |table: Table| {
+            let mut host = table_host(table, 0);
+            host.layout_cache = None;
+            host
+        };
+        let floating = one_cell_cached_table().with_placement(
+            ObjectPlacement::new(
+                ObjectTextWrap::TopAndBottom,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_treat_as_char(true),
+        );
+        let err = replay(&doc_of(vec![cacheless(floating)]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
+            "{err:?}"
+        );
+        let err = replay(&doc_of(vec![cacheless(one_cell_cached_table())]), &PdfOptions::default())
+            .unwrap_err();
+        assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
+    }
+
+    /// A-T6: 표 admission 은 Core `placement` 를 본다 — 캐시가 기본 flow 라도
+    /// placement 가 떠 있으면 거부, 기본 flow 를 `Some` 으로 가진 표(디코더가
+    /// 접지 않은 경우)는 허용. 이것을 실패시키는 것: 캐시 `default_flow_pos`
+    /// 로 되돌리기 / 기본값 비교를 `None` 만으로 좁히기.
+    #[test]
+    fn table_admission_reads_the_core_placement() {
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+        let default = ObjectPlacement::new(
+            ObjectTextWrap::TopAndBottom,
+            ObjectRelativeTo::Para,
+            ObjectRelativeTo::Column,
+        )
+        .with_flow_with_text(true);
+        let ok = one_cell_cached_table().with_placement(default.clone());
+        assert!(replay(&doc_of(vec![table_host(ok, 0)]), &PdfOptions::default()).is_ok());
+        let floating = one_cell_cached_table()
+            .with_placement(default.with_vert_offset(HwpUnit::new(500).unwrap()));
+        let err =
+            replay(&doc_of(vec![table_host(floating, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
+            "{err:?}"
+        );
+    }
+
     #[test]
     fn table_profile_violations_are_rejected() {
         use hwpforge_core::table::TableLayoutCache;
-        // 비기본 pos
+        // 비기본 pos (Core placement — 글자처럼 취급 표)
         let t = Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])])
-            .with_layout_cache(TableLayoutCache::new(None, false));
+            .with_layout_cache(TableLayoutCache::new(None, true))
+            .with_placement(
+                hwpforge_core::placement::ObjectPlacement::new(
+                    hwpforge_core::placement::ObjectTextWrap::TopAndBottom,
+                    hwpforge_core::placement::ObjectRelativeTo::Para,
+                    hwpforge_core::placement::ObjectRelativeTo::Para,
+                )
+                .with_treat_as_char(true),
+            );
         let err = replay(&doc_of(vec![table_host(t, 0)]), &PdfOptions::default()).unwrap_err();
         assert!(
             matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
@@ -4360,6 +5316,108 @@ mod tests {
             .flat_map(|l| l.text_runs().map(|r| r.text.clone()))
             .collect();
         assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
+    }
+
+    /// P16 (review r1): each of the four placement fields P16 added —
+    /// vertical and horizontal alignment, `affect_line_spacing`,
+    /// `hold_anchor_and_so` — set alone on an otherwise default table is
+    /// refused, on a body table and on a table nested in a cell.
+    ///
+    /// 이것을 실패시키는 것: 표 admission 비교에서 네 필드 중 하나를 빼기(그
+    /// 필드만 켠 표가 그려진다).
+    /// §19.22 D3: a cell whose lines are squeezed or kept is refused — the
+    /// renderer cannot squeeze a line, with or without the layout cache (the
+    /// cells here have a valid one, and a line wider than the cell would only
+    /// be warned about) — in a body table and in a nested one; a breaking
+    /// cell is drawn.
+    ///
+    /// 이것을 실패시키는 것: 거부를 지우기 / 거부를 캐시 없을 때만으로.
+    #[test]
+    fn squeezed_and_kept_cells_are_refused() {
+        use hwpforge_core::table::{CellLineWrap, TableLayoutCache};
+        let table_with = |wrap: CellLineWrap| {
+            let mut cell =
+                cell_with_cache("아주 긴 칸 글이 칸 폭을 넘는다 아주 긴 칸 글이 칸 폭을 넘는다");
+            cell.width = HwpUnit::from_pt(10.0).unwrap();
+            Table::new(vec![TableRow::new(vec![cell.with_line_wrap(wrap)])])
+                .with_layout_cache(TableLayoutCache::new(None, true))
+        };
+        for (wrap, kind) in [
+            (CellLineWrap::Squeeze, "table cell with squeezed lines"),
+            (CellLineWrap::Keep, "table cell with kept lines"),
+        ] {
+            let r = replay(&doc_of(vec![table_host(table_with(wrap), 0)]), &PdfOptions::default());
+            assert!(
+                matches!(&r, Err(PdfError::UnsupportedContent { kind: k, .. }) if *k == kind),
+                "body {wrap:?}: {r:?}"
+            );
+            let mut inner_host = para_with_cache("", vec![seg(0, 0)]);
+            inner_host.add_run(Run::table(table_with(wrap), CharShapeIndex::new(0)));
+            let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![inner_host],
+                HwpUnit::from_pt(100.0).unwrap(),
+            )])])
+            .with_layout_cache(TableLayoutCache::new(None, true));
+            let r = replay(&doc_of(vec![table_host(outer, 0)]), &PdfOptions::default());
+            assert!(
+                matches!(&r, Err(PdfError::UnsupportedContent { kind: k, .. }) if *k == kind),
+                "nested {wrap:?}: {r:?}"
+            );
+        }
+        let r = replay(
+            &doc_of(vec![table_host(table_with(CellLineWrap::Break), 0)]),
+            &PdfOptions::default(),
+        );
+        assert!(
+            !matches!(&r, Err(PdfError::UnsupportedContent { kind, .. }) if kind.contains("lines")),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn each_new_table_placement_field_is_refused_alone() {
+        use hwpforge_core::placement::{
+            HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextWrap, VertAlign,
+        };
+        use hwpforge_core::table::TableLayoutCache;
+        let default = || {
+            ObjectPlacement::new(
+                ObjectTextWrap::TopAndBottom,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Column,
+            )
+            .with_flow_with_text(true)
+        };
+        let edits: [fn(ObjectPlacement) -> ObjectPlacement; 4] = [
+            |p| p.with_vert_align(VertAlign::Center),
+            |p| p.with_horz_align(HorzAlign::Right),
+            |p| p.with_affect_line_spacing(true),
+            |p| p.with_hold_anchor_and_so(true),
+        ];
+        let refused = |doc: &Document<hwpforge_core::document::Validated>| {
+            matches!(
+                replay(doc, &PdfOptions::default()),
+                Err(PdfError::UnsupportedContent { kind: "non-default table position", .. })
+            )
+        };
+        for (n, edit) in edits.into_iter().enumerate() {
+            let body = one_cell_cached_table().with_placement(edit(default()));
+            assert!(refused(&doc_of(vec![table_host(body, 0)])), "body {n}");
+
+            let mut inner_host = para_with_cache("", vec![seg(0, 0)]);
+            inner_host.add_run(Run::table(
+                one_cell_cached_table().with_placement(edit(default())),
+                CharShapeIndex::new(0),
+            ));
+            let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![inner_host],
+                HwpUnit::from_pt(100.0).unwrap(),
+            )])])
+            .with_layout_cache(TableLayoutCache::new(None, true));
+            assert!(refused(&doc_of(vec![table_host(outer, 0)])), "nested {n}");
+        }
+        let plain = one_cell_cached_table().with_placement(default());
+        assert!(replay(&doc_of(vec![table_host(plain, 0)]), &PdfOptions::default()).is_ok());
     }
 
     #[test]
@@ -4511,6 +5569,35 @@ mod tests {
         assert!(matches!(err2, PdfError::InvalidCache { .. }));
     }
 
+    /// 이것을 실패시키는 것: 필드 경계를 비텍스트 개체로 거부하기.
+    #[test]
+    fn field_boundaries_do_not_hide_visible_body() {
+        use hwpforge_core::control::{Control, FieldBoundary, FieldStart};
+        let mut para = para_with_cache("본문", vec![seg(0, 0)]);
+        let mut start = FieldStart::default();
+        start.id = "7".into();
+        start.kind = "CLICK_HERE".into();
+        para.runs.insert(
+            0,
+            Run::control(
+                Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) },
+                CharShapeIndex::new(0),
+            ),
+        );
+        para.runs.push(Run::control(
+            Control::FieldBoundary {
+                boundary: FieldBoundary::End { begin_id: "7".into(), field_id: "7".into() },
+            },
+            CharShapeIndex::new(0),
+        ));
+        let doc = doc_of(vec![para]);
+        let plain = doc_of(vec![para_with_cache("본문", vec![seg(0, 0)])]);
+        assert_eq!(
+            format!("{:?}", replay(&doc, &PdfOptions::default()).unwrap()),
+            format!("{:?}", replay(&plain, &PdfOptions::default()).unwrap())
+        );
+    }
+
     #[test]
     fn leading_non_text_run_before_text_is_rejected() {
         // 독립 리뷰 열린질문 상환: 디코더의 textpos 정규화가 다루지 않는
@@ -4545,6 +5632,38 @@ mod tests {
         ));
         let doc = doc_of(vec![para]);
         let err = replay(&doc, &PdfOptions::default()).expect_err("must reject");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+            "got {err:?}"
+        );
+    }
+
+    /// A paragraph holding a group (a logo of pictures, now a Core group) is
+    /// not rendered: the group is refused like every unrendered object, not
+    /// left out of the page.
+    ///
+    /// 이것을 실패시키는 것: admission 에서 묶음 run 을 허용하는 것(묶음이 빠진 채 성공).
+    #[test]
+    fn paragraph_with_a_group_of_pictures_is_refused() {
+        use hwpforge_core::control::{Control, GroupChild};
+        use hwpforge_core::image::{Image, ImageFormat};
+        let w = hwpforge_foundation::HwpUnit::new(1000).unwrap();
+        let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
+            children: vec![GroupChild::Picture(Image::new(
+                "BinData/a.png",
+                w,
+                w,
+                ImageFormat::Png,
+            ))],
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let mut para = para_with_cache("본문", vec![seg(0, 0)]);
+        para.add_run(Run::control(group, CharShapeIndex::new(0)));
+        let err = replay(&doc_of(vec![para]), &PdfOptions::default()).expect_err("must reject");
         assert!(
             matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
             "got {err:?}"

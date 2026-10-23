@@ -477,3 +477,168 @@ fn the_committed_font_is_the_synthetic_face_unmodified() {
         .collect();
     assert_eq!(entries, vec![PY_FONT_FILE.to_string()]);
 }
+
+/// S22 r1: the hint names what helps. A missing layout cache is written by a
+/// re-save in Hancom; content the replay does not support (here a table
+/// treated as a character) is not, and the hint says to export from Hancom.
+/// 이것을 실패시키는 것: `hint` 의 원인 분기 삭제(두 오류가 같은 재저장 안내).
+#[test]
+fn the_hint_tells_a_missing_cache_from_unsupported_content() {
+    let missing =
+        to_pdf(&retyped("rules-justify.hwpx", true), &options().with_partial_cache_reject(true))
+            .expect_err("a cacheless paragraph is refused");
+    assert_eq!(missing.cause(), Some(PdfErrorCode::MissingLayoutCache));
+    let hint = missing.hint().expect("a hint");
+    assert!(hint.contains("re-saving the document in Hancom writes one"), "{hint}");
+
+    let decoded = HwpxDecoder::decode(&fixture("rules-table.hwpx")).expect("decode fixture");
+    let mut store = decoded.style_store;
+    let faces: Vec<String> = store.iter_fonts().map(|font| font.face_name.clone()).collect();
+    for face in faces {
+        if face != TEST_FACE {
+            store.replace_font(&face, TEST_FACE);
+        }
+    }
+    let mut document = decoded.document;
+    let section = document.sections_mut().first_mut().expect("a section");
+    let table = section
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| p.runs.iter_mut())
+        .find_map(|r| match &mut r.content {
+            hwpforge_core::run::RunContent::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("a table");
+    table.placement = Some(
+        hwpforge_core::placement::ObjectPlacement::new(
+            hwpforge_core::placement::ObjectTextWrap::TopAndBottom,
+            hwpforge_core::placement::ObjectRelativeTo::Para,
+            hwpforge_core::placement::ObjectRelativeTo::Para,
+        )
+        .with_treat_as_char(true),
+    );
+    let bytes = HwpxEncoder::encode_with_diagnostics(
+        &document.validate().expect("validate"),
+        &store,
+        &decoded.image_store,
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .expect("encode")
+    .bytes;
+    let unsupported = to_pdf(&bytes, &options()).expect_err("an inline table is refused");
+    assert_eq!(unsupported.cause(), Some(PdfErrorCode::UnsupportedContent), "{unsupported}");
+    let hint = unsupported.hint().expect("a hint");
+    assert!(hint.contains("re-saving in Hancom does not change that"), "{hint}");
+
+    // S22 r2: a cache out of order (lines at wire 0, 40, 30 — after the
+    // section and column definitions, inside the text) is an InvalidCache a
+    // re-save can rewrite — not unsupported content. The encoder never
+    // writes such a cache, so the section XML is edited.
+    let bytes = {
+        use std::io::{Read as _, Write as _};
+        let source = retyped("rules-justify.hwpx", false);
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(source)).expect("zip");
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).expect("entry");
+            let name = entry.name().expect("ZIP entry name").to_string();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).expect("read");
+            if name == "Contents/section0.xml" {
+                let xml = String::from_utf8(data).expect("utf-8");
+                let start = xml.find("<hp:linesegarray>").expect("a cache");
+                let end = start + xml[start..].find("</hp:linesegarray>").expect("closed");
+                let first = &xml[start..end];
+                let seg = &first[first.find("<hp:lineseg ").expect("a line")..];
+                let seg = &seg[..seg.find("/>").expect("closed") + 2];
+                let at = seg.find("textpos=\"").expect("textpos") + 9;
+                let rest = &seg[at + seg[at..].find('"').expect("quote")..];
+                let lines: String =
+                    [0, 40, 30].iter().map(|t| format!("{}{t}{rest}", &seg[..at])).collect();
+                data = format!("{}<hp:linesegarray>{lines}{}", &xml[..start], &xml[end..])
+                    .into_bytes();
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).expect("start");
+            out.write_all(&data).expect("write");
+        }
+        out.finish().expect("finish").into_inner()
+    };
+    let invalid = to_pdf(&bytes, &options()).expect_err("an out-of-order cache is refused");
+    assert_eq!(invalid.cause(), Some(PdfErrorCode::InvalidCache), "{invalid}");
+    assert!(invalid.to_string().contains("not monotonic"), "{invalid}");
+    let hint = invalid.hint().expect("a hint");
+    assert!(hint.contains("re-saving in Hancom rewrites it"), "{hint}");
+}
+
+#[test]
+fn unclosed_source_field_warns_without_blocking_pdf_reading() {
+    // 이것을 실패시키는 것: 원본 없는 bool을 복구 권한으로 인정하거나 PDF 경고 누락.
+    use std::io::{Cursor, Read, Write};
+    let base = retyped("rules-justify.hwpx", false);
+    let mut zip = zip::ZipArchive::new(Cursor::new(base)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).unwrap();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
+            let mut xml = String::from_utf8(data).unwrap();
+            let at = xml.rfind("</hp:run>").unwrap();
+            xml.insert_str(
+                at,
+                "<hp:ctrl><hp:fieldBegin id=\"open-source\" type=\"FORMULA\"/></hp:ctrl>",
+            );
+            data = xml.into_bytes();
+        }
+        out.start_file(
+            entry.name().expect("ZIP entry name").to_string(),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        out.write_all(&data).unwrap();
+    }
+    let bytes = out.finish().unwrap().into_inner();
+    let output = to_pdf(&bytes, &options()).expect("recovered field is readable");
+    assert!(output.bytes.starts_with(b"%PDF-"));
+    assert!(output.pages >= 1);
+    assert_eq!(
+        codes(&output.warnings).iter().filter(|code| *code == "UNCLOSED_FIELD_BOUNDARY").count(),
+        1
+    );
+}
+
+/// 이것을 실패시키는 것: PDF 직접 호출 경고를 convert::to_pdf에서 누락/필터링.
+#[test]
+fn transformed_textbox_warning_reaches_to_pdf() {
+    use hwpforge_core::{control::ShapeStyle, Control};
+    use hwpforge_foundation::HwpUnit;
+    let mut decoded = HwpxDecoder::decode(&retyped("rules-justify.hwpx", false)).unwrap();
+    let mut textbox = Control::text_box(
+        vec![Paragraph::with_runs(
+            vec![Run::text("a", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        HwpUnit::new(1000).unwrap(),
+        HwpUnit::new(1000).unwrap(),
+    );
+    if let Control::TextBox { style, .. } = &mut textbox {
+        *style = Some(ShapeStyle { rotation: Some(30.), ..Default::default() });
+    }
+    decoded.document.sections_mut()[0].add_paragraph(Paragraph::with_runs(
+        vec![Run::control(textbox, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    ));
+    let encoded = HwpxEncoder::encode_with_diagnostics(
+        &decoded.document.validate().unwrap(),
+        &decoded.style_store,
+        &decoded.image_store,
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    let out = to_pdf(&encoded.bytes, &options()).unwrap();
+    let warnings: Vec<_> =
+        out.warnings.iter().filter(|w| w.parts().code == "OBJECT_TRANSFORM_IGNORED").collect();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].stage(), "render");
+}

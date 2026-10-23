@@ -153,6 +153,7 @@ fn chart_para(
 fn line_separator() -> Paragraph {
     ctrl_para(
         Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(42520, 0),
             width: HwpUnit::from_mm(150.0).unwrap(),
@@ -396,6 +397,8 @@ fn build_section_1() -> Section {
     paras.push(text_para("Dual Serde Rename 패턴:", CS_BOLD, PS_LEFT));
     paras.push(ctrl_para(
         Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![
                 text_para(r#"#[serde(rename(serialize = "hh:refList","#, CS_NORMAL, PS_LEFT),
                 text_para(r#"                deserialize = "refList"))]"#, CS_NORMAL, PS_LEFT),
@@ -561,6 +564,7 @@ fn build_section_2() -> Section {
     let eh = HwpUnit::from_mm(20.0).unwrap().as_i32();
     paras.push(ctrl_para(
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(ew / 2, eh / 2),
             axis1: ShapePoint::new(ew, eh / 2),
             axis2: ShapePoint::new(ew / 2, eh),
@@ -598,6 +602,7 @@ fn build_section_2() -> Section {
     let th = HwpUnit::from_mm(22.0).unwrap().as_i32();
     paras.push(ctrl_para(
         Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(tw / 2, 0),
                 ShapePoint::new(tw, th),

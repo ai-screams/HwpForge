@@ -209,6 +209,24 @@ pub enum Hwp5FillPatternKind {
 }
 
 impl Hwp5FillPatternKind {
+    /// The Core hatch for this kind; `None` for no hatch and an unknown kind.
+    /// Kind 2 is Hancom's `SLASH` (x6 F1) — [`PatternType`]'s display swaps
+    /// the two slashes the same way (WG#21).
+    ///
+    /// [`PatternType`]: hwpforge_foundation::PatternType
+    pub(crate) fn pattern_type(self) -> Option<hwpforge_foundation::PatternType> {
+        use hwpforge_foundation::PatternType;
+        match self {
+            Self::None | Self::Unknown(_) => None,
+            Self::Horizontal => Some(PatternType::Horizontal),
+            Self::Vertical => Some(PatternType::Vertical),
+            Self::BackSlash => Some(PatternType::BackSlash),
+            Self::Slash => Some(PatternType::Slash),
+            Self::Cross => Some(PatternType::Cross),
+            Self::CrossDiagonal => Some(PatternType::CrossDiagonal),
+        }
+    }
+
     fn from_raw(raw: i32) -> Self {
         match raw {
             -1 => Self::None,
@@ -396,7 +414,11 @@ impl Hwp5RawBorderFill {
         let bottom = Hwp5RawBorderLine::parse(&mut cur)?;
         let diagonal = Hwp5RawBorderLine::parse(&mut cur)?;
         let fill_kind = cur.read_u32::<LittleEndian>()?;
-        let fill = parse_fill_payload(fill_kind, &mut cur)?;
+        let fill =
+            parse_fill_payload(fill_kind, &mut cur).map_err(|err| Hwp5Error::RecordParse {
+                offset: cur.position() as usize,
+                detail: format!("BorderFill fill_kind=0x{fill_kind:08X}: {err}"),
+            })?;
 
         Ok(Self {
             property,
@@ -415,13 +437,42 @@ impl Hwp5RawBorderFill {
     }
 }
 
-fn parse_fill_payload(
+/// Bytes left after the cursor.
+fn remaining(cur: &Cursor<&[u8]>) -> u64 {
+    (cur.get_ref().len() as u64).saturating_sub(cur.position())
+}
+
+/// `count` items of `size` bytes, read from what is left — refused before
+/// anything is allocated when the record cannot hold them (a damaged length
+/// word would otherwise ask for gigabytes).
+fn checked_len(cur: &Cursor<&[u8]>, count: u64, size: u64, what: &str) -> Hwp5Result<usize> {
+    let bytes = count.saturating_mul(size);
+    if bytes > remaining(cur) {
+        return Err(Hwp5Error::RecordParse {
+            offset: cur.position() as usize,
+            detail: format!(
+                "fill {what}: {count} items do not fit the {} bytes left",
+                remaining(cur)
+            ),
+        });
+    }
+    Ok(count as usize)
+}
+
+/// Parses a fill block (kind word already read): `DocInfo` border fills and
+/// shape components (after their line information) share this layout.
+///
+/// Every length word is checked against the bytes left before it sizes an
+/// allocation (review r1). 이것을 실패시키는 것: 이 검사를 지우기
+/// (`fill_lengths_beyond_the_record_are_refused_before_allocating`).
+pub(crate) fn parse_fill_payload(
     fill_kind: u32,
     cur: &mut Cursor<&[u8]>,
 ) -> Hwp5Result<Hwp5RawBorderFillFill> {
     match fill_kind {
         0x0000_0000 => {
-            let extra_len = cur.read_u32::<LittleEndian>()? as usize;
+            let extra_len = cur.read_u32::<LittleEndian>()?;
+            let extra_len = checked_len(cur, u64::from(extra_len), 1, "extra data")?;
             let mut ignored_extra_data = vec![0u8; extra_len];
             cur.read_exact(&mut ignored_extra_data)?;
             Ok(Hwp5RawBorderFillFill::None)
@@ -430,8 +481,17 @@ fn parse_fill_payload(
             let background_color = cur.read_u32::<LittleEndian>()?;
             let pattern_color = cur.read_u32::<LittleEndian>()?;
             let pattern_kind = Hwp5FillPatternKind::from_raw(cur.read_i32::<LittleEndian>()?);
-            let alpha = cur.read_u8()?;
-            let extra_len = cur.read_u32::<LittleEndian>()? as usize;
+            // The alpha-less form ends with exactly one zero extra-length
+            // word (DocInfo: 52 bytes; also written by shape components).
+            // Do not infer a version cutoff or accept arbitrary EOF: a short
+            // modern trailer with nonzero alpha/length must remain an error.
+            let alpha = if cur.get_ref().get(cur.position() as usize..) == Some(&[0; 4][..]) {
+                0
+            } else {
+                cur.read_u8()?
+            };
+            let extra_len = cur.read_u32::<LittleEndian>()?;
+            let extra_len = checked_len(cur, u64::from(extra_len), 1, "extra data")?;
             let mut extra_data = vec![0u8; extra_len];
             cur.read_exact(&mut extra_data)?;
             Ok(Hwp5RawBorderFillFill::Color(Hwp5RawColorFill {
@@ -484,7 +544,8 @@ fn parse_gradation_fill_payload(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5RawGr
     let center_x = cur.read_i32::<LittleEndian>()?;
     let center_y = cur.read_i32::<LittleEndian>()?;
     let blur = cur.read_u32::<LittleEndian>()?;
-    let color_count = cur.read_u32::<LittleEndian>()? as usize;
+    let color_count = cur.read_u32::<LittleEndian>()?;
+    let color_count = checked_len(cur, u64::from(color_count), 4, "gradation colours")?;
     let mut colors = Vec::with_capacity(color_count);
     for _ in 0..color_count {
         colors.push(cur.read_u32::<LittleEndian>()?);
@@ -510,9 +571,180 @@ fn parse_gradation_fill_payload(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5RawGr
     })
 }
 
+/// Synthetic no-fill, short color and two-stop gradient records with distinct line slots.
+#[cfg(test)]
+pub(crate) fn synthetic_border_fills() -> Vec<Vec<u8>> {
+    let mut prefix = 0x2003u16.to_le_bytes().to_vec();
+    for slot in 0..5u8 {
+        prefix.extend([slot, slot + 2]);
+        prefix.extend((0x0012_3456 + u32::from(slot)).to_le_bytes());
+    }
+    let mut none = prefix.clone();
+    none.extend(0u32.to_le_bytes());
+    none.extend(0u32.to_le_bytes());
+    let mut color = prefix.clone();
+    for word in [1u32, 0x0012_ABCD, 0x0056_789A, u32::MAX, 0] {
+        color.extend(word.to_le_bytes());
+    }
+    let mut gradient = prefix;
+    gradient.extend(4u32.to_le_bytes());
+    gradient.push(1);
+    for word in [45u32, (-20i32) as u32, 30, 60, 2, 0x0011_2233, 0x0044_5566, 1] {
+        gradient.extend(word.to_le_bytes());
+    }
+    gradient.push(50);
+    vec![none, color, gradient]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn border_fill_synthetic_wire_values_survive_all_variants() {
+        // 이것을 실패시키는 것: 짧은 color의 alpha 강제 읽기 또는 gradient blur_center 누락.
+        let records = synthetic_border_fills();
+        for data in &records {
+            let word = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+            let fill = Hwp5RawBorderFill::parse(data).unwrap();
+            assert_eq!(fill.property, 0x2003);
+            for (slot, line) in
+                [fill.left, fill.right, fill.top, fill.bottom, fill.diagonal].iter().enumerate()
+            {
+                let at = 2 + slot * 6;
+                assert_eq!(line.kind, Hwp5BorderLineKind::from_raw(data[at]));
+                assert_eq!(line.width, data[at + 1]);
+                assert_eq!(line.color, word(at + 2));
+            }
+            match fill.fill {
+                Hwp5RawBorderFillFill::Color(color) => {
+                    assert_eq!(data.len(), 52);
+                    assert_eq!(color.background_color, 0x0012_ABCD);
+                    assert_eq!(color.pattern_color, 0x0056_789A);
+                    assert_eq!(color.pattern_kind, Hwp5FillPatternKind::None);
+                    assert_eq!(color.alpha, 0);
+                    assert!(color.extra_data.is_empty());
+                }
+                Hwp5RawBorderFillFill::Gradation(gradient) => {
+                    assert_eq!(data.len(), 70);
+                    assert_eq!(gradient.colors, [0x0011_2233, 0x0044_5566]);
+                    assert_eq!(gradient.angle, 45);
+                    assert_eq!(gradient.center_x, -20);
+                    assert_eq!(gradient.center_y, 30);
+                    assert_eq!(gradient.blur, 60);
+                    assert_eq!(gradient.shape, Some(1));
+                    assert_eq!(gradient.blur_center, Some(50));
+                    assert!(gradient.extra_data.is_empty());
+                }
+                Hwp5RawBorderFillFill::None => assert_eq!(data.len(), 40),
+                other => panic!("unexpected synthetic fill: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn border_fill_color_alpha_and_length_boundaries() {
+        // 이것을 실패시키는 것: 짧은 color에도 alpha 강제 읽기, 네 zero 조건 삭제,
+        // 현대 alpha 무시, 선언한 extra 길이 검사 제거.
+        let legacy = synthetic_border_fills()[1].clone();
+        for len in 0..52 {
+            assert!(Hwp5RawBorderFill::parse(&legacy[..len]).is_err(), "length {len}");
+        }
+        for at in 48..52 {
+            let mut damaged = legacy.clone();
+            damaged[at] = 1;
+            assert!(Hwp5RawBorderFill::parse(&damaged).is_err(), "nonzero byte {at}");
+        }
+        for alpha in [0, 1, 128, 255] {
+            let mut modern = legacy[..48].to_vec();
+            modern.push(alpha);
+            modern.extend_from_slice(&0u32.to_le_bytes());
+            let Hwp5RawBorderFillFill::Color(color) =
+                Hwp5RawBorderFill::parse(&modern).unwrap().fill
+            else {
+                panic!("color expected")
+            };
+            assert_eq!(color.alpha, alpha);
+            assert_eq!(color.background_color, 0x0012_ABCD);
+            assert!(color.extra_data.is_empty());
+            // With alpha=0, a 52-byte prefix is byte-identical to the valid
+            // legacy form; length/flags cannot distinguish its provenance.
+            assert_eq!(Hwp5RawBorderFill::parse(&modern[..52]).is_ok(), alpha == 0);
+            modern[49..53].copy_from_slice(&2u32.to_le_bytes());
+            assert!(Hwp5RawBorderFill::parse(&modern).is_err());
+            modern.push(0xAB);
+            assert!(Hwp5RawBorderFill::parse(&modern).is_err());
+            modern.push(0xCD);
+            let Hwp5RawBorderFillFill::Color(color) =
+                Hwp5RawBorderFill::parse(&modern).unwrap().fill
+            else {
+                panic!("color expected")
+            };
+            assert_eq!(color.alpha, alpha);
+            assert_eq!(color.extra_data, [0xAB, 0xCD]);
+        }
+    }
+
+    #[test]
+    fn border_fill_gradient_and_image_layout_boundaries() {
+        // 이것을 실패시키는 것: color 전용 짧은 형식을 다른 플래그에 적용,
+        // 이미지 ID/효과 위치 변경, gradient blur_center 변경 또는 색 개수 길이 검사 제거.
+        let gradient = synthetic_border_fills()[2].clone();
+        assert_eq!(gradient.len(), 70);
+        for len in 36..65 {
+            assert!(Hwp5RawBorderFill::parse(&gradient[..len]).is_err(), "gradient {len}");
+        }
+        for alpha_tail in [vec![], vec![0], vec![128]] {
+            let mut data = gradient.clone();
+            data.extend_from_slice(&alpha_tail);
+            let Hwp5RawBorderFillFill::Gradation(fill) =
+                Hwp5RawBorderFill::parse(&data).unwrap().fill
+            else {
+                panic!("gradation expected")
+            };
+            assert_eq!(fill.shape, Some(1));
+            assert_eq!(fill.blur_center, Some(50));
+            assert_eq!(fill.extra_data, alpha_tail);
+        }
+        let mut image = vec![0; 32];
+        image.extend_from_slice(&2u32.to_le_bytes());
+        image.extend_from_slice(&[5, 0xF6, 20, 1, 0x34, 0x12]);
+        for len in 36..42 {
+            assert!(Hwp5RawBorderFill::parse(&image[..len]).is_err(), "image {len}");
+        }
+        image.extend_from_slice(&[0; 5]);
+        let Hwp5RawBorderFillFill::Image(fill) = Hwp5RawBorderFill::parse(&image).unwrap().fill
+        else {
+            panic!("image expected")
+        };
+        assert_eq!(fill.mode, Hwp5FillImageMode::Resize);
+        assert_eq!(fill.brightness, -10);
+        assert_eq!(fill.contrast, 20);
+        assert_eq!(fill.effect, Hwp5FillImageEffect::GrayScale);
+        assert_eq!(fill.bindata_id, 0x1234);
+        assert_eq!(fill.extra_data, [0; 5]);
+    }
+
+    /// A fill whose length word claims more than the record holds is
+    /// refused before anything is allocated: an empty fill's or a colour
+    /// fill's extra-data length, a gradation's colour count — each
+    /// `u32::MAX` in a few-byte record.
+    ///
+    /// 이것을 실패시키는 것: 세 길이 검사 중 하나를 지우기(수 GB 할당 요청 —
+    /// 테스트가 메모리 부족으로 죽거나 `read_exact` 전에 멈춘다).
+    #[test]
+    fn fill_lengths_beyond_the_record_are_refused_before_allocating() {
+        let huge = u32::MAX.to_le_bytes();
+        let none = huge.to_vec();
+        let mut colour = vec![0u8; 13];
+        colour.extend_from_slice(&huge);
+        let mut gradation = vec![0u8; 17];
+        gradation.extend_from_slice(&huge);
+        for (kind, data) in [(0u32, none), (1, colour), (4, gradation)] {
+            let err = parse_fill_payload(kind, &mut Cursor::new(&data[..])).unwrap_err();
+            assert!(err.to_string().contains("do not fit"), "kind {kind}: {err}");
+        }
+    }
 
     fn border_line(kind: u8, width: u8, color: u32) -> Vec<u8> {
         let mut data = Vec::new();

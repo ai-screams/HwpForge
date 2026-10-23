@@ -6,9 +6,10 @@
 //! document, a regenerating edit that is fail-closed, and a diagnostic that
 //! reports a verdict instead of failing.
 
+use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::presets::{builtin_presets, PresetInfo};
-use hwpforge_smithy_hwpx::{EncodeOptions, HwpxDecoder, HwpxEncoder};
+use hwpforge_smithy_hwpx::{DecodeWarning, EncodeOptions, HwpxDecoder, HwpxEncoder};
 use serde::Serialize;
 
 use super::{take_bytes_fail_closed, OpsError, OpsWarning};
@@ -177,6 +178,10 @@ pub struct RestyleMeta {
 /// [`take_bytes_fail_closed`]. Non-semantic warnings (a dropped line-layout
 /// cache) are returned in `warnings` as before.
 ///
+/// The input is refused the same way when its decode already lost content
+/// (`DecodeWarning::is_content_loss`, for example a picture inside a group):
+/// regenerating would make that loss permanent.
+///
 /// # Errors
 ///
 /// - [`OpsError::PresetNotFound`] — no built-in preset has that name.
@@ -187,6 +192,8 @@ pub struct RestyleMeta {
 /// - [`OpsError::Core`] (`VALIDATION_FAILED`) — the decoded document does
 ///   not validate.
 /// - [`OpsError::EncodeSemanticLoss`] — see **Fail-closed** above.
+/// - [`OpsError::Rejected`] with `INPUT_NOT_ROUNDTRIP_SAFE` — the input's
+///   decode lost content; see **Fail-closed** above.
 ///
 /// # Warnings
 ///
@@ -216,6 +223,7 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
         .clone();
 
     let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    reject_input_content_loss(&decoded.warnings)?;
     let decode_warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
     let mut style_store = decoded.style_store;
@@ -242,6 +250,7 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
     let mut warnings = decode_warnings;
     warnings.extend(encode_warnings);
 
+    super::ensure_opaque_carried(hwpx, &bytes)?;
     Ok(RestyleOutput { bytes, preset: opts.preset.clone(), sections, paragraphs, warnings })
 }
 
@@ -352,6 +361,22 @@ pub fn validate(hwpx: &[u8]) -> Result<ValidateOutput, OpsError> {
             errors: vec![WarningInfo::new(VALIDATION_FAILED, error.to_string())],
             warnings,
         }),
+    }
+}
+
+/// Refuses an input whose decode reported lost content: a regenerating edit
+/// would write that loss into its output (`INPUT_NOT_ROUNDTRIP_SAFE`, the code
+/// stamping and cell edits report for the same condition).
+fn reject_input_content_loss(warnings: &[DecodeWarning]) -> Result<(), OpsError> {
+    match warnings.iter().find(|w| w.is_content_loss()) {
+        Some(lost) => Err(OpsError::Rejected {
+            code: OpsCode::InputNotRoundtripSafe,
+            reason: format!(
+                "input is not round-trip safe: {lost} — regenerating it would make the loss \
+                 permanent"
+            ),
+        }),
+        None => Ok(()),
     }
 }
 

@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! use hwpforge_core::{ImageStore, StyleLookup};
+//! use hwpforge_core::{ImageStore, ParagraphMeasure, StyleLookup};
 //! use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 //! use hwpforge_smithy_hwpx::HwpxStyleLookup;
 //!
@@ -20,7 +20,7 @@
 //! assert!(lookup.image_data("logo.png").is_none());
 //! ```
 
-use hwpforge_core::{ImageStore, StyleLookup};
+use hwpforge_core::{ImageStore, ParagraphMeasure, StyleLookup};
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleIndex, UnderlineType,
 };
@@ -69,6 +69,8 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit>;
         fn char_text_color(&self, id: CharShapeIndex) -> Option<Color>;
         fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment>;
+        fn para_indent_left(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure>;
+        fn para_indent_first_line(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure>;
         fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str>;
         fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool>;
@@ -79,35 +81,42 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex>;
         fn border_fill_lines(&self, id: u32) -> Option<hwpforge_core::BorderFillLines>;
         fn border_fill_face(&self, id: u32) -> Option<hwpforge_core::FillKind>;
+        fn border_fill_has_inner_lines(&self, id: u32) -> Option<bool>;
     }
 
     fn image_resolve_filename(&self, key: &str) -> Option<&str> {
-        let stripped = key.strip_prefix("BinData/").unwrap_or(key);
-        // W2a hardening (§3 disposition M5): 종전 단일 iter().find() 는
-        // exact 와 stem 을 OR 로 섞어 HashMap 순서에 따라 다른 자산을
-        // 돌려줄 수 있었다 (비결정). 우선순위 고정:
-        // ① exact 일치 → ② stem 일치가 **유일**할 때만 → ③ 복수 stem =
-        // None (모호 — 추측 금지). 실측 양 경로(HWPX sanitize 키·HWP5
-        // storage_name)는 exact 로 정합하므로 stem 은 방어층이다.
-        if let Some((k, _)) = self.images.iter().find(|(k, _)| *k == stripped) {
-            return Some(k);
-        }
-        let mut stem_matches = self
-            .images
-            .iter()
-            .filter(|(k, _)| k.rsplit_once('.').is_some_and(|(stem, _)| stem == stripped))
-            .map(|(k, _)| k);
-        let first = stem_matches.next()?;
-        if stem_matches.next().is_some() {
-            return None; // 복수 stem — 모호
-        }
-        Some(first)
+        resolve_image_key(self.images, key)
     }
 
     fn image_data(&self, key: &str) -> Option<&[u8]> {
         let resolved = self.image_resolve_filename(key)?;
         self.images.get(resolved)
     }
+}
+
+/// The stored image key an image reference resolves to — the one rule the
+/// whole crate uses (the style lookup here, and the HWPX decoder's pixel
+/// sizes).
+///
+/// W2a hardening (§3 disposition M5): 종전 단일 iter().find() 는 exact 와 stem
+/// 을 OR 로 섞어 HashMap 순서에 따라 다른 자산을 돌려줄 수 있었다 (비결정).
+/// 우선순위 고정: ① exact 일치 → ② stem 일치가 **유일**할 때만 → ③ 복수 stem
+/// = None (모호 — 추측 금지). 실측 양 경로(HWPX sanitize 키·HWP5
+/// storage_name)는 exact 로 정합하므로 stem 은 방어층이다.
+pub(crate) fn resolve_image_key<'s>(images: &'s ImageStore, key: &str) -> Option<&'s str> {
+    let stripped = key.strip_prefix("BinData/").unwrap_or(key);
+    if let Some((k, _)) = images.iter().find(|(k, _)| *k == stripped) {
+        return Some(k);
+    }
+    let mut stem_matches = images
+        .iter()
+        .filter(|(k, _)| k.rsplit_once('.').is_some_and(|(stem, _)| stem == stripped))
+        .map(|(k, _)| k);
+    let first = stem_matches.next()?;
+    if stem_matches.next().is_some() {
+        return None; // 복수 stem — 모호
+    }
+    Some(first)
 }
 
 #[cfg(test)]
@@ -142,7 +151,7 @@ mod tests {
         });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Bullet,
-            heading_id_ref: 7,
+            heading_id_ref: 1,
             checked: true,
             ..Default::default()
         });

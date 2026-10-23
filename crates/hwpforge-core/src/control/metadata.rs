@@ -32,13 +32,20 @@ pub struct MemoMetadata {
     pub id: String,
     /// Memo author (`Author` parameter). Empty when unknown.
     pub author: String,
-    /// HWPX `CreateDateTime` parameter (ISO 8601 UTC). Empty triggers
-    /// encoder-side auto-generation at write time.
+    /// HWPX `CreateDateTime` parameter (ISO 8601 UTC,
+    /// `"YYYY-MM-DDTHH:MM:SSZ"`). When empty, the HWPX encoder writes the
+    /// time its caller gives (`EncodeOptions::with_memo_create_time`), else
+    /// the Unix epoch — it never reads the clock. HWP5 conversion fills it
+    /// with the file's last-saved time; `from-json` passes the current time.
     pub create_datetime: String,
     /// Raw wire `Command` parameter (`"MEMO/{shape}/{number}/…"` from HWP5).
     /// Empty for HwpForge-authored memos — encoders synthesise a minimum
     /// `MEMO/{shape}/{number}/` form in that case.
     pub command: String,
+    /// Preserve empty source metadata instead of generating ID, command or
+    /// creation time. Set by readers; newly authored memos keep the defaults.
+    #[serde(default)]
+    pub preserve_empty: bool,
 }
 
 impl Default for MemoMetadata {
@@ -50,15 +57,16 @@ impl Default for MemoMetadata {
             author: String::new(),
             create_datetime: String::new(),
             command: String::new(),
+            preserve_empty: false,
         }
     }
 }
 
 impl MemoMetadata {
     /// Returns the HWPX `ID` parameter, deriving `"memo{number}"` when the
-    /// explicit field is blank.
+    /// explicit field is blank and `preserve_empty` is false.
     pub fn hwpx_id(&self) -> String {
-        if self.id.is_empty() {
+        if self.id.is_empty() && !self.preserve_empty {
             format!("memo{}", self.number)
         } else {
             self.id.clone()

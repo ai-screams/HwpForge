@@ -21,6 +21,7 @@ pub(crate) struct WireListParts {
 }
 
 /// Converts shared list semantics into HWPX wire components.
+/// Hancom W3: branded indices become 1-based positions, irrespective of definition id.
 pub(crate) fn list_ref_to_wire_parts(
     list_ref: Option<ParagraphListRef>,
     numberings: &[NumberingDef],
@@ -44,8 +45,8 @@ pub(crate) fn list_ref_to_wire_parts(
                     kind: "numbering definition",
                     index: numbering_id.get() as u32,
                     max: numberings.len() as u32,
-                })?
-                .id,
+                })
+                .map(|_| numbering_id.get() as u32 + 1)?,
             level: u32::from(level),
             checked: false,
         }),
@@ -61,7 +62,7 @@ pub(crate) fn list_ref_to_wire_parts(
             }
             Ok(WireListParts {
                 heading_type: HeadingType::Bullet,
-                id_ref: bullet.id,
+                id_ref: bullet_id.get() as u32 + 1,
                 level: u32::from(level),
                 checked: false,
             })
@@ -78,7 +79,7 @@ pub(crate) fn list_ref_to_wire_parts(
             }
             Ok(WireListParts {
                 heading_type: HeadingType::Bullet,
-                id_ref: bullet.id,
+                id_ref: bullet_id.get() as u32 + 1,
                 level: u32::from(level),
                 checked,
             })
@@ -222,7 +223,8 @@ mod tests {
     use hwpforge_foundation::{BulletIndex, NumberingIndex};
 
     #[test]
-    fn list_ref_to_wire_parts_uses_definition_ids_not_indices() {
+    fn list_ref_to_wire_parts_uses_positions_not_definition_labels() {
+        // Hancom W3: wire references select list positions, even for sparse labels.
         let numberings = vec![NumberingDef {
             id: 42,
             start: 0,
@@ -274,7 +276,7 @@ mod tests {
             .unwrap(),
             WireListParts {
                 heading_type: HeadingType::Number,
-                id_ref: 42,
+                id_ref: 1,
                 level: 2,
                 checked: false
             },
@@ -288,7 +290,7 @@ mod tests {
             .unwrap(),
             WireListParts {
                 heading_type: HeadingType::Bullet,
-                id_ref: 7,
+                id_ref: 1,
                 level: 0,
                 checked: false
             },
@@ -304,7 +306,7 @@ mod tests {
                 &bullets,
             )
             .unwrap(),
-            WireListParts { heading_type: HeadingType::Bullet, id_ref: 8, level: 1, checked: true },
+            WireListParts { heading_type: HeadingType::Bullet, id_ref: 2, level: 1, checked: true },
         );
     }
 

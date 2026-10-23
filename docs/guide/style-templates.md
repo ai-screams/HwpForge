@@ -44,6 +44,46 @@ styles:
 
 `inherits` 키로 다른 스타일을 상속받습니다. 상속 체인은 DFS로 해결되며, 자식 스타일의 값이 부모를 덮어씁니다. `Option` 필드(`PartialCharShape`, `PartialParaShape`)를 병합하는 two-type 패턴으로 구현됩니다.
 
+### 글자 그림자 (`shadow`)
+
+`char_shape.shadow` 는 종류만 적는 문자열이나, 종류·색·간격을 적는 맵으로 씁니다. 간격은 글자 크기 대비 % 로 −100 이상 100 이하, 색은 `"#RRGGBB"` 또는 색 없음 `none` 입니다.
+
+```yaml
+# parent.yaml
+meta:
+  name: parent
+styles:
+  heading1:
+    char_shape:
+      font: 한컴바탕
+      size: 16pt
+      shadow:                 # 맵: 종류·색·간격
+        kind: continuous
+        color: '#123456'
+        offset_x: -3
+        offset_y: 4
+  body:
+    char_shape:
+      font: 한컴바탕
+      size: 10pt
+      shadow: drop            # 문자열: 종류만 (drop · continuous · none)
+
+# child.yaml
+meta:
+  name: child
+  extends: parent
+styles:
+  heading1:
+    char_shape:
+      shadow: { color: '#00FF00' }   # 색만 바꿈 — 종류·간격은 parent 의 것
+```
+
+`extends` 로 이어진 템플릿 사이의 상속은 칸별입니다. 자식이 `shadow: { color: '#00FF00' }` 만 적으면 부모의 종류·간격은 그대로이고 색만 바뀝니다(위 예의 child heading1 = 연속 `#00FF00` −3·4). `color: none` 은 색을 지우는 명시 값이고, 키를 적지 않으면 부모 값을 물려받습니다. 끝까지 정해지지 않은 칸은 한컴 새 문서의 값(종류 없음·`#C0C0C0`·10·10)이 됩니다 — 위 예의 body 는 비연속 `#C0C0C0` 10·10. `color: null`, 모르는 키, 범위 밖 간격은 오류입니다.
+
+옛 템플릿의 `shadow: drop` 은 그대로 읽힙니다. 다만 색을 적지 않고 그림자를 켜면 0.17.0 부터 한컴 새 문서와 같은 `#C0C0C0` 으로 그려져, 이전(`#B2B2B2`)보다 밝게 보입니다. 이전 색이 필요하면 `shadow: {kind: drop, color: '#B2B2B2'}` 처럼 색을 적습니다.
+
+Rust API 에서 결정값 `CharShape.shadow` 는 `ShadowType` 이 아니라 `hwpforge_foundation::CharShadow`(종류·색·간격), 부분값 `PartialCharShape.shadow` 는 `Option<PartialCharShadow>` 입니다(0.17.0 breaking).
+
 ## StyleRegistry: from_template() 사용법
 
 ```rust,no_run

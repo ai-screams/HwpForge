@@ -46,7 +46,7 @@ print(lossy.text[:200])
 print(lossy.report["mode"], list(lossy.report["images"].keys()))
 ```
 
-- `mode="lossless"`는 무언가를 잃어야 하면 `ENCODE_FAILED`로 거부합니다.
+- `mode="lossless"`는 [보존 범위](../markdown-bridge.md#lossless-보존-범위)의 보존 목록은 보존하고, 거부 목록에 든 개체가 있으면 `ENCODE_FAILED`로 거부하며, 그 밖의 값(문단 스타일, 머리말 등)은 거부 없이 빠질 수 있습니다.
 - 보고서의 `images`는 문서가 참조한 이미지의 `{키: 바이트}`입니다. Markdown 텍스트가 그 키를 가리키므로, 파일로 저장할 때 같은 이름으로 옆에 써 두면 됩니다.
 
 ## `to_json` · `from_json` — 전체 문서를 JSON으로
@@ -82,11 +82,11 @@ converted.document.save("old.hwpx")
 
 - 인자는 파일 경로가 아니라 **바이트**입니다(`Document.open`은 HWPX 전용입니다). 읽을 수 없는 바이트는 `HWP5_DECODE_FAILED`.
 - 보고서의 `warnings`에 HWP5가 가졌지만 HWPX로 옮기지 못한 것이 전부 나옵니다.
-- `carry_layout_cache=True`는 한컴이 계산해 둔 줄 조판 캐시를 함께 옮깁니다. PDF 렌더가 한컴의 쪽 나눔을 그대로 재현하려면 이 캐시가 필요합니다(아래). 캐시를 옮긴 HWPX는 PDF 재생·비교용이며, 한컴에서 다시 열어 편집할 문서로 취급하지 마세요.
+- 기본값(`carry_layout_cache=True`)은 한컴이 계산해 둔 줄 조판 캐시를 함께 옮깁니다. 결과가 원본의 줄 나눔 자리를 담고, PDF 렌더는 이 캐시를 재생합니다(아래). 줄 시작 자리를 정확히 옮길 수 없는 문단은 캐시를 버리고 `LAYOUT_CACHE_DROPPED`로 알립니다. 캐시 없이 쓰려면 `carry_layout_cache=False`를 줍니다.
 
 ## `to_pdf` — PDF 렌더
 
-렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5(..., carry_layout_cache=True)`로 캐시를 옮긴 HWPX. Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
+렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5`로 캐시를 옮긴 HWPX(기본값). Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
 
 캐시가 있어도 아직 재생하지 못하는 내용이 있습니다. 한컴이 저장한 문서라도 아래 경우는 실패하고, **한컴에서 다시 저장해도 풀리지 않습니다.**
 
@@ -99,7 +99,7 @@ converted.document.save("old.hwpx")
 
 ```python
 with open("old.hwp", "rb") as handle:
-    carried = hwpforge.convert_hwp5(handle.read(), carry_layout_cache=True).document
+    carried = hwpforge.convert_hwp5(handle.read()).document
 
 try:
     pdf = carried.to_pdf(font_dirs=["/Library/Fonts/Hancom"])
@@ -117,7 +117,7 @@ except hwpforge.HwpForgeError as exc:
 - `discovery`는 `font_dirs` 밖을 더 볼지의 선택입니다: `"explicit"`(기본, 결정적) · `"hancom"`(한컴 설치 글꼴 위치) · `"platform"`(OS 글꼴).
 - `font_dirs`는 시퀀스여야 합니다. 문자열 하나를 주면 한 글자짜리 디렉터리들로 읽히는 대신 `TypeError`로 거부됩니다.
 - `partial_cache_reject=True`는 캐시가 일부만 있는 문서를 다시 배치하지 않고 거부합니다.
-- 실패의 두 번째 분류는 `exc.cause`에 옵니다(`stage`·`code`·`kind`·`location`). `exc.hint`는 원인과 상관없이 같은 문장이므로, 무엇을 할지는 `cause["code"]`로 가르세요: `FONT_UNRESOLVED`는 `font_dirs`·`discovery`, `NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`는 한컴에서 다시 저장, `INVALID_CACHE`·`UNSUPPORTED_CONTENT`는 위 표.
+- 실패의 두 번째 분류는 `exc.cause`에 옵니다(`stage`·`code`·`kind`·`location`). `exc.hint`는 캐시가 없는 경우(`NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`, 한컴 재저장), 지원하지 않는 내용(`UNSUPPORTED_CONTENT`, 한컴에서 PDF 저장), 캐시가 재생과 맞지 않는 경우(`INVALID_CACHE`, 재저장 또는 메시지가 가리키는 내용에 따라 한컴 PDF 저장)만 가르고 그 밖에는 같은 문장이므로, 무엇을 할지는 `cause["code"]`로 가르세요: `FONT_UNRESOLVED`는 `font_dirs`·`discovery`, `NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`는 한컴에서 다시 저장, `INVALID_CACHE`·`UNSUPPORTED_CONTENT`는 위 표.
 
 ## `templates` · `schema`
 

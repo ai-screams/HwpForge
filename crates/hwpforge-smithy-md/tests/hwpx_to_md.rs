@@ -5,7 +5,8 @@
 //! 2. `HwpxDecoder::decode` → `HwpxDocument { document, style_store, image_store }`
 //! 3. `document.validate()` → `Document<Validated>`
 //! 4. `HwpxStyleLookup::new(&style_store, &image_store)` → `&dyn StyleLookup`
-//! 5. `MdEncoder::encode_styled(&validated, &lookup)` → `MdOutput { markdown, images }`
+//! 5. `MdEncoder::encode_styled(&validated, &lookup)` → `MdOutput { markdown, images, warnings }`
+//!    (`#[non_exhaustive]`: read its fields or destructure with `..`)
 
 use std::io::Write as IoWrite;
 
@@ -42,7 +43,7 @@ fn para_pr_xml(id: u32, heading_xml: Option<&str>) -> String {
                 <align horizontal="LEFT" vertical="BASELINE"/>
                 {heading}
                 <switch><default>
-                    <lineSpacing type="PERCENT" value="160"/>
+                    <lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>
                 </default></switch>
             </paraPr>"#,
     )
@@ -75,14 +76,17 @@ fn build_header_xml(char_prs: &[String], para_prs: &[String], styles: &[String])
         para_prs.join("")
     );
     let styles_xml = if styles.is_empty() {
-        String::new()
+        format!("<styles itemCnt=\"1\">{}</styles>", style_xml(0, "본문", "Normal", 0, 0, 0))
     } else {
         format!("<styles itemCnt=\"{}\">{}</styles>", styles.len(), styles.join(""))
     };
 
+    let fontfaces = FONTFACES_XML.replace("</fontfaces>", &format!("{}</fontfaces>", ["LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"].map(|lang| format!(r#"<fontface lang="{lang}" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface>"#)).join("")));
     format!(
         r#"<head version="1.4" secCnt="1">
-    <refList>{FONTFACES_XML}
+    <refList>{fontfaces}
+        <numberings><numbering id="2" start="1"/></numberings>
+        <bullets><bullet id="1" char="•"/></bullets>
         {char_properties}
         {para_properties}
         {styles_xml}
@@ -278,7 +282,7 @@ fn heading_detection_uses_outline_para_shape_even_for_custom_style_names() {
 fn numbered_para_shape_beats_heading_like_style_name() {
     let char_prs = vec![char_pr_xml(0, 1000)];
     let para_prs = vec![
-        para_pr_xml(0, Some(r#"<heading type="NUMBER" idRef="2" level="0"/>"#)),
+        para_pr_xml(0, Some(r#"<heading type="NUMBER" idRef="1" level="0"/>"#)),
         para_pr_xml(1, None),
     ];
     let styles =
@@ -457,34 +461,14 @@ fn multi_section_produces_section_markers() {
 /// Bold/italic formatting: charPr with bold=true should produce `**text**` in output.
 #[test]
 fn bold_text_produces_double_asterisk() {
-    let header = r##"<head version="1.4" secCnt="1">
-        <refList>
-            <fontfaces itemCnt="1">
-                <fontface lang="HANGUL" fontCnt="1">
-                    <font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
-                </fontface>
-            </fontfaces>
-            <charProperties itemCnt="2">
-                <charPr id="0" height="1000" textColor="#000000" shadeColor="none"
-                        useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
-                    <fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
-                </charPr>
-                <charPr id="1" height="1000" textColor="#000000" shadeColor="none"
-                        bold="1"
-                        useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
-                    <fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
-                </charPr>
-            </charProperties>
-            <paraProperties itemCnt="1">
-                <paraPr id="0">
-                    <align horizontal="LEFT" vertical="BASELINE"/>
-                    <switch><default>
-                        <lineSpacing type="PERCENT" value="160"/>
-                    </default></switch>
-                </paraPr>
-            </paraProperties>
-        </refList>
-    </head>"##;
+    let header = build_header_xml(
+        &[
+            char_pr_xml(0, 1000),
+            char_pr_xml(1, 1000).replace("height=\"1000\"", "height=\"1000\" bold=\"1\""),
+        ],
+        &[para_pr_xml(0, None)],
+        &[],
+    );
 
     let section = r#"<sec>
         <p paraPrIDRef="0">
@@ -493,7 +477,7 @@ fn bold_text_produces_double_asterisk() {
         </p>
     </sec>"#;
 
-    let bytes = make_hwpx(header, &[section]);
+    let bytes = make_hwpx(&header, &[section]);
     let output = decode_and_convert(&bytes);
 
     assert!(output.markdown.contains("보통 텍스트"), "normal text should appear");

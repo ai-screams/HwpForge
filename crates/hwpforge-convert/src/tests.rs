@@ -10,7 +10,7 @@ use hwpforge_core::control::Control;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::table::Table;
 use hwpforge_foundation::{
@@ -159,6 +159,18 @@ fn fixture_path(name: &str) -> PathBuf {
     found.into_iter().next().unwrap_or(direct)
 }
 
+/// The cache drop the default carry reports for the first paragraph of a
+/// note or caption: it opens with its number (`atno`), which projects to an
+/// inline page number of unknown kind that has no HWPX form, so the encoder
+/// skips it and drops that paragraph's line cache.
+fn is_number_paragraph_cache_drop(text: &str) -> bool {
+    text.contains("LayoutCacheDropped")
+        && ["Footnote", "Endnote", "Caption"]
+            .iter()
+            .any(|container| text.contains(&format!("{container}, NestedParagraph(0)])")))
+        && text.contains(r#"reason: "unencodable control skipped""#)
+}
+
 fn unique_temp_path(file_name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -181,7 +193,7 @@ fn joined_text_runs<'a>(runs: impl IntoIterator<Item = &'a Run>) -> String {
 fn inspect_summary_counts_style_projection_warnings() {
     let doc_info = doc_info_with_style_projection_warning();
     let store = Hwp5StyleStore::from_doc_info(&doc_info);
-    let (_hwpx_store, style_warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    let (_hwpx_store, style_warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
     assert!(
         !style_warnings.is_empty(),
         "synthetic doc info must trigger style projection warnings"
@@ -1008,6 +1020,108 @@ fn hwp5_to_hwpx_user_sample_equation_carries_script() {
     assert_eq!(layout.equations, 1, "exactly one Control::Equation should round-trip");
 
     let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn memo_layout_cache_keeps_folded_coordinates_and_styled_field_pairs() {
+    use quick_xml::events::Event;
+    // 이것을 실패시키는 것: encoder expected_core를 display_runs로 되돌림.
+    // 162c4335 이전 네 본문 문단의 wire 캐시 값 (감사 보고서 §5.2).
+    for (fixture, rows) in [
+        (
+            "../../crates/hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure/field-mix.hwp",
+            vec![(2, 3200, "검토 필요", vec![(7, "긁은글자 "), (0, "보통글자")])],
+        ),
+        (
+            "user_samples/sample-memo-basic.hwp",
+            vec![(0, 0, "쇠부리야 여기가 메모야", vec![(0, "메모 대상 문장")])],
+        ),
+        (
+            "user_samples/sample-memo-multiple.hwp",
+            vec![(0, 0, "첫 번째", vec![(0, "메모1")]), (1, 1600, "두번째", vec![(0, "메모2")])],
+        ),
+    ] {
+        let (bytes, warnings) =
+            hwp5_to_hwpx_bytes(&std::fs::read(fixture_path(fixture)).unwrap()).unwrap();
+        assert!(
+            !warnings.iter().any(|w| matches!(w, ConvertWarning::HwpxEncode(_))),
+            "{fixture}: {warnings:?}"
+        );
+        let xml = PackageReader::new(&bytes).unwrap().read_section_xml(0).unwrap();
+        // Select top-level paragraphs, not the memo's nested subList paragraphs.
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        let (mut depth, mut start) = (0, 0);
+        let mut paragraphs = Vec::new();
+        loop {
+            let pos = reader.buffer_position() as usize;
+            match reader.read_event().unwrap() {
+                Event::Start(e) if e.local_name().as_ref() == "p" => {
+                    if depth == 0 {
+                        start = pos;
+                    }
+                    depth += 1;
+                }
+                Event::End(e) if e.local_name().as_ref() == "p" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        paragraphs.push(&xml[start..reader.buffer_position() as usize]);
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        for (index, vertpos, body, anchors) in rows {
+            let p = paragraphs[index];
+            let cache = format!(
+                r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="{vertpos}" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="42520" flags="393216"/></hp:linesegarray>"#
+            );
+            assert!(p.contains(&cache), "{fixture} p[{index}]: {p}");
+            assert!(p.contains(&format!(r#"<hp:run charPrIDRef="4"><hp:t>{body}</hp:t></hp:run>"#)));
+            let mut begin = None;
+            let mut ends = 0;
+            let mut reader = quick_xml::Reader::from_str(p);
+            loop {
+                match reader.read_event().unwrap() {
+                    Event::Start(e) | Event::Empty(e) => {
+                        let attr = |key| {
+                            e.attributes()
+                                .map(Result::unwrap)
+                                .find(|a| a.key.as_ref() == key)
+                                .unwrap()
+                                .value
+                                .into_owned()
+                        };
+                        match e.local_name().as_ref() {
+                            "fieldBegin" => {
+                                assert!(begin.is_none());
+                                assert_eq!(attr("type"), "MEMO");
+                                begin = Some((attr("id"), attr("fieldid")));
+                            }
+                            "fieldEnd" => {
+                                assert_eq!(
+                                    begin.as_ref(),
+                                    Some(&(attr("beginIDRef"), attr("fieldid")))
+                                );
+                                ends += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(ends, 1);
+            let mut previous = p.find("</hp:fieldBegin>").unwrap();
+            for (style, text) in anchors {
+                let run = format!(r#"<hp:run charPrIDRef="{style}"><hp:t>{text}</hp:t></hp:run>"#);
+                let at = p.find(&run).unwrap();
+                assert!(previous < at && at < p.find("<hp:fieldEnd ").unwrap());
+                previous = at;
+            }
+        }
+    }
 }
 
 #[test]
@@ -2108,6 +2222,7 @@ fn hwp5_to_hwpx_user_sample_tab_preserves_inline_tab_text_and_custom_tab_def() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// 이것을 실패시키는 것: 셀의 cold 구역 설정 손실 경고 제거/중복 또는 탭 본문 손실.
 #[test]
 fn hwp5_to_hwpx_user_sample_table_tab_preserves_inline_tab_text_in_cell() {
     let source = fixture_path("user_samples/tabs/sample-table-tab.hwp");
@@ -2118,10 +2233,17 @@ fn hwp5_to_hwpx_user_sample_table_tab_preserves_inline_tab_text_in_cell() {
     let out = unique_temp_path("user-sample-table-tab.hwpx");
     let warnings =
         hwp5_to_hwpx(&source, &out).expect("user sample table tab conversion should succeed");
-    // Phase 2: inline tab carry restored full parity here too.
+    // The fixture has its own cold record at level 3 in the table cell.
+    // Inline tabs survive; the unsupported independent column scope is reported.
     assert!(
-        warnings.is_empty(),
-        "controlled table-tab fixture should convert without warnings, saw {warnings:?}"
+        matches!(
+            warnings.as_slice(),
+            [ConvertWarning::Hwp5(Hwp5Warning::DroppedControl {
+                control: "nested_section_settings",
+                reason,
+            })] if reason.contains("no independent Core section scope")
+        ),
+        "table-tab fixture should report exactly its nested column scope loss: {warnings:?}"
     );
 
     assert_valid_hwpx(&out);
@@ -2206,7 +2328,7 @@ fn hwp5_to_hwpx_user_sample_checkable_multiline_preserves_item_state_and_continu
     assert_eq!(continuation_shape.heading_type, HeadingType::None);
     assert_eq!(continuation_shape.heading_id_ref, 0);
     assert!(!continuation_shape.checked);
-    assert!(continuation_shape.margin_left.as_i32() > 0);
+    assert!(continuation_shape.margin_left.as_hwp_unit().unwrap().as_i32() > 0);
 
     let _ = std::fs::remove_file(&out);
 }
@@ -2323,7 +2445,16 @@ fn hwp5_to_hwpx_user_sample_footnote_carries_four_footnotes() {
     let out = unique_temp_path("user-sample-field-footnote.hwpx");
     let warnings =
         hwp5_to_hwpx(&source, &out).expect("user sample footnote conversion should succeed");
-    assert!(warnings.is_empty(), "footnote fixture should convert without warnings: {warnings:?}");
+    // The default carries the line cache; each note's first paragraph drops
+    // its cache (`is_number_paragraph_cache_drop`). That is the only warning
+    // this fixture gives. 이것을 실패시키는 것: 다른 경고, 또는 같은 drop 이
+    // 다른 자리·이유로 나는 것(인코더의 그 이유 문자열을 바꾸면 실패 확인).
+    let unexpected: Vec<_> =
+        warnings.iter().filter(|w| !is_number_paragraph_cache_drop(&format!("{w:?}"))).collect();
+    assert!(
+        unexpected.is_empty(),
+        "footnote fixture should convert without warnings: {warnings:?}"
+    );
 
     assert_valid_hwpx(&out);
 
@@ -2557,7 +2688,32 @@ fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wir
 
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
-        assert!(warnings.is_empty(), "{relative} should convert without warnings: {warnings:?}");
+        // A caption fixture's picture caption is reported, not carried (HWP5
+        // shape captions are not projected); a table caption is carried (D)
+        // and its number (`atno` kind 4), like an equation caption's (kind
+        // 5), is reported (§19.16 J, P19) — the only warnings these fixtures
+        // give.
+        let unexpected: Vec<_> = warnings
+            .iter()
+            .filter(|w| {
+                let text = format!("{w:?}");
+                // The default carries the line cache; a note's or caption's
+                // first paragraph drops it (`is_number_paragraph_cache_drop`),
+                // and so does the body paragraph holding the kind-5 number
+                // (`atno`) in the equation fixture.
+                let expected = text.contains("DroppedControl { control: \"caption\"")
+                    || is_number_paragraph_cache_drop(&text)
+                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        && text.contains(
+                            r#"BodyParagraph(1)]), reason: "unencodable control skipped""#,
+                        ))
+                    || ((relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        || relative.ends_with("sample-table-caption-4-refs.hwp"))
+                        && text.contains("control.auto_number"));
+                !expected
+            })
+            .collect();
+        assert!(unexpected.is_empty(), "{relative} should convert without warnings: {warnings:?}");
 
         assert_valid_hwpx(&out);
 
@@ -2640,7 +2796,32 @@ fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
         let out = unique_temp_path(&format!("crossref-link-{stem}.hwpx"));
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
-        assert!(warnings.is_empty(), "{relative} should convert without warnings: {warnings:?}");
+        // A caption fixture's picture caption is reported, not carried (HWP5
+        // shape captions are not projected); a table caption is carried (D)
+        // and its number (`atno` kind 4), like an equation caption's (kind
+        // 5), is reported (§19.16 J, P19) — the only warnings these fixtures
+        // give.
+        let unexpected: Vec<_> = warnings
+            .iter()
+            .filter(|w| {
+                let text = format!("{w:?}");
+                // The default carries the line cache; a note's or caption's
+                // first paragraph drops it (`is_number_paragraph_cache_drop`),
+                // and so does the body paragraph holding the kind-5 number
+                // (`atno`) in the equation fixture.
+                let expected = text.contains("DroppedControl { control: \"caption\"")
+                    || is_number_paragraph_cache_drop(&text)
+                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        && text.contains(
+                            r#"BodyParagraph(1)]), reason: "unencodable control skipped""#,
+                        ))
+                    || ((relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        || relative.ends_with("sample-table-caption-4-refs.hwp"))
+                        && text.contains("control.auto_number"));
+                !expected
+            })
+            .collect();
+        assert!(unexpected.is_empty(), "{relative} should convert without warnings: {warnings:?}");
 
         let section_xml = read_section_xml(&out, 0);
 
@@ -3166,34 +3347,34 @@ fn hwp5_to_hwpx_user_sample_indent_preserves_four_variants() {
     // paraPr 20: 왼쪽 들여쓰기 (margin_left > 0, others 0)
     let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
     assert!(
-        s20.margin_left.as_i32() > 0,
+        s20.margin_left.as_hwp_unit().unwrap().as_i32() > 0,
         "para 20 (왼쪽) expects positive margin_left, got {}",
-        s20.margin_left.as_i32()
+        s20.margin_left.as_hwp_unit().unwrap().as_i32()
     );
-    assert_eq!(s20.indent.as_i32(), 0, "para 20 indent should be 0");
+    assert_eq!(s20.indent.as_hwp_unit().unwrap().as_i32(), 0, "para 20 indent should be 0");
 
     // paraPr 21: 오른쪽 들여쓰기 (margin_right > 0)
     let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
     assert!(
-        s21.margin_right.as_i32() > 0,
+        s21.margin_right.as_hwp_unit().unwrap().as_i32() > 0,
         "para 21 (오른쪽) expects positive margin_right, got {}",
-        s21.margin_right.as_i32()
+        s21.margin_right.as_hwp_unit().unwrap().as_i32()
     );
 
     // paraPr 22: 첫 줄 들여쓰기 (indent > 0)
     let s22 = decoded.style_store.para_shape(ParaShapeIndex::new(22)).expect("para shape 22");
     assert!(
-        s22.indent.as_i32() > 0,
+        s22.indent.as_hwp_unit().unwrap().as_i32() > 0,
         "para 22 (첫 줄) expects positive indent, got {}",
-        s22.indent.as_i32()
+        s22.indent.as_hwp_unit().unwrap().as_i32()
     );
 
     // paraPr 23: 내어쓰기 (indent < 0 / hanging)
     let s23 = decoded.style_store.para_shape(ParaShapeIndex::new(23)).expect("para shape 23");
     assert!(
-        s23.indent.as_i32() < 0,
+        s23.indent.as_hwp_unit().unwrap().as_i32() < 0,
         "para 23 (내어쓰기) expects negative hanging indent, got {}",
-        s23.indent.as_i32()
+        s23.indent.as_hwp_unit().unwrap().as_i32()
     );
 
     let _ = std::fs::remove_file(&out);
@@ -3372,7 +3553,8 @@ fn hwp5_to_hwpx_chart_fixture_emits_embedded_chart_switch_block() {
     let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
         .expect("converted hwpx should open as zip");
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> =
+        archive.file_names().map(|name| name.expect("ZIP entry name").into_owned()).collect();
     assert!(
         names.iter().any(|n| n == "Chart/chart1.xml"),
         "expected Chart/chart1.xml in zip, got {names:?}"
@@ -3642,7 +3824,7 @@ mod lib_unit_tests {
         store.id_mappings = Some(id_mappings_with_counts(2, 0, 0));
         store.tab_defs = vec![simple_tab_def(0)];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.count")),
@@ -3656,7 +3838,7 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.id_mappings = Some(id_mappings_with_counts(0, 3, 0));
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "numbering.count")),
@@ -3670,7 +3852,7 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.id_mappings = Some(id_mappings_with_counts(0, 0, 5));
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "bullet.count")),
@@ -3684,7 +3866,7 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.tab_defs = vec![Hwp5TabDefSlot { raw_id: 0, tab_def: None }];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ParserFallback { subject, .. } if *subject == "tab_def.slot")),
@@ -3694,7 +3876,7 @@ mod lib_unit_tests {
 
     /// tab stop with out-of-range position → ParserFallback for tab_def.position
     #[test]
-    fn tab_stop_out_of_range_position_emits_warning() {
+    fn tab_stop_char_position_outside_physical_range_retains_unit() {
         let mut store = empty_store();
         store.tab_defs = vec![Hwp5TabDefSlot::parsed(
             0,
@@ -3708,12 +3890,16 @@ mod lib_unit_tests {
             },
         )];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
-        assert!(
-            warnings.iter().any(|w| matches!(w,
-                Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.position")),
-            "expected tab_def.position warning for out-of-range position"
+        let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
+        assert_eq!(
+            hwpx_store.iter_tabs().next().unwrap().stops[0]
+                .position
+                .as_char_count()
+                .unwrap()
+                .ticks(),
+            50_000_000
         );
+        assert!(warnings.is_empty());
     }
 
     /// tab stop with unknown tab_type → ParserFallback for tab_def.align
@@ -3728,7 +3914,7 @@ mod lib_unit_tests {
             },
         )];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.align")),
@@ -3748,7 +3934,7 @@ mod lib_unit_tests {
             },
         )];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.leader")),
@@ -3758,17 +3944,14 @@ mod lib_unit_tests {
 
     /// paragraph shape referencing a missing tab definition → ParserFallback for tab_def.ref
     #[test]
-    fn para_shape_referencing_missing_tab_def_emits_ref_warning() {
+    fn fix2_para_shape_referencing_missing_tab_def_is_error() {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![minimal_para_shape_with_tab_id(99)];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
-        assert!(
-            warnings.iter().any(|w| matches!(w,
-                Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.ref")),
-            "expected tab_def.ref warning for missing tab definition id 99"
-        );
+        // 이것을 실패시키는 것: 없는 탭 99를 0으로 바꿔 성공 반환.
+        let error = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
+        assert!(error.contains("paraPr 0") && error.contains("ID 99"), "{error}");
     }
 
     /// Korean "개요 N" style name triggers outline-level override on matching paraPr
@@ -3779,9 +3962,12 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];
+        store.char_shapes.push(
+            hwpforge_smithy_hwp5::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap(),
+        );
         store.styles = vec![para_style("개요 8", 0)];
 
-        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         let para = hwpx_store.para_shape(ParaShapeIndex::new(0)).expect("para shape 0 must exist");
         // The override only applies when heading_type is Outline
         if matches!(para.heading_type, HeadingType::Outline) {
@@ -3797,9 +3983,12 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];
+        store.char_shapes.push(
+            hwpforge_smithy_hwp5::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap(),
+        );
         store.styles = vec![para_style("Outline 9", 0)];
 
-        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         let para = hwpx_store.para_shape(ParaShapeIndex::new(0)).expect("para shape 0 must exist");
         if matches!(para.heading_type, HeadingType::Outline) {
             assert_eq!(para.heading_level, 8, "Outline 9 should set heading_level to 8");
@@ -3812,23 +4001,30 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];
+        store.char_shapes.push(
+            hwpforge_smithy_hwp5::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap(),
+        );
         store.styles = vec![char_style("개요 3", 0)];
 
         // Should not panic
-        let (_hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
     }
 
-    /// Style with para_shape_id out of bounds is silently skipped
+    /// Missing paraPr references fail before outline-name handling.
     #[test]
-    fn outline_style_with_oob_para_shape_id_is_skipped() {
+    fn fix3_outline_style_with_oob_para_shape_id_is_error() {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];
         // para_shape_id=99 references a non-existent slot
+        store.char_shapes.push(
+            hwpforge_smithy_hwp5::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap(),
+        );
         store.styles = vec![para_style("개요 3", 99)];
 
-        // Should not panic
-        let (_hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        // 이것을 실패시키는 것: 없는 paraPr 참조를 outline override에서 무시.
+        let error = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
+        assert!(error.contains("paraPr reference ID 99"), "{error}");
     }
 
     /// Style with unrecognized name (not outline) leaves heading_level unchanged
@@ -3839,9 +4035,12 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];
+        store.char_shapes.push(
+            hwpforge_smithy_hwp5::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap(),
+        );
         store.styles = vec![para_style("바탕글", 0)];
 
-        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         let para = hwpx_store.para_shape(ParaShapeIndex::new(0)).expect("para shape 0 must exist");
         // heading_level should NOT have been overridden to anything unexpected
         // (the value is determined by the property1 bits; level 0 from 1<<23 gives Outline level 0)
@@ -3856,7 +4055,7 @@ mod lib_unit_tests {
     fn no_id_mappings_skips_all_integrity_checks() {
         let store = empty_store(); // id_mappings = None
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             !warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. }
@@ -3872,7 +4071,7 @@ mod lib_unit_tests {
         store.id_mappings = Some(id_mappings_with_counts(1, 0, 0));
         store.tab_defs = vec![simple_tab_def(0)];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             !warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.count")),
@@ -3896,7 +4095,7 @@ mod lib_unit_tests {
             },
         )];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             !warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.position")),
@@ -3916,7 +4115,7 @@ mod lib_unit_tests {
             },
         )];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             !warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.align")),
@@ -3936,7 +4135,7 @@ mod lib_unit_tests {
             },
         )];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             !warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.leader")),
@@ -3952,9 +4151,12 @@ mod lib_unit_tests {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];
+        store.char_shapes.push(
+            hwpforge_smithy_hwp5::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap(),
+        );
         store.styles = vec![para_style("개요 11", 0)]; // N=11 is out of range
 
-        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         let para = hwpx_store.para_shape(ParaShapeIndex::new(0)).expect("para shape 0 must exist");
         // No override should have happened; heading_level remains at the wire-encoded value
         if matches!(para.heading_type, HeadingType::Outline) {
@@ -3972,7 +4174,7 @@ mod lib_unit_tests {
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![minimal_para_shape_with_tab_id(0)];
 
-        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+        let (_hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
         assert!(
             !warnings.iter().any(|w| matches!(w,
                 Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "tab_def.ref")),
@@ -4007,40 +4209,37 @@ fn hwp5_to_hwpx_carries_column_separator_line() {
     let _ = std::fs::remove_file(&out);
 }
 
-// ── W1d: HWP5 조판 캐시 opt-in carry ────────────────────────────────
+// ── W1d·S22: HWP5 조판 캐시 기본 carry ────────────────────────────────
 
-/// 기본 변환은 linesegarray 를 방출하지 않고(기존 불변), opt-in 은
-/// HWP5 LINE_SEG 를 `<hp:linesegarray>` 로 carry 하며 재디코드 시
-/// Core 캐시로 승격돼야 한다.
+/// 기본 변환은 HWP5 LINE_SEG 를 `<hp:linesegarray>` 로 carry 하며 재디코드
+/// 시 Core 캐시로 승격돼야 하고, opt-out 은 linesegarray 를 방출하지 않는다.
 #[test]
-fn carry_layout_cache_optin_emits_and_roundtrips() {
+fn carry_layout_cache_default_emits_and_roundtrips() {
     let path = fixture_path("hwp5/hwp5_00.hwp");
     if !path.exists() {
         return; // fixture-optional (suite 관례)
     }
     let bytes = std::fs::read(&path).expect("fixture read");
 
+    let off = crate::ConvertOptions::default().with_carry_layout_cache(false);
+    let (off_out, _) =
+        crate::hwp5_to_hwpx_bytes_with_options(&bytes, off).expect("opt-out convert");
+    let off_xml = {
+        let mut pkg = PackageReader::new(&off_out).expect("package");
+        pkg.read_section_xml(0).expect("section xml")
+    };
+    assert!(!off_xml.contains("linesegarray"), "opt-out 은 캐시를 방출하지 않는다");
+
+    // 기본 변환이 carry 한다 — 기본값을 false 로 되돌리면 실패한다.
     let (default_out, _) = hwp5_to_hwpx_bytes(&bytes).expect("default convert");
     let default_xml = {
         let mut pkg = PackageReader::new(&default_out).expect("package");
         pkg.read_section_xml(0).expect("section xml")
     };
-    assert!(
-        !default_xml.contains("linesegarray"),
-        "기본 변환은 캐시를 방출하지 않는다 (기존 불변)"
-    );
-
-    let options = crate::ConvertOptions::default().with_carry_layout_cache(true);
-    let (optin_out, _) =
-        crate::hwp5_to_hwpx_bytes_with_options(&bytes, options).expect("opt-in convert");
-    let optin_xml = {
-        let mut pkg = PackageReader::new(&optin_out).expect("package");
-        pkg.read_section_xml(0).expect("section xml")
-    };
-    assert!(optin_xml.contains("<hp:linesegarray>"), "opt-in 은 HWP5 LINE_SEG 를 carry 한다");
+    assert!(default_xml.contains("<hp:linesegarray>"), "기본은 HWP5 LINE_SEG 를 carry 한다");
 
     // 재디코드 → Core 캐시 승격 확인 (PDF 재생 소비 경로 성립)
-    let decoded = HwpxDecoder::decode(&optin_out).expect("decode opt-in output");
+    let decoded = HwpxDecoder::decode(&default_out).expect("decode default output");
     let mut cached = 0usize;
     let mut doc = decoded.document;
     doc.for_each_paragraph_mut(|p| {
@@ -4074,9 +4273,16 @@ fn hwp5_to_hwpx_image_treat_as_char_placement_golden_for_additional_fixtures() {
 
         let out = unique_temp_path(&format!("{}.hwpx", name.trim_end_matches(".hwp")));
         let warnings = hwp5_to_hwpx(&source, &out).expect("fixture conversion should succeed");
+        // The default carries the line cache; the chart host paragraph's
+        // cache is dropped (chart emission reorders content) and reported.
+        // 이것을 실패시키는 것: 그 이유 문자열이 아닌 cache drop.
         assert!(
-            warnings.is_empty(),
-            "controlled image fixture should convert without warnings: {name}"
+            warnings.iter().all(|w| {
+                let text = format!("{w:?}");
+                text.contains("LayoutCacheDropped")
+                    && text.contains(r#"reason: "chart emission reorders content""#)
+            }),
+            "controlled image fixture should convert without warnings: {name}: {warnings:?}"
         );
         assert_valid_hwpx(&out);
 
@@ -4251,17 +4457,12 @@ fn hwp5_native_anchored_image_placement_axes_are_byte_ground() {
 
     // 한컴 native hp:pos 실측: treatAsChar=0, flowWithText=1, allowOverlap=0,
     // vertRelTo=PARA, horzRelTo=PARA, off (0,0); pic textWrap=SQUARE.
-    let expected = ObjectPlacement {
-        text_wrap: ObjectTextWrap::Square,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: true,
-        allow_overlap: false,
-        vert_rel_to: ObjectRelativeTo::Para,
-        horz_rel_to: ObjectRelativeTo::Para,
-        vert_offset: HwpUnit::ZERO,
-        horz_offset: HwpUnit::ZERO,
-    };
+    let expected = ObjectPlacement::new(
+        ObjectTextWrap::Square,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Para,
+    )
+    .with_flow_with_text(true);
     assert_eq!(hwp_placement, expected, "hwp5 image placement must match measured hp:pos axes");
 
     // companion .hwpx 는 OWPML wire 를 직접 읽는 독립 진리원 — 두 디코드가
@@ -4308,17 +4509,14 @@ fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
     let hwp_placement =
         first_textbox_placement(&hwp_doc.document).expect("hwp5 decode should place the text box");
 
-    let expected = ObjectPlacement {
-        text_wrap: ObjectTextWrap::Square,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: false,
-        allow_overlap: true,
-        vert_rel_to: ObjectRelativeTo::Para,
-        horz_rel_to: ObjectRelativeTo::Page,
-        vert_offset: HwpUnit::new(2_834).unwrap(),
-        horz_offset: HwpUnit::new(8_503).unwrap(),
-    };
+    let expected = ObjectPlacement::new(
+        ObjectTextWrap::Square,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Page,
+    )
+    .with_allow_overlap(true)
+    .with_vert_offset(HwpUnit::new(2_834).unwrap())
+    .with_horz_offset(HwpUnit::new(8_503).unwrap());
     assert_eq!(hwp_placement, expected, "hwp5 text box placement must match measured hp:pos axes");
 
     let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture readable");
@@ -4329,4 +4527,585 @@ fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
         hwp_placement, hwpx_placement,
         "HWP5-native and HWPX-native text box placement must agree on every axis (W5 w0)"
     );
+}
+
+/// C4, end to end: a HWP5 border fill whose image asset is in the file keeps
+/// its `imgBrush`, and the reference resolves in the converted package.
+///
+/// 이것을 실패시키는 것: 변환 경로가 이미지 채우기를 자산 유무와 관계없이
+/// 빼는 것, 또는 자산 집합을 확장자 포함 키(`BIN0001.png`)로 만드는 것.
+#[test]
+fn border_fill_image_with_its_asset_survives_conversion_and_resolves() {
+    let bytes = std::fs::read(fixture_path("tables/table_16_image_fill.hwp")).expect("fixture");
+    let (hwpx, warnings) =
+        crate::hwp5_to_hwpx_bytes_with_diagnostics(&bytes, crate::ConvertOptions::default())
+            .expect("convert");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&hwpx)).expect("zip");
+    let mut header = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("Contents/header.xml")
+            .expect("header")
+            .read_to_string(&mut header)
+            .expect("utf-8");
+    }
+    assert!(header.contains(r#"binaryItemIDRef="BIN0001""#), "the image fill stays");
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            ConvertWarning::HwpxEncode(
+                hwpforge_smithy_hwpx::EncodeWarning::ImageReferenceUnresolved { .. }
+            )
+        )),
+        "{warnings:?}"
+    );
+}
+
+/// `table_16_image_fill.hwp` rewritten without its `/BinData/BIN0001.*`
+/// stream, so its border fill names an image the file does not contain.
+fn table_16_image_fill_without_its_image() -> Vec<u8> {
+    use std::io::{Read, Write};
+
+    let bytes = std::fs::read(fixture_path("tables/table_16_image_fill.hwp")).expect("fixture");
+    let mut source = cfb::CompoundFile::open(std::io::Cursor::new(bytes)).expect("cfb");
+    let entries: Vec<(std::path::PathBuf, bool)> =
+        source.walk().map(|e| (e.path().to_path_buf(), e.is_stream())).collect();
+    let mut out = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).expect("create");
+    let mut dropped = 0;
+    for (path, is_stream) in entries {
+        let name = path.to_string_lossy();
+        if name == "/" {
+            continue;
+        }
+        if !is_stream {
+            out.create_storage(&path).expect("storage");
+        } else if name.starts_with("/BinData/BIN0001") {
+            dropped += 1;
+        } else {
+            let mut data = Vec::new();
+            source.open_stream(&path).expect("open").read_to_end(&mut data).expect("read");
+            out.create_stream(&path).expect("stream").write_all(&data).expect("write");
+        }
+    }
+    assert_eq!(dropped, 1, "the fixture carries exactly one BIN0001 stream");
+    out.flush().expect("flush");
+    out.into_inner().into_inner()
+}
+
+/// C4, end to end, the other way: the border fill's image is missing from the
+/// file. The decoder's missing-asset warning stays, the `imgBrush` is left
+/// out of the converted header, and no unresolved reference is reported.
+///
+/// 이것을 실패시키는 것: 변환 경로가 스타일 매핑에 자산 집합 대신 `None` 을
+/// 넘기는 것 (`imgBrush` 와 `BIN0001` 참조가 남고 C4 경고가 난다).
+#[test]
+fn border_fill_image_without_its_asset_is_left_out_of_the_conversion() {
+    let (hwpx, warnings) = crate::hwp5_to_hwpx_bytes_with_diagnostics(
+        &table_16_image_fill_without_its_image(),
+        crate::ConvertOptions::default(),
+    )
+    .expect("convert");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&hwpx)).expect("zip");
+    let mut header = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("Contents/header.xml")
+            .expect("header")
+            .read_to_string(&mut header)
+            .expect("utf-8");
+    }
+    assert!(!header.contains("imgBrush"), "the broken image fill is left out");
+    assert!(!header.contains("BIN0001"), "no reference to the missing image");
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            ConvertWarning::Hwp5(Hwp5Warning::ProjectionFallback { subject, reason })
+                if *subject == "style.border_fill.image"
+                    && reason == "missing_image_asset_for_binary_data_id=1"
+        )),
+        "the decoder's missing-asset warning is kept: {warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            ConvertWarning::HwpxEncode(
+                hwpforge_smithy_hwpx::EncodeWarning::ImageReferenceUnresolved { .. }
+            )
+        )),
+        "{warnings:?}"
+    );
+}
+
+fn r5_record(tag: u32, level: u32, data: &[u8]) -> Vec<u8> {
+    let mut bytes = (tag | (level << 10) | ((data.len() as u32) << 20)).to_le_bytes().to_vec();
+    bytes.extend(data);
+    bytes
+}
+
+fn r5_paragraph(level: u32, text: &str) -> Vec<u8> {
+    let mut b = r5_record(0x42, level, &[0; 22]);
+    b.extend(r5_record(
+        0x43,
+        level + 1,
+        &text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>(),
+    ));
+    b
+}
+
+fn r5_table(level: u32, height: u32, cells: &[(u16, Vec<u8>)]) -> Vec<u8> {
+    let mut ctrl = vec![0; 24];
+    ctrl[..4].copy_from_slice(&0x7462_6c20u32.to_le_bytes());
+    ctrl[16..20].copy_from_slice(&9000u32.to_le_bytes());
+    ctrl[20..24].copy_from_slice(&height.to_le_bytes());
+    let mut b = r5_record(0x47, level, &ctrl);
+    let mut table = vec![0; 20];
+    table[4..6].copy_from_slice(&1u16.to_le_bytes());
+    table[6..8].copy_from_slice(&(cells.len() as u16).to_le_bytes());
+    b.extend(r5_record(0x4d, level + 1, &table));
+    for (column, paragraphs) in cells {
+        let mut cell = vec![0; 34];
+        cell[..4].copy_from_slice(&1u32.to_le_bytes());
+        cell[8..10].copy_from_slice(&column.to_le_bytes());
+        cell[12..14].copy_from_slice(&1u16.to_le_bytes());
+        cell[14..16].copy_from_slice(&1u16.to_le_bytes());
+        cell[16..20].copy_from_slice(&9000u32.to_le_bytes());
+        // Deliberately distinct from ctrl height, so a discarded hint cannot
+        // accidentally look as if it was applied to the right object.
+        cell[20..24].copy_from_slice(&3000u32.to_le_bytes());
+        b.extend(r5_record(0x48, level + 1, &cell));
+        b.extend(paragraphs);
+    }
+    b
+}
+
+fn r5_hwp(section: &[u8]) -> Vec<u8> {
+    use std::io::{Cursor, Read, Write};
+    let original =
+        std::fs::read(fixture_path("user_samples/sample-field-hyperlink-basic.hwp")).unwrap();
+    let mut file = cfb::CompoundFile::open(Cursor::new(original)).unwrap();
+    let mut header = Vec::new();
+    file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+    let section = if header[36] & 1 != 0 {
+        let mut compressor =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        compressor.write_all(section).unwrap();
+        compressor.finish().unwrap()
+    } else {
+        section.to_vec()
+    };
+    file.create_stream("/BodyText/Section0").unwrap().write_all(&section).unwrap();
+    file.into_inner().into_inner()
+}
+
+/// 이것을 실패시키는 것: 원시 셀 순서 검사를 제거하거나 불확실한 구역 힌트를 계속 반환.
+#[test]
+fn r5_reordered_nested_tables_discard_hints_in_final_conversion() {
+    for reversed in [false, true] {
+        let mut a = r5_paragraph(2, "cell-A");
+        a.extend(r5_table(3, 1111, &[(0, r5_paragraph(4, "inner-A"))]));
+        let mut b = r5_paragraph(2, "cell-B");
+        b.extend(r5_table(3, 2222, &[(0, r5_paragraph(4, "inner-B"))]));
+        let cells = if reversed { vec![(1, a), (0, b)] } else { vec![(0, b), (1, a)] };
+        let mut section = r5_paragraph(0, "body");
+        section.extend(r5_table(1, 9999, &cells));
+        for header in [false, true] {
+            let section = if header {
+                let mut wrapped = r5_paragraph(0, "header-anchor");
+                wrapped.extend(r5_record(0x47, 1, &0x6865_6164u32.to_le_bytes()));
+                wrapped.extend(r5_record(0x48, 2, &1u32.to_le_bytes()));
+                for record in hwpforge_smithy_hwp5::schema::record::Record::parse_stream(
+                    &mut std::io::Cursor::new(&section),
+                )
+                .unwrap()
+                {
+                    wrapped.extend(r5_record(
+                        u32::from(record.header.tag_id),
+                        u32::from(record.header.level) + 2,
+                        &record.data,
+                    ));
+                }
+                wrapped
+            } else {
+                section.clone()
+            };
+            for carry in [false, true] {
+                let (hwpx, warnings) = crate::hwp5_to_hwpx_bytes_with_diagnostics(
+                    &r5_hwp(&section),
+                    crate::ConvertOptions::default().with_carry_layout_cache(carry),
+                )
+                .unwrap();
+                let xml = PackageReader::new(&hwpx).unwrap().read_section_xml(0).unwrap();
+                assert!(xml.find("inner-B").unwrap() < xml.find("inner-A").unwrap());
+                let discarded: Vec<_> = warnings
+                    .iter()
+                    .filter_map(|w| match w {
+                        ConvertWarning::Hwp5(Hwp5Warning::ProjectionFallback {
+                            subject: "layout_hints.discarded",
+                            reason,
+                        }) => Some(reason),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(discarded.len(), usize::from(reversed), "{warnings:?}");
+                if reversed {
+                    assert!(discarded[0].contains("raw table cell order"));
+                    assert!(!xml.contains("height=\"1111\""));
+                    assert!(!xml.contains("height=\"2222\""));
+                } else {
+                    assert!(xml.contains("height=\"1111\""));
+                    assert!(xml.contains("height=\"2222\""));
+                }
+            }
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: scope 수집기가 건너뛴 중첩 머리말/꼬리말을 신뢰하거나 경고 삭제.
+#[test]
+fn r5_nested_header_footer_discard_hints_in_final_conversion() {
+    // The exact textbox → header/footer counterexample, through final patching.
+    for id in [0x6865_6164u32, 0x666f_6f74] {
+        let mut section = r5_paragraph(0, "body");
+        section.extend(r5_record(0x45, 1, &[0; 36]));
+        let mut ctrl = vec![0; 24];
+        ctrl[..4].copy_from_slice(&0x6773_6f20u32.to_le_bytes());
+        ctrl[16..20].copy_from_slice(&9000u32.to_le_bytes());
+        ctrl[20..24].copy_from_slice(&3000u32.to_le_bytes());
+        section.extend(r5_record(0x47, 1, &ctrl));
+        let mut shape = b"cer$cer$".to_vec();
+        shape.extend([0; 10]);
+        shape.extend(1u16.to_le_bytes());
+        shape.extend(9000u32.to_le_bytes());
+        shape.extend(3000u32.to_le_bytes());
+        shape.extend([0; 22]);
+        shape.extend(1u16.to_le_bytes());
+        for _ in 0..3 {
+            for value in [1.0f64, 0.0, 0.0, 0.0, 1.0, 0.0] {
+                shape.extend(value.to_le_bytes());
+            }
+        }
+        shape.extend([0; 17]);
+        section.extend(r5_record(0x4c, 2, &shape));
+        section.extend(r5_record(0x4f, 3, &[0; 33]));
+        section.extend(r5_record(0x48, 3, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        section.extend(r5_paragraph(3, "textbox"));
+        section.extend(r5_record(0x47, 4, &id.to_le_bytes()));
+        section.extend(r5_record(0x48, 5, &1u32.to_le_bytes()));
+        section.extend(r5_paragraph(5, "nested-head-foot"));
+        for carry in [false, true] {
+            let (hwpx, warnings) = crate::hwp5_to_hwpx_bytes_with_diagnostics(
+                &r5_hwp(&section),
+                crate::ConvertOptions::default().with_carry_layout_cache(carry),
+            )
+            .unwrap();
+            let xml = PackageReader::new(&hwpx).unwrap().read_section_xml(0).unwrap();
+            assert!(xml.contains("nested-head-foot"));
+            assert!(warnings.iter().any(|w| matches!(w,
+                ConvertWarning::Hwp5(Hwp5Warning::ProjectionFallback { subject: "layout_hints.discarded", reason })
+                if reason.contains("nested header/footer") && reason.contains("skipped"))), "{warnings:?}");
+        }
+    }
+}
+
+#[test]
+fn fix2_failed_shape_slots_keep_body_references_through_hwpx() {
+    // 이것을 실패시키는 것: 실패 char/para/style/font 슬롯 압축,
+    // 파싱 경고 전파 누락, 실패 슬롯 참조가 뒤 정상 정의로 이동.
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use std::io::{Cursor, Read, Write};
+    let mut doc_info = Vec::new();
+    for id in 0..3u16 {
+        let mut face = vec![0, 1, 0];
+        face.extend((u16::from(b'A') + id).to_le_bytes());
+        doc_info.extend(r5_record(0x13, 0, if id == 1 { &[] } else { &face }));
+        let mut char_shape = vec![0u8; 68];
+        char_shape[..2].copy_from_slice(&id.to_le_bytes());
+        char_shape[42..46].copy_from_slice(&(1000 + i32::from(id) * 1000).to_le_bytes());
+        doc_info.extend(r5_record(0x15, 0, if id == 1 { &[] } else { &char_shape }));
+        let mut para_shape = vec![0u8; 42];
+        para_shape[4..8].copy_from_slice(&(2000 + i32::from(id) * 2000).to_le_bytes());
+        doc_info.extend(r5_record(0x19, 0, if id == 1 { &[] } else { &para_shape }));
+        let mut style = vec![0u8; 16]; // two empty strings, then fixed fields
+        style[8..10].copy_from_slice(&id.to_le_bytes());
+        style[10..12].copy_from_slice(&id.to_le_bytes());
+        doc_info.extend(r5_record(0x1a, 0, if id == 1 { &[] } else { &style }));
+    }
+    let mut section = Vec::new();
+    for id in [1u16, 2] {
+        let mut header = vec![0u8; 22];
+        header[..4].copy_from_slice(&1u32.to_le_bytes());
+        header[8..10].copy_from_slice(&id.to_le_bytes());
+        header[10] = u8::try_from(id).unwrap();
+        header[12..14].copy_from_slice(&1u16.to_le_bytes());
+        section.extend(r5_record(0x42, 0, &header));
+        section.extend(r5_record(0x43, 1, &u16::from(b'x').to_le_bytes()));
+        let mut run = 0u32.to_le_bytes().to_vec();
+        run.extend(u32::from(id).to_le_bytes());
+        section.extend(r5_record(0x44, 1, &run));
+    }
+    let mut file = cfb::CompoundFile::open(Cursor::new(r5_hwp(&[]))).unwrap();
+    let mut header = Vec::new();
+    file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+    header[36] &= !1;
+    for (path, data) in
+        [("/FileHeader", header), ("/DocInfo", doc_info), ("/BodyText/Section0", section)]
+    {
+        file.create_stream(path).unwrap().write_all(&data).unwrap();
+    }
+    let input = file.into_inner().into_inner();
+    let (output, warnings) = hwp5_to_hwpx_bytes(&input).unwrap();
+    for subject in ["fonts.slot", "char_shapes.slot", "para_shapes.slot", "styles.slot"] {
+        assert!(
+            warnings.iter().any(|w| matches!(w,
+            ConvertWarning::Hwp5(Hwp5Warning::ParserFallback { subject: s, reason })
+            if *s == subject && reason.contains("slot 1"))),
+            "{subject}: {warnings:?}"
+        );
+    }
+    let decoded = HwpxDecoder::decode(&output).unwrap();
+    let store = &decoded.style_store;
+    for id in [1usize, 2] {
+        let para = &decoded.document.sections()[0].paragraphs[id - 1];
+        assert_eq!(para.para_shape_id.get(), id);
+        assert_eq!(para.runs[0].char_shape_id.get(), id);
+        assert_eq!(para.style_id.unwrap().get(), id);
+    }
+    assert_eq!(store.char_shape(CharShapeIndex::new(1)).unwrap().height.as_i32(), 0);
+    assert_eq!(store.char_shape(CharShapeIndex::new(2)).unwrap().height.as_i32(), 3000);
+    assert_eq!(
+        store
+            .para_shape(ParaShapeIndex::new(1))
+            .unwrap()
+            .margin_left
+            .as_hwp_unit()
+            .unwrap()
+            .as_i32(),
+        0
+    );
+    assert_eq!(
+        store
+            .para_shape(ParaShapeIndex::new(2))
+            .unwrap()
+            .margin_left
+            .as_hwp_unit()
+            .unwrap()
+            .as_i32(),
+        3000
+    );
+}
+
+#[test]
+fn fix3_font_declarations_through_public_conversion() {
+    // 이것을 실패시키는 것: 합계 불일치/음수 선언을 부재로 취급하여 전체 글꼴 복제,
+    // 빈 그룹을 전체 그룹으로 복제, 정상 선언·선언 부재·빈 글꼴 표의 font 0 거부.
+    use std::io::{Cursor, Read, Write};
+    for (counts, font_count, hangul, hanja, expected) in [
+        (Some([1, 1, 0, 0, 0, 0, 0]), 2, 1u16, 0u16, "font HANGUL"),
+        (Some([1, 1, 1, 0, 0, 0, 0]), 2, 1, 0, "font group total"),
+        (Some([-1, 2, 0, 0, 0, 0, 0]), 2, 0, 0, "negative font group"),
+        (Some([1, 0, 0, 0, 0, 0, 0]), 2, 0, 0, "font group total"),
+        (Some([2, 0, 0, 0, 0, 0, 0]), 2, 0, 1, "font HANJA"),
+        (Some([1, 1, 0, 0, 0, 0, 0]), 2, 0, 0, "A"),
+        (None, 2, 1, 0, "B"),
+        (Some([0; 7]), 0, 0, 0, "함초롬바탕"),
+        (Some([1, 0, 0, 0, 0, 0, 0]), 0, 0, 0, "font group total"),
+    ] {
+        let mut doc_info = Vec::new();
+        if let Some(counts) = counts {
+            let mut mappings = vec![0u8; 60];
+            for (i, count) in counts.into_iter().enumerate() {
+                mappings[4 + i * 4..8 + i * 4].copy_from_slice(&i32::to_le_bytes(count));
+            }
+            doc_info.extend(r5_record(0x11, 0, &mappings));
+        }
+        for id in 0..font_count {
+            doc_info.extend(r5_record(0x13, 0, &[0, 1, 0, b'A' + id, 0]));
+        }
+        let mut shape = vec![0u8; 68];
+        shape[..2].copy_from_slice(&hangul.to_le_bytes());
+        shape[4..6].copy_from_slice(&hanja.to_le_bytes());
+        shape[42..46].copy_from_slice(&1000i32.to_le_bytes());
+        doc_info.extend(r5_record(0x15, 0, &shape));
+        doc_info.extend(r5_record(0x19, 0, &[0u8; 42]));
+        doc_info.extend(r5_record(0x1a, 0, &[0u8; 16]));
+        let mut file = cfb::CompoundFile::open(Cursor::new(r5_hwp(&[]))).unwrap();
+        let mut header = Vec::new();
+        file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+        header[36] &= !1;
+        for (path, data) in [
+            ("/FileHeader", header),
+            ("/DocInfo", doc_info),
+            ("/BodyText/Section0", r5_paragraph(0, "x")),
+        ] {
+            file.create_stream(path).unwrap().write_all(&data).unwrap();
+        }
+        let result = hwp5_to_hwpx_bytes(&file.into_inner().into_inner());
+        if ["A", "B", "함초롬바탕"].contains(&expected) {
+            let (output, _) = result.unwrap();
+            let decoded = HwpxDecoder::decode(&output).unwrap();
+            let font = decoded
+                .style_store
+                .iter_fonts()
+                .find(|f| f.lang == "HANGUL" && f.id == u32::from(hangul))
+                .unwrap();
+            assert_eq!(font.face_name, expected);
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains(expected), "{counts:?}: {error}");
+        }
+    }
+}
+
+#[test]
+fn fix4_public_conversion_rejects_damaged_declarations_and_body_borders() {
+    // 이것을 실패시키는 것: 59바이트 선언을 부재로 대체, 출력 기본/빈 정의가
+    // 원본 표·셀·쪽 4/99 참조를 만족시키기, 중첩 표 검증 생략.
+    use std::io::{Cursor, Read, Write};
+    for kind in ["declaration", "table", "cell", "page", "nested"] {
+        for id in [4u16, 99] {
+            let mut info = Vec::new();
+            if kind == "declaration" {
+                let mut mapping = [0u8; 59];
+                mapping[4..8].copy_from_slice(&1i32.to_le_bytes());
+                mapping[8..12].copy_from_slice(&1i32.to_le_bytes());
+                info.extend(r5_record(0x11, 0, &mapping));
+            }
+            for face in [b'A', b'B'] {
+                info.extend(r5_record(0x13, 0, &[0, 1, 0, face, 0]));
+            }
+            let mut shape = [0u8; 68];
+            shape[..2].copy_from_slice(&u16::from(kind == "declaration").to_le_bytes());
+            shape[42..46].copy_from_slice(&1000i32.to_le_bytes());
+            info.extend(r5_record(0x15, 0, &shape));
+            info.extend(r5_record(0x19, 0, &[0; 42]));
+            info.extend(r5_record(0x1a, 0, &[0; 16]));
+            let table = |level| {
+                let source = r5_table(level, 3000, &[(0, r5_paragraph(level + 1, "x"))]);
+                let mut out = Vec::new();
+                let mut at = 0;
+                while at < source.len() {
+                    let word = u32::from_le_bytes(source[at..at + 4].try_into().unwrap());
+                    let size = (word >> 20) as usize;
+                    let mut data = source[at + 4..at + 4 + size].to_vec();
+                    let tag = word & 0x3ff;
+                    if tag == 0x4d && kind != "cell" {
+                        data.extend(id.to_le_bytes());
+                    }
+                    if tag == 0x48 && kind == "cell" {
+                        data[32..34].copy_from_slice(&id.to_le_bytes());
+                    }
+                    out.extend(r5_record(tag, (word >> 10) & 0x3ff, &data));
+                    at += size + 4;
+                }
+                out
+            };
+            let mut section = r5_paragraph(0, "body");
+            if kind == "page" {
+                let mut fill = [0; 14];
+                fill[12..14].copy_from_slice(&id.to_le_bytes());
+                section.extend(r5_record(0x4b, 1, &fill));
+            } else if kind == "nested" {
+                let mut cell = r5_paragraph(2, "outer");
+                cell.extend(table(3));
+                section.extend(r5_table(1, 3000, &[(0, cell)]));
+            } else if kind != "declaration" {
+                section.extend(table(1));
+            }
+            let mut file = cfb::CompoundFile::open(Cursor::new(r5_hwp(&[]))).unwrap();
+            let mut header = Vec::new();
+            file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+            header[36] &= !1;
+            for (path, data) in
+                [("/FileHeader", header), ("/DocInfo", info), ("/BodyText/Section0", section)]
+            {
+                file.create_stream(path).unwrap().write_all(&data).unwrap();
+            }
+            let error =
+                hwp5_to_hwpx_bytes(&file.into_inner().into_inner()).unwrap_err().to_string();
+            let expected = if kind == "declaration" { "IdMappings" } else { "borderFill" };
+            assert!(error.contains(expected), "{kind} {id}: {error}");
+        }
+    }
+}
+
+#[test]
+fn fix8b_empty_unused_numbering_record_preserves_later_numbering_selection() {
+    // 이것을 실패시키는 것: 원본 1번 실패 슬롯 뒤의 heading을 압축 위치로 변환하지 않음.
+    use hwpforge_smithy_hwp5::schema::record::{Record, TagId};
+    use std::io::{Cursor, Read, Write};
+    let original =
+        std::fs::read(fixture_path("user_samples/sample-numbered-list-custom-formats.hwp"))
+            .unwrap();
+    let before = hwpforge_smithy_hwp5::decode_hwp5_to_core(&original).unwrap();
+    assert!(before.style_store.para_shapes.iter().all(|p| p.numbering_bullet_id != 1));
+    let mut file = cfb::CompoundFile::open(Cursor::new(original)).unwrap();
+    let mut header = Vec::new();
+    file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+    let compressed = header[36] & 1 != 0;
+    let mut info = Vec::new();
+    file.open_stream("/DocInfo").unwrap().read_to_end(&mut info).unwrap();
+    if compressed {
+        let mut data = Vec::new();
+        flate2::read::DeflateDecoder::new(info.as_slice()).read_to_end(&mut data).unwrap();
+        info = data;
+    }
+    let records = Record::parse_stream(&mut info.as_slice()).unwrap();
+    let mut changed = false;
+    let mut info = Vec::new();
+    for record in records {
+        let data = if record.header.tag_id == u16::from(TagId::NumberingDef) && !changed {
+            changed = true;
+            &[][..]
+        } else {
+            &record.data
+        };
+        info.extend(r5_record(u32::from(record.header.tag_id), record.header.level as u32, data));
+    }
+    assert!(changed);
+    if compressed {
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&info).unwrap();
+        info = encoder.finish().unwrap();
+    }
+    file.create_stream("/DocInfo").unwrap().write_all(&info).unwrap();
+    let input = file.into_inner().into_inner();
+    let decoded = hwpforge_smithy_hwp5::decode_hwp5_to_core(&input).unwrap();
+    assert!(decoded.style_store.numberings[0].numbering.is_none());
+    let (bytes, warnings) = hwp5_to_hwpx_bytes(&input).unwrap();
+    assert!(warnings.iter().any(|w| matches!(
+        w,
+        ConvertWarning::Hwp5(Hwp5Warning::ParserFallback { subject: "numbering.slot", .. })
+    )));
+    let output = HwpxDecoder::decode(&bytes).unwrap();
+    let mut checked = 0;
+    for (raw, para) in
+        before.style_store.para_shapes.iter().zip(output.style_store.iter_para_shapes())
+    {
+        if matches!(para.heading_type, HeadingType::Number | HeadingType::Outline)
+            && raw.numbering_bullet_id > 0
+        {
+            assert_eq!(para.heading_id_ref, u32::from(raw.numbering_bullet_id) - 1);
+            let source = before.style_store.numberings[raw.numbering_bullet_id as usize - 1]
+                .numbering
+                .as_ref()
+                .unwrap()
+                .to_core_numbering_def(para.heading_id_ref);
+            assert_eq!(
+                output
+                    .style_store
+                    .iter_numberings()
+                    .nth(para.heading_id_ref as usize - 1)
+                    .unwrap()
+                    .levels,
+                source.levels
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 4);
 }

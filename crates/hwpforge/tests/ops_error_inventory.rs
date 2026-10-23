@@ -56,6 +56,7 @@ const ERROR_MAPPING: Table = &[
     (
         "HwpxError",
         &[
+            ("LegacyJsonTabs", "DECODE_FAILED"),
             ("Zip", "DECODE_FAILED"),
             ("InvalidMimetype", "DECODE_FAILED"),
             ("MissingFile", "DECODE_FAILED"),
@@ -84,6 +85,9 @@ const ERROR_MAPPING: Table = &[
     (
         "CoreError",
         &[
+            ("MeasureUnitMismatch", "VALIDATION_FAILED"),
+            ("MeasureOverflow", "VALIDATION_FAILED"),
+            ("MeasureOffGrid", "VALIDATION_FAILED"),
             ("Validation", "VALIDATION_FAILED"),
             ("Foundation", "INTERNAL_INVARIANT"),
             ("InvalidStructure", "VALIDATION_FAILED"),
@@ -279,18 +283,29 @@ const WARNING_MAPPING: Table = &[
     (
         "EncodeWarning",
         &[
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             ("NoteHeadSkipped", "NOTE_HEAD_SKIPPED"),
             ("TitleMarkSkipped", "TITLE_MARK_SKIPPED"),
             ("NoteRestartIgnored", "NOTE_RESTART_IGNORED"),
             ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
+            ("ContentLost", "CONTENT_LOST"),
+            ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
+            ("ImageReferenceUnresolved", "IMAGE_REFERENCE_UNRESOLVED"),
+            ("ObjectIdConflict", "OBJECT_ID_CONFLICT"),
         ],
     ),
     (
         "DecodeWarning",
         &[
+            ("InactiveHeaderReference", "INACTIVE_HEADER_REFERENCE"),
+            ("ParagraphMeasureNormalized", "PARAGRAPH_MEASURE_NORMALIZED"),
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
+            ("InvalidFieldBoundary", "INVALID_FIELD_BOUNDARY"),
             ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
+            ("ContentLost", "CONTENT_LOST"),
+            ("BeginNumRepaired", "BEGIN_NUM_REPAIRED"),
         ],
     ),
     ("StructuralWarning", &[("IndexMarkRemoved", "INDEX_MARK_REMOVED")]),
@@ -301,8 +316,12 @@ const WARNING_MAPPING: Table = &[
     (
         "MdWarning",
         &[
+            ("ParagraphMeasureLost", "PARAGRAPH_MEASURE_LOST"),
             ("MergedCellsFlattened", "TABLE_MERGE_FLATTENED"),
             ("ImageEmbedSkipped", "IMAGE_EMBED_SKIPPED"),
+            ("ContainerTooDeep", "CONTAINER_TOO_DEEP"),
+            ("EquationAsText", "EQUATION_AS_TEXT"),
+            ("MarkupWrittenAsText", "MARKUP_WRITTEN_AS_TEXT"),
         ],
     ),
     (
@@ -328,6 +347,13 @@ fn io_error() -> std::io::Error {
 
 fn hwpx_errors() -> Vec<(&'static str, HwpxError)> {
     vec![
+        (
+            "LegacyJsonTabs",
+            HwpxError::LegacyJsonTabs {
+                count: 1,
+                paths: "$.styles.tabs[0].stops[0].position".into(),
+            },
+        ),
         ("Zip", HwpxError::Zip("bad central directory".into())),
         ("InvalidMimetype", HwpxError::InvalidMimetype { actual: "text/plain".into() }),
         ("MissingFile", HwpxError::MissingFile { path: "Contents/header.xml".into() }),
@@ -358,6 +384,9 @@ fn hwpx_errors() -> Vec<(&'static str, HwpxError)> {
 
 fn core_errors() -> Vec<(&'static str, CoreError)> {
     vec![
+        ("MeasureUnitMismatch", CoreError::MeasureUnitMismatch),
+        ("MeasureOverflow", CoreError::MeasureOverflow),
+        ("MeasureOffGrid", CoreError::MeasureOffGrid),
         ("Validation", CoreError::Validation(ValidationError::EmptyDocument)),
         (
             "Foundation",
@@ -694,6 +723,13 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
         "EncodeWarning",
         vec![
             (
+                "UnclosedFieldBoundary",
+                OpsWarning::Encode(EncodeWarning::UnclosedFieldBoundary {
+                    part: "Contents/section0.xml".into(),
+                    reason: "source open".into(),
+                }),
+            ),
+            (
                 "LayoutCacheDropped",
                 OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
                     path: path(),
@@ -730,6 +766,43 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     count: 1,
                 }),
             ),
+            // 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를 `UNCLASSIFIED` 로
+            // 되돌리는 것 (`OTHER`).
+            (
+                "ContentLost",
+                OpsWarning::Encode(EncodeWarning::ContentLost {
+                    part: "Contents/section0.xml".into(),
+                    path: path(),
+                    kind: "shape_emission".into(),
+                    reason: "stored transform is off by 35.08 HWPUNIT".into(),
+                }),
+            ),
+            (
+                // 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "PackageIdConflict",
+                OpsWarning::Encode(EncodeWarning::PackageIdConflict {
+                    id: "header".into(),
+                    hrefs: vec!["Contents/header.xml".into(), "BinData/header.png".into()],
+                }),
+            ),
+            (
+                // 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "ImageReferenceUnresolved",
+                OpsWarning::Encode(EncodeWarning::ImageReferenceUnresolved {
+                    part: "Contents/header.xml".into(),
+                    location: "hc:img@binaryItemIDRef".into(),
+                    reference: "image1".into(),
+                }),
+            ),
+            (
+                "ObjectIdConflict",
+                OpsWarning::Encode(EncodeWarning::ObjectIdConflict {
+                    id: 7,
+                    kinds: vec!["table".into(), "picture".into()],
+                }),
+            ),
         ],
     );
     all.insert(
@@ -756,6 +829,37 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
         "DecodeWarning",
         vec![
             (
+                "InactiveHeaderReference",
+                OpsWarning::Decode(DecodeWarning::InactiveHeaderReference {
+                    part: "Contents/header.xml".into(),
+                    kind: "memoPr".into(),
+                    reason: "unused definition".into(),
+                }),
+            ),
+            (
+                "ParagraphMeasureNormalized",
+                OpsWarning::Decode(DecodeWarning::ParagraphMeasureNormalized {
+                    definition: "paraPr",
+                    id: 7,
+                    field: "left".into(),
+                    reason: "case differs from default".into(),
+                }),
+            ),
+            (
+                "UnclosedFieldBoundary",
+                OpsWarning::Decode(DecodeWarning::UnclosedFieldBoundary {
+                    part: "Contents/section0.xml".into(),
+                    reason: "unpaired source start".into(),
+                }),
+            ),
+            (
+                "InvalidFieldBoundary",
+                OpsWarning::Decode(DecodeWarning::InvalidFieldBoundary {
+                    part: "Contents/section0.xml".into(),
+                    reason: "unpaired end".into(),
+                }),
+            ),
+            (
                 "UnknownEnumValue",
                 OpsWarning::Decode(DecodeWarning::UnknownEnumValue {
                     attribute: "hp:header@applyPageType",
@@ -770,11 +874,38 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     reason: "textpos".into(),
                 }),
             ),
+            (
+                // 이것을 실패시키는 것: `decode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "ContentLost",
+                OpsWarning::Decode(DecodeWarning::ContentLost {
+                    part: "Contents/section0.xml".into(),
+                    path: path(),
+                    kind: "pic".into(),
+                    reason: "unsupported group child".into(),
+                }),
+            ),
+            (
+                // 이것을 실패시키는 것: `decode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "BeginNumRepaired",
+                OpsWarning::Decode(DecodeWarning::BeginNumRepaired { axes: vec!["page"] }),
+            ),
         ],
     );
     all.insert(
         "MdWarning",
         vec![
+            (
+                "ParagraphMeasureLost",
+                OpsWarning::Md(MdWarning::ParagraphMeasureLost {
+                    definition: 0,
+                    field: "indent".into(),
+                    measure: hwpforge::core::ParagraphMeasure::from_hwp_unit(
+                        hwpforge::foundation::HwpUnit::ZERO,
+                    ),
+                }),
+            ),
             (
                 "MergedCellsFlattened",
                 OpsWarning::Md(MdWarning::MergedCellsFlattened { merged_cells: 2 }),
@@ -785,6 +916,23 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     src: "a.png".into(),
                     reason: ImageEmbedSkipReason::MissingFile,
                 }),
+            ),
+            (
+                "ContainerTooDeep",
+                OpsWarning::Md(MdWarning::ContainerTooDeep {
+                    container: "table",
+                    limit: 8,
+                    section: 0,
+                    paragraph: 1,
+                }),
+            ),
+            (
+                "EquationAsText",
+                OpsWarning::Md(MdWarning::EquationAsText { section: 0, paragraph: 0 }),
+            ),
+            (
+                "MarkupWrittenAsText",
+                OpsWarning::Md(MdWarning::MarkupWrittenAsText { section: 0, paragraph: 0 }),
             ),
         ],
     );
@@ -981,6 +1129,89 @@ fn constructed_warnings_produce_the_mapped_code() {
             assert_eq!(info.code, *expected, "{enum_name}::{variant}");
             assert!(!info.message.is_empty(), "{enum_name}::{variant} has no message");
         }
+    }
+}
+
+/// Every decode warning the decoder can emit, taken from its own sample list:
+/// the variants `ops` already printed keep their output, every other one
+/// reports the decoder's code and wording instead of `OTHER` or Debug text.
+///
+/// 이것을 실패시키는 것: `decode_warning_code` 의 위임 갈래를
+/// `UNCLASSIFIED` 로, 또는 `decode_warning_message` 의 위임 갈래를 Debug
+/// 포맷으로 되돌리는 것.
+#[test]
+fn decode_warning_samples_keep_old_output_and_never_fall_back() {
+    use hwpforge::hwpx::decoder::warning_samples;
+
+    for warning in warning_samples::decode() {
+        let info = OpsWarning::Decode(warning.clone()).info();
+        match &warning {
+            DecodeWarning::UnknownEnumValue { .. } => {
+                assert_eq!(info.code, "UNKNOWN_ENUM_VALUE");
+                assert_eq!(
+                    info.message,
+                    "hp:header@applyPageType: \"SOMETIMES\" unknown — fell back to BOTH"
+                );
+            }
+            DecodeWarning::LayoutCacheDropped { .. } => {
+                assert_eq!(info.code, "LAYOUT_CACHE_DROPPED");
+                assert_eq!(info.message, "layout cache dropped at section[0].para[0]: sample");
+            }
+            other => {
+                assert_eq!(info.code, other.code(), "{other:?}");
+                assert_ne!(info.code, "OTHER", "{other:?}");
+                assert!(!info.message.contains(" {"), "Debug fallback: {}", info.message);
+                assert_eq!(info.message, other.to_string());
+            }
+        }
+    }
+}
+
+/// Every encode warning the encoder can emit, taken from its own sample list:
+/// the variants `ops` already printed keep their code and `Display` wording,
+/// every other one reports the encoder's code instead of `OTHER`.
+///
+/// The existing variants' code and wording are pinned as literals, so a
+/// change to the encoder's `Display` text fails here.
+///
+/// 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를 `UNCLASSIFIED`
+/// 로 되돌리는 것, 또는 기존 변형의 `Display` 문구를 바꾸는 것.
+#[test]
+fn encode_warning_samples_keep_old_output_and_never_fall_back() {
+    use hwpforge::hwpx::decoder::warning_samples;
+
+    for warning in warning_samples::encode() {
+        let info = OpsWarning::Encode(warning.clone()).info();
+        let (code, message) = match &warning {
+            EncodeWarning::LayoutCacheDropped { .. } => (
+                "LAYOUT_CACHE_DROPPED",
+                "layout cache dropped at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::NoteHeadSkipped { .. } => (
+                "NOTE_HEAD_SKIPPED",
+                "note number head skipped at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::TitleMarkSkipped { .. } => (
+                "TITLE_MARK_SKIPPED",
+                "titleMark skipped at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::NoteRestartIgnored { .. } => (
+                "NOTE_RESTART_IGNORED",
+                "note restart ignored at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::XmlForbiddenCharsRemoved { .. } => (
+                "XML_FORBIDDEN_CHARS_REMOVED",
+                "removed 1 XML-forbidden character(s) from hp:t in Contents/section0.xml"
+                    .to_string(),
+            ),
+            other => {
+                assert_ne!(info.code, "OTHER", "{other:?}");
+                (other.code(), other.to_string())
+            }
+        };
+        assert_eq!(info.code, code, "{warning:?}");
+        assert_eq!(info.message, message, "{warning:?}");
+        assert!(!info.message.contains(" {"), "Debug fallback: {}", info.message);
     }
 }
 

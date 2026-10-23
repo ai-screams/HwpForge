@@ -84,6 +84,74 @@ impl Run {
         }
     }
 
+    /// Visits every table in this run — itself if it is one, and the
+    /// tables in every paragraph nested in it, run picture captions included
+    /// (see [`crate::paragraph::Paragraph::for_each_table`]).
+    pub fn for_each_table<F: FnMut(&Table)>(&self, mut f: F) {
+        self.walk_tables(&mut f);
+    }
+
+    pub(crate) fn walk_tables(&self, f: &mut dyn FnMut(&Table)) {
+        // `own` visits the tables a run holds outside any paragraph of its
+        // own: itself, its picture caption's tables (the paragraph walk
+        // does not enter run pictures' captions) and, for a memo, its anchor
+        // runs (review r3 M3 — not paragraphs either). Every paragraph the
+        // run nests is then walked and its runs looked at the same way.
+        // 이것을 실패시키는 것: 메모 앵커 갈래 삭제(`cell_zone_validation_reaches_nested_tables`
+        // 의 메모 앵커 표).
+        fn own(run: &Run, f: &mut dyn FnMut(&Table)) {
+            match &run.content {
+                RunContent::Table(t) => f(t),
+                RunContent::Image(img) => {
+                    for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
+                        cp.walk_tables(f);
+                    }
+                }
+                RunContent::Control(c) => {
+                    if let Control::Memo { anchor_runs, .. } = c.as_ref() {
+                        for anchor in anchor_runs {
+                            own(anchor, f);
+                        }
+                    }
+                }
+                RunContent::Text(_) | RunContent::InlineText(_) => {}
+            }
+        }
+        own(self, f);
+        self.walk_paragraphs(&mut |q| {
+            for run in &q.runs {
+                own(run, f);
+            }
+        });
+    }
+
+    pub(crate) fn walk_tables_mut(&mut self, f: &mut dyn FnMut(&mut Table)) {
+        fn own(run: &mut Run, f: &mut dyn FnMut(&mut Table)) {
+            match &mut run.content {
+                RunContent::Table(t) => f(t),
+                RunContent::Image(img) => {
+                    for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
+                        cp.walk_tables_mut(f);
+                    }
+                }
+                RunContent::Control(c) => {
+                    if let Control::Memo { anchor_runs, .. } = c.as_mut() {
+                        for anchor in anchor_runs {
+                            own(anchor, f);
+                        }
+                    }
+                }
+                RunContent::Text(_) | RunContent::InlineText(_) => {}
+            }
+        }
+        own(self, f);
+        self.walk_paragraphs_mut(&mut |q| {
+            for run in &mut q.runs {
+                own(run, f);
+            }
+        });
+    }
+
     /// Creates a text run.
     ///
     /// This is the most common constructor. Most runs in a typical
@@ -183,6 +251,10 @@ impl std::fmt::Display for Run {
 /// assert!(text.is_text());
 /// assert_eq!(text.as_text(), Some("Hello"));
 /// ```
+// `Image` is held unboxed: boxing it would change the public
+// `RunContent::Image(Image)` pattern. Its link field took the variant past
+// the lint's 200-byte difference (248 vs 24 bytes).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum RunContent {

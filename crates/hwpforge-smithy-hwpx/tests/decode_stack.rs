@@ -91,7 +91,7 @@ fn nested_package(pattern: &str, levels: usize) -> Vec<u8> {
         let mut entry = archive.by_index(index).expect("zip entry");
         let options =
             zip::write::SimpleFileOptions::default().compression_method(entry.compression());
-        let name = entry.name().to_string();
+        let name = entry.name().expect("ZIP entry name").to_string();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).expect("read zip entry");
         if name == "Contents/section0.xml" {

@@ -21,12 +21,13 @@ use super::*;
 /// Generates all required sub-elements (offset, orgSz, curSz, flip,
 /// rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim,
 /// img, sz, pos, outMargin) to match 한글's expected structure.
-pub(super) fn build_picture(
+pub(crate) fn build_picture(
     img: &Image,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
@@ -37,15 +38,91 @@ pub(super) fn build_picture(
 
     let w = img.width.as_i32();
     let h = img.height.as_i32();
+    // A negative original size is refused, as for shapes
+    // (`shapes::shape_frame_plan`).
+    // 이것을 실패시키는 것: 이 거부를 지우기(`negative_original_size_is_not_written`).
+    if let Some(o) = img.frame.original_size {
+        if o.width.as_i32() < 0 || o.height.as_i32() < 0 {
+            return Err(crate::error::HwpxError::InvalidStructure {
+                detail: format!(
+                    "picture has a negative original size {}x{}",
+                    o.width.as_i32(),
+                    o.height.as_i32()
+                ),
+            });
+        }
+    }
+    let href = picture_href(img, sink);
     let half_w = w / 2;
     let half_h = h / 2;
     let placement = img.placement.as_ref();
+    let mut group_box = Image::from_path("", img.width, img.height);
+    group_box.frame = img.frame;
+    let source = if as_group_child { &group_box } else { img };
+    let plan = hwpforge_core::control::geometry::picture_frame_plan(
+        source,
+        &crate::encoder::shapes::HWPX_POLICY,
+    );
+    let frame = PictureFrame::of(img, &plan);
 
-    Ok(HxPic {
+    if as_group_child
+        && (super::super::standalone::transformed(img.rotation, img.flip)
+            || img.in_margin.is_some())
+    {
+        sink.content_lost(
+            "shape_transform",
+            "group picture rotation/flip/inner margin is outside the group model".into(),
+        );
+    }
+    let standalone = (!as_group_child
+        && super::super::standalone::transformed(img.rotation, img.flip))
+    .then(|| super::super::standalone::plan((w, h), img.rotation, img.flip, &plan));
+    if !as_group_child && super::super::standalone::transformed(img.rotation, img.flip) {
+        crate::encoder::shapes::report_shape_emission(&plan, sink);
+        if plan.loss().is_none() {
+            let exact = hwpforge_core::control::geometry::picture_frame_plan(
+                img,
+                &hwpforge_core::control::geometry::EmissionPolicy::exact(),
+            );
+            let residual = super::super::standalone::residual(
+                &plan,
+                &exact,
+                standalone.as_ref().expect("transformed picture"),
+            );
+            if residual > 2.0 {
+                sink.content_lost(
+                    "shape_emission",
+                    format!("picture actual standalone T*R*S residual {residual} HWPUNIT"),
+                );
+            }
+        }
+    }
+    let margin = if as_group_child { None } else { img.in_margin };
+    let (bw, bh) = standalone.as_ref().map_or((w, h), |p| p.size);
+    let add_margin = |size: i32, a: i32, b: i32| {
+        i32::try_from(i64::from(size) + i64::from(a) + i64::from(b)).map_err(|_| {
+            crate::error::HwpxError::InvalidStructure {
+                detail: format!("picture output size overflows i32: {size} + {a} + {b}"),
+            }
+        })
+    };
+    let (bw, bh) = (
+        add_margin(
+            bw,
+            margin.map_or(0, |m| m.left.as_i32()),
+            margin.map_or(0, |m| m.right.as_i32()),
+        )?,
+        add_margin(
+            bh,
+            margin.map_or(0, |m| m.top.as_i32()),
+            margin.map_or(0, |m| m.bottom.as_i32()),
+        )?,
+    );
+    let mut hx = HxPic {
         // Wave 12p Step 4: HWPX `<hp:pic id="...">` cross-ref target.
         // Image.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
         // 없으면 sequential fallback.
-        id: img.inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
+        id: super::super::object_ids::core_or_drawn("picture", img.inst_id),
         z_order: 0,
         numbering_type: "PICTURE".to_string(),
         text_wrap: placement
@@ -56,13 +133,13 @@ pub(super) fn build_picture(
             .unwrap_or_else(|| "BOTH_SIDES".to_string()),
         lock: 0,
         dropcap_style: DropCapStyle::None.to_string(),
-        href: String::new(),
+        href,
         group_level: 0,
         instid: generate_instid(),
         reverse: 0,
 
         offset: Some(HxOffset { x: 0, y: 0 }),
-        org_sz: Some(HxSizeAttr { width: w, height: h }),
+        org_sz: Some(HxSizeAttr { width: frame.original.0, height: frame.original.1 }),
         cur_sz: Some(HxSizeAttr { width: w, height: h }),
         flip: Some(HxFlip { horizontal: 0, vertical: 0 }),
         rotation_info: Some(HxRotationInfo {
@@ -73,18 +150,19 @@ pub(super) fn build_picture(
         }),
         rendering_info: Some(HxRenderingInfo {
             trans_matrix: HxMatrix::identity(),
-            sca_matrix: HxMatrix::identity(),
+            sca_matrix: crate::encoder::shapes::scale_matrix(frame.scale),
             rot_matrix: HxMatrix::identity(),
+            extra_pairs: Vec::new(),
         }),
         img_rect: Some(HxImgRect {
             pt0: HxPoint { x: 0, y: 0 },
-            pt1: HxPoint { x: w, y: 0 },
-            pt2: HxPoint { x: w, y: h },
-            pt3: HxPoint { x: 0, y: h },
+            pt1: HxPoint { x: frame.original.0, y: 0 },
+            pt2: HxPoint { x: frame.original.0, y: frame.original.1 },
+            pt3: HxPoint { x: 0, y: frame.original.1 },
         }),
-        img_clip: Some(HxImgClip { left: 0, right: w, top: 0, bottom: h }),
+        img_clip: Some(frame.clip),
         in_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        img_dim: Some(HxImgDim { dim_width: w, dim_height: h }),
+        img_dim: frame.extent.map(|(dim_width, dim_height)| HxImgDim { dim_width, dim_height }),
         img: Some(HxImg {
             binary_item_id_ref: binary_ref.to_string(),
             bright: 0,
@@ -93,34 +171,115 @@ pub(super) fn build_picture(
             alpha: "0".to_string(),
         }),
         sz: Some(HxTableSz {
-            width: w,
+            width: bw,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
+            height: bh,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            // 이것을 실패시키는 것: 상수 0 으로 되돌리기(`picture_and_table_protect_round_trip`).
+            protect: u32::from(img.frame.size_protect),
         }),
         pos: Some(build_picture_position(placement)),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(crate::encoder::shapes::object_out_margin(placement)),
         caption: img
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, bw, depth, hyperlink_entries, options, sink))
             .transpose()?,
-    })
+        line_shape: None,
+        effects: None,
+    };
+    if let Some(p) = standalone {
+        hx.offset = Some(p.offset);
+        hx.cur_sz = Some(p.cur);
+        hx.flip = Some(p.flip);
+        hx.rotation_info = Some(p.rotation);
+        hx.rendering_info = Some(p.rendering);
+    }
+    if let Some(m) = margin {
+        hx.in_margin = Some(HxTableMargin {
+            left: m.left.as_i32(),
+            right: m.right.as_i32(),
+            top: m.top.as_i32(),
+            bottom: m.bottom.as_i32(),
+        });
+    }
+    Ok(hx)
+}
+
+/// A picture's box and crop on the wire: `orgSz`/`imgRect` (the original
+/// box O), `imgClip` (the crop in the image's coordinates I) and `imgDim`
+/// (the extent of I). With none of the Core fields set every value is the
+/// display size — the whole image, unscaled.
+struct PictureFrame {
+    /// `orgSz` (and the `imgRect` corners): the emission plan's original box
+    /// ([`picture_frame_plan`](hwpforge_core::control::geometry::picture_frame_plan)).
+    original: (i32, i32),
+    /// `scaMatrix`: the plan's display / original.
+    scale: (f64, f64),
+    /// `imgClip`.
+    clip: HxImgClip,
+    /// `imgDim`; `None` = not written (a crop whose extent is unknown —
+    /// Hancom's own files carry such pictures without `imgDim`).
+    extent: Option<(i32, i32)>,
+}
+
+impl PictureFrame {
+    fn of(img: &Image, plan: &hwpforge_core::control::geometry::FramePlan) -> Self {
+        let display = (img.width.as_i32(), img.height.as_i32());
+        let pair = |(a, b): (HwpUnit, HwpUnit)| (a.as_i32(), b.as_i32());
+        let extent = img.image_extent.map(pair);
+        let clip = match img.crop {
+            Some(c) => HxImgClip {
+                left: c.left.as_i32(),
+                right: c.right.as_i32(),
+                top: c.top.as_i32(),
+                bottom: c.bottom.as_i32(),
+            },
+            None => {
+                let (ew, eh) = extent.unwrap_or(display);
+                HxImgClip { left: 0, right: ew, top: 0, bottom: eh }
+            }
+        };
+        let extent = match (img.crop, extent) {
+            (Some(_), None) => None,
+            (_, extent) => Some(extent.unwrap_or(display)),
+        };
+        Self { original: plan.original_size(), scale: plan.scale(), clip, extent }
+    }
+}
+
+/// The picture's `href`: its link URL with Hancom's object-link suffix, or
+/// empty. A URL with an unsafe scheme (`javascript:`, `file:`, …) is not
+/// written and is reported as lost; a schemeless one gets `http://`, as a
+/// text hyperlink does.
+fn picture_href(img: &Image, sink: &mut DocumentEncodeContext) -> String {
+    let Some(url) = img.hyperlink.as_deref() else { return String::new() };
+    match super::super::normalize_hyperlink_url(url) {
+        Some(safe) if !safe.is_empty() => {
+            format!("{safe}{}", crate::decoder::section::OBJECT_HYPERLINK_SUFFIX)
+        }
+        _ => {
+            sink.content_lost(
+                "picture_hyperlink",
+                format!("picture hyperlink {url:?} is not a safe URL and is left out"),
+            );
+            String::new()
+        }
+    }
 }
 
 pub(super) fn build_picture_position(placement: Option<&ObjectPlacement>) -> HxTablePos {
     match placement {
         Some(value) => HxTablePos {
             treat_as_char: u32::from(value.treat_as_char),
-            affect_l_spacing: 0,
+            affect_l_spacing: u32::from(value.affect_line_spacing),
             flow_with_text: u32::from(value.flow_with_text),
             allow_overlap: u32::from(value.allow_overlap),
-            hold_anchor_and_so: 0,
+            hold_anchor_and_so: u32::from(value.hold_anchor_and_so),
             vert_rel_to: value.vert_rel_to.as_hwpx_str().into_owned(),
             horz_rel_to: value.horz_rel_to.as_hwpx_str().into_owned(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
+            vert_align: value.vert_align.as_hwpx_str().to_string(),
+            horz_align: value.horz_align.as_hwpx_str().to_string(),
             vert_offset: value.vert_offset.as_i32(),
             horz_offset: value.horz_offset.as_i32(),
         },

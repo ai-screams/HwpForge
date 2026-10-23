@@ -215,10 +215,55 @@ fn resolve_char_style(
 /// fallback 금지) + 백엔드 실패([`PdfError::Backend`]).
 /// 원자별 준비 결과 — 텍스트 셰이핑 · 이미지 자산 (W2a §3 D4) · 인라인
 /// 글상자 (W4 w3 — 폭만 소비하고 배치 단계에서 clip 그룹으로 낮춘다).
+/// 그림 한 개의 페인트 항목. 자르기가 없으면 상자에 그림 전체를, 있으면
+/// (§19.20 PDF-v3, P18) 보이는 부분 `[왼, 위, 오른, 아래]`(그림 전체에 대한
+/// 비율)이 상자를 채우도록 그림 전체를 늘려 놓고 상자로 클립한다: 전체 크기 =
+/// 상자 / (오른 − 왼), 원점 = 상자 − 왼 × 전체. 좌표는 HWPUNIT.
+/// 이것을 실패시키는 것: 클립을 빼거나 늘림·이동 계산을 바꾸는 것
+/// (`cropped_picture_paints_clipped_and_scaled`).
+fn picture_item(
+    canonical_key: String,
+    data: std::sync::Arc<Vec<u8>>,
+    (x, y): (f64, f64),
+    (width, height): (i32, i32),
+    crop: Option<[f64; 4]>,
+    location: String,
+) -> PaintItem {
+    let (w, h) = (f64::from(width), f64::from(height));
+    let image = |origin: (f64, f64), size: (f64, f64), location: String| {
+        PaintItem::Image(crate::paint::ImageItem {
+            canonical_key,
+            data,
+            origin: Point { x: Pt::from_hwpunit_f64(origin.0), y: Pt::from_hwpunit_f64(origin.1) },
+            size: Size {
+                width: Pt::from_hwpunit_f64(size.0),
+                height: Pt::from_hwpunit_f64(size.1),
+            },
+            location,
+        })
+    };
+    let Some([l, t, r, b]) = crop else { return image((x, y), (w, h), location) };
+    let (full_w, full_h) = (w / (r - l), h / (b - t));
+    let inner = image((x - l * full_w, y - t * full_h), (full_w, full_h), location);
+    PaintItem::Clipped(crate::paint::ClipGroup {
+        origin: Point { x: Pt::from_hwpunit_f64(x), y: Pt::from_hwpunit_f64(y) },
+        size: Size { width: Pt::from_hwpunit(width), height: Pt::from_hwpunit(height) },
+        items: vec![inner],
+    })
+}
+
 enum PreparedAtom<'a> {
     Run(PreparedRun),
-    Image { canonical_key: String, data: std::sync::Arc<Vec<u8>>, width: i32, height: i32 },
-    TextBox { tb: &'a crate::source::LineTextBox },
+    Image {
+        canonical_key: String,
+        data: std::sync::Arc<Vec<u8>>,
+        width: i32,
+        height: i32,
+        crop: Option<[f64; 4]>,
+    },
+    TextBox {
+        tb: &'a crate::source::LineTextBox,
+    },
 }
 
 struct PreparedRun {
@@ -233,6 +278,7 @@ struct PreparedRun {
 pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<PdfOutput> {
     let layout = replay_layout(input, options)?;
     let mut warnings = layout.warnings;
+    report_ignored_transforms(input, &mut warnings);
     let mut table =
         FontTable::new(FontResolver::with_discovery(&options.font_dirs, options.discovery)?);
     let pages = build_paint_pages(input, options, &layout.pages, &mut table, &mut warnings)?;
@@ -276,16 +322,14 @@ pub(crate) fn build_paint_pages(
             else {
                 continue; // Degraded: 경고 후 생략.
             };
-            items.push(PaintItem::Image(crate::paint::ImageItem {
-                canonical_key: ai.canonical_key.clone(),
+            items.push(picture_item(
+                ai.canonical_key.clone(),
                 data,
-                origin: Point { x: Pt::from_hwpunit(ai.x), y: Pt::from_hwpunit(ai.y) },
-                size: Size {
-                    width: Pt::from_hwpunit(ai.width),
-                    height: Pt::from_hwpunit(ai.height),
-                },
-                location: ai.location.clone(),
-            }));
+                (f64::from(ai.x), f64::from(ai.y)),
+                (ai.width, ai.height),
+                ai.crop,
+                ai.location.clone(),
+            ));
         }
         // z-order 계약 (source): 셀 배경 → 괘선 → 글리프.
         for r in &page.rects {
@@ -481,6 +525,7 @@ fn render_line(
                     data,
                     width: img.width,
                     height: img.height,
+                    crop: img.crop,
                 });
                 continue;
             }
@@ -576,7 +621,7 @@ fn render_line(
     let mut x = placement.origin_x;
     for atom in prepared {
         let p = match atom {
-            PreparedAtom::Image { canonical_key, data, width, height } => {
+            PreparedAtom::Image { canonical_key, data, width, height, crop } => {
                 // 세로 배치 = §10c-2 분기 (이미지-지배는 line_top, sub-line 은
                 // baseline + 상수 k descent). baseline = baseline_y − top_y.
                 let image_top = inline_image_top(
@@ -585,13 +630,14 @@ fn render_line(
                     line.vertsize,
                     height,
                 );
-                out.push(PaintItem::Image(crate::paint::ImageItem {
+                out.push(picture_item(
                     canonical_key,
                     data,
-                    origin: Point { x: Pt::from_hwpunit_f64(x), y: Pt::from_hwpunit(image_top) },
-                    size: Size { width: Pt::from_hwpunit(width), height: Pt::from_hwpunit(height) },
-                    location: line.location.clone(),
-                }));
+                    (x, f64::from(image_top)),
+                    (width, height),
+                    crop,
+                    line.location.clone(),
+                ));
                 x += f64::from(width);
                 continue;
             }
@@ -806,6 +852,7 @@ mod atom_tests {
                     canonical_key: "img1.png".into(),
                     width: 2000,
                     height: 3000,
+                    crop: None,
                 })],
                 top_y: 5000,
                 baseline_y: 5000 + 2550,
@@ -854,6 +901,61 @@ mod atom_tests {
         assert!((img.size.height.0 - Pt::from_hwpunit(3000).0).abs() < 1e-9);
     }
 
+    /// P18 (PDF-v3): a cropped picture — inline and anchored — paints its
+    /// whole image scaled so the visible part fills the box, clipped to the
+    /// box. Crop (0.25, 0.5)–(0.75, 1.0) of a 2000 x 3000 box: whole image
+    /// 4000 x 6000 at (box − 1000, box − 3000).
+    ///
+    /// 이것을 실패시키는 것: 클립 그룹을 빼는 것 / 늘림을 (오른 − 왼) 대신 1 로 /
+    /// 원점에서 왼·위 이동을 빼는 것 / 앵커 그림에 자르기를 넘기지 않는 것.
+    #[test]
+    fn cropped_picture_paints_clipped_and_scaled() {
+        let crop = Some([0.25, 0.5, 0.75, 1.0]);
+        let mut layout = image_only_layout();
+        if let LineAtom::Image(img) = &mut layout.lines[0].atoms[0] {
+            img.crop = crop;
+        }
+        layout.anchored_images.push(LaidAnchoredImage {
+            location: "s0/p1".into(),
+            canonical_key: "img1.png".into(),
+            x: 20000,
+            y: 30000,
+            width: 2000,
+            height: 3000,
+            crop,
+        });
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &ImgStyles };
+        let mut table = FontTable::new(
+            FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                .expect("resolver"),
+        );
+        let mut warnings = Vec::new();
+        let pages =
+            build_paint_pages(&input, &PdfOptions::default(), &[layout], &mut table, &mut warnings)
+                .expect("paint");
+        let groups: Vec<_> = pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                PaintItem::Clipped(g) => Some(g),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(groups.len(), 2, "{:?}", pages[0].items);
+        let close = |a: Pt, hwp: f64| (a.0 - Pt::from_hwpunit_f64(hwp).0).abs() < 1e-9;
+        for (g, (bx, by)) in groups.iter().zip([(20_000.0, 30_000.0), (8504.0, 5000.0)]) {
+            assert!(close(g.origin.x, bx) && close(g.origin.y, by), "{g:?}");
+            assert!(close(g.size.width, 2000.0) && close(g.size.height, 3000.0), "{g:?}");
+            let [PaintItem::Image(img)] = g.items.as_slice() else { panic!("{g:?}") };
+            assert!(close(img.size.width, 4000.0) && close(img.size.height, 6000.0), "{img:?}");
+            assert!(
+                close(img.origin.x, bx - 1000.0) && close(img.origin.y, by - 3000.0),
+                "{img:?}"
+            );
+        }
+    }
+
     #[test]
     fn subline_image_atom_paints_at_descent_formula_y() {
         // 리뷰 Low-2 잠금 (CI 실행·fixture 불요): render_line →
@@ -868,6 +970,7 @@ mod atom_tests {
             canonical_key: "img1.png".into(),
             width: 567,
             height: 567,
+            crop: None,
         })];
         line.baseline_y = 5000 + 850;
         line.vertsize = 1000; // 텍스트-지배 줄 — sub-line 분기.
@@ -909,6 +1012,7 @@ mod atom_tests {
                 y: 11020,
                 width: 4000,
                 height: 3000,
+                crop: None,
             }],
             rects: vec![LaidRect {
                 location: "s0/p0/cell".into(),
@@ -964,6 +1068,7 @@ mod atom_tests {
                 y: 0,
                 width: 4000,
                 height: 3000,
+                crop: None,
             }],
             rects: Vec::new(),
             borders: Vec::new(),
@@ -1038,21 +1143,24 @@ mod atom_tests {
     /// 배치는 image-dominated 분기로 고정 — sub-line 공식은 별도 테스트).
     fn inner_image_line(vertsize: i32) -> TextBoxLine {
         TextBoxLine {
-            seg: LineSeg {
-                textpos: 0,
-                vertpos: 0,
-                vertsize,
-                textheight: vertsize,
-                baseline: 0,
-                spacing: 0,
-                horzpos: 0,
-                horzsize: 16440,
-                flags: 0,
+            seg: {
+                let mut lineseg = LineSeg::default();
+                lineseg.textpos = 0;
+                lineseg.vertpos = 0;
+                lineseg.vertsize = vertsize;
+                lineseg.textheight = vertsize;
+                lineseg.baseline = 0;
+                lineseg.spacing = 0;
+                lineseg.horzpos = 0;
+                lineseg.horzsize = 16440;
+                lineseg.flags = 0;
+                lineseg
             },
             atoms: vec![LineAtom::Image(LineImage {
                 canonical_key: "img1.png".into(),
                 width: vertsize,
                 height: vertsize,
+                crop: None,
             })],
             alignment: Alignment::Left,
             is_last_line: true,
@@ -1244,5 +1352,80 @@ mod subline_image_top_tests {
         // = 1_000_000 − 1_500_000 + 1_500_000×152/1000 = −272_000
         let top = inline_image_top(100_000_000, 1_000_000, 2_000_000, 1_500_000);
         assert_eq!(top, 100_000_000 - 272_000);
+    }
+}
+
+/// Diagnostics only; layout, clipping and painting stay unchanged.
+fn report_ignored_transforms(input: &PdfInput<'_>, warnings: &mut Vec<PdfWarning>) {
+    use hwpforge_core::control::GroupChild;
+    use hwpforge_core::{Control, RunContent};
+    use hwpforge_foundation::Flip;
+    fn transformed(r: Option<f32>, f: Option<Flip>) -> bool {
+        r.is_some_and(|v| v.rem_euclid(360.0) != 0.0)
+            || matches!(f, Some(Flip::Horizontal | Flip::Vertical | Flip::Both))
+    }
+    fn image(i: &hwpforge_core::image::Image, location: &str, warnings: &mut Vec<PdfWarning>) {
+        if transformed(i.rotation, i.flip) || i.in_margin.is_some() {
+            warnings.push(PdfWarning::ObjectTransformIgnored { location: location.into(), kind: "picture",
+                detail: format!("rotation={:?}, flip={:?}, in_margin={:?}; PDF output does not apply this transform",i.rotation,i.flip,i.in_margin) });
+        }
+    }
+    fn control(c: &Control, location: &str, warnings: &mut Vec<PdfWarning>) {
+        match c {
+            Control::TextBox { style: Some(s), .. } if transformed(s.rotation, s.flip) => {
+                warnings.push(PdfWarning::ObjectTransformIgnored {
+                    location: location.into(),
+                    kind: "textbox",
+                    detail: format!(
+                        "rotation={:?}, flip={:?}; PDF output does not apply this transform",
+                        s.rotation, s.flip
+                    ),
+                });
+            }
+            Control::Group { children, .. } => {
+                for (n, child) in children.iter().enumerate() {
+                    let loc = format!("{location}.child[{n}]");
+                    match child {
+                        GroupChild::Picture(i) => image(i, &loc, warnings),
+                        GroupChild::Shape(c) => control(c, &loc, warnings),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn own_run(run: &hwpforge_core::Run, loc: &str, warnings: &mut Vec<PdfWarning>) {
+        match &run.content {
+            RunContent::Image(i) => {
+                image(i, loc, warnings);
+                for (n, p) in i.caption.iter().flat_map(|c| c.paragraphs.iter()).enumerate() {
+                    p.for_each_paragraph(|q| {
+                        for (r, run) in q.runs.iter().enumerate() {
+                            own_run(run, &format!("{loc}.caption[{n}].run[{r}]"), warnings);
+                        }
+                    });
+                }
+            }
+            RunContent::Control(c) => {
+                control(c, loc, warnings);
+                if let Control::Memo { anchor_runs, .. } = c.as_ref() {
+                    for (n, run) in anchor_runs.iter().enumerate() {
+                        own_run(run, &format!("{loc}.anchor[{n}]"), warnings);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut p = 0;
+    for section in input.document.sections() {
+        section.for_each_paragraph(|para| {
+            for (r, run) in para.runs.iter().enumerate() {
+                let loc = format!("paragraph[{p}].run[{r}]");
+                own_run(run, &loc, warnings);
+            }
+            p += 1;
+        });
     }
 }

@@ -239,11 +239,11 @@ impl Hwp5RawIdMappings {
     /// minimum required 60 bytes.
     pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
         const MIN_SIZE: usize = 60; // 15 × i32
-        if data.len() < MIN_SIZE {
+        if data.len() < MIN_SIZE || (data.len() < 72 && !data.len().is_multiple_of(4)) {
             return Err(Hwp5Error::RecordParse {
                 offset: 0,
                 detail: format!(
-                    "IdMappings too short: {} bytes (expected >= {})",
+                    "IdMappings invalid length: {} bytes (expected >= {}, complete count words)",
                     data.len(),
                     MIN_SIZE
                 ),
@@ -291,9 +291,18 @@ impl Hwp5RawIdMappings {
 ///
 /// HWP5 stores the semantic list identity here: a shared numbering ID with up
 /// to 10 paragraph heads. Only the fields needed to preserve ordered-list
-/// semantics are retained; layout-only attributes are parsed and discarded.
+/// semantics and paragraph-head layout are retained for the destination style store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5RawNumberingParaHead {
+    /// Paragraph-head attribute word (alignment, instance width, indent and offset unit).
+    pub attributes: u32,
+    /// Signed number/bullet width adjustment in HWPUNIT.
+    pub width_adjust: i16,
+    /// Signed distance from the number/bullet to its text, in the attribute-selected unit.
+    pub text_offset: i16,
+
+    /// Original character definition ID; u32::MAX means inherit.
+    pub char_shape_id: u32,
     /// Start number for this level.
     pub start_number: u32,
     /// Zero-based list level within the numbering definition.
@@ -398,35 +407,48 @@ impl Hwp5RawBulletDef {
     /// # Record layout (verified against real Hancom `HWPTAG_BULLET` records)
     ///
     /// The published KS X 6101 / HWP5 spec (table 42) is incomplete here. Real
-    /// records are 25 bytes:
+    /// HWP 5.0.1.7 records have a 14-byte glyph base. Extended records have
+    /// a 9-byte image extension and an optional 2-byte check glyph:
     ///
     /// | offset | bytes | field                                            |
     /// |--------|-------|--------------------------------------------------|
     /// | 0..12  | 12    | paragraph-head info (attribute u32 + i16 + i16 + char-shape u32) |
     /// | 12..14 | 2     | bullet glyph (WCHAR)                              |
     /// | 14..18 | 4     | image-bullet flag (INT32; 0 = glyph bullet)       |
-    /// | 18..23 | 5     | image-bullet block (bright/contrast/effect u8 + bin-item u16) — ALWAYS present |
-    /// | 23..25 | 2     | check-bullet glyph (WCHAR)                        |
+    /// | 18..23 | 5     | image-bullet block (bright/contrast/effect u8 + bin-item u16) — present with extension |
+    /// | 23..25 | 2     | optional check-bullet glyph (WCHAR)               |
     ///
-    /// The image-bullet block is a fixed 5 bytes regardless of the flag value,
+    /// In extended records the image block is 5 bytes regardless of the flag,
     /// so `check_bullet_char` always sits at offset 23, not at a flag-dependent
     /// offset. The previous code read the block as 4 bytes and only when the
     /// flag was set, which silently dropped `checkedChar` for glyph bullets.
     pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
         const IMAGE_BLOCK_LEN: usize = 5;
         // 12 (para head) + 2 (bullet char) + 4 (image flag) + 5 (image block)
-        // + 2 (check char) = 25.
-        const MIN_SIZE: usize = 25;
-        if data.len() < MIN_SIZE {
+        // Optional check glyph starts at offset 23; a partial WCHAR is invalid.
+        // 이것을 실패시키는 것: 구형 14바이트 거부 또는 잘린 확장 허용.
+        if !matches!(data.len(), 14 | 23 | 25..) {
             return Err(Hwp5Error::RecordParse {
                 offset: 0,
-                detail: format!("Bullet too short: {} bytes (expected >= {MIN_SIZE})", data.len()),
+                detail: format!(
+                    "Bullet incomplete: {} bytes (expected 14, 23 or >= 25)",
+                    data.len()
+                ),
             });
         }
 
         let mut cur = Cursor::new(data);
         let paragraph_head = parse_numbering_para_head(&mut cur, 0, false)?;
         let bullet_char = decode_utf16_code_unit(cur.read_u16::<LittleEndian>()?);
+        if data.len() == 14 {
+            return Ok(Self {
+                paragraph_head,
+                bullet_char,
+                use_image: false,
+                image_id: None,
+                check_bullet_char: None,
+            });
+        }
         let image_bullet_flag = cur.read_i32::<LittleEndian>()?;
         let use_image = image_bullet_flag != 0;
         let image_id = use_image.then_some(image_bullet_flag as u32);
@@ -436,8 +458,12 @@ impl Hwp5RawBulletDef {
         let mut _image_block = [0u8; IMAGE_BLOCK_LEN];
         cur.read_exact(&mut _image_block)?;
 
-        let code_unit = cur.read_u16::<LittleEndian>()?;
-        let check_bullet_char = (code_unit != 0).then(|| decode_utf16_code_unit(code_unit));
+        let check_bullet_char = if data.len() >= 25 {
+            let code_unit = cur.read_u16::<LittleEndian>()?;
+            (code_unit != 0).then(|| decode_utf16_code_unit(code_unit))
+        } else {
+            None
+        };
 
         Ok(Self { paragraph_head, bullet_char, use_image, image_id, check_bullet_char })
     }
@@ -540,7 +566,9 @@ pub struct Hwp5RawBinData {
     pub compression: Hwp5BinDataCompression,
     /// Status bits from the property field.
     pub status: u8,
-    /// 1-based binary item ID used by picture controls.
+    /// The id stored in the record, naming its `/BinData/BIN{id:04X}` stream
+    /// (`0` for an external link). Picture, border-fill and OLE references
+    /// do not use it: they count `BIN_DATA` records in `DocInfo` order.
     pub binary_data_id: u16,
     /// File extension used in `/BinData/BINXXXX.ext`.
     pub extension: String,
@@ -558,18 +586,33 @@ impl Hwp5RawBinData {
 
         let mut cur = Cursor::new(data);
         let property = cur.read_u16::<LittleEndian>()?;
-        let binary_data_id = cur.read_u16::<LittleEndian>()?;
-        let extension = read_utf16le_string(&mut cur)?;
         let data_type = Hwp5BinDataType::from_bits((property & 0x000F) as u8);
         let compression = Hwp5BinDataCompression::from_bits(((property >> 4) & 0x0003) as u8);
         let status = ((property >> 8) & 0x0003) as u8;
+        // An external link stores two paths instead of an id and an
+        // extension (HWP 5.0 표 17); it has no `/BinData` stream.
+        if data_type == Hwp5BinDataType::Link {
+            return Ok(Self {
+                property,
+                data_type,
+                compression,
+                status,
+                binary_data_id: 0,
+                extension: String::new(),
+            });
+        }
+        let binary_data_id = cur.read_u16::<LittleEndian>()?;
+        let extension = read_utf16le_string(&mut cur)?;
 
         Ok(Self { property, data_type, compression, status, binary_data_id, extension })
     }
 
-    /// Returns the expected `/BinData/*` filename for this entry.
+    /// Returns the expected `/BinData/*` filename for this entry, or an empty
+    /// string for an external link (which has no stream).
     pub fn storage_name(&self) -> String {
-        if self.extension.is_empty() {
+        if self.data_type == Hwp5BinDataType::Link {
+            String::new()
+        } else if self.extension.is_empty() {
             format!("BIN{:04X}", self.binary_data_id)
         } else {
             format!("BIN{:04X}.{}", self.binary_data_id, self.extension)
@@ -582,7 +625,7 @@ impl Hwp5RawBinData {
 /// Parsed from a `FaceName` record (TagId 0x13).
 ///
 /// Contains the font property flags and the decoded UTF-16LE face name.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawFaceName {
     /// Font property flags byte.
     pub property: u8,
@@ -667,7 +710,7 @@ impl Hwp5RawFaceName {
 /// Parsed from a `CharShape` record (TagId 0x15).
 ///
 /// Minimum size is 68 bytes; optional fields appear in later format versions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawCharShape {
     /// Font IDs for 7 language groups (hangul, english, hanja, japanese,
     /// other, symbol, user).
@@ -825,15 +868,14 @@ impl Hwp5RawCharShape {
         (self.property >> 11) & 0b11
     }
 
-    /// Returns the shadow effect encoded in bits 11-12.
-    ///
-    /// HWP5 distinguishes discrete vs continuous shadows; the current shared
-    /// IR only carries `None` vs `Drop`.
+    /// Returns the shadow kind encoded in bits 11-12: 0 none, 1 discrete
+    /// (비연속, `Drop`), 2 continuous (연속). 3 is outside the spec and reads
+    /// as none; the projection reports it.
     pub fn shadow_type(&self) -> ShadowType {
-        if self.shadow_kind_raw() == 0 {
-            ShadowType::None
-        } else {
-            ShadowType::Drop
+        match self.shadow_kind_raw() {
+            1 => ShadowType::Drop,
+            2 => ShadowType::Continuous,
+            _ => ShadowType::None,
         }
     }
 
@@ -968,7 +1010,7 @@ impl Hwp5RawCharShape {
 /// Parsed from a `ParaShape` record (TagId 0x19).
 ///
 /// Base size is 42 bytes; optional fields appear in later format versions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawParaShape {
     /// Property bitfield 1 (alignment in bits 2–4, etc.).
     pub property1: u32,
@@ -1179,6 +1221,16 @@ impl Hwp5RawParaShape {
         self.property2.is_some_and(|property2| property2 & (1 << 5) != 0)
     }
 
+    /// Returns the raw "한 줄로 입력" (single-line input) mode in `property2`
+    /// bits 0-1.
+    ///
+    /// Hancom twins map `0` to `lineWrap="BREAK"` and `1` to `"SQUEEZE"`;
+    /// `2` and `3` do not occur in the corpus. A record without `property2`
+    /// (older than v5.0.1.7) has no such field and reads as `0`.
+    pub fn line_wrap_raw(&self) -> u32 {
+        self.property2.map_or(0, |property2| property2 & 0b11)
+    }
+
     /// Returns the paragraph-level checked-item state (`property2` bit 7).
     ///
     /// User fixtures show checkable bullet items toggling this bit while
@@ -1265,10 +1317,6 @@ fn parse_numbering_para_head(
     numbering: bool,
 ) -> Hwp5Result<Hwp5RawNumberingParaHead> {
     let attribute = cur.read_u32::<LittleEndian>()?;
-    let _align_bits = (attribute & 0b11) as u8;
-    let _use_instance_width = (attribute >> 2) & 1 != 0;
-    let _auto_indent = (attribute >> 3) & 1 != 0;
-    let _text_offset_kind = ((attribute >> 4) & 1) as u8;
     // Bit 5 of the paragraph-head attribute is the checkable (checkbox bullet)
     // flag. It is only meaningful for BULLET records — NUMBERING records leave
     // it clear — so reading it unconditionally is safe: numbering and
@@ -1276,16 +1324,27 @@ fn parse_numbering_para_head(
     // BULLET records (`sample-checkable-bullet-*.hwp` carry attribute 0x28 with
     // bit 5 set; `sample-bullet-list.hwp` carries 0x08 with bit 5 clear).
     let checkable = (attribute >> 5) & 1 != 0;
-    let _width_adjust = cur.read_i16::<LittleEndian>()?;
-    let _text_offset = cur.read_i16::<LittleEndian>()?;
-    let _char_shape_id = cur.read_u32::<LittleEndian>()?;
+    let width_adjust = cur.read_i16::<LittleEndian>()?;
+    let text_offset = cur.read_i16::<LittleEndian>()?;
+    let char_shape_id = cur.read_u32::<LittleEndian>()?;
     let (num_format, text) = if numbering {
         (numbering_attr_num_format(attribute).to_string(), read_utf16le_string(cur)?)
     } else {
         (String::new(), String::new())
     };
 
-    Ok(Hwp5RawNumberingParaHead { start_number: 1, level, num_format, text, checkable })
+    // 이것을 실패시키는 것: signed 폭·간격과 공통 속성을 읽은 뒤 버리기.
+    Ok(Hwp5RawNumberingParaHead {
+        attributes: attribute,
+        width_adjust,
+        text_offset,
+        char_shape_id,
+        start_number: 1,
+        level,
+        num_format,
+        text,
+        checkable,
+    })
 }
 
 fn numbering_attr_num_format(attribute: u32) -> &'static str {
@@ -1493,7 +1552,7 @@ fn read_utf16le_string(cur: &mut Cursor<&[u8]>) -> Hwp5Result<String> {
 }
 
 /// Parsed from a `Style` record (TagId 0x1A).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawStyle {
     /// Style name in Korean (UTF-16LE).
     pub name: String,
@@ -1887,6 +1946,23 @@ mod tests {
         assert!(ps.property2.is_none());
     }
 
+    /// `property2` bits 0-1 only; bits 2-3 (reserved) and above are not part
+    /// of the value, and a record without `property2` reads as 0.
+    ///
+    /// 이것을 실패시키는 것: `>> 2` 로 읽기(`0x8` → 2) · `& 1` 로 읽기
+    /// (`0x3` → 1) · 비트 무시(`0x1` → 0) · `property2` 없음에서 패닉.
+    #[test]
+    fn line_wrap_raw_reads_property2_bits_0_and_1() {
+        let mut data = vec![0u8; 46];
+        for (property2, expected) in [(0x1u32, 1), (0x0, 0), (0x8, 0), (0x3, 3), (0x31, 1)] {
+            data[42..46].copy_from_slice(&property2.to_le_bytes());
+            let ps = Hwp5RawParaShape::parse(&data).unwrap();
+            assert_eq!(ps.line_wrap_raw(), expected, "property2 {property2:#x}");
+        }
+        let old = Hwp5RawParaShape::parse(&[0u8; 42]).unwrap();
+        assert_eq!(old.line_wrap_raw(), 0);
+    }
+
     #[test]
     fn parse_para_shape_extended() {
         let mut data = vec![0u8; 54];
@@ -1995,6 +2071,27 @@ mod tests {
     }
 
     #[test]
+    fn fix1_bullet_base_and_optional_wchar_lengths() {
+        let full = make_bullet_def_bytes_full(false, 0x2611, 0x08);
+        // 이것을 실패시키는 것: 23바이트 기본형 거부 또는 체크 글리프 합성.
+        let base = Hwp5RawBulletDef::parse(&full[..23]).unwrap();
+        assert_eq!(base.bullet_char, "●");
+        assert_eq!(base.check_bullet_char, None);
+        assert!(!base.paragraph_head.checkable);
+        // 이것을 실패시키는 것: 24바이트 잘린 WCHAR 허용 또는 기본형보다 짧은 입력 허용.
+        for len in (0..23).filter(|len| *len != 14).chain([24]) {
+            assert!(Hwp5RawBulletDef::parse(&full[..len]).is_err(), "length {len}");
+        }
+        // 이것을 실패시키는 것: 체크 WCHAR offset 변경 또는 25바이트 초과 입력 거부.
+        for extra in [vec![], vec![0x12, 0x34, 0x56]] {
+            let mut bytes = full.clone();
+            bytes.extend(extra);
+            let bullet = Hwp5RawBulletDef::parse(&bytes).unwrap();
+            assert_eq!(bullet.check_bullet_char.as_deref(), Some("☑"));
+        }
+    }
+
+    #[test]
     fn parse_bullet_def_zero_checked_char_becomes_none() {
         let bullet = Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, 0))
             .expect("bullet parse should succeed");
@@ -2040,10 +2137,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_bullet_def_rejects_record_shorter_than_25_bytes() {
-        // The real Hancom record is always 25 bytes; a 20-byte record (the old
-        // incorrect minimum) must now be rejected rather than silently
-        // mis-parsing the check glyph offset.
+    fn parse_bullet_def_rejects_record_shorter_than_base() {
+        // A 20-byte record does not contain the complete image block.
         let mut short = make_bullet_def_bytes_with_checked_char(false, 0x2611);
         short.truncate(20);
         assert!(Hwp5RawBulletDef::parse(&short).is_err());

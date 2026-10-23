@@ -61,12 +61,15 @@ pub mod inspect;
 pub mod inspect_meta;
 #[cfg(feature = "ops-md")]
 pub mod markdown;
+mod opaque;
 pub mod read;
 #[cfg(feature = "schemars")]
 pub mod schema;
 pub mod stamp;
 pub mod style;
 mod walk;
+
+use opaque::ensure_opaque_carried;
 
 use hwpforge_core::CoreError;
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
@@ -126,6 +129,9 @@ pub use style::{
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
+    /// Shared JSON exchange validation failure.
+    #[error(transparent)]
+    Exchange(HwpxError),
     /// HWPX decode-stage failure: reading the package, parsing XML or
     /// projecting it to Core. Build it with [`OpsError::decode`].
     #[error(transparent)]
@@ -303,7 +309,8 @@ impl OpsError {
             Self::Stamper(e) => stamper_code(e),
             Self::StampMap(e) => stamp_map_code(e),
             Self::Core(e) => core_code(e),
-            Self::Json(_) => OpsCode::JsonParseFailed,
+            Self::Exchange(HwpxError::LegacyJsonTabs { .. }) => OpsCode::LegacyJsonTabs,
+            Self::Exchange(_) | Self::Json(_) => OpsCode::JsonParseFailed,
             Self::JsonSerialize(_) => OpsCode::JsonSerializeFailed,
             Self::PresetNotFound { .. } => OpsCode::PresetNotFound,
             Self::InvalidInput { .. } => OpsCode::InvalidInput,
@@ -449,6 +456,9 @@ enum Stage {
 /// frontend that wants its own spelling pins its own literal instead
 /// (`hwpforge-bindings-cli`'s `compat::TABLE`, `hwpforge-bindings-mcp`'s).
 fn hint_for(code: OpsCode) -> Option<&'static str> {
+    if code == OpsCode::LegacyJsonTabs {
+        return Some("원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오.");
+    }
     Some(match code {
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
         OpsCode::EmptyFieldValue => {
@@ -519,7 +529,8 @@ fn hwpx_code(error: &HwpxError, stage: Stage) -> OpsCode {
         Stage::Encode => OpsCode::EncodeFailed,
     };
     match error.code() {
-        HwpxErrorCode::Zip
+        HwpxErrorCode::LegacyJsonTabs
+        | HwpxErrorCode::Zip
         | HwpxErrorCode::InvalidMimetype
         | HwpxErrorCode::MissingFile
         | HwpxErrorCode::XmlParse
@@ -537,7 +548,11 @@ fn hwpx_code(error: &HwpxError, stage: Stage) -> OpsCode {
 
 fn core_code(error: &CoreError) -> OpsCode {
     match error {
-        CoreError::Validation(_) | CoreError::InvalidStructure { .. } => OpsCode::ValidationFailed,
+        CoreError::Validation(_)
+        | CoreError::InvalidStructure { .. }
+        | CoreError::MeasureUnitMismatch
+        | CoreError::MeasureOverflow
+        | CoreError::MeasureOffGrid => OpsCode::ValidationFailed,
         CoreError::Foundation(_) => OpsCode::InternalInvariant,
         _ => OpsCode::UpstreamUnmapped,
     }
@@ -745,6 +760,11 @@ const UNCLASSIFIED: &str = "OTHER";
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsWarning {
+    /// Shared exchange version/migration diagnostic.
+    LegacyParagraphMeasures {
+        /// Migration limits and affected JSON paths.
+        message: String,
+    },
     /// HWPX encoder warning.
     Encode(EncodeWarning),
     /// HWPX decoder warning.
@@ -785,7 +805,14 @@ impl OpsWarning {
     /// **new canonical codes** that the frontends will adopt through their
     /// compatibility tables: `NOTE_HEAD_SKIPPED`, `TITLE_MARK_SKIPPED`,
     /// `NOTE_RESTART_IGNORED` (the CLI prints these warnings uncoded today),
-    /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`. `ASSET_DROPPED`
+    /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`, and
+    /// `CONTENT_LOST` (decode or encode: input content the model or the
+    /// output could not carry), `PACKAGE_ID_CONFLICT` (two `content.hpf`
+    /// items share one id), `IMAGE_REFERENCE_UNRESOLVED` (a
+    /// `binaryItemIDRef` that does not resolve to image or OLE data in the
+    /// package) and `BEGIN_NUM_REPAIRED` (a header start number of 0, written
+    /// back as 1).
+    /// `ASSET_DROPPED`
     /// and `ASSET_REMOTE` are **reserved, not emitted**: `convert_md` reports
     /// an excluded image once, through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),
     /// and keeps the typed disposition in its `assets` list; the two codes
@@ -796,6 +823,9 @@ impl OpsWarning {
     #[must_use]
     pub fn info(&self) -> WarningInfo {
         match self {
+            Self::LegacyParagraphMeasures { message } => {
+                WarningInfo::new("LEGACY_PARAGRAPH_MEASURES", message)
+            }
             Self::Encode(w) => WarningInfo::new(encode_warning_code(w), w.to_string()),
             Self::Decode(w) => WarningInfo::new(decode_warning_code(w), decode_warning_message(w)),
             Self::Structural(w) => WarningInfo::new(structural_warning_code(w), w.to_string()),
@@ -822,7 +852,9 @@ fn encode_warning_code(warning: &EncodeWarning) -> &'static str {
         EncodeWarning::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
         EncodeWarning::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
         EncodeWarning::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
-        _ => UNCLASSIFIED,
+        // A variant without a row above reports the encoder's own code, so a
+        // new warning is never filed under `OTHER`.
+        other => other.code(),
     }
 }
 
@@ -830,7 +862,9 @@ fn decode_warning_code(warning: &DecodeWarning) -> &'static str {
     match warning {
         DecodeWarning::UnknownEnumValue { .. } => "UNKNOWN_ENUM_VALUE",
         DecodeWarning::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
-        _ => UNCLASSIFIED,
+        // A variant without a row above reports the decoder's own code, so a
+        // new warning is never filed under `OTHER`.
+        other => other.code(),
     }
 }
 
@@ -844,7 +878,7 @@ fn decode_warning_message(warning: &DecodeWarning) -> String {
         DecodeWarning::LayoutCacheDropped { path, reason } => {
             format!("layout cache dropped at {path}: {reason}")
         }
-        other => format!("{other:?}"),
+        other => other.to_string(),
     }
 }
 
@@ -858,8 +892,12 @@ fn structural_warning_code(warning: &StructuralWarning) -> &'static str {
 #[cfg(feature = "ops-md")]
 fn md_warning_code(warning: &MdWarning) -> &'static str {
     match warning {
+        MdWarning::ParagraphMeasureLost { .. } => "PARAGRAPH_MEASURE_LOST",
         MdWarning::MergedCellsFlattened { .. } => "TABLE_MERGE_FLATTENED",
         MdWarning::ImageEmbedSkipped { .. } => "IMAGE_EMBED_SKIPPED",
+        MdWarning::ContainerTooDeep { .. } => "CONTAINER_TOO_DEEP",
+        MdWarning::EquationAsText { .. } => "EQUATION_AS_TEXT",
+        MdWarning::MarkupWrittenAsText { .. } => "MARKUP_WRITTEN_AS_TEXT",
         _ => UNCLASSIFIED,
     }
 }
@@ -1045,6 +1083,73 @@ mod tests {
         assert_eq!(warnings[0].code, "NOTE_HEAD_SKIPPED");
         assert_eq!(others.len(), 1, "non-semantic warnings are kept, not dropped");
         assert_eq!(others[0].code, "LAYOUT_CACHE_DROPPED");
+    }
+
+    /// R1-1: a control the encoder left out blocks a fail-closed editor.
+    ///
+    /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+    /// `ContentLost` 를 `false` 갈래로 옮기는 것.
+    #[test]
+    fn content_lost_refuses_the_bytes() {
+        let lost = EncodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: path(),
+            kind: "unknown".into(),
+            reason: "no HWPX form".into(),
+        };
+        let outcome = EncodeOutcome { bytes: vec![0x50, 0x4b], warnings: vec![lost] };
+
+        let error = take_bytes_fail_closed(outcome).expect_err("must fail closed");
+
+        assert_eq!(error.code(), OpsCode::EncodeSemanticLoss);
+        let OpsError::EncodeSemanticLoss { warnings, .. } = &error else {
+            panic!("wrong variant: {error:?}");
+        };
+        assert_eq!(warnings[0].code, "CONTENT_LOST");
+    }
+
+    /// C4: a manifest id two items share blocks a fail-closed editor.
+    ///
+    /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+    /// `PackageIdConflict` 를 `false` 갈래로 옮기는 것.
+    #[test]
+    fn package_id_conflict_refuses_the_bytes() {
+        let conflict = EncodeWarning::PackageIdConflict {
+            id: "header".into(),
+            hrefs: vec!["Contents/header.xml".into(), "BinData/header.png".into()],
+        };
+        let outcome = EncodeOutcome { bytes: vec![0x50, 0x4b], warnings: vec![conflict] };
+
+        let error = take_bytes_fail_closed(outcome).expect_err("must fail closed");
+
+        assert_eq!(error.code(), OpsCode::EncodeSemanticLoss);
+        let OpsError::EncodeSemanticLoss { warnings, .. } = &error else {
+            panic!("wrong variant: {error:?}");
+        };
+        assert_eq!(warnings[0].code, "PACKAGE_ID_CONFLICT");
+    }
+
+    /// C4: an image reference no package item resolves blocks a fail-closed
+    /// editor.
+    ///
+    /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+    /// `ImageReferenceUnresolved` 를 `false` 갈래로 옮기는 것.
+    #[test]
+    fn image_reference_unresolved_refuses_the_bytes() {
+        let dangling = EncodeWarning::ImageReferenceUnresolved {
+            part: "Contents/section0.xml".into(),
+            location: "hc:img@binaryItemIDRef".into(),
+            reference: "image2".into(),
+        };
+        let outcome = EncodeOutcome { bytes: vec![0x50, 0x4b], warnings: vec![dangling] };
+
+        let error = take_bytes_fail_closed(outcome).expect_err("must fail closed");
+
+        assert_eq!(error.code(), OpsCode::EncodeSemanticLoss);
+        let OpsError::EncodeSemanticLoss { warnings, .. } = &error else {
+            panic!("wrong variant: {error:?}");
+        };
+        assert_eq!(warnings[0].code, "IMAGE_REFERENCE_UNRESOLVED");
     }
 
     #[test]

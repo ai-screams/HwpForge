@@ -90,3 +90,11 @@ delete-para	UNCARRIED_ZIP_ENTRIES	1	한컴이 저장한 문서(`Preview/*`·`MET
 insert-para	UNCARRIED_ZIP_ENTRIES	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)
 set-cell	INPUT_ENTRIES_NOT_CARRIED	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)
 stamp	INPUT_ENTRIES_NOT_CARRIED	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)
+#
+# to-pdf PDF_RENDER_FAILED: 옛 힌트는 원인과 상관없이 "cacheless documents
+# need a Hancom re-save; …" 였다. 미지원 내용(UNSUPPORTED_CONTENT)은 재저장으로
+# 풀리지 않고, 캐시가 재생과 맞지 않는 경우(INVALID_CACHE)는 다시 쓸 수 있다.
+# 그래서 원인이 MISSING_LAYOUT_CACHE·NO_RENDERABLE_CACHE·INVALID_CACHE·
+# UNSUPPORTED_CONTENT 이면 라이브러리의 원인별 힌트를, 그 밖(글꼴 등)은 옛
+# 문구를 그대로 낸다. `src/compat.rs` 의 `HINT_MADE_PER_CAUSE` 가 짝이다.
+to-pdf	PDF_RENDER_FAILED	2	dynamic:by render cause — missing/no renderable cache: Hancom re-save; invalid cache: re-save or a PDF from Hancom; unsupported content: a PDF from Hancom; other causes: the legacy text

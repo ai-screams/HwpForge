@@ -42,6 +42,8 @@ fn p_border(text: &str) -> Paragraph {
 
 fn build_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    // 이것을 실패시키는 것: 글자에서 참조하는 borderFill 3 정의 제거(실제 example 실행).
+    store.push_border_fill(hwpforge_smithy_hwpx::style_store::HwpxBorderFill::default_table_border());
 
     // CS 0: normal (10pt, black)
     store.push_char_shape(HwpxCharShape::default());
@@ -97,6 +99,8 @@ fn main() {
     let sec3 = {
         // TextBox with DropCapStyle::DoubleLine
         let textbox = Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![p("바탕글 테스트 문단입니다. \
                  이 글상자는 dropcapstyle=\"DoubleLine\"으로 설정되어 \
                  2줄 바탕글 효과가 적용됩니다.")],
@@ -113,6 +117,8 @@ fn main() {
 
         // TextBox with DropCapStyle::Margin
         let textbox2 = Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![p("여백 바탕글 테스트입니다. \
                  이 글상자는 dropcapstyle=\"Margin\"으로 설정되어 \
                  여백 바탕글 효과가 적용됩니다.")],

@@ -26,7 +26,11 @@ pub(crate) fn collect_section_path_inventory(
 
     for section_index in 0..section_count {
         let xml: String = package_reader.read_section_xml(section_index)?;
-        path_inventory.extend(scan_section_xml(section_index, &xml)?);
+        path_inventory.extend(scan_section_xml(
+            section_index,
+            &package_reader.section_paths()[section_index],
+            &xml,
+        )?);
     }
 
     path_inventory.sort_by(|left, right| {
@@ -41,8 +45,32 @@ pub(crate) fn collect_section_path_inventory(
     Ok(path_inventory)
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct MasterPartInventory {
+    pub section_index: usize,
+    pub index: usize,
+    pub part: String,
+    pub occurrences: Vec<HwpxPathOccurrence>,
+}
+
+pub(crate) fn collect_master_path_inventory(
+    pkg: &mut PackageReader<'_>,
+) -> HwpxResult<Vec<MasterPartInventory>> {
+    let paths = hwpforge_smithy_hwpx::master_page_part_paths(pkg)?;
+    let mut out = Vec::new();
+    for (section_index, parts) in paths.into_iter().enumerate() {
+        for (index, part) in parts.into_iter().enumerate() {
+            let xml = pkg.read_text_entry(&part)?;
+            let occurrences = scan_section_xml(section_index, &part, &xml)?;
+            out.push(MasterPartInventory { section_index, index, part, occurrences });
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn scan_section_xml(
     section_index: usize,
+    part: &str,
     xml: &str,
 ) -> HwpxResult<Vec<HwpxPathOccurrence>> {
     let mut reader: Reader<&[u8]> = Reader::from_str(xml);
@@ -87,7 +115,7 @@ pub(crate) fn scan_section_xml(
             Ok(Event::Eof) => {
                 if !stack.is_empty() {
                     return Err(HwpxError::XmlParse {
-                        file: format!("Contents/section{section_index}.xml"),
+                        file: part.into(),
                         detail: format!("unexpected end of input, unclosed <{}>", stack.join("/")),
                     });
                 }
@@ -95,10 +123,7 @@ pub(crate) fn scan_section_xml(
             }
             Ok(_) => {}
             Err(err) => {
-                return Err(HwpxError::XmlParse {
-                    file: format!("Contents/section{section_index}.xml"),
-                    detail: err.to_string(),
-                });
+                return Err(HwpxError::XmlParse { file: part.into(), detail: err.to_string() });
             }
         }
 
@@ -186,10 +211,10 @@ mod tests {
         // 이것을 실패시키는 것: `Err(err)` 팔을 `Err(_) => break` 로 되돌리는 변경
         // (앞부분 목록만 Ok 로 반환됨)
         let xml = "<hs:sec><hp:tbl/><hp:t>x</hp:T></hs:sec>";
-        let err = scan_section_xml(3, xml).unwrap_err();
+        let err = scan_section_xml(3, "Contents/section7.xml", xml).unwrap_err();
         match err {
             HwpxError::XmlParse { file, detail } => {
-                assert_eq!(file, "Contents/section3.xml");
+                assert_eq!(file, "Contents/section7.xml");
                 assert!(detail.contains("hp:T"), "{detail}");
             }
             other => panic!("expected XmlParse, got {other:?}"),
@@ -200,14 +225,47 @@ mod tests {
     fn scan_reports_unclosed_element_at_eof() {
         // 이것을 실패시키는 것: `Eof` 팔의 `!stack.is_empty()` 검사 삭제
         // (raw reader 는 닫히지 않은 요소가 있어도 Eof 를 정상으로 돌려줌)
-        let err = scan_section_xml(0, "<hs:sec><hp:tbl/>").unwrap_err();
-        assert!(matches!(err, HwpxError::XmlParse { .. }), "{err:?}");
+        let err = scan_section_xml(0, "Contents/section7.xml", "<hs:sec><hp:tbl/>").unwrap_err();
+        assert!(
+            matches!(err, HwpxError::XmlParse { ref file, .. } if file == "Contents/section7.xml"),
+            "{err:?}"
+        );
+    }
+
+    // 이것을 실패시키는 것: inventory가 파서에 실제 spine 파트 대신 숫자 파일명을 전달하기.
+    // mismatch/EOF 두 오류 팔 모두 같은 실제 경로를 사용해야 한다.
+    #[test]
+    fn reversed_spine_inventory_error_names_the_actual_part() {
+        use std::io::{Cursor, Write};
+        for broken in ["<sec><t>x</T></sec>", "<sec><t/>"] {
+            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for (path, xml) in [
+                ("mimetype", "application/hwp+zip"),
+                ("Contents/section0.xml", "<sec/>"),
+                ("Contents/section1.xml", broken),
+                (
+                    "Contents/content.hpf",
+                    r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="a" href="Contents/section0.xml" media-type="application/xml"/><opf:item id="b" href="Contents/section1.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="b"/><opf:itemref idref="a"/></opf:spine></opf:package>"#,
+                ),
+            ] {
+                zip.start_file(path, zip::write::SimpleFileOptions::default()).unwrap();
+                zip.write_all(xml.as_bytes()).unwrap();
+            }
+            let bytes = zip.finish().unwrap().into_inner();
+            let mut reader = PackageReader::new(&bytes).unwrap();
+            assert_eq!(reader.section_paths()[0], "Contents/section1.xml");
+            let error = collect_section_path_inventory(&mut reader).unwrap_err();
+            assert!(
+                matches!(error, HwpxError::XmlParse { ref file, .. } if file == "Contents/section1.xml"),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]
     fn scan_accepts_well_formed_xml() {
         let xml = "<hs:sec><hp:tbl/><hp:t>x</hp:t></hs:sec>";
-        let found = scan_section_xml(0, xml).unwrap();
+        let found = scan_section_xml(0, "Contents/section0.xml", xml).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].kind, "tbl");
         assert_eq!(found[1].text.as_deref(), Some("x"));

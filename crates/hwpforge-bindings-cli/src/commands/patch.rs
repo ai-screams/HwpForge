@@ -32,7 +32,8 @@ pub fn run(
         Ok(o) => o,
         Err(e) => compat::exit_ops_error(Command::Patch, e, json_mode),
     };
-    // Decoder warnings for the base package (`PatchOutput::warnings`) were
+    // Warnings (`PatchOutput::warnings`: the base decode, then the edited
+    // slots cleaned of forbidden characters) were
     // not surfaced pre-W5. W5 follow-up: additive — a new, omit-if-empty
     // `warnings` key in `--json`, and one `[patch]`-prefixed stderr line
     // each in text mode.

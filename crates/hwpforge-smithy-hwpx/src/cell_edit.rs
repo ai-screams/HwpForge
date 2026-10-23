@@ -41,8 +41,10 @@ use hwpforge_core::table::{Table, TableCell};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
-use crate::encoder::HwpxEncoder;
-use crate::stamp::{admission_compare, check_zip_carry, encode_hwpx, StamperError};
+use crate::encoder::{EncodeWarning, HwpxEncoder};
+use crate::stamp::{
+    admission_compare, check_zip_carry, encode_hwpx, reject_input_content_loss, StamperError,
+};
 use crate::table_inventory::{for_each_table_mut, tables_in_document, PathSeg};
 
 /// How a [`CellSpec`] addresses a cell inside its table.
@@ -100,7 +102,7 @@ pub struct SetCellResult {
 
 /// Result of an all-or-nothing [`apply_set_cells`] batch.
 ///
-/// 현재 인코드 [`EncodeWarning`](crate::EncodeWarning) 은 이 결과에 실리지
+/// 현재 인코드 [`EncodeWarning`] 은 이 결과에 실리지
 /// 않는다 — 경고 채널 신설은 public 필드 추가(semver) 라 별도 승인 대기
 /// (각주 에픽 계획 문서 §7h).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -145,7 +147,7 @@ pub enum CellEditError {
         /// How many cells matched.
         count: usize,
     },
-    /// The target cell contains non-text content (table/image/control).
+    /// The target cell contains non-text content or lies within a protected field.
     NonTextContent {
         /// Table ordinal.
         table: usize,
@@ -280,6 +282,7 @@ pub fn apply_set_cells(
 ) -> Result<SetCellOutcome, CellEditError> {
     // ── preflight: resolve every spec before touching anything ──────
     let entries = tables_in_document(document);
+    let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections());
     let mut grids: HashMap<usize, TableGrid> = HashMap::new();
     let mut resolved: Vec<ResolvedEdit> = Vec::with_capacity(specs.len());
 
@@ -339,7 +342,7 @@ pub fn apply_set_cells(
         };
 
         let target_cell = &entry.table.rows[cell.row_idx].cells[cell.cell_idx];
-        if !cell_is_text_only(target_cell) {
+        if crate::stamp::table_in_field(entry, &fields) || !cell_is_text_only(target_cell) {
             return Err(CellEditError::NonTextContent { table: spec.table, anchor: cell.anchor });
         }
 
@@ -403,8 +406,15 @@ pub fn apply_set_cells(
             for edit in edits {
                 let cell = &mut table.rows[edit.row_idx].cells[edit.cell_idx];
                 let (para_shape, char_shape) = inherit_style(cell);
-                cell.paragraphs =
-                    vec![Paragraph::with_runs(vec![Run::text(&edit.text, char_shape)], para_shape)];
+                // §19.22 D5: the end mark keeps its char shape, as when the
+                // text is retyped in Hancom (the first paragraph's).
+                // 이것을 실패시키는 것: 물려받지 않기
+                // (`set_cell_keeps_the_end_char_shape`).
+                let end_char_shape = cell.paragraphs.first().and_then(|p| p.end_char_shape);
+                let mut paragraph =
+                    Paragraph::with_runs(vec![Run::text(&edit.text, char_shape)], para_shape);
+                paragraph.end_char_shape = end_char_shape;
+                cell.paragraphs = vec![paragraph];
             }
         }
     });
@@ -580,13 +590,21 @@ impl HwpxCellEditor {
     ///
     /// The warnings come from the encode that produced the bytes, and they
     /// are reported **before** the layout-cache carry step runs. A
-    /// [`EncodeWarning::LayoutCacheDropped`](crate::EncodeWarning::LayoutCacheDropped)
+    /// [`EncodeWarning::LayoutCacheDropped`]
     /// therefore means "this encode did not emit that cache", not "the
     /// output lacks it": the layout-carry step may put an untouched
     /// paragraph's original cache back afterwards. Reporting the
     /// encode verbatim is deliberate — filtering would require proving which
     /// paths the carry restored, and a dropped-then-restored cache is still
     /// worth telling the caller about.
+    ///
+    /// Ahead of the encoder's warnings come the ones for the texts
+    /// themselves: each text has the characters XML 1.0 cannot represent
+    /// removed before the edit (the C0 controls other than TAB, LF, CR and
+    /// U+001F, plus U+FFFE/U+FFFF — including inside a text that also holds
+    /// a tab), and each text that lost any adds one
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`] located at
+    /// `table T cell (ROW, COL)`, the anchor the edit landed on.
     ///
     /// # Errors
     ///
@@ -603,9 +621,52 @@ impl HwpxCellEditor {
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1).map_err(map_admission_error)?;
         check_zip_carry(base, &e0).map_err(map_admission_error)?;
+        // After the older checks, so an input they already refused keeps
+        // their error code.
+        reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
 
-        let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
-        let outcome = apply_set_cells(&mut document, specs)?;
+        for spec in specs {
+            d0.require_source_table(spec.table).map_err(|e| CellEditError::Codec(e.to_string()))?;
+        }
+        let HwpxDocument {
+            source_maps: _,
+            source_basis: _,
+            mut document,
+            style_store,
+            image_store,
+            warnings: decode_warnings,
+        } = d0;
+        // Each text is cleaned once, before the edit, so the cell holds the
+        // cleaned text and the encoder's part scan finds nothing left of it to
+        // report. The warning names the anchor the edit resolved to, which is
+        // known only after the edit.
+        let table_sections: Vec<usize> =
+            tables_in_document(&document).iter().map(|e| e.section).collect();
+        let (specs, removed): (Vec<CellSpec>, Vec<usize>) = specs
+            .iter()
+            .map(|spec| {
+                let (text, count) = crate::wire_xml::clean_edit_text(&spec.text);
+                (CellSpec { text, ..spec.clone() }, count)
+            })
+            .unzip();
+        let outcome = apply_set_cells(&mut document, &specs)?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
+        for (cell, count) in outcome.cells.iter().zip(removed) {
+            if count > 0 {
+                encode_warnings.push(EncodeWarning::XmlForbiddenCharsRemoved {
+                    part: package
+                        .section_path(table_sections[cell.table])
+                        .map_err(|e| CellEditError::Codec(e.to_string()))?,
+                    location: format!(
+                        "table {} cell ({}, {})",
+                        cell.table, cell.anchor.row, cell.anchor.col
+                    ),
+                    count,
+                });
+            }
+        }
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
         let encode_outcome = HwpxEncoder::encode_with_diagnostics(
@@ -627,14 +688,18 @@ impl HwpxCellEditor {
         // the two editors cannot drift apart.
         let (bytes, others) = crate::encoder::split_successful_encode(encode_outcome)
             .map_err(|(warnings, others)| CellEditError::SemanticLoss { warnings, others })?;
+        encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
-        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
+        let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
+            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        encode_warnings.extend(dropped);
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },
             decode_warnings,
-            others,
+            encode_warnings,
         ))
     }
 }
@@ -729,6 +794,24 @@ mod tests {
         let para = &table.rows[0].cells[1].paragraphs[0];
         assert_eq!(para.para_shape_id, ParaShapeIndex::new(2));
         assert_eq!(para.runs[0].char_shape_id, CharShapeIndex::new(3));
+    }
+
+    /// §19.22 D5: set-cell keeps the cell's end-mark char shape.
+    ///
+    /// 이것을 실패시키는 것: 새 문단을 `None` 으로 만들기.
+    #[test]
+    fn set_cell_keeps_the_end_char_shape() {
+        let mut form = label_form();
+        form.rows[0].cells[1].paragraphs[0].end_char_shape = Some(CharShapeIndex::new(7));
+        let mut doc = doc_with(vec![form]);
+        apply_set_cells(&mut doc, &[spec(0, CellTarget::At(GridCoord::new(0, 1)), "홍길동")])
+            .unwrap();
+        let table =
+            doc.sections()[0].paragraphs[0].runs.iter().find_map(|r| r.content.as_table()).unwrap();
+        assert_eq!(
+            table.rows[0].cells[1].paragraphs[0].end_char_shape,
+            Some(CharShapeIndex::new(7))
+        );
     }
 
     #[test]

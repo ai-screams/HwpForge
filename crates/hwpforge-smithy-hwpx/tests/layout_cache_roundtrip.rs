@@ -17,16 +17,18 @@ use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{style_store_for_preset, EncodeOptions, HwpxDecoder, HwpxEncoder};
 
 fn seg(textpos: u32, vertpos: i32) -> LineSeg {
-    LineSeg {
-        textpos,
-        vertpos,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0x0060_0000,
+    {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = textpos;
+        lineseg.vertpos = vertpos;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0x0060_0000;
+        lineseg
     }
 }
 
@@ -68,10 +70,9 @@ fn section_xml(bytes: &[u8]) -> String {
 
 #[test]
 fn default_encode_omits_linesegarray() {
-    // 주의: 같은 문서라도 인코딩마다 generate_instid() 산출 id 가 달라
-    // 두 encode 호출의 바이트 동일성은 성립하지 않는다. 옵션 플럼빙의
-    // 기본 경로 중립성은 기존 바이트 고정점 게이트(994 테스트)가 잠근다.
-    // 여기서는 "기본 = 캐시 미방출" 불변식만 두 진입점 모두에서 잠근다.
+    // W0 부터 개체 id 는 인코드마다 새 할당기에서 나오므로 두 진입점의
+    // 기본 경로가 바이트까지 같다. 캐시 미방출 불변식과 함께 그것도 잠근다.
+    // 이것을 실패시키는 것: 기본 옵션이 출력을 바꾸기 · 전역 id 카운터 복귀.
     let store = style_store_for_preset("default").expect("preset");
     let validated = build_doc().validate().expect("validate");
     let images = ImageStore::new();
@@ -86,6 +87,7 @@ fn default_encode_omits_linesegarray() {
         !section_xml(&with_default).contains("linesegarray"),
         "EncodeOptions::default() 도 캐시를 방출하지 않는다"
     );
+    assert_eq!(plain, with_default);
 }
 
 #[test]

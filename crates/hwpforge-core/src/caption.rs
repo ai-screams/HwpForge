@@ -7,8 +7,11 @@
 //! # Design
 //!
 //! Caption is a Core-level structural type. It holds position, gap, optional
-//! width, and paragraph content. HWPX-specific attributes (`fullSz`, `lastWidth`)
-//! belong in the Schema layer, not here.
+//! width, whether it spans the object's outer margins (`full_size`, HWPX
+//! `fullSz`), the box width Hancom saved when it differs from the object's
+//! (`last_width`, HWPX `lastWidth`), and paragraph content. Both HWP 5.0 and
+//! HWPX carry the last two, and the PDF renderer places the caption box with
+//! them.
 //!
 //! # Examples
 //!
@@ -17,13 +20,10 @@
 //! use hwpforge_core::paragraph::Paragraph;
 //! use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
 //!
-//! let caption = Caption {
-//!     side: CaptionSide::Bottom,
-//!     width: None,
-//!     gap: HwpUnit::new(850).unwrap(),
-//!     paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
-//! };
+//! let caption = Caption::new(vec![Paragraph::new(ParaShapeIndex::new(0))], CaptionSide::Bottom)
+//!     .with_gap(HwpUnit::new(850).unwrap());
 //! assert_eq!(caption.side, CaptionSide::Bottom);
+//! assert!(!caption.full_size && caption.last_width.is_none());
 //! ```
 
 use hwpforge_foundation::HwpUnit;
@@ -58,6 +58,7 @@ pub const DEFAULT_CAPTION_GAP: i32 = 850;
 /// assert!(cap.paragraphs.is_empty());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct Caption {
     /// Position of the caption relative to the object.
     pub side: CaptionSide,
@@ -67,6 +68,16 @@ pub struct Caption {
     pub gap: HwpUnit,
     /// Caption content paragraphs.
     pub paragraphs: Vec<Paragraph>,
+    /// Whether the caption box spans the object's outer margins too
+    /// (HWPX `fullSz`, HWP 5.0 caption property bit 2). Left out of JSON
+    /// when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full_size: bool,
+    /// The caption box width the file saved (HWPX `lastWidth`), kept only
+    /// when it differs from the object's width; `None` means the object's
+    /// width, which encoders write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_width: Option<HwpUnit>,
 }
 
 impl Default for Caption {
@@ -76,6 +87,8 @@ impl Default for Caption {
             width: None,
             gap: HwpUnit::new(DEFAULT_CAPTION_GAP).unwrap(),
             paragraphs: Vec::new(),
+            full_size: false,
+            last_width: None,
         }
     }
 }
@@ -122,7 +135,38 @@ impl Caption {
             width: None,
             gap: HwpUnit::new(DEFAULT_CAPTION_GAP).expect("DEFAULT_CAPTION_GAP is valid"),
             paragraphs,
+            full_size: false,
+            last_width: None,
         }
+    }
+
+    /// Sets an explicit caption width.
+    #[must_use]
+    pub fn with_width(mut self, width: HwpUnit) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// Sets the gap between the caption and the object.
+    #[must_use]
+    pub fn with_gap(mut self, gap: HwpUnit) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    /// Sets whether the caption spans the object's outer margins
+    /// (see [`Caption::full_size`]).
+    #[must_use]
+    pub fn with_full_size(mut self, full_size: bool) -> Self {
+        self.full_size = full_size;
+        self
+    }
+
+    /// Sets the saved caption box width (see [`Caption::last_width`]).
+    #[must_use]
+    pub fn with_last_width(mut self, last_width: Option<HwpUnit>) -> Self {
+        self.last_width = last_width;
+        self
     }
 }
 
@@ -233,6 +277,8 @@ mod tests {
             width: Some(HwpUnit::from_mm(80.0).unwrap()),
             gap: HwpUnit::new(1000).unwrap(),
             paragraphs: vec![simple_paragraph()],
+            full_size: false,
+            last_width: None,
         };
         let json = serde_json::to_string(&cap).unwrap();
         let back: Caption = serde_json::from_str(&json).unwrap();
@@ -263,6 +309,8 @@ mod tests {
             width: None,
             gap: HwpUnit::new(850).unwrap(),
             paragraphs: vec![simple_paragraph(), simple_paragraph()],
+            full_size: false,
+            last_width: None,
         };
         assert_eq!(cap.paragraphs.len(), 2);
     }
@@ -285,6 +333,8 @@ mod tests {
             width: Some(HwpUnit::from_mm(50.0).unwrap()),
             gap: HwpUnit::new(500).unwrap(),
             paragraphs: vec![simple_paragraph()],
+            full_size: false,
+            last_width: None,
         };
         let mut cloned = cap.clone();
         cloned.side = CaptionSide::Right;
@@ -322,6 +372,27 @@ mod tests {
     fn caption_custom_gap() {
         let cap = Caption { gap: HwpUnit::from_mm(5.0).unwrap(), ..Caption::default() };
         assert!(cap.gap.as_i32() > 850);
+    }
+
+    /// D: `full_size` and `last_width` are left out of JSON at their
+    /// defaults, read as defaults when missing (JSON written before them),
+    /// and kept otherwise.
+    /// 이것을 실패시키는 것: `serde(default)` 삭제 · 생략 조건 삭제 · 값 버리기.
+    #[test]
+    fn caption_full_size_and_last_width_json() {
+        let cap = Caption::default();
+        let json = serde_json::to_value(&cap).unwrap();
+        assert!(json.get("full_size").is_none() && json.get("last_width").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<Caption>(json).unwrap(), cap);
+        let set = Caption::default()
+            .with_full_size(true)
+            .with_last_width(Some(HwpUnit::new(48190).unwrap()));
+        let json = serde_json::to_value(&set).unwrap();
+        assert_eq!(
+            (json["full_size"].clone(), json["last_width"].clone()),
+            (true.into(), 48190.into())
+        );
+        assert_eq!(serde_json::from_value::<Caption>(json).unwrap(), set);
     }
 
     #[test]

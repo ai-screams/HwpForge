@@ -106,39 +106,16 @@ fn non_hwpx_input_is_a_decode_failure() {
     assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
 }
 
-/// The export still succeeds when preservation metadata cannot be built, but
-/// it must say so: without that metadata the section can only be rebuilt, not
-/// patched back, and a caller who edits it and calls `patch` would be told
-/// nothing until the patch failed.
+/// 이것을 실패시키는 것: 원본을 재순회하여 그림·차트 사이의 Core 슬롯 인덱스 추론.
 #[test]
-fn a_section_without_preservation_metadata_warns_instead_of_failing() {
+fn mixed_image_chart_sections_have_decoder_preservation() {
     let bytes = repo_fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
-
-    let out = export_section(&bytes, &ExportSectionOptions::default()).expect("export still works");
-
-    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
-    assert_eq!(codes, ["PRESERVATION_METADATA_UNAVAILABLE"], "{codes:?}");
-    assert!(out.section.get("section").is_some(), "the section itself is still exported");
-}
-
-/// The warning reaches the wire payload, not just the Rust output.
-#[test]
-fn the_preservation_warning_reaches_the_meta() {
-    let bytes = repo_fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
-    let out = export_section(&bytes, &ExportSectionOptions::default()).expect("export");
-
-    let value = serde_json::to_value(out.meta()).expect("serialise meta");
-
+    let out = export_section(&bytes, &ExportSectionOptions::default()).unwrap();
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(out.section.get("preservation").is_some());
+    let value = serde_json::to_value(out.meta()).unwrap();
     assert_eq!(keys(&value), ["section", "warnings"].map(String::from).into_iter().collect());
-    assert_eq!(
-        value["warnings"][0]["code"],
-        serde_json::json!("PRESERVATION_METADATA_UNAVAILABLE")
-    );
-    assert!(
-        value["warnings"][0]["message"].as_str().is_some_and(|m| !m.is_empty()),
-        "a frontend prints this: {}",
-        value["warnings"][0]
-    );
+    assert_eq!(value["warnings"], serde_json::json!([]));
 }
 
 /// `export_section` reports decode warnings, exactly as `to_json` does.

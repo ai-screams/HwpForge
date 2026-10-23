@@ -43,7 +43,8 @@ fn para(text: &str, cs: CharShapeIndex) -> Paragraph {
 }
 
 fn main() {
-    let mut store = HwpxStyleStore::new();
+    // 이것을 실패시키는 것: 원본 언어별 글꼴 정의 제거(실제 example 실행).
+    let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
     store.push_char_shape(HwpxCharShape::default()); // index 0: plain (headings)
     store.push_para_shape(HwpxParaShape::default());
 

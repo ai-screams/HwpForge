@@ -146,6 +146,7 @@ impl HwpxPatcher {
             };
 
         let exported = ExportedSection {
+            format_version: 2,
             section_index: section_idx,
             section,
             styles: include_styles.then_some(hwpx_doc.style_store),
@@ -171,12 +172,10 @@ impl HwpxPatcher {
     /// Apply a section export back, keeping the decoder's warnings.
     ///
     /// Same outcome as [`HwpxPatcher::patch_exported_section`], which is a
-    /// thin wrapper over this function.
-    ///
-    /// A preserving patch re-writes one section's XML and leaves every other
-    /// ZIP entry alone, so there is no encode and therefore no encoder
-    /// warning. It does decode the base to validate the replacement against
-    /// it, and those decoder warnings are what this twin carries.
+    /// thin wrapper over this function. This one is in turn a thin wrapper
+    /// over [`HwpxPatcher::patch_exported_section_with_codec_diagnostics`]
+    /// that drops the encode channel — the warnings for characters removed
+    /// from the edited text slots. Use that twin to see them.
     ///
     /// # Errors
     ///
@@ -186,6 +185,50 @@ impl HwpxPatcher {
         section_idx: usize,
         exported: &ExportedSection,
     ) -> Result<crate::diagnostics::WithDecodeWarnings<SectionPatchOutcome>, SectionWorkflowError>
+    {
+        Self::patch_exported_section_with_codec_diagnostics(base_bytes, section_idx, exported).map(
+            |diagnosed| {
+                crate::diagnostics::WithDecodeWarnings::new(
+                    diagnosed.value,
+                    diagnosed.decode_warnings,
+                )
+            },
+        )
+    }
+
+    /// Apply a section export back, keeping both warning channels.
+    ///
+    /// Same outcome as [`HwpxPatcher::patch_exported_section`]. A preserving
+    /// patch re-writes one section's XML and leaves every other ZIP entry
+    /// alone. The decode warnings come from decoding the base to validate
+    /// the replacement against it; the encode warnings are the ones
+    /// [`HwpxPatcher::patch_section_preserving_with_codec_diagnostics`]
+    /// reports for edited text that held characters XML 1.0 cannot carry.
+    ///
+    /// # Errors
+    ///
+    /// See [`SectionWorkflowError`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use hwpforge_smithy_hwpx::HwpxPatcher;
+    ///
+    /// let base = std::fs::read("form.hwpx")?;
+    /// let exported = HwpxPatcher::export_section_for_edit(&base, 0, false)?.exported;
+    /// // `exported.section` would normally carry the caller's text edits here.
+    /// let diagnosed =
+    ///     HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &exported)?;
+    /// for warning in &diagnosed.encode_warnings {
+    ///     eprintln!("{warning}");
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn patch_exported_section_with_codec_diagnostics(
+        base_bytes: &[u8],
+        section_idx: usize,
+        exported: &ExportedSection,
+    ) -> Result<crate::diagnostics::WithCodecWarnings<SectionPatchOutcome>, SectionWorkflowError>
     {
         let section_count = PackageReader::new(base_bytes)
             .map_err(|error| SectionWorkflowError::Decode { detail: error.to_string() })?
@@ -205,7 +248,7 @@ impl HwpxPatcher {
             });
         }
 
-        let patched = HwpxPatcher::patch_section_preserving_with_diagnostics(
+        let patched = HwpxPatcher::patch_section_preserving_with_codec_diagnostics(
             base_bytes,
             section_idx,
             &exported.section,
@@ -213,13 +256,14 @@ impl HwpxPatcher {
             exported.preservation.as_ref(),
         )?;
 
-        Ok(crate::diagnostics::WithDecodeWarnings::new(
+        Ok(crate::diagnostics::WithCodecWarnings::new(
             SectionPatchOutcome {
                 bytes: patched.value,
                 patched_section: section_idx,
                 sections: section_count,
             },
-            patched.warnings,
+            patched.decode_warnings,
+            patched.encode_warnings,
         ))
     }
 }

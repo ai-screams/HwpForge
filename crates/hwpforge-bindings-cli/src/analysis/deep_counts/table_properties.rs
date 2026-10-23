@@ -148,7 +148,7 @@ impl DeepTablePropertiesSummary {
         if table.repeat_header {
             self.repeat_header_tables += 1;
         }
-        self.header_rows += table.rows.iter().filter(|row| row.is_header).count();
+        self.header_rows += table.header_row_count();
         if table.cell_spacing.is_some_and(|cell_spacing| cell_spacing.as_i32() != 0) {
             self.nonzero_cell_spacing_tables += 1;
         }
@@ -206,7 +206,7 @@ impl DeepTablePropertiesSummary {
             row: row_index,
             col_span: cell.col_span,
             row_span: cell.row_span,
-            is_header: row_is_header,
+            is_header: cell.effective_header(row_is_header),
             border_fill_id: cell.border_fill_id,
             height_hwp: raw_height,
             width_hwp: (raw_width > 0).then_some(raw_width),
@@ -259,10 +259,20 @@ pub(crate) fn summarize_hwp5_table_properties(
     let mut next_table_ordinal: usize = 0;
 
     for (section_index, section) in document.sections.iter().enumerate() {
-        for table_payload in section.controls.iter().filter_map(|control| match &control.payload {
-            Hwp5SemanticControlPayload::Table(payload) => Some(payload),
-            _ => None,
-        }) {
+        for table_payload in section
+            .controls
+            .iter()
+            .filter(|control| {
+                !matches!(
+                    control.container.segments.first(),
+                    Some(hwpforge_smithy_hwp5::Hwp5SemanticContainerKind::MasterPageSubList(_))
+                )
+            })
+            .filter_map(|control| match &control.payload {
+                Hwp5SemanticControlPayload::Table(payload) => Some(payload),
+                _ => None,
+            })
+        {
             match table_payload.page_break {
                 Hwp5SemanticTablePageBreak::None => {
                     summary.increment_page_break(TablePageBreak::None)
@@ -575,6 +585,27 @@ mod tests {
 
     fn spanned_cell(col_span: u16, row_span: u16) -> TableCell {
         TableCell::with_span(vec![], HwpUnit::new(3000).unwrap(), col_span, row_span)
+    }
+
+    /// 이것을 실패시키는 것: 칸 증거를 행 값으로 덮기 · 행 캐시로 집계.
+    #[test]
+    fn cell_header_audit_uses_effective_values_and_shared_count() {
+        for (flag, markers, expected, count) in [
+            (true, vec![None, Some(false), Some(true)], vec![true, false, true], 0),
+            (false, vec![Some(true), Some(true)], vec![true, true], 1),
+        ] {
+            let table = Table::new(vec![TableRow::new(
+                markers.into_iter().map(|m| spanned_cell(1, 1).with_header(m)).collect(),
+            )
+            .with_header(flag)]);
+            let mut summary = DeepTablePropertiesSummary::default();
+            summary.observe_table(0, 0, &table, &mut 1);
+            assert_eq!(summary.header_rows, count);
+            assert_eq!(
+                summary.cell_evidence.iter().map(|c| c.is_header).collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

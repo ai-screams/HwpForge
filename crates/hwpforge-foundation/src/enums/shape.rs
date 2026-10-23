@@ -285,7 +285,9 @@ impl schemars::JsonSchema for ArrowType {
 
 /// Arrowhead size for line endpoints.
 ///
-/// Encoded as `{HEAD}_{TAIL}` string in HWPX (e.g. `"MEDIUM_MEDIUM"`).
+/// HWPX stores two size components (e.g. `"SMALL_LARGE"`), not head/tail.
+/// Serde uses Rust variant names. Numeric values 0–2 remain stable;
+/// these discriminants are **not** HWP5 wire size codes.
 ///
 /// # Examples
 ///
@@ -305,6 +307,18 @@ pub enum ArrowSize {
     Medium = 1,
     /// Large arrowhead.
     Large = 2,
+    /// HWPX `SMALL_MEDIUM` arrowhead.
+    SmallMedium = 3,
+    /// HWPX `SMALL_LARGE` arrowhead.
+    SmallLarge = 4,
+    /// HWPX `MEDIUM_SMALL` arrowhead.
+    MediumSmall = 5,
+    /// HWPX `MEDIUM_LARGE` arrowhead.
+    MediumLarge = 6,
+    /// HWPX `LARGE_SMALL` arrowhead.
+    LargeSmall = 7,
+    /// HWPX `LARGE_MEDIUM` arrowhead.
+    LargeMedium = 8,
 }
 
 impl fmt::Display for ArrowSize {
@@ -313,6 +327,12 @@ impl fmt::Display for ArrowSize {
             Self::Small => f.write_str("SMALL_SMALL"),
             Self::Medium => f.write_str("MEDIUM_MEDIUM"),
             Self::Large => f.write_str("LARGE_LARGE"),
+            Self::SmallMedium => f.write_str("SMALL_MEDIUM"),
+            Self::SmallLarge => f.write_str("SMALL_LARGE"),
+            Self::MediumSmall => f.write_str("MEDIUM_SMALL"),
+            Self::MediumLarge => f.write_str("MEDIUM_LARGE"),
+            Self::LargeSmall => f.write_str("LARGE_SMALL"),
+            Self::LargeMedium => f.write_str("LARGE_MEDIUM"),
         }
     }
 }
@@ -325,10 +345,16 @@ impl std::str::FromStr for ArrowSize {
             "SMALL_SMALL" | "Small" | "small" => Ok(Self::Small),
             "MEDIUM_MEDIUM" | "Medium" | "medium" => Ok(Self::Medium),
             "LARGE_LARGE" | "Large" | "large" => Ok(Self::Large),
+            "SMALL_MEDIUM" | "SmallMedium" => Ok(Self::SmallMedium),
+            "SMALL_LARGE" | "SmallLarge" => Ok(Self::SmallLarge),
+            "MEDIUM_SMALL" | "MediumSmall" => Ok(Self::MediumSmall),
+            "MEDIUM_LARGE" | "MediumLarge" => Ok(Self::MediumLarge),
+            "LARGE_SMALL" | "LargeSmall" => Ok(Self::LargeSmall),
+            "LARGE_MEDIUM" | "LargeMedium" => Ok(Self::LargeMedium),
             _ => Err(FoundationError::ParseError {
                 type_name: "ArrowSize".to_string(),
                 value: s.to_string(),
-                valid_values: "SMALL_SMALL, MEDIUM_MEDIUM, LARGE_LARGE".to_string(),
+                valid_values: "SMALL_SMALL, SMALL_MEDIUM, SMALL_LARGE, MEDIUM_SMALL, MEDIUM_MEDIUM, MEDIUM_LARGE, LARGE_SMALL, LARGE_MEDIUM, LARGE_LARGE".to_string(),
             }),
         }
     }
@@ -342,10 +368,17 @@ impl TryFrom<u8> for ArrowSize {
             0 => Ok(Self::Small),
             1 => Ok(Self::Medium),
             2 => Ok(Self::Large),
+            3 => Ok(Self::SmallMedium),
+            4 => Ok(Self::SmallLarge),
+            5 => Ok(Self::MediumSmall),
+            6 => Ok(Self::MediumLarge),
+            7 => Ok(Self::LargeSmall),
+            8 => Ok(Self::LargeMedium),
+
             _ => Err(FoundationError::ParseError {
                 type_name: "ArrowSize".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (Small), 1 (Medium), 2 (Large)".to_string(),
+                valid_values: "0 (Small), 1 (Medium), 2 (Large), 3 (SmallMedium), 4 (SmallLarge), 5 (MediumSmall), 6 (MediumLarge), 7 (LargeSmall), 8 (LargeMedium)".to_string(),
             }),
         }
     }
@@ -580,5 +613,42 @@ mod vertical_align_tests {
     #[test]
     fn is_one_byte() {
         assert_eq!(std::mem::size_of::<VerticalAlign>(), 1);
+    }
+}
+
+#[cfg(test)]
+mod arrow_size_tests {
+    use super::ArrowSize;
+    /// 이것을 실패시키는 것: 기존 번호 변경, wire/serde 대응 누락, 문자열 스키마를 열거형으로 제한하기.
+    #[test]
+    fn nine_arrow_sizes_keep_discriminants_and_exchange_names() {
+        let values = [
+            (ArrowSize::Small, "SMALL_SMALL", "Small"),
+            (ArrowSize::Medium, "MEDIUM_MEDIUM", "Medium"),
+            (ArrowSize::Large, "LARGE_LARGE", "Large"),
+            (ArrowSize::SmallMedium, "SMALL_MEDIUM", "SmallMedium"),
+            (ArrowSize::SmallLarge, "SMALL_LARGE", "SmallLarge"),
+            (ArrowSize::MediumSmall, "MEDIUM_SMALL", "MediumSmall"),
+            (ArrowSize::MediumLarge, "MEDIUM_LARGE", "MediumLarge"),
+            (ArrowSize::LargeSmall, "LARGE_SMALL", "LargeSmall"),
+            (ArrowSize::LargeMedium, "LARGE_MEDIUM", "LargeMedium"),
+        ];
+        let schema = serde_json::to_value(schemars::schema_for!(ArrowSize)).unwrap();
+        assert_eq!(schema["type"], "string");
+        assert!(schema.get("oneOf").is_none());
+        assert!(schema.get("enum").is_none());
+        for (i, (value, wire, json)) in values.into_iter().enumerate() {
+            assert_eq!(value as u8, i as u8);
+            assert_eq!(ArrowSize::try_from(i as u8).unwrap(), value);
+            assert_eq!(value.to_string(), wire);
+            assert_eq!(wire.parse::<ArrowSize>().unwrap(), value);
+            assert_eq!(serde_json::to_value(value).unwrap(), json);
+            assert_eq!(
+                serde_json::from_value::<ArrowSize>(serde_json::json!(json)).unwrap(),
+                value
+            );
+        }
+        assert!(ArrowSize::try_from(9).is_err());
+        assert!("FUTURE_SIZE".parse::<ArrowSize>().is_err());
     }
 }

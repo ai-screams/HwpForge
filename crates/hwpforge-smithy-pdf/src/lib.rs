@@ -131,6 +131,15 @@ pub struct PdfOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PdfWarning {
+    /// An object transform that the frozen PDF painter does not apply.
+    ObjectTransformIgnored {
+        /// Document location.
+        location: String,
+        /// Object kind.
+        kind: &'static str,
+        /// Ignored rotation, reflection and margin values.
+        detail: String,
+    },
     /// 캐시 결손 문단을 건너뜀 ([`PartialCachePolicy::WarnAndSkip`]).
     ParagraphSkipped {
         /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).
@@ -229,6 +238,17 @@ pub enum PdfWarning {
     AnchorMarkerOnLineBoundary {
         /// 문서 내 위치.
         location: String,
+    },
+    /// D: 표 캡션의 저장 상자 폭(`lastWidth`)이 배치 식(`fullSz` 0 = 표 폭,
+    /// 1 = 표 폭 + 바깥 여백 좌우)과 다름 — 줄 안 배치는 캡션 줄 캐시가
+    /// 정하므로 그리기는 계속하고 불일치만 알린다.
+    TableCaptionWidthMismatch {
+        /// 표 host 문단 위치.
+        location: String,
+        /// 저장된 캡션 상자 폭 (HWPUNIT).
+        saved: i32,
+        /// 배치 식의 폭 (HWPUNIT).
+        expected: i32,
     },
     /// 분할 표의 중간 쪽 경계는 캐시에 신호가 없어 **계산**으로 배치함
     /// (W3 — 캐시 앵커 이중 검산을 통과한 출력에만 딸려 나옴).

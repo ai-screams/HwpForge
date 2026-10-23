@@ -461,6 +461,16 @@ fn convert_warnings_keep_the_cli_codes_and_the_convert_stage() {
             "LAYOUT_CACHE_DROPPED",
             "ledger",
         ),
+        // 이것을 실패시키는 것: `hwp5_warning_parts` 의 `ContentLost` 갈래를 빼는 것 (`OTHER` 로 떨어짐).
+        (
+            ConvertWarning::Hwp5(Hwp5Warning::ContentLost {
+                kind: "pic".into(),
+                reason: "unsupported group child".into(),
+                location: "group[0].child[1]".into(),
+            }),
+            "CONTENT_LOST",
+            "group[0].child[1]: pic lost: unsupported group child",
+        ),
         (
             ConvertWarning::HwpxEncode(EncodeWarning::LayoutCacheDropped {
                 path: path(),
@@ -478,6 +488,17 @@ fn convert_warnings_keep_the_cli_codes_and_the_convert_stage() {
             }),
             "XML_FORBIDDEN_CHARS_REMOVED",
             "Contents/header.xml hh:style@engName: removed 2 XML-forbidden character(s)",
+        ),
+        // 이것을 실패시키는 것: `convert_warning_parts` 의 접근자 갈래를 `OTHER` 로 되돌리는 것.
+        (
+            ConvertWarning::HwpxEncode(EncodeWarning::ContentLost {
+                part: "Contents/section0.xml".into(),
+                path: path(),
+                kind: "shape_emission".into(),
+                reason: "off by 35.08".into(),
+            }),
+            "CONTENT_LOST",
+            "Contents/section0.xml:section[0]: shape_emission lost: off by 35.08",
         ),
     ];
 
@@ -514,6 +535,82 @@ fn decode_warnings_keep_the_attribute_and_the_decode_stage() {
     let info = warning.info();
     assert_eq!(info.code, "UNKNOWN_ENUM_VALUE");
     assert_eq!(info.message, "hp:header@applyPageType: \"WEIRD\" unknown — fell back to BOTH");
+}
+
+/// Every decode warning sample from the decoder: the two variants the CLI has
+/// always printed keep their output (`LayoutCacheDropped` stays `OTHER` with
+/// its Debug text), every newer one reports the decoder's own code, wording
+/// and location.
+///
+/// 이것을 실패시키는 것: `decode_warning_parts` 의 마지막 갈래를
+/// `(OTHER, Debug, None)` 으로 되돌리는 것.
+#[test]
+fn decode_warning_samples_keep_old_output_and_never_fall_back() {
+    use hwpforge_smithy_hwpx::decoder::warning_samples;
+
+    for warning in warning_samples::decode() {
+        let parts = ConvertOpsWarning::Decode(warning.clone()).parts();
+        match &warning {
+            DecodeWarning::UnknownEnumValue { .. } => {
+                assert_eq!(parts.code, "UNKNOWN_ENUM_VALUE");
+                assert_eq!(parts.location.as_deref(), Some("hp:header@applyPageType"));
+            }
+            DecodeWarning::LayoutCacheDropped { .. } => {
+                assert_eq!(parts.code, "OTHER");
+                assert_eq!(parts.message, format!("{warning:?}"));
+                assert_eq!(parts.location, None);
+            }
+            other => {
+                assert_eq!(parts.code, other.code(), "{other:?}");
+                assert_ne!(parts.code, "OTHER", "{other:?}");
+                assert_eq!(parts.message, other.message());
+                assert_eq!(parts.location, other.location());
+            }
+        }
+    }
+}
+
+/// Every encode warning sample from the encoder: the variants the CLI has
+/// always printed keep their output (the three uncoded ones stay `OTHER` with
+/// the Debug text of the convert warning), every newer one reports the
+/// encoder's own code, wording and location.
+///
+/// 이것을 실패시키는 것: `convert_warning_parts` 의 마지막 인코드 갈래를
+/// `(OTHER, Debug, None)` 으로 되돌리는 것, 또는 세 기존 변형의 명시 갈래를
+/// 빼서 접근자 갈래로 보내는 것.
+#[test]
+fn encode_warning_samples_keep_old_output_and_never_fall_back() {
+    use hwpforge_smithy_hwpx::decoder::warning_samples;
+
+    for warning in warning_samples::encode() {
+        let convert = ConvertWarning::HwpxEncode(warning.clone());
+        let parts = ConvertOpsWarning::Convert(convert.clone()).parts();
+        match &warning {
+            EncodeWarning::LayoutCacheDropped { .. } => {
+                assert_eq!(parts.code, "LAYOUT_CACHE_DROPPED");
+                assert_eq!(parts.message, "sample");
+                assert_eq!(parts.location.as_deref(), Some("section[0].para[0]"));
+            }
+            EncodeWarning::NoteHeadSkipped { .. }
+            | EncodeWarning::TitleMarkSkipped { .. }
+            | EncodeWarning::NoteRestartIgnored { .. } => {
+                assert_eq!(parts.code, "OTHER", "{warning:?}");
+                assert_eq!(parts.message, format!("{convert:?}"));
+                assert_eq!(parts.location, None);
+            }
+            EncodeWarning::XmlForbiddenCharsRemoved { .. } => {
+                assert_eq!(parts.code, "XML_FORBIDDEN_CHARS_REMOVED");
+                assert_eq!(parts.message, "removed 1 XML-forbidden character(s)");
+                assert_eq!(parts.location.as_deref(), Some("Contents/section0.xml hp:t"));
+            }
+            other => {
+                assert_eq!(parts.code, other.code(), "{other:?}");
+                assert_ne!(parts.code, "OTHER", "{other:?}");
+                assert_eq!(parts.message, other.message());
+                assert_eq!(parts.location, other.location());
+            }
+        }
+    }
 }
 
 #[test]
@@ -577,6 +674,10 @@ fn every_known_render_warning_has_a_code_and_the_render_stage() {
             "INVALID_IMAGE_GEOMETRY",
         ),
         (PdfWarning::TablePaginationComputed { location: location() }, "TABLE_PAGINATION_COMPUTED"),
+        (
+            PdfWarning::TableCaptionWidthMismatch { location: location(), saved: 1, expected: 2 },
+            "TABLE_CAPTION_WIDTH_MISMATCH",
+        ),
         (PdfWarning::TableDeficitDistributed { location: location() }, "TABLE_DEFICIT_DISTRIBUTED"),
         (
             PdfWarning::UnsupportedTableStyle { location: location(), what: "diagonal" },
@@ -597,7 +698,7 @@ fn every_known_render_warning_has_a_code_and_the_render_stage() {
         (PdfWarning::LineOverflow { location: location(), excess: 120 }, "LINE_OVERFLOW"),
     ];
 
-    assert_eq!(cases.len(), 22, "one case per known PdfWarning variant");
+    assert_eq!(cases.len(), 23, "one case per known PdfWarning variant");
     for (warning, code) in cases {
         let wrapped = ConvertOpsWarning::Render(warning);
         assert_eq!(wrapped.stage(), "render");

@@ -172,6 +172,8 @@ fn category_key(warning: &hwpforge_convert::ConvertWarning) -> String {
                 reason.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect();
             format!("LayoutCacheDropped:{stable}")
         }
+        // P1b: 묶음 내용 손실 — 종류(kind)로 묶는다(사유·위치는 가변).
+        Hwp5Warning::ContentLost { kind, .. } => format!("ContentLost:{kind}"),
         _ => "Other:unknown".to_string(),
     }
 }

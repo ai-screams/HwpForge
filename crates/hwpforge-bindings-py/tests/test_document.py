@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import pickle
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,7 +16,7 @@ import pytest
 from conftest import FONT_UNRESOLVED, all_paragraphs
 
 import hwpforge
-from hwpforge import BytesResult, Document, DocumentResult, HwpForgeError, TextResult
+from hwpforge import BytesResult, Document, DocumentResult, HwpForgeError, TextResult, _hwpforge
 
 if TYPE_CHECKING:
     from hwpforge._hwpforge import StampRequestV2
@@ -106,6 +108,21 @@ def test_editing_leaves_the_receiver_alone(fields_bytes: bytes) -> None:
     assert result.document != document
     assert document.to_bytes() == before, "fill must not touch the document it was called on"
     assert [field["name"] for field in result.report["filled"]] == ["user_email"]
+
+
+def test_a_fill_value_with_a_control_character_comes_back_as_a_warning(
+    fields_bytes: bytes,
+) -> None:
+    # 이것을 실패시키는 것: ops `fill` 이 인코드 경고 채널을 `warnings` 에 합치지 않는 것.
+    result = Document.from_bytes(fields_bytes).fill({"user_email": "a\x01b"})
+
+    assert [field["name"] for field in result.report["filled"]] == ["user_email"]
+    assert [(w["code"], w["message"]) for w in result.report["warnings"]] == [
+        (
+            "XML_FORBIDDEN_CHARS_REMOVED",
+            "removed 1 XML-forbidden character(s) from field 'user_email' in Contents/section0.xml",
+        )
+    ]
 
 
 def test_results_are_frozen(fields_bytes: bytes) -> None:
@@ -207,6 +224,19 @@ def test_convert_hwp5_reads_a_binary_document(hwp5_bytes: bytes) -> None:
 
     assert isinstance(result, DocumentResult)
     assert result.document.inspect()["sections"] >= 1
+
+
+def test_convert_hwp5_carries_the_layout_cache_by_default(hwp5_bytes: bytes) -> None:
+    # 이것을 실패시키는 것: 공개 기본값 또는 PyO3 기본값을 False 로 되돌리는 것.
+    def carries(data: bytes) -> bool:
+        with zipfile.ZipFile(io.BytesIO(data)) as package:
+            return b"<hp:linesegarray>" in package.read("Contents/section0.xml")
+
+    assert carries(hwpforge.convert_hwp5(hwp5_bytes).document.to_bytes())
+    assert carries(_hwpforge.convert_hwp5(hwp5_bytes)[0])
+    assert not carries(
+        hwpforge.convert_hwp5(hwp5_bytes, carry_layout_cache=False).document.to_bytes()
+    )
 
 
 def test_templates_and_schema_need_no_document() -> None:
@@ -521,3 +551,44 @@ def test_document_does_not_widen_a_string_into_a_sequence(
     """
     with pytest.raises(TypeError):
         call(Document.from_bytes(generated_bytes))
+
+
+@pytest.mark.parametrize(("sample", "count"), [("basic", 1), ("multiple", 2)])
+def test_converted_memos_remain_public_controls_and_markdown_comments(
+    sample: str, count: int
+) -> None:
+    from conftest import USER_SAMPLES
+
+    result = hwpforge.convert_hwp5((USER_SAMPLES / f"sample-memo-{sample}.hwp").read_bytes())
+    exported = json.loads(result.document.to_json().text)
+
+    def memos(value):
+        if isinstance(value, dict):
+            found = [value["Memo"]] if "Memo" in value else []
+            return found + [memo for child in value.values() for memo in memos(child)]
+        if isinstance(value, list):
+            return [memo for child in value for memo in memos(child)]
+        return []
+
+    annotations = memos(exported)
+    assert len(annotations) == count
+    assert all(memo["anchor_runs"] and memo["content"] for memo in annotations)
+    for mode in ["styled", "lossy"]:
+        markdown = result.document.to_md(mode=mode).text
+        assert markdown.count("<!-- memo:") == (count if mode == "styled" else 0)
+        if sample == "basic":
+            assert "메모 대상 문장" in markdown
+            if mode == "styled":
+                assert "쇠부리야 여기가 메모야" in markdown
+
+
+def test_w2_legacy_json_tabs_share_code_reason_and_remedy() -> None:
+    source = '{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}'
+    with pytest.raises(HwpForgeError) as caught:
+        hwpforge.from_json(source)
+    error = caught.value
+    assert error.code == "LEGACY_JSON_TABS"
+    assert "원래 단위와 case/default 척도를 복구할 수 없어" in error.message
+    assert "$.styles.tabs[0].stops[0].position" in error.message
+    assert "1건" in error.message
+    assert error.hint == "원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오."

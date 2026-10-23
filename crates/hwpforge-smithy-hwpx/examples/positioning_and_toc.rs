@@ -112,20 +112,21 @@ fn section_positioning() -> Section {
     // Line with absolute offset
     paras.push(p("아래 선은 절대 위치 (horz_offset=5000, vert_offset=2000):"));
     let line_abs: Control = Control::Line {
+        frame: hwpforge_core::ObjectFrame::new(),
         start: ShapePoint::new(0, 0),
         end: ShapePoint::new(14000, 0),
         width: HwpUnit::from_pt(140.0).unwrap(),
         height: HwpUnit::new(100).expect("valid"),
-        placement: Some(ObjectPlacement {
-            treat_as_char: false,
-            allow_overlap: true,
-            text_wrap: ObjectTextWrap::InFrontOfText,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Paper,
-            horz_offset: HwpUnit::new(5000).unwrap(),
-            vert_offset: HwpUnit::new(2000).unwrap(),
-            ..ObjectPlacement::legacy_inline_defaults()
-        }),
+        placement: Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::InFrontOfText,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Paper,
+            )
+            .with_allow_overlap(true)
+            .with_horz_offset(HwpUnit::new(5000).unwrap())
+            .with_vert_offset(HwpUnit::new(2000).unwrap()),
+        ),
         caption: None,
         style: Some(ShapeStyle {
             line_color: Some(Color::from_rgb(0xFF, 0x00, 0x00)),
@@ -152,6 +153,7 @@ fn section_positioning() -> Section {
     // Polygon with absolute offset (diamond)
     paras.push(p("아래 마름모는 절대 위치 (horz_offset=8000, vert_offset=1000):"));
     let diamond: Control = Control::Polygon {
+        frame: hwpforge_core::ObjectFrame::new(),
         vertices: vec![
             ShapePoint::new(5000, 0),
             ShapePoint::new(10000, 5000),
@@ -160,16 +162,16 @@ fn section_positioning() -> Section {
         ],
         width: HwpUnit::new(10000).expect("valid"),
         height: HwpUnit::new(10000).expect("valid"),
-        placement: Some(ObjectPlacement {
-            treat_as_char: false,
-            allow_overlap: true,
-            text_wrap: ObjectTextWrap::InFrontOfText,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Paper,
-            horz_offset: HwpUnit::new(8000).unwrap(),
-            vert_offset: HwpUnit::new(1000).unwrap(),
-            ..ObjectPlacement::legacy_inline_defaults()
-        }),
+        placement: Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::InFrontOfText,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Paper,
+            )
+            .with_allow_overlap(true)
+            .with_horz_offset(HwpUnit::new(8000).unwrap())
+            .with_vert_offset(HwpUnit::new(1000).unwrap()),
+        ),
         paragraphs: vec![],
         caption: None,
         style: Some(ShapeStyle {

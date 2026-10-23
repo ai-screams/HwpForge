@@ -45,6 +45,25 @@ use crate::caption::Caption;
 use crate::object_id::ObjectId;
 use crate::paragraph::Paragraph;
 
+/// Counts the leading nonempty physical rows whose effective cell markers are
+/// all true. Empty rows end the block even when covered by a rowspan; spans do
+/// not promote rows. Importers can adapt their source cells to this same rule.
+/// This count is independent of the table's repeat-header switch.
+///
+/// 이것을 실패시키는 것: 첫 false/빈 행 건너뛰기 · all 대신 any 사용
+/// (`cell_header_effective_values_survive_derivation`).
+pub fn header_row_count(rows: impl IntoIterator<Item = impl IntoIterator<Item = bool>>) -> usize {
+    let mut count = 0;
+    for row in rows {
+        let mut cells = row.into_iter();
+        if cells.next() != Some(true) || !cells.all(|header| header) {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
 /// Page-break policy for a table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +88,40 @@ pub enum TableVerticalAlign {
     Center,
     /// Align cell content to the bottom edge.
     Bottom,
+}
+
+/// How the text of a table cell breaks into lines (`<hp:subList lineWrap>`,
+/// HWP5 cell property bits 3–4).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::table::{CellLineWrap, TableCell};
+/// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+/// use hwpforge_core::paragraph::Paragraph;
+///
+/// let cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::ZERO)
+///     .with_line_wrap(CellLineWrap::Squeeze);
+/// assert_eq!(cell.line_wrap, CellLineWrap::Squeeze);
+/// assert_eq!(CellLineWrap::default(), CellLineWrap::Break);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+#[non_exhaustive]
+pub enum CellLineWrap {
+    /// Lines break at the cell width (Hancom's default).
+    #[default]
+    #[serde(rename = "BREAK")]
+    Break,
+    /// A line that would break is squeezed into the cell width instead.
+    #[serde(rename = "SQUEEZE")]
+    Squeeze,
+    /// The line is kept as it is (Hancom's `KEEP`).
+    #[serde(rename = "KEEP")]
+    Keep,
+}
+
+fn is_break(wrap: &CellLineWrap) -> bool {
+    *wrap == CellLineWrap::Break
 }
 
 /// Explicit margins inside a table cell.
@@ -179,6 +232,79 @@ pub struct Table {
     /// [`TableLayoutCache`]. Encoders must not emit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_cache: Option<TableLayoutCache>,
+    /// Where the table sits and how text wraps it (HWPX `<hp:pos>` plus the
+    /// table's `textWrap`/`textFlow`).
+    ///
+    /// `None` is the placement encoders have always written for a table:
+    /// not treated as a character, flowing with the text, no overlap,
+    /// anchored to the paragraph vertically and the column horizontally,
+    /// zero offsets, aligned top/left, not affecting line spacing, anchor not
+    /// held, top-and-bottom wrap, both-sides flow. (A shape's `None`, by
+    /// contrast, means an inline object.) Decoders write `None` only when
+    /// every one of those matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::placement::ObjectPlacement>,
+    /// The table's size lock (HWPX `<hp:sz protect>`, HWP 5.0 object common
+    /// property bit 20). A table has no original box: its
+    /// [`original_size`](crate::frame::ObjectFrame::original_size) must stay
+    /// `None` (`validate` rejects one).
+    #[serde(default, skip_serializing_if = "crate::frame::ObjectFrame::is_unset")]
+    pub frame: crate::frame::ObjectFrame,
+    /// Whether the cell sizes are fixed (HWPX `<hp:tbl noAdjust>`, HWP 5.0
+    /// table property bit 3): Hancom keeps the cell sizes when the table's
+    /// size changes. `false` is the default and is not written to JSON.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_adjust: bool,
+    /// Cell zones (HWPX `<hp:cellzoneList>`, HWP 5.0 table "valid zone
+    /// info"): rectangles of cells drawn with one border/fill. Empty for most
+    /// tables and left out of JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_zones: Vec<CellZone>,
+}
+
+/// A rectangle of table cells drawn with one border/fill (HWPX
+/// `<hp:cellzone>`): grid rows `start_row..=end_row`, columns
+/// `start_col..=end_col`.
+///
+/// `validate` refuses a zone whose start is past its end or whose end is
+/// outside the table.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::table::CellZone;
+///
+/// let zone = CellZone::new(0, 0, 1, 2, 5);
+/// assert_eq!((zone.end_row, zone.end_col, zone.border_fill_id), (1, 2, 5));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct CellZone {
+    /// First grid row of the zone.
+    pub start_row: u16,
+    /// First grid column of the zone.
+    pub start_col: u16,
+    /// Last grid row of the zone (inclusive).
+    pub end_row: u16,
+    /// Last grid column of the zone (inclusive).
+    pub end_col: u16,
+    /// The border/fill the zone is drawn with (`borderFillIDRef`).
+    pub border_fill_id: u32,
+}
+
+impl CellZone {
+    /// Creates a zone over rows `start_row..=end_row` and columns
+    /// `start_col..=end_col`.
+    #[must_use]
+    pub fn new(
+        start_row: u16,
+        start_col: u16,
+        end_row: u16,
+        end_col: u16,
+        border_fill_id: u32,
+    ) -> Self {
+        Self { start_row, start_col, end_row, end_col, border_fill_id }
+    }
 }
 
 impl Table {
@@ -206,6 +332,10 @@ impl Table {
             out_margin: None,
             in_margin: None,
             layout_cache: None,
+            placement: None,
+            frame: crate::frame::ObjectFrame::new(),
+            no_adjust: false,
+            cell_zones: Vec::new(),
         }
     }
 
@@ -241,6 +371,13 @@ impl Table {
         }
     }
 
+    /// Sets where the table sits (see [`Table::placement`]).
+    #[must_use]
+    pub fn with_placement(mut self, placement: crate::placement::ObjectPlacement) -> Self {
+        self.placement = Some(placement);
+        self
+    }
+
     /// Sets an explicit table width.
     #[must_use]
     pub fn with_width(mut self, width: HwpUnit) -> Self {
@@ -259,6 +396,20 @@ impl Table {
     #[must_use]
     pub fn with_page_break(mut self, page_break: TablePageBreak) -> Self {
         self.page_break = page_break;
+        self
+    }
+
+    /// Sets the cell zones (see [`Table::cell_zones`]).
+    #[must_use]
+    pub fn with_cell_zones(mut self, cell_zones: Vec<CellZone>) -> Self {
+        self.cell_zones = cell_zones;
+        self
+    }
+
+    /// Sets whether the cell sizes are fixed (see [`Table::no_adjust`]).
+    #[must_use]
+    pub fn with_no_adjust(mut self, no_adjust: bool) -> Self {
+        self.no_adjust = no_adjust;
         self
     }
 
@@ -302,6 +453,12 @@ impl Table {
     pub fn with_layout_cache(mut self, layout_cache: TableLayoutCache) -> Self {
         self.layout_cache = Some(layout_cache);
         self
+    }
+
+    /// Returns the leading header-row count derived from effective cell values.
+    /// See [`header_row_count`]; `repeat_header` does not affect this count.
+    pub fn header_row_count(&self) -> usize {
+        TableRow::header_row_count(&self.rows)
     }
 
     /// Returns the number of rows.
@@ -351,6 +508,10 @@ pub struct TableRow {
     /// Optional fixed row height. `None` means auto-height.
     pub height: Option<HwpUnit>,
     /// Whether this row is part of the table's leading header-row block.
+    /// A compatibility fallback for cells with `header: None`, and otherwise a
+    /// derived convenience flag. Importers and `Document::validate()` refresh
+    /// it with [`TableRow::derive_header_rows`], preserving effective cell values.
+    /// Consumers use [`Table::header_row_count`] rather than trusting this flag.
     #[serde(default)]
     pub is_header: bool,
 }
@@ -398,6 +559,35 @@ impl TableRow {
         Self { cells, height: Some(height), is_header: false }
     }
 
+    /// Counts header rows using the shared physical-row rule.
+    pub fn header_row_count(rows: &[Self]) -> usize {
+        header_row_count(
+            rows.iter()
+                .map(|row| row.cells.iter().map(|cell| cell.effective_header(row.is_header))),
+        )
+    }
+
+    /// Refreshes the derived leading header flags without changing any cell's
+    /// effective value. Before changing a row flag, inherited (`None`) markers
+    /// in that row are materialized as `Some(old_flag)`. Unchanged rows retain
+    /// `None`, preserving legacy generation and lossless Markdown inheritance.
+    /// Call after editing cell markers; document validation also does this.
+    ///
+    /// 이것을 실패시키는 것: 구체화 생략 · 새 행 값으로 구체화 · Some 덮기
+    /// (`cell_header_effective_values_survive_derivation`).
+    pub fn derive_header_rows(rows: &mut [Self]) {
+        let count = Self::header_row_count(rows);
+        for (index, row) in rows.iter_mut().enumerate() {
+            let derived = index < count;
+            if row.is_header != derived {
+                for cell in &mut row.cells {
+                    cell.header.get_or_insert(row.is_header);
+                }
+                row.is_header = derived;
+            }
+        }
+    }
+
     /// Marks whether this row belongs to the table's leading header-row block.
     #[must_use]
     pub fn with_header(mut self, is_header: bool) -> Self {
@@ -428,6 +618,10 @@ impl TableRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct TableCell {
+    /// Cell-local title marker. `Some` preserves the source value; `None`
+    /// inherits [`TableRow::is_header`] for legacy JSON and generated cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<bool>,
     /// Rich content within the cell.
     pub paragraphs: Vec<Paragraph>,
     /// Number of columns this cell spans. Must be >= 1.
@@ -450,6 +644,18 @@ pub struct TableCell {
     /// Optional vertical alignment override for the cell content box.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertical_align: Option<TableVerticalAlign>,
+    /// How the cell's text breaks into lines; omitted from JSON when it is
+    /// [`CellLineWrap::Break`].
+    #[serde(default, skip_serializing_if = "is_break")]
+    pub line_wrap: CellLineWrap,
+    /// The cell's own margin values while it uses the table's padding
+    /// (`margin` is `None`, HWPX `hasMargin="0"`): not used for layout, but
+    /// kept, as Hancom keeps them, so turning the cell's own margin back on
+    /// finds them again. `None` = the table's padding, what the encoder
+    /// writes then; ignored when `margin` is `Some`. JSON omits it when
+    /// `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dormant_margin: Option<TableMargin>,
 }
 
 impl TableCell {
@@ -473,6 +679,7 @@ impl TableCell {
     #[must_use]
     pub fn new(paragraphs: Vec<Paragraph>, width: HwpUnit) -> Self {
         Self {
+            header: None,
             paragraphs,
             col_span: 1,
             row_span: 1,
@@ -482,6 +689,8 @@ impl TableCell {
             border_fill_id: None,
             margin: None,
             vertical_align: None,
+            line_wrap: CellLineWrap::Break,
+            dormant_margin: None,
         }
     }
 
@@ -511,6 +720,7 @@ impl TableCell {
         row_span: u16,
     ) -> Self {
         Self {
+            header: None,
             paragraphs,
             col_span,
             row_span,
@@ -520,7 +730,29 @@ impl TableCell {
             border_fill_id: None,
             margin: None,
             vertical_align: None,
+            line_wrap: CellLineWrap::Break,
+            dormant_margin: None,
         }
+    }
+
+    /// Resolves the title marker, giving an explicit cell value precedence.
+    #[must_use]
+    pub fn effective_header(&self, row_is_header: bool) -> bool {
+        self.header.unwrap_or(row_is_header)
+    }
+
+    /// Sets a cell-local title marker, or restores row inheritance with `None`.
+    #[must_use]
+    pub fn with_header(mut self, header: Option<bool>) -> Self {
+        self.header = header;
+        self
+    }
+
+    /// Sets how the cell's text breaks into lines.
+    #[must_use]
+    pub fn with_line_wrap(mut self, line_wrap: CellLineWrap) -> Self {
+        self.line_wrap = line_wrap;
+        self
     }
 
     /// Sets an explicit cell height.
@@ -564,6 +796,179 @@ mod tests {
     use super::*;
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+    /// S19: no dormant margin writes no `dormant_margin`; one round trips.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn dormant_margin_json() {
+        let cell = TableCell::new(vec![simple_paragraph()], HwpUnit::new(1000).unwrap());
+        let json = serde_json::to_value(&cell).unwrap();
+        assert!(json.get("dormant_margin").is_none(), "{json}");
+        let mut with = cell;
+        let u = HwpUnit::new(141).unwrap();
+        with.dormant_margin = Some(TableMargin { left: u, right: u, top: u, bottom: u });
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["dormant_margin"]["left"], 141);
+        assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), with);
+    }
+
+    /// F: `cell_zones` is left out of JSON when empty, read as empty when
+    /// missing, and kept field by field.
+    ///
+    /// 이것을 실패시키는 것: `serde(default)` 삭제 · 빈 목록 생략 삭제 · 칸
+    /// 이름 바꾸기.
+    #[test]
+    fn table_cell_zones_json() {
+        let table = Table::new(vec![]);
+        let json = serde_json::to_value(&table).unwrap();
+        assert!(json.get("cell_zones").is_none(), "{json}");
+        assert!(serde_json::from_value::<Table>(json).unwrap().cell_zones.is_empty());
+        let zoned = table.with_cell_zones(vec![CellZone::new(12, 0, 31, 1, 7)]);
+        let json = serde_json::to_value(&zoned).unwrap();
+        assert_eq!(
+            json["cell_zones"],
+            serde_json::json!([{"start_row": 12, "start_col": 0, "end_row": 31, "end_col": 1, "border_fill_id": 7}])
+        );
+        assert_eq!(serde_json::from_value::<Table>(json).unwrap().cell_zones, zoned.cell_zones);
+    }
+
+    /// E: `no_adjust` is left out of JSON when false, read as false when
+    /// missing (JSON written before the field), and kept when true.
+    ///
+    /// 이것을 실패시키는 것: `serde(default)` 삭제(옛 JSON 실패) ·
+    /// `skip_serializing_if` 삭제(기본 표 JSON 이 바뀜) · 직렬화에서 값 버리기.
+    #[test]
+    fn table_no_adjust_json() {
+        let table = Table::new(vec![]);
+        let json = serde_json::to_value(&table).unwrap();
+        assert!(json.get("no_adjust").is_none(), "{json}");
+        let back: Table = serde_json::from_value(json).unwrap();
+        assert!(!back.no_adjust);
+        let fixed = table.with_no_adjust(true);
+        let json = serde_json::to_value(&fixed).unwrap();
+        assert_eq!(json["no_adjust"], true);
+        assert!(serde_json::from_value::<Table>(json).unwrap().no_adjust);
+    }
+
+    /// §19.22 D3: a breaking cell's JSON has no `line_wrap` (old JSON and
+    /// output unchanged), a JSON without it reads as `Break`, and a squeezed
+    /// cell writes and reads `"SQUEEZE"`.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제 / serde 이름 바꾸기.
+    #[test]
+    fn cell_line_wrap_json() {
+        let cell = TableCell::new(vec![simple_paragraph()], HwpUnit::new(1000).unwrap());
+        let json = serde_json::to_value(&cell).unwrap();
+        assert!(json.get("line_wrap").is_none(), "{json}");
+        let back: TableCell = serde_json::from_value(json).unwrap();
+        assert_eq!(back.line_wrap, CellLineWrap::Break);
+        let squeezed = cell.with_line_wrap(CellLineWrap::Squeeze);
+        let json = serde_json::to_value(&squeezed).unwrap();
+        assert_eq!(json["line_wrap"], "SQUEEZE");
+        assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), squeezed);
+    }
+
+    /// 이것을 실패시키는 것: Some(false)를 행 true로 덮기 / None 기본값 변경 /
+    /// JSON의 None 생략 삭제 / 빌더가 값을 버리기 / with_span 기본값 변경.
+    #[test]
+    fn cell_header_json_and_precedence() {
+        let cell = simple_cell();
+        assert_eq!(cell.header, None);
+        let json = serde_json::to_value(&cell).unwrap();
+        assert!(json.get("header").is_none());
+        assert_eq!(serde_json::from_value::<TableCell>(json.clone()).unwrap().header, None);
+        let mut explicit_null = json;
+        explicit_null["header"] = serde_json::Value::Null;
+        assert_eq!(serde_json::from_value::<TableCell>(explicit_null).unwrap().header, None);
+        assert_eq!(TableCell::with_span(vec![simple_paragraph()], cell.width, 2, 1).header, None);
+        for marker in [None, Some(false), Some(true)] {
+            let cell = cell.clone().with_header(marker);
+            assert_eq!(cell.header, marker);
+            for row in [false, true] {
+                assert_eq!(cell.effective_header(row), marker.unwrap_or(row));
+            }
+            let json = serde_json::to_value(&cell).unwrap();
+            if let Some(value) = marker {
+                assert_eq!(json["header"], value);
+            }
+            assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), cell);
+        }
+    }
+
+    /// 이것을 실패시키는 것: all→any / 빈 행 허용 / 선두 제한 제거 /
+    /// 기존 행 값 fallback 제거 / 파생하면서 원본 칸 값을 바꾸기.
+    #[test]
+    fn cell_header_derivation_is_leading_and_non_destructive() {
+        let row = |markers: &[Option<bool>], flag| {
+            TableRow::new(markers.iter().map(|v| simple_cell().with_header(*v)).collect())
+                .with_header(flag)
+        };
+        for stop in
+            [vec![], vec![Some(false), Some(false)], vec![Some(true), Some(false)], vec![None]]
+        {
+            let mut rows = vec![
+                row(&[None, Some(true)], true),
+                row(&[Some(true), Some(true)], false),
+                row(&stop, false),
+                row(&[Some(true), Some(true)], false),
+            ];
+            let original: Vec<_> = rows.iter().map(|r| r.cells.clone()).collect();
+            TableRow::derive_header_rows(&mut rows);
+            assert_eq!(
+                rows.iter().map(|r| r.is_header).collect::<Vec<_>>(),
+                [true, true, false, false]
+            );
+            assert_eq!(rows.iter().map(|r| r.cells.clone()).collect::<Vec<_>>(), original);
+            let once = rows.clone();
+            TableRow::derive_header_rows(&mut rows);
+            assert_eq!(rows, once);
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(512))]
+        /// 이것을 실패시키는 것: None 구체화 생략/반전 · 명시값 덮기 ·
+        /// 선두/빈 행/all 규칙 변경 · rowspan으로 제목행을 늘리기.
+        #[test]
+        fn cell_header_effective_values_survive_derivation(
+            input in proptest::collection::vec(
+                (proptest::bool::ANY, proptest::collection::vec(
+                    (proptest::option::of(proptest::bool::ANY), 1u16..5), 0..6)), 0..8)
+        ) {
+            let mut rows: Vec<_> = input.iter().map(|(flag, cells)| {
+                TableRow::new(cells.iter().map(|(marker, span)| {
+                    let mut cell = simple_cell().with_header(*marker);
+                    cell.row_span = *span;
+                    cell
+                }).collect()).with_header(*flag)
+            }).collect();
+            let values = |rows: &[TableRow]| rows.iter().map(|r| {
+                r.cells.iter().map(|c| c.effective_header(r.is_header)).collect::<Vec<_>>()
+            }).collect::<Vec<_>>();
+            let before = values(&rows);
+            // Independent oracle: first row containing no cells or a false cell.
+            let expected = before.iter().position(|r| r.is_empty() || r.contains(&false))
+                .unwrap_or(before.len());
+            proptest::prop_assert_eq!(TableRow::header_row_count(&rows), expected);
+            TableRow::derive_header_rows(&mut rows);
+            proptest::prop_assert_eq!(values(&rows), before);
+            for (index, row) in rows.iter().enumerate() {
+                proptest::prop_assert_eq!(row.is_header, index < expected);
+                for (cell, (marker, span)) in row.cells.iter().zip(&input[index].1) {
+                    proptest::prop_assert_eq!(cell.row_span, *span);
+                    if marker.is_some() || input[index].0 == row.is_header {
+                        proptest::prop_assert_eq!(cell.header, *marker);
+                    } else {
+                        proptest::prop_assert_eq!(cell.header, Some(input[index].0));
+                    }
+                }
+            }
+            let once = rows.clone();
+            TableRow::derive_header_rows(&mut rows);
+            proptest::prop_assert_eq!(rows, once);
+        }
+    }
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(

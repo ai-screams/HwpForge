@@ -21,8 +21,8 @@ use hwpforge_core::run::Run;
 use serde_json::Value;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
-use crate::patch::{collect_direct_child_outer_spans, find_root_span, section_path, RawPackage};
-use crate::stamp::{admission_compare, check_zip_carry, encode_hwpx, StamperError};
+use crate::patch::RawPackage;
+use crate::stamp::{admission_compare, check_zip_carry, delta_compare, encode_hwpx, StamperError};
 
 /// Addresses a **top-level body-flow** paragraph for structural editing.
 ///
@@ -252,7 +252,7 @@ fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
 /// refused with no bytes.
 fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEditError> {
     let d2 = HwpxDecoder::decode(bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-    admission_compare(&d2, expected).map_err(|e| match e {
+    delta_compare(&d2, expected).map_err(|e| match e {
         StamperError::NotRoundTripSafe { component, diff_path } => {
             StructuralEditError::DeltaMismatch {
                 detail: format!("{component} diverges at {diff_path}"),
@@ -324,6 +324,7 @@ impl HwpxStructuralEditor {
         let decode_warnings = d0.warnings.clone();
         let sections = d0.document.sections();
 
+        let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(sections);
         // ── preflight: ranges, duplicates, rejection rules ──
         let mut seen = std::collections::BTreeSet::new();
         for t in targets {
@@ -351,6 +352,12 @@ impl HwpxStructuralEditor {
                     index: t.index,
                 });
             }
+            // 이것을 실패시키는 것: 문단 삭제에서 공통 구간 preflight 생략.
+            if fields.protects_paragraph(t.section, "paragraphs", t.index) {
+                return Err(StructuralEditError::Codec(
+                    "protected field range: paragraph deletion".into(),
+                ));
+            }
             if para.page_break || para.column_break {
                 return Err(StructuralEditError::HardBreakLoss {
                     section: t.section,
@@ -361,7 +368,7 @@ impl HwpxStructuralEditor {
 
         // ── declared delta: base document minus the targets ──
         let mut expected = d0.document.clone();
-        remove_targets(&mut expected, targets);
+        remove_targets(&mut expected, targets)?;
         // Core invariants do not ride along the byte-splice path, so assert
         // them explicitly on the declared result. Empty-section is checked
         // precisely (which section) before the generic validate().
@@ -384,11 +391,14 @@ impl HwpxStructuralEditor {
             by_section.entry(t.section).or_default().push(t.index);
         }
         for (section_idx, mut indices) in by_section {
-            let path = section_path(section_idx);
+            let path = package
+                .section_path(section_idx)
+                .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
             let xml = package
                 .read_text_entry(&path)
                 .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-            let spans = paragraph_spans(&xml)?;
+            let map = &d0.source_maps[section_idx];
+            let spans: Vec<_> = map.paragraphs.iter().map(|p| p.outer.clone()).collect();
             if spans.len() != sections[section_idx].paragraphs.len() {
                 return Err(StructuralEditError::SpanCountMismatch {
                     section: section_idx,
@@ -401,36 +411,24 @@ impl HwpxStructuralEditor {
             // section layout. Refuse — the self-verify would catch it, but a
             // clear rejection beats an opaque delta mismatch.
             for &idx in &indices {
-                if xml[spans[idx].clone()].contains("<hp:secPr") {
+                if map.paragraphs[idx].has_properties {
                     return Err(StructuralEditError::SectionPropertiesParagraph {
                         section: section_idx,
                         index: idx,
                     });
                 }
             }
-            // Cut in descending order so earlier byte offsets stay valid.
-            let first_changed = *indices.iter().min().expect("targets grouped this section");
-            indices.sort_unstable_by(|a, b| b.cmp(a));
-            let mut out = xml;
-            for idx in indices {
-                let span = spans[idx].clone();
-                out.replace_range(span, "");
-            }
-            // Every paragraph from the first deletion down shifts up, so its
-            // Hancom line-layout cache (cumulative vertpos) is now stale.
-            // Drop it from the edit point onward; the renderer recomputes
-            // (a document with no linesegarray renders correctly — our own
-            // encoder emits none). Paragraphs above the edit keep valid caches.
-            out = strip_line_segs_from(&out, first_changed)?;
-            // Delete leaves gaps in the sequential `<hp:p id>`; renumber so the
-            // wire stays canonical (unique, contiguous).
-            out = renumber_paragraph_ids(&out)?;
+            indices.sort_unstable();
+            let out = splice_paragraphs(&xml, map, &indices, None)?;
             package.replace_text_entry(&path, out);
         }
+        normalize_header_for_edit(&mut package, &d0)?;
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
         // ── reverse-delta self-verify: output ≡ declared delta ──
         let expected_doc = HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: expected,
             style_store: d0.style_store.clone(),
@@ -501,11 +499,46 @@ impl HwpxStructuralEditor {
     /// [`Self::delete_paragraphs_with_diagnostics`] spells out; inserting has
     /// no advisory scan of its own, so that decode is the whole list.
     ///
-    /// There is no encoder channel here even though this path encodes the
-    /// declared delta. That encode exists only to source the new paragraphs'
-    /// bytes, which are then spliced into the original XML; the package it
-    /// produced is thrown away, so its diagnostics would describe something
-    /// the caller never receives.
+    /// This is itself a thin wrapper over
+    /// [`Self::insert_paragraphs_with_codec_diagnostics`] that drops the
+    /// encode channel — the warnings for characters removed from the texts.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::insert_paragraphs_with_codec_diagnostics`].
+    pub fn insert_paragraphs_with_diagnostics(
+        base: &[u8],
+        anchor: ParagraphLocator,
+        position: InsertPosition,
+        texts: &[String],
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
+        Self::insert_paragraphs_with_codec_diagnostics(base, anchor, position, texts).map(
+            |diagnosed| {
+                crate::diagnostics::WithDecodeWarnings::new(
+                    diagnosed.value,
+                    diagnosed.decode_warnings,
+                )
+            },
+        )
+    }
+
+    /// Inserts a block, keeping both warning channels.
+    ///
+    /// Same bytes as [`Self::insert_paragraphs`]. `decode_warnings` is the
+    /// admission gate's read of `base`, as in
+    /// [`Self::insert_paragraphs_with_diagnostics`].
+    ///
+    /// `encode_warnings` covers the texts alone. This path encodes the
+    /// declared delta only to source the new paragraphs' bytes and throws
+    /// that package away, so its diagnostics are not reported. What is
+    /// reported is the entry clean-up: each text has the characters XML 1.0
+    /// cannot represent removed (the C0 controls other than TAB, LF, CR and
+    /// U+001F, plus U+FFFE/U+FFFF), and each text that lost any adds one
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
+    /// located at `new paragraph N` (its index in the section after the
+    /// insert). The cleaned text is the one inserted and the one the
+    /// self-verify expects; a text left empty is inserted as an empty
+    /// paragraph.
     ///
     /// # Errors
     ///
@@ -514,12 +547,30 @@ impl HwpxStructuralEditor {
     /// package entry is read and counted, including ones the decoder ignores:
     /// an entry past 50 MiB, or a package past 500 MiB decompressed, is
     /// refused with [`StructuralEditError::Codec`].
-    pub fn insert_paragraphs_with_diagnostics(
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use hwpforge_smithy_hwpx::{HwpxStructuralEditor, InsertPosition, ParagraphLocator};
+    ///
+    /// let base = std::fs::read("report.hwpx")?;
+    /// let diagnosed = HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
+    ///     &base,
+    ///     ParagraphLocator { section: 0, index: 2 },
+    ///     InsertPosition::After,
+    ///     &["새 문단".to_string()],
+    /// )?;
+    /// for warning in &diagnosed.encode_warnings {
+    ///     eprintln!("{warning}");
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn insert_paragraphs_with_codec_diagnostics(
         base: &[u8],
         anchor: ParagraphLocator,
         position: InsertPosition,
         texts: &[String],
-    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
+    ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
         for text in texts {
             if text.contains('\n') || text.contains('\r') {
                 return Err(StructuralEditError::MultiParagraphText);
@@ -529,7 +580,11 @@ impl HwpxStructuralEditor {
         // empty-target behaviour; binding surfaces nudge with their own
         // "no text" errors).
         if texts.is_empty() {
-            return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
+            return Ok(crate::diagnostics::WithCodecWarnings::new(
+                base.to_vec(),
+                Vec::new(),
+                Vec::new(),
+            ));
         }
 
         // ── input admission ──
@@ -556,6 +611,38 @@ impl HwpxStructuralEditor {
             .runs
             .first()
             .map_or(hwpforge_foundation::CharShapeIndex::new(0), |r| r.char_shape_id);
+        let insert_index = match position {
+            InsertPosition::Before => anchor.index,
+            InsertPosition::After => anchor.index + 1,
+        };
+        // 이것을 실패시키는 것: 경계 사이 및 미종결 구간 뒤 삽입 허용.
+        if hwpforge_core::field_inventory::FieldInventory::from_sections(sections)
+            .protects_insertion(anchor.section, "paragraphs", insert_index, None)
+        {
+            return Err(StructuralEditError::Codec(
+                "protected field range: paragraph insertion".into(),
+            ));
+        }
+        // Each text is cleaned once here; the cleaned text is what is encoded,
+        // spliced and expected by the self-verify below.
+        let mut package =
+            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let path = package
+            .section_path(anchor.section)
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let mut encode_warnings = Vec::new();
+        let texts: Vec<String> = texts
+            .iter()
+            .enumerate()
+            .map(|(offset, text)| {
+                crate::wire_xml::sanitize_edit_text(
+                    text,
+                    &path,
+                    &format!("new paragraph {}", insert_index + offset),
+                    &mut encode_warnings,
+                )
+            })
+            .collect();
         let new_paras: Vec<Paragraph> = texts
             .iter()
             .map(|text| {
@@ -568,17 +655,32 @@ impl HwpxStructuralEditor {
             })
             .collect();
 
-        let insert_index = match position {
-            InsertPosition::Before => anchor.index,
-            InsertPosition::After => anchor.index + 1,
-        };
-
         // ── declared delta: the new paragraphs spliced into the Core doc ──
         let mut expected = d0.document.clone();
         {
-            let paragraphs = &mut expected.sections_mut()[anchor.section].paragraphs;
-            for (offset, new_para) in new_paras.into_iter().enumerate() {
-                paragraphs.insert(insert_index + offset, new_para);
+            let count = new_paras.len();
+            if !hwpforge_core::field_inventory::FieldInventory::insert_paragraphs(
+                expected.sections_mut(),
+                anchor.section,
+                insert_index,
+                new_paras,
+            ) {
+                return Err(StructuralEditError::Codec(
+                    "invalid paragraph insertion provenance".into(),
+                ));
+            }
+            let section = &mut expected.sections_mut()[anchor.section];
+            // A header/footer control sits in its anchor paragraph's bytes, so
+            // it moves down with that paragraph.
+            // 이것을 실패시키는 것: 이 이동을 지우기 — 새 문단이 앵커 자리에
+            // 인코드되어 꼬리말이 둘이 된다(self-verify 거부,
+            // `structural_edits_move_an_anchored_footer_with_its_paragraph`).
+            for hf in section.headers.iter_mut().chain(section.footers.iter_mut()) {
+                if let Some(anchor_paragraph) = hf.anchor_paragraph {
+                    if anchor_paragraph >= insert_index {
+                        hf.anchor_paragraph = Some(anchor_paragraph + count);
+                    }
+                }
             }
         }
         expected
@@ -589,6 +691,8 @@ impl HwpxStructuralEditor {
         // Encode the declared delta once; its section XML holds the new
         // paragraph in the exact form the codec round-trips.
         let encoded = encode_hwpx(&HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: expected.clone(),
             style_store: d0.style_store.clone(),
@@ -597,11 +701,13 @@ impl HwpxStructuralEditor {
         .map_err(map_admission)?;
         let encoded_pkg =
             RawPackage::read(&encoded).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let path = section_path(anchor.section);
-        let encoded_xml = encoded_pkg
-            .read_text_entry(&path)
+        let encoded_path = encoded_pkg
+            .section_path(anchor.section)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let encoded_spans = paragraph_spans(&encoded_xml)?;
+        let encoded_xml = encoded_pkg
+            .read_text_entry(&encoded_path)
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let encoded_spans = encoded_paragraph_spans(&encoded_xml)?;
         // The encoded doc has `texts.len()` more paragraphs than the base;
         // guard the whole block range (`insert_index + N`, not `insert_index`
         // — off-by-one) so an encoder invariant break fails gracefully
@@ -621,12 +727,11 @@ impl HwpxStructuralEditor {
             .collect();
 
         // ── splice the new paragraph's bytes into the ORIGINAL section XML ──
-        let mut package =
-            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let xml = package
             .read_text_entry(&path)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let spans = paragraph_spans(&xml)?;
+        let map = &d0.source_maps[anchor.section];
+        let spans: Vec<_> = map.paragraphs.iter().map(|p| p.outer.clone()).collect();
         if spans.len() != section.paragraphs.len() {
             return Err(StructuralEditError::SpanCountMismatch {
                 section: anchor.section,
@@ -636,34 +741,28 @@ impl HwpxStructuralEditor {
         }
         // Guard section properties: inserting before the secPr carrier would
         // displace it from first position.
-        if position == InsertPosition::Before
-            && xml[spans[anchor.index].clone()].contains("<hp:secPr")
-        {
+        if position == InsertPosition::Before && map.paragraphs[anchor.index].has_properties {
             return Err(StructuralEditError::InsertBeforeSectionProperties {
                 section: anchor.section,
                 index: anchor.index,
             });
         }
 
-        let at = match position {
-            InsertPosition::Before => spans[anchor.index].start,
-            InsertPosition::After => spans[anchor.index].end,
-        };
-        let mut out = xml;
-        out.insert_str(at, &new_para_bytes);
-        // The inserted paragraph carries no cache (the encoder emits none) and
-        // every paragraph below it shifts down, so its cumulative-vertpos
-        // cache is stale — strip from the insertion point onward.
-        out = strip_line_segs_from(&out, insert_index)?;
-        // The transplanted paragraph carries the encoded document's id (a
-        // different numbering than the original wire), so renumber every
-        // `<hp:p id>` sequentially to keep ids unique and contiguous.
-        out = renumber_paragraph_ids(&out)?;
+        let prefix = &map.paragraphs[anchor.index].prefix;
+        let replacement = if prefix.is_empty() { String::new() } else { format!("{prefix}:") };
+        let new_para_bytes = new_para_bytes
+            .replace("<hp:", &format!("<{replacement}"))
+            .replace("</hp:", &format!("</{replacement}"));
+        let out =
+            splice_paragraphs(&xml, map, &[], Some((insert_index, texts.len(), &new_para_bytes)))?;
         package.replace_text_entry(&path, out);
+        normalize_header_for_edit(&mut package, &d0)?;
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
         // ── reverse-delta self-verify ──
         let expected_doc = HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: expected,
             style_store: d0.style_store.clone(),
@@ -671,81 +770,97 @@ impl HwpxStructuralEditor {
         };
         self_verify(&bytes, &expected_doc)?;
 
-        Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
+        Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
 }
 
-/// Removes `<hp:linesegarray>` from every direct-child `<hp:p>` at index
-/// `from_index` or later. A structural edit shifts the cumulative vertical
-/// position of every paragraph from the edit point down, making their caches
-/// stale; dropping them lets the renderer recompute (a document with no
-/// linesegarray renders correctly). Paragraphs above the edit keep their
-/// valid caches.
-///
-/// Only the paragraph's **direct-child** `linesegarray` is removed — a nested
-/// table's cell caches (which appear earlier in byte order) are left alone.
-fn strip_line_segs_from(xml: &str, from_index: usize) -> Result<String, StructuralEditError> {
-    let spans = paragraph_spans(xml)?;
-    let mut removals: Vec<std::ops::Range<usize>> = Vec::new();
-    for span in spans.into_iter().skip(from_index) {
-        // Depth-aware: `<hp:linesegarray>` is a direct child of `<hp:p>`; a
-        // substring search would wrongly hit a cell paragraph's cache first.
-        let lsa = collect_direct_child_outer_spans(xml, span.clone(), "hp:linesegarray")
-            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        removals.extend(lsa);
+// Admission has already validated the original definitions and proved the
+// header round-trips. Body splicing keeps positional references unchanged.
+fn normalize_header_for_edit(
+    package: &mut RawPackage,
+    decoded: &HwpxDocument,
+) -> Result<(), StructuralEditError> {
+    if decoded.requires_header_normalization() {
+        let sections = decoded.document.sections();
+        let header = crate::encoder::header::encode_header(
+            &decoded.style_store,
+            sections.len() as u32,
+            sections.first().and_then(|s| s.begin_num.as_ref()),
+        )
+        .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        package.replace_text_entry("Contents/header.xml", header);
     }
-    removals.sort_unstable_by(|a, b| b.start.cmp(&a.start));
-    let mut out = xml.to_string();
-    for r in removals {
-        out.replace_range(r, "");
+    Ok(())
+}
+
+/// New encoder output only. Original-document positions come exclusively from
+/// the decoder's SourceMap; never call this on a package's original XML.
+fn encoded_paragraph_spans(xml: &str) -> Result<Vec<std::ops::Range<usize>>, StructuralEditError> {
+    let (_, source) =
+        hwpforge_core::source_xml::XmlSource::read(xml).map_err(StructuralEditError::Codec)?;
+    let root = source.elements().iter().find(|e| e.name() == "sec").ok_or_else(|| {
+        StructuralEditError::Codec("section root missing in encoded fragment".into())
+    })?;
+    Ok(root
+        .children()
+        .iter()
+        .filter_map(|id| source.element(*id))
+        .filter(|e| e.name() == "p")
+        .map(|e| e.outer())
+        .collect())
+}
+
+/// Apply every edit in original coordinates once. Cache ranges and paragraph
+/// spans are decoder records, so deletion/insertion never triggers a rescan.
+fn splice_paragraphs(
+    xml: &str,
+    map: &crate::decoder::source_map::SourceMap,
+    deleted: &[usize],
+    inserted: Option<(usize, usize, &str)>,
+) -> Result<String, StructuralEditError> {
+    let first =
+        inserted.map(|(at, _, _)| at).or_else(|| deleted.first().copied()).unwrap_or(usize::MAX);
+    let mut edits = Vec::new();
+    for (index, p) in map.paragraphs.iter().enumerate() {
+        if deleted.contains(&index) {
+            edits.push((p.outer.clone(), String::new()));
+            continue;
+        }
+        if index >= first {
+            edits.extend(p.line_segments.iter().cloned().map(|r| (r, String::new())));
+        }
+        let new_index = index - deleted.partition_point(|i| *i < index)
+            + inserted.map_or(0, |(at, count, _)| if index >= at { count } else { 0 });
+        if let Some(range) = &p.id_value {
+            edits.push((range.clone(), new_index.to_string()));
+        }
+    }
+    if let Some((index, _, fragment)) = inserted {
+        let at = if let Some(p) = map.paragraphs.get(index) {
+            p.outer.start
+        } else {
+            map.paragraphs
+                .last()
+                .ok_or_else(|| StructuralEditError::Codec("no paragraph source".into()))?
+                .outer
+                .end
+        };
+        edits.push((at..at, fragment.to_owned()));
+    }
+    edits.sort_by(|a, b| b.0.start.cmp(&a.0.start).then(b.0.end.cmp(&a.0.end)));
+    let mut out = xml.to_owned();
+    for (range, replacement) in edits {
+        out.replace_range(range, &replacement);
     }
     Ok(out)
-}
-
-/// Renumbers the `id` attribute of every direct-child `<hp:p>` to its sequential
-/// index (the encoder's canonical scheme). A byte-splice insert transplants a
-/// paragraph carrying the *encoded* document's id, and delete leaves gaps — both
-/// break `<hp:p id>` uniqueness/contiguity, which downstream consumers
-/// (e.g. `settings.xml` `paraIDRef`) rely on. Ids are wire-only (Core has no
-/// `id` field), so this does not affect the reverse-delta self-verify.
-///
-/// Note: paragraph ids are a distinct id-space from cross-reference targets
-/// (`ObjectId`/`inst_id`), so renumbering never disturbs a cross-reference.
-fn renumber_paragraph_ids(xml: &str) -> Result<String, StructuralEditError> {
-    let spans = paragraph_spans(xml)?;
-    // (byte range of the id value, new value) — applied descending.
-    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
-    for (i, span) in spans.iter().enumerate() {
-        let open_end = xml[span.clone()].find('>').map_or(span.end, |r| span.start + r);
-        let opening = &xml[span.start..open_end];
-        let Some(id_rel) = opening.find("id=\"") else {
-            continue;
-        };
-        let val_start = span.start + id_rel + 4;
-        let Some(q_rel) = xml[val_start..open_end].find('"') else {
-            continue;
-        };
-        edits.push((val_start..(val_start + q_rel), i.to_string()));
-    }
-    edits.sort_unstable_by(|a, b| b.0.start.cmp(&a.0.start));
-    let mut out = xml.to_string();
-    for (range, value) in edits {
-        out.replace_range(range, &value);
-    }
-    Ok(out)
-}
-
-/// Collects the outer byte spans of a section's direct-child `<hp:p>` elements.
-fn paragraph_spans(xml: &str) -> Result<Vec<std::ops::Range<usize>>, StructuralEditError> {
-    let root =
-        find_root_span(xml, "hs:sec").map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-    collect_direct_child_outer_spans(xml, root, "hp:p")
-        .map_err(|e| StructuralEditError::Codec(e.to_string()))
 }
 
 /// Removes the targeted paragraphs from `document` (descending per section so
 /// indices stay valid).
-fn remove_targets(document: &mut Document<Draft>, targets: &[ParagraphLocator]) {
+fn remove_targets(
+    document: &mut Document<Draft>,
+    targets: &[ParagraphLocator],
+) -> Result<(), StructuralEditError> {
     let mut by_section: std::collections::BTreeMap<usize, Vec<usize>> =
         std::collections::BTreeMap::new();
     for t in targets {
@@ -753,15 +868,18 @@ fn remove_targets(document: &mut Document<Draft>, targets: &[ParagraphLocator]) 
     }
     let sections = document.sections_mut();
     for (section_idx, mut indices) in by_section {
-        if let Some(section) = sections.get_mut(section_idx) {
-            indices.sort_unstable_by(|a, b| b.cmp(a));
-            for idx in indices {
-                if idx < section.paragraphs.len() {
-                    section.paragraphs.remove(idx);
-                }
-            }
+        indices.sort_unstable();
+        if !hwpforge_core::field_inventory::FieldInventory::delete_paragraphs(
+            sections,
+            section_idx,
+            &indices,
+        ) {
+            return Err(StructuralEditError::Codec(
+                "protected field range: paragraph deletion".into(),
+            ));
         }
     }
+    Ok(())
 }
 
 /// Result of scanning a paragraph subtree for reference material that makes a
@@ -961,6 +1079,16 @@ mod tests {
         p
     }
 
+    fn test_splice(xml: &str, from: usize) -> String {
+        let parsed = crate::decoder::section::parse_section(xml, 0, &Default::default()).unwrap();
+        let section = hwpforge_core::Section::with_paragraphs(
+            parsed.paragraphs,
+            hwpforge_core::PageSettings::a4(),
+        );
+        let map = parsed.source.finish(&section, 0, "Contents/section0.xml");
+        splice_paragraphs(xml, &map, &[], Some((from, 0, ""))).unwrap()
+    }
+
     #[test]
     fn plain_text_paragraph_has_no_reference_material() {
         let mut p = para();
@@ -1000,7 +1128,8 @@ mod tests {
         // cannot cause a miss here.
         let inner = Control::footnote_with_id(7, vec![para()]);
         let group = Control::Group {
-            children: vec![inner],
+            frame: hwpforge_core::ObjectFrame::new(),
+            children: vec![hwpforge_core::control::GroupChild::Shape(inner)],
             inst_id: None,
             width: HwpUnit::ZERO,
             height: HwpUnit::ZERO,
@@ -1208,7 +1337,7 @@ mod tests {
             "</hs:sec>"
         );
         assert_eq!(xml.matches("<hp:linesegarray").count(), 3);
-        let out = strip_line_segs_from(xml, 1).unwrap();
+        let out = test_splice(xml, 1);
         assert_eq!(out.matches("<hp:linesegarray").count(), 1, "only p0 keeps its cache");
         for t in ["<hp:t>a</hp:t>", "<hp:t>b</hp:t>", "<hp:t>c</hp:t>"] {
             assert!(out.contains(t), "text {t} must be preserved");
@@ -1439,14 +1568,14 @@ mod tests {
             "<hs:sec>",
             "<hp:p id=\"0\"><hp:run><hp:t>x</hp:t></hp:run>",
             "<hp:linesegarray><hp:lineseg vertpos=\"0\"/></hp:linesegarray></hp:p>",
-            "<hp:p id=\"1\"><hp:run><hp:tbl><hp:tr><hp:tc><hp:subList>",
+            "<hp:p id=\"1\"><hp:run><hp:tbl rowCnt=\"1\" colCnt=\"1\"><hp:tr><hp:tc><hp:subList>",
             "<hp:p id=\"0\"><hp:run><hp:t>cell</hp:t></hp:run>",
             "<hp:linesegarray><hp:lineseg vertpos=\"9\"/></hp:linesegarray></hp:p>",
             "</hp:subList></hp:tc></hp:tr></hp:tbl></hp:run>",
             "<hp:linesegarray><hp:lineseg vertpos=\"1600\"/></hp:linesegarray></hp:p>",
             "</hs:sec>"
         );
-        let out = strip_line_segs_from(xml, 1).unwrap();
+        let out = test_splice(xml, 1);
         // The paragraph's own cache (vertpos 1600) is gone; the cell cache stays.
         assert!(!out.contains("vertpos=\"1600\""), "top-level cache must be stripped");
         assert!(out.contains("vertpos=\"9\""), "nested cell cache must be preserved");
@@ -1454,19 +1583,20 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 디코더의 id 값 구간을 무시하거나 소비처에서 id= 문자열 재검색.
     fn renumber_paragraph_ids_rewrites_sequentially_and_skips_missing_id() {
         // Direct helper coverage: sequential rewrite + a `<hp:p>` with no id
         // attribute (the skip branch) + values preserved.
         let xml = concat!(
             "<hs:sec>",
-            "<hp:p id=\"7\"><hp:run><hp:t>a</hp:t></hp:run></hp:p>",
+            "<hp:p data-id=\"untouched\" id = '7'><hp:run><hp:t>a</hp:t></hp:run></hp:p>",
             "<hp:p paraPrIDRef=\"3\"><hp:run><hp:t>b</hp:t></hp:run></hp:p>",
             "<hp:p id=\"9\"><hp:run><hp:t>c</hp:t></hp:run></hp:p>",
             "</hs:sec>"
         );
-        let out = renumber_paragraph_ids(xml).unwrap();
+        let out = test_splice(xml, usize::MAX);
         // First paragraph id 7→0; second has no id (unchanged); third 9→2.
-        assert!(out.contains("<hp:p id=\"0\">"), "out: {out}");
+        assert!(out.contains("<hp:p data-id=\"untouched\" id = '0'>"), "out: {out}");
         assert!(out.contains("<hp:p paraPrIDRef=\"3\">"), "no-id paragraph untouched");
         assert!(out.contains("<hp:p id=\"2\">"), "out: {out}");
         for t in ["<hp:t>a</hp:t>", "<hp:t>b</hp:t>", "<hp:t>c</hp:t>"] {
@@ -1476,7 +1606,7 @@ mod tests {
 
     #[test]
     fn paragraph_spans_errors_without_a_section_root() {
-        assert!(matches!(paragraph_spans("<other/>"), Err(StructuralEditError::Codec(_))));
+        assert!(matches!(encoded_paragraph_spans("<other/>"), Err(StructuralEditError::Codec(_))));
     }
 
     #[test]
@@ -1485,7 +1615,7 @@ mod tests {
             "<hs:sec><hp:p id=\"0\"><hp:run><hp:t>x</hp:t></hp:run>",
             "<hp:linesegarray><hp:lineseg vertpos=\"0\"/></hp:linesegarray></hp:p></hs:sec>"
         );
-        let out = strip_line_segs_from(xml, 5).unwrap();
+        let out = test_splice(xml, 5);
         assert_eq!(out, xml, "no paragraph at or past the index → unchanged");
     }
 
@@ -1499,6 +1629,8 @@ mod tests {
         let mut wrong = decoded.document.clone();
         wrong.sections_mut()[0].paragraphs.pop();
         let expected = HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: wrong,
             style_store: decoded.style_store.clone(),
@@ -1515,6 +1647,8 @@ mod tests {
         let base = fixture("plain_paragraphs.hwpx");
         let decoded = HwpxDecoder::decode(&base).unwrap();
         let expected = HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: decoded.document.clone(),
             style_store: decoded.style_store.clone(),
@@ -1530,7 +1664,7 @@ mod tests {
         let mut zout = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).unwrap();
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
@@ -1718,6 +1852,8 @@ mod tests {
             hwpforge_foundation::CharShapeIndex::new(0),
         ));
         let bytes = encode_hwpx(&HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             document,
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),

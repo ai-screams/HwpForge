@@ -59,7 +59,7 @@ pub(crate) mod test_support;
 mod warning_utils;
 mod wire_text_map;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -84,8 +84,9 @@ pub use semantic::{
     Hwp5SemanticControlId, Hwp5SemanticControlKind, Hwp5SemanticControlNode,
     Hwp5SemanticControlPayload, Hwp5SemanticDocInfo, Hwp5SemanticDocument,
     Hwp5SemanticGraphIntegrityIssue, Hwp5SemanticImageFormat, Hwp5SemanticImagePayload,
-    Hwp5SemanticNamedStyleRef, Hwp5SemanticOlePayload, Hwp5SemanticPackageMeta,
-    Hwp5SemanticParagraph, Hwp5SemanticParagraphId, Hwp5SemanticSection, Hwp5SemanticSectionId,
+    Hwp5SemanticMasterPage, Hwp5SemanticMasterPageScope, Hwp5SemanticNamedStyleRef,
+    Hwp5SemanticOlePayload, Hwp5SemanticPackageMeta, Hwp5SemanticParagraph,
+    Hwp5SemanticParagraphId, Hwp5SemanticSection, Hwp5SemanticSectionId,
     Hwp5SemanticTableCellEvidence, Hwp5SemanticTableCellMargin, Hwp5SemanticTableCellVerticalAlign,
     Hwp5SemanticTablePageBreak, Hwp5SemanticTablePayload, Hwp5SemanticUnresolvedId,
     Hwp5UnresolvedItem, Hwp5UnresolvedReason,
@@ -97,10 +98,18 @@ pub(crate) struct Hwp5JoinedImageAsset {
     pub bytes: Vec<u8>,
 }
 
+/// The image assets of one document, keyed by **BinData reference**: the
+/// 1-based position of a `DocInfo` `BIN_DATA` record among all of them, the
+/// number picture, border-fill and OLE records use (not the record's stored
+/// id — the two differ when the stored ids are not `1..n`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Hwp5JoinedImageAssetPlan {
     pub ordered_assets: Vec<Hwp5JoinedImageAsset>,
-    pub assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset>,
+    pub assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset>,
+    /// Why a reference whose record exists has no image asset, for the
+    /// records that are not embedded images (an external link, an extension
+    /// that is not an image this crate carries).
+    pub unavailable_reasons: BTreeMap<u16, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,15 +119,23 @@ struct Hwp5ImageGeometryHint {
 }
 
 impl Hwp5JoinedImageAssetPlan {
-    pub(crate) fn asset_for_binary_data_id(
-        &self,
-        binary_data_id: u16,
-    ) -> Option<&Hwp5JoinedImageAsset> {
-        self.assets_by_binary_data_id.get(&binary_data_id)
+    pub(crate) fn asset_for_reference(&self, reference: u16) -> Option<&Hwp5JoinedImageAsset> {
+        self.assets_by_reference.get(&reference)
+    }
+
+    /// The warning reason for a `reference` that has no asset: the record's
+    /// own cause when it is known, otherwise the missing-asset reason (no
+    /// record, a record that could not be parsed, or no `/BinData` stream).
+    pub(crate) fn missing_asset_reason(&self, reference: u16) -> String {
+        self.unavailable_reasons
+            .get(&reference)
+            .cloned()
+            .unwrap_or_else(|| format!("missing_image_asset_for_binary_data_id={reference}"))
     }
 }
 
-/// Per-document plan of OLE-backed BinData entries, keyed by `binary_data_id`.
+/// Per-document plan of OLE-backed BinData entries, keyed by BinData
+/// reference (see [`Hwp5JoinedImageAssetPlan`]).
 ///
 /// This carries the inflated `/BinData/BIN*.OLE` bytes so the projection layer
 /// can attempt chart extraction without re-opening the source CFB. Non-OLE
@@ -126,19 +143,30 @@ impl Hwp5JoinedImageAssetPlan {
 /// [`Hwp5JoinedImageAssetPlan`].
 #[derive(Debug, Default)]
 pub(crate) struct Hwp5OleAssetPlan {
-    /// Inflated `/BinData/*` bytes by `binary_data_id`, or why the entry could
-    /// not be inflated (per-stream cap, ratio limit or a corrupt stream). The
+    /// Inflated `/BinData/*` bytes by reference, or why the entry could not
+    /// be inflated (per-stream cap, ratio limit or a corrupt stream). The
     /// error is reported only if a control references the entry, as the
     /// existing `DroppedControl` warning.
-    pub assets_by_binary_data_id: BTreeMap<u16, Result<Vec<u8>, ChartOleError>>,
+    pub assets_by_reference: BTreeMap<u16, Result<Vec<u8>, ChartOleError>>,
+    /// References whose record by position and record by stored id are not
+    /// the same record, with both readings spelled out. An OLE reference is
+    /// read by position like a picture's, but no Hancom file in hand tells
+    /// the two readings apart for OLE (the x7 fixture renumbers ids `1..n`),
+    /// so a disagreement is reported rather than settled silently.
+    pub reference_ambiguities: BTreeMap<u16, String>,
 }
 
 impl Hwp5OleAssetPlan {
-    pub(crate) fn inflated_for_binary_data_id(
+    pub(crate) fn inflated_for_reference(
         &self,
-        binary_data_id: u16,
+        reference: u16,
     ) -> Option<&Result<Vec<u8>, ChartOleError>> {
-        self.assets_by_binary_data_id.get(&binary_data_id)
+        self.assets_by_reference.get(&reference)
+    }
+
+    /// Both readings of an OLE `reference` when they name different records.
+    pub(crate) fn reference_ambiguity(&self, reference: u16) -> Option<&str> {
+        self.reference_ambiguities.get(&reference).map(String::as_str)
     }
 }
 
@@ -303,6 +331,10 @@ pub struct Hwp5SectionCensus {
     pub tag_counts: Vec<Hwp5TagCount>,
     /// `CtrlHeader` IDs seen in the section.
     pub ctrl_ids: Vec<Hwp5CtrlIdCount>,
+    /// Visible Unicode scalar count in raw PARA_TEXT records, independent of
+    /// paragraph/control decoding. Extended control payloads and paragraph
+    /// terminators are excluded; tabs, line breaks and spaces count once.
+    pub para_text_chars: usize,
 }
 
 /// Count of a single tag ID in a decompressed HWP5 stream.
@@ -341,9 +373,13 @@ pub struct Hwp5BinDataStream {
 /// Summary for a single `DocInfo/BinData` record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hwp5BinDataRecordSummary {
-    /// 1-based binary item ID.
+    /// The id stored in the record, which names its `/BinData/BIN{id:04X}`
+    /// stream. References do **not** use it: they use the record's position
+    /// (`DocInfo` order), and the two differ when the stored ids are not
+    /// `1..n`. `0` for an external link, which stores no id.
     pub binary_data_id: u16,
-    /// Expected `/BinData/*` storage name derived from the record.
+    /// Expected `/BinData/*` storage name derived from the record; empty for
+    /// an external link, which has no stream.
     pub storage_name: String,
     /// File extension from the record payload.
     pub extension: String,
@@ -355,6 +391,12 @@ pub struct Hwp5BinDataRecordSummary {
     /// `/BinData/*` stream must be DEFLATE-decoded before use.
     #[serde(skip_serializing)]
     pub(crate) should_decompress: bool,
+    /// The number picture, border-fill and OLE records use to name this
+    /// entry: its 1-based position among **all** `DocInfo` `BIN_DATA`
+    /// records, counted before parsing (a record that fails to parse still
+    /// takes its position).
+    #[serde(skip_serializing)]
+    pub(crate) reference_ordinal: u16,
 }
 
 /// Inspects an HWP5 document from bytes and returns a compact audit summary.
@@ -456,6 +498,11 @@ pub fn census_hwp5(bytes: &[u8]) -> Hwp5Result<Hwp5CensusReport> {
             decoded_size_bytes: section_data.len(),
             record_count: records.len(),
             tag_counts: summarize_tag_counts(&records),
+            para_text_chars: records
+                .iter()
+                .filter(|r| r.header.tag_id == 0x43)
+                .map(|r| raw_para_text_chars(&r.data))
+                .sum(),
             ctrl_ids: ctrl_counts
                 .into_iter()
                 .map(|(ctrl_id, (count, levels))| Hwp5CtrlIdCount {
@@ -487,6 +534,37 @@ pub fn census_hwp5(bytes: &[u8]) -> Hwp5Result<Hwp5CensusReport> {
         sections,
         bin_data_streams,
     })
+}
+
+/// Independent wire census: deliberately does not call Hwp5ParaText::parse.
+fn raw_para_text_chars(data: &[u8]) -> usize {
+    let units: Vec<u16> = data.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    let mut i = 0;
+    let mut count = 0;
+    while let Some(&unit) = units.get(i) {
+        match unit {
+            1..=9 | 11..=12 | 14..=23 => {
+                if unit == 9 {
+                    count += 1;
+                }
+                i += 8;
+            }
+            10 | 24 | 30 | 31 => {
+                count += 1;
+                i += 1;
+            }
+            0..=31 => i += 1,
+            0xD800..=0xDBFF if units.get(i + 1).is_some_and(|u| (0xDC00..=0xDFFF).contains(u)) => {
+                count += 1;
+                i += 2;
+            }
+            _ => {
+                count += 1;
+                i += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Builds a raw fixture census for an HWP5 document on disk.
@@ -570,6 +648,7 @@ pub(crate) fn decode_hwp5_with_images_with_budget_limit(
     let (mut document, image_store, proj_warnings) =
         projection::project_to_core_with_images(intermediate.sections, &image_assets, budget)?;
     document.set_metadata(metadata);
+    projection::fill_memo_create_times(&mut document);
     warnings.extend(proj_warnings);
 
     Ok(Hwp5Document { document, image_store, warnings })
@@ -606,10 +685,21 @@ pub struct Hwp5Decoded {
     /// Per-section captured layout hints (paragraph line segments, table
     /// heights) for output formats that preserve them as fidelity hints.
     pub layout_hints: Vec<layout_hint_patch::SectionLayoutHints>,
+    /// Independent hint queues for emitted master parts, grouped by section.
+    pub master_layout_hints: Vec<Vec<layout_hint_patch::SectionLayoutHints>>,
     /// Document metadata parsed from `\x05HwpSummaryInformation`.
     pub metadata: hwpforge_core::metadata::Metadata,
     /// Non-fatal warnings collected during decoding and Core projection.
     pub warnings: Vec<Hwp5Warning>,
+    /// The `/BinData` storage name (`BIN0006.png`) of every BinData
+    /// reference, keyed by the reference: the 1-based position of the
+    /// `DocInfo` `BIN_DATA` record, which is what picture and border-fill
+    /// image references count — not the id stored in the record.
+    ///
+    /// External links and records that could not be parsed have no entry.
+    /// An output format resolves a style's image reference through this map
+    /// (see `hwpforge_convert::hwp5_style_store_to_hwpx_with_bin_data`).
+    pub bin_data_reference_names: BTreeMap<u16, String>,
 }
 
 /// Decodes an HWP5 document into the neutral [`Hwp5Decoded`] bundle.
@@ -634,10 +724,19 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
     budget_limit: u64,
 ) -> Hwp5Result<Hwp5Decoded> {
     let intermediate = decoder::decode_intermediate(bytes)?;
+    let bin_data_reference_names: BTreeMap<u16, String> = intermediate
+        .bin_data_records
+        .iter()
+        .filter(|record| !record.storage_name.is_empty())
+        .map(|record| (record.reference_ordinal, record.storage_name.clone()))
+        .collect();
     let (image_assets, mut budget) = join_hwp5_image_assets(bytes, &intermediate, budget_limit)?;
     let ole_assets = join_hwp5_ole_assets(bytes, &intermediate, &mut budget)?;
-    let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
+    let layout_hints =
+        layout_hint_patch::capture_layout_hints(&intermediate.sections, &mut warnings);
+    let master_layout_hints =
+        layout_hint_patch::capture_master_layout_hints(&intermediate.sections, &mut warnings);
     // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
     // the projected Core Document so a downstream encoder emits a populated
     // `<opf:metadata>` block.
@@ -653,7 +752,17 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
             budget,
         )?;
     document.set_metadata(metadata.clone());
+    projection::fill_memo_create_times(&mut document);
     warnings.extend(proj_warnings);
+    hwpforge_core::style_lookup::validate_body_borders(
+        &document,
+        style_store.border_fills().iter().map(|slot| slot.id),
+    )?;
+    projection::drop_cell_zones_with_unknown_border_fill(
+        &mut document,
+        style_store.border_fills.len(),
+        &mut warnings,
+    );
     supplement_border_fill_image_assets(
         &style_store,
         &image_assets,
@@ -661,7 +770,16 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
         &mut warnings,
     );
 
-    Ok(Hwp5Decoded { document, image_store, style_store, layout_hints, metadata, warnings })
+    Ok(Hwp5Decoded {
+        document,
+        image_store,
+        style_store,
+        layout_hints,
+        master_layout_hints,
+        metadata,
+        warnings,
+        bin_data_reference_names,
+    })
 }
 
 fn supplement_border_fill_image_assets(
@@ -670,12 +788,12 @@ fn supplement_border_fill_image_assets(
     image_store: &mut ImageStore,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    for binary_data_id in hwp5_styles.border_fill_image_binary_ids() {
-        let Some(asset) = image_assets.asset_for_binary_data_id(binary_data_id) else {
+    for reference in hwp5_styles.border_fill_image_binary_ids() {
+        let Some(asset) = image_assets.asset_for_reference(reference) else {
             push_projection_fallback(
                 warnings,
                 "style.border_fill.image",
-                format!("missing_image_asset_for_binary_data_id={binary_data_id}"),
+                image_assets.missing_asset_reason(reference),
             );
             continue;
         };
@@ -700,11 +818,27 @@ fn join_hwp5_image_assets(
     let geometry_hints: BTreeMap<u16, Hwp5ImageGeometryHint> =
         collect_image_geometry_hints(&intermediate.sections);
     let mut ordered_assets: Vec<Hwp5JoinedImageAsset> = Vec::new();
-    let mut assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset> = BTreeMap::new();
+    let mut assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset> = BTreeMap::new();
+    let mut unavailable_reasons: BTreeMap<u16, String> = BTreeMap::new();
 
     for record in &intermediate.bin_data_records {
+        let reference = record.reference_ordinal;
+        if record.storage_name.is_empty() {
+            unavailable_reasons.insert(
+                reference,
+                format!("bin_data_reference={reference} is an external link (not carried)"),
+            );
+            continue;
+        }
         let extension = record.extension.to_ascii_lowercase();
         if !is_supported_image_extension(&extension) {
+            unavailable_reasons.insert(
+                reference,
+                format!(
+                    "bin_data_reference={reference} extension '{}' is not a supported image",
+                    record.extension
+                ),
+            );
             continue;
         }
 
@@ -720,16 +854,19 @@ fn join_hwp5_image_assets(
                 storage_name: record.storage_name.clone(),
                 package_path: format!("BinData/{}", record.storage_name),
                 format: semantic_image_format_from_extension(&extension),
-                width_hwp: geometry_hints.get(&record.binary_data_id).map(|hint| hint.width_hwp),
-                height_hwp: geometry_hints.get(&record.binary_data_id).map(|hint| hint.height_hwp),
+                width_hwp: geometry_hints.get(&reference).map(|hint| hint.width_hwp),
+                height_hwp: geometry_hints.get(&reference).map(|hint| hint.height_hwp),
             },
             bytes: data,
         };
-        assets_by_binary_data_id.insert(record.binary_data_id, asset.clone());
+        assets_by_reference.insert(reference, asset.clone());
         ordered_assets.push(asset);
     }
 
-    Ok((Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id }, budget))
+    Ok((
+        Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_reference, unavailable_reasons },
+        budget,
+    ))
 }
 
 /// Inflates every OLE BinData entry once, under the per-stream cap and the
@@ -746,8 +883,7 @@ fn join_hwp5_ole_assets(
     use decoder::package::PackageReader;
 
     let pkg = PackageReader::open(bytes)?;
-    let mut assets_by_binary_data_id: BTreeMap<u16, Result<Vec<u8>, ChartOleError>> =
-        BTreeMap::new();
+    let mut assets_by_reference: BTreeMap<u16, Result<Vec<u8>, ChartOleError>> = BTreeMap::new();
     for record in &intermediate.bin_data_records {
         let extension = record.extension.to_ascii_lowercase();
         if extension != "ole" {
@@ -764,9 +900,69 @@ fn join_hwp5_ole_assets(
             }
             Err(err) => Err(ChartOleError::Inflate(err.to_string())),
         };
-        assets_by_binary_data_id.insert(record.binary_data_id, inflated);
+        assets_by_reference.insert(record.reference_ordinal, inflated);
     }
-    Ok(Hwp5OleAssetPlan { assets_by_binary_data_id })
+    let reference_ambiguities = reference_ambiguities(&intermediate.bin_data_records);
+    Ok(Hwp5OleAssetPlan { assets_by_reference, reference_ambiguities })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Records [`reference_ambiguities`] has looked at, counted per thread
+    /// in tests so a test can bound the work without timing it.
+    pub(crate) static RECORD_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// `records`, iterated — every scan of the `BIN_DATA` records in
+/// [`reference_ambiguities`] goes through here so tests can count it.
+fn record_visits(
+    records: &[Hwp5BinDataRecordSummary],
+) -> impl Iterator<Item = &Hwp5BinDataRecordSummary> {
+    records.iter().inspect(|_| {
+        #[cfg(test)]
+        RECORD_VISITS.with(|visits| visits.set(visits.get() + 1));
+    })
+}
+
+/// Every reference whose record by position differs from its record by
+/// stored id, with both readings (`ordinal 3 → external link, storage id 3 →
+/// BIN0003.OLE`). Covers every `BIN_DATA` slot — external links, records
+/// that could not be parsed and records without a stream included — not
+/// just the loaded OLE assets. When several records store the same id, the
+/// first one in `DocInfo` order is the id reading.
+pub(crate) fn reference_ambiguities(records: &[Hwp5BinDataRecordSummary]) -> BTreeMap<u16, String> {
+    // Both readings are indexed once, so the check stays linear in the
+    // number of records (a document may hold 65,535 of them).
+    let mut by_position: BTreeMap<u16, usize> = BTreeMap::new();
+    let mut by_id: BTreeMap<u16, usize> = BTreeMap::new();
+    for (index, record) in record_visits(records).enumerate() {
+        by_position.insert(record.reference_ordinal, index);
+        if !record.storage_name.is_empty() {
+            by_id.entry(record.binary_data_id).or_insert(index);
+        }
+    }
+    let describe = |slot: Option<usize>| match slot.map(|index| &records[index]) {
+        Some(record) if record.storage_name.is_empty() => "external link".to_string(),
+        Some(record) => record.storage_name.clone(),
+        None => "no parsed record".to_string(),
+    };
+    let references: BTreeSet<u16> =
+        by_position.keys().chain(by_id.keys()).copied().filter(|r| *r != 0).collect();
+    references
+        .into_iter()
+        .filter_map(|reference| {
+            let ordinal = by_position.get(&reference).copied();
+            let id = by_id.get(&reference).copied();
+            (ordinal != id).then(|| {
+                let reason = format!(
+                    "ordinal {reference} → {}, storage id {reference} → {}",
+                    describe(ordinal),
+                    describe(id)
+                );
+                (reference, reason)
+            })
+        })
+        .collect()
 }
 
 /// Returns the image bytes of one BinData entry, decompressing when the
@@ -797,7 +993,23 @@ fn collect_image_geometry_hints(
 ) -> BTreeMap<u16, Hwp5ImageGeometryHint> {
     let mut hints: BTreeMap<u16, Hwp5ImageGeometryHint> = BTreeMap::new();
     for section in sections {
-        collect_image_geometry_hints_in_paragraphs(&section.paragraphs, &mut hints);
+        // Keep the existing first-wins asset geometry policy in wire order.
+        // A master is a distinct host, but may reference the same BinData as
+        // a body picture before or after its section-owned list.
+        let mut masters = section.master_pages.iter().peekable();
+        for (index, paragraph) in section.paragraphs.iter().enumerate() {
+            let mut from = 0;
+            while let Some(master) = masters.next_if(|m| m.body_paragraph_index == index) {
+                let to = master.body_control_index.min(paragraph.controls.len()).max(from);
+                collect_image_geometry_hints_in_controls(&paragraph.controls[from..to], &mut hints);
+                collect_image_geometry_hints_in_paragraphs(&master.paragraphs, &mut hints);
+                from = to;
+            }
+            collect_image_geometry_hints_in_controls(&paragraph.controls[from..], &mut hints);
+        }
+        for master in masters {
+            collect_image_geometry_hints_in_paragraphs(&master.paragraphs, &mut hints);
+        }
     }
     hints
 }
@@ -871,6 +1083,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::NewNumber(_)
             | decoder::section::Hwp5Control::PageHiding(_)
             | decoder::section::Hwp5Control::OleObject(_)
+            | decoder::section::Hwp5Control::Bookmark { .. }
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
     }
@@ -971,8 +1184,18 @@ fn summarize_doc_info_bin_data_records(
     Ok(records
         .iter()
         .filter(|record| matches!(TagId::from(record.header.tag_id), TagId::BinData))
-        .filter_map(|record| Hwp5RawBinData::parse(&record.data).ok())
-        .map(|record| Hwp5BinDataRecordSummary {
+        // The position is taken before parsing: references count every
+        // record, so one that fails to parse must still use up its number.
+        .enumerate()
+        .filter_map(|(index, record)| {
+            // A position past u16::MAX cannot be named by any (u16)
+            // reference, so dropping it loses nothing reachable.
+            let reference_ordinal = u16::try_from(index + 1).ok()?;
+            let parsed = Hwp5RawBinData::parse(&record.data).ok()?;
+            Some((reference_ordinal, parsed))
+        })
+        .map(|(reference_ordinal, record)| Hwp5BinDataRecordSummary {
+            reference_ordinal,
             binary_data_id: record.binary_data_id,
             storage_name: record.storage_name(),
             extension: record.extension,
@@ -1077,3 +1300,16 @@ fn summarize_document(sections: &[Hwp5SectionSummary]) -> Hwp5DocumentSummary {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod raw_census_tests {
+    /// 이것을 실패시키는 것: 제어 payload까지 글자로 세기 / surrogate를 두 자로 세기.
+    #[test]
+    fn raw_para_text_counts_scalars_and_skips_control_payloads() {
+        let mut units: Vec<u16> = "A😀가".encode_utf16().collect();
+        units.extend([0x17, 0x7073, 0x7463, 123, 456, 789, 999, 0x17]);
+        units.extend([9, 0, 0, 0, 0, 0, 0, 9, 10, 24, 30, 31, 13]);
+        let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
+        assert_eq!(super::raw_para_text_chars(&bytes), 8);
+    }
+}

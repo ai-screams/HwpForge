@@ -7,17 +7,21 @@ use super::{ConvertOpsError, ConvertOpsWarning};
 use crate::{hwp5_to_hwpx_bytes_with_diagnostics, ConvertOptions};
 
 /// Options for [`convert_hwp5`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ConvertHwp5Options {
-    /// Emit the HWP5 line-segment cache into the HWPX output as
-    /// `<hp:linesegarray>`. Default `false`.
-    ///
-    /// This is opt-in because the carried cache is **render material, not an
-    /// editing surface**: the output is meant for the PDF replay pipeline,
-    /// not for reopening in Hancom Office. Leave it off unless the bytes feed
-    /// a renderer. [`super::to_pdf`] turns it on for its own HWP5 leg.
+    /// Carry the HWP5 line-segment cache into the HWPX output as
+    /// `<hp:linesegarray>`. Default `true`: the package then holds the source's
+    /// own line breaks, which the PDF renderer replays. A paragraph whose line
+    /// starts cannot be placed exactly loses its cache with a warning. Turn
+    /// it off to leave the line breaks to whatever opens the package.
     pub carry_layout_cache: bool,
+}
+
+impl Default for ConvertHwp5Options {
+    fn default() -> Self {
+        Self { carry_layout_cache: true }
+    }
 }
 
 impl ConvertHwp5Options {

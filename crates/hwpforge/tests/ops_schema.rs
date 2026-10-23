@@ -130,3 +130,120 @@ fn an_unknown_kind_name_is_rejected_with_the_valid_ones_listed() {
     assert_eq!(err.code().as_str(), "INVALID_INPUT", "{err}");
     assert!(err.to_string().contains("exported-section"), "{err}");
 }
+
+/// Group JSON as 0.16.10 wrote it (`to-json` of Hancom's F1 g4, a nested
+/// group, converted from HWP5 by that release; its children are plain shape
+/// controls) validates against the schema this release publishes and reads
+/// into the same groups, every child a shape.
+///
+/// 이것을 실패시키는 것: 스키마에서 `GroupChild` 의 Shape 갈래(`$ref Control`)를 빼는
+/// 것(검증 실패) / `GroupChild` 를 외부 태그 derive 로 바꾸는 것(옛 자식이 읽히지 않음).
+#[test]
+fn group_payload_from_0_16_10_still_validates_and_reads() {
+    use hwpforge::core::control::{Control, GroupChild};
+    use hwpforge::core::run::RunContent;
+
+    let old = std::fs::read_to_string(format!("{DATA}v0_16_10_group_document.json")).unwrap();
+    let mut instance: serde_json::Value = serde_json::from_str(&old).unwrap();
+    hwpforge::hwpx::exchange::read_exchange_v2(&mut instance).unwrap();
+    // Canonical v2 serialization also applies older non-measure aliases (shadow_type).
+    let instance = serde_json::to_value(
+        serde_json::from_value::<hwpforge::hwpx::ExportedDocument>(instance).unwrap(),
+    )
+    .unwrap();
+    let snapshot: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(snapshot_path(SchemaKind::ExportedDocument)).unwrap(),
+    )
+    .unwrap();
+    let mut schemas = boon::Schemas::new();
+    let mut compiler = boon::Compiler::new();
+    compiler.add_resource("urn:hwpforge:exported-document", snapshot).unwrap();
+    let index = compiler.compile("urn:hwpforge:exported-document", &mut schemas).unwrap();
+    if let Err(e) = schemas.validate(&instance, index) {
+        panic!("0.16.10 group JSON no longer validates: {e:#}");
+    }
+
+    // The shared migration changes only paragraph measures, preserving the legacy group payload.
+    let doc: hwpforge::core::Document<hwpforge::core::Draft> =
+        serde_json::from_value(instance["document"].clone()).expect("group document reads");
+    fn shapes(children: &[GroupChild]) -> usize {
+        children
+            .iter()
+            .map(|c| match c {
+                GroupChild::Shape(Control::Group { children, .. }) => 1 + shapes(children),
+                GroupChild::Shape(_) => 1,
+                _ => panic!("not a shape: {c:?}"),
+            })
+            .sum()
+    }
+    let counted: usize = doc.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .filter_map(|r| match &r.content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Group { children, .. } => Some(shapes(children)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .sum();
+    // Count the children in the raw JSON the same way.
+    fn raw(v: &serde_json::Value) -> usize {
+        match v {
+            serde_json::Value::Object(m) => match m.get("Group") {
+                Some(g) => g["children"].as_array().unwrap().iter().map(|c| 1 + raw_inner(c)).sum(),
+                None => m.values().map(raw).sum(),
+            },
+            serde_json::Value::Array(a) => a.iter().map(raw).sum(),
+            _ => 0,
+        }
+    }
+    fn raw_inner(child: &serde_json::Value) -> usize {
+        child.get("Group").map_or(0, |_| raw(child))
+    }
+    assert!(counted > 0);
+    assert_eq!(counted, raw(&instance["document"]));
+}
+
+/// A document exported by 0.16.10 still validates against the published
+/// `exported-document` schema and still builds a package.
+///
+/// `tests/data/master_pages_v0_16_10.json` is the 0.16.10 release binary's
+/// output for the master page fixture with even and odd master pages:
+///
+/// ```text
+/// hwpforge to-json tests/fixtures/master_pages/f5c-odd-even.hwpx --no-styles \
+///     -o crates/hwpforge/tests/data/master_pages_v0_16_10.json
+/// ```
+///
+/// Its master pages carry only `apply_page_type` and `paragraphs`; every
+/// field added since must stay optional in the schema.
+///
+/// 이것을 실패시키는 것: 새 `MasterPage` 필드 하나의 `#[serde(default)]` 를
+/// 지우기 — schemars 가 그 필드를 `required` 로 올린다.
+#[test]
+fn a_0_16_10_master_page_export_validates_against_the_current_schema() {
+    use hwpforge::ops::exchange::{from_json, FromJsonOptions};
+
+    let path = format!("{DATA}master_pages_v0_16_10.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let mut old: serde_json::Value = serde_json::from_str(&text).expect("old export is JSON");
+    hwpforge::hwpx::exchange::read_exchange_v2(&mut old).unwrap();
+    let masters = &old["document"]["sections"][0]["master_pages"];
+    assert_eq!(masters[0]["apply_page_type"], "Even", "the fixture is the even/odd one");
+    assert_eq!(masters[0].as_object().map(|o| o.len()), Some(2), "only the 0.16.10 fields");
+
+    let mut schemas = boon::Schemas::new();
+    let mut compiler = boon::Compiler::new();
+    compiler
+        .add_resource("urn:exported-document", produced(SchemaKind::ExportedDocument))
+        .expect("schema resource");
+    let id = compiler.compile("urn:exported-document", &mut schemas).expect("schema compiles");
+    if let Err(e) = schemas.validate(&old, id) {
+        panic!("0.16.10 export no longer validates: {e:#}");
+    }
+
+    let built = from_json(&text, &FromJsonOptions::default()).expect("old export still builds");
+    assert_eq!(built.sections, 1);
+}

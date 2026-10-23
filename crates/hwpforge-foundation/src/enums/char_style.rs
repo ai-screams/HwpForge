@@ -571,8 +571,10 @@ pub enum ShadowType {
     /// No shadow (default).
     #[default]
     None = 0,
-    /// Drop shadow.
+    /// Drop shadow (HWP5 kind 1, HWPX `DROP`; 비연속).
     Drop = 1,
+    /// Continuous shadow (HWP5 kind 2, HWPX `CONTINUOUS`; 연속).
+    Continuous = 2,
 }
 
 impl fmt::Display for ShadowType {
@@ -580,6 +582,7 @@ impl fmt::Display for ShadowType {
         match self {
             Self::None => f.write_str("None"),
             Self::Drop => f.write_str("Drop"),
+            Self::Continuous => f.write_str("Continuous"),
         }
     }
 }
@@ -591,10 +594,11 @@ impl std::str::FromStr for ShadowType {
         match s {
             "None" | "none" => Ok(Self::None),
             "Drop" | "drop" => Ok(Self::Drop),
+            "Continuous" | "continuous" => Ok(Self::Continuous),
             _ => Err(FoundationError::ParseError {
                 type_name: "ShadowType".to_string(),
                 value: s.to_string(),
-                valid_values: "None, Drop".to_string(),
+                valid_values: "None, Drop, Continuous".to_string(),
             }),
         }
     }
@@ -607,10 +611,11 @@ impl TryFrom<u8> for ShadowType {
         match value {
             0 => Ok(Self::None),
             1 => Ok(Self::Drop),
+            2 => Ok(Self::Continuous),
             _ => Err(FoundationError::ParseError {
                 type_name: "ShadowType".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (None), 1 (Drop)".to_string(),
+                valid_values: "0 (None), 1 (Drop), 2 (Continuous)".to_string(),
             }),
         }
     }

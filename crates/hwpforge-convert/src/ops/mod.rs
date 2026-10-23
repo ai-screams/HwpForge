@@ -292,7 +292,30 @@ impl ConvertOpsError {
     /// ```
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
-        hint_for(self.code())
+        // S22 r1: a render failure names what helps — re-saving in Hancom
+        // writes a missing layout cache, but does not make content the replay
+        // does not support renderable.
+        // 이것을 실패시키는 것: 원인 분기 삭제(미지원 내용에도 재저장 안내),
+        // `InvalidCache` 를 미지원 내용 안내로 합치기
+        // (`the_hint_tells_a_missing_cache_from_unsupported_content`).
+        match self.cause() {
+            Some(PdfErrorCode::MissingLayoutCache | PdfErrorCode::NoRenderableCache) => Some(
+                "paragraphs without a layout cache: re-saving the document in Hancom writes one",
+            ),
+            Some(PdfErrorCode::UnsupportedContent) => Some(
+                "the replay does not support this content yet, and re-saving in Hancom does not \
+                 change that: export the PDF from Hancom",
+            ),
+            // S22 r2: a cache the replay cannot use — out of order, or over
+            // content it cannot draw. A re-save rewrites the cache; the
+            // message says which it was.
+            Some(PdfErrorCode::InvalidCache) => Some(
+                "the layout cache does not fit what the replay expects: re-saving in Hancom \
+                 rewrites it; if the message names content the replay cannot draw, export the \
+                 PDF from Hancom",
+            ),
+            _ => hint_for(self.code()),
+        }
     }
 }
 
@@ -668,8 +691,20 @@ fn convert_warning_parts(warning: &ConvertWarning) -> (&'static str, String, Opt
                 Some(format!("{part} {location}")),
             );
         }
-        ConvertWarning::HwpxEncode(_) => {
+        // The CLI has always printed these three under `OTHER` with their
+        // Debug text; kept as is (public output contract).
+        ConvertWarning::HwpxEncode(
+            EncodeWarning::NoteHeadSkipped { .. }
+            | EncodeWarning::TitleMarkSkipped { .. }
+            | EncodeWarning::NoteRestartIgnored { .. },
+        ) => {
             return (OTHER, format!("{warning:?}"), None);
+        }
+        // Anything newer reports the encoder's own code, wording and place
+        // (the wording without the place, which travels in `location`), so it
+        // never falls back to `OTHER`.
+        ConvertWarning::HwpxEncode(other) => {
+            return (other.code(), other.message(), other.location());
         }
     };
     hwp5_warning_parts(hwp5)
@@ -697,6 +732,11 @@ fn hwp5_warning_parts(warning: &Hwp5Warning) -> (&'static str, String, Option<St
         Hwp5Warning::LayoutCacheDropped { reason } => {
             ("LAYOUT_CACHE_DROPPED", reason.clone(), None)
         }
+        // Same code and wording as the HWPX decode warning; the group and
+        // child position travel in the location column.
+        Hwp5Warning::ContentLost { kind, reason, location } => {
+            ("CONTENT_LOST", format!("{kind} lost: {reason}"), Some(location.clone()))
+        }
         other => (OTHER, format!("{other:?}"), None),
     }
 }
@@ -709,13 +749,22 @@ fn decode_warning_parts(warning: &DecodeWarning) -> (&'static str, String, Optio
             format!("\"{raw}\" unknown — fell back to {fallback}"),
             Some((*attribute).to_string()),
         ),
-        other => (OTHER, format!("{other:?}"), None),
+        // The CLI has always printed this one under `OTHER` with its Debug
+        // text; kept as is (public output contract).
+        DecodeWarning::LayoutCacheDropped { .. } => (OTHER, format!("{warning:?}"), None),
+        // Anything newer reports the decoder's own code, wording and place
+        // (the wording without the place, which travels in `location`), so it
+        // never falls back to `OTHER`.
+        other => (other.code(), other.message(), other.location()),
     }
 }
 
 /// Reproduces the CLI's `render_warning_dto` (`commands/to_pdf.rs`).
 fn render_warning_parts(warning: &PdfWarning) -> (&'static str, String, Option<String>) {
     match warning {
+        PdfWarning::ObjectTransformIgnored { location, kind, detail } => {
+            ("OBJECT_TRANSFORM_IGNORED", format!("{kind}: {detail}"), Some(location.clone()))
+        }
         PdfWarning::ParagraphSkipped { location } => (
             "PARAGRAPH_SKIPPED",
             "paragraph without layout cache skipped".to_string(),
@@ -781,6 +830,11 @@ fn render_warning_parts(warning: &PdfWarning) -> (&'static str, String, Option<S
         PdfWarning::TablePaginationComputed { location } => (
             "TABLE_PAGINATION_COMPUTED",
             "split-table page boundary computed (cache has no signal)".to_string(),
+            Some(location.clone()),
+        ),
+        PdfWarning::TableCaptionWidthMismatch { location, saved, expected } => (
+            "TABLE_CAPTION_WIDTH_MISMATCH",
+            format!("table caption saved width {saved} differs from the placed width {expected}"),
             Some(location.clone()),
         ),
         PdfWarning::TableDeficitDistributed { location } => (

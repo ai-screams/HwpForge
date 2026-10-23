@@ -430,7 +430,8 @@ GsoGroupBuilder` type cycle). A nested child's records recurse into its own
 builder; the parent's depth-based close rule is identical for both arms.
 
 Recursion threads through all four layers: projection
-(`project_group_child` → `project_group_run` on a nested group),
+(`projection/group.rs`: `project_child` → `project_nested_group`, each child
+folded by the Core geometry definition),
 layout-hint collection (`collect_group_child_layout_hints` recurses so the
 inner group's drawText `<hp:p>` get hints — otherwise the section patcher
 underflows), HWPX encoder (`encode_group_child_xml` early-returns into
@@ -453,6 +454,43 @@ HWPX decoder (`HxContainer.containers: Vec<HxContainer>` +
 Source: `Hwp5ShapeComponentGeometry::parse_from_shape_component`. Derived by
 correlating native `sample-gso-group.hwp` child bytes with the 한컴-emitted
 `<hp:offset>`/`<hp:orgSz>` in the `.hwpx` pair.
+
+**Rendering block and matrix chain** (`Hwp5ShapeRender::parse`). The same
+header goes on: `[12..14]` group level (u16), `[14..16]` version, `[16..24]`
+initial size (= HWPX `orgSz`), `[24..32]` current size (`curSz`), `[32..36]`
+flags, `[36..38]` angle (i16), `[38..46]` rotation centre, `[46..48]` pair
+count (u16), then `transMatrix` and `(scaMatrix, rotMatrix)` × pair count,
+each 6 × f64 — the same chain as HWPX `<hp:renderingInfo>`. Every group child
+in the HWP5 corpus has pair count = group level + 1 (3,936/3,936). The
+component right under a top-level `gso` CtrlHeader writes its type tag twice
+(`[0..4]` = `[4..8]`), shifting every field by four bytes; children write it
+once. A local point lands in the outermost group's space at
+`T · R1 · S1 · … · Rn · Sn · p` (last pair = the shape's own, first pair =
+the outermost group's); the outermost space's origin is the group's page
+position, not the minimum of the group's own transformed frame (F9: frame
+from (−1680, −3359), shapes from (−1679, 0), Hancom's ungroup at pos + chain).
+Drawing shapes follow the chain with line information (13 bytes) and a fill
+kind u32 (bit 0 = colour + hatch, pattern kind i32 at +12 with `-1` = none;
+bit 1 = picture; bit 2 = gradient — the `DocInfo` border-fill layout).
+
+**Groups outside body paragraphs.** A `gso` in a table cell paragraph or in
+another object's text (a text box, a header or footer) is collected by the
+single-shape `InlineGsoContext`; when its first `ShapeComponent` right under
+the control header is `$con` (type tag written twice), the same
+`GsoGroupBuilder` as in body paragraphs takes every deeper record. Before,
+the single-shape path folded such a group into one shape the size of the
+group (when one payload kind appeared) or dropped it as `Unknown` (corpus:
+259 groups in 83 documents' table cells). A group in a text box that itself
+sits in a cell or header is still not reached (the inline context keeps no
+paragraphs), nor one on a master page.
+
+**Child record levels.** A child's own shape sub-records and `LIST_HEADER` /
+`PARA_HEADER` sit one level below its `ShapeComponent`; its paragraphs'
+`PARA_TEXT` / `PARA_CHAR_SHAPE` / `PARA_LINE_SEG` and inline `CtrlHeader`s two
+levels below. Deeper records belong to an object inside the child's text (a
+table and its cells, a picture's own `ShapeComponent` / `ShapePicture`) and
+must not be read as the child's (F2: a picture in a grouped text box made the
+text box classify as two payloads and drop).
 
 **HWPX positioning gotcha**: 한컴 places a `<hp:container>` child by its
 `<hc:transMatrix>` **translation** (`e3` = x, `e6` = y), NOT by `<hp:offset>`
@@ -531,8 +569,8 @@ warning. Source: `schema/section.rs::Hwp5DutmalControl`.
 ### Compose (`tcps`) layouts + decoration glyph (task #74)
 
 The full 14-circleType × 2-composeType matrix
-(`sample-compose-all-shapes.hwp`, `probe_compose_variants`) confirmed
-exactly **two** layouts discriminated by `properties.low`:
+(`sample-compose-all-shapes.hwp`, `probe_compose_variants`) observed
+two layouts with two-character inputs:
 
 - `0x0003` (unpacked) — text fully in body; `properties.high` holds a
   decoration glyph that is a pure 1:1 function of the body-trailer
@@ -541,8 +579,15 @@ exactly **two** layouts discriminated by `properties.low`:
 - `0x0002` (packed) — `composeText[0]` in `properties.high`; observed
   on exactly one matrix cell (`CHAR + OVERLAP`).
 
-No third layout exists, so an unknown discriminator is genuinely
-malformed. Source: `schema/section.rs::Hwp5ComposeControl`.
+The purpose-made `tests/fixtures/hancom_controls/f2-compose-links.hwp`
+also has unpacked `efg`: `properties.low=4`, `properties.high=0x25C6`
+(◆), followed by three UTF-16 units and the fixed 44-byte trailer.
+Its Hancom HWPX twin has `composeText="efg"` and
+`circleType="SHAPE_REVERSAL_RHOMBUS"`. For values above 3, the decoder
+requires `properties.low == body_text_utf16_units + 1` (the decoration
+glyph contributes one unit). Existing 2/3 behavior is preserved;
+inconsistent longer lengths still fall back to Unknown.
+Source: `schema/section.rs::Hwp5ComposeControl`.
 
 ### IndexMark (`idxm`) surrogate split + trailer (task #75)
 
@@ -790,30 +835,31 @@ Source: `layout_hint_patch.rs::write_linesegarray`.
 
 ## 21. Wave 12 Series Provenance
 
-| Wave    | Discovery                                                                                                         |
-| ------- | ----------------------------------------------------------------------------------------------------------------- |
-| 12a     | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                                     |
-| 12b     | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                          |
-| 12d     | `eqed` + `EQEDIT` (0x58) script pairing                                                                           |
-| 12e     | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                           |
-| 12f     | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                      |
-| 12h     | Memo 7-parameter `<hp:parameters>` carry                                                                          |
-| 12i     | Dutmal `tdut` split-leader BSTR + `option_raw`                                                                    |
-| #73     | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                                 |
-| #74     | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant       |
-| #75     | IndexMark split-leader splits surrogate pairs (high in header, low leads body); trailer stays a constant sentinel |
-| 12j     | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                            |
-| 12k     | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                                 |
-| 12l     | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                              |
-| 12m     | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                       |
-| 12n     | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                                  |
-| 12o     | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                                  |
-| 12p     | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                               |
-| 12p#121 | ParaShape bits 25-27 are zero-based ordinal                                                                       |
-| 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                      |
-| 12p#124 | SUMMERY `editable` per-FieldType                                                                                  |
-| 12q     | Style "개요 N" override for outline levels 7~9                                                                    |
-| audit-1 | 옵션 전수조사: 번호 형식 / 쪽번호 형식 / 이미지 채우기 / 대각선 enum 정렬 (§22)                                   |
+| Wave     | Discovery                                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------------------------- |
+| 12a      | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                                     |
+| 12b      | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                          |
+| 12d      | `eqed` + `EQEDIT` (0x58) script pairing                                                                           |
+| 12e      | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                           |
+| 12f      | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                      |
+| 12h      | Memo 7-parameter `<hp:parameters>` carry                                                                          |
+| 12i      | Dutmal `tdut` split-leader BSTR + `option_raw`                                                                    |
+| #73      | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                                 |
+| #74      | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant       |
+| #75      | IndexMark split-leader splits surrogate pairs (high in header, low leads body); trailer stays a constant sentinel |
+| 12j      | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                            |
+| 12k      | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                                 |
+| 12l      | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                              |
+| 12m      | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                       |
+| 12n      | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                                  |
+| 12o      | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                                  |
+| 12p      | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                               |
+| 12p#121  | ParaShape bits 25-27 are zero-based ordinal                                                                       |
+| 12p#123  | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                      |
+| 12p#124  | SUMMERY `editable` per-FieldType                                                                                  |
+| 12q      | Style "개요 N" override for outline levels 7~9                                                                    |
+| bf-color | BORDER_FILL alpha-less color trailer, shared parser, contextual diagnostics (§22.6)                               |
+| audit-1  | 옵션 전수조사: 번호 형식 / 쪽번호 형식 / 이미지 채우기 / 대각선 enum 정렬 (§22)                                   |
 
 ---
 
@@ -905,17 +951,26 @@ hwp-rs `common_properties.rs` 대조 + 아래 native fixture 바이트 검증:
 | 15-17 | widthRelTo                   | **Core 미carry**                                                                                                             |
 | 18-19 | heightRelTo                  | **Core 미carry**                                                                                                             |
 | 20    | protect (크기 보호)          | vertRelTo=Para 일 때만 — **Core 미carry**                                                                                    |
-| 21-23 | textWrap                     | `text_wrap`: `0`=Square `1`=Tight `2`=Through `3`=TopAndBottom `4`=BehindText `5`=InFrontOfText (`6`/`7` 미정의 → Square)    |
-| 24-25 | textFlow                     | `text_flow`: `0`=BothSides `1`=LeftOnly `2`=RightOnly `3`=LargestOnly (wrap∈{Square,Tight,Through} 일 때만)                  |
+| 21-23 | textWrap                     | `text_wrap`: `0`=Square `1`=TopAndBottom `2`=BehindText `3`=InFrontOfText — 한컴 4값 (스펙 6값 아님, 아래). `4`–`7` → Square |
+| 24-25 | textFlow                     | `text_flow`: `0`=BothSides `1`=LeftOnly `2`=RightOnly `3`=LargestOnly (wrap=Square 일 때만)                                  |
 | 26-28 | numbering (번호 범주, mod 4) | Figure/Table/Equation — **Core 미carry**                                                                                     |
 
 - **오프셋** (속성 DWORD 직후 `[8..12]` vertOffset · `[12..16]` horzOffset)
   은 이미 `read_i32` (signed) — corpus 에 음수 실재(문단 위 돌출), u32 로
   읽지 말 것 (기존 디코드 정상, 정정 불요).
-- **미정의 값 폴백 (typed 경고 + 보수 기본값)**: `vertRelTo`=3 ·
-  `textWrap`∈{6,7} 은 레퍼런스 enum (hwp-rs `VerticalRelativeTo`/`TextWrap`)에
-  대응 variant 이 **없는 값** — 유효 HWP5 에는 나타나지 않으므로, 실제
-  출현은 손상/미문서 파일 신호다. `Hwp5Warning::ProjectionFallback`
+- **textWrap 은 한컴 4값이다**: 공식 스펙 rev1.3 표 70·hwp-rs `TextWrap`·
+  hwp.js `TextFlowMethod` 는 6값(Square·Tight·Through·TopAndBottom·
+  BehindText·InFrontOfText) 순서로 읽지만, 한컴 저장본은 `0` 어울림·`1`
+  자리 차지·`2` 글 뒤로·`3` 글 앞으로를 쓴다. 근거: 한컴 저작 X2
+  (`tests/fixtures/shapes/x2-wrap-modes.hwp` — 사각형 4 개 속성 word
+  `0x040a4000`·`0x042a4000`·`0x046a4000`·`0x044a4000`, bit 21–23 = 0·1·3·2,
+  HWPX 짝 `SQUARE`·`TOP_AND_BOTTOM`·`IN_FRONT_OF_TEXT`·`BEHIND_TEXT`) 4/4,
+  한컴 `.hwp`/`.hwpx` 짝의 떠 있는 개체 457/457. 코퍼스의 떠 있는 개체 값은
+  0–3 뿐이다.
+- **미정의 값 폴백 (typed 경고 + 보수 기본값)**: `vertRelTo`=3 은 레퍼런스
+  enum (hwp-rs `VerticalRelativeTo`)에 대응 variant 이 **없는 값**,
+  `textWrap`∈{4..7} 은 한컴이 쓰지 않는 값 — 유효 HWP5 에는 나타나지
+  않으므로, 실제 출현은 손상/미문서 파일 신호다. `Hwp5Warning::ProjectionFallback`
   typed 경고 + 보수 기본값(Paper/Square) 폴백으로 처리한다 (§13 Dutmal
   의 unknown align → CENTER + `ProjectionFallback` 관례와 동일). 추측
   **매핑**을 발명하지 않는 것이 house rule 의 요지이고 (§22.4 대각선
@@ -937,6 +992,76 @@ parity, `crates/hwpforge-convert/src/tests.rs`).
 
 ---
 
+### 22.6 DocInfo BORDER_FILL trailer variants (2026-10-19)
+
+`schema/border_fill.rs::{Hwp5RawBorderFill::parse, parse_fill_payload}` is the
+shared parser for DocInfo and shape fills. The fixed DocInfo prefix is property
+u16 `[0..2]`, five line slots (kind u8, width u8, COLORREF u32) `[2..32]`, then
+fill flags u32 `[32..36]`. Bits 0/1/2 mean color/image/gradation; they are flags,
+not mutually exclusive enum ordinals (§19.5). All numbers below are payload
+lengths, excluding the TLV header.
+
+Raw scans: the full source corpus directory has 2,247 `.hwp` paths, of which
+2,231 are CFB files with 92,576 BORDER_FILL records. Excluded: 14 ZIP files
+and two non-CFB files with `SCDS` magic.
+The 2026-10-16 stratified HWP5 sample has 258 CFB files / 10,725 records plus one
+ZIP/HWPX file. Repository `tests/fixtures` and crate test fixtures add 186 files /
+905 records. Full-corpus counts are by path, without SHA deduplication; these
+three sets overlap. Counts below are definitions (files), and file counts overlap
+between rows.
+
+| Flags | Payload bytes | Wire payload after flags                                                                 |    Full corpus |      Sample | Test fixtures |
+| ----- | ------------- | ---------------------------------------------------------------------------------------- | -------------: | ----------: | ------------: |
+| 0     | 40            | zero u32 extra length                                                                    | 59,569 (2,231) | 6,907 (258) |     537 (186) |
+| 1     | 52            | background u32, pattern color u32, hatch i32, **four zero bytes; no alpha byte**         |     1,095 (78) |     187 (8) |             0 |
+| 1     | 53            | same 12 color bytes, five zero trailer bytes                                             | 30,522 (2,153) | 3,446 (250) |     359 (181) |
+| 2     | 47            | mode u8, brightness i8, contrast i8, effect u8, BinData ID u16, five zero trailer bytes  |      611 (169) |     92 (24) |         4 (4) |
+| 3     | 60            | 12 color bytes + 6 image bytes + six zero trailer bytes                                  |         11 (7) |       3 (1) |             0 |
+| 4     | 70            | type u8, angle u32, center x/y i32, blur u32, count u32=2, two COLORREFs, u32=1, byte=50 |        30 (15) |       6 (2) |             0 |
+| 4     | 71            | same gradation fields, variable blur-center byte, then zero byte                         |      738 (398) |     84 (51) |         5 (5) |
+
+The full-corpus 71-byte gradations have blur-center values 15, 20, 47, 48, 49,
+50, 51, 80, 85, 90, 99 or 100; the existing parser carries this byte. All 768
+full-corpus gradients have two colors. No additional length/flag pair appeared
+outside the stratified sample. The 1,095 alpha-less color records all have the
+exact zero trailer and version 5.0.1.7; only the 187 sample definitions were
+reconverted and compared in the A/B check.
+
+This exhausts the observed `(flags, payload length)` pairs, not every possible
+HWP5 file. Flags 5/6/7 and unknown high bits were not observed. The combination
+3 remains `Unknown { kind, raw_data }`: its borders are preserved, its fill is
+omitted, and `decoder/header.rs::parse_doc_info` emits `ParserFallback` with
+1-based definition ID, flags, full payload length and unparsed byte count.
+
+The 52-byte color form is recognized **only** by flags=1 and exactly four
+remaining zero bytes after the colors/hatch. The zero word is consumed as extra
+length; missing alpha means opaque (`alpha=0`, the existing shape-fill contract).
+All 1,095 full-corpus definitions have this exact trailer (version 5.0.1.7); version
+is not used to select a layout. The former shape-only rescue path is removed:
+both callers use `parse_fill_payload` directly.
+
+For the longer color form, preserve the existing parser contract: alpha u8,
+extra length u32, declared extra bytes. The all-zero observed trailers cannot
+independently establish alpha/length ordering for nonzero extensions; do not
+infer a new ordering from them. Synthetic tests preserve nonzero alpha and
+extra-data behavior. A 52-byte prefix of an opaque 53-byte record is identical
+to the valid short form and cannot be distinguished using wire bytes alone.
+Other truncations/nonzero short trailers still fail; no catch-all EOF fallback.
+
+Image's six-byte base block and remaining `extra_data`, and gradation's named
+fields, colors, optional `shape` u32 / `blur_center` u8 and `extra_data`, retain
+their existing parser contract. The final zero byte is optional (a two-color
+gradient with shape and blur-center fields is 70 bytes). No nonzero transparency or multi-stop (>2) gradient
+was observed here; these observations do not establish new semantics for opaque
+extensions. This patch does not change image/gradation projection or public types.
+
+In-memory synthetic BORDER_FILL records cover all raw colors/five line slots,
+52/53-byte color boundaries, nonzero alpha, declared extra lengths, image/gradient fixed-length boundaries,
+and diagnostic context. Parse failures preserve the original placeholder/ID
+policy but use `ParserFallback` rather than `UnsupportedTag { offset: 0 }`.
+
+---
+
 ## 23. Update Protocol
 
 When a new wave discovers wire-level behavior:
@@ -948,3 +1073,163 @@ When a new wave discovers wire-level behavior:
 
 The goal is that future me / future contributors can grep this file before
 re-running probes.
+
+## 24. Master-Page Lists (section-owned `LIST_HEADER`)
+
+Source: `src/decoder/section/master.rs` (`intercept_master_record`,
+`dispatch_master_record`, `Hwp5MasterPage::core_metadata`). Fixtures:
+`tests/fixtures/master_pages/f5a`–`f5f` with Hancom HWPX companions.
+
+A section's master pages are `LIST_HEADER` lists owned by the section, not
+paragraphs of the body. Before 0.17.0 the parser read them as body content:
+master text overwrote the first body paragraph and master shapes were drawn
+in the body.
+
+**Where the lists are.**
+
+| Kind                                | Position                                                                       | Count                         |
+| ----------------------------------- | ------------------------------------------------------------------------------ | ----------------------------- |
+| Ordinary (both / even / odd)        | `LIST_HEADER` one level below the section-owned `secd` `CtrlHeader`            | from the `secd` scope bits    |
+| Extended (last page, optional page) | `LIST_HEADER` at section level + 1, after the body, outside tables and objects | `secd` payload u16 at byte 30 |
+
+Only a `secd` directly under the section owns master lists; a `secd` inside a
+cell or shape is left to its nested parser. A list ends at the first record
+whose level is lower than the `LIST_HEADER`, or equal to it and not a
+`PARA_HEADER`. Memo lists at the end of the section are not master lists.
+
+**`LIST_HEADER` payload (34 bytes or more).**
+
+| Offset       | Field                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| u32 @4       | bits 5–6 vertical alignment (0 top, 1 centre, 2 bottom)                                              |
+| u32 @8 / @12 | text width / height (HwpUnit)                                                                        |
+| u32 @18      | selector: 0 for ordinary lists; extended 3 = last page, 5 / 6 = optional page 2 / 3 (`selector - 3`) |
+| u32 @22      | bit 0 = `pageDuplicate` (overlap the previous master), bit 1 = `pageFront` (print on top)            |
+
+**Ordinary scope.** `secd` property bits 29–31 = 1 with one list → BOTH;
+= 6 with two lists → EVEN (first list) then ODD (second). Other combinations
+(single EVEN or ODD, other optional page numbers, unknown selectors) are not
+confirmed against Hancom output yet: they are reported as
+`ProjectionFallback` and never widened to BOTH. A `secd` that declares lists
+but whose lists are missing is reported with the declaration's record index
+and raw payload.
+
+**Notes inside master pages.** Hancom for macOS greys out footnote and
+endnote insertion in master-page editing. A footnote, endnote or
+footnote/endnote `NewNumber` found in a master list (directly or through a
+memo whose content is attached later) is kept and reported as
+`master_page.note_numbering`, because the HWPX note planner numbers master
+pages after the body.
+
+## 25. Rotation and Flip of Shapes Outside Groups
+
+Writer invariant for the nine standalone shape kinds: `offset` equals the
+translation actually written in `transMatrix` (e3, e6); zero translation
+keeps existing bytes. TextArt and group emission retain their existing paths.
+
+Source: Core `fold_standalone` / `fold_standalone_picture`
+(`hwpforge-core/src/control/geometry.rs`), HWP5 `projection/standalone.rs`,
+HWPX `decoder/shapes.rs` and `encoder/standalone.rs`. Fixtures:
+`tests/fixtures/standalone-rotation/` (Hancom-saved HWP5/HWPX pairs).
+
+HWP5 `SHAPE_COMPONENT` and HWPX `hp:renderingInfo` hold the same values:
+original size (`orgSz`), current size, flip bits, angle, rotation centre and
+the matrix chain (translation, then scale/rotation pairs). The `gso`
+`CtrlHeader` width and height are HWPX `hp:sz`. HWPX writes a current-size
+axis that equals the original as 0.
+
+| Rule            | Fact                                                                                                                                                                                         |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Drawing         | Hancom draws with the composed matrix `T · R1 · S1 · …` (scale first). Mapping the original box `[0, orgSz]` through it fills `[0, sz]`                                                      |
+| Local box       | D = original size × the scale; the current size is a copy of it. A text box grown by its content carries the grown height in the scale                                                       |
+| Bounding box    | `sz` is the bounding box of D rotated (and flipped) about its centre. Pictures add their inner margin (`inMargin`) outside the rotation                                                      |
+| Source of truth | The angle and flip fields and the `offset` attribute are not geometry. Older documents store the same flip with a different matrix combination, and source `offset` is not read for geometry |
+| Text            | Text in a rotated text box is not rotated; it wraps to the bounding-box width minus the left and right margins                                                                               |
+
+A shape whose matrix has no rotation or flip takes the existing path even if
+its angle or flip fields say otherwise (the fields are dropped with a
+warning). A matrix that does not map the original box onto `sz` within 2.5
+HWPUNIT is recomputed from D with a warning; Hancom produces such a shape when
+the width of a rotated line is edited and the shape is rotated again.
+
+## 26. Shape outline property word (fixture 30)
+
+The 13-byte line information is COLORREF (u32), thickness (i32 HWPUNIT),
+properties (u32), outline (u8), after the shape matrix chain. Standalone
+shapes and group children use the same parser and projection function.
+Group children also use the standalone fill and corner-ratio projection.
+Gradient, pattern and picture values are carried unchanged (fixture 32); their
+drawn direction under group transforms awaits the PDF visual gate. Unsupported fill
+details and missing picture assets retain the existing warnings.
+
+| Bits          | Meaning                                                      |
+| ------------- | ------------------------------------------------------------ |
+| 0–5           | Line type: 0 NONE, 1 SOLID, 2 DOT, 3 DASH (confirmed values) |
+| 6–9           | End cap (unchanged by this implementation)                   |
+| 10–15 / 16–21 | Head / tail arrow shape                                      |
+| 22–25 / 26–29 | Head / tail arrow size                                       |
+| 30 / 31       | Head / tail filled                                           |
+
+| HWP5 shape | Core ArrowType | HWPX          |
+| ---------- | -------------- | ------------- |
+| 0          | None           | NORMAL        |
+| 1          | Normal         | ARROW         |
+| 2          | Arrow          | SPEAR         |
+| 3          | Concave        | CONCAVE_ARROW |
+| 4          | Diamond        | EMPTY_DIAMOND |
+| 5          | Oval           | EMPTY_CIRCLE  |
+| 6          | Open           | EMPTY_BOX     |
+
+The HWP 5.0 specification PDF's shape-name table is wrong starting at value 2.
+These mappings come from the Hancom-saved `tests/fixtures/shapes/arrows.*`
+pair. Filled/empty is independent of shape, including EMPTY_* names.
+
+| HWP5 size | Core ArrowSize (stable discriminant) | HWPX          |
+| --------- | ------------------------------------ | ------------- |
+| 0         | Small (0)                            | SMALL_SMALL   |
+| 1         | SmallMedium (3)                      | SMALL_MEDIUM  |
+| 2         | SmallLarge (4)                       | SMALL_LARGE   |
+| 3         | MediumSmall (5)                      | MEDIUM_SMALL  |
+| 4         | Medium (1)                           | MEDIUM_MEDIUM |
+| 5         | MediumLarge (6)                      | MEDIUM_LARGE  |
+| 6         | LargeSmall (7)                       | LARGE_SMALL   |
+| 7         | LargeMedium (8)                      | LARGE_MEDIUM  |
+| 8         | Large (2)                            | LARGE_LARGE   |
+
+Shape >=7 or size >=9 emits a concrete ProjectionFallback and omits that
+endpoint, including shape 0 with an unknown size. Decision B′: shape 0 is
+omitted only with Medium size and filled=true; nondefault size/fill is kept
+as `Some(ArrowStyle { arrow_type: None, .. })` for subsequent editing.
+HWPX unknown endpoint strings use UnknownEnumValue and likewise
+omit that endpoint, rather than silently replacing its size or shape.
+
+The native `ShapeComponentArc` (0x51) is always read, both standalone and
+inside groups. Its byte type 0/1/2 maps to Normal/Pie/Chord through the same
+projection; other values are diagnosed and omitted. It defines an
+`AxisEndpoints` arc (center and two axes). Ellipse-derived arcs retain
+`EllipseSweep` (seven defining points). HWPX emission follows this definition,
+independent of rotation, reflection or parent.
+
+## 27. Native arc layout and group fills (fixtures 31–32)
+
+Fixture 31 confirms the same `ShapeComponentArc` (0x51) layout for standalone
+and grouped arcs: byte 0 is the closure type; bytes 1–8, 9–16 and 17–24 are
+the center, first axis endpoint and second axis endpoint, each an `(x, y)`
+pair of little-endian i32 HWPUNIT values. The three Hancom arc-border buttons
+0 / 1 / 2 map to HWPX NORMAL / PIE / CHORD respectively.
+
+Fixture 32 (`tests/fixtures/shapes/fills.*`) adds the following evidence:
+
+- No fill has two HWP5 forms: the existing fill kind 0, and fixture 32's
+  kind 1 (solid) with face COLORREF `0xFFFFFFFF` and pattern −1.
+  Both mean Core `Fill::None`.
+  Hancom writes `winBrush faceColor="none"`; our existing writer omits
+  `fillBrush`. The spelling stays unchanged pending Hancom editing-UI checks.
+- Pattern value 2 means HWPX `SLASH` (Hancom UI `\`). Other pattern values
+  are not confirmed by fixture 32.
+- The first byte of `ShapeComponentRect` is the corner ratio in percent
+  (`20` in the rounded rectangle, both groups).
+- Group B stores horizontal flip 1 and rotation 30 on the group, plus
+  rotation 180 and no flip on every child, in both Hancom formats.
+  Our existing fold transfers the group transform to the children; fill
+  values are preserved independently of that placement representation.

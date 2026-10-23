@@ -55,6 +55,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "LegacyJsonTabs",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "Zip",
           "shape": "tuple",
           "cfg": [],
@@ -731,6 +737,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "UnclosedFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "LayoutCacheDropped",
           "shape": "struct",
           "cfg": [],
@@ -759,6 +771,30 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ContentLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "PackageIdConflict",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ImageReferenceUnresolved",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ObjectIdConflict",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },
@@ -771,6 +807,30 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "InactiveHeaderReference",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ParagraphMeasureNormalized",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnclosedFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "UnknownEnumValue",
           "shape": "struct",
           "cfg": [],
@@ -778,6 +838,18 @@
         },
         {
           "name": "LayoutCacheDropped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ContentLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "BeginNumRepaired",
           "shape": "struct",
           "cfg": [],
           "discriminant": null
@@ -828,6 +900,24 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "MeasureUnitMismatch",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MeasureOverflow",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MeasureOffGrid",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "Validation",
           "shape": "tuple",
           "cfg": [],
@@ -856,6 +946,12 @@
       "wrapped": false,
       "not_wrapped_reason": "reached only through CoreError::Validation, which classifies the whole family as VALIDATION_FAILED",
       "variants": [
+        {
+          "name": "InvalidFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
         {
           "name": "EmptyDocument",
           "shape": "unit",
@@ -966,6 +1062,36 @@
         },
         {
           "name": "InvalidSummaryToken",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidMasterPageScope",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidCornerRatio",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidObjectFrame",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidCellZone",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "HeaderFooterAnchorOutOfRange",
           "shape": "struct",
           "cfg": [],
           "discriminant": null
@@ -1105,6 +1231,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "ParagraphMeasureLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "MergedCellsFlattened",
           "shape": "struct",
           "cfg": [],
@@ -1112,6 +1244,24 @@
         },
         {
           "name": "ImageEmbedSkipped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ContainerTooDeep",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EquationAsText",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MarkupWrittenAsText",
           "shape": "struct",
           "cfg": [],
           "discriminant": null

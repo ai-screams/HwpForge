@@ -6,19 +6,7 @@
 
 use std::fs;
 
-use hwpforge_core::document::Document;
-use hwpforge_core::Draft;
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxStyleStore};
-use serde::{Deserialize, Serialize};
-
-/// CLI의 ExportedDocument와 동일한 구조.
-/// smithy-hwpx 예제에서 bindings-cli에 의존하지 않기 위해 재정의.
-#[derive(Serialize, Deserialize)]
-struct ExportedDocument {
-    document: Document<Draft>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    styles: Option<HwpxStyleStore>,
-}
+use hwpforge_smithy_hwpx::{ExportedDocument, HwpxDecoder, HwpxEncoder, HwpxStyleStore};
 
 fn roundtrip(name: &str) {
     let input_path = format!("examples/{name}.hwpx");
@@ -28,7 +16,7 @@ fn roundtrip(name: &str) {
     let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("decode hwpx");
 
     let exported =
-        ExportedDocument { document: decoded.document, styles: Some(decoded.style_store) };
+        ExportedDocument { format_version: 2, document: decoded.document, styles: Some(decoded.style_store) };
     let json_string = serde_json::to_string_pretty(&exported).expect("serialize to json");
 
     fs::create_dir_all("examples/hwpx2json").expect("create hwpx2json dir");

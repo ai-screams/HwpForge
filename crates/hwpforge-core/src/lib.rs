@@ -87,6 +87,8 @@ pub mod column;
 pub mod control;
 pub mod document;
 pub mod error;
+pub mod field_inventory;
+pub mod frame;
 pub mod image;
 pub mod inline;
 pub mod layout;
@@ -96,6 +98,8 @@ pub mod object_id;
 pub mod outline;
 pub mod page;
 pub mod paragraph;
+pub mod paragraph_measure;
+pub use paragraph_measure::{CharCount, ParagraphMeasure};
 pub mod placement;
 pub mod run;
 pub mod section;
@@ -117,7 +121,8 @@ pub use control::{
 };
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
-pub use image::{Image, ImageFormat, ImageStore};
+pub use frame::ObjectFrame;
+pub use image::{Image, ImageCrop, ImageFormat, ImageStore};
 pub use inline::{InlineSegment, InlineTabAttr, InlineText};
 pub use metadata::Metadata;
 pub use numbering::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
@@ -128,9 +133,21 @@ pub use paragraph::Paragraph;
 pub use placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 pub use run::{Run, RunContent};
 pub use section::{
-    BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry,
-    PageNumber, Section, Visibility,
+    BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, MasterPageSpecial,
+    PageBorderFillEntry, PageNumber, Section, Visibility,
 };
 pub use style_lookup::{BorderFillLines, BorderLine, BorderLineKind, FillKind, StyleLookup};
 pub use tab::{TabDef, TabStop};
-pub use table::{Table, TableCell, TableRow};
+pub use table::{CellZone, Table, TableCell, TableRow};
+
+/// Shared semantic node paths and categories.
+pub mod node_path;
+
+/// Immutable original XML evidence.
+pub mod source_xml;
+
+/// Shared field presentation for output consumers.
+pub mod field_view;
+
+#[doc(hidden)]
+pub mod zip_package;

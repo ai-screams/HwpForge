@@ -69,6 +69,9 @@ const AUDITED: &[Audited] = &[
             ("ProjectionFallback", "PROJECTION_FALLBACK"),
             ("ParserFallback", "PARSER_FALLBACK"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
+            // Same code as the HWPX decode warning; the group and child
+            // position travel in the location column.
+            ("ContentLost", "CONTENT_LOST"),
         ],
     },
     Audited {
@@ -93,6 +96,7 @@ const AUDITED: &[Audited] = &[
         file: "crates/hwpforge-smithy-hwpx/src/encoder/mod.rs",
         enum_name: "EncodeWarning",
         table: &[
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             // OTHER by design: these three carry no CLI wording, so `ops`
             // keeps their Debug text under the CLI's own `OTHER` spelling
@@ -103,12 +107,29 @@ const AUDITED: &[Audited] = &[
             // New with #198 and printed by no older frontend, so it gets its
             // own code; the part and location travel in the location column.
             ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
+            // A shape the HWPX writer cannot store exactly, or content it
+            // leaves out; reported under the encoder's own code
+            // (`EncodeWarning::code`), part and path in the location column.
+            ("ContentLost", "CONTENT_LOST"),
+            ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
+            ("ImageReferenceUnresolved", "IMAGE_REFERENCE_UNRESOLVED"),
+            ("ObjectIdConflict", "OBJECT_ID_CONFLICT"),
         ],
     },
     Audited {
         file: "crates/hwpforge-smithy-hwpx/src/decoder/mod.rs",
         enum_name: "DecodeWarning",
-        table: &[("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"), ("LayoutCacheDropped", "OTHER")],
+        table: &[
+            ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
+            ("LayoutCacheDropped", "OTHER"),
+            // Reported under the decoder's own code (`DecodeWarning::code`).
+            ("ContentLost", "CONTENT_LOST"),
+            ("BeginNumRepaired", "BEGIN_NUM_REPAIRED"),
+            ("InactiveHeaderReference", "INACTIVE_HEADER_REFERENCE"),
+            ("ParagraphMeasureNormalized", "PARAGRAPH_MEASURE_NORMALIZED"),
+            ("InvalidFieldBoundary", "INVALID_FIELD_BOUNDARY"),
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
+        ],
     },
     Audited {
         file: "crates/hwpforge-smithy-pdf/src/lib.rs",
@@ -127,6 +148,7 @@ const AUDITED: &[Audited] = &[
             ("NonTextRunDropped", "NON_TEXT_RUN_DROPPED"),
             ("AnchorMarkerOnLineBoundary", "ANCHOR_MARKER_ON_LINE_BOUNDARY"),
             ("TablePaginationComputed", "TABLE_PAGINATION_COMPUTED"),
+            ("TableCaptionWidthMismatch", "TABLE_CAPTION_WIDTH_MISMATCH"),
             ("TableDeficitDistributed", "TABLE_DEFICIT_DISTRIBUTED"),
             ("UnsupportedTableStyle", "UNSUPPORTED_TABLE_STYLE"),
             ("BandOverflow", "BAND_OVERFLOW"),
@@ -136,6 +158,7 @@ const AUDITED: &[Audited] = &[
             ("PageNumberStyleFallback", "PAGE_NUMBER_STYLE_FALLBACK"),
             ("MissingGlyphs", "MISSING_GLYPHS"),
             ("LineOverflow", "LINE_OVERFLOW"),
+            ("ObjectTransformIgnored", "OBJECT_TRANSFORM_IGNORED"),
         ],
     },
     Audited {

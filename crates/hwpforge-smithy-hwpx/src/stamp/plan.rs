@@ -1,11 +1,10 @@
 //! Plan phase (E6 Wave 1A): enumerate class-A placeholder candidates over a
 //! Core document.
 //!
-//! Coverage mirrors `patch.rs::collect_semantic_text_slots` exactly — the
-//! same walker is reused, so any text a patch can address, a stamp plan can
-//! see (and nothing else). Existing ClickHere field bodies (`…control.field`
-//! slots) are excluded: stamping inside `fieldBegin`~`fieldEnd` would split
-//! the field.
+//! The shared text walker includes protected field text and folded Memo
+//! anchors. This planner applies the field-body policy to those real slots;
+//! no prior patchability filter may hide a policy omission. Existing field
+//! bodies are excluded because stamping them would split the field.
 //!
 //! Instruction-context guards are scoped to the surrounding **paragraph**
 //! (all runs concatenated) and, inside tables, the surrounding **cell** —
@@ -17,7 +16,7 @@ use std::ops::Range;
 use hwpforge_core::Document;
 
 use super::detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason};
-use crate::patch::collect_semantic_text_slots;
+use crate::patch::collect_stamp_text_slots;
 
 /// One placeholder candidate produced by the plan phase.
 ///
@@ -51,16 +50,21 @@ pub struct StampCandidate {
 pub fn plan<S>(document: &Document<S>) -> Vec<StampCandidate> {
     let mut out = Vec::new();
     for (section_idx, section) in document.sections().iter().enumerate() {
-        let slots = collect_semantic_text_slots(section);
+        let inventory = hwpforge_core::field_inventory::FieldInventory::from_sections_at(
+            std::slice::from_ref(section),
+            section_idx,
+        );
+        // 이것을 실패시키는 것: 범위 본문을 일반 placeholder 로 다시 탐지하기.
+        let slots: Vec<_> = collect_stamp_text_slots(section, section_idx)
+            .into_iter()
+            .filter(|slot| !inventory.contains_body(section_idx, &slot.path))
+            .collect();
 
         // Guard scopes: paragraph text (runs concatenated, slot order) and
         // table-cell text. Keys are path prefixes of the slot paths.
         let mut para_text: HashMap<String, String> = HashMap::new();
         let mut cell_text: HashMap<String, String> = HashMap::new();
         for slot in &slots {
-            if is_field_body_slot(&slot.path) {
-                continue;
-            }
             if let Some(pk) = paragraph_key(&slot.path) {
                 para_text.entry(pk.to_string()).or_default().push_str(&slot.text);
             }
@@ -73,7 +77,7 @@ pub fn plan<S>(document: &Document<S>) -> Vec<StampCandidate> {
             // Field bodies are never stamp targets; tab-bearing InlineText
             // runs still contribute guard context above, but splitting them
             // is lossy so they produce no candidates (Wave 1A).
-            if is_field_body_slot(&slot.path) || slot.inline {
+            if slot.inline {
                 continue;
             }
             let hits = detect_markers(&slot.text);
@@ -101,11 +105,6 @@ pub fn plan<S>(document: &Document<S>) -> Vec<StampCandidate> {
         }
     }
     out
-}
-
-/// Existing ClickHere bodies are patch slots but never stamp targets.
-fn is_field_body_slot(path: &str) -> bool {
-    path.ends_with(".field")
 }
 
 /// Slot path minus its `.runs[j]…` tail — identifies the paragraph.

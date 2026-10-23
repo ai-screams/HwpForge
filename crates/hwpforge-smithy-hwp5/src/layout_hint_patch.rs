@@ -17,20 +17,22 @@ use crate::schema::section::Hwp5ParaLineSeg;
 
 /// Per-section captured layout hints (paragraph line segments + table heights).
 ///
-/// The ordering of `paragraphs` and `tables` mirrors the document order the
-/// HWPX encoder emits elements in, so a consumer can replay them as a queue
-/// while streaming the generated `section{N}.xml`.
+/// Both queues hold the body's hints, then the headers', then the footers'
+/// (each scope in the order the HWPX encoder emits it). The encoder writes
+/// a header/footer into the paragraph it is anchored to, so in the XML its
+/// elements interleave with the body's; a consumer splits each queue by the
+/// number of elements of each scope it finds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionLayoutHints {
-    /// Paragraph layout hints in HWPX emission order (body, then headers,
-    /// then footers).
+    /// Paragraph layout hints (body, then headers, then footers).
     pub paragraphs: VecDeque<ParagraphLayoutHint>,
-    /// Table layout hints in HWPX emission order.
+    /// Table layout hints (body, then headers, then footers).
     pub tables: VecDeque<TableLayoutHint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ScopeLayoutHints {
+    uncertain: Option<&'static str>,
     paragraphs: VecDeque<ParagraphLayoutHint>,
     tables: VecDeque<TableLayoutHint>,
 }
@@ -55,8 +57,46 @@ pub struct TableLayoutHint {
 ///
 /// Crate-internal: the captured hints reach output-format orchestrators through
 /// the `Hwp5Decoded::layout_hints` bundle rather than this entry point.
-pub(crate) fn capture_layout_hints(sections: &[SectionResult]) -> Vec<SectionLayoutHints> {
-    sections.iter().map(collect_section_layout_hints).collect()
+pub(crate) fn capture_layout_hints(
+    sections: &[SectionResult],
+    warnings: &mut Vec<crate::Hwp5Warning>,
+) -> Vec<SectionLayoutHints> {
+    sections.iter().map(|section| collect_section_layout_hints(section, warnings)).collect()
+}
+
+/// Master hints follow emitted master order, excluding unrepresentable scopes.
+pub(crate) fn capture_master_layout_hints(
+    sections: &[SectionResult],
+    warnings: &mut Vec<crate::Hwp5Warning>,
+) -> Vec<Vec<SectionLayoutHints>> {
+    sections
+        .iter()
+        .map(|section| {
+            section
+                .master_pages
+                .iter()
+                .filter(|master| master.core_metadata().is_ok())
+                .map(|master| {
+                    let mut hints = ScopeLayoutHints::default();
+                    collect_scope_paragraphs(&master.paragraphs, &mut hints);
+                    if let Some(reason) = hints.uncertain {
+                        warnings.push(crate::Hwp5Warning::ProjectionFallback {
+                            subject: "layout_hints.discarded",
+                            reason: format!(
+                                "{}: {reason}; master layout hints discarded",
+                                master.location()
+                            ),
+                        });
+                        return SectionLayoutHints {
+                            paragraphs: VecDeque::new(),
+                            tables: VecDeque::new(),
+                        };
+                    }
+                    SectionLayoutHints { paragraphs: hints.paragraphs, tables: hints.tables }
+                })
+                .collect()
+        })
+        .collect()
 }
 
 impl SectionLayoutHints {
@@ -66,7 +106,10 @@ impl SectionLayoutHints {
     }
 }
 
-fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
+fn collect_section_layout_hints(
+    section: &SectionResult,
+    warnings: &mut Vec<crate::Hwp5Warning>,
+) -> SectionLayoutHints {
     let mut body = ScopeLayoutHints::default();
     let mut header = ScopeLayoutHints::default();
     let mut footer = ScopeLayoutHints::default();
@@ -77,7 +120,13 @@ fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
 
     body.append(&mut header);
     body.append(&mut footer);
-
+    if let Some(reason) = body.uncertain {
+        warnings.push(crate::Hwp5Warning::ProjectionFallback {
+            subject: "layout_hints.discarded",
+            reason: format!("section layout hints discarded: {reason}; positional hint queues cannot be linked reliably to output objects"),
+        });
+        return SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() };
+    }
     SectionLayoutHints { paragraphs: body.paragraphs, tables: body.tables }
 }
 
@@ -88,10 +137,18 @@ impl ScopeLayoutHints {
     }
 
     fn push_table(&mut self, table: &Hwp5Table) {
+        if table
+            .cells
+            .windows(2)
+            .any(|cells| (cells[0].row, cells[0].column) > (cells[1].row, cells[1].column))
+        {
+            self.uncertain = Some("raw table cell order differs from projected row/column order");
+        }
         self.tables.push_back(TableLayoutHint { height: derive_table_height(table) });
     }
 
     fn append(&mut self, other: &mut Self) {
+        self.uncertain = self.uncertain.or(other.uncertain);
         self.paragraphs.append(&mut other.paragraphs);
         self.tables.append(&mut other.tables);
     }
@@ -107,13 +164,20 @@ fn collect_flow_paragraph_layout_hints(
 
     for control in &paragraph.controls {
         match control {
-            Hwp5Control::Table(table) => collect_table_layout_hints(table, body),
+            Hwp5Control::Table(table) => {
+                collect_flow_table_layout_hints(table, body, header, footer)
+            }
             Hwp5Control::Header(subtree) => collect_scope_paragraphs(&subtree.paragraphs, header),
             Hwp5Control::Footer(subtree) => collect_scope_paragraphs(&subtree.paragraphs, footer),
             Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
                 collect_scope_paragraphs(&subtree.paragraphs, body);
             }
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, body),
+            // 이것을 실패시키는 것: 이 갈래를 지우기(타원 글 hint 가 빠져 캐시 켠
+            // 변환이 hint 부족으로 실패 — `ellipse_and_polygon_keep_their_text`).
+            Hwp5Control::Ellipse(_) | Hwp5Control::Polygon(_) => {
+                collect_scope_paragraphs(crate::projection::written_shape_text(control), body);
+            }
             // Memo body paragraphs are emitted as `<hp:subList>` children of
             // the body paragraph in HWPX, so the patcher consumes layout
             // hints for them from the body scope — same pattern as
@@ -125,8 +189,6 @@ fn collect_flow_paragraph_layout_hints(
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
-            | Hwp5Control::Polygon(_)
-            | Hwp5Control::Ellipse(_)
             | Hwp5Control::Arc(_)
             | Hwp5Control::Curve(_)
             | Hwp5Control::TextArt(_)
@@ -144,25 +206,53 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::NewNumber(_)
             | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
+            | Hwp5Control::Bookmark { .. }
             | Hwp5Control::Unknown { .. } => {}
         }
     }
 }
 
-/// Collects layout hints from a group's text-bearing children (rect/ellipse
-/// with `drawText`). Non-text children carry no paragraphs. A child that is
-/// itself a nested group recurses so the inner group's text-bearing leaves
-/// (whose `<hp:p>` the encoder still emits) contribute hints — without this
-/// the patcher would underflow on nested groups.
+/// A body table: its cells are flow paragraphs too, so a header/footer in a
+/// cell (lifted into the section by projection, §19.7 F) leaves its hints
+/// in the header/footer scope rather than the body.
+///
+/// 이것을 실패시키는 것: 칸 문단을 `collect_scope_paragraphs(.., body)` 로
+/// 되돌리기 — 칸 안 꼬리말 문단의 hint 가 사라져 문단 hint 수가 모자란다
+/// (`cell_footer_converts_with_and_without_the_layout_cache`).
+fn collect_flow_table_layout_hints(
+    table: &Hwp5Table,
+    body: &mut ScopeLayoutHints,
+    header: &mut ScopeLayoutHints,
+    footer: &mut ScopeLayoutHints,
+) {
+    body.push_table(table);
+    // D: the caption's paragraphs are written inside `<hp:tbl>` before the
+    // rows (`<hp:caption>` precedes `<hp:tr>`), so their hints come first.
+    // 이것을 실패시키는 것: 캡션 hint 를 빼거나 칸 뒤로(캡션 표 변환이
+    // hint 수 부족으로 실패 — `table_caption_converts_with_its_line_cache`).
+    for paragraph in crate::projection::written_caption_paragraphs(table) {
+        collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
+    }
+    for cell in &table.cells {
+        for paragraph in &cell.paragraphs {
+            collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
+        }
+    }
+}
+
+/// Collects layout hints from the group children whose text is written:
+/// the group projection's own plan
+/// ([`written_group_text`](crate::projection::written_group_text)) decides,
+/// so a child whose text is dropped (a polygon's, an arc's), a child the
+/// fold drops (an axis collapsed, out of range) and every child of a nested
+/// group that is dropped leave no hint behind — a leftover hint fails the
+/// whole conversion ("left unconsumed hints").
 fn collect_group_child_layout_hints(
     group: &crate::decoder::section::Hwp5GroupControl,
     scope: &mut ScopeLayoutHints,
 ) {
-    for child in &group.children {
-        if let Hwp5Control::Group(nested) = &child.control {
-            collect_group_child_layout_hints(nested, scope);
-        }
-        collect_scope_paragraphs(&child.paragraphs, scope);
+    for paragraphs in crate::projection::written_group_text(group) {
+        collect_scope_paragraphs(paragraphs, scope);
     }
 }
 
@@ -179,18 +269,20 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
         match control {
             Hwp5Control::Table(table) => collect_table_layout_hints(table, scope),
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, scope),
+            Hwp5Control::Ellipse(_) | Hwp5Control::Polygon(_) => {
+                collect_scope_paragraphs(crate::projection::written_shape_text(control), scope);
+            }
             Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
                 collect_scope_paragraphs(&subtree.paragraphs, scope);
             }
             Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, scope),
             Hwp5Control::Group(group) => collect_group_child_layout_hints(group, scope),
-            Hwp5Control::Header(_)
-            | Hwp5Control::Footer(_)
-            | Hwp5Control::Image(_)
+            Hwp5Control::Header(_) | Hwp5Control::Footer(_) => {
+                scope.uncertain = Some("nested header/footer is lifted by projection but skipped by the scope hint collector");
+            }
+            Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
-            | Hwp5Control::Polygon(_)
-            | Hwp5Control::Ellipse(_)
             | Hwp5Control::Arc(_)
             | Hwp5Control::Curve(_)
             | Hwp5Control::TextArt(_)
@@ -208,6 +300,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::NewNumber(_)
             | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
+            | Hwp5Control::Bookmark { .. }
             | Hwp5Control::Unknown { .. } => {}
         }
     }
@@ -215,12 +308,30 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
 
 fn collect_table_layout_hints(table: &Hwp5Table, scope: &mut ScopeLayoutHints) {
     scope.push_table(table);
+    // D: a caption is written before the rows here too (a table in a text
+    // box, a header, a note). 이것을 실패시키는 것: 이 줄을 지우기 — 글상자 안
+    // 캡션 표 변환이 hint 부족으로 실패(`caption_in_a_text_box_table_converts`).
+    collect_scope_paragraphs(crate::projection::written_caption_paragraphs(table), scope);
     for cell in &table.cells {
         collect_scope_paragraphs(&cell.paragraphs, scope);
     }
 }
 
+/// The table's `sz height`: the height Hancom saved in the table's own
+/// `CtrlHeader` (Hancom twins: 5,130 of 5,131 tables), else the old
+/// derivation from row heights.
+///
+/// 이것을 실패시키는 것: `CtrlHeader` 높이를 건너뛰기
+/// (`table_height_hint_is_the_ctrl_header_height`).
 fn derive_table_height(table: &Hwp5Table) -> Option<i32> {
+    if let Some(height) = table
+        .ctrl
+        .as_ref()
+        .and_then(|ctrl| i32::try_from(ctrl.geometry.height).ok())
+        .filter(|&h| h > 0)
+    {
+        return Some(height);
+    }
     if table.rows == 0 || table.cells.iter().any(|cell| cell.row_span != 1) {
         return None;
     }
@@ -266,6 +377,7 @@ mod tests {
         controls: Vec<Hwp5Control>,
     ) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -297,9 +409,106 @@ mod tests {
         }
     }
 
+    /// D: a captioned table inside a scope (a text box, a note) queues the
+    /// caption paragraph's hint before the cells', as HWPX writes them; a
+    /// table without cells (its caption dropped) queues none for it.
+    /// 이것을 실패시키는 것: scope 표에서 캡션 hint 빼기 · 칸 뒤로 · 칸 없는 표의
+    /// 캡션도 넣기.
+    #[test]
+    fn caption_in_a_text_box_table_converts() {
+        use crate::decoder::section::{
+            Hwp5TableCaption, Hwp5TableCell, Hwp5TableCellMargin, Hwp5TableCellVerticalAlign,
+        };
+        let cell = Hwp5TableCell {
+            has_margin: false,
+            line_wrap: 0,
+            column: 0,
+            row: 0,
+            col_span: 1,
+            row_span: 1,
+            width: 1000,
+            height: 0,
+            margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+            vertical_align: Hwp5TableCellVerticalAlign::Top,
+            is_header: false,
+            border_fill_id: None,
+            paragraphs: vec![paragraph("cell", vec![line_segment(0, 2, 1000)], vec![])],
+        };
+        let table = |cells: Vec<Hwp5TableCell>| Hwp5Table {
+            inner_margin: None,
+            no_adjust: false,
+            cell_zones: Vec::new(),
+            caption: Some(Hwp5TableCaption {
+                side: 3,
+                full_size: false,
+                width: 0,
+                gap: 850,
+                last_width: 1000,
+                paragraphs: vec![paragraph("cap", vec![line_segment(0, 1, 1000)], vec![])],
+            }),
+            rows: 1,
+            cols: 1,
+            page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
+            repeat_header: false,
+            cell_spacing: 0,
+            border_fill_id: None,
+            cells,
+            instance_id: 0,
+            ctrl: None,
+        };
+        let host = |t| paragraph("", vec![line_segment(0, 0, 1000)], vec![Hwp5Control::Table(t)]);
+        let mut scope = ScopeLayoutHints::default();
+        collect_scope_paragraph_layout_hints(&host(table(vec![cell])), &mut scope);
+        let order: Vec<i32> =
+            scope.paragraphs.iter().map(|h| h.line_segments[0].vertical_position).collect();
+        assert_eq!(order, [0, 1, 2]);
+        let mut empty = ScopeLayoutHints::default();
+        collect_scope_paragraph_layout_hints(&host(table(vec![])), &mut empty);
+        assert_eq!(empty.paragraphs.len(), 1);
+    }
+
+    /// A-T4: the table height hint is the table `CtrlHeader` height (법무부
+    /// 본문 표 43643, not the cell-height derived 102508).
+    /// 이것을 실패시키는 것: `CtrlHeader` 높이를 건너뛰기.
+    #[test]
+    fn table_height_hint_is_the_ctrl_header_height() {
+        let mut table = Hwp5Table {
+            inner_margin: None,
+            no_adjust: false,
+            cell_zones: Vec::new(),
+            caption: None,
+            rows: 0,
+            cols: 0,
+            page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
+            repeat_header: false,
+            cell_spacing: 0,
+            border_fill_id: None,
+            cells: vec![],
+            instance_id: 0,
+            ctrl: None,
+        };
+        assert_eq!(derive_table_height(&table), None);
+        table.ctrl = Some(crate::decoder::section::Hwp5TableCtrl {
+            outer_margin: None,
+            properties: 0,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
+                x: 0,
+                y: 0,
+                width: 50_737,
+                height: 43_643,
+            },
+        });
+        assert_eq!(derive_table_height(&table), Some(43_643));
+    }
+
     #[test]
     fn derive_table_height_uses_line_segments_and_cell_margin() {
         let table = Hwp5Table {
+            inner_margin: None,
+            no_adjust: false,
+            cell_zones: Vec::new(),
+            caption: None,
             rows: 1,
             cols: 1,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
@@ -307,6 +516,8 @@ mod tests {
             cell_spacing: 0,
             border_fill_id: None,
             cells: vec![crate::decoder::section::Hwp5TableCell {
+                has_margin: true,
+                line_wrap: 0,
                 column: 0,
                 row: 0,
                 col_span: 1,
@@ -323,6 +534,7 @@ mod tests {
                 is_header: false,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -340,19 +552,171 @@ mod tests {
                 }],
             }],
             instance_id: 0,
+            ctrl: None,
         };
 
         assert_eq!(derive_table_height(&table), Some(4482));
     }
 
+    /// The group projection keeps the text of a rect child and drops that of
+    /// a polygon child (reported lost); only the kept text's paragraph gets
+    /// a hint, else the patcher is left with an unconsumed one.
+    ///
+    /// 이것을 실패시키는 것: 글자를 버리는 자식(다각형)의 문단도 힌트로 모으는 것,
+    /// 행렬열을 못 읽어 버리는 자식의 문단을 모으는 것.
+    #[test]
+    fn group_hints_follow_the_text_the_projection_keeps() {
+        use crate::decoder::section::{
+            Hwp5GroupChild, Hwp5GroupControl, Hwp5PolygonControl, Hwp5RectControl,
+        };
+        use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapeFill, Hwp5ShapeRender};
+        let geo =
+            Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0, outer_margin: [0; 4] };
+        let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let render = Ok(Hwp5ShapeRender {
+            source_id: 0,
+            angle: 0,
+            flip: (false, false),
+            initial: (100, 100),
+            trans: id,
+            pairs: vec![(id, id)],
+            fill: Hwp5ShapeFill::Plain,
+        });
+        let child = |control, render, start| Hwp5GroupChild {
+            control,
+            paragraphs: vec![paragraph("t", vec![line_segment(start, 0, 1000)], Vec::new())],
+            list_header_properties: None,
+            text_margin: None,
+            render,
+            nested_controls: Vec::new(),
+        };
+        let rect = || {
+            Hwp5Control::Rect(Hwp5RectControl {
+                standalone_render: None,
+                original_size: None,
+                look: None,
+                ctrl_id: 0,
+                geometry: geo.clone(),
+                ctrl_properties: 0,
+            })
+        };
+        let group = Hwp5GroupControl {
+            ctrl_id: 0,
+            geometry: geo.clone(),
+            children: vec![
+                child(rect(), render.clone(), 1),
+                child(
+                    Hwp5Control::Polygon(Hwp5PolygonControl {
+                        standalone_render: None,
+                        original_size: None,
+                        look: None,
+                        ctrl_id: 0,
+                        paragraphs: Vec::new(),
+                        list_header_properties: None,
+                        text_margin: None,
+                        geometry: geo.clone(),
+                        points: Vec::new(),
+                        ctrl_properties: 0,
+                    }),
+                    render.clone(),
+                    2,
+                ),
+                child(rect(), Err("cut short".into()), 3),
+            ],
+            render,
+            instance_id: 0,
+            has_link: false,
+            ctrl_properties: 0,
+        };
+        let mut scope = ScopeLayoutHints::default();
+        collect_group_child_layout_hints(&group, &mut scope);
+        let starts: Vec<u32> =
+            scope.paragraphs.iter().map(|h| h.line_segments[0].text_start_position).collect();
+        assert_eq!(starts, [1]);
+    }
+
+    /// A rect with text that the fold drops (its x scale is 0) and a nested
+    /// group dropped because its only child collapses leave no hint; the
+    /// kept rect's text does.
+    ///
+    /// 이것을 실패시키는 것: 힌트를 투영 계획이 아니라 자식 종류·행렬열 읽힘만으로
+    /// 고르는 것(접기에서 버려진 글상자의 힌트가 남는다).
+    #[test]
+    fn group_hints_skip_text_the_fold_drops() {
+        use crate::decoder::section::{Hwp5GroupChild, Hwp5GroupControl, Hwp5RectControl};
+        use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapeFill, Hwp5ShapeRender};
+        let geo =
+            Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0, outer_margin: [0; 4] };
+        let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let flat = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let render = |sca| {
+            Ok(Hwp5ShapeRender {
+                source_id: 0,
+                angle: 0,
+                flip: (false, false),
+                initial: (100, 100),
+                trans: id,
+                pairs: vec![(sca, id)],
+                fill: Hwp5ShapeFill::Plain,
+            })
+        };
+        let rect = |sca, start| Hwp5GroupChild {
+            control: Hwp5Control::Rect(Hwp5RectControl {
+                standalone_render: None,
+                original_size: None,
+                look: None,
+                ctrl_id: 0,
+                geometry: geo.clone(),
+                ctrl_properties: 0,
+            }),
+            paragraphs: vec![paragraph("t", vec![line_segment(start, 0, 1000)], Vec::new())],
+            list_header_properties: None,
+            text_margin: None,
+            render: render(sca),
+            nested_controls: Vec::new(),
+        };
+        let nested = Hwp5GroupChild {
+            control: Hwp5Control::Group(Hwp5GroupControl {
+                ctrl_id: 0,
+                geometry: geo.clone(),
+                children: vec![rect(flat, 3)],
+                render: render(id),
+                instance_id: 0,
+                has_link: false,
+                ctrl_properties: 0,
+            }),
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+            text_margin: None,
+            render: render(id),
+            nested_controls: Vec::new(),
+        };
+        let group = Hwp5GroupControl {
+            ctrl_id: 0,
+            geometry: geo.clone(),
+            children: vec![rect(id, 1), rect(flat, 2), nested],
+            render: render(id),
+            instance_id: 0,
+            has_link: false,
+            ctrl_properties: 0,
+        };
+        let mut scope = ScopeLayoutHints::default();
+        collect_group_child_layout_hints(&group, &mut scope);
+        let starts: Vec<u32> =
+            scope.paragraphs.iter().map(|h| h.line_segments[0].text_start_position).collect();
+        assert_eq!(starts, [1]);
+    }
+
     #[test]
     fn collect_section_layout_hints_orders_body_before_header_and_footer() {
         let section = SectionResult {
+            master_pages: Vec::new(),
             paragraphs: vec![
                 paragraph(
                     "body-a",
                     vec![line_segment(10, 0, 1000)],
                     vec![Hwp5Control::Header(Hwp5NestedSubtree {
+                        wire_order: 0,
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
                         instance_id: 0,
@@ -367,6 +731,7 @@ mod tests {
                     "body-b",
                     vec![line_segment(20, 0, 1000)],
                     vec![Hwp5Control::Footer(Hwp5NestedSubtree {
+                        wire_order: 0,
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
                         instance_id: 0,
@@ -386,7 +751,7 @@ mod tests {
             warnings: Vec::new(),
         };
 
-        let hints = collect_section_layout_hints(&section);
+        let hints = collect_section_layout_hints(&section, &mut Vec::new());
         let order = hints
             .paragraphs
             .iter()

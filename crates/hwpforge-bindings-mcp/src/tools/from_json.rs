@@ -148,3 +148,20 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod paragraph_measure_contract {
+    #[test]
+    fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
+        let input = r#"{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}"#;
+        let error = super::run_from_json(input, "unused.hwpx").unwrap_err();
+        assert_eq!(error.code, "LEGACY_JSON_TABS");
+        assert!(error.message.contains("원래 단위와 case/default 척도를 복구할 수 없어"));
+        assert!(error.message.contains("$.styles.tabs[0].stops[0].position"));
+        assert!(error.message.contains("1건"));
+        assert_eq!(
+            error.hint,
+            "원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오."
+        );
+    }
+}

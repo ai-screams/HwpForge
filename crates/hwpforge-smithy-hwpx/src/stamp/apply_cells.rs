@@ -33,13 +33,13 @@ use hwpforge_core::table::grid::{GridCoord, TableGrid};
 use hwpforge_core::Control;
 use hwpforge_foundation::FieldType;
 
-use super::cells::{is_stampable_empty, plan_cells, CellStampCandidate};
+use super::cells::{is_stampable_empty, plan_cells, table_in_field, CellStampCandidate};
 use super::request::{CellLabelClaim, CellStampAction, CellStampSpec};
 use crate::cell_edit::normalize_label;
-use crate::fill::visit_section_fields;
 use crate::table_inventory::{for_each_table_mut, tables_in_document};
+use hwpforge_core::field_inventory::FieldInventory;
 
-/// One field created by [`commit_cells`].
+/// One field created by `commit_cells`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CellStampedField {
@@ -244,16 +244,9 @@ pub(crate) fn preflight_cells(
     let skipped_grid: HashMap<usize, &str> =
         plan.skipped_tables.iter().map(|s| (s.table, s.error.as_str())).collect();
 
-    // Existing field names (fill's visitor — the single definition of
-    // field-visit coverage).
-    let mut existing: HashSet<String> = HashSet::new();
-    for (idx, section) in document.sections_mut().iter_mut().enumerate() {
-        visit_section_fields(section, idx, &mut |slot| {
-            if let Control::Field { name: Some(name), .. } = &*slot.control {
-                existing.insert(name.clone());
-            }
-        });
-    }
+    let fields = FieldInventory::from_sections(document.sections());
+    let existing: HashSet<String> =
+        fields.fields().iter().filter_map(|f| f.name().clone()).collect();
 
     let entries = tables_in_document(document);
     let mut grids: HashMap<usize, TableGrid> = HashMap::new();
@@ -267,6 +260,10 @@ pub(crate) fn preflight_cells(
         let Some(entry) = entries.get(spec.table) else {
             return Err(CellStampError::TableNotFound { table: spec.table });
         };
+        // 이것을 실패시키는 것: 명시적 셀 요청으로 필드 본문 보호를 우회하기.
+        if table_in_field(entry, &fields) {
+            return Err(CellStampError::TargetNotStampable { table: spec.table, at: spec.at });
+        }
         if let Some(detail) = skipped_grid.get(&spec.table) {
             return Err(CellStampError::TableGridInvalid {
                 table: spec.table,

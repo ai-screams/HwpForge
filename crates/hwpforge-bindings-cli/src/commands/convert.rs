@@ -166,9 +166,8 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
 
 /// [`EncodeWarning`] 을 레거시 CLI 의 한 줄 진단 문자열로 만든다 — W3
 /// 마이그레이션 전 `commands/convert.rs`(pre-`ops`)의 `encode_warning_line`
-/// 을 바이트 동일하게 복원한 것. `#[non_exhaustive]` — 새 variant 는
-/// Debug 표기로 폴백해 무음 유실을 막는다 (경고 채널의 목적이 곧 무음
-/// 방지다).
+/// 을 바이트 동일하게 복원한 것. 그 밖의(새) variant 는 인코더 접근자로
+/// `CODE at 자리: 문구` 를 만든다 — 폴백 없이 자기 코드로 보고된다.
 fn encode_warning_line(w: &EncodeWarning) -> String {
     match w {
         EncodeWarning::LayoutCacheDropped { path, reason } => {
@@ -188,7 +187,10 @@ fn encode_warning_line(w: &EncodeWarning) -> String {
                 "XML_FORBIDDEN_CHARS_REMOVED at {part} {location}: {count} character(s) removed"
             )
         }
-        other => format!("ENCODE_WARNING {other:?}"),
+        other => match other.location() {
+            Some(location) => format!("{} at {location}: {}", other.code(), other.message()),
+            None => format!("{}: {}", other.code(), other.message()),
+        },
     }
 }
 
@@ -223,10 +225,70 @@ mod tests {
         assert_eq!(line, "LAYOUT_CACHE_DROPPED at section[0].para[1]: x");
     }
 
+    /// Every encode warning sample from the encoder: the variants the legacy
+    /// CLI printed keep their exact line, every newer one is printed as
+    /// `CODE at 자리: 문구` from the encoder's accessors, never as Debug text.
+    ///
+    /// 이것을 실패시키는 것: `encode_warning_line` 의 마지막 갈래를 Debug
+    /// 폴백(`ENCODE_WARNING {other:?}`)으로 되돌리는 것.
+    #[test]
+    fn encode_warning_samples_keep_old_lines_and_never_fall_back() {
+        use hwpforge_smithy_hwpx::decoder::warning_samples;
+
+        for warning in warning_samples::encode() {
+            let line = encode_warning_line(&warning);
+            let expected = match &warning {
+                EncodeWarning::LayoutCacheDropped { .. } => {
+                    "LAYOUT_CACHE_DROPPED at section[0].para[0]: sample".to_string()
+                }
+                EncodeWarning::NoteHeadSkipped { .. } => {
+                    "NOTE_HEAD_SKIPPED at section[0].para[0]: sample".to_string()
+                }
+                EncodeWarning::TitleMarkSkipped { .. } => {
+                    "TITLE_MARK_SKIPPED at section[0].para[0]: sample".to_string()
+                }
+                EncodeWarning::NoteRestartIgnored { .. } => {
+                    "NOTE_RESTART_IGNORED at section[0].para[0]: sample".to_string()
+                }
+                EncodeWarning::XmlForbiddenCharsRemoved { .. } => {
+                    "XML_FORBIDDEN_CHARS_REMOVED at Contents/section0.xml hp:t: 1 character(s) \
+                     removed"
+                        .to_string()
+                }
+                other => format!(
+                    "{} at {}: {}",
+                    other.code(),
+                    other.location().expect("new variants carry a place"),
+                    other.message()
+                ),
+            };
+            assert_eq!(line, expected, "{warning:?}");
+            assert!(!line.starts_with("ENCODE_WARNING"), "Debug fallback: {line}");
+        }
+    }
+
+    #[test]
+    fn encode_warning_line_names_the_place_of_lost_content() {
+        // 이것을 실패시키는 것: `encode_warning_line` 의 접근자 갈래를 Debug 폴백
+        // (`ENCODE_WARNING …`)으로 되돌리는 것.
+        let warning = EncodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(2)]),
+            kind: "shape_emission".into(),
+            reason: "off by 35.08".into(),
+        };
+
+        assert_eq!(
+            encode_warning_line(&warning),
+            "CONTENT_LOST at Contents/section0.xml:section[0].para[2]: shape_emission lost: off by \
+             35.08"
+        );
+    }
+
     #[test]
     fn encode_warning_line_names_the_part_and_location_of_removed_characters() {
         // 이것을 실패시키는 것: `encode_warning_line` 의 `XmlForbiddenCharsRemoved` 갈래를 빼는 것
-        // (Debug 폴백 `ENCODE_WARNING …` 이 된다).
+        // (접근자 갈래가 받아 문구가 `removed 3 XML-forbidden character(s)` 로 바뀐다).
         let warning = EncodeWarning::XmlForbiddenCharsRemoved {
             part: "Contents/section0.xml".into(),
             location: "hp:t".into(),

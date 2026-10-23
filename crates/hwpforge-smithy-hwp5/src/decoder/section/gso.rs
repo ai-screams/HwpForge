@@ -1,10 +1,9 @@
 //! GSO (그리기 개체) builders for the HWP5 `BodyText` decoder.
 //!
 //! Cohesive cluster of paragraph-local GSO collection contexts and group
-//! builders (`InlineGsoContext`, `GsoChildBuilder`, `GsoGroupBuilder`, …) that
+//! builders (`GsoChildBuilder`, `GsoGroupBuilder`) that
 //! accumulate shape-component evidence and finalize it into model controls.
-//! Split out of `decoder/section.rs` verbatim (E7 file split); no behavior
-//! change. The shared `classify_gso_control` finalizer and the `CTRL_ID_GSO` /
+//! Paragraph text delegates to the body control interpreter. The shared `classify_gso_control` finalizer and the `CTRL_ID_GSO` /
 //! `GSO_GROUP_MAX_DEPTH` / `SHAPE_COMPONENT_TYPE_GROUP` items stay in the parent
 //! module and are reached via `super::`.
 
@@ -12,37 +11,45 @@ use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
     Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
     Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
-    Hwp5ShapeTextArt,
+    Hwp5ShapeRender, Hwp5ShapeTextArt,
 };
 
 use super::{
-    classify_gso_control, segments_to_string, BodyTextParserState, Hwp5Control, Hwp5GroupChild,
-    Hwp5GroupControl, Hwp5Paragraph, Hwp5Warning, CTRL_ID_GSO, GSO_GROUP_MAX_DEPTH,
-    SHAPE_COMPONENT_TYPE_GROUP,
+    classify_gso_control, BodyTextParserState, Hwp5Control, Hwp5GroupChild, Hwp5GroupControl,
+    Hwp5Warning, CTRL_ID_GSO, GSO_GROUP_MAX_DEPTH, SHAPE_COMPONENT_TYPE_GROUP,
 };
 
-/// Active paragraph-local `gso ` scope while collecting image evidence.
-pub(super) struct InlineGsoContext {
-    pub(super) ctrl_depth: u16,
-    ctrl_id: u32,
-    /// Wave 12p Step 1c-3: GSO CtrlHeader trailer instance ID,
-    /// carried through to typed `Hwp5ImageControl` and friends.
-    instance_id: u32,
-    /// W2p: GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
-    /// bit0 = 글자처럼 취급 — `Hwp5ImageControl::ctrl_properties` 로 carry.
-    ctrl_properties: u32,
-    saw_shape_component: bool,
-    saw_shape_rectangle: bool,
-    geometry: Option<Hwp5ShapeComponentGeometry>,
-    picture: Option<Hwp5ShapePicture>,
-    ole: Option<Hwp5ShapeComponentOle>,
-    line: Option<Hwp5ShapeComponentLine>,
-    polygon: Option<Hwp5ShapeComponentPolygon>,
-    ellipse: Option<Hwp5ShapeComponentEllipse>,
-    curve: Option<Hwp5ShapeComponentCurve>,
-    text_art: Option<Hwp5ShapeTextArt>,
-    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
-    shape_component_kind: Option<[u8; 4]>,
+/// The property word of a shape's text `LIST_HEADER` (§19.22 D4): a u32
+/// paragraph count, then the property word at bytes 4..8 — not the cell
+/// layout (u16 count) the three readers used before, which put the vertical
+/// align two bytes off. Every shape text list in the corpus is 20, 28, 33 or
+/// 45 bytes long (2,139 records); in the Hancom twin pairs the 33- and
+/// 45-byte forms match `vertAlign` 348/348. `None` when shorter than 8 bytes.
+///
+/// 이것을 실패시키는 것: 오프셋을 2..6 으로(`shape_text_list_header_reads_its_own_layout`).
+pub(super) fn shape_text_list_properties(data: &[u8]) -> Option<u32> {
+    data.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// The inner margin of a shape's text `LIST_HEADER` (§19.22 D4): bytes
+/// 8..16, left, right, top, bottom (Hancom twins match `textMargin` in all
+/// 348 text boxes). `None` when shorter than 16 bytes.
+///
+/// 이것을 실패시키는 것: 오프셋을 바꾸기(`text_margins_are_read`).
+pub(super) fn shape_text_list_margin(data: &[u8]) -> Option<super::Hwp5TableCellMargin> {
+    super::Hwp5TableCellMargin::read(data, 8)
+}
+
+/// The warning for a shape text `LIST_HEADER` too short for its property
+/// word or its margin (none in the corpus): what is missing keeps its
+/// default (top alignment, 283 margin).
+pub(super) fn short_list_header_warning(len: usize) -> Hwp5Warning {
+    Hwp5Warning::ProjectionFallback {
+        subject: "textbox.list_header_short",
+        reason: format!(
+            "shape text list header of {len} bytes; its properties or margin are not read"
+        ),
+    }
 }
 
 pub(super) struct GsoClassificationInput {
@@ -66,11 +73,26 @@ pub(super) struct GsoClassificationInput {
     /// W2p: GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
     /// bit0 = 글자처럼 취급 — `Hwp5ImageControl::ctrl_properties` 로 carry.
     pub(super) ctrl_properties: u32,
+    /// The shape's hyperlink (a picture keeps it).
+    pub(super) link: Option<Result<String, String>>,
+    /// The shape's outline and fill, shared by standalone and group projection.
+    pub(super) look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// The shape's text paragraphs and its `LIST_HEADER` word (single
+    /// shapes; empty for group children, whose text the group projection
+    /// decides). An ellipse or polygon keeps them; a rectangle with text is
+    /// a text box before classification.
+    pub(super) paragraphs: Vec<super::Hwp5Paragraph>,
+    pub(super) list_header_properties: Option<u32>,
+    pub(super) text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    /// The initial box of the scope's first `ShapeComponent` (single
+    /// shapes; `None` for group children).
+    pub(super) original_size: Option<(u32, u32)>,
+    pub(super) standalone_render: Option<Result<Hwp5ShapeRender, String>>,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
 ///
-/// Mirrors the single-shape slot set of [`InlineGsoContext`] /
+/// Mirrors the single-shape slot set of
 /// [`NestedSubtreeContext`] (same `note_shape_*` mutators, same
 /// `classify_gso_control` finalize path) plus a nested paragraph list for
 /// children that carry `drawText` content (the native group fixture's rect
@@ -85,6 +107,7 @@ pub(super) struct GsoChildBuilder {
     /// `속성` (UINT32) word of this child's `HWPTAG_LIST_HEADER` record (표 65),
     /// when present. Bits 5–6 carry text vertical alignment.
     list_header_properties: Option<u32>,
+    text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     geometry: Option<Hwp5ShapeComponentGeometry>,
     picture: Option<Hwp5ShapePicture>,
     ole: Option<Hwp5ShapeComponentOle>,
@@ -94,7 +117,14 @@ pub(super) struct GsoChildBuilder {
     curve: Option<Hwp5ShapeComponentCurve>,
     text_art: Option<Hwp5ShapeTextArt>,
     shape_component_kind: Option<[u8; 4]>,
-    paragraphs: Vec<Hwp5Paragraph>,
+    text_parser: Option<Box<BodyTextParserState>>,
+    render: Result<Hwp5ShapeRender, String>,
+    /// Control ids of `CtrlHeader` records under this child.
+    nested_controls: Vec<u32>,
+    look: Option<crate::schema::section::Hwp5ShapeLook>,
+    unread_corner_ratio: u8,
+    /// The child's hyperlink (its own `CtrlData`).
+    link: Option<Result<String, String>>,
 }
 
 impl GsoChildBuilder {
@@ -102,12 +132,14 @@ impl GsoChildBuilder {
         comp_depth: u16,
         shape_component_kind: Option<[u8; 4]>,
         geometry: Option<Hwp5ShapeComponentGeometry>,
+        render: Result<Hwp5ShapeRender, String>,
     ) -> Self {
         Self {
             comp_depth,
             saw_shape_rectangle: false,
             saw_list_header: false,
             list_header_properties: None,
+            text_margin: None,
             geometry,
             picture: None,
             ole: None,
@@ -117,7 +149,12 @@ impl GsoChildBuilder {
             curve: None,
             text_art: None,
             shape_component_kind,
-            paragraphs: Vec::new(),
+            text_parser: None,
+            render,
+            nested_controls: Vec::new(),
+            link: None,
+            look: None,
+            unread_corner_ratio: 0,
         }
     }
 
@@ -132,7 +169,17 @@ impl GsoChildBuilder {
     /// through [`GsoActiveChild::Nested`] (Wave B); this leaf path only sees a
     /// `$con` kind when the [`GSO_GROUP_MAX_DEPTH`] cap forced the nested group
     /// to degrade to a leaf, in which case it becomes `Unknown` with a warning.
-    fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+    fn into_child(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+        // 이것을 실패시키는 것: look 파싱 실패 때 묶음 자식의 비영 곡률을 무음 폐기.
+        if self.unread_corner_ratio > 0 {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "shape.corner_ratio",
+                reason: format!(
+                    "corner ratio {} not carried: the shape's outline and fill block is unreadable",
+                    self.unread_corner_ratio
+                ),
+            });
+        }
         if self.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
             warnings.push(Hwp5Warning::DroppedControl {
                 control: "gso_group",
@@ -144,10 +191,23 @@ impl GsoChildBuilder {
                 control: Hwp5Control::Unknown { ctrl_id: CTRL_ID_GSO, header_data: Vec::new() },
                 paragraphs: Vec::new(),
                 list_header_properties: None,
+                text_margin: None,
+                render: self.render,
+                nested_controls: self.nested_controls,
             };
         }
 
+        let paragraphs = self
+            .text_parser
+            .take()
+            .map(|parser| {
+                let result = parser.finish();
+                warnings.extend(result.warnings);
+                result.paragraphs
+            })
+            .unwrap_or_default();
         let control = classify_gso_control(GsoClassificationInput {
+            standalone_render: None,
             ctrl_id: CTRL_ID_GSO,
             saw_shape_component: true,
             saw_shape_rectangle: self.saw_shape_rectangle,
@@ -164,11 +224,20 @@ impl GsoChildBuilder {
             // 그룹 자식의 개체 속성은 그룹 배치(W5)가 지배 — 자식 단독
             // treat_as_char 는 W5 에서 해석.
             ctrl_properties: 0,
+            link: self.link,
+            look: self.look,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+            text_margin: None,
+            original_size: None,
         });
         Hwp5GroupChild {
             control,
-            paragraphs: self.paragraphs,
+            paragraphs,
             list_header_properties: self.list_header_properties,
+            text_margin: self.text_margin,
+            render: self.render,
+            nested_controls: self.nested_controls,
         }
     }
 }
@@ -182,15 +251,24 @@ impl GsoChildBuilder {
 /// the [`GSO_GROUP_MAX_DEPTH`] cap is wired so Wave B's recursive `$con`
 /// handling is a small lift.
 pub(super) struct GsoGroupBuilder {
+    pub(super) wire_sequence: std::rc::Rc<std::cell::Cell<usize>>,
     /// Level of the `$con` `ShapeComponent` (`0x4C`) that opened this group.
     comp_depth: u16,
-    /// `1`-based nesting depth used for the depth cap. The outermost group
-    /// is depth `1`.
-    depth: u16,
+    /// Cumulative path budget inherited from the owning control/parser.
+    budget: super::NestingBudget,
+    #[cfg(test)]
+    pub(super) work: std::rc::Rc<std::cell::Cell<usize>>,
+    #[cfg(test)]
+    pub(super) record_identity: std::rc::Rc<std::cell::Cell<*const Record>>,
     geometry: Hwp5ShapeComponentGeometry,
     instance_id: u32,
+    /// `CtrlHeader` object properties (top group only; `0` when nested).
+    ctrl_properties: u32,
     children: Vec<Hwp5GroupChild>,
     current_child: Option<GsoActiveChild>,
+    render: Result<Hwp5ShapeRender, String>,
+    /// The group has a hyperlink of its own (a `CtrlData` record).
+    has_link: bool,
 }
 
 /// The live child of a [`GsoGroupBuilder`]: either a flat leaf shape or a
@@ -221,11 +299,17 @@ impl GsoActiveChild {
     fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
         match self {
             Self::Leaf(b) => b.into_child(warnings),
-            Self::Nested(b) => Hwp5GroupChild {
-                control: b.into_control(warnings),
-                paragraphs: Vec::new(),
-                list_header_properties: None,
-            },
+            Self::Nested(b) => {
+                let render = b.render.clone();
+                Hwp5GroupChild {
+                    control: b.into_control(warnings),
+                    paragraphs: Vec::new(),
+                    list_header_properties: None,
+                    text_margin: None,
+                    render,
+                    nested_controls: Vec::new(),
+                }
+            }
         }
     }
 }
@@ -235,14 +319,25 @@ impl GsoGroupBuilder {
         comp_depth: u16,
         geometry: Hwp5ShapeComponentGeometry,
         instance_id: u32,
+        ctrl_properties: u32,
+        render: Result<Hwp5ShapeRender, String>,
+        budget: super::NestingBudget,
     ) -> Self {
         Self {
             comp_depth,
-            depth: 1,
+            budget,
+            wire_sequence: Default::default(),
+            #[cfg(test)]
+            work: Default::default(),
+            #[cfg(test)]
+            record_identity: Default::default(),
             geometry,
             instance_id,
+            ctrl_properties,
             children: Vec::new(),
             current_child: None,
+            render,
+            has_link: false,
         }
     }
 
@@ -264,6 +359,12 @@ impl GsoGroupBuilder {
         level: u16,
         warnings: &mut Vec<Hwp5Warning>,
     ) {
+        #[cfg(test)]
+        {
+            self.work.set(self.work.get() + 1);
+            let expected = self.record_identity.get();
+            assert!(expected.is_null() || std::ptr::eq(expected, record), "record was cloned");
+        }
         // Close the live child when a record arrives at or above its depth
         // (mirrors the `table_stack` close rule). A sibling `ShapeComponent`
         // at the child depth closes the prior child before opening the next.
@@ -274,6 +375,10 @@ impl GsoGroupBuilder {
         // A `ShapeComponent` (`0x4C`) one level below the `$con` opens a new
         // child. A nested `$con` child opens a recursive `GsoGroupBuilder`
         // (Wave B); any other shape opens a flat leaf builder.
+        if matches!(tag, TagId::CtrlData) && level == self.comp_depth.saturating_add(1) {
+            self.has_link = true;
+            return;
+        }
         if matches!(tag, TagId::ShapeComponent) && level == self.comp_depth.saturating_add(1) {
             let kind = record.data.get(..4).map(|c| [c[0], c[1], c[2], c[3]]);
             // Parse the child's group-relative geometry from its own
@@ -282,12 +387,14 @@ impl GsoGroupBuilder {
             // drops the child to Unknown.
             let geometry =
                 Hwp5ShapeComponentGeometry::parse_from_shape_component(&record.data).ok();
+            // A component below the `gso` header writes its type tag once.
+            let render = Hwp5ShapeRender::parse(&record.data, false).map_err(|e| e.to_string());
 
             if kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
                 // Depth cap: a nested `$con` past the limit degrades to a leaf
                 // (→ Unknown at finalize) instead of recursing — bounds both
                 // recursion depth and malicious nesting.
-                if self.depth.saturating_add(1) > GSO_GROUP_MAX_DEPTH {
+                if self.budget.enter(false, true).is_none() {
                     warnings.push(Hwp5Warning::DroppedControl {
                         control: "gso_group",
                         reason: format!(
@@ -296,21 +403,34 @@ impl GsoGroupBuilder {
                         ),
                     });
                     self.current_child = Some(GsoActiveChild::Leaf(Box::new(
-                        GsoChildBuilder::new(level, kind, geometry),
+                        GsoChildBuilder::new(level, kind, geometry, render),
                     )));
                 } else {
                     // Nested group: its bounding box is the child geometry
                     // (fall back to the parent bbox if unrecoverable); it has
                     // no per-child CtrlHeader so instance_id = 0.
                     let bbox = geometry.unwrap_or_else(|| self.geometry.clone());
-                    let mut nested = GsoGroupBuilder::new(level, bbox, 0);
-                    nested.depth = self.depth.saturating_add(1);
+                    let mut nested = GsoGroupBuilder::new(
+                        level,
+                        bbox,
+                        0,
+                        0,
+                        render,
+                        self.budget.enter(false, true).expect("budget checked above"),
+                    );
+                    nested.wire_sequence = self.wire_sequence.clone();
+                    #[cfg(test)]
+                    let nested = GsoGroupBuilder {
+                        work: self.work.clone(),
+                        record_identity: self.record_identity.clone(),
+                        ..nested
+                    };
                     self.current_child = Some(GsoActiveChild::Nested(Box::new(nested)));
                 }
             } else {
-                self.current_child = Some(GsoActiveChild::Leaf(Box::new(GsoChildBuilder::new(
-                    level, kind, geometry,
-                ))));
+                let mut child = GsoChildBuilder::new(level, kind, geometry, render);
+                child.look = parse_shape_look(&record.data, false, warnings);
+                self.current_child = Some(GsoActiveChild::Leaf(Box::new(child)));
             }
             return;
         }
@@ -325,37 +445,101 @@ impl GsoGroupBuilder {
             Some(GsoActiveChild::Leaf(leaf)) => leaf,
             None => return,
         };
+        // Decode the complete text subtree with the body parser and an
+        // absolute paragraph base. Borrow the original record at every depth.
+        // It owns paragraph/control order and table/cell boundaries; shape
+        // records at the child's own level stay here.
+        let own = level == child.comp_depth.saturating_add(1);
+        if child.saw_list_header
+            && matches!(tag, TagId::ParaHeader)
+            && own
+            && child.text_parser.is_none()
+        {
+            let Some(budget) = self.budget.enter(false, false) else {
+                warnings.push(Hwp5Warning::DroppedControl {
+                    control: "group_child_text",
+                    reason: "shared container depth cap exceeded".to_string(),
+                });
+                return;
+            };
+            child.text_parser = Some(Box::new(BodyTextParserState {
+                wire_sequence: self.wire_sequence.clone(),
+                base_level: child.comp_depth + 1,
+                budget,
+                active_budget: budget,
+                nested: true,
+                #[cfg(test)]
+                work: self.work.clone(),
+                #[cfg(test)]
+                record_identity: self.record_identity.clone(),
+                ..BodyTextParserState::default()
+            }));
+        }
+        if (own && matches!(tag, TagId::ParaHeader)) || level > child.comp_depth.saturating_add(1) {
+            if let Some(parser) = child.text_parser.as_mut() {
+                parser.handle_record(record);
+                return;
+            }
+        }
         match tag {
-            TagId::ListHeader => {
+            TagId::ListHeader if own => {
                 child.saw_list_header = true;
-                if let Some(bytes) = record.data.get(2..6) {
-                    if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
-                        child.list_header_properties = Some(u32::from_le_bytes(arr));
-                    }
+                child.list_header_properties = shape_text_list_properties(&record.data);
+                child.text_margin = shape_text_list_margin(&record.data);
+                if child.text_margin.is_none() {
+                    warnings.push(short_list_header_warning(record.data.len()));
                 }
             }
-            TagId::ShapeComponentRect => child.saw_shape_rectangle = true,
-            TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
+            TagId::ShapeComponentRect if own => {
+                child.saw_shape_rectangle = true;
+                match (child.look.as_mut(), record.data.first()) {
+                    (Some(look), Some(&ratio)) => look.corner_ratio = ratio,
+                    (None, Some(&ratio)) => child.unread_corner_ratio = ratio,
+                    _ => {}
+                }
+            }
+            TagId::ShapeComponentLine if own => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => child.line = Some(line),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
-                Ok(polygon) => child.polygon = Some(polygon),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
-                Ok(ellipse) => child.ellipse = Some(ellipse),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+            TagId::ShapeComponentPolygon if own => {
+                match Hwp5ShapeComponentPolygon::parse(&record.data) {
+                    Ok(polygon) => child.polygon = Some(polygon),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
+            TagId::ShapeComponentArc if own => {
+                match Hwp5ShapeComponentEllipse::parse_arc(&record.data) {
+                    Ok(arc) => child.ellipse = Some(arc),
+                    Err(e) => warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "shape.arc_record",
+                        reason: format!(
+                            "native arc record ({} bytes, expected at least 25): {e}",
+                            record.data.len()
+                        ),
+                    }),
+                }
+            }
+            TagId::ShapeComponentEllipse if own => {
+                match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                    Ok(ellipse) => child.ellipse = Some(ellipse),
+                    Err(e) => warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "shape.ellipse_record",
+                        reason: format!("ellipse/arc record: {e}"),
+                    }),
+                }
+            }
+            TagId::ShapeComponentCurve if own => match Hwp5ShapeComponentCurve::parse(&record.data)
+            {
                 Ok(curve) => child.curve = Some(curve),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ShapeTextArt => {
+            TagId::ShapeTextArt if own => {
                 match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
                     Ok(ta) => child.text_art = Some(ta),
                     Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
@@ -364,61 +548,19 @@ impl GsoGroupBuilder {
                     }),
                 }
             }
-            TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
+            TagId::CtrlData if own && child.link.is_none() => {
+                child.link = Some(crate::schema::section::parse_object_link(&record.data));
+            }
+            TagId::ShapePicture if own => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => child.picture = Some(picture),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ShapeComponentOle => match Hwp5ShapeComponentOle::parse(&record.data) {
+            TagId::ShapeComponentOle if own => match Hwp5ShapeComponentOle::parse(&record.data) {
                 Ok(ole) => child.ole = Some(ole),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ParaHeader => {
-                if child.saw_list_header {
-                    if let Some(buf) = BodyTextParserState::parse_para_header_buf(
-                        record.header.tag_id,
-                        &record.data,
-                        warnings,
-                    ) {
-                        child.paragraphs.push(buf.finish());
-                    }
-                }
-            }
-            TagId::ParaText => {
-                if let Some(text) = BodyTextParserState::parse_para_text_value(
-                    record.header.tag_id,
-                    &record.data,
-                    warnings,
-                ) {
-                    if let Some(last) = child.paragraphs.last_mut() {
-                        last.text_segments = text.segments;
-                        last.text = segments_to_string(&last.text_segments);
-                    }
-                }
-            }
-            TagId::ParaCharShape => {
-                if let Some(runs) = BodyTextParserState::parse_para_char_shape_runs(
-                    record.header.tag_id,
-                    &record.data,
-                    warnings,
-                ) {
-                    if let Some(last) = child.paragraphs.last_mut() {
-                        last.char_shape_runs = runs;
-                    }
-                }
-            }
-            TagId::ParaLineSeg => {
-                if let Some(segments) = BodyTextParserState::parse_para_line_segments(
-                    record.header.tag_id,
-                    &record.data,
-                    warnings,
-                ) {
-                    if let Some(last) = child.paragraphs.last_mut() {
-                        last.line_segments = segments;
-                    }
-                }
-            }
             TagId::Unknown(id) => {
                 warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
             }
@@ -434,92 +576,38 @@ impl GsoGroupBuilder {
             geometry: self.geometry,
             children: self.children,
             instance_id: self.instance_id,
+            render: self.render,
+            has_link: self.has_link,
+            ctrl_properties: self.ctrl_properties,
         })
     }
 }
 
-impl InlineGsoContext {
-    pub(super) fn new(
-        ctrl_depth: u16,
-        ctrl_id: u32,
-        instance_id: u32,
-        ctrl_properties: u32,
-        geometry: Option<Hwp5ShapeComponentGeometry>,
-    ) -> Self {
-        Self {
-            ctrl_depth,
-            ctrl_id,
-            instance_id,
-            ctrl_properties,
-            saw_shape_component: false,
-            saw_shape_rectangle: false,
-            geometry,
-            picture: None,
-            ole: None,
-            line: None,
-            polygon: None,
-            ellipse: None,
-            curve: None,
-            text_art: None,
-            shape_component_kind: None,
+/// Both standalone shapes and group leaves use the same partial-look boundary.
+/// Other component families have their own payload layout, not this line/fill block.
+pub(super) fn parse_shape_look(
+    data: &[u8],
+    type_repeated: bool,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<crate::schema::section::Hwp5ShapeLook> {
+    match Hwp5ShapeRender::parse_look(data, type_repeated) {
+        Ok(look) => Some(look),
+        Err(error) => {
+            if matches!(
+                data.get(..4),
+                Some(b"cer$" | b"lle$" | b"cra$" | b"lop$" | b"ruc$" | b"nil$" | b"loc$")
+            ) {
+                // 이것을 실패시키는 것: 선 정보 실패를 채우기 손실 경고만으로 숨기기.
+                warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "shape.line",
+                    reason: format!("line information unreadable; color, thickness, style and arrows not carried: {error}"),
+                });
+                warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "shape.fill",
+                    reason: "fill block unavailable after unreadable line information".into(),
+                });
+            }
+            None
         }
-    }
-
-    pub(super) fn note_shape_component(&mut self, data: &[u8]) {
-        self.saw_shape_component = true;
-        if let Some(code) = data.get(..4) {
-            self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
-        }
-    }
-
-    pub(super) fn note_shape_rectangle(&mut self) {
-        self.saw_shape_rectangle = true;
-    }
-
-    pub(super) fn note_shape_picture(&mut self, picture: Hwp5ShapePicture) {
-        self.picture = Some(picture);
-    }
-
-    pub(super) fn note_shape_ole(&mut self, ole: Hwp5ShapeComponentOle) {
-        self.ole = Some(ole);
-    }
-
-    pub(super) fn note_shape_line(&mut self, line: Hwp5ShapeComponentLine) {
-        self.line = Some(line);
-    }
-
-    pub(super) fn note_shape_polygon(&mut self, polygon: Hwp5ShapeComponentPolygon) {
-        self.polygon = Some(polygon);
-    }
-
-    pub(super) fn note_shape_ellipse(&mut self, ellipse: Hwp5ShapeComponentEllipse) {
-        self.ellipse = Some(ellipse);
-    }
-
-    pub(super) fn note_shape_curve(&mut self, curve: Hwp5ShapeComponentCurve) {
-        self.curve = Some(curve);
-    }
-
-    pub(super) fn note_shape_text_art(&mut self, ta: Hwp5ShapeTextArt) {
-        self.text_art = Some(ta);
-    }
-
-    pub(super) fn into_control(self) -> Hwp5Control {
-        classify_gso_control(GsoClassificationInput {
-            ctrl_id: self.ctrl_id,
-            saw_shape_component: self.saw_shape_component,
-            saw_shape_rectangle: self.saw_shape_rectangle,
-            instance_id: self.instance_id,
-            ctrl_properties: self.ctrl_properties,
-            geometry: self.geometry,
-            picture: self.picture,
-            ole: self.ole,
-            line: self.line,
-            polygon: self.polygon,
-            ellipse: self.ellipse,
-            curve: self.curve,
-            text_art: self.text_art,
-            shape_component_kind: self.shape_component_kind,
-        })
     }
 }

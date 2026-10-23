@@ -23,16 +23,20 @@
 //! ```
 
 mod fields;
+mod group;
 mod metadata;
 mod shapes;
 
+pub mod geometry;
+
 pub use fields::*;
+pub use group::GroupChild;
 pub use metadata::*;
 pub use shapes::*;
 
 use hwpforge_foundation::{
     ArcType, BookmarkType, Color, CurveSegmentType, FieldType, HwpUnit, RefContentType, RefType,
-    VerticalAlign,
+    Size, VerticalAlign,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -43,6 +47,7 @@ use crate::chart::{
     ScatterStyle, StockVariant,
 };
 use crate::error::{CoreError, CoreResult};
+use crate::frame::ObjectFrame;
 use crate::object_id::ObjectId;
 use crate::paragraph::Paragraph;
 use crate::placement::ObjectPlacement;
@@ -65,10 +70,12 @@ use crate::run::Run;
 ///     paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
 ///     width: HwpUnit::from_mm(80.0).unwrap(),
 ///     height: HwpUnit::from_mm(40.0).unwrap(),
+///     frame: hwpforge_core::ObjectFrame::new(),
 ///     placement: None,
 ///     caption: None,
 ///     style: None,
 ///     text_vertical_align: VerticalAlign::Top,
+///     text_margin: None,
 /// };
 /// assert!(text_box.is_text_box());
 /// assert!(!text_box.is_hyperlink());
@@ -76,6 +83,11 @@ use crate::run::Run;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum Control {
+    /// A range field marker; its visible text remains in ordinary runs.
+    FieldBoundary {
+        /// Start metadata or a reference to the matching start.
+        boundary: FieldBoundary,
+    },
     /// An inline text box with its own paragraph content.
     /// Maps to HWPX `<hp:rect>` + `<hp:drawText>` (drawing object, not control).
     TextBox {
@@ -85,6 +97,11 @@ pub enum Control {
         width: HwpUnit,
         /// Box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -101,6 +118,12 @@ pub enum Control {
         /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
         #[serde(default)]
         text_vertical_align: VerticalAlign,
+        /// Inner margin between the box and its text (HWPX
+        /// `<hp:drawText><hp:textMargin>`, HWP5 text list header bytes 8–16).
+        /// `None` = 283 HWPUNIT (1 mm) on every side, what the encoder wrote
+        /// before this field existed; decoders carry the wire value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_margin: Option<crate::table::TableMargin>,
     },
 
     /// A hyperlink with display text and URL.
@@ -121,7 +144,7 @@ pub enum Control {
     /// suffix 의 typed 보존은 section note-format 승격(별도 승인) 대상.
     Footnote {
         /// Object identity for cross-ref linking (optional). Shares the
-        /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
+        /// [`ObjectId`] space with [`RefTarget::Object`].
         inst_id: Option<ObjectId>,
         /// Paragraphs that form the footnote body.
         paragraphs: Vec<Paragraph>,
@@ -134,7 +157,7 @@ pub enum Control {
     /// 독립 카운터).
     Endnote {
         /// Object identity for cross-ref linking (optional). Shares the
-        /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
+        /// [`ObjectId`] space with [`RefTarget::Object`].
         inst_id: Option<ObjectId>,
         /// Paragraphs that form the endnote body.
         paragraphs: Vec<Paragraph>,
@@ -151,6 +174,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -177,6 +205,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -239,6 +272,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -261,6 +299,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -386,9 +429,14 @@ pub enum Control {
         char_pr_ids: Vec<u32>,
     },
 
-    /// An arc (partial ellipse) drawing object.
-    /// Maps to HWPX `<hp:ellipse>` with `hasArcPr="1"`.
+    /// An arc drawing object. Its definition selects HWPX `arc` or `ellipse`.
     Arc {
+        /// Active defining points and wire representation.
+        /// Omitted values default to `EllipseSweep` only during JSON/MD deserialization.
+        /// Rust struct literals must specify `definition: ArcDefinition::EllipseSweep`
+        /// to retain the default ellipse-sweep representation.
+        #[serde(default)]
+        definition: ArcDefinition,
         /// Arc type (normal open arc, pie/sector, chord).
         arc_type: ArcType,
         /// Center point of the parent ellipse.
@@ -409,6 +457,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -433,6 +486,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -461,6 +519,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -478,19 +541,24 @@ pub enum Control {
     /// Maps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with
     /// the `"$con"` type tag wrapping child `ShapeComponent`s.
     ///
-    /// `children` reuses the shape `Control` variants (`Rect`/`Ellipse`/
-    /// `Line`/`Polygon`/`Curve`/`ConnectLine`/`Image`/`EmbeddedChart` and,
-    /// recursively, `Group`). Non-shape variants are rejected by
-    /// `validate` rather than the type system, matching how every other
-    /// recursive container (`TextBox`/`Footnote`/`Memo.content`) carries a
-    /// loose `Vec<Paragraph>` / `Vec<Run>`.
+    /// `children` holds pictures ([`GroupChild::Picture`]) and drawing
+    /// shapes ([`GroupChild::Shape`]: the shape `Control` variants and,
+    /// recursively, `Group`). A shape child that is not a drawing object (a
+    /// hyperlink, field, memo, …) is rejected by `validate` rather than the
+    /// type system.
     Group {
-        /// Child drawing objects, in z-order. May nest further `Group`s.
-        children: Vec<Control>,
+        /// Child pictures and drawing objects, in z-order. May nest further
+        /// `Group`s.
+        children: Vec<GroupChild>,
         /// Bounding box width (HWPUNIT).
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -535,6 +603,11 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Original box and size lock (see [`ObjectFrame`]). Defining points
+        /// are coordinates in the original box. Default = none: the points
+        /// are in the displayed box.
+        #[serde(default, skip_serializing_if = "ObjectFrame::is_unset")]
+        frame: ObjectFrame,
         /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
         /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
         /// default (treat-as-char, zero offset) — the encoder emits the legacy
@@ -565,7 +638,7 @@ pub enum Control {
     /// Maps to HWPX `fieldBegin type="CROSSREF"` with parameters.
     ///
     /// Wave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로
-    /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로
+    /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로
     /// 구분되어 caller 가 의미를 정확히 알 수 있음.
     ///
     /// Wave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.
@@ -714,6 +787,14 @@ pub enum Control {
         display_text: String,
     },
 
+    /// Page-number placement at this exact paragraph/run position. Decoders
+    /// preserve every occurrence here; Section::page_number is a legacy
+    /// summary/fallback for documents created without positioned controls.
+    PageNumber {
+        /// Placement and decoration of the page number.
+        number: crate::section::PageNumber,
+    },
+
     /// An `atno` **inline** page number control (Wave 12n).
     ///
     /// HWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴
@@ -730,12 +811,24 @@ pub enum Control {
         kind: InlinePageKind,
     },
 
+    /// A caption's automatic number — "그림 3", "표 7" (HWPX `<hp:autoNum
+    /// numType="PICTURE|TABLE|EQUATION">`). Hancom keeps the number it
+    /// counted in the file; `num` is that cached value.
+    AutoNumber {
+        /// Which counter.
+        kind: AutoNumberKind,
+        /// The number Hancom last counted (`num`).
+        num: u32,
+        /// How the number is written.
+        format: AutoNumberFormat,
+    },
+
     /// A `nwno` **새 번호 지정** control — restarts a numbering counter
     /// from this position (HWPX `<hp:newNum num numType>`).
     ///
     /// HWP5 wire (native fixture 실측 2026-08-12): 10 bytes —
     /// `ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the
-    /// paragraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로
+    /// paragraph text by a `0x15` inline marker. 한컴 \[쪽\]→\[새 번호로
     /// 시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies
     /// from the **physical page containing the control** (PDF 실측:
     /// 1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).
@@ -775,19 +868,186 @@ pub enum Control {
         hide_page_num: bool,
     },
 
-    /// An unrecognized control element preserved for round-trip fidelity.
+    /// An unrecognized control element.
     ///
-    /// `tag` holds the element's tag name or type identifier.
-    /// `data` holds optional serialized content for lossless preservation.
+    /// No HWPX or HWP5 decoder produces it; it comes from JSON input, the
+    /// Rust API, or the Markdown lossless decoder. `tag` holds the element's
+    /// tag name or type identifier, `data` optional serialized content.
+    ///
+    /// The Markdown lossless encoder keeps it with `data`; the other Markdown
+    /// encoders show only the tag. The HWPX encoder has no form for it: in
+    /// body text, table cells, notes, captions, text boxes, headers or
+    /// footers and master pages it leaves the control out and reports a
+    /// `CONTENT_LOST` encode warning. One place still drops it without that
+    /// warning: a memo's anchor runs (only their text is kept).
     Unknown {
         /// Tag name or type identifier of the unrecognized element.
         tag: String,
-        /// Optional serialized data for round-trip preservation.
+        /// Optional serialized data, kept only by the Markdown lossless
+        /// encoder.
         data: Option<String>,
     },
 }
 
 impl Control {
+    /// The object's [`ObjectFrame`]; `None` for a control that has none (only
+    /// the drawing shapes, groups and TextArt carry one).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let w = HwpUnit::new(100).unwrap();
+    /// assert!(Control::ellipse(w, w).frame().is_some_and(|f| f.is_unset()));
+    /// assert!(Control::bookmark("x").frame().is_none());
+    /// ```
+    #[must_use]
+    pub fn frame(&self) -> Option<&ObjectFrame> {
+        match self {
+            Self::TextBox { frame, .. }
+            | Self::Line { frame, .. }
+            | Self::Ellipse { frame, .. }
+            | Self::Rect { frame, .. }
+            | Self::Polygon { frame, .. }
+            | Self::Arc { frame, .. }
+            | Self::Curve { frame, .. }
+            | Self::ConnectLine { frame, .. }
+            | Self::Group { frame, .. }
+            | Self::TextArt { frame, .. } => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// Mutable [`Self::frame`].
+    pub fn frame_mut(&mut self) -> Option<&mut ObjectFrame> {
+        match self {
+            Self::TextBox { frame, .. }
+            | Self::Line { frame, .. }
+            | Self::Ellipse { frame, .. }
+            | Self::Rect { frame, .. }
+            | Self::Polygon { frame, .. }
+            | Self::Arc { frame, .. }
+            | Self::Curve { frame, .. }
+            | Self::ConnectLine { frame, .. }
+            | Self::Group { frame, .. }
+            | Self::TextArt { frame, .. } => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// Displayed width and height of a control with a frame.
+    fn framed_size(&self) -> Option<(HwpUnit, HwpUnit)> {
+        match self {
+            Self::TextBox { width, height, .. }
+            | Self::Line { width, height, .. }
+            | Self::Ellipse { width, height, .. }
+            | Self::Rect { width, height, .. }
+            | Self::Polygon { width, height, .. }
+            | Self::Arc { width, height, .. }
+            | Self::Curve { width, height, .. }
+            | Self::ConnectLine { width, height, .. }
+            | Self::Group { width, height, .. }
+            | Self::TextArt { width, height, .. } => Some((*width, *height)),
+            _ => None,
+        }
+    }
+
+    /// The original box this control's defining points are in: the frame's
+    /// [`original_size`](ObjectFrame::original_size), or the kind's default
+    /// when that is `None` — a TextArt's design box
+    /// ([`TEXT_ART_DESIGN_SIDE`](crate::frame::TEXT_ART_DESIGN_SIDE)²), the
+    /// displayed size for every other kind. `None` for a control without a
+    /// frame.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::{HwpUnit, Size};
+    ///
+    /// let w = HwpUnit::new(850).unwrap();
+    /// let circle = Control::ellipse(w, w);
+    /// assert_eq!(circle.effective_original_size(), Some(Size::new(w, w)));
+    /// ```
+    #[must_use]
+    pub fn effective_original_size(&self) -> Option<Size> {
+        let frame = self.frame()?;
+        frame.original_size.or_else(|| self.default_original_size())
+    }
+
+    /// The kind's original box when the frame holds none.
+    fn default_original_size(&self) -> Option<Size> {
+        match self {
+            Self::TextArt { .. } => {
+                let side = HwpUnit::new(crate::frame::TEXT_ART_DESIGN_SIDE).ok()?;
+                Some(Size::new(side, side))
+            }
+            _ => self.framed_size().map(|(w, h)| Size::new(w, h)),
+        }
+    }
+
+    /// Changes the displayed size the way Hancom's editor resizes an object:
+    /// the original box stays and only the scale changes, so the drawn shape
+    /// (every defining point) stretches with the box.
+    ///
+    /// A control without an original size first takes its current original
+    /// box — its displayed size before the change — so its points keep their
+    /// meaning; the frame stays `None` only while that equals the kind's
+    /// default (a TextArt's design box, or a resize to the same size).
+    ///
+    /// Groups are not resized here: their children sit in the group's
+    /// displayed space and do not follow. Returns `false`, changing nothing,
+    /// for a group or a control without a frame.
+    ///
+    /// Editing `width`/`height` directly (for instance in JSON) keeps the
+    /// points where they are: to stretch a shape by hand, set
+    /// [`original_size`](ObjectFrame::original_size) to the previous size
+    /// as well.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, ShapePoint};
+    /// use hwpforge_foundation::{HwpUnit, Size};
+    ///
+    /// let u = |v| HwpUnit::new(v).unwrap();
+    /// let mut circle = Control::ellipse(u(850), u(850));
+    /// assert!(circle.resize(u(1700), u(1700)));
+    /// // The centre stays at 425 in the original 850 box: drawn at 850.
+    /// let Control::Ellipse { center, frame, .. } = &circle else { unreachable!() };
+    /// assert_eq!(*center, ShapePoint { x: 425, y: 425 });
+    /// assert_eq!(frame.original_size, Some(Size::new(u(850), u(850))));
+    /// ```
+    pub fn resize(&mut self, width: HwpUnit, height: HwpUnit) -> bool {
+        let Some(before) = self.effective_original_size() else { return false };
+        match self {
+            Self::TextBox { width: w, height: h, .. }
+            | Self::Line { width: w, height: h, .. }
+            | Self::Ellipse { width: w, height: h, .. }
+            | Self::Rect { width: w, height: h, .. }
+            | Self::Polygon { width: w, height: h, .. }
+            | Self::Arc { width: w, height: h, .. }
+            | Self::Curve { width: w, height: h, .. }
+            | Self::ConnectLine { width: w, height: h, .. }
+            | Self::TextArt { width: w, height: h, .. } => {
+                *w = width;
+                *h = height;
+            }
+            _ => return false,
+        }
+        // Folded against the default of the NEW state: a shape's default is
+        // its new size, so the previous box stays; a TextArt's is fixed.
+        // 이것을 실패시키는 것: 기본값 비교를 크기 바꾸기 전으로 옮기기(점이
+        // 425 에 남는다 — `resize_keeps_the_original_box`).
+        let default = self.default_original_size();
+        if let Some(frame) = self.frame_mut() {
+            frame.original_size = (Some(before) != default).then_some(before);
+        }
+        true
+    }
+
     /// 이 컨트롤 안에 중첩된 모든 문단을 재귀 방문한다
     /// (글상자/도형 본문·캡션·각주/미주·메모 본문+앵커 run·묶음 자식 포함).
     ///
@@ -830,7 +1090,17 @@ impl Control {
             | Self::ConnectLine { caption, .. } => walk_caption(caption, f),
             Self::Group { children, .. } => {
                 for child in children {
-                    child.walk_paragraphs_mut(f);
+                    match child {
+                        GroupChild::Picture(image) => walk_caption(&mut image.caption, f),
+                        GroupChild::Shape(control) => control.walk_paragraphs_mut(f),
+                    }
+                }
+            }
+            Self::FieldBoundary { boundary } => {
+                if let FieldBoundary::Start(start) = boundary {
+                    if let Some(paragraphs) = &mut start.annotation {
+                        walk_vec(paragraphs, f);
+                    }
                 }
             }
             Self::Memo { content, anchor_runs, .. } => {
@@ -853,7 +1123,9 @@ impl Control {
             | Self::UnknownSummary { .. }
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
+            | Self::PageNumber { .. }
             | Self::InlinePageNumber { .. }
+            | Self::AutoNumber { .. }
             | Self::NewNumber { .. }
             | Self::PageHiding { .. }
             | Self::Unknown { .. } => {}
@@ -899,7 +1171,17 @@ impl Control {
             | Self::ConnectLine { caption, .. } => walk_caption(caption, f),
             Self::Group { children, .. } => {
                 for child in children {
-                    child.walk_paragraphs(f);
+                    match child {
+                        GroupChild::Picture(image) => walk_caption(&image.caption, f),
+                        GroupChild::Shape(control) => control.walk_paragraphs(f),
+                    }
+                }
+            }
+            Self::FieldBoundary { boundary } => {
+                if let FieldBoundary::Start(start) = boundary {
+                    if let Some(paragraphs) = &start.annotation {
+                        walk_vec(paragraphs, f);
+                    }
                 }
             }
             Self::Memo { content, anchor_runs, .. } => {
@@ -922,7 +1204,9 @@ impl Control {
             | Self::UnknownSummary { .. }
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
+            | Self::PageNumber { .. }
             | Self::InlinePageNumber { .. }
+            | Self::AutoNumber { .. }
             | Self::NewNumber { .. }
             | Self::PageHiding { .. }
             | Self::Unknown { .. } => {}
@@ -957,13 +1241,16 @@ impl Control {
             Self::TextArt { .. } => "text_art",
             Self::Bookmark { .. } => "bookmark",
             Self::CrossRef { .. } => "cross_ref",
+            Self::FieldBoundary { .. } => "field_boundary",
             Self::Field { .. } => "field",
             Self::Memo { .. } => "memo",
             Self::IndexMark { .. } => "index_mark",
             Self::UnknownSummary { .. } => "unknown_summary",
             Self::DateCodeField { .. } => "date_code_field",
             Self::PathField { .. } => "path_field",
+            Self::PageNumber { .. } => "page_number",
             Self::InlinePageNumber { .. } => "inline_page_number",
+            Self::AutoNumber { .. } => "auto_number",
             Self::NewNumber { .. } => "new_number",
             Self::PageHiding { .. } => "page_hiding",
             Self::Unknown { .. } => "unknown",
@@ -1281,6 +1568,8 @@ impl Control {
     /// ```
     pub fn text_box(paragraphs: Vec<Paragraph>, width: HwpUnit, height: HwpUnit) -> Self {
         Self::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
+            text_margin: None,
             paragraphs,
             width,
             height,
@@ -1395,6 +1684,7 @@ impl Control {
         let w = width.as_i32();
         let h = height.as_i32();
         Self::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint::new(w / 2, h / 2),
             axis1: ShapePoint::new(w, h / 2),
             axis2: ShapePoint::new(w / 2, h),
@@ -1431,6 +1721,7 @@ impl Control {
         let w = width.as_i32();
         let h = height.as_i32();
         Self::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint::new(w / 2, h / 2),
             axis1: ShapePoint::new(w, h / 2),
             axis2: ShapePoint::new(w / 2, h),
@@ -1476,7 +1767,14 @@ impl Control {
                 ),
             });
         }
-        Ok(Self::Rect { width, height, placement: None, caption: None, style: None })
+        Ok(Self::Rect {
+            frame: crate::frame::ObjectFrame::new(),
+            width,
+            height,
+            placement: None,
+            caption: None,
+            style: None,
+        })
     }
 
     /// Creates a polygon control from the given vertices.
@@ -1525,6 +1823,7 @@ impl Control {
             reason: format!("bounding box height {bbox_h} exceeds HwpUnit range"),
         })?;
         Ok(Self::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices,
             width,
             height,
@@ -1584,6 +1883,7 @@ impl Control {
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         Ok(Self::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: norm_start,
             end: norm_end,
             width,
@@ -1614,6 +1914,7 @@ impl Control {
     pub fn horizontal_line(width: HwpUnit) -> Self {
         let w = width.as_i32();
         Self::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(w, 0),
             width,
@@ -1672,6 +1973,7 @@ impl Control {
     }
 
     /// Creates an arc control with the given bounding box dimensions.
+    /// Uses [`ArcDefinition::EllipseSweep`], with all seven defining points.
     ///
     /// Geometry is auto-derived from the bounding box.
     /// Defaults: inline positioning, no caption, no style.
@@ -1691,6 +1993,8 @@ impl Control {
         let w = width.as_i32();
         let h = height.as_i32();
         Self::Arc {
+            definition: ArcDefinition::EllipseSweep,
+            frame: crate::frame::ObjectFrame::new(),
             arc_type,
             center: ShapePoint::new(w / 2, h / 2),
             axis1: ShapePoint::new(w, h / 2),
@@ -1754,6 +2058,7 @@ impl Control {
         })?;
         let seg_count = points.len().saturating_sub(1);
         Ok(Self::Curve {
+            frame: crate::frame::ObjectFrame::new(),
             points,
             segment_types: vec![CurveSegmentType::Curve; seg_count],
             width,
@@ -1809,6 +2114,7 @@ impl Control {
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         Ok(Self::ConnectLine {
+            frame: crate::frame::ObjectFrame::new(),
             start: norm_start,
             end: norm_end,
             control_points: Vec::new(),
@@ -1929,6 +2235,7 @@ impl std::fmt::Display for Control {
             Self::CrossRef { target, ref_type, .. } => {
                 write!(f, "CrossRef({:?}, {ref_type})", target.as_display())
             }
+            Self::FieldBoundary { boundary } => write!(f, "FieldBoundary({boundary:?})"),
             Self::Field { field_type, hint_text, name, .. } => {
                 let hint = hint_text.as_deref().unwrap_or("");
                 match name.as_deref().filter(|s| !s.is_empty()) {
@@ -1959,11 +2266,13 @@ impl std::fmt::Display for Control {
             Self::PathField { command, .. } => {
                 write!(f, "PathField({})", command.wire_command())
             }
+            Self::PageNumber { number } => write!(f, "{number}"),
             Self::InlinePageNumber { kind } => match kind {
                 InlinePageKind::CurrentPage => write!(f, "InlinePageNumber(current)"),
                 InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
                 InlinePageKind::Unknown => write!(f, "InlinePageNumber(unknown)"),
             },
+            Self::AutoNumber { kind, num, .. } => write!(f, "AutoNumber({kind:?}, {num})"),
             Self::NewNumber { kind, number } => {
                 write!(f, "NewNumber({kind:?}, {number})")
             }
@@ -1998,6 +2307,32 @@ impl std::fmt::Display for Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S16: a text box without a margin writes no `text_margin` (old JSON
+    /// and its output unchanged) and reads back as `None`; a margin round
+    /// trips.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn text_box_margin_json() {
+        let unit = HwpUnit::new(1000).unwrap();
+        let tb = Control::text_box(vec![], unit, unit);
+        let json = serde_json::to_value(&tb).unwrap();
+        assert!(json["TextBox"].get("text_margin").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<Control>(json).unwrap(), tb);
+        let mut with = tb.clone();
+        if let Control::TextBox { text_margin, .. } = &mut with {
+            *text_margin = Some(crate::table::TableMargin {
+                left: unit,
+                right: unit,
+                top: unit,
+                bottom: unit,
+            });
+        }
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["TextBox"]["text_margin"]["left"], 1000);
+        assert_eq!(serde_json::from_value::<Control>(json).unwrap(), with);
+    }
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex, VerticalAlign};
 
@@ -2077,6 +2412,8 @@ mod tests {
     #[test]
     fn text_box_construction() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -2141,6 +2478,7 @@ mod tests {
     #[test]
     fn display_text_art_escapes_line_breaks() {
         let ta = Control::TextArt {
+            frame: crate::frame::ObjectFrame::new(),
             text: "위\r\n\r\n\"아래\"".to_string(),
             shape: "WAVE2".to_string(),
             font_name: String::new(),
@@ -2155,6 +2493,31 @@ mod tests {
             inst_id: None,
         };
         assert_eq!(ta.to_string(), r#"TextArt("위\r\n\r\n\"아래\"", WAVE2)"#);
+    }
+
+    /// A caption number round-trips through JSON with its format, and
+    /// names itself. 이것을 실패시키는 것: `kind_name`·`Display` 갈래를 다른
+    /// variant 로 합치는 것 / 형식 필드 하나를 serde 에서 빼는 것.
+    #[test]
+    fn auto_number_round_trips_and_names_itself() {
+        use hwpforge_foundation::NumberFormatType;
+        let control = Control::AutoNumber {
+            kind: AutoNumberKind::Table,
+            num: 7,
+            format: AutoNumberFormat {
+                number_type: NumberFormatType::RomanCapital,
+                user_char: None,
+                prefix: Some('('),
+                suffix: Some(')'),
+                superscript: true,
+            },
+        };
+        assert_eq!(control.to_string(), "AutoNumber(Table, 7)");
+        assert_eq!(control.kind_name(), "auto_number");
+        let json = serde_json::to_string(&control).unwrap();
+        assert_eq!(serde_json::from_str::<Control>(&json).unwrap(), control);
+        assert_eq!(AutoNumberFormat::default().number_type, NumberFormatType::Digit);
+        assert!(!AutoNumberFormat::default().superscript);
     }
 
     #[test]
@@ -2199,6 +2562,8 @@ mod tests {
     #[test]
     fn display_text_box() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![simple_paragraph(), simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -2262,6 +2627,8 @@ mod tests {
     #[test]
     fn serde_roundtrip_text_box() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -2318,6 +2685,7 @@ mod tests {
     #[test]
     fn line_construction() {
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
@@ -2335,6 +2703,7 @@ mod tests {
     #[test]
     fn ellipse_construction() {
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -2354,6 +2723,7 @@ mod tests {
     #[test]
     fn ellipse_with_paragraphs() {
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -2372,6 +2742,7 @@ mod tests {
     #[test]
     fn polygon_construction() {
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -2394,6 +2765,7 @@ mod tests {
     #[test]
     fn display_line() {
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 100, y: 200 },
             width: HwpUnit::from_mm(10.0).unwrap(),
@@ -2408,6 +2780,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_line() {
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 100, y: 200 },
             end: ShapePoint { x: 300, y: 400 },
             width: HwpUnit::from_mm(20.0).unwrap(),
@@ -2424,6 +2797,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_ellipse() {
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -2443,6 +2817,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_polygon() {
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -2599,7 +2974,7 @@ mod tests {
         let ctrl = Control::rect(width, height).unwrap();
         assert!(ctrl.is_rect());
         match ctrl {
-            Control::Rect { width: w, height: h, placement, caption, style } => {
+            Control::Rect { frame: _, width: w, height: h, placement, caption, style } => {
                 assert_eq!(w, width);
                 assert_eq!(h, height);
                 assert!(placement.is_none());
@@ -2692,7 +3067,7 @@ mod tests {
         let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(5000, 0)).unwrap();
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line { start, end, width, height, placement, caption, style } => {
+            Control::Line { frame: _, start, end, width, height, placement, caption, style } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end, ShapePoint::new(5000, 0));
                 assert_eq!(width, HwpUnit::new(5000).unwrap());
@@ -2742,7 +3117,7 @@ mod tests {
         let ctrl = Control::horizontal_line(width);
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line { start, end, width: w, height, placement, caption, style } => {
+            Control::Line { frame: _, start, end, width: w, height, placement, caption, style } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end.y, 0);
                 assert_eq!(end.x, width.as_i32());

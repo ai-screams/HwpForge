@@ -1,4 +1,4 @@
-# HWPX/HWP5 Wire Gotchas (WG#1\~37)
+# HWPX/HWP5 Wire Gotchas (WG#1\~41)
 
 > 이 파일은 CLAUDE.md 로딩 맵에서 필요 시 로드된다 (자동 로드 아님).
 > **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` 는 RG# 독립 번호 (WG#28\~30·34\~37 = RG#44\~50)
@@ -40,5 +40,9 @@
 35. 인코더 전체-run 치환 placeholder(HWPHL/HWPFD/HWPBM 등 13종) = **run 직렬화 문자열 전체가 치환 키** — titleMark 등 후주입으로 run 을 바꾸면 내부 마커가 XML 로 유출. 판정은 등록 키와 **정확 일치**로만 (substring 은 정상 텍스트 "0"·"hp" 오탐)
 36. `BeginNum.footnote/endnote` 는 `<hp:startNum>` wire 에 **속성 자체가 없음** — 디코더가 1 을 합성 (첫 섹션만 header `<hh:beginNum>` 실값 병합). 재시작 신호로 읽으면 공개 왕복에서 각주 번호 1,2,3→1,2,1 리셋
 37. `hp:newNum@num` = **xs:integer** (0 유효 wire — verbatim 캐리) / `xs:positiveInteger` 는 footNotePr `numbering@newNum` 쪽. 두 XSD 를 혼동해 0 을 거르면 wire-캐시 의미 분열
+38. HWP5 개체 속성 word **bit 21–23 textWrap 은 한컴 4값** (`0` 어울림 SQUARE · `1` 자리 차지 TOP_AND_BOTTOM · `2` 글 뒤로 BEHIND_TEXT · `3` 글 앞으로 IN_FRONT_OF_TEXT) — 스펙 rev1.3 표 70·hwp-rs·hwp.js 의 6값(Tight·Through 포함) 순서가 아니다. 한컴 저작 X2(`tests/fixtures/shapes/x2-wrap-modes.hwp`) 4/4·한컴 짝 떠 있는 개체 457/457. `4`–`7` 은 경고 + Square (`HWP5_WIRE_SPEC.md §22.5`)
+39. 줄 시작(`lineseg@textpos`)은 **영-core 토큰(구역·단 정의·쪽 번호·표·책갈피·필드 시작/끝 등) 사이에** 놓일 수 있다 — Core 좌표로는 같은 자리라 좌표만 옮기면 줄이 겹친다(`[0,0]`). Core `LineSeg.boundary`(앞에서 지나는 토큰 종류 열 + 다음 토큰 종류)로 그 자리를 옮기고, 인코더는 자기 토큰 열이 종류까지 같을 때만 그 뒤에 놓는다(아니면 문단 캐시 drop+경고). 인코더 주입 토큰은 **실제 직렬화 순서**(secPr → colPr → 머리말 → 꼬리말 → pageNum)로 기록. 한 문단 경계 skip 합은 `MAX_PARAGRAPH_BOUNDARY_SKIP`(1024) 상한
+40. 필드 시작과 **같은 run 의** 글자는 필드 본문으로 접힌다 — 끝이 그 run 에 없거나(문단을 가로지르는 필드), 같은 run 의 두 번째 시작이 덮거나, 닫혀도 그 control 이 글자를 담지 않는 종류(책갈피 범위·메모·Core 형태 없는 FORMULA)면 본문이 Core 에서 사라진다. 그 문단 캐시는 버린다(상호참조는 같은 run 에서 닫힌 본문을 `display_text` 로 담는다 — 보존 목록에 있음. 디코더 `convert_ctrl_child` 의 보존 목록 — 본문을 살리는 변경은 그 Core 종류를 이 목록에 더해야 가드가 꺼진다). 시작이 run 을 혼자 차지하는 문단을 가로지르는 필드(한컴 보도자료 서식의 "본문" 누름틀)는 본문이 1:1 이라 캐시가 맞다
+41. **ZIP 패키지 읽기의 완화는 디렉터리 일치·이름 변환 불변·모든 항목의 이름 충돌을 각각 검사한다.** (a) 기존에 수용하던 끝 레코드는 기존 규칙으로 처리한다. 새 ZIP32 경로는 마지막 원시 끝 레코드 위치와 항목 수·디렉터리 시작·기준 주소가 한컴 참조의 해석과 일치해야 한다. 새 ZIP64 수용은 보류한다. (b) 모든 항목의 원시 이름과 UnicodePath 이름은 한컴의 이름 변환(NUL 절단, 두 번째 UTF-16 단위의 `:`, 선행 구분자·상위 경로 처리, 역슬래시 변환)에 불변이어야 한다. 이 검사는 기존에 수용한 일부 콜론 이름도 거부하는 의도된 강화다. (c) 비정규 이름은 원시 이름과 UnicodePath 이름이 같고, 대소문자를 접은 키가 다른 항목과 겹치지 않는 등 보류 경계를 통과할 때 opaque로 보존하며 의미 조회에서는 거부한다. 입력을 받는 편집·저장 작업은 opaque 보존 또는 오류를 보장하지만, 문서 모델만으로 일반 재생성하는 API에는 그 보장이 없다. 정상·opaque 구분 없이 서로 다른 항목의 원시·UnicodePath 이름에서 ASCII 대소문자를 접은 키가 겹치면 payload 해제 전에 거부한다. 단, 한컴이 원시 이름을 대소문자 구별하여 따로 찾는 `mimetype` 키는 예외다. 대소문자만 다른 항목은 거부하며, 한컴처럼 항목을 고르는 동작은 이후 과제다. **알려진 한계:** manifest href를 따르지 않는 그림·바탕쪽·설정 조회도 별도 슬라이스다. 이 세 검사는 모든 부품 선택의 일치까지 보장하지 않는다.
 
 ---

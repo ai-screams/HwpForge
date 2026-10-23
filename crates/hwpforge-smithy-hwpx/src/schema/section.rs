@@ -12,7 +12,7 @@ use hwpforge_core::run::RunContent;
 use hwpforge_foundation::HwpUnit;
 use serde::{Deserialize, Serialize};
 
-use super::deser_i32_or_u32;
+use super::{deser_i32_or_u32, ser_i32_as_u32};
 
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
@@ -49,6 +49,12 @@ fn default_table_repeat_header() -> u32 {
 /// `<hp:p id="..." paraPrIDRef="3" styleIDRef="0" ...>`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxParagraph {
+    #[serde(rename = "@hwpforgeOrigin", default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<usize>,
+    // Decoder source identity is independent of the encoder layout origin.
+    #[serde(rename = "@_hwpforge_origin", default, skip_serializing)]
+    pub source_origin: usize,
+
     #[serde(rename = "@id", default)]
     pub id: String,
     #[serde(rename = "@paraPrIDRef", default)]
@@ -93,6 +99,9 @@ pub struct HxParagraph {
 /// 직렬화 불요, Codex 리뷰 #2 채택).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct HxRun {
+    #[serde(rename = "@_hwpforge_origin", default, skip_serializing)]
+    pub origin: usize,
+
     #[serde(rename = "@charPrIDRef", default)]
     pub char_pr_id_ref: u32,
 
@@ -294,6 +303,9 @@ pub enum HxRunChildKind {
     TextArt,
     /// 미지 요소 (자리 보존용 — 종류별 Vec 에는 미수록).
     Other,
+    /// `<hp:ole>` — 디코더가 담지 않는 OLE 개체. 본문에서는 [`Self::Other`]
+    /// 와 똑같이 다루고, 바탕쪽에서만 손실 종류 이름(`ole`)이 다르다.
+    Ole,
     /// run 직속 stray `$text` — 스키마상 위치가 없어 내용은 드롭하지만
     /// **존재·위치는 기록**한다 (W1b: 캐시 fail-closed 신호, v4 R3#7).
     StrayText,
@@ -341,6 +353,8 @@ enum HxRunChildDe {
     Line(Box<HxLine>),
     #[serde(rename = "ellipse")]
     Ellipse(Box<HxEllipse>),
+    #[serde(rename = "arc")]
+    Arc(Box<HxEllipse>),
     #[serde(rename = "polygon")]
     Polygon(Box<HxPolygon>),
     #[serde(rename = "curve")]
@@ -361,6 +375,8 @@ enum HxRunChildDe {
     Container(Box<HxContainer>),
     #[serde(rename = "textart")]
     TextArt(Box<HxTextArt>),
+    #[serde(rename = "ole")]
+    Ole(serde::de::IgnoredAny),
     /// run 직속 텍스트 노드 (정상 문서엔 없음 — 방어적 흡수).
     #[serde(rename = "$text")]
     StrayText(String),
@@ -373,6 +389,8 @@ impl<'de> serde::Deserialize<'de> for HxRun {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct HxRunDe {
+            #[serde(rename = "@_hwpforge_origin", default)]
+            origin: usize,
             #[serde(rename = "@charPrIDRef", default)]
             char_pr_id_ref: u32,
             #[serde(rename = "$value", default)]
@@ -380,6 +398,7 @@ impl<'de> serde::Deserialize<'de> for HxRun {
         }
         let de = HxRunDe::deserialize(deserializer)?;
         let mut run = HxRun {
+            origin: de.origin,
             char_pr_id_ref: de.char_pr_id_ref,
             sec_pr: None,
             texts: Vec::new(),
@@ -432,6 +451,16 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                     run.child_order.push((K::Line, run.lines.len()));
                     run.lines.push(*x);
                 }
+                HxRunChildDe::Arc(mut x) => {
+                    // Object identity must survive zero-angle quantization and malformed
+                    // matrices. Geometry classification/diagnostics belong to the decoder.
+                    // A run child is a paragraph object. Direct group children are
+                    // parsed by HxContainerChildDe, regardless of this cached level.
+                    x.has_arc_pr = 1;
+                    x.axis_endpoints = true;
+                    run.child_order.push((K::Ellipse, run.ellipses.len()));
+                    run.ellipses.push(*x);
+                }
                 HxRunChildDe::Ellipse(x) => {
                     run.child_order.push((K::Ellipse, run.ellipses.len()));
                     run.ellipses.push(*x);
@@ -481,6 +510,9 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                     // 위치는 사이드카에 기록한다 (W1b fail-closed 관측).
                     run.child_order.push((K::StrayText, 0));
                 }
+                HxRunChildDe::Ole(_) => {
+                    run.child_order.push((K::Ole, 0));
+                }
                 HxRunChildDe::Other => {
                     run.child_order.push((K::Other, 0));
                 }
@@ -494,8 +526,9 @@ impl<'de> serde::Deserialize<'de> for HxRun {
 ///
 /// Decode-only mirror of [`crate::encoder::shapes::encode_text_art_to_xml`].
 /// Captures only the attributes needed to reconstruct `Control::TextArt`:
-/// the displayed `text`, `instid`, placement (`offset`), size (`sz`), and the
-/// `<hp:textartPr>` typography sub-element.
+/// the displayed `text`, `instid`, placement (`offset`), size (`sz`; for a
+/// group child, which has no `sz`, `orgSz` and the matrix chain), the fill
+/// brush, and the `<hp:textartPr>` typography sub-element.
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 pub struct HxTextArt {
     /// Displayed text content.
@@ -510,82 +543,345 @@ pub struct HxTextArt {
     /// Display size (`<hp:sz>`) — carries width/height.
     #[serde(rename(deserialize = "sz"), default)]
     pub sz: Option<HxTableSz>,
+    /// Size before the matrix chain (`<hp:orgSz>`).
+    #[serde(rename(deserialize = "orgSz"), default)]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Current size (`<hp:curSz>`).
+    #[serde(rename(deserialize = "curSz"), default)]
+    pub cur_sz: Option<HxSizeAttr>,
+    /// Matrix chain (`<hp:renderingInfo>`) — places a group child.
+    #[serde(rename(deserialize = "renderingInfo"), default)]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Fill brush (`<hc:fillBrush>`) — the text's colour.
+    #[serde(rename(deserialize = "fillBrush"), default)]
+    pub fill_brush: Option<HxFillBrush>,
+    /// Outline (`<hp:lineShape>`). Core TextArt has no outline, so only its
+    /// absence (`style="NONE"`) round-trips.
+    #[serde(rename(deserialize = "lineShape"), default)]
+    pub line_shape: Option<HxLineShape>,
+    /// Shape shadow (`<hp:shadow>`). Core TextArt has no shadow, so only
+    /// `type="NONE"` round-trips.
+    #[serde(rename(deserialize = "shadow"), default)]
+    pub shadow: Option<HxShadow>,
     /// Typography properties (`<hp:textartPr>`).
     #[serde(rename(deserialize = "textartPr"), default)]
     pub textart_pr: Option<HxTextArtPr>,
 }
 
 /// `<hp:textartPr>` — TextArt typography (font / shape / spacing / align).
-#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+///
+/// An omitted attribute takes its OWPML schema default (`fontStyle="REGULAR"`,
+/// `fontType="TTF"`, `lineSpacing="120"`, `charSpacing="100"`), and so does
+/// a missing `<hp:textartPr>` ([`Default`]).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HxTextArtPr {
     /// Font family name.
     #[serde(rename = "@fontName", default)]
     pub font_name: String,
     /// Font style label.
-    #[serde(rename = "@fontStyle", default)]
+    #[serde(rename = "@fontStyle", default = "textart_default_font_style")]
     pub font_style: String,
+    /// Font kind: `TTF` (TrueType) or `HTF` (Hangul font). Core TextArt has
+    /// no field for it; the writer always writes `TTF`.
+    #[serde(rename = "@fontType", default = "textart_default_font_type")]
+    pub font_type: String,
     /// HWPX `textShape` name (e.g. `"WAVE2"`).
     #[serde(rename = "@textShape", default)]
     pub text_shape: String,
     /// Line spacing (percent).
-    #[serde(rename = "@lineSpacing", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@lineSpacing",
+        default = "textart_default_line_spacing",
+        deserialize_with = "deser_i32_or_u32"
+    )]
     pub line_spacing: i32,
     /// Character spacing (percent).
-    #[serde(rename = "@charSpacing", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@charSpacing",
+        default = "textart_default_char_spacing",
+        deserialize_with = "deser_i32_or_u32"
+    )]
     pub char_spacing: i32,
     /// Text alignment (e.g. `"LEFT"`).
     #[serde(rename = "@align", default)]
     pub align: String,
+    /// Text shadow (`<hp:shadow>` inside `<hp:textartPr>`). Core TextArt has
+    /// no shadow, so only `type="NONE"` round-trips.
+    #[serde(rename(deserialize = "shadow"), default)]
+    pub shadow: Option<HxShadow>,
+}
+
+impl Default for HxTextArtPr {
+    fn default() -> Self {
+        Self {
+            font_name: String::new(),
+            font_style: textart_default_font_style(),
+            font_type: textart_default_font_type(),
+            text_shape: String::new(),
+            line_spacing: textart_default_line_spacing(),
+            char_spacing: textart_default_char_spacing(),
+            align: String::new(),
+            shadow: None,
+        }
+    }
+}
+
+fn textart_default_font_style() -> String {
+    "REGULAR".to_string()
+}
+
+fn textart_default_font_type() -> String {
+    "TTF".to_string()
+}
+
+fn textart_default_line_spacing() -> i32 {
+    120
+}
+
+fn textart_default_char_spacing() -> i32 {
+    100
 }
 
 /// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.
 ///
-/// Decodes flat children (rect/ellipse/line/polygon/curve/connectLine) plus
-/// nested `<hp:container>` children (Wave B). The shape-common block
-/// (offset/orgSz/…) is parsed for geometry; children reuse the per-shape
-/// decoders, and nested containers recurse through `decode_container`.
-#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+/// Deserialization is manual: every child element is recorded in document
+/// order in [`HxContainer::child_order`] (the [`HxRun::child_order`] pattern),
+/// so the decoder keeps the wire child order and can report each element it
+/// does not support instead of skipping it silently. The container's own
+/// shape-common block (`offset`, `orgSz`, `curSz`, `renderingInfo`, `sz`,
+/// `pos`, `outMargin`) is parsed; `flip`/`rotationInfo`/`shapeComment` are
+/// not needed by the decoder and are skipped.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct HxContainer {
     /// Group nesting level (`0` = outermost).
-    #[serde(rename = "@groupLevel", default)]
     pub group_level: u32,
     /// Instance identifier (mirrors HWP5 / Core `inst_id`).
-    #[serde(rename = "@instid", default)]
     pub instid: String,
+    /// `textWrap` attribute (empty when absent).
+    pub text_wrap: String,
+    /// `textFlow` attribute (empty when absent).
+    pub text_flow: String,
+    /// `href` attribute: the group's own hyperlink (empty when absent).
+    pub href: String,
 
+    /// Offset inside the parent group (`<hp:offset>`, signed).
+    pub offset: Option<HxOffset>,
     /// Group bounding-box original size (`<hp:orgSz>`).
-    #[serde(rename(deserialize = "orgSz"), default)]
     pub org_sz: Option<HxSizeAttr>,
+    /// Current size (`<hp:curSz>`).
+    pub cur_sz: Option<HxSizeAttr>,
+    /// The container's own matrix chain (`<hp:renderingInfo>`).
+    pub rendering_info: Option<HxRenderingInfo>,
     /// Group placement (`<hp:pos>`) — carries the anchor offsets.
-    #[serde(rename(deserialize = "pos"), default)]
     pub pos: Option<HxTablePos>,
     /// Group display size (`<hp:sz>`).
-    #[serde(rename(deserialize = "sz"), default)]
     pub sz: Option<HxTableSz>,
+    /// The group's outer margin (`<hp:outMargin>`, S18).
+    pub out_margin: Option<HxTableMargin>,
 
-    // ── Children (flat shapes for Wave A) ──
     /// `<hp:rect>` children (textboxes / pure rects).
-    #[serde(rename(deserialize = "rect"), default)]
     pub rects: Vec<HxRect>,
     /// `<hp:line>` children.
-    #[serde(rename(deserialize = "line"), default)]
     pub lines: Vec<HxLine>,
     /// `<hp:ellipse>` children (ellipse / arc).
-    #[serde(rename(deserialize = "ellipse"), default)]
     pub ellipses: Vec<HxEllipse>,
     /// `<hp:polygon>` children.
-    #[serde(rename(deserialize = "polygon"), default)]
     pub polygons: Vec<HxPolygon>,
     /// `<hp:curve>` children.
-    #[serde(rename(deserialize = "curve"), default)]
     pub curves: Vec<HxCurve>,
     /// `<hp:connectLine>` children.
-    #[serde(rename(deserialize = "connectLine"), default)]
     pub connect_lines: Vec<HxConnectLine>,
-    /// Nested `<hp:container>` children (group-in-group, Wave B). `Vec` is
-    /// heap-indirected so the recursive type needs no explicit `Box`.
-    #[serde(rename(deserialize = "container"), default)]
+    /// Nested `<hp:container>` children (group-in-group).
     pub containers: Vec<HxContainer>,
+    /// `<hp:textart>` children.
+    pub textarts: Vec<HxTextArt>,
+    /// `<hp:pic>` children.
+    pub pics: Vec<HxPic>,
+
+    /// Child elements in document order: `(kind, index in that kind's Vec)`.
+    /// Elements the decoder does not support are recorded as
+    /// [`HxContainerChildKind::Unsupported`] with index `0`.
+    pub child_order: Vec<(HxContainerChildKind, usize)>,
+}
+
+/// [`HxContainer::child_order`] entry kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HxContainerChildKind {
+    /// `<hp:rect>`.
+    Rect,
+    /// `<hp:line>`.
+    Line,
+    /// `<hp:ellipse>`.
+    Ellipse,
+    /// `<hp:polygon>`.
+    Polygon,
+    /// `<hp:curve>`.
+    Curve,
+    /// `<hp:connectLine>`.
+    ConnectLine,
+    /// `<hp:container>`.
+    Container,
+    /// `<hp:textart>`.
+    TextArt,
+    /// `<hp:pic>`.
+    Picture,
+    /// An element the decoder cannot carry into Core, named by its local
+    /// wire name (`"pic"`, `"ole"`, …; `"unknown"` for an element this
+    /// schema does not name).
+    Unsupported(&'static str),
+}
+
+/// `$value` children of `<hp:container>` (deserialization only).
+#[derive(Deserialize)]
+enum HxContainerChildDe {
+    #[serde(rename = "offset")]
+    Offset(HxOffset),
+    #[serde(rename = "orgSz")]
+    OrgSz(HxSizeAttr),
+    #[serde(rename = "curSz")]
+    CurSz(HxSizeAttr),
+    #[serde(rename = "renderingInfo")]
+    RenderingInfo(Box<HxRenderingInfo>),
+    #[serde(rename = "pos")]
+    Pos(Box<HxTablePos>),
+    #[serde(rename = "sz")]
+    Sz(Box<HxTableSz>),
+    #[serde(rename = "flip")]
+    Flip(serde::de::IgnoredAny),
+    #[serde(rename = "rotationInfo")]
+    RotationInfo(serde::de::IgnoredAny),
+    #[serde(rename = "outMargin")]
+    OutMargin(HxTableMargin),
+    #[serde(rename = "shapeComment")]
+    ShapeComment(serde::de::IgnoredAny),
+    #[serde(rename = "rect")]
+    Rect(Box<HxRect>),
+    #[serde(rename = "line")]
+    Line(Box<HxLine>),
+    #[serde(rename = "arc")]
+    Arc(Box<HxEllipse>),
+    #[serde(rename = "ellipse")]
+    Ellipse(Box<HxEllipse>),
+    #[serde(rename = "polygon")]
+    Polygon(Box<HxPolygon>),
+    #[serde(rename = "curve")]
+    Curve(Box<HxCurve>),
+    #[serde(rename = "connectLine")]
+    ConnectLine(Box<HxConnectLine>),
+    #[serde(rename = "container")]
+    Container(Box<HxContainer>),
+    #[serde(rename = "pic")]
+    Pic(Box<HxPic>),
+    #[serde(rename = "ole")]
+    Ole(serde::de::IgnoredAny),
+    #[serde(rename = "textart")]
+    TextArt(Box<HxTextArt>),
+    #[serde(rename = "equation")]
+    Equation(serde::de::IgnoredAny),
+    #[serde(rename = "switch")]
+    Switch(serde::de::IgnoredAny),
+    #[serde(rename = "caption")]
+    Caption(serde::de::IgnoredAny),
+    #[serde(rename = "parameterset")]
+    ParameterSet(serde::de::IgnoredAny),
+    /// Text directly inside the container (not part of the schema).
+    #[serde(rename = "$text")]
+    StrayText(String),
+    #[serde(other)]
+    Other,
+}
+
+impl<'de> serde::Deserialize<'de> for HxContainer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct HxContainerDe {
+            #[serde(rename = "@groupLevel", default)]
+            group_level: u32,
+            #[serde(rename = "@instid", default)]
+            instid: String,
+            #[serde(rename = "@textWrap", default)]
+            text_wrap: String,
+            #[serde(rename = "@textFlow", default)]
+            text_flow: String,
+            #[serde(rename = "@href", default)]
+            href: String,
+            #[serde(rename = "$value", default)]
+            children: Vec<HxContainerChildDe>,
+        }
+        use HxContainerChildDe as C;
+        use HxContainerChildKind as K;
+        let de = HxContainerDe::deserialize(deserializer)?;
+        let mut c = HxContainer {
+            group_level: de.group_level,
+            instid: de.instid,
+            text_wrap: de.text_wrap,
+            text_flow: de.text_flow,
+            href: de.href,
+            ..HxContainer::default()
+        };
+        for child in de.children {
+            match child {
+                C::Offset(x) => c.offset = Some(x),
+                C::OrgSz(x) => c.org_sz = Some(x),
+                C::CurSz(x) => c.cur_sz = Some(x),
+                C::RenderingInfo(x) => c.rendering_info = Some(*x),
+                C::Pos(x) => c.pos = Some(*x),
+                C::Sz(x) => c.sz = Some(*x),
+                C::OutMargin(x) => c.out_margin = Some(x),
+                C::Flip(_) | C::RotationInfo(_) | C::ShapeComment(_) => {}
+                C::Rect(x) => {
+                    c.child_order.push((K::Rect, c.rects.len()));
+                    c.rects.push(*x);
+                }
+                C::Line(x) => {
+                    c.child_order.push((K::Line, c.lines.len()));
+                    c.lines.push(*x);
+                }
+                C::Arc(mut x) => {
+                    x.has_arc_pr = 1;
+                    x.axis_endpoints = true;
+                    c.child_order.push((K::Ellipse, c.ellipses.len()));
+                    c.ellipses.push(*x);
+                }
+                C::Ellipse(x) => {
+                    c.child_order.push((K::Ellipse, c.ellipses.len()));
+                    c.ellipses.push(*x);
+                }
+                C::Polygon(x) => {
+                    c.child_order.push((K::Polygon, c.polygons.len()));
+                    c.polygons.push(*x);
+                }
+                C::Curve(x) => {
+                    c.child_order.push((K::Curve, c.curves.len()));
+                    c.curves.push(*x);
+                }
+                C::ConnectLine(x) => {
+                    c.child_order.push((K::ConnectLine, c.connect_lines.len()));
+                    c.connect_lines.push(*x);
+                }
+                C::Container(x) => {
+                    c.child_order.push((K::Container, c.containers.len()));
+                    c.containers.push(*x);
+                }
+                C::Pic(x) => {
+                    c.child_order.push((K::Picture, c.pics.len()));
+                    c.pics.push(*x);
+                }
+                C::Ole(_) => c.child_order.push((K::Unsupported("ole"), 0)),
+                C::TextArt(x) => {
+                    c.child_order.push((K::TextArt, c.textarts.len()));
+                    c.textarts.push(*x);
+                }
+                C::Equation(_) => c.child_order.push((K::Unsupported("equation"), 0)),
+                C::Switch(_) => c.child_order.push((K::Unsupported("switch"), 0)),
+                C::Caption(_) => c.child_order.push((K::Unsupported("caption"), 0)),
+                C::ParameterSet(_) => c.child_order.push((K::Unsupported("parameterset"), 0)),
+                C::StrayText(_) => {}
+                C::Other => c.child_order.push((K::Unsupported("unknown"), 0)),
+            }
+        }
+        Ok(c)
+    }
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -625,7 +921,7 @@ impl HxText {
         if s.is_empty() {
             Self { parts: Vec::new() }
         } else {
-            Self { parts: vec![HxTextPart::Text(s)] }
+            Self { parts: vec![HxTextPart::Text(crate::wire_xml::PreservedText::new(s))] }
         }
     }
 
@@ -643,7 +939,7 @@ impl HxText {
         self.parts
             .iter()
             .map(|p| match p {
-                HxTextPart::Text(s) => crate::wire_xml::strip_ws_sentinel(s),
+                HxTextPart::Text(s) => s.as_str(),
                 HxTextPart::LineBreak {} => "\n",
                 HxTextPart::Tab { .. } => "\t",
                 HxTextPart::FwSpace {} => "\u{001F}",
@@ -692,11 +988,9 @@ impl HxText {
         }
 
         let segments = self.parts.iter().filter_map(|p| match p {
-            HxTextPart::Text(s) if s.is_empty() => None,
+            HxTextPart::Text(s) if s.as_str().is_empty() => None,
             HxTextPart::TitleMark { .. } => None,
-            HxTextPart::Text(s) => {
-                Some(InlineSegment::Plain(crate::wire_xml::strip_ws_sentinel(s).to_string()))
-            }
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.as_str().to_string())),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
                     width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),
@@ -719,7 +1013,7 @@ impl HxText {
 pub enum HxTextPart {
     /// Plain text content.
     #[serde(rename = "$text")]
-    Text(String),
+    Text(crate::wire_xml::PreservedText),
     /// `<hp:lineBreak/>` — line break within a text run.
     #[serde(rename(serialize = "hp:lineBreak", deserialize = "lineBreak"))]
     LineBreak {},
@@ -1707,12 +2001,45 @@ pub struct HxTable {
         skip_serializing_if = "Option::is_none"
     )]
     pub in_margin: Option<HxTableMargin>,
+    /// Cell zones (`<hp:cellzoneList>`), between `inMargin` and the rows.
+    #[serde(
+        rename(serialize = "hp:cellzoneList", deserialize = "cellzoneList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cell_zone_list: Option<HxCellZoneList>,
     #[serde(
         rename(serialize = "hp:tr", deserialize = "tr"),
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
     pub rows: Vec<HxTableRow>,
+}
+
+/// `<hp:cellzoneList>` — a table's cell zones.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCellZoneList {
+    #[serde(
+        rename(serialize = "hp:cellzone", deserialize = "cellzone"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub zones: Vec<HxCellZone>,
+}
+
+/// `<hp:cellzone startRowAddr startColAddr endRowAddr endColAddr borderFillIDRef/>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCellZone {
+    #[serde(rename = "@startRowAddr", default)]
+    pub start_row_addr: u32,
+    #[serde(rename = "@startColAddr", default)]
+    pub start_col_addr: u32,
+    #[serde(rename = "@endRowAddr", default)]
+    pub end_row_addr: u32,
+    #[serde(rename = "@endColAddr", default)]
+    pub end_col_addr: u32,
+    #[serde(rename = "@borderFillIDRef", default)]
+    pub border_fill_id_ref: u32,
 }
 
 /// `<hp:sz>` — table size specification.
@@ -1731,6 +2058,10 @@ pub struct HxTableSz {
 }
 
 /// `<hp:pos>` — table position specification.
+///
+/// Hancom writes a negative offset as its unsigned wrap (`4294964867` =
+/// −2429), never as a negative literal, so the offsets are written back
+/// unsigned.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTablePos {
     #[serde(rename = "@treatAsChar", default)]
@@ -1751,22 +2082,56 @@ pub struct HxTablePos {
     pub vert_align: String,
     #[serde(rename = "@horzAlign", default)]
     pub horz_align: String,
-    #[serde(rename = "@vertOffset", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@vertOffset",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub vert_offset: i32,
-    #[serde(rename = "@horzOffset", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@horzOffset",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub horz_offset: i32,
 }
 
 /// `<hp:outMargin>` / `<hp:inMargin>` / `<hp:cellMargin>` — margin specification.
+///
+/// Every side is `xs:nonNegativeInteger`; Hancom writes `4294967295` (read
+/// as -1) in the dormant `<hp:cellMargin>` of some cells, so a side is
+/// written back unsigned.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTableMargin {
-    #[serde(rename = "@left", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@left",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub left: i32,
-    #[serde(rename = "@right", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@right",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub right: i32,
-    #[serde(rename = "@top", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@top",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub top: i32,
-    #[serde(rename = "@bottom", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@bottom",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub bottom: i32,
 }
 
@@ -1865,6 +2230,30 @@ pub struct HxCellSz {
     pub width: i32,
     #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
     pub height: i32,
+}
+
+/// `Contents/masterpage{N}.xml` 의 루트 `<masterPage>` (역직렬화 전용).
+///
+/// 속성은 문자열로 받아 디코더가 해석한다 — XSD 의 `xs:boolean`
+/// (`true`/`1`)·`xs:nonNegativeInteger` 를 serde 가 거부해 문서 전체 디코드가
+/// 실패하지 않게.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxMasterPage {
+    /// `BOTH`·`EVEN`·`ODD`·`LAST_PAGE`·`OPTIONAL_PAGE` (결측 = `BOTH`).
+    #[serde(rename = "@type", default)]
+    pub page_type: String,
+    /// `OPTIONAL_PAGE` 의 쪽 번호.
+    #[serde(rename = "@pageNumber", default)]
+    pub page_number: String,
+    /// 앞 바탕쪽과 겹침.
+    #[serde(rename = "@pageDuplicate", default)]
+    pub page_duplicate: String,
+    /// 바탕쪽 앞으로.
+    #[serde(rename = "@pageFront", default)]
+    pub page_front: String,
+    /// 바탕쪽 내용.
+    #[serde(rename = "subList", default)]
+    pub sub_list: Option<HxSubList>,
 }
 
 /// `<hp:subList>` — container for paragraphs inside a table cell.
@@ -2053,6 +2442,30 @@ pub struct HxPic {
         skip_serializing_if = "Option::is_none"
     )]
     pub caption: Option<HxCaption>,
+    /// Border line around the picture. Read only, to judge a group picture:
+    /// Core keeps no picture border and the writer draws none.
+    #[serde(rename(deserialize = "lineShape"), default, skip_serializing)]
+    pub line_shape: Option<HxLineShape>,
+    /// `<hp:effects>` (shadow, glow, soft edge, reflection). Read only, to
+    /// judge a group picture: Core keeps none of them.
+    #[serde(rename(deserialize = "effects"), default, skip_serializing)]
+    pub effects: Option<HxPicEffects>,
+}
+
+/// `<hp:effects>` of a picture — only whether it has any child is read.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxPicEffects {
+    /// One entry per child element.
+    #[serde(rename = "$value", default)]
+    pub items: Vec<HxAnyElement>,
+}
+
+/// Any XML element, its content ignored.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub enum HxAnyElement {
+    /// The element.
+    #[serde(other)]
+    Element,
 }
 
 /// `<hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>`.
@@ -2074,22 +2487,49 @@ pub struct HxImg {
 }
 
 /// Generic width/height attribute pair used in `<hp:orgSz>`, `<hp:curSz>`.
+///
+/// Hancom writes a negative `<hp:curSz>` side as its unsigned wrap and
+/// never as a negative literal, so both sides are written back unsigned.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSizeAttr {
-    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@width",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub width: i32,
-    #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@height",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub height: i32,
 }
 
 // ── Picture-specific sub-elements ────────────────────────────────
 
 /// `<hp:offset x="0" y="0"/>` — position offset for shapes.
+///
+/// The schema allows a negative `xs:integer`, but Hancom writes a negative
+/// offset as its unsigned wrap (`4294966986` = −310), so it is written
+/// back unsigned.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxOffset {
-    #[serde(rename = "@x", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@x",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub x: i32,
-    #[serde(rename = "@y", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@y",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub y: i32,
 }
 
@@ -2154,17 +2594,88 @@ impl Default for HxMatrix {
 }
 
 /// `<hp:renderingInfo>` — transformation matrices for rendering.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+///
+/// The wire carries one `transMatrix` followed by one `scaMatrix, rotMatrix`
+/// pair per group level: a shape inside a group of level *n* has *n* + 1
+/// pairs (`trans, sca1, rot1, sca2, rot2, …`). The first pair is the one the
+/// outermost group applied after grouping; the last pair is the shape's own.
+/// `sca_matrix`/`rot_matrix` hold the first pair and [`Self::extra_pairs`] the
+/// rest, in wire order.
+///
+/// Deserialization is manual: a missing or misplaced `transMatrix`, an odd
+/// matrix after it, no pair at all or any other child element is an
+/// `XmlParse` error. Serialization writes `trans, sca, rot` only — the
+/// encoder always writes a single pair.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct HxRenderingInfo {
     /// Translation matrix.
-    #[serde(rename(serialize = "hc:transMatrix", deserialize = "transMatrix"))]
+    #[serde(rename(serialize = "hc:transMatrix"))]
     pub trans_matrix: HxMatrix,
-    /// Scale matrix.
-    #[serde(rename(serialize = "hc:scaMatrix", deserialize = "scaMatrix"))]
+    /// Scale matrix of the first pair.
+    #[serde(rename(serialize = "hc:scaMatrix"))]
     pub sca_matrix: HxMatrix,
-    /// Rotation matrix.
-    #[serde(rename(serialize = "hc:rotMatrix", deserialize = "rotMatrix"))]
+    /// Rotation matrix of the first pair.
+    #[serde(rename(serialize = "hc:rotMatrix"))]
     pub rot_matrix: HxMatrix,
+    /// The `(scaMatrix, rotMatrix)` pairs after the first, in wire order.
+    /// Never serialized.
+    #[serde(skip)]
+    pub extra_pairs: Vec<(HxMatrix, HxMatrix)>,
+}
+
+impl HxRenderingInfo {
+    /// Every `(scaMatrix, rotMatrix)` pair in wire order, the first included.
+    pub fn pairs(&self) -> impl Iterator<Item = (&HxMatrix, &HxMatrix)> {
+        std::iter::once((&self.sca_matrix, &self.rot_matrix))
+            .chain(self.extra_pairs.iter().map(|(s, r)| (s, r)))
+    }
+}
+
+/// `$value` children of `<hp:renderingInfo>` (deserialization only).
+#[derive(Deserialize)]
+enum HxRenderingChildDe {
+    #[serde(rename = "transMatrix")]
+    Trans(HxMatrix),
+    #[serde(rename = "scaMatrix")]
+    Sca(HxMatrix),
+    #[serde(rename = "rotMatrix")]
+    Rot(HxMatrix),
+    #[serde(other)]
+    Other,
+}
+
+impl<'de> serde::Deserialize<'de> for HxRenderingInfo {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        #[derive(Deserialize)]
+        struct HxRenderingInfoDe {
+            #[serde(rename = "$value", default)]
+            children: Vec<HxRenderingChildDe>,
+        }
+        let de = HxRenderingInfoDe::deserialize(deserializer)?;
+        let mut children = de.children.into_iter();
+        let trans_matrix = match children.next() {
+            Some(HxRenderingChildDe::Trans(m)) => m,
+            _ => return Err(D::Error::custom("renderingInfo must start with transMatrix")),
+        };
+        let mut pairs: Vec<(HxMatrix, HxMatrix)> = Vec::new();
+        loop {
+            match (children.next(), children.next()) {
+                (None, _) => break,
+                (Some(HxRenderingChildDe::Sca(sca)), Some(HxRenderingChildDe::Rot(rot))) => {
+                    pairs.push((sca, rot));
+                }
+                _ => return Err(D::Error::custom(
+                    "renderingInfo matrices after transMatrix must be scaMatrix, rotMatrix pairs",
+                )),
+            }
+        }
+        let mut pairs = pairs.into_iter();
+        let Some((sca_matrix, rot_matrix)) = pairs.next() else {
+            return Err(D::Error::custom("renderingInfo has no scaMatrix, rotMatrix pair"));
+        };
+        Ok(Self { trans_matrix, sca_matrix, rot_matrix, extra_pairs: pairs.collect() })
+    }
 }
 
 // Shape-common types (HxLineShape, HxWinBrush, HxFillBrush, HxShadow, HxShapeComment)

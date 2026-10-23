@@ -4,10 +4,10 @@
 //! `#[non_exhaustive]` output struct out, no file I/O, warnings carried
 //! beside the payload instead of inside it.
 
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
-use hwpforge_foundation::{CharShapeIndex, FieldType, FontIndex, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
 use serde::{Deserialize, Serialize};
 
@@ -113,7 +113,7 @@ pub struct InspectMetadata {
 /// | Prefix | Fields | Recurses into | Master pages | Captions |
 /// | -- | -- | -- | -- | -- |
 /// | `top_level_` | paragraphs, tables, images, charts | nothing: the section's own body-flow runs (`Section::paragraphs`, `Section::content_counts()`) | no | no |
-/// | *(none)* | paragraphs, tables, images, charts | `Section::for_each_paragraph` — table cells, text boxes, notes, memos, headers, footers | yes | no |
+/// | *(none)* | paragraphs, tables, images, charts | `Section::for_each_paragraph` — table cells, text boxes, notes, memos, headers, footers; `images` counts a group's pictures too | yes | no |
 /// | `deep_` | paragraphs | headers, footers, table cells, and `TextBox`/`Footnote`/`Endnote`/`Ellipse`/`Polygon`/`Memo` bodies | no | no |
 /// | `all_` | tables, images, text boxes, lines, rectangles, polygons | everything the section's own XML part physically holds, group children and a memo's anchor run included | no | yes |
 ///
@@ -310,12 +310,12 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
     let document = &decoded.document;
     let metadata = document.metadata();
 
-    let mut fields: Vec<String> = Vec::new();
+    let fields = field_names(document.sections());
     let mut section_details: Vec<InspectSection> = Vec::new();
 
     for (index, section) in document.sections().iter().enumerate() {
         let mut counts = Counts::default();
-        section.for_each_paragraph(|paragraph| counts.visit(paragraph, &mut fields));
+        section.for_each_paragraph(|paragraph| counts.visit(paragraph));
         let top_level = section.content_counts();
         let objects = walk::object_counts(section);
         let paragraphs = walk::paragraph_counts(section);
@@ -385,7 +385,7 @@ impl Counts {
     ///
     /// The traversal already descends into nested paragraphs, so this only
     /// looks at the runs the paragraph owns directly.
-    fn visit(&mut self, paragraph: &Paragraph, fields: &mut Vec<String>) {
+    fn visit(&mut self, paragraph: &Paragraph) {
         self.paragraphs += 1;
         for run in &paragraph.runs {
             match &run.content {
@@ -393,11 +393,9 @@ impl Counts {
                 RunContent::Image(_) => self.images += 1,
                 RunContent::Control(control) => match control.as_ref() {
                     Control::Chart { .. } => self.charts += 1,
-                    Control::Field {
-                        field_type: FieldType::ClickHere, name: Some(name), ..
-                    } => {
-                        fields.push(name.clone());
-                    }
+                    // A group's pictures are not runs; the paragraph walk
+                    // does not reach them as it does a text box's runs.
+                    Control::Group { children, .. } => self.images += group_pictures(children),
                     _ => {}
                 },
                 RunContent::Text(_) | RunContent::InlineText(_) => {}
@@ -405,6 +403,27 @@ impl Counts {
             }
         }
     }
+}
+
+fn field_names(sections: &[hwpforge_core::Section]) -> Vec<String> {
+    hwpforge_core::field_inventory::FieldInventory::from_sections(sections)
+        .fields()
+        .iter()
+        .filter(|f| f.kind() == "CLICK_HERE")
+        .filter_map(|f| f.name().clone())
+        .collect()
+}
+
+/// Pictures in a group, nested groups included.
+fn group_pictures(children: &[GroupChild]) -> usize {
+    children
+        .iter()
+        .map(|c| match c {
+            GroupChild::Picture(_) => 1,
+            GroupChild::Shape(Control::Group { children, .. }) => group_pictures(children),
+            _ => 0,
+        })
+        .sum()
 }
 
 fn summarize_styles(store: &HwpxStyleStore) -> InspectStyles {
@@ -457,7 +476,7 @@ fn summarize_styles(store: &HwpxStyleStore) -> InspectStyles {
 mod tests {
     use super::*;
     use hwpforge_core::run::Run;
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
 
     fn click_here(name: Option<&str>) -> Control {
         Control::Field {
@@ -479,8 +498,11 @@ mod tests {
         paragraph.runs.push(Run::control(click_here(Some("소속")), shape));
 
         let mut counts = Counts::default();
-        let mut fields = Vec::new();
-        counts.visit(&paragraph, &mut fields);
+        counts.visit(&paragraph);
+        let fields = field_names(&[hwpforge_core::Section::with_paragraphs(
+            vec![paragraph],
+            hwpforge_core::PageSettings::a4(),
+        )]);
 
         assert_eq!(fields, ["성명", "소속"], "unnamed fields cannot be addressed");
         assert_eq!(counts.paragraphs, 1);
@@ -490,10 +512,42 @@ mod tests {
     #[test]
     fn a_paragraph_without_runs_still_counts_as_one() {
         let mut counts = Counts::default();
-        let mut fields = Vec::new();
-        counts.visit(&Paragraph::new(ParaShapeIndex::new(0)), &mut fields);
+        counts.visit(&Paragraph::new(ParaShapeIndex::new(0)));
+        let fields = field_names(&[]);
 
         assert_eq!(counts.paragraphs, 1);
         assert!(fields.is_empty());
+    }
+
+    /// A group's pictures count as images, a nested group's too; a group's
+    /// shapes do not.
+    ///
+    /// 이것을 실패시키는 것: `Counts::visit` 의 Group 갈래 삭제 / 중첩 묶음 재귀 삭제.
+    #[test]
+    fn group_pictures_count_as_images() {
+        use hwpforge_core::control::GroupChild;
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit;
+        let w = HwpUnit::new(1000).unwrap();
+        let pic = || GroupChild::Picture(Image::new("BinData/a.png", w, w, ImageFormat::Png));
+        let group = |children| Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
+            children,
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let nested = group(vec![pic()]);
+        let outer = group(vec![
+            pic(),
+            GroupChild::Shape(Control::rect(w, w).unwrap()),
+            GroupChild::Shape(nested),
+        ]);
+        let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
+        paragraph.runs.push(Run::control(outer, CharShapeIndex::new(0)));
+        let mut counts = Counts::default();
+        counts.visit(&paragraph);
+        assert_eq!(counts.images, 2);
     }
 }

@@ -7,8 +7,9 @@
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
-    BorderFillIndex, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
-    StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
+    BorderFillIndex, CharShadow, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
+    ShadowOffset, StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType,
+    VerticalPosition,
 };
 use hwpforge_smithy_hwp5::schema::header::{
     Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
@@ -17,50 +18,167 @@ use hwpforge_smithy_hwp5::schema::header::{
 use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
 use hwpforge_smithy_hwp5::Hwp5Warning;
 use hwpforge_smithy_hwpx::{
-    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore, HwpxSubstFont,
 };
 
 pub(crate) fn bgr_colorref_to_color(bgr: u32) -> Color {
     Color::from_raw(bgr & 0x00FF_FFFF)
 }
 
-pub(crate) fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
-    const FONT_LANGS: [&str; 7] =
-        ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+/// The HWP5 shadow as a [`CharShadow`]: kind (bits 11-12), color (COLORREF,
+/// `0xFFFFFFFF` = no color, otherwise the low 24 bits) and gaps (INT8,
+/// clamped to −100..=100). What does not fit is reported by
+/// [`append_char_shape_projection_warnings`].
+pub(crate) fn char_shadow(raw: &Hwp5RawCharShape) -> CharShadow {
+    let color = (raw.shadow_color != 0xFFFF_FFFF).then(|| bgr_colorref_to_color(raw.shadow_color));
+    let x = ShadowOffset::saturating_from_i32(i32::from(raw.shadow_gap_x)).0;
+    let y = ShadowOffset::saturating_from_i32(i32::from(raw.shadow_gap_y)).0;
+    CharShadow::new(raw.shadow_type())
+        .with_color(color)
+        .expect("bgr_colorref_to_color clears the upper byte")
+        .with_offset(x, y)
+}
 
-    if src.fonts.is_empty() {
-        for &lang in &FONT_LANGS {
-            store.push_font(HwpxFont::new(0, "함초롬바탕", lang));
-        }
-        return;
-    }
+/// PANOSE byte 0 → `<hh:typeInfo familyType>`, in hwpxlib's enumeration
+/// order (Hancom twins: 0 UNKNOWN, 1 MYUNGJO, 2 GOTHIC, 4 BRUSHSCRIPT seen).
+const FONT_FAMILY_TYPES: [&str; 8] = [
+    "FCAT_UNKNOWN",
+    "FCAT_MYUNGJO",
+    "FCAT_GOTHIC",
+    "FCAT_SSERIF",
+    "FCAT_BRUSHSCRIPT",
+    "FCAT_DECORATIVE",
+    "FCAT_NONRECTMJ",
+    "FCAT_NONRECTGT",
+];
 
-    if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts) {
-        for (lang, fonts) in FONT_LANGS.into_iter().zip(groups.into_iter()) {
-            for (idx, face) in fonts.iter().enumerate() {
-                store.push_font(HwpxFont::new(idx as u32, &face.face_name, lang));
-            }
-        }
-        return;
-    }
-
-    for &lang in &FONT_LANGS {
-        for (idx, face) in src.fonts.iter().enumerate() {
-            store.push_font(HwpxFont::new(idx as u32, &face.face_name, lang));
-        }
+/// HWP5 font kind code (FACE_NAME property low two bits, or a substitute's
+/// type byte): 1 TTF, 2 HFT. 0 is "unknown" in the format and maps to `None`
+/// like any other value; [`append_face_name_projection_warnings`] reports
+/// the undefined ones.
+fn hwp5_font_type(code: u8) -> Option<HwpxFontType> {
+    match code {
+        1 => Some(HwpxFontType::Ttf),
+        2 => Some(HwpxFontType::Hft),
+        _ => None,
     }
 }
 
-pub(crate) fn resolved_font_group_counts(src: &Hwp5StyleStore) -> [usize; 7] {
-    if src.fonts.is_empty() {
-        return [1; 7];
-    }
+/// One HWP5 face as an HWPX font: name, kind (property bits 0-1), the
+/// substitute (property 0x80) and the classification (PANOSE, 0x40 — byte 0
+/// is the family type, bytes 2-9 the eight numbers; Hancom twins match
+/// 36,332/36,332 kinds, 4,492/4,492 substitutes, 32,577/32,755 numbers).
+/// 이것을 실패시키는 것: 하위 비트 대신 0x80 비트 읽기 · 대체 유형 1·2 뒤바꿈 ·
+/// PANOSE 바이트 하나 밀림 · 계열 표 한 칸 밀림(`hwp5_face_metadata_maps`).
+fn hwp5_face_to_hwpx_font(id: u32, face: &Hwp5RawFaceName, lang: &str) -> HwpxFont {
+    let mut font = HwpxFont::new(id, &face.face_name, lang);
+    font.font_type = hwp5_font_type(face.property & 0b11);
+    font.substitute = match (face.alternate_font_type, face.alternate_font_name.as_ref()) {
+        (Some(code @ 0..=2), Some(name)) => Some(HwpxSubstFont::new(hwp5_font_type(code), name)),
+        _ => None,
+    };
+    font.type_info = face.panose1.map(|panose| {
+        let family = FONT_FAMILY_TYPES.get(usize::from(panose[0])).unwrap_or(&FONT_FAMILY_TYPES[0]);
+        let mut values = [0u32; 8];
+        for (value, byte) in values.iter_mut().zip(&panose[2..10]) {
+            *value = u32::from(*byte);
+        }
+        HwpxFontTypeInfo::new(*family, values)
+    });
+    font
+}
 
-    if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts) {
-        return groups.map(|group| group.len());
+/// Reports face-name values HWPX cannot carry: a kind of 3, a substitute
+/// type outside 0-2 (the substitute is dropped) and a PANOSE family type of
+/// 8 or more (written as `FCAT_UNKNOWN`).
+/// 이것을 실패시키는 것: 세 경고 중 하나 삭제 · 지원값에 경고.
+fn append_face_name_projection_warnings(
+    face: &Hwp5RawFaceName,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if face.property & 0b11 == 3 {
+        push_projection_fallback(
+            warnings,
+            "style.font.font_type",
+            format!("face name {raw_id} kind 3 is undefined; written as TTF"),
+        );
     }
+    if let Some(code @ 3..) = face.alternate_font_type {
+        push_projection_fallback(
+            warnings,
+            "style.font.substitute",
+            format!(
+                "face name {raw_id} substitute font type {code} is undefined; substitute dropped"
+            ),
+        );
+    }
+    if let Some(panose) =
+        face.panose1.filter(|panose| usize::from(panose[0]) >= FONT_FAMILY_TYPES.len())
+    {
+        push_projection_fallback(
+            warnings,
+            "style.font.type_info",
+            format!(
+                "face name {raw_id} PANOSE family type {} is undefined; written as FCAT_UNKNOWN",
+                panose[0]
+            ),
+        );
+    }
+}
 
-    [src.fonts.len(); 7]
+/// Pushes the HWP5 faces as HWPX fonts and reports, once per face record,
+/// what HWPX cannot carry.
+pub(crate) fn push_fonts_with_warnings(
+    store: &mut HwpxStyleStore,
+    src: &Hwp5StyleStore,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
+    for (raw_id, face) in src.fonts.iter().enumerate() {
+        append_face_name_projection_warnings(face, raw_id, warnings);
+    }
+    push_fonts(store, src)
+}
+
+fn push_fonts(
+    store: &mut HwpxStyleStore,
+    src: &Hwp5StyleStore,
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
+    const FONT_LANGS: [&str; 7] =
+        ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+
+    // Validate declarations even when the font record list is empty.
+    if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts)? {
+        for (lang, fonts) in FONT_LANGS.into_iter().zip(groups.into_iter()) {
+            // Empty declared groups have only the established implicit font 0.
+            // Materialize it before validation so encoder group cloning cannot
+            // accidentally make IDs 1..N valid in an empty source group.
+            if fonts.is_empty() {
+                let font = match src.fonts.first() {
+                    Some(face) => hwp5_face_to_hwpx_font(0, face, lang),
+                    None => HwpxFont::new(0, "함초롬바탕", lang),
+                };
+                store.push_font(font);
+            }
+            for (idx, face) in fonts.iter().enumerate() {
+                store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
+            }
+        }
+    } else if src.fonts.is_empty() {
+        for &lang in &FONT_LANGS {
+            store.push_font(HwpxFont::new(0, "함초롬바탕", lang));
+        }
+    } else {
+        // Without a declaration, retain the legacy shared font table.
+        // A damaged declaration must never enter this branch.
+        for &lang in &FONT_LANGS {
+            for (idx, face) in src.fonts.iter().enumerate() {
+                store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
@@ -125,7 +243,7 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
         VerticalPosition::Normal
     };
     shape.outline_type = raw.outline_type();
-    shape.shadow_type = raw.shadow_type();
+    shape.shadow = char_shadow(raw);
     shape.emboss_type = if raw.emboss() { EmbossType::Emboss } else { EmbossType::None };
     shape.engrave_type = if raw.engrave() { EngraveType::Engrave } else { EngraveType::None };
     shape.emphasis = raw.emphasis();
@@ -135,61 +253,55 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
     shape.char_offset = raw.primary_offset();
     shape.use_kerning = raw.use_kerning();
     shape.use_font_space = raw.use_font_space();
-    shape.border_fill_id = raw.border_fill_id.filter(|id| *id != 0 && *id != 2).map(u32::from);
+    // Slot 2 is an ordinary slot of the document (§19.22 A): a char shape
+    // pointing at it keeps it. 0 means "no border"; the store conversion
+    // points those char shapes at an empty border fill it appends.
+    shape.border_fill_id = raw.border_fill_id.filter(|id| *id != 0).map(u32::from);
     shape
 }
 
-pub(crate) fn hwp5_char_shape_to_hwpx_with_counts(
+pub(crate) fn hwp5_char_shape_to_hwpx_with_warnings(
     raw: &Hwp5RawCharShape,
-    font_group_counts: [usize; 7],
-) -> HwpxCharShape {
-    let mut shape = hwp5_char_shape_to_hwpx(raw);
-    let clamp = |value: u16, count: usize| -> FontIndex {
-        if count == 0 {
-            return FontIndex::new(0);
-        }
-        FontIndex::new((value as usize).min(count.saturating_sub(1)))
-    };
-
-    shape.font_ref.hangul = clamp(raw.font_ids[0], font_group_counts[0]);
-    shape.font_ref.latin = clamp(raw.font_ids[1], font_group_counts[1]);
-    shape.font_ref.hanja = clamp(raw.font_ids[2], font_group_counts[2]);
-    shape.font_ref.japanese = clamp(raw.font_ids[3], font_group_counts[3]);
-    shape.font_ref.other = clamp(raw.font_ids[4], font_group_counts[4]);
-    shape.font_ref.symbol = clamp(raw.font_ids[5], font_group_counts[5]);
-    shape.font_ref.user = clamp(raw.font_ids[6], font_group_counts[6]);
-    shape
-}
-
-pub(crate) fn hwp5_char_shape_to_hwpx_with_counts_and_warnings(
-    raw: &Hwp5RawCharShape,
-    font_group_counts: [usize; 7],
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> HwpxCharShape {
     append_char_shape_projection_warnings(raw, raw_id, warnings);
-    hwp5_char_shape_to_hwpx_with_counts(raw, font_group_counts)
+    hwp5_char_shape_to_hwpx(raw)
 }
 
 #[cfg(test)]
-pub(crate) fn hwp5_para_shape_to_hwpx(raw: &Hwp5RawParaShape) -> HwpxParaShape {
+pub(crate) fn hwp5_para_shape_to_hwpx(
+    raw: &Hwp5RawParaShape,
+) -> hwpforge_smithy_hwpx::HwpxResult<HwpxParaShape> {
     hwp5_para_shape_to_hwpx_with_tab_id(raw, raw.tab_def_id as u32)
 }
 
 pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     raw: &Hwp5RawParaShape,
     tab_pr_id_ref: u32,
-) -> HwpxParaShape {
+) -> hwpforge_smithy_hwpx::HwpxResult<HwpxParaShape> {
     let to_unit = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
     let (heading_type, heading_id_ref, heading_level) = hwp5_heading_wire_parts(raw);
 
+    let margin = |field, value| {
+        hwpforge_smithy_hwpx::paragraph_measure::unpack_margin(value).map_err(|e| {
+            hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                detail: format!("{field} raw {value}: {e}"),
+            }
+        })
+    };
     let mut shape = HwpxParaShape::default();
     shape.alignment = raw.alignment();
-    shape.margin_left = to_unit(raw.left_margin);
-    shape.margin_right = to_unit(raw.right_margin);
-    shape.indent = to_unit(raw.indent);
-    shape.spacing_before = to_unit(raw.space_before);
-    shape.spacing_after = to_unit(raw.space_after);
+    shape.margin_left = margin("margin_left", raw.left_margin)?;
+    shape.margin_right = margin("margin_right", raw.right_margin)?;
+    shape.indent = margin("indent", raw.indent)?;
+    shape.spacing_before = margin("spacing_before", raw.space_before)?;
+    shape.spacing_after = margin("spacing_after", raw.space_after)?;
+    if raw.line_spacing_kind_raw() > 3 || raw.line_spacing2.is_some_and(|v| v > i32::MAX as u32) {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: "HWP5 lineSpacing unknown type or overflow".into(),
+        });
+    }
     shape.line_spacing = raw.line_spacing_value();
     shape.line_spacing_type = raw.line_spacing_type();
     shape.snap_to_grid = raw.snap_to_grid();
@@ -209,7 +321,37 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     shape.checked = raw.checked();
     shape.tab_pr_id_ref = tab_pr_id_ref;
     shape.condense = raw.condense();
-    shape
+    // PARA_SHAPE bits 20–21 (Hancom twins: per-document value multisets equal
+    // in 452 of 477 pairs; the rest differ in the HWPX, not in another byte)
+    // and bytes 34–42, bits 28–29 (42,599 / 36 / 11 twin matches).
+    shape.vertical_align = match raw.vertical_align_raw() {
+        1 => "TOP",
+        2 => "CENTER",
+        3 => "BOTTOM",
+        _ => "BASELINE",
+    }
+    .to_string();
+    shape.border_offset = [
+        raw.border_offset_left,
+        raw.border_offset_right,
+        raw.border_offset_top,
+        raw.border_offset_bottom,
+    ]
+    .map(|v| to_unit(i32::from(v)));
+    shape.border_connect = raw.border_connect();
+    shape.border_ignore_margin = raw.border_ignore_margin();
+    // property2 bits 0-1 "한 줄로 입력": Hancom twins write 1 as SQUEEZE and
+    // 0 as BREAK (133/133 definitions). 2 and 3 are undefined and stay
+    // BREAK, reported by `warn_on_para_line_wrap`.
+    if raw.line_wrap_raw() == 1 {
+        shape.line_wrap = "SQUEEZE".to_string();
+    }
+    if shape.line_spacing < 0 {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: "negative HWP5 lineSpacing".into(),
+        });
+    }
+    Ok(shape)
 }
 
 pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
@@ -217,9 +359,13 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
     tab_pr_id_ref: u32,
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
-) -> HwpxParaShape {
+) -> hwpforge_smithy_hwpx::HwpxResult<HwpxParaShape> {
     append_para_shape_projection_warnings(raw, raw_id, warnings);
-    hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref)
+    hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref).map_err(|e| {
+        hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: format!("HWP5 DocInfo paraPr {raw_id}: {e}"),
+        }
+    })
 }
 
 fn optional_non_black_color(bgr: u32) -> Option<Color> {
@@ -251,11 +397,8 @@ fn append_para_shape_projection_warnings(
 ) {
     warn_on_para_line_spacing_kind(raw, raw_id, warnings);
     warn_on_para_break_latin_word(raw, raw_id, warnings);
-    warn_on_para_vertical_align(raw, raw_id, warnings);
-    warn_on_para_font_line_height(raw, raw_id, warnings);
     warn_on_para_auto_spacing(raw, raw_id, warnings);
-    warn_on_para_border_offsets(raw, raw_id, warnings);
-    warn_on_para_border_flags(raw, raw_id, warnings);
+    warn_on_para_line_wrap(raw, raw_id, warnings);
 }
 
 fn warn_on_char_vertical_position_conflict(
@@ -298,15 +441,14 @@ fn warn_on_char_shadow_kind(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.shadow_kind_raw() == 0 {
+    if raw.shadow_kind_raw() != 3 {
         return;
     }
     push_projection_fallback(
         warnings,
         "style.char_shape.shadow_kind",
         format!(
-            "char shape {raw_id} shadow kind {} collapsed to Drop because the shared IR only carries None vs Drop",
-            raw.shadow_kind_raw()
+            "char shape {raw_id} shadow kind 3 is outside the spec (0 none, 1 discrete, 2 continuous); written as NONE with its color and offsets"
         ),
     );
 }
@@ -316,14 +458,14 @@ fn warn_on_char_shadow_color(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.shadow_kind_raw() == 0 {
+    if raw.shadow_color >> 24 == 0 || raw.shadow_color == 0xFFFF_FFFF {
         return;
     }
     push_projection_fallback(
         warnings,
         "style.char_shape.shadow_color",
         format!(
-            "char shape {raw_id} shadow color 0x{:08X} is not carried because HwpxCharShape does not store shadow_color",
+            "char shape {raw_id} shadow color 0x{:08X} has a non-zero upper byte; only the low 24 bits are kept",
             raw.shadow_color
         ),
     );
@@ -334,17 +476,15 @@ fn warn_on_char_shadow_offset(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.shadow_kind_raw() == 0 {
-        return;
-    }
-    if raw.shadow_gap_x == 0 && raw.shadow_gap_y == 0 {
+    let clamped = |v: i8| ShadowOffset::saturating_from_i32(i32::from(v)).1;
+    if !clamped(raw.shadow_gap_x) && !clamped(raw.shadow_gap_y) {
         return;
     }
     push_projection_fallback(
         warnings,
         "style.char_shape.shadow_offset",
         format!(
-            "char shape {raw_id} shadow offset (dx={}, dy={}) is not carried because HwpxCharShape does not store shadow gaps",
+            "char shape {raw_id} shadow offset (dx={}, dy={}) is outside -100..=100; clamped",
             raw.shadow_gap_x, raw.shadow_gap_y
         ),
     );
@@ -415,41 +555,6 @@ fn warn_on_para_break_latin_word(
     }
 }
 
-fn warn_on_para_vertical_align(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.vertical_align_raw() == 0 {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.para_shape.vertical_align",
-        format!(
-            "para shape {raw_id} vertical align mode {} was dropped because the current style surface only carries horizontal alignment",
-            raw.vertical_align_raw()
-        ),
-    );
-}
-
-fn warn_on_para_font_line_height(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if !raw.font_line_height() {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.para_shape.font_line_height",
-        format!(
-            "para shape {raw_id} font-line-height flag was dropped because the current style surface does not carry that switch"
-        ),
-    );
-}
-
 fn warn_on_para_auto_spacing(
     raw: &Hwp5RawParaShape,
     raw_id: usize,
@@ -475,56 +580,16 @@ fn warn_on_para_auto_spacing(
     );
 }
 
-fn warn_on_para_border_offsets(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    let border_offsets = [
-        raw.border_offset_left,
-        raw.border_offset_right,
-        raw.border_offset_top,
-        raw.border_offset_bottom,
-    ];
-    if !border_offsets.into_iter().any(|offset| offset != 0) {
+fn warn_on_para_line_wrap(raw: &Hwp5RawParaShape, raw_id: usize, warnings: &mut Vec<Hwp5Warning>) {
+    let mode = raw.line_wrap_raw();
+    if mode < 2 {
         return;
     }
     push_projection_fallback(
         warnings,
-        "style.para_shape.border_offsets",
-        format!(
-            "para shape {raw_id} border offsets [{}, {}, {}, {}] were dropped because the current style surface only carries borderFill references",
-            raw.border_offset_left,
-            raw.border_offset_right,
-            raw.border_offset_top,
-            raw.border_offset_bottom
-        ),
+        "style.para_shape.line_wrap",
+        format!("para shape {raw_id} single-line input mode {mode} is undefined; written as BREAK"),
     );
-}
-
-fn warn_on_para_border_flags(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.border_connect() {
-        push_projection_fallback(
-            warnings,
-            "style.para_shape.border_connect",
-            format!(
-                "para shape {raw_id} border-connect flag was dropped because the current style surface does not carry paragraph border adjacency semantics"
-            ),
-        );
-    }
-    if raw.border_ignore_margin() {
-        push_projection_fallback(
-            warnings,
-            "style.para_shape.border_ignore_margin",
-            format!(
-                "para shape {raw_id} border-ignore-margin flag was dropped because the current style surface does not carry that rendering mode"
-            ),
-        );
-    }
 }
 
 fn hwp5_heading_wire_parts(raw: &Hwp5RawParaShape) -> (HeadingType, u32, u32) {
@@ -589,40 +654,36 @@ fn hwp5_fill_type_to_tab_leader(fill_type: u8) -> TabLeader {
     TabLeader::from_hwpx_str(leader)
 }
 
-pub(crate) fn hwp5_tab_def_to_hwpx(id: u32, raw: &Hwp5RawTabDef) -> TabDef {
-    TabDef {
+pub(crate) fn hwp5_tab_def_to_hwpx(
+    id: u32,
+    raw: &Hwp5RawTabDef,
+) -> hwpforge_smithy_hwpx::HwpxResult<TabDef> {
+    Ok(TabDef {
         id,
         auto_tab_left: raw.auto_tab_left(),
         auto_tab_right: raw.auto_tab_right(),
         stops: raw
             .tab_stops
             .iter()
-            .map(|stop| TabStop {
-                position: hwp5_tab_position_to_hwp_unit(stop.position),
-                align: hwp5_tab_align_to_foundation(stop.tab_type),
-                leader: hwp5_fill_type_to_tab_leader(stop.fill_type),
+            .enumerate()
+            .map(|(index, stop)| {
+                Ok(TabStop {
+                    position: hwpforge_smithy_hwpx::paragraph_measure::unpack_tab(stop.position)
+                        .map_err(|e| hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                            detail: format!(
+                                "HWP5 DocInfo tabPr {id}.position[{index}] raw {}: {e}",
+                                stop.position
+                            ),
+                        })?,
+                    align: hwp5_tab_align_to_foundation(stop.tab_type),
+                    leader: hwp5_fill_type_to_tab_leader(stop.fill_type),
+                })
             })
-            .collect(),
-    }
+            .collect::<hwpforge_smithy_hwpx::HwpxResult<_>>()?,
+    })
 }
 
-/// Converts a HWP5 raw tab stop position (HwpUnit) into the value
-/// expected by `crates/hwpforge-smithy-hwpx/src/encoder/header_tabs.rs`.
-///
-/// The HWPX encoder treats `TabStop.position` as **HwpUnitChar**: it emits
-/// the value as-is into the `HwpUnitChar` switch branch and doubles it
-/// into the legacy default branch. HWP5 stores the position in HwpUnit
-/// (per HWP 5.0 spec §4.2.7), so we halve here to land in the encoder's
-/// HwpUnitChar convention. Confirmed against the
-/// `sample-tab.hwp{,x}` truth pair: HWP5 raw `30000` → HWPX
-/// `pos="15000"` (HwpUnitChar) / `pos="30000"` (default).
-///
-/// See `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B1).
-fn hwp5_tab_position_to_hwp_unit(position: u32) -> HwpUnit {
-    TabDef::clamp_position_from_unsigned(u64::from(position) / 2)
-}
-
-pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize) -> HwpxStyle {
+pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle) -> HwpxStyle {
     HwpxStyle::new(
         id,
         if raw.kind == 1 { "CHAR" } else { "PARA" },
@@ -630,7 +691,7 @@ pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize
         raw.english_name.clone(),
         raw.para_shape_id as u32,
         raw.char_shape_id as u32,
-        if (raw.next_style_id as usize) < style_count { raw.next_style_id as u32 } else { 0 },
+        raw.next_style_id as u32,
         if raw.lang_id < 0 { 1042 } else { raw.lang_id as u32 },
         raw.lock_form as u32,
     )
@@ -639,8 +700,10 @@ pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize
 fn font_groups_from_id_mappings<'a>(
     id_mappings: Option<&Hwp5RawIdMappings>,
     fonts: &'a [Hwp5RawFaceName],
-) -> Option<[&'a [Hwp5RawFaceName]; 7]> {
-    let mappings = id_mappings?;
+) -> hwpforge_smithy_hwpx::HwpxResult<Option<[&'a [Hwp5RawFaceName]; 7]>> {
+    let Some(mappings) = id_mappings else {
+        return Ok(None);
+    };
     let counts = [
         mappings.hangul_font_count,
         mappings.english_font_count,
@@ -649,18 +712,68 @@ fn font_groups_from_id_mappings<'a>(
         mappings.other_font_count,
         mappings.symbol_font_count,
         mappings.user_font_count,
-    ]
-    .map(|count| count.max(0) as usize);
+    ];
+    if counts.iter().any(|&count| count < 0) {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: "HWP5 IdMappings negative font group count".into(),
+        });
+    }
+    let counts = counts.map(|count| count as usize);
 
-    let total: usize = counts.iter().sum();
-    if total != fonts.len() {
-        return None;
+    let total: u64 = counts.iter().map(|&count| count as u64).sum();
+    if total != fonts.len() as u64 {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: format!(
+                "HWP5 IdMappings font group total {total} differs from FaceName count {}",
+                fonts.len()
+            ),
+        });
     }
 
     let mut offset = 0usize;
-    Some(counts.map(|count| {
+    Ok(Some(counts.map(|count| {
         let slice = &fonts[offset..offset + count];
         offset += count;
         slice
-    }))
+    })))
+}
+
+/// Carry list-head layout through the destination's existing private fidelity store.
+/// 이것을 실패시키는 것: HWP5 paraHead metrics를 버리거나 unsigned로 감아 출력하기.
+pub(crate) fn carry_head_metrics(
+    out: &mut HwpxStyleStore,
+    kind: HeadingType,
+    position: u32,
+    head: &hwpforge_smithy_hwp5::schema::header::Hwp5RawNumberingParaHead,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
+    use hwpforge_foundation::Alignment;
+    let align = match head.attributes & 3 {
+        0 => Alignment::Left,
+        1 => Alignment::Center,
+        2 => Alignment::Right,
+        bits => {
+            push_projection_fallback(
+                warnings,
+                "list_head.align",
+                format!(
+                    "{kind:?} {position} level {}: unknown alignment {bits}; using LEFT",
+                    head.level
+                ),
+            );
+            Alignment::Left
+        }
+    };
+    out.set_paragraph_head_metrics(
+        kind,
+        position,
+        u32::from(head.level) + 1,
+        align,
+        head.attributes & 4 != 0,
+        head.attributes & 8 != 0,
+        i32::from(head.width_adjust),
+        i32::from(head.text_offset),
+        head.attributes & 16 != 0,
+        head.char_shape_id,
+    )
 }

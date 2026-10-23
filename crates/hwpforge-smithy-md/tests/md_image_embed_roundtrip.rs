@@ -69,8 +69,9 @@ fn md_image_embeds_into_bindata_and_roundtrips() {
     // 패키지 실물: BinData/ 엔트리 + manifest 등재 (H2 — id 정합).
     let reader = std::io::Cursor::new(&bytes);
     let mut zip = zip::ZipArchive::new(reader).expect("zip");
-    let names: Vec<String> =
-        (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().expect("ZIP entry name").to_string())
+        .collect();
     assert!(names.iter().any(|n| n == "BinData/image1.png"), "BinData 엔트리: {names:?}");
     let mut content_hpf = String::new();
     {

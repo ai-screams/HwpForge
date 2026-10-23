@@ -13,7 +13,7 @@ use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::document::Document;
 use hwpforge_core::image::{Image, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::table::{Table, TableCell, TableRow};
@@ -84,21 +84,22 @@ fn main() {
     //    방출됨 (§10h 디코드 갭, task #50) — 마지막 줄이 이미지 세로 범위
     //    아래로 벗어나는 긴 문단에 앵커한다.
     let mut anchored = img(MASCOT, 18.0);
-    anchored.placement = Some(ObjectPlacement {
-        text_wrap: ObjectTextWrap::Square,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: false,
-        allow_overlap: true,
-        vert_rel_to: ObjectRelativeTo::Para,
-        horz_rel_to: ObjectRelativeTo::Para,
-        vert_offset: HwpUnit::from_mm(2.0).expect("voff"),
-        horz_offset: HwpUnit::from_mm(130.0).expect("hoff"),
-    });
+    anchored.placement = Some(
+        ObjectPlacement::new(
+            ObjectTextWrap::Square,
+            ObjectRelativeTo::Para,
+            ObjectRelativeTo::Para,
+        )
+        .with_allow_overlap(true)
+        .with_vert_offset(HwpUnit::from_mm(2.0).expect("voff"))
+        .with_horz_offset(HwpUnit::from_mm(130.0).expect("hoff")),
+    );
 
     let styled_box = |title_line: &str, body: &str, h_mm: f64| {
         para(vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
+                text_margin: None,
                 paragraphs: vec![text(title_line, cs0), text(body, cs0)],
                 width: HwpUnit::from_mm(120.0).expect("width"),
                 height: HwpUnit::from_mm(h_mm).expect("height"),
@@ -204,6 +205,8 @@ fn main() {
         text("아키텍처 — 대장간 은유", cs_h2),
         para(vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
+                text_margin: None,
                 paragraphs: vec![para(vec![
                     Run::text("기초 자재 ", cs0),
                     Run::image(img(ICON, 6.0), cs0),

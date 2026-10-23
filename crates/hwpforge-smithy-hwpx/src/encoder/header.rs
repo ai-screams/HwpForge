@@ -6,9 +6,9 @@
 
 use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
-    Alignment, BreakType, Color, EmbossType, EmphasisType, EngraveType, HwpUnit, LineSpacingType,
-    NumberFormatType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
-    WordBreakType,
+    Alignment, BreakType, CharShadow, Color, EmbossType, EmphasisType, EngraveType,
+    LineSpacingType, NumberFormatType, OutlineType, ShadowType, StrikeoutShape, UnderlineType,
+    VerticalPosition, WordBreakType,
 };
 
 use super::{escape_xml, header_tabs::build_tab_properties_xml};
@@ -18,12 +18,13 @@ use crate::schema::header::{
     HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxBullet, HxBulletParaHead, HxCharPr,
     HxCharProperties, HxFont, HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxLangValues,
     HxLineSpacing, HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList,
-    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo,
-    HxUnderline, HxUnitValue,
+    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSubstFont, HxSwitch, HxSwitchCase, HxSwitchDefault,
+    HxTypeInfo, HxUnderline, HxUnitValue,
 };
 use crate::style_store::{
     ActiveBorderFillBrush, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxDiagonalLine,
-    HwpxFont, HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxFont, HwpxFontType, HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore,
 };
 
 // ── Public entry point ──────────────────────────────────────────
@@ -42,6 +43,10 @@ pub(crate) fn encode_header(
     sec_cnt: u32,
     begin_num: Option<&hwpforge_core::section::BeginNum>,
 ) -> HwpxResult<String> {
+    crate::paragraph_measure::validate_measure_output(store)?;
+    crate::header_references::HeaderReferences::build(store)?;
+    let numbered = store.numbered_for_output();
+    let store = &numbered;
     let head = build_head(store, sec_cnt);
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let head_xml = quick_xml::se::to_string(&head)
@@ -99,38 +104,28 @@ fn wrap_header_xml(
 
 // ── 한글 compatibility defaults ─────────────────────────────────
 
-/// Builds `<hh:beginNum>` XML from Core `BeginNum`, defaulting to all 1s.
+/// Builds `<hh:beginNum>` — the document's start numbers — from the first
+/// section's `BeginNum`.
+///
+/// Only footnote and endnote come from it (the decoder merges the header's
+/// values there). Its page/pic/tbl/equation are the section's restart
+/// numbers (`<hp:startNum>`, `0` = continue), not the document's, and Core
+/// has no document layer, so those are written as Hancom always writes them:
+/// `1` (XSD `positiveInteger`; Hancom keeps the header at 1 when a start
+/// number changes — F16, F17 — and a header page of 0 starts the document at
+/// page 0 and swaps odd and even master pages).
 fn build_begin_num_xml(begin_num: Option<&hwpforge_core::section::BeginNum>) -> String {
-    let bn = begin_num.copied().unwrap_or_default();
+    let (footnote, endnote) = begin_num.map_or((1, 1), |bn| (bn.footnote, bn.endnote));
     format!(
-        r#"<hh:beginNum page="{}" footnote="{}" endnote="{}" pic="{}" tbl="{}" equation="{}"/>"#,
-        bn.page, bn.footnote, bn.endnote, bn.pic, bn.tbl, bn.equation,
+        r#"<hh:beginNum page="1" footnote="{footnote}" endnote="{endnote}" pic="1" tbl="1" equation="1"/>"#,
     )
 }
 
 /// Generates the `<hh:borderFills>` XML dynamically from the store's border fills.
 ///
-/// `borderFillIDRef="1"` is referenced by `<hp:pageBorderFill>` in secPr.
-/// `borderFillIDRef="2"` is referenced by every `<hh:charPr>`.
-/// `borderFillIDRef="3"` is referenced by table cells (`<hp:tbl>` / `<hp:tc>`).
-///
-/// If the store has no border fills (e.g. a manually constructed store that
-/// did not go through `from_registry`), the 3 standard defaults are emitted
-/// to maintain backward compatibility with 한글.
+/// Output-only defaults have already been added by the document encoder,
+/// after all explicit references were checked against the original store.
 fn build_border_fills_xml(store: &HwpxStyleStore) -> String {
-    if store.border_fill_count() == 0 {
-        let page = HwpxBorderFill::default_page_border();
-        let char_bg = HwpxBorderFill::default_char_background();
-        let table = HwpxBorderFill::default_table_border();
-        let count = 3u32;
-        let mut xml = format!(r##"<hh:borderFills itemCnt="{count}">"##);
-        for bf in [&page, &char_bg, &table] {
-            xml.push_str(&build_border_fill_xml(bf));
-        }
-        xml.push_str("</hh:borderFills>");
-        return xml;
-    }
-
     let count = store.border_fill_count();
     let mut xml = format!(r##"<hh:borderFills itemCnt="{count}">"##);
     for bf in store.iter_border_fills() {
@@ -258,24 +253,30 @@ fn build_numberings_xml(store: &HwpxStyleStore) -> String {
 
     let count = numberings.len();
     let mut xml = format!(r#"<hh:numberings itemCnt="{count}">"#);
-    for ndef in &numberings {
+    for (index, ndef) in numberings.iter().enumerate() {
         xml.push_str(&format!(r#"<hh:numbering id="{}" start="{}">"#, ndef.id, ndef.start));
         for lvl in &ndef.levels {
             let num_format = number_format_to_hwpx(lvl.num_format);
             let checkable = u32::from(lvl.checkable);
+            let defaults = crate::style_store::fidelity::HeadMetrics::generated(1);
+            let metrics = store
+                .header_fidelity
+                .numbering
+                .get(&(index as u32 + 1))
+                .and_then(|levels| levels.get(&lvl.level))
+                .unwrap_or(&defaults);
+            xml.push_str(&format!(
+                r#"<hh:paraHead start="{}" level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{num_format}" charPrIDRef="{}" checkable="{checkable}""#,
+                lvl.start, lvl.level, escape_xml(&metrics.align), metrics.use_inst_width,
+                metrics.auto_indent, metrics.width_adjust, escape_xml(&metrics.text_offset_type),
+                metrics.text_offset, metrics.char_pr_id_ref,
+            ));
             if lvl.text.is_empty() {
-                // Self-closing for levels with empty text (levels 9 and 10)
-                xml.push_str(&format!(
-                    r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}"/>"#,
-                    lvl.start, lvl.level,
-                ));
+                xml.push_str("/>");
             } else {
-                xml.push_str(&format!(
-                    r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}">{}</hh:paraHead>"#,
-                    lvl.start,
-                    lvl.level,
-                    escape_xml(&lvl.text),
-                ));
+                xml.push('>');
+                xml.push_str(&escape_xml(&lvl.text));
+                xml.push_str("</hh:paraHead>");
             }
         }
         xml.push_str("</hh:numbering>");
@@ -290,7 +291,24 @@ fn build_bullets_xml(store: &HwpxStyleStore) -> String {
         return String::new();
     }
 
-    let items: Vec<HxBullet> = store.iter_bullets().map(bullet_def_to_hwpx).collect();
+    let items: Vec<HxBullet> = store
+        .iter_bullets()
+        .enumerate()
+        .map(|(index, def)| {
+            let mut bullet = bullet_def_to_hwpx(def);
+            for head in &mut bullet.para_heads {
+                if let Some(metrics) = store
+                    .header_fidelity
+                    .bullet
+                    .get(&(index as u32 + 1))
+                    .and_then(|levels| levels.get(&head.level))
+                {
+                    metrics.apply(head);
+                }
+            }
+            bullet
+        })
+        .collect();
     let count = items.len() as u32;
     let mut xml = format!(r#"<hh:bullets itemCnt="{count}">"#);
     for bullet in &items {
@@ -327,11 +345,11 @@ fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
         return format!(
             r#"<hh:paraHead level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{}" charPrIDRef="{}" checkable="{}"/>"#,
             para_head.level,
-            para_head.align,
+            escape_xml(&para_head.align),
             para_head.use_inst_width,
             para_head.auto_indent,
             para_head.width_adjust,
-            para_head.text_offset_type,
+            escape_xml(&para_head.text_offset_type),
             para_head.text_offset,
             para_head.num_format,
             para_head.char_pr_id_ref,
@@ -342,11 +360,11 @@ fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
     let mut xml = format!(
         r#"<hh:paraHead level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{}" charPrIDRef="{}" checkable="{}">"#,
         para_head.level,
-        para_head.align,
+        escape_xml(&para_head.align),
         para_head.use_inst_width,
         para_head.auto_indent,
         para_head.width_adjust,
-        para_head.text_offset_type,
+        escape_xml(&para_head.text_offset_type),
         para_head.text_offset,
         para_head.num_format,
         para_head.char_pr_id_ref,
@@ -358,7 +376,7 @@ fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
 }
 
 /// Maps a [`NumberFormatType`] to its HWPX string representation.
-fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
+pub(crate) fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
     match nf {
         NumberFormatType::Digit => "DIGIT",
         NumberFormatType::CircledDigit => "CIRCLED_DIGIT",
@@ -510,6 +528,8 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
 fn build_fontfaces(store: &HwpxStyleStore) -> HxFontFaces {
     let mut groups = group_fonts_by_lang(store);
 
+    // The document encoder reaches this output-only supplementation only after
+    // validating explicit font references against original language tables.
     // 한글 requires all 7 language groups to be present.
     // If any are missing, fill them with the first font as fallback.
     const REQUIRED_LANGS: &[&str] =
@@ -568,9 +588,31 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
                 .map(|f| HxFont {
                     id: f.id,
                     face: crate::wire_xml::clean_font_name(&f.face_name),
-                    font_type: "TTF".into(),
+                    // C: an unknown kind is TTF, an unknown classification the
+                    // default one. 이것을 실패시키는 것: 상수 TTF·기본 분류
+                    // 복귀 / 대체 글꼴 미방출(`font_metadata_round_trips`).
+                    font_type: f.font_type.unwrap_or(HwpxFontType::Ttf).as_hwpx_str().into(),
                     is_embedded: 0,
-                    type_info: Some(default_type_info()),
+                    subst_font: f.substitute.as_ref().map(|sub| HxSubstFont {
+                        face: crate::wire_xml::clean_font_name(&sub.face_name),
+                        font_type: sub.font_type.unwrap_or(HwpxFontType::Ttf).as_hwpx_str().into(),
+                        is_embedded: 0,
+                        binary_item_id_ref: String::new(),
+                    }),
+                    type_info: Some(f.type_info.as_ref().map_or_else(default_type_info, |ti| {
+                        let [w, p, c, sv, a, l, m, x] = ti.values;
+                        HxTypeInfo {
+                            family_type: ti.family_type.clone(),
+                            weight: w,
+                            proportion: p,
+                            contrast: c,
+                            stroke_variation: sv,
+                            arm_style: a,
+                            letterform: l,
+                            midline: m,
+                            x_height: x,
+                        }
+                    })),
                 })
                 .collect();
             HxFontFaceGroup { lang, font_cnt, fonts: hx_fonts }
@@ -647,12 +689,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         } else {
             None
         },
-        shadow: Some(HxShadow {
-            shadow_type: shadow_type_to_hwpx(cs.shadow_type).into(),
-            color: "#B2B2B2".into(),
-            offset_x: 10,
-            offset_y: 10,
-        }),
+        shadow: Some(char_shadow_to_hwpx(&cs.shadow)),
     }
 }
 
@@ -721,27 +758,29 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
 /// breakSetting, autoSpacing, margin/lineSpacing (inside hp:switch),
 /// and an optional border block when the shared model references one.
 fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
+    let [offset_left, offset_right, offset_top, offset_bottom] =
+        ps.border_offset.map(|v| v.as_i32());
     let border = ps.border_fill_id.map(|border_fill_id| HxBorder {
         border_fill_id_ref: border_fill_id.get() as u32,
-        offset_left: 0,
-        offset_right: 0,
-        offset_top: 0,
-        offset_bottom: 0,
-        connect: 0,
-        ignore_margin: 0,
+        offset_left,
+        offset_right,
+        offset_top,
+        offset_bottom,
+        connect: u32::from(ps.border_connect),
+        ignore_margin: u32::from(ps.border_ignore_margin),
     });
 
     HxParaPr {
         id,
         tab_pr_id_ref: ps.tab_pr_id_ref,
         condense: ps.condense,
-        font_line_height: 0,
+        font_line_height: ps.font_line_height,
         snap_to_grid: Some(u32::from(ps.snap_to_grid)),
         suppress_line_numbers: 0,
         checked: u32::from(ps.checked),
         align: Some(HxAlign {
             horizontal: alignment_to_hwpx(ps.alignment).into(),
-            vertical: "BASELINE".into(),
+            vertical: ps.vertical_align.clone(),
         }),
         heading: Some(wire_parts_to_heading(ps.heading_type, ps.heading_id_ref, ps.heading_level)),
         break_setting: Some(HxBreakSetting {
@@ -754,6 +793,8 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             line_wrap: ps.line_wrap.clone(),
         }),
         auto_spacing: Some(HxAutoSpacing { e_asian_eng: 0, e_asian_num: 0 }),
+        margin: None,
+        line_spacing: None,
         switches: vec![build_margin_switch(ps)],
         border,
     }
@@ -761,16 +802,15 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
 
 /// Builds the `<hp:switch>` block with both `<hp:case>` and `<hp:default>`.
 ///
-/// Hancom emits the `HwpUnitChar` case branch using half-scale values while
-/// the default branch keeps the regular HWP unit magnitudes. Mirroring that
-/// wire shape keeps paragraph layout stable when 한글 prefers the case branch.
-fn build_margin_switch(ps: &HwpxParaShape) -> HxSwitch {
+/// The case carries semantic values and units; default carries `2 * value + bit`.
+/// Physical line spacing uses its separate legacy ×2 contract.
+pub(crate) fn build_margin_switch(ps: &HwpxParaShape) -> HxSwitch {
     HxSwitch {
-        case: Some(HxSwitchCase {
+        cases: vec![HxSwitchCase {
             required_namespace: "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar".into(),
             margin: Some(build_margin_case(ps)),
             line_spacing: Some(build_line_spacing_case(ps)),
-        }),
+        }],
         default: Some(HxSwitchDefault {
             margin: Some(build_margin(ps)),
             line_spacing: Some(build_line_spacing(ps)),
@@ -806,7 +846,9 @@ fn build_margin_case(ps: &HwpxParaShape) -> HxMargin {
 fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
     HxLineSpacing {
         spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
-        value: ps.line_spacing.max(0) as u32,
+        value: crate::paragraph_measure::encode_line_spacing(ps.line_spacing, ps.line_spacing_type)
+            .expect("preflight validated line spacing")
+            .1,
         unit: "HWPUNIT".into(),
     }
 }
@@ -815,10 +857,10 @@ fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
 ///
 /// Hancom stores these values at half the default HWP unit scale.
 fn build_line_spacing_case(ps: &HwpxParaShape) -> HxLineSpacing {
-    let value = match ps.line_spacing_type {
-        LineSpacingType::Percentage => ps.line_spacing.max(0) as u32,
-        _ => (ps.line_spacing.max(0) / 2) as u32,
-    };
+    let value =
+        crate::paragraph_measure::encode_line_spacing(ps.line_spacing, ps.line_spacing_type)
+            .expect("preflight validated line spacing")
+            .0;
     HxLineSpacing {
         spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
         value,
@@ -827,12 +869,18 @@ fn build_line_spacing_case(ps: &HwpxParaShape) -> HxLineSpacing {
 }
 
 /// Creates an `HxUnitValue` from an `HwpUnit`.
-fn hwpunit_value(u: HwpUnit) -> HxUnitValue {
-    HxUnitValue { value: u.as_i32(), unit: "HWPUNIT".into() }
+fn hwpunit_value(u: hwpforge_core::ParagraphMeasure) -> HxUnitValue {
+    HxUnitValue {
+        value: i64::from(
+            crate::paragraph_measure::pack_margin(u).expect("preflight validated margin"),
+        ),
+        unit: "HWPUNIT".into(),
+    }
 }
 
-fn hwpunit_char_case_value(u: HwpUnit) -> HxUnitValue {
-    HxUnitValue { value: u.as_i32() / 2, unit: "HWPUNIT".into() }
+fn hwpunit_char_case_value(u: hwpforge_core::ParagraphMeasure) -> HxUnitValue {
+    let (value, unit) = crate::paragraph_measure::parts(u);
+    HxUnitValue { value: i64::from(value), unit: unit.into() }
 }
 
 // ── Color / alignment helpers ───────────────────────────────────
@@ -950,7 +998,20 @@ fn shadow_type_to_hwpx(st: ShadowType) -> &'static str {
     match st {
         ShadowType::None => "NONE",
         ShadowType::Drop => "DROP",
+        ShadowType::Continuous => "CONTINUOUS",
         _ => "NONE",
+    }
+}
+
+/// `<hh:shadow>` from a [`CharShadow`]: the color as `#RRGGBB` or `none`,
+/// offsets as signed decimals (XSD `xs:integer` −100..=100; Hancom writes
+/// `offsetX="-3"`, unlike the u32 wrap it uses for `hp:pos` offsets).
+fn char_shadow_to_hwpx(shadow: &CharShadow) -> HxShadow {
+    HxShadow {
+        shadow_type: shadow_type_to_hwpx(shadow.kind()).into(),
+        color: shadow.color().map_or_else(|| "none".into(), |c| c.to_hex_rgb()),
+        offset_x: i32::from(shadow.offset_x().get()),
+        offset_y: i32::from(shadow.offset_y().get()),
     }
 }
 
@@ -1003,6 +1064,7 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
 mod tests {
     use super::*;
     use crate::style_store::HwpxFill;
+    use hwpforge_foundation::HwpUnit;
     use hwpforge_foundation::{
         CharShapeIndex, EmbossType, EngraveType, FontIndex, ParaShapeIndex, VerticalPosition,
     };
@@ -1013,7 +1075,12 @@ mod tests {
     fn minimal_store() -> HwpxStyleStore {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_char_shape(HwpxCharShape {
             height: HwpUnit::new(1000).unwrap(),
@@ -1141,12 +1208,29 @@ mod tests {
     fn test_font_grouping() {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_font(HwpxFont {
-            id: 1, face_name: "함초롬바탕".into(), lang: "HANGUL".into()
+            id: 1,
+            face_name: "함초롬바탕".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
-        store.push_font(HwpxFont { id: 0, face_name: "Arial".into(), lang: "LATIN".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "Arial".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
 
         let groups = group_fonts_by_lang(&store);
         assert_eq!(groups.len(), 2);
@@ -1170,11 +1254,11 @@ mod tests {
     fn test_margin_switch_structure() {
         let ps = HwpxParaShape {
             alignment: Alignment::Justify,
-            margin_left: HwpUnit::new(100).unwrap(),
-            margin_right: HwpUnit::new(50).unwrap(),
-            indent: HwpUnit::new(200).unwrap(),
-            spacing_before: HwpUnit::new(300).unwrap(),
-            spacing_after: HwpUnit::new(150).unwrap(),
+            margin_left: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap()),
+            margin_right: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(50).unwrap()),
+            indent: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap()),
+            spacing_before: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(300).unwrap()),
+            spacing_after: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(150).unwrap()),
             line_spacing: 200,
             line_spacing_type: LineSpacingType::Percentage,
             ..Default::default()
@@ -1183,14 +1267,14 @@ mod tests {
         let switch = build_margin_switch(&ps);
 
         // Case must be present
-        let case = switch.case.as_ref().expect("case must be present");
+        let case = switch.cases.first().expect("case must be present");
         assert_eq!(case.required_namespace, "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar");
         let case_margin = case.margin.as_ref().unwrap();
-        assert_eq!(case_margin.left.as_ref().unwrap().value, 50);
-        assert_eq!(case_margin.right.as_ref().unwrap().value, 25);
-        assert_eq!(case_margin.indent.as_ref().unwrap().value, 100);
-        assert_eq!(case_margin.prev.as_ref().unwrap().value, 150);
-        assert_eq!(case_margin.next.as_ref().unwrap().value, 75);
+        assert_eq!(case_margin.left.as_ref().unwrap().value, 100);
+        assert_eq!(case_margin.right.as_ref().unwrap().value, 50);
+        assert_eq!(case_margin.indent.as_ref().unwrap().value, 200);
+        assert_eq!(case_margin.prev.as_ref().unwrap().value, 300);
+        assert_eq!(case_margin.next.as_ref().unwrap().value, 150);
         let case_ls = case.line_spacing.as_ref().unwrap();
         assert_eq!(case_ls.value, 200);
         assert_eq!(case_ls.spacing_type, "PERCENT");
@@ -1198,8 +1282,8 @@ mod tests {
         // Default must keep the full HWP-unit values.
         let default = switch.default.as_ref().expect("default must be present");
         let def_margin = default.margin.as_ref().unwrap();
-        assert_eq!(def_margin.left.as_ref().unwrap().value, 100);
-        assert_eq!(def_margin.indent.as_ref().unwrap().value, 200);
+        assert_eq!(def_margin.left.as_ref().unwrap().value, 200);
+        assert_eq!(def_margin.indent.as_ref().unwrap().value, 400);
         let def_ls = default.line_spacing.as_ref().unwrap();
         assert_eq!(def_ls.value, 200);
     }
@@ -1213,7 +1297,7 @@ mod tests {
         };
 
         let switch = build_margin_switch(&ps);
-        let case_ls = switch.case.as_ref().unwrap().line_spacing.as_ref().unwrap();
+        let case_ls = switch.cases.first().unwrap().line_spacing.as_ref().unwrap();
         let def_ls = switch.default.as_ref().unwrap().line_spacing.as_ref().unwrap();
 
         assert_eq!(case_ls.spacing_type, "FIXED");
@@ -1299,7 +1383,7 @@ mod tests {
         assert!(xml.contains(r#"X&amp;Y&lt;&quot;Z&quot;"#));
 
         let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
-        let numbering = decoded.iter_numberings().find(|numbering| numbering.id == 9).unwrap();
+        let numbering = decoded.iter_numberings().find(|numbering| numbering.id == 1).unwrap();
         assert_eq!(numbering.levels[0].text, r#"A&B<"C""#);
 
         let bullet = decoded.iter_bullets().next().unwrap();
@@ -1322,6 +1406,47 @@ mod tests {
         assert!(xml.contains("</hh:head>"));
     }
 
+    /// C: a font's kind, substitute and classification round-trip through
+    /// the header; a font that knows none of them writes TTF, no substitute
+    /// and the default classification.
+    /// 이것을 실패시키는 것: 디코더가 셋 중 하나를 읽지 않기 · 인코더 상수
+    /// TTF·기본 분류 복귀 · 대체 글꼴 미방출 · 분류 칸 순서 밀림.
+    #[test]
+    fn font_metadata_round_trips() {
+        let xml = r#"<head version="1.4" secCnt="1"><refList><fontfaces itemCnt="1"><fontface lang="HANGUL" fontCnt="2"><font id="0" face="휴먼명조" type="HFT" isEmbedded="0"><substFont face="한컴바탕" type="HFT" isEmbedded="0" binaryItemIDRef=""/><typeInfo familyType="FCAT_MYUNGJO" weight="5" proportion="4" contrast="3" strokeVariation="2" armStyle="7" letterform="8" midline="9" xHeight="10"/></font><font id="1" face="돋움" type="TTF" isEmbedded="0"><typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="0" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/></font></fontface></fontfaces></refList></head>"#;
+        let store = crate::decoder::header::parse_header(xml).unwrap().style_store;
+        let hft = store.font(FontIndex::new(0)).unwrap();
+        assert_eq!(hft.font_type, Some(crate::style_store::HwpxFontType::Hft));
+        assert_eq!(
+            hft.substitute,
+            Some(crate::style_store::HwpxSubstFont::new(
+                Some(crate::style_store::HwpxFontType::Hft),
+                "한컴바탕"
+            ))
+        );
+        assert_eq!(
+            hft.type_info,
+            Some(crate::style_store::HwpxFontTypeInfo::new(
+                "FCAT_MYUNGJO",
+                [5, 4, 3, 2, 7, 8, 9, 10]
+            ))
+        );
+        let out = encode_header(&store, 1, None).unwrap();
+        assert!(
+            out.contains(r#"<hh:font id="0" face="휴먼명조" type="HFT" isEmbedded="0"><hh:substFont face="한컴바탕" type="HFT" isEmbedded="0" binaryItemIDRef=""/><hh:typeInfo familyType="FCAT_MYUNGJO" weight="5" proportion="4" contrast="3" strokeVariation="2" armStyle="7" letterform="8" midline="9" xHeight="10"/></hh:font>"#),
+            "{out}"
+        );
+        assert!(out.contains(r#"<hh:font id="1" face="돋움" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_GOTHIC" weight="6" "#), "{out}");
+
+        let mut unknown = HwpxStyleStore::new();
+        unknown.push_font(HwpxFont::new(0, "A", "HANGUL"));
+        let out = encode_header(&unknown, 1, None).unwrap();
+        assert!(
+            out.contains(r#"<hh:font id="0" face="A" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="0" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/></hh:font>"#),
+            "{out}"
+        );
+    }
+
     // ── 10. Roundtrip with rich data ────────────────────────────
 
     #[test]
@@ -1330,15 +1455,28 @@ mod tests {
 
         // 2 HANGUL fonts + 1 LATIN font
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_font(HwpxFont {
-            id: 1, face_name: "함초롬바탕".into(), lang: "HANGUL".into()
+            id: 1,
+            face_name: "함초롬바탕".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_font(HwpxFont {
             id: 0,
             face_name: "Times New Roman".into(),
             lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
 
         // Bold + colored char shape
@@ -1363,11 +1501,11 @@ mod tests {
         // Justified para with margins
         store.push_para_shape(HwpxParaShape {
             alignment: Alignment::Justify,
-            margin_left: HwpUnit::new(100).unwrap(),
-            margin_right: HwpUnit::new(50).unwrap(),
-            indent: HwpUnit::new(200).unwrap(),
-            spacing_before: HwpUnit::new(300).unwrap(),
-            spacing_after: HwpUnit::new(150).unwrap(),
+            margin_left: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap()),
+            margin_right: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(50).unwrap()),
+            indent: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap()),
+            spacing_before: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(300).unwrap()),
+            spacing_after: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(150).unwrap()),
             line_spacing: 200,
             line_spacing_type: LineSpacingType::Percentage,
             snap_to_grid: false,
@@ -1403,11 +1541,11 @@ mod tests {
         // Para shape
         let ps = decoded.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 100);
-        assert_eq!(ps.margin_right.as_i32(), 50);
-        assert_eq!(ps.indent.as_i32(), 200);
-        assert_eq!(ps.spacing_before.as_i32(), 300);
-        assert_eq!(ps.spacing_after.as_i32(), 150);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 100);
+        assert_eq!(ps.margin_right.as_hwp_unit().unwrap().as_i32(), 50);
+        assert_eq!(ps.indent.as_hwp_unit().unwrap().as_i32(), 200);
+        assert_eq!(ps.spacing_before.as_hwp_unit().unwrap().as_i32(), 300);
+        assert_eq!(ps.spacing_after.as_hwp_unit().unwrap().as_i32(), 150);
         assert_eq!(ps.line_spacing, 200);
         assert!(!ps.snap_to_grid);
         assert_eq!(ps.line_wrap, "SQUEEZE");
@@ -1619,14 +1757,10 @@ mod tests {
     }
 
     #[test]
-    fn build_border_fills_xml_empty_store_emits_defaults() {
-        // An empty store (no fills) still emits 3 standard defaults for backward compat.
-        let store = HwpxStyleStore::new();
-        let xml = build_border_fills_xml(&store);
-        assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
-        assert!(xml.contains(r##"<hh:borderFill id="1""##));
-        assert!(xml.contains(r##"<hh:borderFill id="2""##));
-        assert!(xml.contains(r##"<hh:borderFill id="3""##));
+    fn fix5_border_writer_does_not_invent_definitions() {
+        // 이것을 실패시키는 것: header writer가 빈 표에 기본 정의 1·2·3을 몰래 추가.
+        let xml = build_border_fills_xml(&HwpxStyleStore::new());
+        assert_eq!(xml, r#"<hh:borderFills itemCnt="0"></hh:borderFills>"#);
     }
 
     #[test]
@@ -1891,5 +2025,190 @@ mod tests {
 
         assert!(xml.contains(r##"<hh:slash type="CENTER" Crooked="0" isCounter="0"/>"##));
         assert!(xml.contains(r##"<hh:backSlash type="ALL" Crooked="0" isCounter="0"/>"##));
+    }
+
+    /// A paragraph's vertical alignment, border offsets and border flags
+    /// survive a header round trip (§19.16 I, S11 — before, every paraPr
+    /// came back BASELINE with zero offsets: 2,875 + 686 Hancom documents);
+    /// a default paraPr writes what it did before.
+    ///
+    /// 이것을 실패시키는 것: 인코더가 `vertical` 을 BASELINE 으로 고정하는 것 /
+    /// 오프셋·connect·ignoreMargin 중 하나를 0 으로 쓰는 것 / 디코더가 그 값을 버리는 것.
+    #[test]
+    fn para_vertical_align_and_border_offsets_round_trip() {
+        let unit = |v: i32| HwpUnit::new(v).unwrap();
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape {
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(2)),
+            ..HwpxParaShape::default()
+        });
+        let mut shaped = HwpxParaShape {
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(2)),
+            ..HwpxParaShape::default()
+        };
+        shaped.vertical_align = "CENTER".to_string();
+        shaped.border_offset = [unit(100), unit(200), unit(300), unit(400)];
+        shaped.border_connect = true;
+        shaped.border_ignore_margin = true;
+        store.push_para_shape(shaped.clone());
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains(r#"<hh:align horizontal="LEFT" vertical="BASELINE"/>"#), "{xml}");
+        assert!(xml.contains(r#"offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0""#), "{xml}");
+        assert!(xml.contains(r#"<hh:align horizontal="LEFT" vertical="CENTER"/>"#), "{xml}");
+        assert!(xml.contains(r#"offsetLeft="100" offsetRight="200" offsetTop="300" offsetBottom="400" connect="1" ignoreMargin="1""#), "{xml}");
+
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
+        let back: Vec<_> = decoded.iter_para_shapes().cloned().collect();
+        assert_eq!(back[1].vertical_align, "CENTER");
+        assert_eq!(back[1].border_offset, shaped.border_offset);
+        assert!(back[1].border_connect && back[1].border_ignore_margin);
+        assert_eq!(back[0].vertical_align, "BASELINE");
+    }
+
+    /// A paraPr border offset outside the HWPUNIT range is reported lost
+    /// (it is kept as 0); one in range is not.
+    #[test]
+    fn para_border_offset_out_of_range_is_reported_lost() {
+        let mut store = HwpxStyleStore::new();
+        let mut shaped = HwpxParaShape {
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(2)),
+            ..HwpxParaShape::default()
+        };
+        shaped.border_offset[0] = HwpUnit::new(100).unwrap();
+        store.push_para_shape(shaped);
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(crate::decoder::header::parse_header(&xml).unwrap().warnings.is_empty());
+        let far = xml.replacen(r#"offsetLeft="100""#, r#"offsetLeft="100000001""#, 1);
+        let warnings = crate::decoder::header::parse_header(&far).unwrap().warnings;
+        assert!(
+            matches!(warnings.as_slice(), [crate::DecodeWarning::ContentLost { kind, .. }] if kind == "para_border_offset"),
+            "{warnings:?}"
+        );
+    }
+
+    /// The new paraPr fields are left out of JSON when they hold the
+    /// default, so a style store exported before them reads and writes the
+    /// same.
+    ///
+    /// 이것을 실패시키는 것: 네 필드 중 하나의 `skip_serializing_if` 삭제 /
+    /// `vertical_align` 의 `default = "baseline"` 삭제(옛 JSON 이 빈 문자열이 된다).
+    #[test]
+    fn para_shape_json_omits_default_new_fields() {
+        let json = serde_json::to_value(HwpxParaShape::default()).unwrap();
+        for key in ["vertical_align", "border_offset", "border_connect", "border_ignore_margin"] {
+            assert!(json.get(key).is_none(), "{key}: {json}");
+        }
+        let mut old = json.clone();
+        old.as_object_mut().unwrap().retain(|k, _| k != "vertical_align");
+        let back: HwpxParaShape = serde_json::from_value(old).unwrap();
+        assert_eq!(back, HwpxParaShape::default());
+    }
+
+    /// A charPr whose ratio, spacing, relative size or offset differs
+    /// between languages is reported lost (the store keeps the hangul
+    /// value); a uniform one is not.
+    ///
+    /// 이것을 실패시키는 것: 언어별 비교를 지우는 것 / 네 필드 중 하나를 비교에서
+    /// 빼는 것(그 필드의 경고가 사라짐).
+    #[test]
+    fn per_language_char_scalars_are_reported_lost() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape::default());
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(crate::decoder::header::parse_header(&xml).unwrap().warnings.is_empty());
+        for (element, expect) in
+            [("ratio", "ratio"), ("spacing", "spacing"), ("relSz", "relSz"), ("offset", "offset")]
+        {
+            let at = xml.find(&format!("<hh:{element} hangul=")).unwrap();
+            let latin = at + xml[at..].find("latin=\"").unwrap() + "latin=\"".len();
+            let end = latin + xml[latin..].find('"').unwrap();
+            let changed = format!("{}77{}", &xml[..latin], &xml[end..]);
+            let warnings = crate::decoder::header::parse_header(&changed).unwrap().warnings;
+            assert_eq!(warnings.len(), 1, "{element}: {warnings:?}");
+            let crate::DecodeWarning::ContentLost { kind, reason, .. } = &warnings[0] else {
+                panic!("{warnings:?}")
+            };
+            assert_eq!(kind, "char_shape_per_language");
+            assert!(reason.contains(&format!("per-language {expect} values")), "{reason}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod fidelity_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: 원본 metrics 문자열을 XML 속성에 이스케이프 없이 삽입하기.
+    #[test]
+    fn bullet_metric_strings_are_escaped_in_empty_and_text_heads() {
+        for text in ["", "head"] {
+            let xml = format!(
+                r#"<hh:paraHead xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" level="0" align="R&amp;&quot;" textOffsetType="H&amp;&quot;">{text}</hh:paraHead>"#
+            );
+            let head: HxBulletParaHead = crate::decoder::xml_from_str(&xml).unwrap();
+            let encoded = build_bullet_para_head_xml(&head);
+            assert!(encoded.contains(r#"align="R&amp;&quot;""#));
+            assert!(encoded.contains(r#"textOffsetType="H&amp;&quot;""#));
+            let restored: HxBulletParaHead = crate::decoder::xml_from_str(&encoded).unwrap();
+            assert_eq!(head, restored);
+        }
+    }
+
+    // 이것을 실패시키는 것: capture/JSON 저장/일반 인코더 적용 중 하나를 빼서
+    // fontLineHeight 또는 번호·글머리표의 useInstWidth/나머지 metrics를 상수로 쓰기.
+    #[test]
+    fn header_fidelity_survives_json_and_regeneration_without_a_base() {
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_numbering(NumberingDef::default_outline());
+        store.push_bullet(hwpforge_core::BulletDef {
+            id: 3,
+            bullet_char: "*".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        });
+        let original = encode_header(&store, 1, None)
+            .unwrap()
+            .replace("fontLineHeight=\"0\"", "fontLineHeight=\"1\"")
+            .replace("useInstWidth=\"1\"", "useInstWidth=\"NO\"")
+            .replace("useInstWidth=\"0\"", "useInstWidth=\"1\"")
+            .replace("useInstWidth=\"NO\"", "useInstWidth=\"0\"")
+            .replace("autoIndent=\"1\"", "autoIndent=\"0\"")
+            .replace("align=\"LEFT\"", "align=\"RIGHT\"")
+            .replace("widthAdjust=\"0\"", "widthAdjust=\"17\"")
+            .replace("textOffsetType=\"PERCENT\"", "textOffsetType=\"HWPUNIT\"")
+            .replace("textOffset=\"50\"", "textOffset=\"123\"")
+            .replace("charPrIDRef=\"4294967295\"", "charPrIDRef=\"0\"");
+        let parsed = crate::decoder::header::parse_header(&original).unwrap().style_store;
+        let json = serde_json::to_string(&parsed).unwrap();
+        let decoded: HwpxStyleStore = serde_json::from_str(&json).unwrap();
+        let output = encode_header(&decoded, 1, None).unwrap();
+        for attr in [
+            "fontLineHeight=\"1\"",
+            "useInstWidth=\"0\"",
+            "useInstWidth=\"1\"",
+            "autoIndent=\"0\"",
+            "align=\"RIGHT\"",
+            "widthAdjust=\"17\"",
+            "textOffsetType=\"HWPUNIT\"",
+            "textOffset=\"123\"",
+            "charPrIDRef=\"0\"",
+        ] {
+            assert_eq!(output.matches(attr).count(), original.matches(attr).count(), "{attr}");
+            assert!(original.contains(attr));
+        }
+        // A JSON edit to the private wire metrics is an actual output edit,
+        // never cache provenance; the package fingerprint sees its new value.
+        let altered = json.replace("\"use_inst_width\":0", "\"use_inst_width\":1");
+        let altered: HwpxStyleStore = serde_json::from_str(&altered).unwrap();
+        assert_ne!(output, encode_header(&altered, 1, None).unwrap());
     }
 }

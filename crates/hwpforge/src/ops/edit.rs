@@ -21,10 +21,19 @@
 //!
 //! | operation | decoder warnings | then |
 //! | -- | -- | -- |
-//! | [`fill`] | the name-resolution decode | — |
-//! | [`insert_para`] | the admission decode | — |
+//! | [`fill`] | the name-resolution decode | values cleaned of forbidden characters |
+//! | [`insert_para`] | the admission decode | texts cleaned of forbidden characters |
 //! | [`delete_para`] | the admission decode | the advisory scan (`INDEX_MARK_REMOVED`) |
-//! | [`set_cell`] | the admission decode | the successful encode's non-semantic warnings |
+//! | [`set_cell`] | the admission decode | texts cleaned of forbidden characters, then the successful encode's non-semantic warnings |
+//!
+//! "Cleaned of forbidden characters" means the edit removed, from a value
+//! the caller gave, characters XML 1.0 cannot represent (the C0 controls
+//! other than TAB, LF, CR and U+001F, plus U+FFFE/U+FFFF) and wrote the rest:
+//! one `XML_FORBIDDEN_CHARS_REMOVED` per cleaned value, whose location names
+//! the field (`field 'NAME'`), the new paragraph (`new paragraph N`) or the
+//! cell (`table T cell (ROW, COL)`). Only the caller's values are looked at;
+//! a base document that already holds such characters keeps them wherever
+//! the edit does not reach.
 //!
 //! Each operation reports **one** decode, even though several run. The
 //! preserving patcher behind [`fill`] re-decodes the base once per touched
@@ -34,16 +43,12 @@
 //! receives, so merging them would report one document's losses several
 //! times over. The count therefore does not grow with the size of the edit.
 //!
-//! [`set_cell`] is the one **regenerating** edit here, so it has a second
-//! channel the other three do not: the other half of its fail-closed
-//! contract ([`HwpxCellEditor::set_cells_with_diagnostics`]). An encode that
-//! loses meaning produces no bytes, and an encode that succeeds hands back
-//! whatever **non-semantic** warnings it raised. That list is empty for every
-//! document available today (the only non-semantic `EncodeWarning` is
-//! `LayoutCacheDropped`, which the encoder raises only under
-//! `EncodeOptions::emit_layout_cache`, an opt-in a preserve-first editor must
-//! never set), but it is carried rather than discarded, so a future warning
-//! reaches the caller without an API change.
+//! [`set_cell`] is the one **regenerating** edit here, so it has a channel
+//! the other three do not: the other half of its fail-closed contract
+//! ([`HwpxCellEditor::set_cells_with_diagnostics`]). An encode that loses
+//! meaning produces no bytes, and an encode that succeeds hands back
+//! whatever **non-semantic** warnings it raised, after the clean-up warnings
+//! for its own texts.
 
 use std::collections::BTreeMap;
 
@@ -103,7 +108,8 @@ pub struct FillOutput {
     /// The fields that were filled, in document order.
     pub filled: Vec<FilledField>,
     /// What decoding the package to resolve the names reported, in decoder
-    /// order. Filling adds nothing of its own — see the module docs.
+    /// order, then one `XML_FORBIDDEN_CHARS_REMOVED` per value that had
+    /// characters removed — see the module docs.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -184,12 +190,12 @@ pub fn fill(
         }
     }
 
-    let diagnosed = HwpxFiller::fill_with_diagnostics(hwpx, &map)?;
-    Ok(FillOutput {
-        bytes: diagnosed.value.bytes,
-        filled: diagnosed.value.filled,
-        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
-    })
+    let diagnosed = HwpxFiller::fill_with_codec_diagnostics(hwpx, &map)?;
+    let mut warnings: Vec<OpsWarning> =
+        diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value.bytes)?;
+    Ok(FillOutput { bytes: diagnosed.value.bytes, filled: diagnosed.value.filled, warnings })
 }
 
 // ── set_cell ────────────────────────────────────────────────────
@@ -270,9 +276,10 @@ pub struct SetCellOutput {
     pub bytes: Vec<u8>,
     /// One record per applied edit, in spec order.
     pub results: Vec<SetCellResult>,
-    /// What the admission decode reported, then the successful encode's
-    /// non-semantic warnings — see the module docs for the order. The encode
-    /// half is empty for every document reachable today.
+    /// What the admission decode reported, then one
+    /// `XML_FORBIDDEN_CHARS_REMOVED` per text that had characters removed,
+    /// then the successful encode's non-semantic warnings — see the module
+    /// docs for the order.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -337,6 +344,7 @@ pub fn set_cell(hwpx: &[u8], opts: &SetCellOptions) -> Result<SetCellOutput, Ops
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value.bytes)?;
     Ok(SetCellOutput {
         bytes: diagnosed.value.bytes,
         results: diagnosed.value.outcome.cells,
@@ -490,9 +498,10 @@ pub struct StructuralOutput {
     pub inserted: usize,
     /// Paragraphs deleted; zero for [`insert_para`].
     pub deleted: usize,
-    /// What the admission decode reported, then — for [`delete_para`] only —
-    /// the advisories about what the edit took with it. [`insert_para`] has
-    /// no advisory scan, so its list is the decoder's alone.
+    /// What the admission decode reported, then — for [`delete_para`] — the
+    /// advisories about what the edit took with it, or — for
+    /// [`insert_para`] — one `XML_FORBIDDEN_CHARS_REMOVED` per text that had
+    /// characters removed.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -560,15 +569,14 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
     }
     let position = if opts.before { InsertPosition::Before } else { InsertPosition::After };
     let anchor = ParagraphLocator { section: opts.section, index: opts.anchor };
-    let diagnosed = HwpxStructuralEditor::insert_paragraphs_with_diagnostics(
+    let diagnosed = HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
         hwpx, anchor, position, &opts.text,
     )?;
-    Ok(StructuralOutput {
-        bytes: diagnosed.value,
-        inserted: opts.text.len(),
-        deleted: 0,
-        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
-    })
+    let mut warnings: Vec<OpsWarning> =
+        diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value)?;
+    Ok(StructuralOutput { bytes: diagnosed.value, inserted: opts.text.len(), deleted: 0, warnings })
 }
 
 /// Deletes top-level paragraphs from one section, all-or-nothing.
@@ -621,6 +629,7 @@ pub fn delete_para(hwpx: &[u8], opts: &DeleteParaOptions) -> Result<StructuralOu
     let mut warnings: Vec<OpsWarning> =
         diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(advisories.into_iter().map(OpsWarning::Structural));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value)?;
     Ok(StructuralOutput {
         bytes: diagnosed.value,
         inserted: 0,

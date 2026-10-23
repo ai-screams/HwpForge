@@ -4,10 +4,11 @@
 //! `Document<Draft>` to `Document<Validated>`. It is not part of the
 //! public API; it is called exclusively by `Document<Draft>::validate()`.
 
-use crate::control::Control;
+use crate::control::{Control, GroupChild};
 use crate::error::ValidationError;
 use crate::run::RunContent;
 use crate::section::Section;
+use hwpforge_foundation::ApplyPageType;
 
 #[derive(Clone, Copy)]
 struct RunValidationContext {
@@ -31,6 +32,9 @@ struct RunValidationContext {
 /// 6. `col_span >= 1`, `row_span >= 1`
 /// 7. TextBox controls have at least 1 paragraph
 /// 8. Footnote controls have at least 1 paragraph
+/// 9. A master page with a special scope applies to both page types
+/// 10. A header/footer anchor points at an existing body paragraph
+/// 11. A rectangle's or text box's corner ratio is at most 50
 ///
 /// Errors carry precise location context.
 pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationError> {
@@ -58,9 +62,305 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
                 )?;
             }
         }
+
+        // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `<` 를 `<=` 로
+        // (`header_footer_anchor_*` 두 테스트 — 마지막 문단 index 는 통과,
+        // 문단 수와 같은 index 는 거부).
+        for (kind, list) in [("header", &section.headers), ("footer", &section.footers)] {
+            for (index, hf) in list.iter().enumerate() {
+                if let Some(anchor) = hf.anchor_paragraph {
+                    if anchor >= section.paragraphs.len() {
+                        return Err(ValidationError::HeaderFooterAnchorOutOfRange {
+                            section_index: si,
+                            kind,
+                            index,
+                            anchor_paragraph: anchor,
+                            paragraph_count: section.paragraphs.len(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // §19.5 1c (review r1): the 0–50 corner ratio is checked wherever
+        // the encoder writes a shape — body, cells, text boxes, notes,
+        // captions, group children, headers/footers, master pages.
+        // 이것을 실패시키는 것: 중첩 순회를 지우기(칸·글상자·머리말·바탕쪽의 51
+        // 이 통과 — `corner_ratio_is_checked_in_nested_places`) / `> 50` 을
+        // `>= 50` 으로(`corner_ratio_50_accepted`).
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    if let Some(ratio) = run_corner_ratio_over_50(run) {
+                        return Err(ValidationError::InvalidCornerRatio {
+                            section_index: si,
+                            paragraph_index: pi,
+                            run_index: ri,
+                            ratio,
+                        });
+                    }
+                }
+            }
+        }
+
+        // F (review r2 MEDIUM-2): cell zones are checked on every table —
+        // nested tables, captions (run pictures' included), headers/footers
+        // and master pages — through the one table walk.
+        // 이것을 실패시키는 것: 이 순회를 최상위 표로 좁히기
+        // (`cell_zone_validation_reaches_nested_tables`).
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    let ctx = RunValidationContext {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                    };
+                    let mut first = None;
+                    run.walk_tables(&mut |table| {
+                        if first.is_none() {
+                            first = validate_cell_zones(table, ctx).err();
+                        }
+                    });
+                    if let Some(err) = first {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        // S20: an object frame is checked in the same places as the corner
+        // ratio. 이것을 실패시키는 것: 이 순회를 지우기(`object_frame_is_checked_in_nested_places`).
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    if let Some((kind, field, reason)) = run_frame_error(run) {
+                        return Err(ValidationError::InvalidObjectFrame {
+                            section_index: si,
+                            paragraph_index: pi,
+                            run_index: ri,
+                            kind,
+                            field,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `Both` 비교를 빼고
+        // `special` 만 보기 (`master_page_special_scope_*` 두 테스트).
+        for (mi, master) in section.master_pages.iter().flatten().enumerate() {
+            if master.special.is_some() && master.apply_page_type != ApplyPageType::Both {
+                return Err(ValidationError::InvalidMasterPageScope {
+                    section_index: si,
+                    master_page_index: mi,
+                });
+            }
+        }
     }
 
+    // 이것을 실패시키는 것: 독립 흐름의 경계 검증을 생략하기.
+    if let Some(error) = crate::field_inventory::FieldInventory::from_sections(sections)
+        .diagnostics()
+        .first()
+        .cloned()
+    {
+        return Err(error);
+    }
     Ok(())
+}
+
+/// The first corner ratio above 50 in `run`: its own rectangle or text
+/// box, a group's shapes, and every paragraph nested in it — picture
+/// captions included, which the Core paragraph walk does not enter but the
+/// HWPX writer does (review r2).
+///
+/// (A group picture's caption is already in that walk.)
+///
+/// 이것을 실패시키는 것: 그림 run 의 캡션 / 중첩 문단 안 그림의 캡션을
+/// 건너뛰기(`corner_ratio_is_checked_in_nested_places`).
+fn run_corner_ratio_over_50(run: &crate::run::Run) -> Option<u8> {
+    fn caption_ratio(image: &crate::image::Image) -> Option<u8> {
+        image
+            .caption
+            .as_ref()?
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.runs)
+            .find_map(run_corner_ratio_over_50)
+    }
+    fn control_ratio(control: &Control) -> Option<u8> {
+        match control {
+            Control::Rect { style: Some(style), .. }
+            | Control::TextBox { style: Some(style), .. } => style.corner_ratio.filter(|&r| r > 50),
+            Control::Group { children, .. } => children.iter().find_map(|child| match child {
+                crate::control::GroupChild::Shape(shape) => control_ratio(shape),
+                crate::control::GroupChild::Picture(_) => None,
+            }),
+            _ => None,
+        }
+    }
+    fn own_ratio(run: &crate::run::Run) -> Option<u8> {
+        match &run.content {
+            RunContent::Control(control) => control_ratio(control),
+            RunContent::Image(image) => caption_ratio(image),
+            _ => None,
+        }
+    }
+    let mut found = own_ratio(run);
+    run.walk_paragraphs(&mut |nested| {
+        if found.is_none() {
+            found = nested.runs.iter().find_map(own_ratio);
+        }
+    });
+    found
+}
+
+/// What makes an original box unwritable for a `width × height` object:
+/// a negative axis, or an axis of zero whose displayed axis is not (the
+/// points on it cannot stretch). An axis of zero under a displayed zero is a
+/// straight line and fine; a displayed zero under a positive original axis is
+/// the existing size rule's concern.
+///
+/// 이것을 실패시키는 것: 음수 검사를 지우기(`negative_original_size_is_rejected`)
+/// / 0 축을 한 축만 보기 / 0 × 0 을 오류로(`original_axis_rules`).
+fn original_size_error(
+    original: hwpforge_foundation::Size,
+    width: hwpforge_foundation::HwpUnit,
+    height: hwpforge_foundation::HwpUnit,
+) -> Option<&'static str> {
+    let (ow, oh) = (original.width.as_i32(), original.height.as_i32());
+    if ow < 0 || oh < 0 {
+        return Some("negative original size");
+    }
+    if (ow == 0 && width.as_i32() != 0) || (oh == 0 && height.as_i32() != 0) {
+        return Some("original axis of zero under a displayed axis that is not");
+    }
+    None
+}
+
+/// The first unwritable object frame in `run` — its own object, a group's
+/// shapes and pictures, a table, and every paragraph nested in it (picture
+/// captions included), as [`run_corner_ratio_over_50`] walks.
+///
+/// Each object is checked once: nested paragraphs come from the one
+/// paragraph walk (which enters group pictures' captions), and only a run
+/// picture's caption, which that walk does not enter, is searched from its
+/// run (branch review B-H1: a group picture's caption searched from the
+/// picture *and* by the walk doubled the work at every nesting level).
+fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
+    fn image_error(
+        image: &crate::image::Image,
+    ) -> Option<(&'static str, &'static str, &'static str)> {
+        if image.rotation.is_some_and(|r| !r.is_finite()) {
+            return Some(("picture", "rotation", "rotation is not finite"));
+        }
+        if image
+            .in_margin
+            .is_some_and(|m| [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() < 0))
+        {
+            return Some(("picture", "in_margin", "negative inner margin"));
+        }
+        let o = image.frame.original_size?;
+        original_size_error(o, image.width, image.height)
+            .map(|reason| ("picture", "original_size", reason))
+    }
+    fn control_error(control: &Control) -> Option<(&'static str, &'static str, &'static str)> {
+        if let (Some(frame), Some(size)) = (control.frame(), control.effective_original_size()) {
+            let current = match control {
+                Control::TextBox { width, height, .. }
+                | Control::Line { width, height, .. }
+                | Control::Ellipse { width, height, .. }
+                | Control::Rect { width, height, .. }
+                | Control::Polygon { width, height, .. }
+                | Control::Arc { width, height, .. }
+                | Control::Curve { width, height, .. }
+                | Control::ConnectLine { width, height, .. }
+                | Control::Group { width, height, .. }
+                | Control::TextArt { width, height, .. } => Some((*width, *height)),
+                _ => None,
+            };
+            if let (Some(_), Some((w, h))) = (frame.original_size, current) {
+                if let Some(reason) = original_size_error(size, w, h) {
+                    return Some((control.kind_name(), "original_size", reason));
+                }
+            }
+        }
+        match control {
+            Control::Group { children, .. } => children.iter().find_map(|child| {
+                // S20 review r1: a group child has no size of its own to lock
+                // (no `<hp:sz>` in HWPX, no CtrlHeader in HWP 5.0); a lock
+                // there would be dropped on writing, so it is refused.
+                // 이것을 실패시키는 것: 이 검사를 지우기 / 그림 자식만 또는 도형
+                // 자식만 보기(`group_child_size_lock_is_rejected`).
+                let (kind, locked) = match child {
+                    GroupChild::Shape(shape) => {
+                        (shape.kind_name(), shape.frame().is_some_and(|f| f.size_protect))
+                    }
+                    GroupChild::Picture(image) => ("picture", image.frame.size_protect),
+                };
+                if locked {
+                    return Some((
+                        kind,
+                        "size_protect",
+                        "a group child has no size lock of its own",
+                    ));
+                }
+                match child {
+                    GroupChild::Shape(shape) => control_error(shape),
+                    GroupChild::Picture(image) => image_error(image),
+                }
+            }),
+            _ => None,
+        }
+    }
+    fn own_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
+        #[cfg(test)]
+        FRAME_CHECKS.with(|n| n.set(n.get() + 1));
+        match &run.content {
+            RunContent::Control(control) => control_error(control),
+            // 이것을 실패시키는 것: 캡션 검색 삭제(`run_picture_caption_frame_is_checked`).
+            RunContent::Image(image) => image_error(image).or_else(|| {
+                image
+                    .caption
+                    .as_ref()?
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| &p.runs)
+                    .find_map(run_frame_error)
+            }),
+            // 이것을 실패시키는 것: 표 검사를 지우기(`table_original_size_is_rejected`).
+            RunContent::Table(table) => table.frame.original_size.is_some().then_some((
+                "table",
+                "original_size",
+                "a table has no original box",
+            )),
+            _ => None,
+        }
+    }
+    let mut found = own_error(run);
+    run.walk_paragraphs(&mut |nested| {
+        if found.is_none() {
+            found = nested.runs.iter().find_map(own_error);
+        }
+    });
+    found
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many runs [`run_frame_error`] checked on this thread.
+    static FRAME_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Validates a single run's content recursively.
@@ -99,11 +399,47 @@ fn validate_table_run(
         && crate::table::grid::TableGrid::from_table(table)
             .is_ok_and(|grid| grid.dimensions().1 > 0);
 
-    let mut seen_non_header_row: bool = false;
     for (row_i, row) in table.rows.iter().enumerate() {
-        validate_table_row(row, ctx, row_i, &mut seen_non_header_row, empty_rows_covered)?;
+        validate_table_row(row, ctx, row_i, empty_rows_covered)?;
     }
+    Ok(())
+}
 
+/// Every cell zone starts at or before its end and lies inside the grid; a
+/// table with zones must form a grid.
+/// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로 비교 ·
+/// 격자 실패를 통과시키기 (`cell_zone_validation`).
+fn validate_cell_zones(
+    table: &crate::table::Table,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if table.cell_zones.is_empty() {
+        return Ok(());
+    }
+    let error = |zone_index, reason| ValidationError::InvalidCellZone {
+        section_index: ctx.section_index,
+        paragraph_index: ctx.paragraph_index,
+        run_index: ctx.run_index,
+        zone_index,
+        reason,
+    };
+    // A reversed range is wrong whatever the grid (review r1 MEDIUM-3: it
+    // was skipped when the grid did not tile).
+    for (zone_index, zone) in table.cell_zones.iter().enumerate() {
+        if zone.start_row > zone.end_row || zone.start_col > zone.end_col {
+            return Err(error(zone_index, "start past end"));
+        }
+    }
+    // Zones address grid cells: without a grid they cannot be placed.
+    let Ok(grid) = crate::table::grid::TableGrid::from_table(table) else {
+        return Err(error(0, "the table's cells do not form a grid"));
+    };
+    let (rows, cols) = grid.dimensions();
+    for (zone_index, zone) in table.cell_zones.iter().enumerate() {
+        if u32::from(zone.end_row) >= rows || u32::from(zone.end_col) >= cols {
+            return Err(error(zone_index, "outside the table"));
+        }
+    }
     Ok(())
 }
 
@@ -111,7 +447,6 @@ fn validate_table_row(
     row: &crate::table::TableRow,
     ctx: RunValidationContext,
     row_i: usize,
-    seen_non_header_row: &mut bool,
     empty_rows_covered: bool,
 ) -> Result<(), ValidationError> {
     if row.cells.is_empty() && !empty_rows_covered {
@@ -121,19 +456,6 @@ fn validate_table_row(
             run_index: ctx.run_index,
             row_index: row_i,
         });
-    }
-
-    if row.is_header {
-        if *seen_non_header_row {
-            return Err(ValidationError::NonLeadingTableHeaderRow {
-                section_index: ctx.section_index,
-                paragraph_index: ctx.paragraph_index,
-                run_index: ctx.run_index,
-                row_index: row_i,
-            });
-        }
-    } else {
-        *seen_non_header_row = true;
     }
 
     for (cell_i, cell) in row.cells.iter().enumerate() {
@@ -250,6 +572,7 @@ fn validate_control_run(
         | Control::ConnectLine { .. }
         | Control::Bookmark { .. }
         | Control::CrossRef { .. }
+        | Control::FieldBoundary { .. }
         | Control::Field { .. }
         | Control::Memo { .. }
         | Control::IndexMark { .. } => Ok(()),
@@ -257,12 +580,13 @@ fn validate_control_run(
         // medium: do not let new variants slide through with a blanket `Ok(())`.
         Control::UnknownSummary { token, .. } => validate_unknown_summary(token, ctx),
         Control::DateCodeField { .. }
+        | Control::PageNumber { .. }
         | Control::InlinePageNumber { .. }
         | Control::PathField { .. } => Ok(()),
         // W2 (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이
         // 유효 (Codex 결함 8: 근거 없는 clamp 금지). kind Unknown 은 인코더가
         // 스킵하므로 validation 통과.
-        Control::NewNumber { .. } => Ok(()),
+        Control::AutoNumber { .. } | Control::NewNumber { .. } => Ok(()),
         // W3 (2026-08-12): 감추기 — 6 bool 전 조합이 유효 (빈 mask 도
         // corpus 실측 존재, 렌더 no-op).
         Control::PageHiding { .. } => Ok(()),
@@ -271,16 +595,38 @@ fn validate_control_run(
         // shape-family controls are legitimate children; non-shape variants
         // are rejected so a malformed builder caller can't smuggle a
         // hyperlink/field/memo into a `<hp:container>`.
+        //
+        // A picture child must name its image and have a size: an empty path
+        // is reported as `InvalidGroupChild` (there is no picture to draw), a
+        // width or height of zero or less as `InvalidShapeDimension`.
         Control::Group { children, .. } => {
+            let invalid_child = || ValidationError::InvalidGroupChild {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+            };
             for child in children {
-                if !is_group_child_allowed(child) {
-                    return Err(ValidationError::InvalidGroupChild {
-                        section_index: ctx.section_index,
-                        paragraph_index: ctx.paragraph_index,
-                        run_index: ctx.run_index,
-                    });
+                match child {
+                    GroupChild::Picture(image) => {
+                        if image.path.is_empty() {
+                            return Err(invalid_child());
+                        }
+                        if image.width.as_i32() <= 0 || image.height.as_i32() <= 0 {
+                            return Err(ValidationError::InvalidShapeDimension {
+                                section_index: ctx.section_index,
+                                paragraph_index: ctx.paragraph_index,
+                                run_index: ctx.run_index,
+                                shape_type: "Picture",
+                            });
+                        }
+                    }
+                    GroupChild::Shape(control) => {
+                        if !is_group_child_allowed(control) {
+                            return Err(invalid_child());
+                        }
+                        validate_control_run(control, ctx)?;
+                    }
                 }
-                validate_control_run(child, ctx)?;
             }
             Ok(())
         }
@@ -288,8 +634,8 @@ fn validate_control_run(
 }
 
 /// Returns `true` if `control` is a drawing-shape variant permitted as a
-/// child of [`Control::Group`]. Groups may nest the geometric shapes, OLE
-/// objects, images, and further groups — but not text-flow controls
+/// shape child of [`Control::Group`]. Groups may nest the geometric shapes,
+/// OLE objects and further groups (pictures are [`GroupChild::Picture`]) — but not text-flow controls
 /// (hyperlink/field/memo/bookmark/cross-ref/index-mark/page-number).
 fn is_group_child_allowed(control: &Control) -> bool {
     matches!(
@@ -456,11 +802,12 @@ fn validate_equation_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::ShapePoint;
     use crate::object_id::ObjectId;
     use crate::page::PageSettings;
     use crate::paragraph::Paragraph;
     use crate::run::Run;
-    use crate::section::Section;
+    use crate::section::{MasterPage, MasterPageSpecial, Section};
     use crate::table::{Table, TableCell, TableRow};
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, VerticalAlign};
 
@@ -478,6 +825,508 @@ mod tests {
 
     fn simple_cell() -> TableCell {
         TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap())
+    }
+
+    // === Rule 9: master page special scope ===
+
+    fn section_with_master(apply: ApplyPageType, special: Option<MasterPageSpecial>) -> Section {
+        let mut section = simple_section();
+        let ok = MasterPage::new(ApplyPageType::Both, vec![simple_paragraph()]);
+        let mut checked = MasterPage::new(apply, vec![simple_paragraph()]);
+        checked.special = special;
+        section.master_pages = Some(vec![ok, checked]);
+        section
+    }
+
+    // 이것을 실패시키는 것: Rule 9 검사를 지우기.
+    #[test]
+    fn master_page_special_scope_requires_both() {
+        let section = section_with_master(ApplyPageType::Even, Some(MasterPageSpecial::LastPage));
+        assert_eq!(
+            validate_sections(&[section]),
+            Err(ValidationError::InvalidMasterPageScope { section_index: 0, master_page_index: 1 })
+        );
+        assert_eq!(
+            ValidationError::InvalidMasterPageScope { section_index: 0, master_page_index: 1 }
+                .code() as u32,
+            2021
+        );
+    }
+
+    // 이것을 실패시키는 것: `apply_page_type != Both` 조건을 빼고 `special` 만
+    // 보기 (special + Both 를 거부), 또는 `special.is_some()` 을 빼기
+    // (special 없는 Odd 를 거부).
+    #[test]
+    fn master_page_special_scope_accepts_both_and_plain_even_odd() {
+        let special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+        assert_eq!(validate_sections(&[section_with_master(ApplyPageType::Both, special)]), Ok(()));
+        assert_eq!(validate_sections(&[section_with_master(ApplyPageType::Odd, None)]), Ok(()));
+    }
+
+    // === Rule 10: header/footer anchor in range ===
+
+    fn section_with_anchored_footer(paragraphs: usize, anchor: usize) -> Section {
+        let mut section = Section::with_paragraphs(
+            (0..paragraphs).map(|_| simple_paragraph()).collect(),
+            PageSettings::a4(),
+        );
+        section.headers.push(crate::section::HeaderFooter::all_pages(vec![simple_paragraph()]));
+        let mut footer = crate::section::HeaderFooter::all_pages(vec![simple_paragraph()]);
+        footer.anchor_paragraph = Some(anchor);
+        section.footers.push(footer);
+        section
+    }
+
+    // 이것을 실패시키는 것: Rule 10 검사를 지우기, 또는 `>=` 를 `>` 로.
+    #[test]
+    fn header_footer_anchor_equal_to_paragraph_count_rejected() {
+        let err = validate_sections(&[section_with_anchored_footer(3, 3)]).unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::HeaderFooterAnchorOutOfRange {
+                section_index: 0,
+                kind: "footer",
+                index: 0,
+                anchor_paragraph: 3,
+                paragraph_count: 3,
+            }
+        );
+        assert_eq!(err.code() as u32, 2022);
+    }
+
+    // 이것을 실패시키는 것: 비교를 `anchor + 1 >= len` 으로 당기기(마지막
+    // 문단 거부).
+    #[test]
+    fn header_footer_anchor_on_last_paragraph_accepted() {
+        assert_eq!(validate_sections(&[section_with_anchored_footer(3, 2)]), Ok(()));
+    }
+
+    // === Rule 11: corner ratio ≤ 50 ===
+
+    fn section_with_rect_ratio(ratio: u8) -> Section {
+        let mut rect =
+            Control::rect(HwpUnit::new(1000).unwrap(), HwpUnit::new(1000).unwrap()).unwrap();
+        if let Control::Rect { style, .. } = &mut rect {
+            *style = Some(crate::control::ShapeStyle {
+                corner_ratio: Some(ratio),
+                ..Default::default()
+            });
+        }
+        Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(rect, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        )
+    }
+
+    // === S20: object frame ===
+
+    fn size(w: i32, h: i32) -> hwpforge_foundation::Size {
+        hwpforge_foundation::Size::new(HwpUnit::new(w).unwrap(), HwpUnit::new(h).unwrap())
+    }
+
+    fn section_with(run: Run) -> Section {
+        Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )
+    }
+
+    fn framed(mut control: Control, original: hwpforge_foundation::Size) -> Run {
+        control.frame_mut().unwrap().original_size = Some(original);
+        Run::control(control, CharShapeIndex::new(0))
+    }
+
+    fn frame_err(section: Section) -> Option<(&'static str, &'static str)> {
+        match validate_sections(&[section]) {
+            Err(ValidationError::InvalidObjectFrame { kind, reason, .. }) => Some((kind, reason)),
+            Ok(()) => None,
+            Err(other) => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    /// 이것을 실패시키는 것: 음수 검사를 지우기(음수 원래 크기가 통과해 인코더가
+    /// 감싼 값을 쓴다).
+    #[test]
+    fn negative_original_size_is_rejected() {
+        let w = HwpUnit::new(850).unwrap();
+        let err = validate_sections(&[section_with(framed(Control::ellipse(w, w), size(-1, 560)))])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ValidationError::InvalidObjectFrame { kind: "ellipse", field: "original_size", .. }
+        ));
+        assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidShapeDimension);
+        assert!(frame_err(section_with(framed(Control::ellipse(w, w), size(560, -1)))).is_some());
+        assert!(frame_err(section_with(framed(Control::ellipse(w, w), size(560, 560)))).is_none());
+    }
+
+    /// The axis rules (§19.23.11 H4): 0 under 0 is a straight line, 0 under a
+    /// displayed length cannot stretch, a positive original under a displayed
+    /// 0 is the existing size rule's business.
+    /// 이것을 실패시키는 것: 0 축을 한 축만 보기 / 0 × 0 을 오류로.
+    #[test]
+    fn original_axis_rules() {
+        // A line whose displayed box is exactly its end point's extent.
+        let line = |end: (i32, i32)| Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: end.0, y: end.1 },
+            width: HwpUnit::new(end.0).unwrap(),
+            height: HwpUnit::new(end.1).unwrap(),
+            frame: crate::frame::ObjectFrame::new(),
+            placement: None,
+            caption: None,
+            style: None,
+        };
+        // A horizontal line: original 1000 × 0, shown 2000 × 0.
+        let mut flat = line((2000, 0));
+        flat.frame_mut().unwrap().original_size = Some(size(1000, 0));
+        assert!(frame_err(section_with(Run::control(flat, CharShapeIndex::new(0)))).is_none());
+        // A vertical one, the other axis.
+        let mut upright = line((0, 2000));
+        upright.frame_mut().unwrap().original_size = Some(size(0, 1000));
+        assert!(frame_err(section_with(Run::control(upright, CharShapeIndex::new(0)))).is_none());
+        // Original 0 wide but shown 2000 wide.
+        let mut stretched = line((2000, 0));
+        stretched.frame_mut().unwrap().original_size = Some(size(0, 0));
+        assert!(frame_err(section_with(Run::control(stretched, CharShapeIndex::new(0)))).is_some());
+        let mut tall = line((0, 2000));
+        tall.frame_mut().unwrap().original_size = Some(size(1000, 0));
+        assert!(frame_err(section_with(Run::control(tall, CharShapeIndex::new(0)))).is_some());
+    }
+
+    /// A table has no original box (§19.23.11 M6); its lock is fine.
+    /// 이것을 실패시키는 것: 표 검사를 지우기.
+    #[test]
+    fn table_original_size_is_rejected() {
+        let mut table = Table::new(vec![TableRow::new(vec![simple_cell()])]);
+        table.frame.size_protect = true;
+        assert!(
+            frame_err(section_with(Run::table(table.clone(), CharShapeIndex::new(0)))).is_none()
+        );
+        table.frame.original_size = Some(size(100, 100));
+        assert_eq!(
+            frame_err(section_with(Run::table(table, CharShapeIndex::new(0)))),
+            Some(("table", "a table has no original box"))
+        );
+    }
+
+    /// Checked wherever the writer writes an object: a table cell, a group's
+    /// picture, a header.
+    /// 이것을 실패시키는 것: 중첩 순회를 지우기 / 묶음 그림을 건너뛰기.
+    #[test]
+    fn object_frame_is_checked_in_nested_places() {
+        let w = HwpUnit::new(850).unwrap();
+        let bad = || framed(Control::ellipse(w, w), size(-5, 5));
+        // In a table cell.
+        let cell = TableCell::new(
+            vec![Paragraph::with_runs(vec![bad()], ParaShapeIndex::new(0))],
+            HwpUnit::from_mm(50.0).unwrap(),
+        );
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
+        assert!(frame_err(section_with(Run::table(table, CharShapeIndex::new(0)))).is_some());
+        // A group's picture.
+        let mut picture =
+            crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png);
+        picture.frame.original_size = Some(size(0, 850));
+        let group = Control::Group {
+            children: vec![GroupChild::Picture(picture)],
+            width: w,
+            height: w,
+            frame: crate::frame::ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        assert_eq!(
+            frame_err(section_with(Run::control(group, CharShapeIndex::new(0)))).map(|e| e.0),
+            Some("picture")
+        );
+        // A header.
+        let mut section = simple_section();
+        section.headers.push(crate::section::HeaderFooter::new(
+            vec![Paragraph::with_runs(vec![bad()], ParaShapeIndex::new(0))],
+            ApplyPageType::Both,
+        ));
+        assert!(frame_err(section).is_some());
+    }
+
+    /// A run picture's caption is not entered by the paragraph walk, so it is
+    /// searched from its run; a group picture's caption is reached by the
+    /// walk.
+    /// 이것을 실패시키는 것: run 그림 캡션 검색 삭제 · 묶음 그림 캡션을 어디서도 보지 않기.
+    #[test]
+    fn run_picture_caption_frame_is_checked() {
+        let w = HwpUnit::new(850).unwrap();
+        let bad = Paragraph::with_runs(
+            vec![framed(Control::ellipse(w, w), size(-5, 5))],
+            ParaShapeIndex::new(0),
+        );
+        let captioned = || {
+            crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png)
+                .with_caption(crate::caption::Caption::new(
+                    vec![bad.clone()],
+                    crate::caption::CaptionSide::Bottom,
+                ))
+        };
+        let run_picture = Run::image(captioned(), CharShapeIndex::new(0));
+        assert_eq!(frame_err(section_with(run_picture)).map(|e| e.0), Some("ellipse"));
+        let group = Control::Group {
+            children: vec![GroupChild::Picture(captioned())],
+            width: w,
+            height: w,
+            frame: crate::frame::ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        let in_group = Run::control(group, CharShapeIndex::new(0));
+        assert_eq!(frame_err(section_with(in_group)).map(|e| e.0), Some("ellipse"));
+    }
+
+    /// Branch review B-H1: groups nested through their pictures' captions
+    /// are checked once per object — the count grows with the depth, not
+    /// twice per level.
+    /// 이것을 실패시키는 것: 묶음 그림 캡션을 그림에서도 다시 찾기(검사 수 2^깊이).
+    #[test]
+    fn nested_picture_captions_are_checked_once() {
+        let w = HwpUnit::new(850).unwrap();
+        let nest = |depth: usize| {
+            let mut run = Run::control(Control::ellipse(w, w), CharShapeIndex::new(0));
+            for _ in 0..depth {
+                let picture =
+                    crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png)
+                        .with_caption(crate::caption::Caption::new(
+                            vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                            crate::caption::CaptionSide::Bottom,
+                        ));
+                run = Run::control(
+                    Control::Group {
+                        children: vec![GroupChild::Picture(picture)],
+                        width: w,
+                        height: w,
+                        frame: crate::frame::ObjectFrame::new(),
+                        placement: None,
+                        inst_id: None,
+                    },
+                    CharShapeIndex::new(0),
+                );
+            }
+            run
+        };
+        let counts: Vec<usize> = [8, 16]
+            .iter()
+            .map(|&depth| {
+                let run = nest(depth);
+                FRAME_CHECKS.with(|n| n.set(0));
+                assert!(run_frame_error(&run).is_none());
+                FRAME_CHECKS.with(std::cell::Cell::get)
+            })
+            .collect();
+        // One check per run: the groups and the innermost ellipse.
+        assert_eq!(counts, [9, 17]);
+    }
+
+    /// A size lock on a group child (shape, picture, nested group) is
+    /// refused; on the group itself it is kept.
+    #[test]
+    fn group_child_size_lock_is_rejected() {
+        let w = HwpUnit::new(850).unwrap();
+        let locked = crate::frame::ObjectFrame::new().with_size_protect(true);
+        let group = |children: Vec<GroupChild>, frame| Control::Group {
+            children,
+            width: w,
+            height: w,
+            frame,
+            placement: None,
+            inst_id: None,
+        };
+        let mut ellipse = Control::ellipse(w, w);
+        *ellipse.frame_mut().unwrap() = locked;
+        let mut picture =
+            crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png);
+        picture.frame = locked;
+        let nested = group(vec![GroupChild::Shape(Control::ellipse(w, w))], locked);
+        for (child, kind) in [
+            (GroupChild::Shape(ellipse), "ellipse"),
+            (GroupChild::Picture(picture), "picture"),
+            (GroupChild::Shape(nested), "group"),
+        ] {
+            let run = Run::control(
+                group(vec![child], crate::frame::ObjectFrame::new()),
+                CharShapeIndex::new(0),
+            );
+            assert_eq!(
+                frame_err(section_with(run)),
+                Some((kind, "a group child has no size lock of its own"))
+            );
+        }
+        let top = group(vec![GroupChild::Shape(Control::ellipse(w, w))], locked);
+        assert_eq!(frame_err(section_with(Run::control(top, CharShapeIndex::new(0)))), None);
+    }
+
+    #[test]
+    fn corner_ratio_above_50_rejected() {
+        let err = validate_sections(&[section_with_rect_ratio(51)]).unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::InvalidCornerRatio {
+                section_index: 0,
+                paragraph_index: 0,
+                run_index: 0,
+                ratio: 51
+            }
+        );
+        assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidShapeDimension);
+    }
+
+    /// A ratio above 50 is refused wherever the shape sits — a table cell,
+    /// a text box's text, a group, a header, a footer, a master page, a
+    /// picture's caption (review r2) — and
+    /// 50 passes there too (review r1: only top-level runs were checked, so
+    /// a nested 51 reached the HWPX writer).
+    #[test]
+    fn corner_ratio_is_checked_in_nested_places() {
+        use crate::control::GroupChild;
+        use crate::section::{HeaderFooter, MasterPage};
+        use crate::table::{Table, TableCell, TableRow};
+        let rect_run = |ratio: u8| section_with_rect_ratio(ratio).paragraphs[0].runs[0].clone();
+        let para = |run: Run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        let plain = || para(Run::text("x", CharShapeIndex::new(0)));
+        let unit = HwpUnit::new(1000).unwrap();
+        let captioned = move |r: u8| {
+            crate::image::Image::new("BinData/a.png", unit, unit, crate::image::ImageFormat::Png)
+                .with_caption(crate::caption::Caption::new(
+                    vec![para(rect_run(r))],
+                    crate::caption::CaptionSide::Bottom,
+                ))
+        };
+        let places: Vec<(&str, Box<dyn Fn(u8) -> Section>)> = vec![
+            (
+                "cell",
+                Box::new(move |r| {
+                    let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![para(rect_run(r))],
+                        unit,
+                    )])]);
+                    Section::with_paragraphs(
+                        vec![para(Run::table(table, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "text box",
+                Box::new(move |r| {
+                    let tb = Control::text_box(vec![para(rect_run(r))], unit, unit);
+                    Section::with_paragraphs(
+                        vec![para(Run::control(tb, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "group",
+                Box::new(move |r| {
+                    let RunContent::Control(rect) = rect_run(r).content else { unreachable!() };
+                    let group = Control::Group {
+                        frame: crate::frame::ObjectFrame::new(),
+                        children: vec![GroupChild::Shape(*rect)],
+                        width: unit,
+                        height: unit,
+                        placement: None,
+                        inst_id: None,
+                    };
+                    Section::with_paragraphs(
+                        vec![para(Run::control(group, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "header",
+                Box::new(move |r| {
+                    let mut s = Section::with_paragraphs(vec![plain()], PageSettings::a4());
+                    s.headers.push(HeaderFooter::all_pages(vec![para(rect_run(r))]));
+                    s
+                }),
+            ),
+            (
+                "footer",
+                Box::new(move |r| {
+                    let mut s = Section::with_paragraphs(vec![plain()], PageSettings::a4());
+                    s.footers.push(HeaderFooter::all_pages(vec![para(rect_run(r))]));
+                    s
+                }),
+            ),
+            (
+                "master page",
+                Box::new(move |r| {
+                    let mut s = Section::with_paragraphs(vec![plain()], PageSettings::a4());
+                    s.master_pages = Some(vec![MasterPage::new(
+                        hwpforge_foundation::ApplyPageType::Both,
+                        vec![para(rect_run(r))],
+                    )]);
+                    s
+                }),
+            ),
+            (
+                "picture caption",
+                Box::new(move |r| {
+                    let image = captioned(r);
+                    Section::with_paragraphs(
+                        vec![para(Run::image(image, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "caption of a picture in a cell",
+                Box::new(move |r| {
+                    let cell = TableCell::new(
+                        vec![para(Run::image(captioned(r), CharShapeIndex::new(0)))],
+                        unit,
+                    );
+                    let table = Table::new(vec![TableRow::new(vec![cell])]);
+                    Section::with_paragraphs(
+                        vec![para(Run::table(table, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "caption of a group picture",
+                Box::new(move |r| {
+                    let group = Control::Group {
+                        frame: crate::frame::ObjectFrame::new(),
+                        children: vec![GroupChild::Picture(captioned(r))],
+                        width: unit,
+                        height: unit,
+                        placement: None,
+                        inst_id: None,
+                    };
+                    Section::with_paragraphs(
+                        vec![para(Run::control(group, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+        ];
+        for (name, build) in &places {
+            assert!(
+                matches!(
+                    validate_sections(&[build(51)]),
+                    Err(ValidationError::InvalidCornerRatio { ratio: 51, .. })
+                ),
+                "{name}"
+            );
+            assert_eq!(validate_sections(&[build(50)]), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
+    fn corner_ratio_50_accepted() {
+        assert_eq!(validate_sections(&[section_with_rect_ratio(50)]), Ok(()));
     }
 
     // === Rule 1: At least 1 section ===
@@ -511,6 +1360,18 @@ mod tests {
     }
 
     // === Rule 3: Every paragraph has at least 1 run ===
+
+    /// §19.22 D5: an end-mark char shape does not stand in for a run.
+    #[test]
+    fn end_char_shape_does_not_make_a_paragraph_non_empty() {
+        let mut p = Paragraph::new(ParaShapeIndex::new(0));
+        p.end_char_shape = Some(hwpforge_foundation::CharShapeIndex::new(3));
+        let result = validate_sections(&[Section::with_paragraphs(vec![p], PageSettings::a4())]);
+        assert_eq!(
+            result,
+            Err(ValidationError::EmptyParagraph { section_index: 0, paragraph_index: 0 })
+        );
+    }
 
     #[test]
     fn empty_paragraph_rejected() {
@@ -656,6 +1517,152 @@ mod tests {
         );
     }
 
+    /// Review r2 MEDIUM-2: a bad zone on a table nested in a cell, in a run
+    /// picture's caption and in a header is refused like a top-level one.
+    /// 이것을 실패시키는 것: 순회를 최상위 표로 좁히기 · 그림 캡션 미방문
+    /// (최상위 그림, 칸 안 그림 각각 — 불변·가변 순회 모두).
+    #[test]
+    fn cell_zone_validation_reaches_nested_tables() {
+        use crate::caption::{Caption, CaptionSide};
+        use crate::image::{Image, ImageFormat};
+        use crate::section::HeaderFooter;
+        use crate::table::CellZone;
+        let bad = || {
+            Table::new(vec![TableRow::new(vec![simple_cell()])])
+                .with_cell_zones(vec![CellZone::new(1, 0, 0, 0, 3)])
+        };
+        let host = |run: Run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        let in_cell = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![host(Run::table(bad(), CharShapeIndex::new(0)))],
+            HwpUnit::from_mm(10.0).unwrap(),
+        )])]);
+        let mut image = Image::new("a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+        image.caption = Some(Caption::new(
+            vec![host(Run::table(bad(), CharShapeIndex::new(0)))],
+            CaptionSide::Bottom,
+        ));
+        let header = HeaderFooter::all_pages(vec![host(Run::table(bad(), CharShapeIndex::new(0)))]);
+        let cases: Vec<Section> = vec![
+            Section::with_paragraphs(
+                vec![host(Run::table(in_cell, CharShapeIndex::new(0)))],
+                PageSettings::a4(),
+            ),
+            Section::with_paragraphs(
+                vec![host(Run::image(image, CharShapeIndex::new(0)))],
+                PageSettings::a4(),
+            ),
+            {
+                let mut s = simple_section();
+                s.headers.push(header);
+                s
+            },
+            // Review r3 M3: a table directly in a memo's anchor runs.
+            Section::with_paragraphs(
+                vec![host(Run::control(
+                    crate::control::Control::memo_with_anchor(
+                        vec![simple_paragraph()],
+                        vec![Run::table(bad(), CharShapeIndex::new(0))],
+                    ),
+                    CharShapeIndex::new(0),
+                ))],
+                PageSettings::a4(),
+            ),
+            {
+                // A picture in a cell whose caption holds the bad table.
+                let mut pic = Image::new("b.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+                pic.caption = Some(Caption::new(
+                    vec![host(Run::table(bad(), CharShapeIndex::new(0)))],
+                    CaptionSide::Bottom,
+                ));
+                let cell = TableCell::new(
+                    vec![host(Run::image(pic, CharShapeIndex::new(0)))],
+                    HwpUnit::from_mm(10.0).unwrap(),
+                );
+                let outer = Table::new(vec![TableRow::new(vec![cell])]);
+                Section::with_paragraphs(
+                    vec![host(Run::table(outer, CharShapeIndex::new(0)))],
+                    PageSettings::a4(),
+                )
+            },
+        ];
+        for (i, mut section) in cases.into_iter().enumerate() {
+            // The mutable walk (decoders drop zones with it) reaches the same
+            // tables.
+            let mut zoned = 0;
+            section.for_each_table_mut(|t| zoned += usize::from(!t.cell_zones.is_empty()));
+            assert_eq!(zoned, 1, "case {i}");
+            assert!(
+                matches!(
+                    validate_sections(&[section]),
+                    Err(ValidationError::InvalidCellZone { .. })
+                ),
+                "case {i}"
+            );
+        }
+    }
+
+    /// F: a cell zone must start at or before its end and end inside the
+    /// grid; the last row and column are inclusive.
+    /// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로
+    /// 비교(마지막 칸 영역 거부).
+    #[test]
+    fn cell_zone_validation() {
+        use crate::table::CellZone;
+        let check = |zone: CellZone| {
+            let row = || TableRow::new(vec![simple_cell(), simple_cell(), simple_cell()]);
+            let table = Table::new(vec![row(), row()]).with_cell_zones(vec![zone]);
+            validate_sections(&[Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::table(table, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            )])
+        };
+        assert!(check(CellZone::new(0, 0, 1, 2, 3)).is_ok(), "the whole 2x3 grid");
+        assert!(check(CellZone::new(1, 2, 1, 2, 3)).is_ok(), "the last cell");
+        for (zone, reason) in [
+            (CellZone::new(1, 0, 0, 2, 3), "start past end"),
+            (CellZone::new(0, 2, 1, 1, 3), "start past end"),
+            (CellZone::new(0, 0, 2, 2, 3), "outside the table"),
+            (CellZone::new(0, 0, 1, 3, 3), "outside the table"),
+        ] {
+            let err = check(zone).unwrap_err();
+            assert!(
+                matches!(err, ValidationError::InvalidCellZone { zone_index: 0, reason: r, .. } if r == reason),
+                "{zone:?}: {err}"
+            );
+            assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidSpan);
+        }
+        // Review r1 MEDIUM-3: a ragged table (2 cells, then 1) does not form
+        // a grid; a reversed zone on it is still refused, and so is any zone.
+        let ragged = |zone: CellZone| {
+            let table = Table::new(vec![
+                TableRow::new(vec![simple_cell(), simple_cell()]),
+                TableRow::new(vec![simple_cell()]),
+            ])
+            .with_cell_zones(vec![zone]);
+            validate_sections(&[Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::table(table, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            )])
+        };
+        assert!(matches!(
+            ragged(CellZone::new(1, 0, 0, 0, 3)),
+            Err(ValidationError::InvalidCellZone { reason: "start past end", .. })
+        ));
+        assert!(matches!(
+            ragged(CellZone::new(0, 0, 0, 0, 3)),
+            Err(ValidationError::InvalidCellZone {
+                reason: "the table's cells do not form a grid",
+                ..
+            })
+        ));
+    }
+
     // === Rule 6: Spans >= 1 ===
 
     #[test]
@@ -699,6 +1706,8 @@ mod tests {
     #[test]
     fn empty_text_box_rejected() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -746,6 +1755,8 @@ mod tests {
     #[test]
     fn valid_text_box_accepted() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -820,7 +1831,7 @@ mod tests {
     }
 
     #[test]
-    fn non_leading_table_header_row_rejected() {
+    fn non_leading_table_header_row_structurally_valid() {
         let header_cell = TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap());
         let data_cell = TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap());
         let table = Table::new(vec![
@@ -833,15 +1844,70 @@ mod tests {
             PageSettings::a4(),
         )];
 
-        let result = validate_sections(&sections);
+        // 이것을 실패시키는 것: 비선두 제목칸을 구조 오류로 거부.
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    /// 이것을 실패시키는 것: validate 정규화 삭제/최상위로 한정 ·
+    /// 칸 실효값 변경 · 제목칸을 비선두라는 이유로 거부.
+    #[test]
+    fn cell_header_validation_normalizes_every_table() {
+        use crate::{Caption, CaptionSide, Document, HeaderFooter, Image, ImageFormat};
+        let host = |run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        let table = || {
+            Table::new(vec![
+                TableRow::new(vec![simple_cell().with_header(Some(true))]),
+                TableRow::new(vec![simple_cell(), simple_cell().with_header(Some(false))])
+                    .with_header(true),
+                TableRow::new(vec![simple_cell()]).with_header(true),
+            ])
+        };
+        let paragraph = || host(Run::table(table(), CharShapeIndex::new(0)));
+        let mut outer = table();
+        outer.rows[0].cells[0].paragraphs.push(paragraph());
+        outer.caption = Some(Caption::new(vec![paragraph()], CaptionSide::Bottom));
+        let mut image = Image::new("a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+        image.caption = Some(Caption::new(vec![paragraph()], CaptionSide::Bottom));
+        let mut section = Section::with_paragraphs(
+            vec![
+                host(Run::table(outer, CharShapeIndex::new(0))),
+                host(Run::image(image, CharShapeIndex::new(0))),
+                host(Run::control(
+                    Control::memo_with_anchor(
+                        vec![paragraph()],
+                        vec![Run::table(table(), CharShapeIndex::new(0))],
+                    ),
+                    CharShapeIndex::new(0),
+                )),
+            ],
+            PageSettings::a4(),
+        );
+        section.headers.push(HeaderFooter::all_pages(vec![paragraph()]));
+        section.footers.push(HeaderFooter::all_pages(vec![paragraph()]));
+        section.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![paragraph()])]);
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().unwrap();
+        let mut count = 0;
+        doc.sections()[0].for_each_table(|table| {
+            count += 1;
+            assert_eq!(table.header_row_count(), 1);
+            assert_eq!(
+                table.rows.iter().map(|r| r.is_header).collect::<Vec<_>>(),
+                [true, false, false]
+            );
+            assert_eq!(table.rows[1].cells[0].header, Some(true));
+            assert_eq!(table.rows[1].cells[1].header, Some(false));
+            assert_eq!(table.rows[2].cells[0].header, Some(true));
+        });
+        assert_eq!(count, 9);
+        let once = doc.clone();
         assert_eq!(
-            result,
-            Err(ValidationError::NonLeadingTableHeaderRow {
-                section_index: 0,
-                paragraph_index: 0,
-                run_index: 0,
-                row_index: 1,
-            })
+            serde_json::from_value::<Document>(serde_json::to_value(&doc).unwrap())
+                .unwrap()
+                .validate()
+                .unwrap(),
+            once
         );
     }
 
@@ -878,6 +1944,7 @@ mod tests {
     #[test]
     fn polygon_zero_vertices_rejected() {
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
@@ -900,6 +1967,7 @@ mod tests {
     fn polygon_two_vertices_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![ShapePoint { x: 0, y: 0 }, ShapePoint { x: 100, y: 100 }],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
@@ -922,6 +1990,7 @@ mod tests {
     fn polygon_three_vertices_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -949,6 +2018,7 @@ mod tests {
     fn ellipse_zero_width_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -976,6 +2046,7 @@ mod tests {
     fn ellipse_zero_height_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -1003,6 +2074,7 @@ mod tests {
     fn polygon_zero_width_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -1033,6 +2105,7 @@ mod tests {
         use crate::control::ShapePoint;
         // Lines can have zero height (horizontal line)
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 1000, y: 0 },
             width: HwpUnit::from_mm(50.0).unwrap(),
@@ -1054,6 +2127,7 @@ mod tests {
         use crate::control::ShapePoint;
         // Lines can have zero width (vertical line)
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 0, y: 1000 },
             width: HwpUnit::new(0).unwrap(), // valid for lines
@@ -1074,6 +2148,7 @@ mod tests {
     fn valid_line_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
@@ -1094,6 +2169,7 @@ mod tests {
     fn valid_ellipse_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -1117,6 +2193,7 @@ mod tests {
     fn valid_polygon_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -1341,5 +2418,76 @@ mod tests {
         let ctrl = Control::equation("{a+b} over {c+d}");
         let sections = wrap_ctrl(ctrl);
         assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Group children ===
+
+    fn group_doc(children: Vec<GroupChild>) -> Vec<Section> {
+        let w = HwpUnit::new(1000).unwrap();
+        let group = Control::Group {
+            frame: crate::frame::ObjectFrame::new(),
+            children,
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let para = Paragraph::with_runs(
+            vec![Run::control(group, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        vec![Section::with_paragraphs(vec![para], PageSettings::a4())]
+    }
+
+    fn picture(path: &str, w: i32, h: i32) -> GroupChild {
+        GroupChild::Picture(crate::image::Image::new(
+            path,
+            HwpUnit::new(w).unwrap(),
+            HwpUnit::new(h).unwrap(),
+            crate::image::ImageFormat::Png,
+        ))
+    }
+
+    #[test]
+    fn group_picture_and_shape_children_are_accepted() {
+        let w = HwpUnit::new(1000).unwrap();
+        let children = vec![
+            picture("BinData/image1.png", 10, 10),
+            GroupChild::Shape(Control::rect(w, w).unwrap()),
+        ];
+        assert_eq!(validate_sections(&group_doc(children)), Ok(()));
+    }
+
+    /// 이것을 실패시키는 것: Picture 의 빈 경로 검사 삭제.
+    #[test]
+    fn group_picture_without_a_path_is_rejected() {
+        assert!(matches!(
+            validate_sections(&group_doc(vec![picture("", 10, 10)])),
+            Err(ValidationError::InvalidGroupChild { .. })
+        ));
+    }
+
+    /// 이것을 실패시키는 것: 크기 검사 삭제, 또는 `<= 0` 을 `== 0` 으로(음수 통과).
+    #[test]
+    fn group_picture_without_a_size_is_rejected() {
+        for (w, h) in [(0, 10), (10, 0), (-5, 10)] {
+            assert!(
+                matches!(
+                    validate_sections(&group_doc(vec![picture("a.png", w, h)])),
+                    Err(ValidationError::InvalidShapeDimension { shape_type: "Picture", .. })
+                ),
+                "{w}x{h}"
+            );
+        }
+    }
+
+    /// 이것을 실패시키는 것: Shape 갈래의 `is_group_child_allowed` 검사 삭제.
+    #[test]
+    fn group_shape_child_that_is_not_a_drawing_is_rejected() {
+        let link = Control::Hyperlink { text: "a".into(), url: "https://a.kr".into() };
+        assert!(matches!(
+            validate_sections(&group_doc(vec![GroupChild::Shape(link)])),
+            Err(ValidationError::InvalidGroupChild { .. })
+        ));
     }
 }

@@ -178,14 +178,29 @@ mod tests {
     /// are independent, as the module doc above promises.
     #[test]
     fn validate_reports_decode_warnings_and_a_real_validation_failure_together() {
-        use std::io::{Cursor, Write};
+        use std::io::{Cursor, Read, Write};
 
         let bytes = std::fs::read(fixture("layout/stale-line-cache.hwpx")).expect("read fixture");
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for i in 0..archive.len() {
-            let entry = archive.by_index_raw(i).expect("entry");
-            writer.raw_copy_file(entry).expect("copy");
+            let mut entry = archive.by_index(i).expect("entry");
+            if entry.name().expect("ZIP entry name") == "Contents/content.hpf" {
+                // The added section must also belong to the reading-order spine.
+                let mut xml = String::new();
+                entry.read_to_string(&mut xml).unwrap();
+                let xml = xml.replace("</opf:manifest>", "<opf:item id='section1' href='Contents/section1.xml' media-type='application/xml'/></opf:manifest>")
+                    .replace("</opf:spine>", "<opf:itemref idref='section1'/></opf:spine>");
+                writer
+                    .start_file(
+                        entry.name().expect("ZIP entry name"),
+                        zip::write::SimpleFileOptions::default(),
+                    )
+                    .unwrap();
+                writer.write_all(xml.as_bytes()).unwrap();
+            } else {
+                writer.raw_copy_file(entry).expect("copy");
+            }
         }
         // `HwpxDecoder` has no opinion on an empty `<hs:sec>` — it just
         // decodes zero `<hp:p>` elements — but `Document::validate` rejects

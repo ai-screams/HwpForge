@@ -52,7 +52,7 @@ unicode-normalization = "0.1"
 serde_yaml = "0.9" # deprecated upstream; migration to serde_yml planned
 
 # === ZIP Compression ===
-zip = { version = "8.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 # === HWP5 Binary ===
 byteorder = "1.5"

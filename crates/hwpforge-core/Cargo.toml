@@ -14,9 +14,12 @@ description = "Format-independent Document Object Model for HwpForge"
 
 [dependencies]
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }
+quick-xml = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

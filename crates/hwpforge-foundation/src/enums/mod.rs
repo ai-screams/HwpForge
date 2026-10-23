@@ -585,12 +585,15 @@ mod tests {
     fn shadow_type_display() {
         assert_eq!(ShadowType::None.to_string(), "None");
         assert_eq!(ShadowType::Drop.to_string(), "Drop");
+        assert_eq!(ShadowType::Continuous.to_string(), "Continuous");
     }
 
     #[test]
     fn shadow_type_from_str() {
         assert_eq!(ShadowType::from_str("None").unwrap(), ShadowType::None);
         assert_eq!(ShadowType::from_str("drop").unwrap(), ShadowType::Drop);
+        assert_eq!(ShadowType::from_str("continuous").unwrap(), ShadowType::Continuous);
+        assert_eq!(ShadowType::from_str("Continuous").unwrap(), ShadowType::Continuous);
         assert!(ShadowType::from_str("shadow").is_err());
     }
 
@@ -598,7 +601,10 @@ mod tests {
     fn shadow_type_try_from_u8() {
         assert_eq!(ShadowType::try_from(0u8).unwrap(), ShadowType::None);
         assert_eq!(ShadowType::try_from(1u8).unwrap(), ShadowType::Drop);
-        assert!(ShadowType::try_from(2u8).is_err());
+        // 이것을 실패시키는 것: `2 => Continuous` 갈래 누락(HWP5 연속 그림자가 오류가 됨).
+        assert_eq!(ShadowType::try_from(2u8).unwrap(), ShadowType::Continuous);
+        // 이것을 실패시키는 것: 3 이상을 받아들이는 것(스펙 밖 값).
+        assert!(ShadowType::try_from(3u8).is_err());
     }
 
     // ===================================================================

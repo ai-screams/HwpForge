@@ -60,7 +60,7 @@ fn build_style_store() -> HwpxStyleStore {
         auto_tab_left: false,
         auto_tab_right: false,
         stops: vec![TabStop {
-            position: HwpUnit::from_mm(70.0).unwrap(),
+            position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(70.0).unwrap()),
             align: TabAlign::Left,
             leader: TabLeader::dot(),
         }],
@@ -71,7 +71,7 @@ fn build_style_store() -> HwpxStyleStore {
         auto_tab_left: false,
         auto_tab_right: false,
         stops: vec![TabStop {
-            position: HwpUnit::from_mm(95.0).unwrap(),
+            position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(95.0).unwrap()),
             align: TabAlign::Center,
             leader: TabLeader::none(),
         }],
@@ -82,7 +82,7 @@ fn build_style_store() -> HwpxStyleStore {
         auto_tab_left: false,
         auto_tab_right: false,
         stops: vec![TabStop {
-            position: HwpUnit::from_mm(120.0).unwrap(),
+            position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(120.0).unwrap()),
             align: TabAlign::Decimal,
             leader: TabLeader::none(),
         }],
@@ -94,17 +94,19 @@ fn build_style_store() -> HwpxStyleStore {
         auto_tab_right: false,
         stops: vec![
             TabStop {
-                position: HwpUnit::from_mm(35.0).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(35.0).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::none(),
             },
             TabStop {
-                position: HwpUnit::from_mm(95.0).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(95.0).unwrap()),
                 align: TabAlign::Center,
                 leader: TabLeader::none(),
             },
             TabStop {
-                position: HwpUnit::from_mm(165.0).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(
+                    HwpUnit::from_mm(165.0).unwrap(),
+                ),
                 align: TabAlign::Right,
                 leader: TabLeader::none(),
             },
@@ -117,12 +119,12 @@ fn build_style_store() -> HwpxStyleStore {
         auto_tab_right: false,
         stops: vec![
             TabStop {
-                position: HwpUnit::from_mm(40.0).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(40.0).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::none(),
             },
             TabStop {
-                position: HwpUnit::from_mm(90.0).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(90.0).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::none(),
             },
@@ -134,7 +136,8 @@ fn build_style_store() -> HwpxStyleStore {
 
     let mut title_ps = HwpxParaShape::default();
     title_ps.alignment = Alignment::Center;
-    title_ps.spacing_after = HwpUnit::from_mm(3.0).unwrap();
+    title_ps.spacing_after =
+        hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::from_mm(3.0).unwrap());
     store.push_para_shape(title_ps);
 
     let mut left_dot = HwpxParaShape::default();

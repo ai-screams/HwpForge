@@ -82,6 +82,8 @@ struct SemanticSupport<'a> {
     bin_data_records: &'a [Hwp5BinDataRecordSummary],
     bin_data_streams: &'a [Hwp5BinDataStream],
     image_assets: &'a Hwp5JoinedImageAssetPlan,
+    /// OLE references whose two readings (position, stored id) differ.
+    reference_ambiguities: &'a BTreeMap<u16, String>,
 }
 
 pub(crate) fn adapt_to_semantic(
@@ -89,10 +91,12 @@ pub(crate) fn adapt_to_semantic(
     image_assets: &Hwp5JoinedImageAssetPlan,
 ) -> Hwp5SemanticDocument {
     let mut ids = SemanticIdAlloc::default();
+    let reference_ambiguities = crate::reference_ambiguities(&decoded.bin_data_records);
     let support = SemanticSupport {
         bin_data_records: &decoded.bin_data_records,
         bin_data_streams: &decoded.bin_data_streams,
         image_assets,
+        reference_ambiguities: &reference_ambiguities,
     };
     let mut document = Hwp5SemanticDocument::new(adapt_package_meta(decoded));
     document.doc_info = adapt_doc_info(&decoded.doc_info);
@@ -161,7 +165,48 @@ fn adapt_section(
         );
     }
 
+    let master_pages = section
+        .master_pages
+        .iter()
+        .map(|master| {
+            let paragraph_start = build.paragraphs.len();
+            let control_start = build.controls.len();
+            for paragraph in &master.paragraphs {
+                adapt_paragraph(
+                    paragraph,
+                    Hwp5SemanticContainerPath::new(vec![
+                        Hwp5SemanticContainerKind::MasterPageSubList(master.index),
+                    ]),
+                    None,
+                    &mut build,
+                    support,
+                    ids,
+                );
+            }
+            // Legacy nested paths name their terminal host only. Preserve
+            // that JSON for Body; qualify every newly adapted master descendant
+            // with its list identity, including nested tables/notes/shape text.
+            let root = Hwp5SemanticContainerKind::MasterPageSubList(master.index);
+            for path in build.paragraphs[paragraph_start..]
+                .iter_mut()
+                .map(|p| &mut p.container)
+                .chain(build.controls[control_start..].iter_mut().map(|c| &mut c.container))
+            {
+                if path.segments.first() != Some(&root) {
+                    path.segments.insert(0, root.clone());
+                }
+            }
+            crate::semantic::Hwp5SemanticMasterPage {
+                index: master.index,
+                extended: master.extended,
+                record_index: master.record_index,
+                raw: master.raw.clone(),
+                scope: master.core_metadata().ok().as_ref().map(Into::into),
+            }
+        })
+        .collect();
     Hwp5SemanticSection {
+        master_pages,
         section_id,
         index,
         page_def: section.page_def.as_ref().map(adapt_page_def),
@@ -461,7 +506,7 @@ fn adapt_control(
             }
             node_id
         }
-        Hwp5Control::Unknown { ctrl_id, .. } => {
+        Hwp5Control::Bookmark { ctrl_id, .. } | Hwp5Control::Unknown { ctrl_id, .. } => {
             let node_id = ids.next_control_id();
             let literal = crate::ctrl_id_ascii(*ctrl_id);
             // The page-number control (`pgnp`) reaches us via the Unknown
@@ -498,8 +543,10 @@ fn adapt_ole_object_control(
 ) -> Hwp5SemanticControlId {
     let node_id = ids.next_control_id();
     let literal = crate::ctrl_id_ascii(ole.ctrl_id);
-    let joined_record: Option<&Hwp5BinDataRecordSummary> =
-        support.bin_data_records.iter().find(|record| record.binary_data_id == ole.binary_data_id);
+    let joined_record: Option<&Hwp5BinDataRecordSummary> = support
+        .bin_data_records
+        .iter()
+        .find(|record| record.reference_ordinal == ole.binary_data_id);
     let joined_stream_name: Option<&str> = joined_record.and_then(|record| {
         support
             .bin_data_streams
@@ -508,7 +555,7 @@ fn adapt_ole_object_control(
             .map(|stream| stream.name.as_str())
     });
 
-    let (payload, confidence, extra_notes) =
+    let (payload, mut confidence, mut extra_notes) =
         if let (Some(record), Some(stream_name)) = (joined_record, joined_stream_name) {
             (
                 Hwp5SemanticControlPayload::OleObject(Hwp5SemanticOlePayload {
@@ -541,6 +588,14 @@ fn adapt_ole_object_control(
                 vec!["ole bin data record missing".to_string()],
             )
         };
+    // The join reads the reference by position, as the projection does; no
+    // Hancom file settles which reading OLE uses, so when the stored-id
+    // reading names another record the join is only a low-confidence
+    // interpretation, with both readings spelled out.
+    if let Some(reason) = support.reference_ambiguities.get(&ole.binary_data_id) {
+        confidence = Hwp5SemanticConfidence::Low;
+        extra_notes.push(format!("bin_data_reference_ambiguous: {reason}"));
+    }
 
     let mut notes: Vec<String> = vec![
         format!("raw_ctrl_id=0x{:08X}", ole.ctrl_id),
@@ -604,7 +659,7 @@ fn adapt_image_control(
     let node_id = ids.next_control_id();
     let literal = crate::ctrl_id_ascii(image.ctrl_id);
 
-    if let Some(asset) = image_assets.asset_for_binary_data_id(image.binary_data_id) {
+    if let Some(asset) = image_assets.asset_for_reference(image.binary_data_id) {
         let mut payload: Hwp5SemanticImagePayload = asset.payload.clone();
         payload.width_hwp = i32::try_from(image.geometry.width).ok();
         payload.height_hwp = i32::try_from(image.geometry.height).ok();
@@ -778,6 +833,7 @@ fn adapt_textbox_control(
     ids: &mut SemanticIdAlloc,
 ) -> Hwp5SemanticControlId {
     let subtree = Hwp5NestedSubtree {
+        wire_order: 0,
         ctrl_id: textbox.ctrl_id,
         // textbox carries no header/footer applyPageType bits — set to
         // 0 so projection treats it as default (BOTH).
@@ -966,19 +1022,16 @@ fn structural_table_width_hwp(table: &Hwp5Table) -> Option<i32> {
 }
 
 fn structural_header_row_count(table: &Hwp5Table) -> u16 {
-    let mut row_flags: BTreeMap<u16, (usize, usize)> = BTreeMap::new();
+    // Include missing physical rows; a rowspan-covered empty row ends the
+    // leading block, exactly as it does in Core and the rendering consumers.
+    // 이것을 실패시키는 것: 빈 물리 행을 제거하고 제목행 수 계산.
+    let mut rows = vec![Vec::new(); usize::from(table.rows)];
     for cell in &table.cells {
-        let entry = row_flags.entry(cell.row).or_insert((0, 0));
-        entry.0 += 1;
-        if cell.is_header {
-            entry.1 += 1;
-        }
+        let row = usize::from(cell.row);
+        rows.resize_with(rows.len().max(row + 1), Vec::new);
+        rows[row].push(cell.is_header);
     }
-
-    row_flags
-        .into_iter()
-        .take_while(|(_, (cells, header_cells))| *cells > 0 && *cells == *header_cells)
-        .count() as u16
+    hwpforge_core::table::header_row_count(rows) as u16
 }
 
 fn structural_row_max_cell_heights_hwp(table: &Hwp5Table) -> Vec<i32> {
@@ -1181,7 +1234,8 @@ mod tests {
     fn empty_image_plan() -> Hwp5JoinedImageAssetPlan {
         Hwp5JoinedImageAssetPlan {
             ordered_assets: Vec::new(),
-            assets_by_binary_data_id: BTreeMap::new(),
+            assets_by_reference: BTreeMap::new(),
+            unavailable_reasons: BTreeMap::new(),
         }
     }
 
@@ -1202,12 +1256,16 @@ mod tests {
                 bytes: vec![binary_data_id as u8],
             })
             .collect();
-        let assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset> = ordered_assets
+        let assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset> = ordered_assets
             .iter()
             .cloned()
             .map(|asset| (asset.payload.binary_data_id, asset))
             .collect();
-        Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id }
+        Hwp5JoinedImageAssetPlan {
+            ordered_assets,
+            assets_by_reference,
+            unavailable_reasons: BTreeMap::new(),
+        }
     }
 
     fn image_controls_in_container(
@@ -1310,6 +1368,50 @@ mod tests {
         );
     }
 
+    /// 이것을 실패시키는 것: 빈 물리 행 건너뛰기 · 선언 rows 밖의 칸 무시 ·
+    /// all 대신 any · 선두 제한 제거 · rowspan으로 빈 행 채우기.
+    #[test]
+    fn cell_header_semantic_uses_physical_rows() {
+        let cell = |row, is_header, row_span| Hwp5TableCell {
+            row,
+            column: 0,
+            row_span,
+            col_span: 1,
+            width: 1000,
+            height: 1000,
+            is_header,
+            has_margin: false,
+            line_wrap: 0,
+            border_fill_id: None,
+            margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+            vertical_align: Hwp5TableCellVerticalAlign::Top,
+            paragraphs: vec![],
+        };
+        for (cells, expected) in [
+            (vec![cell(0, true, 2), cell(2, true, 1)], 1),
+            (vec![cell(1, true, 1)], 0),
+            (vec![cell(0, true, 1), cell(0, false, 1)], 0),
+            (vec![cell(0, true, 1), cell(1, true, 1), cell(2, false, 1)], 2),
+        ] {
+            let table = Hwp5Table {
+                rows: 0,
+                cols: 1,
+                cells,
+                page_break: Hwp5TablePageBreak::Cell,
+                repeat_header: true,
+                cell_spacing: 0,
+                border_fill_id: None,
+                instance_id: 0,
+                ctrl: None,
+                inner_margin: None,
+                no_adjust: false,
+                cell_zones: vec![],
+                caption: None,
+            };
+            assert_eq!(structural_header_row_count(&table), expected);
+        }
+    }
+
     #[test]
     fn adapter_preserves_body_table_and_unknown_controls() {
         let decoded = DecodedHwp5Intermediate {
@@ -1320,7 +1422,9 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1332,6 +1436,10 @@ mod tests {
                     line_segments: Vec::new(),
                     controls: vec![
                         Hwp5Control::Table(Hwp5Table {
+                            inner_margin: None,
+                            no_adjust: false,
+                            cell_zones: Vec::new(),
+                            caption: None,
                             rows: 1,
                             cols: 1,
                             page_break: Hwp5TablePageBreak::Cell,
@@ -1339,6 +1447,8 @@ mod tests {
                             cell_spacing: 120,
                             border_fill_id: Some(8),
                             cells: vec![Hwp5TableCell {
+                                has_margin: true,
+                                line_wrap: 0,
                                 column: 0,
                                 row: 0,
                                 col_span: 1,
@@ -1355,6 +1465,7 @@ mod tests {
                                 vertical_align: Hwp5TableCellVerticalAlign::Bottom,
                                 border_fill_id: Some(3),
                                 paragraphs: vec![Hwp5Paragraph {
+                                    end_char_shape: None,
                                     silent_wires: Vec::new(),
                                     page_break: false,
                                     column_break: false,
@@ -1371,6 +1482,7 @@ mod tests {
                                 }],
                             }],
                             instance_id: 0,
+                            ctrl: None,
                         }),
                         Hwp5Control::Unknown { ctrl_id: 0x666F_6F74, header_data: Vec::new() },
                     ],
@@ -1531,6 +1643,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info,
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: Vec::new(),
                 page_def: None,
                 section_def_properties: None,
@@ -1563,7 +1676,9 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1610,7 +1725,9 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1663,7 +1780,9 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1674,16 +1793,21 @@ mod tests {
                     char_shape_runs: Vec::new(),
                     line_segments: Vec::new(),
                     controls: vec![Hwp5Control::Image(Hwp5ImageControl {
+                        standalone_render: None,
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 0,
                             y: 0,
                             width: 3_210,
                             height: 4_560,
                         },
                         binary_data_id: 1,
+                        original_size: None,
                         instance_id: 0,
                         ctrl_properties: 0,
+                        picture: Default::default(),
+                        link: None,
                     })],
                 }],
                 page_def: None,
@@ -1746,11 +1870,14 @@ mod tests {
                 data_type: "Embedding".to_string(),
                 compression: "Default".to_string(),
                 should_decompress: false,
+                reference_ordinal: 1,
             }],
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1763,6 +1890,7 @@ mod tests {
                     controls: vec![Hwp5Control::OleObject(Hwp5OleObjectControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 10,
                             y: 20,
                             width: 5_000,
@@ -1797,6 +1925,111 @@ mod tests {
         assert!(ole_control.notes.iter().any(|note| note == "bin_data_stream_missing"));
     }
 
+    /// §19 C: an OLE reference counts `DocInfo` `BIN_DATA` records — the
+    /// record at position 1 stores id 2, and the reference 1 joins it. No
+    /// record stores id 1, so the stored-id reading differs: the join is
+    /// only a low-confidence interpretation, with both readings in its notes.
+    /// When the record at position 1 also stores id 1, the join is certain.
+    ///
+    /// 이것을 실패시키는 것: 저장 id 로 레코드를 찾는 것(id 1 레코드가 없어
+    /// 강등된다), 모호성 표시를 지우는 것(High 로 남는다), 모호하지 않아도
+    /// 낮추는 것.
+    #[test]
+    fn adapter_joins_an_ole_object_to_the_record_at_its_reference_position() {
+        let mut decoded = DecodedHwp5Intermediate {
+            version: "5.1.1.0".to_string(),
+            compressed: false,
+            package_entries: Vec::new(),
+            bin_data_records: vec![crate::Hwp5BinDataRecordSummary {
+                binary_data_id: 2,
+                storage_name: "BIN0002.OLE".to_string(),
+                extension: "OLE".to_string(),
+                data_type: "Embedding".to_string(),
+                compression: "Default".to_string(),
+                should_decompress: false,
+                reference_ordinal: 1,
+            }],
+            bin_data_streams: vec![crate::Hwp5BinDataStream {
+                name: "BIN0002.OLE".to_string(),
+                size_bytes: 10,
+            }],
+            doc_info: empty_doc_info(),
+            sections: vec![SectionResult {
+                master_pages: Vec::new(),
+                paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
+                    silent_wires: Vec::new(),
+                    page_break: false,
+                    column_break: false,
+                    text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
+                    controls: vec![Hwp5Control::OleObject(Hwp5OleObjectControl {
+                        ctrl_id: 0x6773_6F20,
+                        geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
+                            x: 10,
+                            y: 20,
+                            width: 5_000,
+                            height: 6_000,
+                        },
+                        binary_data_id: 1,
+                        extent_width: 9_100,
+                        extent_height: 8_200,
+                    })],
+                }],
+                page_def: None,
+                section_def_properties: None,
+                section_def_start_numbers: None,
+                page_border_fills: Vec::new(),
+                column_def: None,
+                warnings: Vec::new(),
+            }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
+            warnings: Vec::new(),
+        };
+
+        let semantic = adapt_to_semantic(&decoded, &empty_image_plan());
+        assert!(semantic.graph_is_coherent());
+
+        let ole_control = semantic.sections[0]
+            .controls
+            .iter()
+            .find(|control| control.kind == Hwp5SemanticControlKind::OleObject)
+            .expect("semantic ole control should exist");
+        assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::Low);
+        assert!(
+            matches!(
+                &ole_control.payload,
+                Hwp5SemanticControlPayload::OleObject(ole) if ole.storage_name == "BIN0002.OLE"
+            ),
+            "{:?}",
+            ole_control.payload
+        );
+        assert!(
+            ole_control.notes.iter().any(|note| note
+                == "bin_data_reference_ambiguous: ordinal 1 → BIN0002.OLE, storage id 1 → no parsed record"),
+            "{:?}",
+            ole_control.notes
+        );
+
+        decoded.bin_data_records[0].binary_data_id = 1;
+        let semantic = adapt_to_semantic(&decoded, &empty_image_plan());
+        let ole_control = semantic.sections[0]
+            .controls
+            .iter()
+            .find(|control| control.kind == Hwp5SemanticControlKind::OleObject)
+            .expect("semantic ole control should exist");
+        assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::High);
+        assert!(!ole_control
+            .notes
+            .iter()
+            .any(|note| note.starts_with("bin_data_reference_ambiguous")));
+    }
+
     #[test]
     fn adapter_reconstructs_textbox_subtree_with_owner_linkage_in_synthetic_input() {
         let decoded = DecodedHwp5Intermediate {
@@ -1807,7 +2040,9 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1818,16 +2053,22 @@ mod tests {
                     char_shape_runs: Vec::new(),
                     line_segments: Vec::new(),
                     controls: vec![Hwp5Control::TextBox(Hwp5TextBoxControl {
+                        standalone_render: None,
+                        original_size: None,
+                        look: None,
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 10,
                             y: 20,
                             width: 8_000,
                             height: 6_000,
                         },
                         list_header_properties: None,
+                        text_margin: None,
                         ctrl_properties: 0,
                         paragraphs: vec![Hwp5Paragraph {
+                            end_char_shape: None,
                             silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,

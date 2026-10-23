@@ -74,14 +74,19 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Carry the HWP5 layout cache (PARA_LINE_SEG) into HWPX
-        /// `<hp:linesegarray>` so the output can be rendered with `to-pdf`.
-        /// PDF replay/comparison pipelines only — the carried cache is NOT
-        /// for Hancom re-open (multi-line overlap risk). Paragraphs whose
-        /// coordinates cannot be normalized (charts, unknown controls,
-        /// ambiguous marker boundaries) drop their cache with a
-        /// LAYOUT_CACHE_DROPPED warning instead of carrying bad data.
-        #[arg(long)]
+        /// Leave the HWP5 line layout cache (PARA_LINE_SEG) out of the
+        /// output. By default it is carried into HWPX `<hp:linesegarray>`,
+        /// so the package holds the source's line breaks for `to-pdf` to
+        /// replay.
+        /// Paragraphs whose line starts cannot be placed exactly (charts,
+        /// unknown controls, line starts no boundary can tell apart) lose
+        /// their cache with a LAYOUT_CACHE_DROPPED warning instead.
+        #[arg(long, conflicts_with = "carry_layout_cache")]
+        no_layout_cache: bool,
+
+        /// Carry the layout cache — the default; accepted for scripts that
+        /// still pass it.
+        #[arg(long, hide = true)]
         carry_layout_cache: bool,
     },
 
@@ -167,7 +172,8 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Base HWPX file to inherit images from (for round-trip fidelity).
+        /// Original HWPX supplying images and trusted unchanged line caches.
+        /// Edited paragraphs and their flow tails lose caches; JSON caches are not trusted.
         #[arg(long)]
         base: Option<PathBuf>,
     },
@@ -450,8 +456,8 @@ fn main() {
         Commands::CensusHwp5 { input, companion, output } => {
             commands::census_hwp5::run(&input, &companion, &output, cli.json);
         }
-        Commands::ConvertHwp5 { input, output, carry_layout_cache } => {
-            commands::convert_hwp5::run(&input, &output, carry_layout_cache, cli.json);
+        Commands::ConvertHwp5 { input, output, no_layout_cache, carry_layout_cache: _ } => {
+            commands::convert_hwp5::run(&input, &output, !no_layout_cache, cli.json);
         }
         Commands::ToPdf { input, output, font_dirs, discovery, degraded, partial_cache_reject } => {
             commands::to_pdf::run(

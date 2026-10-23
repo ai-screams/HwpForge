@@ -56,7 +56,13 @@ fn memo_body_text(doc: &Document<hwpforge_core::Validated>) -> String {
     for para in &doc.sections()[0].paragraphs {
         for run in &para.runs {
             if let RunContent::Control(ctrl) = &run.content {
-                if let Control::Memo { content, .. } = ctrl.as_ref() {
+                if let Some(content) = match ctrl.as_ref() {
+                    Control::Memo { content, .. } => Some(content),
+                    Control::FieldBoundary {
+                        boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                    } if start.kind == "MEMO" => start.annotation.as_ref(),
+                    _ => None,
+                } {
                     return content
                         .iter()
                         .flat_map(|p| p.runs.iter())
@@ -78,7 +84,13 @@ fn encode_fixture_with_memo_body(body: RunContent) -> Vec<u8> {
     for para in &mut decoded.document.sections_mut()[0].paragraphs {
         for run in &mut para.runs {
             if let RunContent::Control(ctrl) = &mut run.content {
-                if let Control::Memo { content, .. } = ctrl.as_mut() {
+                if let Some(content) = match ctrl.as_mut() {
+                    Control::Memo { content, .. } => Some(content),
+                    Control::FieldBoundary {
+                        boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                    } if start.kind == "MEMO" => start.annotation.as_mut(),
+                    _ => None,
+                } {
                     content[0].runs[0].content = body.clone();
                     replaced = true;
                 }
@@ -147,7 +159,7 @@ fn hancom_memo_tab_roundtrips_with_attributes() {
         let mut zout = zip::ZipWriter::new(std::io::Cursor::new(&mut patched));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).expect("entry");
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
             let mut data = Vec::new();
             f.read_to_end(&mut data).expect("read entry");
@@ -218,7 +230,8 @@ fn group_text_box_tab_is_emitted() {
         hu(4000),
     );
     let group = Control::Group {
-        children: vec![text_box],
+        frame: hwpforge_core::ObjectFrame::new(),
+        children: vec![hwpforge_core::control::GroupChild::Shape(text_box)],
         width: hu(8000),
         height: hu(4000),
         placement: None,

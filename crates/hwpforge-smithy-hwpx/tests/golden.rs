@@ -653,6 +653,7 @@ fn encode_decode_line_shape() {
 
     // Build document with a single line shape
     let line_ctrl = Control::Line {
+        frame: hwpforge_core::ObjectFrame::new(),
         start: ShapePoint::new(0, 0),
         end: ShapePoint::new(14000, 0),
         width: HwpUnit::new(14000).unwrap(),

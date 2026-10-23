@@ -47,7 +47,7 @@ pub struct LinePlacement {
 ///   자연폭(LEFT)으로 둔다 (W0 실측: rules-justify 4째 줄 459.50 < 538.44).
 /// - 자연폭이 `horzsize` 를 넘으면 늘이지 않는다 (extra 0, LEFT 기점) —
 ///   음수 배분은 발명이며 실측 근거가 없다.
-/// - [`Alignment::Distribute`]/[`Alignment::DistributeSpace`] 는 W0 미실측 —
+/// - [`Alignment::Distribute`]/[`Alignment::DistributeFlush`] 는 W0 미실측 —
 ///   자연폭 + 경고 (위치는 정확, 스트레치만 포기 — no-fake-support).
 pub fn place_line(
     alignment: Alignment,

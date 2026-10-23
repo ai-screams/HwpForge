@@ -9,8 +9,15 @@
 //!   재저장 sz(있을 때) ② 표 다음 문단의 캐시 v == 마지막 조각 종료 +
 //!   outMargin.bottom (rules-pagespan3 실측 62102 = 283+48×1282+283, 0 오차)
 //!
-//! 프로파일 밖(중첩 표·caption·비기본 pos·cellSpacing≠0·분할 경계 교차
-//! rowspan·본문보다 큰 행·셀 캐시 결손·열폭 미유일)은 전부 fail-closed.
+//! 프로파일 밖(중첩 표·위아래가 아닌 caption·캐시 없는 caption·비기본
+//! pos·cellSpacing≠0·분할 경계 교차 rowspan·본문보다 큰 행·셀 캐시 결손·
+//! 열폭 미유일)은 전부 fail-closed.
+//!
+//! 표 캡션(D, 설계 4.2.1): 위·아래 캡션을 캡션 문단 캐시대로 그린다.
+//! `H_c` = 캡션 캐시의 마지막 줄 아래, 위 캡션은 표 테두리를 `H_c + gap`
+//! 만큼 내리고(첫 조각 용량도 그만큼 줄어든다) 캡션 상자 위 = host_v +
+//! om.top, 아래 캡션은 마지막 조각 아래 + gap. 상자 x = 표 테두리 왼쪽
+//! (`fullSz` 면 om.left 만큼 왼쪽). 흐름 = om.top + 표 + gap + H_c + om.bottom.
 
 use hwpforge_core::table::grid::{covered_area, GridCell, TableGrid, MAX_GRID_POSITIONS};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TablePageBreak, TableVerticalAlign};
@@ -18,10 +25,13 @@ use hwpforge_core::{BorderLineKind, FillKind};
 use hwpforge_foundation::Alignment;
 
 use super::{
-    run_utf16_spans, slice_line_runs, validate_textpos, LaidBorder, LaidLine, LaidRect, PageLayout,
+    refuse_caption_number, run_utf16_spans, slice_line_runs, validate_textpos, LaidBorder,
+    LaidLine, LaidRect, PageLayout,
 };
 use crate::text::align::LineBox;
 use crate::{PdfError, PdfInput, PdfResult, PdfWarning};
+use hwpforge_core::caption::{Caption, CaptionSide};
+use hwpforge_core::run::RunContent;
 
 /// 분할 조각 하단 예약 (HWPUNIT) — wire `outMargin.bottom` 에 더해지는
 /// 고정 여유는 실측상 불요 (rules-pagespan3: 예약 = outMargin.bottom 만으로
@@ -63,6 +73,29 @@ pub(crate) struct TableReplayOutcome {
     pub total_height: i32,
 }
 
+/// Whether the table sits in the one placement the replay supports: the
+/// default flow placement (§19.6 A — the HWPX encoder's `None`): not treated
+/// as a character, flowing with text, no overlap, paragraph/column anchors,
+/// zero offsets, top/left, no line-spacing effect, anchor not held,
+/// top-and-bottom wrap, both-sides flow. Read from Core's
+/// [`Table::placement`], not the decode-only cache, so a placement changed
+/// in JSON cannot pass on the cache's old verdict.
+///
+/// 이것을 실패시키는 것: 캐시 `default_flow_pos` 로 되돌리기
+/// (`table_admission_reads_the_core_placement`) / 비교에서 새 네 필드 중
+/// 하나를 빼기.
+pub(crate) fn placement_is_default_flow(table: &Table) -> bool {
+    use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+    table.placement.as_ref().is_none_or(|p| {
+        *p == ObjectPlacement::new(
+            ObjectTextWrap::TopAndBottom,
+            ObjectRelativeTo::Para,
+            ObjectRelativeTo::Column,
+        )
+        .with_flow_with_text(true)
+    })
+}
+
 /// 표 host 문단 하나를 재생한다. 분할 시 `pages` 에 새 쪽을 만든다.
 #[allow(clippy::too_many_arguments)] // 배치 컨텍스트 전달 — 구조체화는 W3d 정리 후보
 pub(crate) fn replay_table(
@@ -81,13 +114,11 @@ pub(crate) fn replay_table(
     };
 
     // ── admission: 검증된 프로파일 밖 = 거부 ─────────────────────
-    if table.caption.is_some() {
-        return reject("table caption");
-    }
+    let caption = table.caption.as_ref().map(|c| admit_caption(c, location)).transpose()?;
     let Some(tlc) = table.layout_cache else {
         return Err(PdfError::MissingLayoutCache { count: 1, first: location.to_string() });
     };
-    if !tlc.default_flow_pos {
+    if !placement_is_default_flow(table) {
         return reject("non-default table position");
     }
     if table.cell_spacing.is_some_and(|s| s.as_i32() != 0) {
@@ -113,8 +144,11 @@ pub(crate) fn replay_table(
     let row_heights =
         compute_row_heights(input, table, &anchors, row_count, location, depth, warnings)?;
 
+    // Keep row-based repetition: mixed title cells are preserved but do not
+    // promote a row. Hancom's help requires the first row, but does not specify
+    // mixed-row repetition; we have no verified layout oracle for that case.
     // ── 제목행 반복 블록 ─────────────────────────────────────────
-    let header_rows = table.rows.iter().take_while(|r| r.is_header).count();
+    let header_rows = table.header_row_count();
     let repeat = table.repeat_header && header_rows > 0;
     for anchor in &anchors {
         let (r, s) = (anchor.anchor.row as usize, anchor.row_span as usize);
@@ -182,7 +216,10 @@ pub(crate) fn replay_table(
     let continuation_top = om_top + if repeat { header_height } else { 0 };
     let mut frags: Vec<Frag> = Vec::new();
     let mut y0 = 0i32;
-    let mut top = host_v + om_top;
+    // D: 위 캡션은 첫 조각 위에 놓여 표를 `H_c + gap` 내린다.
+    // 이것을 실패시키는 것: 이 감산 생략(`top_caption_lowers_the_table`).
+    let top_caption_room = caption.as_ref().filter(|c| c.top).map_or(0, |c| c.height + c.gap);
+    let mut top = host_v + om_top + top_caption_room;
     loop {
         let avail = capacity_end - top;
         if total_height - y0 <= avail {
@@ -260,9 +297,37 @@ pub(crate) fn replay_table(
 
     // ── 방출: 조각 창과 교차하는 앵커를 창-절단으로 그린다 ────────
     let table_x = geom.body_left + host_h + om_left;
+    // D: 캡션 상자 x·폭 검산.
+    let caption_x = caption.as_ref().map(|c| if c.full_size { table_x - om_left } else { table_x });
+    if let Some(c) = caption.as_ref() {
+        let table_width = col_x[col_count];
+        let expected =
+            if c.full_size { table_width + om_left + om.right.as_i32() } else { table_width };
+        let saved = c.last_width.unwrap_or(table_width);
+        if saved != expected {
+            warnings.push(PdfWarning::TableCaptionWidthMismatch {
+                location: location.to_string(),
+                saved,
+                expected,
+            });
+        }
+    }
     for (fi, frag) in frags.iter().enumerate() {
         if fi > 0 {
             new_page(pages);
+        }
+        if fi == 0 {
+            if let (Some(c), Some(x)) = (caption.as_ref().filter(|c| c.top), caption_x) {
+                emit_caption(
+                    input,
+                    c,
+                    x,
+                    geom.body_top + host_v + om_top,
+                    location,
+                    pages,
+                    warnings,
+                )?;
+            }
         }
         let loc = if fi == 0 { location.to_string() } else { format!("{location}/frag{fi}") };
         if fi > 0 && repeat {
@@ -318,7 +383,22 @@ pub(crate) fn replay_table(
     let last = frags.last().ok_or_else(|| PdfError::InternalInvariant {
         detail: format!("{location}: table replay produced no fragments"),
     })?;
-    let expected_next_v = last.top_offset + (last.y1 - last.y0) + om_bottom;
+    // D: 아래 캡션은 마지막 조각 아래 gap 뒤. 같은 쪽 본문 끝을 넘으면 한컴
+    // 동작 근거가 없어 거부(다음 쪽으로 몰래 보내지 않는다).
+    // 이것을 실패시키는 것: 거부 삭제(`bottom_caption_past_the_page_end_is_refused`).
+    let bottom_room = match caption.as_ref().filter(|c| !c.top) {
+        Some(c) => {
+            let caption_top = last.top_offset + (last.y1 - last.y0) + c.gap;
+            if caption_top + c.height > geom.body_height {
+                return reject("table caption past page end");
+            }
+            let x = caption_x.unwrap_or(table_x);
+            emit_caption(input, c, x, geom.body_top + caption_top, location, pages, warnings)?;
+            c.gap + c.height
+        }
+        None => 0,
+    };
+    let expected_next_v = last.top_offset + (last.y1 - last.y0) + bottom_room + om_bottom;
     let anchor_slack = (0..row_count)
         .filter(|&ri| row_tops[ri] < last.y1 && row_tops[ri + 1] > last.y0)
         .map(|ri| row_heights[ri])
@@ -331,6 +411,159 @@ pub(crate) fn replay_table(
         split: frags.len() > 1,
         total_height: row_heights.iter().sum(),
     })
+}
+
+/// The largest magnitude a caption line value may have — the unit range
+/// ([`hwpforge_foundation::HwpUnit::MAX_VALUE`]).
+const MAX_UNIT: u32 = hwpforge_foundation::HwpUnit::MAX_VALUE.unsigned_abs();
+
+/// 표 캡션의 배치 사실 (admission 통과분).
+struct AdmittedCaption<'a> {
+    caption: &'a Caption,
+    /// 위 캡션 (`false` = 아래).
+    top: bool,
+    full_size: bool,
+    /// `H_c` — 캡션 캐시의 마지막 줄 아래.
+    height: i32,
+    gap: i32,
+    last_width: Option<i32>,
+}
+
+/// D: 표 캡션 admission — 위·아래만, 캡션 번호 거부(Q7), 캡션 문단마다 줄
+/// 캐시 필수, 글자 밖 내용 거부. 이것을 실패시키는 것: 측 검사 삭제 · 캐시
+/// 검사 삭제 · 번호 거부 삭제(`unsupported_table_captions_are_refused`).
+fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<AdmittedCaption<'a>> {
+    let top = match caption.side {
+        CaptionSide::Top => true,
+        CaptionSide::Bottom => false,
+        _ => {
+            return Err(PdfError::UnsupportedContent {
+                kind: "table caption side",
+                location: location.to_string(),
+            })
+        }
+    };
+    refuse_caption_number(Some(caption), location)?;
+    let mut height = 0i32;
+    for p in &caption.paragraphs {
+        let Some(cache) = p.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            return Err(PdfError::MissingLayoutCache {
+                count: 1,
+                first: format!("{location}/caption"),
+            });
+        };
+        if p.runs.iter().any(|r| !matches!(r.content, RunContent::Text(_))) {
+            return Err(PdfError::UnsupportedContent {
+                kind: "non-text content in table caption",
+                location: location.to_string(),
+            });
+        }
+        // D review r1 HIGH-1: the lines must cover the caption's text from
+        // its start, and no line may start past the text — or at its end,
+        // except the empty line after a closing line break (review r3 M1).
+        // A line may not start inside a surrogate pair either: the halves
+        // would be replaced without a word (review r3 M2).
+        // 이것을 실패시키는 것: 첫 줄 0 검사 삭제 · 끝 검사 삭제 · 끝 줄바꿈 뒤
+        // 빈 줄 거부 · 서로게이트 검사 삭제(`caption_lines_must_cover_the_text`,
+        // `caption_line_breaks_and_surrogates`).
+        let utf16: Vec<u16> = p.text_content().encode_utf16().collect();
+        let len = utf16.len();
+        let first = cache.lines.first().map_or(0, |seg| seg.textpos as usize);
+        let last = cache.lines.last().map_or(0, |seg| seg.textpos as usize);
+        let ends_in_break = utf16.last() == Some(&u16::from(b'\n'));
+        if len > 0 && (first != 0 || last > len || (last == len && !ends_in_break)) {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}/caption: lines start at {first} and {last} of {len} UTF-16 units"
+                ),
+            });
+        }
+        if let Some(seg) = cache.lines.iter().find(|seg| {
+            utf16.get(seg.textpos as usize).is_some_and(|&u| (0xDC00..=0xDFFF).contains(&u))
+        }) {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}/caption: a line starts at {} inside a surrogate pair",
+                    seg.textpos
+                ),
+            });
+        }
+        // D review r1 MEDIUM-3: line geometry within the unit range, so the
+        // caption box sums below cannot overflow. 이것을 실패시키는 것: 범위
+        // 검사 삭제(`caption_geometry_out_of_range_is_invalid_cache` — debug
+        // 빌드 overflow panic).
+        for seg in &cache.lines {
+            let fields = [seg.vertpos, seg.vertsize, seg.baseline, seg.horzpos, seg.horzsize];
+            let bottom = seg.vertpos.checked_add(seg.vertsize);
+            match bottom {
+                Some(bottom) if fields.iter().all(|v| v.unsigned_abs() <= MAX_UNIT) => {
+                    height = height.max(bottom);
+                }
+                _ => {
+                    return Err(PdfError::InvalidCache {
+                        detail: format!("{location}/caption: line geometry out of range"),
+                    })
+                }
+            }
+        }
+    }
+    Ok(AdmittedCaption {
+        caption,
+        top,
+        full_size: caption.full_size,
+        height,
+        gap: caption.gap.as_i32(),
+        last_width: caption.last_width.map(|w| w.as_i32()),
+    })
+}
+
+/// D: 캡션 문단 줄을 상자 원점 `(x, y)` 기준으로 놓는다 (캐시는 캡션
+/// 목록-상대 — 셀과 같은 재배치).
+fn emit_caption(
+    input: &PdfInput<'_>,
+    caption: &AdmittedCaption<'_>,
+    x: i32,
+    y: i32,
+    location: &str,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<()> {
+    for (pi, para) in caption.caption.paragraphs.iter().enumerate() {
+        let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            continue; // admit_caption 이 이미 거부 — 방어적 스킵.
+        };
+        let utf16: Vec<u16> = para.text_content().encode_utf16().collect();
+        if utf16.is_empty() {
+            continue;
+        }
+        let para_loc = format!("{location}/caption/p{pi}");
+        validate_textpos(cache, utf16.len(), &para_loc)?;
+        let run_spans = run_utf16_spans(para, warnings, &para_loc);
+        let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
+        let line_count = cache.lines.len();
+        for (li, seg) in cache.lines.iter().enumerate() {
+            let start = seg.textpos as usize;
+            let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
+            let atoms = slice_line_runs(&utf16, &run_spans, start, end)
+                .into_iter()
+                .map(crate::source::LineAtom::Text)
+                .collect();
+            let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
+                detail: format!("{para_loc}: no current page for a table caption"),
+            })?;
+            page.lines.push(LaidLine {
+                location: format!("{para_loc}/l{li}"),
+                atoms,
+                top_y: y + seg.vertpos,
+                baseline_y: y + seg.vertpos + seg.baseline,
+                vertsize: seg.vertsize,
+                line_box: LineBox { horzpos: x + seg.horzpos, horzsize: seg.horzsize },
+                is_last_line: li + 1 == line_count,
+                alignment,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// 앵커 제약(`x[c+span] − x[c] = width`)으로 열 경계 오프셋을 푼다.
@@ -435,6 +668,26 @@ pub(crate) fn cell_content_extent(
 fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     for row in &table.rows {
         for cell in &row.cells {
+            // §19.22 D3: the renderer draws line atoms at their natural width
+            // and does not squeeze them, with or without the layout cache;
+            // what Hancom does for KEEP is not confirmed. Both are refused.
+            // 이것을 실패시키는 것: 이 거부를 지우기
+            // (`squeezed_and_kept_cells_are_refused`).
+            match cell.line_wrap {
+                hwpforge_core::table::CellLineWrap::Break => {}
+                hwpforge_core::table::CellLineWrap::Squeeze => {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table cell with squeezed lines",
+                        location: location.to_string(),
+                    });
+                }
+                _ => {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table cell with kept lines",
+                        location: location.to_string(),
+                    });
+                }
+            }
             for para in &cell.paragraphs {
                 // W3 (§7 v2 D1): 3상태 — 글자취급 인라인 이미지는 통과,
                 // `[Table+Image]` 혼합은 명시 거부 (hosted-table replay 가
@@ -525,7 +778,7 @@ fn place_table_flat(
     let Some(tlc) = table.layout_cache else {
         return Err(PdfError::MissingLayoutCache { count: 1, first: location.to_string() });
     };
-    if !tlc.default_flow_pos {
+    if !placement_is_default_flow(table) {
         return reject("non-default table position");
     }
     if table.cell_spacing.is_some_and(|s| s.as_i32() != 0) {
@@ -752,8 +1005,47 @@ fn emit_anchor_clipped(
         let (clip_from, clip_to) = clip.unwrap_or((0, full_h));
         let h = clip_to - clip_from;
 
+        // F: 셀 영역(`Table::cell_zones`) 안의 칸은 채우기를 영역 borderFill 로
+        // 그린다(뒤 영역이 이김). 영역의 선은 칸 선 위에 덧그리지 않는다 —
+        // 한컴 동작 미확인이라 선이 있는 영역은 경고만.
+        // 이것을 실패시키는 것: 영역 무시(`cell_zone_fill_replaces_the_cell_fill`) /
+        // 선 있는 영역 경고 삭제.
+        let zone = table.cell_zones.iter().rev().find(|z| {
+            let (r, c) = (a.anchor.row, a.anchor.col);
+            u32::from(z.start_row) <= r
+                && r <= u32::from(z.end_row)
+                && u32::from(z.start_col) <= c
+                && c <= u32::from(z.end_col)
+        });
+        if let Some(zone) = zone {
+            let has_lines = input.styles.border_fill_lines(zone.border_fill_id).is_some_and(|l| {
+                [l.left, l.right, l.top, l.bottom].iter().any(|e| e.kind != BorderLineKind::None)
+            }) || input.styles.border_fill_has_inner_lines(zone.border_fill_id)
+                != Some(false);
+            // Review r1 HIGH-2: a zone whose border fill is not in the store
+            // would select nothing and erase the cell's own fill — the cell
+            // keeps its fill and the gap is reported.
+            // 이것을 실패시키는 것: 이 분기 삭제(`cell_zone_with_a_missing_border_fill_keeps_the_cell_fill`).
+            if input.styles.border_fill_face(zone.border_fill_id).is_none() {
+                warnings.push(PdfWarning::UnsupportedTableStyle {
+                    location: cell_loc.clone(),
+                    what: "cell zone without its border fill",
+                });
+            }
+            if has_lines {
+                warnings.push(PdfWarning::UnsupportedTableStyle {
+                    location: cell_loc.clone(),
+                    what: "cell zone border",
+                });
+            }
+        }
+        let fill_id = zone
+            .map(|z| z.border_fill_id)
+            .filter(|&id| input.styles.border_fill_face(id).is_some())
+            .or(cell.border_fill_id)
+            .or(table.border_fill_id);
         // 배경 (FillKind — 없음/미지원 구분, 게이트2 M2).
-        if let Some(id) = cell.border_fill_id.or(table.border_fill_id) {
+        if let Some(id) = fill_id {
             match input.styles.border_fill_face(id) {
                 Some(FillKind::Solid(color)) => {
                     let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
@@ -776,8 +1068,9 @@ fn emit_anchor_clipped(
                 }
                 Some(FillKind::None) | None | Some(_) => {}
             }
-            // 괘선 4변 (Solid 만 — Other 는 경고 후 생략).
-            if let Some(lines) = input.styles.border_fill_lines(id) {
+            // 괘선 4변 (Solid 만 — Other 는 경고 후 생략). 선은 늘 칸(또는 표)의 것.
+            let line_id = cell.border_fill_id.or(table.border_fill_id);
+            if let Some(lines) = line_id.and_then(|id| input.styles.border_fill_lines(id)) {
                 let edges = [
                     (lines.left, (x0, row_y), (x0, row_y + h)),
                     (lines.right, (x0 + w, row_y), (x0 + w, row_y + h)),

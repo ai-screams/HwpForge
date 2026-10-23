@@ -143,11 +143,55 @@ fn semantic_loss_returns_no_bytes_at_all() {
     );
 }
 
+/// A picture whose `binaryItemIDRef` names no package item (fixture F6:
+/// `image2` with neither a manifest item nor a BinData entry). Restyling
+/// re-encodes the whole package, which would carry the broken picture over
+/// without a word, so it is refused.
+///
+/// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+/// `ImageReferenceUnresolved` 를 `false` 갈래로 옮기는 것.
 #[test]
-fn a_document_without_fonts_has_nothing_to_rebind() {
-    // A store with shapes but no font table. If the encoder accepts it, the
-    // package decodes into a document `restyle` cannot act on, which is the
-    // one input `NoFonts` exists for.
+fn a_dangling_image_reference_refuses_the_restyle() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/images/");
+    let bytes = std::fs::read(format!("{path}f6-dangling-image.hwpx")).expect("f6 fixture");
+
+    let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
+        .expect_err("a dangling image reference must not pass silently");
+
+    assert_eq!(err.code(), OpsCode::EncodeSemanticLoss, "{err}");
+    let hwpforge::ops::OpsError::EncodeSemanticLoss { warnings, .. } = &err else {
+        panic!("wrong variant: {err:?}");
+    };
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, ["IMAGE_REFERENCE_UNRESOLVED"], "{warnings:?}");
+    assert!(warnings[0].message.contains("image2"), "{warnings:?}");
+}
+
+#[test]
+fn a_new_store_without_fonts_gets_resolvable_defaults() {
+    // 이것을 실패시키는 것: 새 문서 char/para 0 기본값 예외 제거.
+    let store = HwpxStyleStore::new();
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("글꼴 없음", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let validated = doc.validate().expect("validate");
+    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new())
+        .expect("new stores may request generated defaults");
+    assert!(HwpxDecoder::decode(&bytes).expect("decode").style_store.iter_fonts().next().is_some());
+    let out = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
+        .expect("resolvable defaults can be restyled");
+    HwpxDecoder::decode(&out.bytes).expect("restyled references stay valid");
+}
+
+#[test]
+fn a_new_store_without_fonts_cannot_repair_explicit_references() {
+    // 이것을 실패시키는 것: 원본에 없는 명시 글꼴 0을 출력 기본 정의로 수복.
     let mut store = HwpxStyleStore::new();
     store.push_char_shape(HwpxCharShape::default());
     store.push_para_shape(HwpxParaShape::default());
@@ -161,18 +205,17 @@ fn a_document_without_fonts_has_nothing_to_rebind() {
         PageSettings::a4(),
     ));
     let validated = doc.validate().expect("validate");
+    let error = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap_err();
+    assert!(error.to_string().contains("font HANGUL"));
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬바탕", lang));
+    }
     let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new())
-        .expect("a fontless store must still encode for this branch to be reachable");
-    assert!(
-        HwpxDecoder::decode(&bytes).expect("decode").style_store.iter_fonts().next().is_none(),
-        "the package must really come back without a font table"
-    );
-
-    let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
-        .expect_err("there is no base font to replace");
-
-    assert_eq!(err.code(), OpsCode::NoFonts, "{err}");
-    assert!(err.hint().is_some(), "the CLI hint points at `validate`");
+        .expect("original font definitions resolve explicit references");
+    assert!(HwpxDecoder::decode(&bytes).expect("decode").style_store.iter_fonts().next().is_some());
+    let out = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
+        .expect("resolvable defaults can be restyled");
+    HwpxDecoder::decode(&out.bytes).expect("restyled references stay valid");
 }
 
 #[test]
@@ -267,7 +310,7 @@ fn a_clean_fixture_still_reports_no_warnings() {
 /// joining it.
 #[test]
 fn every_returned_warning_is_non_semantic() {
-    let out = restyle(&fixture("sample1.hwpx"), &RestyleOptions::default().with_preset("modern"))
+    let out = restyle(&warning_fixture(), &RestyleOptions::default().with_preset("modern"))
         .expect("restyle");
 
     let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
@@ -282,4 +325,246 @@ fn every_returned_warning_is_non_semantic() {
         assert_ne!(code, "NOTE_RESTART_IGNORED", "{codes:?}");
         assert_ne!(code, "TITLE_MARK_SKIPPED", "{codes:?}");
     }
+}
+
+fn shapes_fixture(name: &str) -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/shapes/");
+    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
+}
+
+/// An input whose decode lost content is refused before encoding: the
+/// regenerated package would make the loss permanent. Both fixtures decode
+/// with exactly one `CONTENT_LOST` (a sheared group child; a group child the
+/// group slants).
+///
+/// 이것을 실패시키는 것: `restyle` 의 `reject_input_content_loss` 호출을 지우는 것.
+#[test]
+fn input_with_lost_content_is_refused() {
+    for name in ["group-sheared-child.hwpx", "group-slanted-child.hwpx"] {
+        let bytes = shapes_fixture(name);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(
+            decoded.warnings.iter().filter(|w| w.is_content_loss()).count(),
+            1,
+            "{name}: {:?}",
+            decoded.warnings
+        );
+        let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern")).unwrap_err();
+        assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{name}: {err}");
+        assert!(err.to_string().contains("input is not round-trip safe"), "{err}");
+    }
+}
+
+/// A table inside a grouped text box is no longer a loss: the group encoder
+/// keeps its size and place, so restyle goes through.
+///
+/// 이것을 실패시키는 것: 묶음 자식 안 개체에 임시 `group_nested_object` 경고를
+/// 남기는 것(거부로 바뀜).
+#[test]
+fn grouped_text_box_table_is_restyled() {
+    let bytes = shapes_fixture("group-nested-table.hwpx");
+    assert!(HwpxDecoder::decode(&bytes).unwrap().warnings.is_empty());
+    restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+}
+
+/// A TextArt whose outline Core cannot keep makes restyle refuse the input
+/// (Hancom's F14 with its TextArt given a 33-unit solid outline); the
+/// untouched F14 goes through.
+///
+/// 이것을 실패시키는 것: 글맵시 외곽선 손실 경고를 지우는 것(restyle 이 외곽선
+/// 없이 다시 씀).
+#[test]
+fn text_art_whose_outline_is_lost_is_refused() {
+    let opts = RestyleOptions::default().with_preset("modern");
+    restyle(&shapes_fixture("group-f14-textart.hwpx"), &opts).expect("plain F14 restyles");
+    let err = restyle(&shapes_fixture("group-textart-outline.hwpx"), &opts).unwrap_err();
+    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
+    assert!(err.to_string().contains("textart_outline"), "{err}");
+}
+
+/// A TextArt whose font type is HTF (Hangul font; Core keeps only TTF)
+/// makes restyle refuse the input (Hancom's F14 with `fontType="HTF"`).
+///
+/// 이것을 실패시키는 것: 글맵시 글꼴 유형 손실 경고를 지우는 것.
+#[test]
+fn text_art_with_a_hangul_font_type_is_refused() {
+    let opts = RestyleOptions::default().with_preset("modern");
+    let err = restyle(&shapes_fixture("group-textart-htf.hwpx"), &opts).unwrap_err();
+    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
+    assert!(err.to_string().contains("textart_font_type"), "{err}");
+}
+
+/// §19.22 D5: a restyle keeps every paragraph's end-mark char shape (the
+/// fixture's paragraphs end in empty runs, as Hancom writes them).
+///
+/// 이것을 실패시키는 것: 디코더가 끝 run 을 읽지 않기 / 인코더가 쓰지 않기 /
+/// 다른 문단으로 옮기거나 다른 글자 모양으로 쓰기.
+#[test]
+fn restyle_keeps_end_mark_char_shapes() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/user_samples/sample-char-breakwordlatin-variants.hwpx"
+    );
+    let source = std::fs::read(path).expect("fixture");
+    let ends = |bytes: &[u8]| {
+        let doc = HwpxDecoder::decode(bytes).expect("decode");
+        let mut out = Vec::new();
+        for p in &doc.document.sections()[0].paragraphs {
+            p.for_each_paragraph(|q| out.push(q.end_char_shape));
+        }
+        out
+    };
+    let before = ends(&source);
+    assert!(before.iter().any(Option::is_some));
+    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    // Paragraph by paragraph (review r1: a count let a moved or renumbered
+    // end mark pass).
+    assert_eq!(ends(&out.bytes), before);
+}
+
+/// S19: a restyle keeps a cell's dormant margin (its own values while it
+/// uses the table's padding).
+///
+/// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기 / 인코더가 쓰지 않기.
+#[test]
+fn restyle_keeps_dormant_cell_margins() {
+    use hwpforge::core::table::{Table, TableCell, TableMargin, TableRow};
+    use hwpforge::foundation::HwpUnit;
+
+    let cell = || {
+        TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("칸", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::new(5000).unwrap(),
+        )
+    };
+    let mut own = cell();
+    let unit = |v| HwpUnit::new(v).unwrap();
+    own.dormant_margin =
+        Some(TableMargin { left: unit(11), right: unit(12), top: unit(13), bottom: unit(14) });
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow::new(vec![own, cell()])]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let source = HwpxEncoder::encode(
+        &doc.validate().expect("validate"),
+        &minimal_store(),
+        &ImageStore::new(),
+    )
+    .expect("encode");
+    let dormant = |bytes: &[u8]| {
+        let doc = HwpxDecoder::decode(bytes).expect("decode");
+        let mut out = Vec::new();
+        for p in &doc.document.sections()[0].paragraphs {
+            for run in &p.runs {
+                if let Some(t) = run.content.as_table() {
+                    out.extend(t.rows.iter().flat_map(|r| &r.cells).map(|c| c.dormant_margin));
+                }
+            }
+        }
+        out
+    };
+    let before = dormant(&source);
+    assert!(before[0].is_some() && before[1].is_none(), "{before:?}");
+    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    assert_eq!(dormant(&out.bytes), before);
+}
+
+/// S19: a restyle writes a dormant margin Hancom left unset (`4294967295`
+/// on every side, read as -1) back as `4294967295`, not `-1` — the margin
+/// attributes are `xs:nonNegativeInteger`.
+///
+/// 이것을 실패시키는 것: 여백 속성을 i32 로 쓰기(`-1` 이 나간다) / 한 변만
+/// 부호 없는 값으로 쓰기.
+#[test]
+fn restyle_writes_an_unset_dormant_cell_margin_unsigned() {
+    use std::io::{Cursor, Read};
+
+    use hwpforge::core::table::{Table, TableCell, TableMargin, TableRow};
+    use hwpforge::foundation::HwpUnit;
+
+    let unset = HwpUnit::new(-1).unwrap();
+    let mut cell = TableCell::new(
+        vec![Paragraph::with_runs(
+            vec![Run::text("칸", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        HwpUnit::new(5000).unwrap(),
+    );
+    cell.dormant_margin =
+        Some(TableMargin { left: unset, right: unset, top: unset, bottom: unset });
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let source = HwpxEncoder::encode(
+        &doc.validate().expect("validate"),
+        &minimal_store(),
+        &ImageStore::new(),
+    )
+    .expect("encode");
+    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    let mut zip = zip::ZipArchive::new(Cursor::new(&out.bytes)).expect("zip");
+    let mut xml = String::new();
+    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut xml).unwrap();
+    let wire = r#"<hp:cellMargin left="4294967295" right="4294967295" top="4294967295" bottom="4294967295"/>"#;
+    assert_eq!(xml.matches(wire).count(), 1, "{xml}");
+    let negative = xml
+        .split("<hp:cellMargin ")
+        .skip(1)
+        .filter(|rest| rest[..rest.find("/>").expect("self-closing")].contains('-'))
+        .count();
+    assert_eq!(negative, 0, "{xml}");
+}
+
+/// C: restyling an HFT face with a substitute onto the preset's face writes
+/// the new face as TTF with no substitute and the default classification —
+/// the old face's kind, substitute and classification do not describe it.
+/// 이것을 실패시키는 것: `replace_font` 의 초기화 생략(출력에 `HFT`·`substFont`
+/// 가 남음).
+#[test]
+fn restyle_clears_the_replaced_face_metadata() {
+    use hwpforge::hwpx::style_store::{HwpxFontType, HwpxFontTypeInfo, HwpxSubstFont};
+    let mut store = HwpxStyleStore::new();
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        let mut font = HwpxFont::new(0, "휴먼명조", lang);
+        font.font_type = Some(HwpxFontType::Hft);
+        font.substitute = Some(HwpxSubstFont::new(Some(HwpxFontType::Hft), "한컴바탕"));
+        font.type_info = Some(HwpxFontTypeInfo::new("FCAT_MYUNGJO", [5, 4, 0, 1, 1, 1, 1, 1]));
+        store.push_font(font);
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("글꼴", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let before = HwpxDecoder::decode(&bytes).unwrap();
+    assert_eq!(before.style_store.iter_fonts().next().unwrap().font_type, Some(HwpxFontType::Hft));
+
+    let out = restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    let after = HwpxDecoder::decode(&out.bytes).unwrap();
+    let font = after.style_store.iter_fonts().next().unwrap();
+    assert_eq!(font.face_name, "맑은 고딕");
+    assert_eq!(font.font_type, Some(HwpxFontType::Ttf));
+    assert_eq!(font.substitute, None);
+    assert_eq!(font.type_info.as_ref().unwrap().family_type, "FCAT_GOTHIC");
 }

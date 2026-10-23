@@ -34,21 +34,22 @@
 //! removed. Interleaved inserts can therefore surface as change pairs —
 //! a documented limitation (LCS alignment is follow-up work).
 
+#[cfg(test)]
 use hwpforge_core::control::Control;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
 use hwpforge_core::table::grid::TableGrid;
 use hwpforge_core::table::Table;
-use hwpforge_foundation::FieldType;
 
-use crate::decoder::package::PackageReader;
 use crate::error::HwpxResult;
 use crate::fill::FieldInfo;
+use crate::package_path::package_error;
 use crate::read::ParaLocator;
 use crate::stamp::first_diff_path;
 use crate::table_inventory::{tables_in_document, TableEntry};
 use crate::{HwpxDecoder, HwpxDocument, HwpxFiller};
+use hwpforge_core::zip_package::open_package;
 
 /// Explicit statement of what each channel does and does not compare.
 pub const COMPARISON_NOTE: &str = "semantic = decoded Core structure; package = ZIP entries \
@@ -462,8 +463,25 @@ fn classify_pair(
         return;
     }
 
-    if let Some(changes) = try_cell_diff(&b, &r, base, base_tables) {
+    let at = format!("$.sections[{section}].paragraphs[{para}]");
+    if let Some((changes, end_marks)) = try_cell_diff(&b, &r, base, base_tables) {
         out.cells.extend(changes);
+        // §19.22 D5: a cell paragraph's end-mark char shape that changed with
+        // its text is reported on the raw axis (cell changes carry text only).
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`end_char_shape_change_is_reported_with_a_text_change`).
+        for (path, detail) in end_marks {
+            out.push_raw(format!("{at}.{path}"), detail);
+        }
+        // The host paragraph's own end mark too (review r1).
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`end_char_shape_change_is_reported_with_a_text_change`, host 경우).
+        if b.end_char_shape != r.end_char_shape {
+            out.push_raw(
+                format!("{at}.end_char_shape"),
+                format!("{:?} vs {:?}", b.end_char_shape, r.end_char_shape),
+            );
+        }
         return;
     }
 
@@ -476,63 +494,62 @@ fn classify_pair(
             before: Some(excerpt(&b_text)),
             after: Some(excerpt(&r_text)),
         });
+        // §19.22 D5: the text change does not say the end mark changed too.
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`end_char_shape_change_is_reported_with_a_text_change`).
+        if b.end_char_shape != r.end_char_shape {
+            out.push_raw(
+                format!("{at}.end_char_shape"),
+                format!("{:?} vs {:?}", b.end_char_shape, r.end_char_shape),
+            );
+        }
         return;
     }
 
-    out.push_raw(format!("$.sections[{section}].paragraphs[{para}]"), first_diff_path(&b, &r));
+    out.push_raw(at, first_diff_path(&b, &r));
 }
 
 /// Blanks every field body (recursing into table cells) so field-value
 /// changes are owned by the field axis alone.
 fn strip_field_bodies(paragraph: &Paragraph) -> Paragraph {
-    let mut p = paragraph.clone();
-    strip_in_paragraph(&mut p);
-    p
-}
-
-fn strip_in_paragraph(paragraph: &mut Paragraph) {
-    for run in &mut paragraph.runs {
-        match &mut run.content {
-            RunContent::Control(control) => {
-                // Mirror the field axis EXACTLY: `diff_fields` only reports
-                // named ClickHere fields (that is all `list_fields` emits by
-                // name), so only those bodies may be blanked here. Blanking
-                // any wider set would let a field-body change vanish from
-                // every semantic axis at once — unnamed or non-ClickHere
-                // field changes must instead fall through to `raw`.
-                if let Control::Field { field_type, name, display_text, .. } = control.as_mut() {
-                    if *field_type == FieldType::ClickHere && name.is_some() {
-                        display_text.clear();
-                    }
-                }
-            }
-            RunContent::Table(table) => {
-                for row in &mut table.rows {
-                    for cell in &mut row.cells {
-                        for p in &mut cell.paragraphs {
-                            strip_in_paragraph(p);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
+    let mut sections =
+        [Section::with_paragraphs(vec![paragraph.clone()], hwpforge_core::PageSettings::a4())];
+    let snapshot = sections.clone();
+    let inventory = FieldInventory::from_sections(&snapshot);
+    let values: Vec<_> = inventory
+        .fields()
+        .iter()
+        .filter(|f| {
+            f.kind() == "CLICK_HERE"
+                && f.name().is_some()
+                && f.editability() == FieldEditability::Editable
+        })
+        .map(|f| (f, ""))
+        .collect();
+    // Unsupported ranges remain visible on the raw axis as well.
+    FieldInventory::replace_values(&mut sections, &values);
+    sections[0].paragraphs.remove(0)
 }
 
 /// Attempts to explain a paragraph pair entirely as table-cell text
 /// changes. Returns `None` when anything else differs (falls to other
 /// classifications).
+/// Raw entries for cell paragraphs whose end-mark char shape changed, as
+/// (path relative to the host paragraph, detail).
+type EndMarkChanges = Vec<(String, String)>;
+
 fn try_cell_diff(
     base: &Paragraph,
     rev: &Paragraph,
     original_base: &Paragraph,
     base_tables: &[TableEntry<'_>],
-) -> Option<Vec<CellTextChange>> {
+) -> Option<(Vec<CellTextChange>, EndMarkChanges)> {
     if base.runs.len() != rev.runs.len() {
         return None;
     }
     let mut changes = Vec::new();
+    let mut end_marks = Vec::new();
     for (idx, (b_run, r_run)) in base.runs.iter().zip(&rev.runs).enumerate() {
         match (&b_run.content, &r_run.content) {
             (RunContent::Table(b_table), RunContent::Table(r_table)) => {
@@ -552,6 +569,22 @@ fn try_cell_diff(
                     .find(|e| std::ptr::eq(e.table, original_table.as_ref()))
                     .map(|e| e.ordinal)?;
                 collect_cell_changes(ordinal, b_table, r_table, &mut changes)?;
+                for (ri, (b_row, r_row)) in b_table.rows.iter().zip(&r_table.rows).enumerate() {
+                    for (ci, (b_cell, r_cell)) in b_row.cells.iter().zip(&r_row.cells).enumerate() {
+                        for (k, (bp, rp)) in
+                            b_cell.paragraphs.iter().zip(&r_cell.paragraphs).enumerate()
+                        {
+                            if bp.end_char_shape != rp.end_char_shape {
+                                end_marks.push((
+                                    format!(
+                                        "runs[{idx}].table.rows[{ri}].cells[{ci}].paragraphs[{k}].end_char_shape"
+                                    ),
+                                    format!("{:?} vs {:?}", bp.end_char_shape, rp.end_char_shape),
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             (b, r) if b == r => {}
             _ => return None,
@@ -560,7 +593,7 @@ fn try_cell_diff(
     if changes.is_empty() {
         None
     } else {
-        Some(changes)
+        Some((changes, end_marks))
     }
 }
 
@@ -627,10 +660,12 @@ fn cell_text(paragraphs: &[Paragraph]) -> String {
 }
 
 fn diff_package(base: &[u8], revised: &[u8]) -> HwpxResult<PackageDiff> {
-    let mut b_reader = PackageReader::new(base)?;
-    let mut r_reader = PackageReader::new(revised)?;
-    let b_entries: Vec<String> = b_reader.list_entries()?.into_iter().map(|e| e.path).collect();
-    let r_entries: Vec<String> = r_reader.list_entries()?.into_iter().map(|e| e.path).collect();
+    let mut b_reader = open_package(base, Default::default()).map_err(package_error)?;
+    let mut r_reader = open_package(revised, Default::default()).map_err(package_error)?;
+    let b_entries: Vec<String> = b_reader.entries().iter().map(|e| e.path.clone()).collect();
+    let r_entries: Vec<String> = r_reader.entries().iter().map(|e| e.path.clone()).collect();
+    let r_indices: std::collections::BTreeMap<_, _> =
+        r_entries.iter().enumerate().map(|(i, p)| (p, i)).collect();
 
     let b_set: std::collections::BTreeSet<&String> = b_entries.iter().collect();
     let r_set: std::collections::BTreeSet<&String> = r_entries.iter().collect();
@@ -641,10 +676,12 @@ fn diff_package(base: &[u8], revised: &[u8]) -> HwpxResult<PackageDiff> {
             diff.added.push(path.clone());
         }
     }
-    for path in &b_entries {
+    for (index, path) in b_entries.iter().enumerate() {
         if !r_set.contains(path) {
             diff.removed.push(path.clone());
-        } else if b_reader.read_binary_entry(path)? != r_reader.read_binary_entry(path)? {
+        } else if b_reader.read(index).map_err(package_error)?
+            != r_reader.read(r_indices[path]).map_err(package_error)?
+        {
             diff.changed.push(path.clone());
         }
     }
@@ -726,6 +763,72 @@ mod tests {
         let cut = excerpt(&long);
         assert!(cut.ends_with('…'));
         assert_eq!(cut.chars().count(), EXCERPT_MAX + 1);
+    }
+
+    /// §19.22 D5: an end-mark char shape change is reported on the raw axis
+    /// — alone (already, by the first-difference path), with a text change
+    /// of the paragraph, and with a text change of a table cell; a cell
+    /// end-mark change alone too.
+    ///
+    /// 이것을 실패시키는 것: 글자 변경과 함께일 때의 raw 보고 둘을 각각 지우기.
+    #[test]
+    fn end_char_shape_change_is_reported_with_a_text_change() {
+        let encode = |paragraphs: Vec<Paragraph>| {
+            let mut doc = hwpforge_core::Document::new();
+            doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::default()));
+            HwpxEncoder::encode(
+                &doc.validate().unwrap(),
+                &{
+                    // 이것을 실패시키는 것: 합성 fixture의 원본 charPr/paraPr 0 정의 누락.
+                    let mut store =
+                        crate::style_store::HwpxStyleStore::with_default_fonts("함초롬바탕");
+                    store.push_char_shape(crate::HwpxCharShape::default());
+                    store.push_para_shape(crate::HwpxParaShape::default());
+                    store
+                },
+                &Default::default(),
+            )
+            .unwrap()
+        };
+        let with_end = |mut p: Paragraph| {
+            p.end_char_shape = Some(CharShapeIndex::new(0));
+            p
+        };
+        let cell_host = |cell: Paragraph| {
+            let table = hwpforge_core::table::Table::new(vec![
+                hwpforge_core::table::TableRow::new(vec![hwpforge_core::table::TableCell::new(
+                    vec![cell],
+                    hwpforge_foundation::HwpUnit::new(5000).unwrap(),
+                )]),
+            ]);
+            Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let raws = |a: Vec<Paragraph>, b: Vec<Paragraph>| {
+            let diff = HwpxDiffer::diff(&encode(a), &encode(b)).unwrap();
+            diff.semantic.raw.iter().map(|r| r.path.clone()).collect::<Vec<_>>()
+        };
+        // Alone.
+        let only = raws(vec![text_para("A")], vec![with_end(text_para("A"))]);
+        assert!(only.iter().any(|p| p.contains("paragraphs[0]")), "{only:?}");
+        // With a text change.
+        let both = raws(vec![text_para("A")], vec![with_end(text_para("B"))]);
+        assert_eq!(both, ["$.sections[0].paragraphs[0].end_char_shape"]);
+        // In a cell with a text change.
+        let cell = raws(vec![cell_host(text_para("A"))], vec![cell_host(with_end(text_para("B")))]);
+        assert_eq!(
+            cell,
+            ["$.sections[0].paragraphs[0].runs[0].table.rows[0].cells[0].paragraphs[0].end_char_shape"]
+        );
+        // The host paragraph's end mark, with a cell text change.
+        let host = raws(vec![cell_host(text_para("A"))], vec![with_end(cell_host(text_para("B")))]);
+        assert_eq!(host, ["$.sections[0].paragraphs[0].end_char_shape"]);
+        // In a cell alone.
+        let cell_only =
+            raws(vec![cell_host(text_para("A"))], vec![cell_host(with_end(text_para("A")))]);
+        assert_eq!(cell_only.len(), 1, "{cell_only:?}");
     }
 
     // -- editing-chain regression gates ----------------------------------

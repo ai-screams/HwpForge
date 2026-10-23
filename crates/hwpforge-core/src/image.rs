@@ -56,6 +56,15 @@ use crate::placement::ObjectPlacement;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct Image {
+    /// Clockwise rotation of the local box, in degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f32>,
+    /// Reflection about the local box's centre, before rotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip: Option<hwpforge_foundation::Flip>,
+    /// Axis-aligned padding outside the rotated picture box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_margin: Option<crate::table::TableMargin>,
     /// Relative path within the document package (e.g. `"BinData/image1.png"`).
     pub path: String,
     /// Display width.
@@ -75,6 +84,60 @@ pub struct Image {
     /// encoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inst_id: Option<ObjectId>,
+    /// URL the picture links to: clicking the picture opens it (Hancom's
+    /// object hyperlink). `None` = the picture links nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<String>,
+    /// The part of the image the picture shows, in the image's own
+    /// coordinates ([`Self::image_extent`]). `None` = the whole image.
+    ///
+    /// The cropped part fills the picture's original box
+    /// ([`Self::effective_original_size`]), which is then scaled to the
+    /// display size (`width` × `height`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<ImageCrop>,
+    /// The size of the whole image in the coordinates [`Self::crop`] is
+    /// measured in (HWPX `<hp:imgDim>`, HWP 5.0 picture record bytes
+    /// 82–90). It cannot be derived from the image's pixels. `None` =
+    /// unknown, or the display size when there is no crop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_extent: Option<(HwpUnit, HwpUnit)>,
+    /// The picture's original box (HWPX `<hp:orgSz>`, HWP 5.0 shape
+    /// component initial size; the display size is this box scaled) and its
+    /// size lock — see [`ObjectFrame`](crate::frame::ObjectFrame). Default =
+    /// none: the original box is the display size. It is the object's box,
+    /// not the image's own coordinates ([`Self::image_extent`]).
+    #[serde(default, skip_serializing_if = "crate::frame::ObjectFrame::is_unset")]
+    pub frame: crate::frame::ObjectFrame,
+}
+
+/// The part of an image a picture shows: a rectangle in the image's own
+/// coordinates (see [`Image::image_extent`]).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::image::ImageCrop;
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let crop = ImageCrop {
+///     left: HwpUnit::ZERO,
+///     top: HwpUnit::new(1113).unwrap(),
+///     right: HwpUnit::new(7260).unwrap(),
+///     bottom: HwpUnit::new(3851).unwrap(),
+/// };
+/// assert!(crop.right > crop.left);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImageCrop {
+    /// Left edge.
+    pub left: HwpUnit,
+    /// Top edge.
+    pub top: HwpUnit,
+    /// Right edge.
+    pub right: HwpUnit,
+    /// Bottom edge.
+    pub bottom: HwpUnit,
 }
 
 impl Image {
@@ -102,6 +165,9 @@ impl Image {
         format: ImageFormat,
     ) -> Self {
         Self {
+            rotation: None,
+            flip: None,
+            in_margin: None,
             path: path.into(),
             width,
             height,
@@ -109,6 +175,10 @@ impl Image {
             caption: None,
             placement: None,
             inst_id: None,
+            hyperlink: None,
+            crop: None,
+            image_extent: None,
+            frame: crate::frame::ObjectFrame::new(),
         }
     }
 
@@ -139,7 +209,22 @@ impl Image {
     pub fn from_path(path: impl Into<String>, width: HwpUnit, height: HwpUnit) -> Self {
         let path: String = path.into();
         let format = ImageFormat::from_extension(&path);
-        Self { path, width, height, format, caption: None, placement: None, inst_id: None }
+        Self {
+            rotation: None,
+            flip: None,
+            in_margin: None,
+            path,
+            width,
+            height,
+            format,
+            caption: None,
+            placement: None,
+            inst_id: None,
+            hyperlink: None,
+            crop: None,
+            image_extent: None,
+            frame: crate::frame::ObjectFrame::new(),
+        }
     }
 
     /// Attaches a caption to the image.
@@ -147,6 +232,53 @@ impl Image {
     pub fn with_caption(mut self, caption: Caption) -> Self {
         self.caption = Some(caption);
         self
+    }
+
+    /// The original box: the frame's
+    /// [`original_size`](crate::frame::ObjectFrame::original_size), or the
+    /// displayed size when that is `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_foundation::{HwpUnit, Size};
+    ///
+    /// let w = HwpUnit::new(1000).unwrap();
+    /// let img = Image::new("BinData/a.png", w, w, ImageFormat::Png);
+    /// assert_eq!(img.effective_original_size(), Size::new(w, w));
+    /// ```
+    #[must_use]
+    pub fn effective_original_size(&self) -> hwpforge_foundation::Size {
+        self.frame
+            .original_size
+            .unwrap_or_else(|| hwpforge_foundation::Size::new(self.width, self.height))
+    }
+
+    /// Changes the displayed size the way Hancom's editor resizes a picture:
+    /// the original box stays (the box "original size" returns to), only the
+    /// scale changes. A picture without an original size first takes its
+    /// displayed size before the change.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_foundation::{HwpUnit, Size};
+    ///
+    /// let u = |v| HwpUnit::new(v).unwrap();
+    /// let mut img = Image::new("BinData/a.png", u(1000), u(500), ImageFormat::Png);
+    /// img.resize(u(2000), u(1000));
+    /// assert_eq!(img.frame.original_size, Some(Size::new(u(1000), u(500))));
+    /// ```
+    pub fn resize(&mut self, width: HwpUnit, height: HwpUnit) {
+        let before = self.effective_original_size();
+        self.width = width;
+        self.height = height;
+        // 이것을 실패시키는 것: 비교를 바꾸기 전 크기와 하기(원래 크기가
+        // 사라진다 — `picture_resize_keeps_the_original_box`).
+        self.frame.original_size =
+            (before != hwpforge_foundation::Size::new(width, height)).then_some(before);
     }
 
     /// Attaches placement metadata while preserving the existing constructor API.
@@ -523,17 +655,18 @@ mod tests {
     #[test]
     fn placement_roundtrip() {
         use crate::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
-        let img = sample_image().with_placement(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::RightOnly,
-            treat_as_char: false,
-            flow_with_text: true,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Page,
-            vert_offset: HwpUnit::new(1200).unwrap(),
-            horz_offset: HwpUnit::new(3400).unwrap(),
-        });
+        let img = sample_image().with_placement(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Page,
+            )
+            .with_text_flow(ObjectTextFlow::RightOnly)
+            .with_flow_with_text(true)
+            .with_allow_overlap(true)
+            .with_vert_offset(HwpUnit::new(1200).unwrap())
+            .with_horz_offset(HwpUnit::new(3400).unwrap()),
+        );
         let json = serde_json::to_string(&img).unwrap();
         let back: Image = serde_json::from_str(&json).unwrap();
         assert_eq!(img, back);
@@ -887,5 +1020,93 @@ mod tests {
             (1..=24).map(|i| (format!("image{i}.png"), vec![i as u8])).collect();
         let other_keys: Vec<&str> = other.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, other_keys);
+    }
+
+    /// The link round-trips; a picture without one writes no key, so JSON
+    /// from before the field reads and writes unchanged.
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn hyperlink_round_trips_and_is_absent_when_none() {
+        let w = HwpUnit::new(100).unwrap();
+        let plain = Image::new("BinData/image1.png", w, w, ImageFormat::Png);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("hyperlink"), "{json}");
+        assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), plain);
+        let mut linked = plain.clone();
+        linked.hyperlink = Some("http://www.korea.kr".to_string());
+        let json = serde_json::to_string(&linked).unwrap();
+        assert!(json.contains(r#""hyperlink":"http://www.korea.kr""#), "{json}");
+        assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), linked);
+    }
+
+    /// Crop, image extent and the frame's original size round-trip; a
+    /// picture without them writes no key, so JSON from before the fields
+    /// reads and writes unchanged.
+    /// 이것을 실패시키는 것: 세 필드 중 하나의 `skip_serializing_if` 삭제
+    /// (`null` 키가 생겨 옛 JSON 과 출력이 달라짐).
+    #[test]
+    fn crop_extent_and_original_size_round_trip_and_are_absent_when_none() {
+        let u = |v: i32| HwpUnit::new(v).unwrap();
+        let plain = Image::new("BinData/image1.png", u(100), u(50), ImageFormat::Png);
+        let json = serde_json::to_string(&plain).unwrap();
+        for key in ["crop", "image_extent", "frame", "original_size"] {
+            assert!(!json.contains(key), "{key}: {json}");
+        }
+        let old = r#"{"path":"BinData/image1.png","width":100,"height":50,"format":"Png","caption":null}"#;
+        assert_eq!(serde_json::from_str::<Image>(old).unwrap(), plain);
+
+        let mut cropped = plain.clone();
+        cropped.crop =
+            Some(ImageCrop { left: u(0), top: u(1113), right: u(7260), bottom: u(3851) });
+        cropped.image_extent = Some((u(7260), u(5040)));
+        cropped.frame.original_size = Some(hwpforge_foundation::Size::new(u(84180), u(59580)));
+        let json = serde_json::to_string(&cropped).unwrap();
+        assert!(
+            json.contains(r#""crop":{"left":0,"top":1113,"right":7260,"bottom":3851}"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""image_extent":[7260,5040]"#), "{json}");
+        assert!(
+            json.contains(r#""frame":{"original_size":{"width":84180,"height":59580}"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), cropped);
+    }
+}
+
+#[cfg(test)]
+mod standalone_contract_tests {
+    use super::*;
+    /// 이것을 실패시키는 것: None 필드를 null로 출력 / 새 선택 필드를 required로 만들기.
+    #[test]
+    fn old_json_and_optional_schema_stay_compatible() {
+        let image =
+            Image::from_path("a.png", HwpUnit::new(100).unwrap(), HwpUnit::new(200).unwrap());
+        let old = r#"{"path":"a.png","width":100,"height":200,"format":"Png","caption":null}"#;
+        let value = serde_json::to_string(&image).unwrap();
+        assert_eq!(value, old);
+        let decoded: Image = serde_json::from_str(old).unwrap();
+        assert_eq!(decoded, image);
+        let schema = serde_json::to_value(schemars::schema_for!(Image)).unwrap();
+        for field in ["rotation", "flip", "in_margin"] {
+            assert!(schema["properties"].get(field).is_some());
+            assert!(!schema["required"].as_array().unwrap().contains(&serde_json::json!(field)));
+        }
+    }
+    /// 이것을 실패시키는 것: resize에서 회전·대칭·여백 초기화 / O를 새 크기로 덮기.
+    #[test]
+    fn transform_json_and_resize_preserve_semantics() {
+        let mut image =
+            Image::from_path("a.png", HwpUnit::new(100).unwrap(), HwpUnit::new(200).unwrap());
+        image.rotation = Some(30.25);
+        image.flip = Some(hwpforge_foundation::Flip::Vertical);
+        image.in_margin = Some(crate::table::TableMargin::default());
+        let before = serde_json::to_string(&image).unwrap();
+        assert_eq!(serde_json::from_str::<Image>(&before).unwrap(), image);
+        image.resize(HwpUnit::new(300).unwrap(), HwpUnit::new(400).unwrap());
+        assert_eq!(image.rotation, Some(30.25));
+        assert_eq!(image.flip, Some(hwpforge_foundation::Flip::Vertical));
+        assert!(image.in_margin.is_some());
+        assert_eq!(image.effective_original_size().width.as_i32(), 100);
     }
 }

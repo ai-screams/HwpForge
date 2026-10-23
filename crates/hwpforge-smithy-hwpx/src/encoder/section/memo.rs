@@ -5,27 +5,23 @@ use super::*;
 
 /// Builds a `<hp:run>` XML string for a memo annotation.
 ///
-/// `anchor_xml` is the inline `<hp:t>…</hp:t>` sequence representing the
-/// visible body span the memo is attached to; it is placed *between*
-/// `<hp:fieldBegin>` and `<hp:fieldEnd>` in the same `<hp:run>`. An empty
-/// `anchor_xml` reproduces the pre-Wave-12f point-anchored layout, which
-/// 한컴 renders as `[메모 시작][필드 끝]` (the memo end marker is
-/// unpaired); see `.docs/algorithms/2026-06-01_memo_anchor_serialization.md`
-/// for why we collapse anchor_runs to a single `<hp:t>` element here.
+/// `anchor_xml` contains complete runs between the begin and end markers.
+/// Each anchor keeps its character shape and inline text attributes.
 pub(super) fn build_memo_run_xml(
     sublist_xml: &str,
     anchor_xml: &str,
     metadata: &hwpforge_core::MemoMetadata,
     char_pr_id_ref: u32,
     field_id: usize,
+    memo_create_time: Option<u64>,
 ) -> String {
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
-    let begin_id = 1_500_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_500_000_000_u64 + field_id as u64);
     // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
     let field_uid = 2_028_000_000_u64 + field_id as u64;
 
     let id = metadata.hwpx_id();
-    let command = if metadata.command.is_empty() {
+    let command = if metadata.command.is_empty() && !metadata.preserve_empty {
         // HwpForge-authored memos synthesise a minimal Command string so
         // 한컴 still pairs the field markers correctly. Format mirrors what
         // 한컴 writes for a wire-less memo.
@@ -33,8 +29,9 @@ pub(super) fn build_memo_run_xml(
     } else {
         metadata.command.clone()
     };
-    let create_datetime = if metadata.create_datetime.is_empty() {
-        iso8601_utc_now()
+    // W0: no clock read — the caller's time or the epoch.
+    let create_datetime = if metadata.create_datetime.is_empty() && !metadata.preserve_empty {
+        memo_default_datetime(memo_create_time)
     } else {
         metadata.create_datetime.clone()
     };
@@ -58,7 +55,7 @@ pub(super) fn build_memo_run_xml(
             r#"{sublist}"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
-            r#"{anchor}"#,
+            r#"</hp:run>{anchor}<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
@@ -87,17 +84,17 @@ pub(super) fn build_memo_parameters_xml(
     author: &str,
     create_datetime: &str,
 ) -> String {
-    let command_esc = escape_xml(command);
-    let id_esc = escape_xml(id);
-    let author_esc = escape_xml(author);
-    let dt_esc = escape_xml(create_datetime);
+    let command_esc = super::field::escape_field_value(command);
+    let id_esc = super::field::escape_field_value(id);
+    let author_esc = super::field::escape_field_value(author);
+    let dt_esc = super::field::escape_field_value(create_datetime);
     format!(
         concat!(
             r#"<hp:parameters cnt="7" name="">"#,
             r#"<hp:integerParam name="Prop">0</hp:integerParam>"#,
+            r#"<hp:integerParam name="Number">{num}</hp:integerParam>"#,
             r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
             r#"<hp:stringParam name="ID">{id}</hp:stringParam>"#,
-            r#"<hp:integerParam name="Number">{num}</hp:integerParam>"#,
             r#"<hp:stringParam name="Author">{author}</hp:stringParam>"#,
             r#"<hp:stringParam name="MemoShapeIDRef">{shape}</hp:stringParam>"#,
             r#"<hp:stringParam name="CreateDateTime">{dt}</hp:stringParam>"#,
@@ -112,41 +109,25 @@ pub(super) fn build_memo_parameters_xml(
     )
 }
 
-/// Serializes a memo's `anchor_runs` into an inline `<hp:t>…</hp:t>` sequence
-/// that lives between `<hp:fieldBegin type="MEMO">` and `<hp:fieldEnd>`.
-///
-/// Lossy by design: every `RunContent::Text` is concatenated into a single
-/// `<hp:t>` element; non-text runs are skipped; the per-run `char_shape_id`
-/// is *not* preserved (the surrounding `<hp:run>` already carries a single
-/// `charPrIDRef`). 한컴's own HWPX output is the same shape — a memo's
-/// anchor is a single `<hp:t>` per `<hp:run>` even when the source HWP5
-/// stream split it across char_shape changes.
-///
-/// Returns `<hp:t/>` for an empty anchor; that path reproduces the
-/// pre-Wave-12f point-anchored layout, which 한컴 mis-renders, so the
-/// projection layer should always populate `anchor_runs` when a memo's
-/// HWP5 `FieldBegin..FieldEnd` span contains text.
-///
-/// See `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` for the
-/// fidelity tradeoff and why we accept it.
-pub(super) fn build_memo_anchor_xml(anchor_runs: &[hwpforge_core::run::Run]) -> String {
-    use hwpforge_core::run::RunContent;
-    let mut text = String::new();
+/// Serializes each anchor run with its character shape and inline attributes.
+/// As with the existing memo writer, only text-bearing anchor runs are emitted.
+pub(super) fn build_memo_anchor_xml(
+    anchor_runs: &[hwpforge_core::run::Run],
+    sink: &DocumentEncodeContext,
+) -> HwpxResult<String> {
+    let mut xml = String::new();
     for run in anchor_runs {
-        if let RunContent::Text(s) = &run.content {
-            text.push_str(s);
-        }
-        // Non-text variants are dropped; a memo anchor cannot wrap
-        // tables/images/nested controls in HWPX, and 한컴 does not produce
-        // such anchors. If they ever appear, the lossy collapse here is
-        // strictly preferable to emitting an empty anchor (the old buggy
-        // path) — both bug 1 (wrong anchor position) and bug 2 (`[필드 끝]`
-        // mis-label) regress if the anchor is empty.
+        let text = match &run.content {
+            RunContent::Text(s) => build_text_element_xml(s),
+            RunContent::InlineText(t) => build_inline_text_element_xml(t),
+            _ => continue,
+        };
+        xml.push_str(&format!(
+            r#"<hp:run charPrIDRef="{}">{text}</hp:run>"#,
+            sink.output_id("charPr", run.char_shape_id.get())?
+        ));
     }
-    if text.is_empty() {
-        return "<hp:t/>".to_string();
-    }
-    build_text_element_xml(&text)
+    Ok(xml)
 }
 
 /// Encodes memo body paragraphs as an XML string for embedding inside fieldBegin.
@@ -159,7 +140,7 @@ pub(super) fn encode_memo_sublist(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     sink.enter(crate::decoder::PathSeg::Memo);
     let sublist_result =

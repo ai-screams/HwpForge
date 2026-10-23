@@ -40,6 +40,7 @@ fn line_run(
 ) -> Run {
     Run::control(
         Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start,
             end,
             width: HwpUnit::new(width).unwrap(),
@@ -281,6 +282,7 @@ fn main() {
     paragraphs.push(Paragraph::with_runs(
         vec![Run::control(
             Control::Line {
+                frame: hwpforge_core::ObjectFrame::new(),
                 start: ShapePoint::new(0, 0),
                 end: ShapePoint::new(30000, 0),
                 width: HwpUnit::new(30000).unwrap(),
@@ -307,6 +309,7 @@ fn main() {
     paragraphs.push(Paragraph::with_runs(
         vec![Run::control(
             Control::Line {
+                frame: hwpforge_core::ObjectFrame::new(),
                 start: ShapePoint::new(0, 0),
                 end: ShapePoint::new(30000, 5000),
                 width: HwpUnit::new(30000).unwrap(),

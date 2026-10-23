@@ -96,7 +96,7 @@ impl Record {
     ///
     /// Returns an empty `Vec` for an empty stream. Any partial record at the
     /// end of the stream is treated as a parse error. Rejects streams whose
-    /// record count exceeds [`MAX_RECORDS_PER_STREAM`] to bound the worst-case
+    /// record count exceeds `MAX_RECORDS_PER_STREAM` to bound the worst-case
     /// `Vec<Record>` a hostile stream of minimal records could amplify into.
     pub fn parse_stream(reader: &mut impl Read) -> Hwp5Result<Vec<Record>> {
         Self::parse_stream_capped(reader, MAX_RECORDS_PER_STREAM)

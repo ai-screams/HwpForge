@@ -153,7 +153,7 @@ fn hwpx_changed_entries(base: &Path, patched: &Path) -> Vec<String> {
     for index in 0..base_zip.len() {
         let name = {
             let file = base_zip.by_index(index).expect("base entry by index");
-            file.name().to_string()
+            file.name().expect("ZIP entry name").to_string()
         };
         let mut base_file = base_zip.by_name(&name).expect("base entry exists");
         let mut patched_file = patched_zip.by_name(&name).expect("patched entry exists");
@@ -402,7 +402,9 @@ fn assert_valid_hwpx(path: &Path) {
     let mut archive = ZipArchive::new(cursor).expect("open hwpx zip");
     for index in 0..archive.len() {
         let mut file = archive.by_index(index).expect("zip entry by index");
-        if !(file.name().ends_with(".xml") || file.name().ends_with(".hpf")) {
+        if !(file.name().expect("ZIP entry name").ends_with(".xml")
+            || file.name().expect("ZIP entry name").ends_with(".hpf"))
+        {
             continue;
         }
 
@@ -411,7 +413,7 @@ fn assert_valid_hwpx(path: &Path) {
         assert!(
             !content.contains(&0),
             "xml entry {} contains NUL byte in {}",
-            file.name(),
+            file.name().expect("ZIP entry name"),
             path.display()
         );
     }
@@ -1021,7 +1023,7 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     let tampered_xml = section_xml.replace(r#"binaryItemIDRef="host""#, r#"binaryItemIDRef="""#);
 
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).expect("entry").name().to_string())
+        .map(|i| archive.by_index(i).expect("entry").name().expect("ZIP entry name").to_string())
         .collect();
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (index, name) in names.iter().enumerate() {
@@ -1185,7 +1187,7 @@ fn audit_hwp5_human_report() {
     assert_eq!(code, 0);
     assert!(stdout.contains("Audit:"));
     assert!(stdout.contains("Status:"));
-    assert!(stdout.contains("Source metrics come from parser-backed HWP5 semantic truth."));
+    assert!(stdout.contains("independent raw record census"));
     assert!(stdout.contains("Visual Checklist:"));
     assert!(stdout.contains("tables"));
 }
@@ -1382,8 +1384,12 @@ fn audit_hwp5_table_border_fill_notes_source_truth() {
 
 #[test]
 fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
-    // W4 표면 게이트: human 모드 요약 라인 + `--json` 의 warning_details 에
-    // 집계 드롭 경고(부처 실물 fixture 의 중첩 'foot' 1건)가 우선 노출된다.
+    // W4 표면 게이트였던 부처 실물 fixture 의 집계 드롭 경고(표 칸 안 'foot'
+    // 1건)는 §19.7 F 로 사라졌다 — 칸 안 꼬리말을 이제 구역 꼬리말로 옮긴다.
+    // human 요약 라인·`--json` warning_details 표면은 그대로 확인하고, 집계
+    // 경고의 문구·묶음은 projection 단위 테스트
+    // (`unknown_control_drops_are_aggregated_into_one_warning_per_id`)가 잠근다.
+    // 이것을 실패시키는 것: 칸 안 꼬리말을 다시 버리기(경고 재등장·꼬리말 0).
     let tmp = test_tmp();
     let source = fixture("table_20_real_world_ministry_stress.hwp");
 
@@ -1391,7 +1397,7 @@ fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
     let (stdout, _, code) =
         run(&["convert-hwp5", source.to_str().unwrap(), "-o", out_h.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("Converted") && stdout.contains("warnings"), "{stdout}");
+    assert!(stdout.contains("Converted"), "{stdout}");
 
     let out_j = tmp.join("stress_json.hwpx");
     let (val, _, code) =
@@ -1399,12 +1405,18 @@ fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
     assert_eq!(code, 0);
     let details = val["warning_details"].as_array().expect("details array");
     assert!(
-        details
-            .first()
-            .and_then(|d| d.as_str())
-            .is_some_and(|d| d.contains("unknown_control") && d.contains("'foot'")),
-        "집계 경고가 첫 항목이어야 함: {details:?}"
+        !details.iter().filter_map(|d| d.as_str()).any(|d| d.contains("'foot'")),
+        "the cell footer is carried, not dropped: {details:?}"
     );
+    let file = std::fs::File::open(&out_j).expect("open hwpx");
+    let mut zip = zip::ZipArchive::new(file).expect("zip");
+    let mut xml = String::new();
+    std::io::Read::read_to_string(
+        &mut zip.by_name("Contents/section0.xml").expect("section0"),
+        &mut xml,
+    )
+    .expect("read section0");
+    assert_eq!(xml.matches("<hp:footer ").count(), 1, "the cell footer reaches the section");
 }
 
 #[test]
@@ -1455,19 +1467,32 @@ fn convert_hwp5_pagectl_native_fixtures_carry_newnum_and_pagehiding() {
 }
 
 #[test]
-fn convert_hwp5_carry_layout_cache_flag_emits_linesegarray() {
-    // W4: `--carry-layout-cache` 는 HWP5 조판 캐시를 HWPX linesegarray 로
-    // 실어 to-pdf 재생을 가능하게 한다 (기본 = 미방출 — 한컴 재개봉 안전).
+fn convert_hwp5_carries_the_layout_cache_unless_told_not_to() {
+    // The default carries the HWP5 line cache into HWPX linesegarray;
+    // `--no-layout-cache` leaves it out; the old `--carry-layout-cache`
+    // is still accepted (it asks for the default) but not with its opposite.
+    // 이것을 실패시키는 것: 디스패치를 `!no_layout_cache` 대신 `carry_layout_cache` 로.
     let tmp = test_tmp();
     let source = fixture("table_09c_page_break_none.hwp");
+    let default = tmp.join("carry_default.hwpx");
     let plain = tmp.join("carry_off.hwpx");
     let carried = tmp.join("carry_on.hwpx");
 
     let (val, _, code) =
-        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", plain.to_str().unwrap()]);
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", default.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert_eq!(val["status"], "ok");
     assert!(val["warning_details"].is_array(), "W4: JSON 에 경고 상세 채널");
+
+    let (val, _, code) = run_json(&[
+        "convert-hwp5",
+        source.to_str().unwrap(),
+        "-o",
+        plain.to_str().unwrap(),
+        "--no-layout-cache",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
 
     let (val, _, code) = run_json(&[
         "convert-hwp5",
@@ -1490,14 +1515,26 @@ fn convert_hwp5_carry_layout_cache_flag_emits_linesegarray() {
         .expect("read section xml");
         xml
     };
+    assert!(read_section(&default).contains("<hp:linesegarray>"), "기본은 linesegarray 방출");
     assert!(
         !read_section(&plain).contains("<hp:linesegarray>"),
-        "기본은 캐시 미방출 (한컴 재개봉 안전)"
+        "--no-layout-cache 는 캐시 미방출"
     );
-    assert!(
-        read_section(&carried).contains("<hp:linesegarray>"),
-        "--carry-layout-cache 는 linesegarray 방출"
+    assert_eq!(
+        std::fs::read(&default).unwrap(),
+        std::fs::read(&carried).unwrap(),
+        "--carry-layout-cache 는 기본과 같은 출력"
     );
+
+    let (_, stderr, code) = run(&[
+        "convert-hwp5",
+        source.to_str().unwrap(),
+        "-o",
+        tmp.join("both.hwpx").to_str().unwrap(),
+        "--no-layout-cache",
+        "--carry-layout-cache",
+    ]);
+    assert_ne!(code, 0, "두 플래그를 함께 주면 거부: {stderr}");
 }
 
 #[test]
@@ -2228,8 +2265,9 @@ fn census_hwp5_companion_with_malformed_section_xml_fails_instead_of_truncating(
     let broken_xml = section_xml.replacen("<hp:t>", "<hp:t>x</hp:T><hp:t>", 1);
     assert_ne!(broken_xml, section_xml, "fixture must contain an <hp:t> to corrupt");
 
-    let names: Vec<String> =
-        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().expect("ZIP entry name").to_string())
+        .collect();
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (index, name) in names.iter().enumerate() {
         if name == "Contents/section0.xml" {
@@ -4466,6 +4504,26 @@ fn fill_named_field_end_to_end() {
 }
 
 #[test]
+fn fill_reports_a_removed_control_character() {
+    // 이것을 실패시키는 것: ops `fill` 이 인코드 경고 채널을 `warnings` 에 합치지 않는 것.
+    let f = fixture("clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled_ctrl.hwpx");
+    let (value, _, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=a\u{1}b",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "XML_FORBIDDEN_CHARS_REMOVED", "{value}");
+    let (again, _, _) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(again["fields"][0]["current"], "ab");
+}
+
+#[test]
 fn fill_unknown_name_reports_available_fields() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();
@@ -6219,4 +6277,494 @@ fn convert_hwp5_fifo_over_the_size_cap_reports_hwp5_decode_failed() {
     assert_eq!(code, 2, "stderr: {stderr}, value: {val}");
     assert_eq!(val["code"], "HWP5_DECODE_FAILED", "{val}");
     assert!(!out.exists());
+}
+
+// ─── S20: the object frame answer key ───
+
+/// `(kind, orgSz, sz protect)` of every object that has its own `<hp:pos>`
+/// (the objects Hancom places), in document order across sections.
+fn frame_answer(path: &Path) -> Vec<(String, Option<(u32, u32)>, Option<String>)> {
+    use quick_xml::events::Event;
+    const KINDS: [&str; 11] = [
+        "rect",
+        "ellipse",
+        "arc",
+        "polygon",
+        "curve",
+        "line",
+        "connectLine",
+        "pic",
+        "container",
+        "textart",
+        "ole",
+    ];
+    let mut out = Vec::new();
+    for index in 0.. {
+        let entry = format!("Contents/section{index}.xml");
+        if !hwpx_has_entry(path, &entry) {
+            break;
+        }
+        let xml = read_hwpx_entry(path, &entry);
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        // Open elements: (local name, slot in `found` when it is an object).
+        let mut stack: Vec<(String, Option<usize>)> = Vec::new();
+        let mut found: Vec<(String, Option<(u32, u32)>, Option<String>, bool)> = Vec::new();
+        loop {
+            let event = reader.read_event().expect("section xml");
+            let (start, empty) = match &event {
+                Event::Start(s) => (Some(s.clone()), false),
+                Event::Empty(s) => (Some(s.clone()), true),
+                Event::End(_) => {
+                    stack.pop();
+                    continue;
+                }
+                Event::Eof => break,
+                _ => continue,
+            };
+            let start = start.unwrap();
+            let name = start.local_name().as_ref().to_owned();
+            let attr = |key: &str| {
+                start
+                    .attributes()
+                    .flatten()
+                    .find(|a| a.key.local_name().as_ref() == key)
+                    .map(|a| a.value.to_string())
+            };
+            if let Some(&(_, Some(slot))) = stack.last() {
+                let record = &mut found[slot];
+                match name.as_str() {
+                    "orgSz" => {
+                        let n = |k| attr(k).and_then(|v| v.parse().ok()).unwrap_or(0);
+                        record.1 = Some((n("width"), n("height")));
+                    }
+                    "sz" => record.2 = attr("protect"),
+                    "pos" => record.3 = true,
+                    _ => {}
+                }
+            }
+            let slot = KINDS.contains(&name.as_str()).then(|| {
+                found.push((name.clone(), None, None, false));
+                found.len() - 1
+            });
+            if !empty {
+                stack.push((name, slot));
+            }
+        }
+        out.extend(found.into_iter().filter(|r| r.3).map(|r| (r.0, r.1, r.2)));
+    }
+    out
+}
+
+/// Hancom twins carrying original sizes other than the displayed ones:
+/// plain shapes, a text-art, group boxes (scaled, nested, mirrored) and
+/// pictures (cropped, resized, in a cell, beside a text box).
+const FRAME_TWINS: [&str; 11] = [
+    "shapes/line_simple",
+    "shapes/polygon_simple",
+    "shapes/textart_multiline",
+    "shapes/group-f1-g1-scaled",
+    "shapes/group-f1-g4-nested",
+    "shapes/group-f8-poly-margin",
+    "images/img_04_images_with_crop_or_resize",
+    "images/real_crop_vs_original_two_objects",
+    "tables/table_07_image_in_merged_cell",
+    "mixed/mixed_02b_textbox_with_image_real",
+    "user_samples/sample-gso-connectline-native",
+];
+
+/// S20 answer key (§19.23.19 gates 2·3): an HWP 5.0 file converted carries
+/// the original size and size lock Hancom writes in its own HWPX twin, and
+/// the twin read and written again keeps them.
+/// 이것을 실패시키는 것: HWP5 초기 크기를 버리기(convert 쪽) / 인코더가 orgSz 를
+/// 표시 크기로 쓰기(재인코드 쪽) / 같은 파일끼리 비교하는 측정 오류(개수 0 단언).
+#[test]
+fn frame_answer_key_matches_hancom() {
+    let tmp = test_tmp();
+    for (i, stem) in FRAME_TWINS.iter().enumerate() {
+        let twin = fixture(&format!("{stem}.hwpx"));
+        let answer = frame_answer(&twin);
+        assert!(
+            answer.iter().any(|r| r.1.is_some()),
+            "{stem}: the answer key holds no original size"
+        );
+
+        let converted = tmp.join(format!("c{i}.hwpx"));
+        let source = fixture(&format!("{stem}.hwp"));
+        let (_, stderr, code) =
+            run(&["convert-hwp5", source.to_str().unwrap(), "-o", converted.to_str().unwrap()]);
+        assert_eq!(code, 0, "{stem}: {stderr}");
+        assert_eq!(frame_answer(&converted), answer, "{stem}: converted");
+
+        let json = tmp.join(format!("r{i}.json"));
+        let rewritten = tmp.join(format!("r{i}.hwpx"));
+        let (_, stderr, code) =
+            run(&["to-json", twin.to_str().unwrap(), "-o", json.to_str().unwrap()]);
+        assert_eq!(code, 0, "{stem}: {stderr}");
+        let (_, stderr, code) =
+            run(&["from-json", json.to_str().unwrap(), "-o", rewritten.to_str().unwrap()]);
+        assert_eq!(code, 0, "{stem}: {stderr}");
+        assert_eq!(frame_answer(&rewritten), answer, "{stem}: re-encoded");
+    }
+
+    // A group whose leaves are turned keeps no original box (§19.23.13): its
+    // `orgSz` is its shown size, 61801 x 10579, where Hancom writes 41203 x
+    // 10579 — the one known exception, from both readers.
+    // 이것을 실패시키는 것: HWP5 투영이 돌린 잎 묶음에 원래 상자를 두고 인코더 묶음
+    // fallback 도 끄기(둘 중 하나만이면 다른 쪽이 막는다 — 각각 단위 테스트가 지킨다).
+    let stem = "shapes/group-f10-rot-then-scale";
+    let shown = vec![("container".to_string(), Some((61801, 10579)), Some("0".to_string()))];
+    assert_eq!(frame_answer(&fixture(&format!("{stem}.hwpx")))[0].1, Some((41203, 10579)));
+    let converted = tmp.join("f10.hwpx");
+    let source = fixture(&format!("{stem}.hwp"));
+    let (_, stderr, code) =
+        run(&["convert-hwp5", source.to_str().unwrap(), "-o", converted.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(frame_answer(&converted), shown, "{stem}: converted");
+}
+
+/// A size lock (`<hp:sz protect="1">`) on a Hancom shape survives reading and
+/// writing (§19.23.19 gate 3: no `protect` exception).
+/// 이것을 실패시키는 것: 디코더가 protect 를 읽지 않기 / 인코더가 0 을 쓰기.
+#[test]
+fn size_lock_round_trips_through_json() {
+    use zip::write::SimpleFileOptions;
+    let tmp = test_tmp();
+    let source = fixture("shapes/x6-fill.hwpx");
+    let locked = tmp.join("locked.hwpx");
+    {
+        let mut archive = ZipArchive::new(std::fs::File::open(&source).unwrap()).unwrap();
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&locked).unwrap());
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let name = file.name().expect("ZIP entry name").to_string();
+            if name == "Contents/section0.xml" {
+                let mut xml = String::new();
+                file.read_to_string(&mut xml).unwrap();
+                let xml = xml.replace("protect=\"0\"", "protect=\"1\"");
+                writer.start_file(name, SimpleFileOptions::default()).unwrap();
+                writer.write_all(xml.as_bytes()).unwrap();
+            } else {
+                writer.raw_copy_file(file).unwrap();
+            }
+        }
+        writer.finish().unwrap();
+    }
+    let answer = frame_answer(&locked);
+    assert!(answer.len() >= 2 && answer.iter().all(|r| r.2.as_deref() == Some("1")), "{answer:?}");
+
+    let json = tmp.join("locked.json");
+    let rewritten = tmp.join("rewritten.hwpx");
+    let (_, stderr, code) =
+        run(&["to-json", locked.to_str().unwrap(), "-o", json.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) =
+        run(&["from-json", json.to_str().unwrap(), "-o", rewritten.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(frame_answer(&rewritten), answer);
+}
+
+/// W0 G-det (a): two separate processes convert each input to the same
+/// bytes, with and without the layout cache — pictures, memos (whose time
+/// comes from the file, not the clock) and a chart.
+/// 이것을 실패시키는 것: 프로세스마다 다른 id 출발점(할당기를 pid 에서 시작).
+/// 시계 의존은 두 실행이 같은 초에 끝나면 못 잡는다 — 그것은 인코더 단위
+/// 시험(`memo_time_comes_from_the_caller_not_the_clock`)이 잡는다.
+#[test]
+fn hwp5_conversion_is_byte_stable_across_processes() {
+    let tmp = test_tmp();
+    for name in [
+        "images/img_03_two_images_png_jpg.hwp",
+        "user_samples/sample-memo-basic.hwp",
+        "user_samples/sample-memo-multiple.hwp",
+        "charts/chart_01_single_column.hwp",
+    ] {
+        let source = resolve_workspace_fixture_path(name);
+        for carry in [false, true] {
+            let outs: Vec<Vec<u8>> = (0..2)
+                .map(|run_index| {
+                    let out =
+                        tmp.join(format!("{}_{carry}_{run_index}.hwpx", name.replace('/', "_")));
+                    let mut args =
+                        vec!["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()];
+                    if !carry {
+                        args.push("--no-layout-cache");
+                    }
+                    let (_, stderr, code) = run(&args);
+                    assert_eq!(code, 0, "{name}: {stderr}");
+                    std::fs::read(&out).unwrap()
+                })
+                .collect();
+            assert_eq!(outs[0], outs[1], "{name} carry={carry}");
+        }
+    }
+}
+
+#[test]
+fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
+    let dir = test_tmp();
+    let input = dir.join("legacy.json");
+    let output = dir.join("out.hwpx");
+    std::fs::write(&input, r#"{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}"#).unwrap();
+    let out = Command::new(hwpforge_bin())
+        .arg("--json")
+        .arg("from-json")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let text =
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("LEGACY_JSON_TABS"), "{text}");
+    assert!(text.contains("원래 단위와 case/default 척도를 복구할 수 없어"), "{text}");
+    assert!(text.contains("$.styles.tabs[0].stops[0].position"), "{text}");
+    assert!(text.contains("1건"), "{text}");
+    assert!(text.contains("원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오."));
+    assert!(!output.exists());
+}
+
+// 이것을 실패시키는 것: 검증한 masterpage00.xml 경로를 masterpage0.xml로 재구성하기.
+#[test]
+fn master_part_leading_zero_is_shared_by_decoder_audit_census_and_raw_counts() {
+    let source = fixture("master_pages/f5b-optional-page3.hwp");
+    let original = std::fs::read(fixture("master_pages/f5b-optional-page3.hwpx")).unwrap();
+    let mut archive = ZipArchive::new(std::io::Cursor::new(&original)).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        let renamed = name.replace("masterpage0.xml", "masterpage00.xml");
+        if name == "Contents/content.hpf" {
+            data = String::from_utf8(data)
+                .unwrap()
+                .replace("masterpage0.xml", "masterpage00.xml")
+                .into_bytes();
+        }
+        writer.start_file(renamed, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    let bytes = writer.finish().unwrap().into_inner();
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).unwrap();
+    let reference = hwpforge_smithy_hwpx::HwpxDecoder::decode(&original).unwrap();
+    assert_eq!(decoded.document.sections(), reference.document.sections());
+    let mut pkg = hwpforge_smithy_hwpx::PackageReader::new(&bytes).unwrap();
+    assert_eq!(
+        hwpforge_smithy_hwpx::master_page_part_paths(&mut pkg).unwrap(),
+        vec![vec!["Contents/masterpage00.xml".to_string()]]
+    );
+    let path = test_tmp().join("leading-zero.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    // audit invokes both master evidence and raw_counts::compare; compare all
+    // metrics with the unchanged companion so neither consumer can be skipped.
+    let companion = fixture("master_pages/f5b-optional-page3.hwpx");
+    let (before, _, before_code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), companion.to_str().unwrap()]);
+    let (after, stderr, code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), path.to_str().unwrap()]);
+    assert_eq!(code, before_code, "{stderr}");
+    assert_eq!(code, 0, "{after}");
+    assert_eq!(after["comparisons"], before["comparisons"]);
+    assert!(after["comparisons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|metric| metric["field"] == "raw.sections[0].para_text_chars"));
+    let (census, stderr, code) =
+        run_json(&["census-hwp5", source.to_str().unwrap(), "--companion", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        census["companion"]["master_path_inventory"].to_string().contains("masterpage00.xml"),
+        "{census}"
+    );
+}
+
+mod hancom_wire {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support/hancom.rs"));
+}
+
+/// 이것을 실패시키는 것: HWP5 bit 18 오독 / 감사에서 셀 제목값을 행 단위로 복제.
+#[test]
+fn audit_hwp5_cell_header_hancom_matches_source() {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/tables");
+    let (value, _, code) = run_json(&[
+        "audit-hwp5",
+        base.join("f1-cell-headers.hwp").to_str().unwrap(),
+        base.join("f1-cell-headers.hwpx").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    for side in ["source", "output"] {
+        let cells =
+            value[side]["table_properties"]["cell_evidence"].as_array().expect("cell evidence");
+        let flags: Vec<_> = cells
+            .iter()
+            .filter(|c| c["table_ordinal"] == 0 && c["row"] == 0)
+            .map(|c| c["is_header"].as_bool().unwrap_or(false))
+            .collect();
+        let expected: Vec<_> =
+            hancom_wire::wire_headers(&std::fs::read(base.join("f1-cell-headers.hwpx")).unwrap())
+                .into_iter()
+                .map(|v| v != 0)
+                .collect();
+        assert_eq!(flags, expected, "{side}");
+    }
+}
+
+/// 이것을 실패시키는 것: 원시 compose/table/table_controls 비교를 강제 일치시킴 /
+/// 중첩 표 텍스트 집계를 강제 일치시킴 / 원시 비교 제거 /
+/// 원본 표 집계를 semantic parser로 되돌림. 각각 실제 변이로 실패를 확인한다.
+/// 실제 nextest 변이 확인: raw_counts의 문자 source/output에 모두 +1을 적용하면
+/// 표 제거 후 30/2로 차이 28 단언은 통과하지만 source 절대값 30 != 29로 실패한다.
+/// 표가 남은 output에만 +1을 적용해도 차이 단언은 통과하고 native output의
+/// 절대값 30 != 29로 실패한다. 두 변이는 실행 후 원복했다.
+#[test]
+fn audit_hwp5_raw_records_detect_nested_content_loss() {
+    for (name, tag, metric) in [
+        ("hancom_controls/f2-compose-links.hwp", "compose", "compose_controls"),
+        ("hancom_controls/f3-group-tables.hwp", "tbl", "table_records"),
+    ] {
+        let source = fixture(name);
+        let twin = source.with_extension("hwpx");
+        let twin_bytes = std::fs::read(&twin).unwrap();
+        let twin_xml = hwpforge_smithy_hwpx::PackageReader::new(&twin_bytes)
+            .unwrap()
+            .read_section_xml(0)
+            .unwrap();
+        let mut reader = quick_xml::Reader::from_str(&twin_xml);
+        reader.config_mut().expand_empty_elements = true;
+        let mut count = 0;
+        let mut all_text = String::new();
+        let mut table_text = String::new();
+        let mut table_depth = 0;
+        let mut in_text = false;
+        loop {
+            use quick_xml::events::Event;
+            match reader.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) => {
+                    if e.local_name().as_ref() == tag {
+                        count += 1;
+                    }
+                    if e.local_name().as_ref() == "tbl" {
+                        table_depth += 1;
+                    }
+                    if e.local_name().as_ref() == "t" {
+                        in_text = true;
+                    }
+                }
+                Event::Text(t) if in_text => {
+                    let text = t.xml_content(quick_xml::XmlVersion::Explicit1_0);
+                    all_text.push_str(&text);
+                    if table_depth > 0 {
+                        table_text.push_str(&text);
+                    }
+                }
+                Event::End(e) => {
+                    if e.local_name().as_ref() == "tbl" {
+                        table_depth -= 1;
+                    }
+                    if e.local_name().as_ref() == "t" {
+                        in_text = false;
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert!(count > 0);
+        let expected = count.to_string();
+        let tmp = test_tmp();
+        let full = tmp.join("full.hwpx");
+        hwpforge_convert::hwp5_to_hwpx(&source, &full).unwrap();
+        let (good, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), full.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        let key = format!("raw.sections[0].{metric}");
+        let find = |v: &serde_json::Value| {
+            v["comparisons"].as_array().unwrap().iter().find(|v| v["field"] == key).unwrap().clone()
+        };
+        let (native, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), twin.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        assert_eq!(find(&native)["source"], expected);
+        assert_eq!(find(&native)["verdict"], "MATCH");
+        assert_eq!(find(&good)["source"], expected);
+        assert_eq!(find(&good)["verdict"], "MATCH");
+        if tag == "tbl" {
+            assert_eq!(good["source"]["totals"]["tables"], count);
+            assert_eq!(good["source"]["sections"][0]["tables"], count);
+        }
+        let input = std::fs::read(&full).unwrap();
+        let mut zip = ZipArchive::new(std::io::Cursor::new(input)).unwrap();
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
+                let mut xml = String::from_utf8(bytes).unwrap();
+                let open = format!("<hp:{tag} ");
+                let close = format!("</hp:{tag}>");
+                while let Some(start) = xml.find(&open) {
+                    let end = start + xml[start..].find(&close).unwrap() + close.len();
+                    xml.replace_range(start..end, "");
+                }
+                bytes = xml.into_bytes();
+            }
+            writer
+                .start_file(
+                    entry.name().expect("ZIP entry name"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let damaged = tmp.join("lost.hwpx");
+        std::fs::write(&damaged, writer.finish().unwrap().into_inner()).unwrap();
+        let (bad, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), damaged.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        assert_eq!(bad["status"], "mismatch");
+        assert_eq!(find(&bad)["source"], expected);
+        assert_eq!(find(&bad)["output"], "0");
+        assert_eq!(find(&bad)["verdict"], "DIFF");
+        if tag == "tbl" {
+            let controls = bad["comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["field"] == "raw.sections[0].table_controls")
+                .unwrap();
+            assert_eq!(controls["source"], expected);
+            assert_eq!(controls["output"], "0");
+            assert_eq!(controls["verdict"], "DIFF");
+            let chars = bad["comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["field"] == "raw.sections[0].para_text_chars")
+                .unwrap();
+            let before: usize = chars["source"].as_str().unwrap().parse().unwrap();
+            let after: usize = chars["output"].as_str().unwrap().parse().unwrap();
+            let total_chars = all_text.chars().count();
+            let table_chars = table_text.chars().count();
+            assert_eq!(before - after, table_chars);
+            for (label, report, output_chars) in [
+                ("table-removed", &bad, total_chars - table_chars),
+                ("native", &native, total_chars),
+                ("converted", &good, total_chars),
+            ] {
+                let metric = report["comparisons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v["field"] == "raw.sections[0].para_text_chars")
+                    .unwrap();
+                assert_eq!(metric["source"], total_chars.to_string(), "{label}: source chars");
+                assert_eq!(metric["output"], output_chars.to_string(), "{label}: output chars");
+            }
+            assert_eq!(chars["verdict"], "DIFF");
+        }
+    }
 }

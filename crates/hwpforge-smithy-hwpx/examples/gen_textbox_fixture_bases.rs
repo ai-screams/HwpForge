@@ -31,6 +31,8 @@ fn textbox_para(
     Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
+                text_margin: None,
                 paragraphs: inner,
                 width: HwpUnit::from_mm(width_mm).expect("width"),
                 height: HwpUnit::from_mm(height_mm).expect("height"),
@@ -148,6 +150,8 @@ fn main() {
             Paragraph::with_runs(
                 vec![Run::control(
                     Control::TextBox {
+                        frame: hwpforge_core::ObjectFrame::new(),
+                        text_margin: None,
                         paragraphs: vec![text_para("파란 테두리, 연노랑 채움.")],
                         width: HwpUnit::from_mm(70.0).expect("width"),
                         height: HwpUnit::from_mm(20.0).expect("height"),
@@ -266,9 +270,7 @@ fn main() {
     //    "음수 offset = doc 좌표 그대로(클립 없음)" 산술을 oracle-lock.
     {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::{
-            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-        };
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
         use hwpforge_foundation::HwpUnit as HU;
         let mut images = ImageStore::new();
         images.insert(
@@ -281,17 +283,16 @@ fn main() {
             HU::from_mm(15.0).expect("h"),
             ImageFormat::Png,
         );
-        img.placement = Some(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HU::from_mm(-8.0).expect("voff"),
-            horz_offset: HU::from_mm(30.0).expect("hoff"),
-        });
+        img.placement = Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_allow_overlap(true)
+            .with_vert_offset(HU::from_mm(-8.0).expect("voff"))
+            .with_horz_offset(HU::from_mm(30.0).expect("hoff")),
+        );
         let anchor_para = Paragraph::with_runs(
             vec![
                 Run::text(
@@ -401,6 +402,8 @@ fn main() {
         let borderless_box = Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
+                    text_margin: None,
                     paragraphs: vec![mixed("G(무테박스·3mm)", cs0)],
                     width: HwpUnit::from_mm(80.0).expect("width"),
                     height: HwpUnit::from_mm(25.0).expect("height"),
@@ -436,9 +439,7 @@ fn main() {
     //    세로 범위를 지나 이어져 문단끝+1 빈 세그먼트도 안 생긴다 (§10h).
     {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::{
-            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-        };
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
         use hwpforge_foundation::HwpUnit as HU;
         let mut images = ImageStore::new();
         images.insert(
@@ -451,17 +452,16 @@ fn main() {
             HU::from_mm(12.0).expect("h"),
             ImageFormat::Png,
         );
-        img.placement = Some(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HU::from_mm(2.0).expect("voff"),
-            horz_offset: HU::from_mm(120.0).expect("hoff"),
-        });
+        img.placement = Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_allow_overlap(true)
+            .with_vert_offset(HU::from_mm(2.0).expect("voff"))
+            .with_horz_offset(HU::from_mm(120.0).expect("hoff")),
+        );
         let anchor_para = Paragraph::with_runs(
             vec![
                 Run::text(
@@ -500,9 +500,7 @@ fn main() {
     //    경고 — 반증 시 교체).
     {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::{
-            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-        };
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
         use hwpforge_foundation::HwpUnit as HU;
         let mut images = ImageStore::new();
         images.insert(
@@ -515,17 +513,16 @@ fn main() {
             HU::from_mm(12.0).expect("h"),
             ImageFormat::Png,
         );
-        img.placement = Some(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HU::from_mm(2.0).expect("voff"),
-            horz_offset: HU::from_mm(120.0).expect("hoff"),
-        });
+        img.placement = Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_allow_overlap(true)
+            .with_vert_offset(HU::from_mm(2.0).expect("voff"))
+            .with_horz_offset(HU::from_mm(120.0).expect("hoff")),
+        );
         let anchor_para = Paragraph::with_runs(
             vec![
                 // ⑪ 실측 첫 줄(55자) 그대로 — 트레일링 공백 포함.

@@ -3,6 +3,7 @@
 //! Creates the ZIP archive structure required by the HWPX format.
 //! Mirrors the [`crate::decoder::package`] module for symmetry.
 
+use std::borrow::Cow;
 use std::io::{Cursor, Write};
 
 use hwpforge_core::metadata::Metadata;
@@ -10,7 +11,7 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
-use crate::encoder::escape_xml_text_safe;
+use crate::encoder::{escape_xml, EncodeWarning};
 use crate::error::{HwpxError, HwpxResult};
 
 // ── HWPX constants ───────────────────────────────────────────────
@@ -57,6 +58,99 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 
 // ── content.hpf generator ────────────────────────────────────────
 
+/// One `<opf:item>` of the `content.hpf` manifest.
+///
+/// [`manifest_items`] builds the whole list once and [`render_content_hpf`]
+/// turns it into `content.hpf`. The encoder checks that rendered text — read
+/// back with an XML reader, the way a consumer sees the ids — and
+/// [`PackageWriter::write_hwpx_with_content_hpf`] writes the same text, so
+/// the check and the written manifest cannot disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManifestItem {
+    /// `id` attribute — what `binaryItemIDRef` / `idref` name.
+    pub id: String,
+    /// `href` attribute — the ZIP entry the item points at.
+    pub href: String,
+    /// `media-type` attribute.
+    pub media_type: &'static str,
+    /// `isEmbeded` attribute (Hancom's spelling), absent for XML parts.
+    pub is_embeded: Option<&'static str>,
+    /// Whether the item is also listed in `<opf:spine>`.
+    pub in_spine: bool,
+}
+
+impl ManifestItem {
+    fn xml_part(id: String, href: String, in_spine: bool) -> Self {
+        Self { id, href, media_type: "application/xml", is_embeded: None, in_spine }
+    }
+}
+
+/// The manifest items for a package, in the order 한글 writes them: header,
+/// sections, settings, images, master pages, embedded-chart OLE blobs.
+///
+/// Images and OLE blobs are not in the spine. Chart XML parts are not in the
+/// manifest at all (한글 expects `Chart/*.xml` in the ZIP only).
+pub(crate) fn manifest_items(
+    section_count: usize,
+    image_paths: &[String],
+    masterpage_paths: &[String],
+    embedded_ole_ids: &[String],
+) -> Vec<ManifestItem> {
+    let mut items =
+        vec![ManifestItem::xml_part("header".to_string(), "Contents/header.xml".to_string(), true)];
+    for i in 0..section_count {
+        items.push(ManifestItem::xml_part(
+            format!("section{i}"),
+            format!("Contents/section{i}.xml"),
+            true,
+        ));
+    }
+    // settings in manifest (not in spine)
+    items.push(ManifestItem::xml_part("settings".to_string(), "settings.xml".to_string(), false));
+
+    // Image entries (not in spine). The `id` must match the
+    // `binaryItemIDRef` in section XML (filename stem, no extension).
+    // `isEmbeded="1"` (intentional typo matching 한글's output) marks the
+    // binary as embedded.
+    for path in image_paths {
+        // Strip extension: "test_image.png" → "test_image"
+        let stem = match path.rfind('.') {
+            Some(pos) => &path[..pos],
+            None => path.as_str(),
+        };
+        items.push(ManifestItem {
+            id: stem.to_string(),
+            href: format!("BinData/{path}"),
+            media_type: guess_image_media_type(path),
+            is_embeded: Some("1"),
+            in_spine: false,
+        });
+    }
+
+    // Master page entries in manifest and spine.
+    for path in masterpage_paths {
+        // path is like "Contents/masterpage0.xml" — extract id "masterpage0"
+        let stem =
+            path.strip_prefix("Contents/").unwrap_or(path).strip_suffix(".xml").unwrap_or(path);
+        items.push(ManifestItem::xml_part(stem.to_string(), path.clone(), true));
+    }
+
+    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
+    // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
+    // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
+    // matches Hancom's own attribute name).
+    for ole_id in embedded_ole_ids {
+        items.push(ManifestItem {
+            id: ole_id.clone(),
+            href: format!("BinData/{ole_id}.ole"),
+            media_type: "application/ole",
+            is_embeded: Some("0"),
+            in_spine: false,
+        });
+    }
+    items
+}
+
 /// Generates the OPF content manifest listing header, sections, and images.
 ///
 /// Matches the structure produced by 한글: full namespace declarations,
@@ -67,9 +161,10 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 /// block. All slots Hancom emits (title/language/creator/subject/
 /// description/lastsaveby/CreatedDate/ModifiedDate/date/keyword) are
 /// **always** emitted to preserve byte-parity with Hancom output —
-/// `None` values self-close, populated values are sanitized and
-/// XML-escaped. Unknown entries in `metadata.extras` are emitted in
+/// `None` values self-close, populated values are XML-escaped (the
+/// package writer's part scan then removes characters XML 1.0 forbids). Unknown entries in `metadata.extras` are emitted in
 /// `BTreeMap` (alphabetical) order so output is deterministic.
+#[cfg(test)]
 fn generate_content_hpf(
     metadata: &Metadata,
     section_count: usize,
@@ -78,74 +173,39 @@ fn generate_content_hpf(
     masterpage_paths: &[String],
     embedded_ole_ids: &[String],
 ) -> String {
-    let mut manifest_items = String::from(
-        r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
-    );
-    let mut spine_refs = String::from(r#"<opf:itemref idref="header" linear="yes"/>"#);
-
-    for i in 0..section_count {
-        use std::fmt::Write as _;
-        write!(
-            manifest_items,
-            r#"<opf:item id="section{i}" href="Contents/section{i}.xml" media-type="application/xml"/>"#,
-        )
-        .expect("write to String is infallible");
-        write!(spine_refs, r#"<opf:itemref idref="section{i}" linear="yes"/>"#)
-            .expect("write to String is infallible");
-    }
-
-    // settings in manifest (not in spine)
-    manifest_items
-        .push_str(r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#);
-
-    // Image entries in manifest (not in spine).
-    // The `id` must match the `binaryItemIDRef` in section XML (filename stem, no extension).
-    // `isEmbeded="1"` (intentional typo matching 한글's output) marks the binary as embedded.
-    for path in image_paths {
-        use std::fmt::Write as _;
-        let media_type = guess_image_media_type(path);
-        // Strip extension: "test_image.png" → "test_image"
-        let stem = match path.rfind('.') {
-            Some(pos) => &path[..pos],
-            None => path.as_str(),
-        };
-        write!(
-            manifest_items,
-            r#"<opf:item id="{stem}" href="BinData/{path}" media-type="{media_type}" isEmbeded="1"/>"#,
-        )
-        .expect("write to String is infallible");
-    }
-
-    // Master page entries in manifest and spine
-    for path in masterpage_paths {
-        use std::fmt::Write as _;
-        // path is like "Contents/masterpage0.xml" — extract id "masterpage0"
-        let stem =
-            path.strip_prefix("Contents/").unwrap_or(path).strip_suffix(".xml").unwrap_or(path);
-        write!(
-            manifest_items,
-            r#"<opf:item id="{stem}" href="{path}" media-type="application/xml"/>"#,
-        )
-        .expect("write to String is infallible");
-        write!(spine_refs, r#"<opf:itemref idref="{stem}" linear="yes"/>"#)
-            .expect("write to String is infallible");
-    }
-
     // NOTE: Chart XML files are NOT listed in the manifest.
-    // 한글 expects Chart/*.xml in the ZIP only, not in content.hpf.
     let _ = chart_paths;
+    render_content_hpf(
+        metadata,
+        &manifest_items(section_count, image_paths, masterpage_paths, embedded_ole_ids),
+    )
+}
 
-    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
-    // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
-    // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
-    // matches Hancom's own attribute name).
-    for ole_id in embedded_ole_ids {
-        use std::fmt::Write as _;
-        write!(
-            manifest_items,
-            r#"<opf:item id="{ole_id}" href="BinData/{ole_id}.ole" media-type="application/ole" isEmbeded="0"/>"#,
-        )
-        .expect("write to String is infallible");
+/// Writes `content.hpf` from metadata and an already built manifest list.
+///
+/// `id` and `href` are attribute-escaped: an image store key is caller data,
+/// and a raw `&` or `"` in it would either break the part or turn into a
+/// different id once parsed (`he&#97;der` would read back as `header`).
+pub(crate) fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) -> String {
+    use std::fmt::Write as _;
+
+    let mut manifest_items = String::new();
+    let mut spine_refs = String::new();
+    for item in items {
+        let ManifestItem { id, href, media_type, is_embeded, in_spine } = item;
+        let id = escape_xml(id);
+        let href = escape_xml(href);
+        write!(manifest_items, r#"<opf:item id="{id}" href="{href}" media-type="{media_type}""#)
+            .expect("write to String is infallible");
+        if let Some(flag) = is_embeded {
+            write!(manifest_items, r#" isEmbeded="{flag}""#)
+                .expect("write to String is infallible");
+        }
+        manifest_items.push_str("/>");
+        if *in_spine {
+            write!(spine_refs, r#"<opf:itemref idref="{id}" linear="yes"/>"#)
+                .expect("write to String is infallible");
+        }
     }
 
     let metadata_block = build_metadata_block(metadata);
@@ -185,7 +245,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
     // <opf:title>
     match &meta.title {
         Some(t) => {
-            let _ = write!(out, "<opf:title>{}</opf:title>", escape_xml_text_safe(t));
+            let _ = write!(out, "<opf:title>{}</opf:title>", escape_xml(t));
         }
         None => out.push_str("<opf:title/>"),
     }
@@ -216,7 +276,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
         let _ = write!(
             out,
             r#"<opf:meta name="keyword" content="text">{}</opf:meta>"#,
-            escape_xml_text_safe(&joined),
+            escape_xml(&joined),
         );
     }
 
@@ -246,8 +306,8 @@ fn build_metadata_block(meta: &Metadata) -> String {
         if k == "date" {
             continue;
         }
-        let safe_key = escape_xml_text_safe(k);
-        let safe_val = escape_xml_text_safe(v);
+        let safe_key = escape_xml(k);
+        let safe_val = escape_xml(v);
         if v.is_empty() {
             let _ = write!(out, r#"<opf:meta name="{safe_key}" content="text"/>"#);
         } else {
@@ -275,7 +335,7 @@ fn push_meta(out: &mut String, name: &'static str, value: Option<&str>) {
             let _ = write!(
                 out,
                 r#"<opf:meta name="{name}" content="text">{}</opf:meta>"#,
-                escape_xml_text_safe(v),
+                escape_xml(v),
             );
         }
         None => {
@@ -304,6 +364,16 @@ fn guess_image_media_type(path: &str) -> &'static str {
     }
 }
 
+/// The ZIP entry an image stored under `path` is written to.
+pub(crate) fn image_entry_name(path: &str) -> String {
+    format!("BinData/{path}")
+}
+
+/// The ZIP entry an embedded-chart OLE blob `ole_id` is written to.
+pub(crate) fn ole_entry_name(ole_id: &str) -> String {
+    format!("BinData/{ole_id}.ole")
+}
+
 // ── PackageWriter ────────────────────────────────────────────────
 
 /// Writes a valid HWPX ZIP archive.
@@ -314,17 +384,9 @@ fn guess_image_media_type(path: &str) -> &'static str {
 pub(crate) struct PackageWriter;
 
 impl PackageWriter {
-    /// Assembles header XML, section XMLs, and optional images into a HWPX ZIP.
-    ///
-    /// # Arguments
-    ///
-    /// * `header_xml` — Serialized `Contents/header.xml` content.
-    /// * `section_xmls` — Serialized section XML strings (`Contents/section0.xml`, etc.).
-    /// * `images` — Pairs of `(filename, data)` written under `BinData/`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`HwpxError::Zip`] if the ZIP writer fails at any stage.
+    /// [`Self::write_hwpx_with_content_hpf`] with the manifest built from the
+    /// same inputs (unit tests of the writer).
+    #[cfg(test)]
     pub fn write_hwpx(
         metadata: &Metadata,
         header_xml: &str,
@@ -333,15 +395,99 @@ impl PackageWriter {
         charts: &[(String, String)],
         master_pages: &[(String, String)],
         embedded_oles: &[(String, Vec<u8>)],
-    ) -> HwpxResult<Vec<u8>> {
+    ) -> HwpxResult<(Vec<u8>, Vec<EncodeWarning>)> {
+        let manifest = manifest_items(
+            section_xmls.len(),
+            &images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        );
+        Self::write_hwpx_with_content_hpf(
+            &render_content_hpf(metadata, &manifest),
+            header_xml,
+            section_xmls,
+            images,
+            charts,
+            master_pages,
+            embedded_oles,
+        )
+    }
+
+    /// Assembles header XML, section XMLs, and optional images into a HWPX ZIP.
+    ///
+    /// # Arguments
+    ///
+    /// * `content_hpf` — `Contents/content.hpf`, from [`render_content_hpf`]
+    ///   over [`manifest_items`] of the same parts, images and OLE blobs.
+    /// * `header_xml` — Serialized `Contents/header.xml` content.
+    /// * `section_xmls` — Serialized section XML strings (`Contents/section0.xml`, etc.).
+    /// * `images` — Pairs of `(filename, data)` written under `BinData/`.
+    ///
+    /// The charts are scanned here for characters XML 1.0 forbids, which are
+    /// removed and returned as
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`] (#198) — no earlier stage
+    /// scans them. The header, section and master page parts arrive already
+    /// scanned (each when it is assembled), and so does `content_hpf`: the
+    /// encoder scans it before reading it back for the manifest checks, so
+    /// the text checked is the text written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HwpxError::Zip`] if the ZIP writer fails at any stage.
+    pub fn write_hwpx_with_content_hpf(
+        content_hpf: &str,
+        header_xml: &str,
+        section_xmls: &[String],
+        images: &[(String, Vec<u8>)],
+        charts: &[(String, String)],
+        master_pages: &[(String, String)],
+        embedded_oles: &[(String, Vec<u8>)],
+    ) -> HwpxResult<(Vec<u8>, Vec<EncodeWarning>)> {
+        // All caller-provided parts use the same canonical-name check as the
+        // decoder, before constructing a ZIP or silently merging any keys.
+        let mut names = std::collections::BTreeSet::from([
+            "mimetype".to_string(),
+            "version.xml".to_string(),
+            "META-INF/container.xml".to_string(),
+            "META-INF/manifest.xml".to_string(),
+            "Contents/content.hpf".to_string(),
+            "settings.xml".to_string(),
+            "Contents/header.xml".to_string(),
+        ]);
+        let dynamic_names = (0..section_xmls.len())
+            .map(|i| format!("Contents/section{i}.xml"))
+            .chain(images.iter().map(|(path, _)| image_entry_name(path)))
+            .chain(master_pages.iter().chain(charts).map(|(path, _)| path.clone()))
+            .chain(embedded_oles.iter().map(|(id, _)| ole_entry_name(id)));
+        for name in dynamic_names {
+            let key = crate::package_path::normalize_part_name(&name)?;
+            // 이것을 실패시키는 것: 정규화된 출력 키 충돌을 ZIP writer까지 넘기기.
+            if !names.insert(key.to_string()) {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!("duplicate package part name '{key}'"),
+                });
+            }
+        }
+        // Validate relative asset keys too, before prefixing hides a drive path.
+        for key in images.iter().chain(embedded_oles).map(|(key, _)| key) {
+            crate::package_path::normalize_part_name(key)?;
+        }
+        let mut warnings = Vec::new();
         let buf: Vec<u8> = Vec::new();
         let cursor = Cursor::new(buf);
         let mut zip = ZipWriter::new(cursor);
 
-        let stored_opts =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        let deflate_opts =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        // W0: entry times are fixed (1980-01-01, the ZIP epoch). The zip
+        // crate stamps the current time by default once its `time` feature
+        // is on, which another dependency can turn on.
+        // 이것을 실패시키는 것: 시각 고정 삭제 + `time` 기능 켜기.
+        let fixed = zip::DateTime::default();
+        let stored_opts = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .last_modified_time(fixed);
+        let deflate_opts = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .last_modified_time(fixed);
 
         // 1. mimetype — STORED, must be first entry (OPF convention)
         zip.start_file("mimetype", stored_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
@@ -364,19 +510,6 @@ impl PackageWriter {
         // 5. Contents/content.hpf (dynamic manifest)
         zip.start_file("Contents/content.hpf", deflate_opts)
             .map_err(|e| HwpxError::Zip(e.to_string()))?;
-        let image_paths: Vec<String> = images.iter().map(|(path, _)| path.clone()).collect();
-        let chart_paths: Vec<String> = charts.iter().map(|(path, _)| path.clone()).collect();
-        let mp_paths: Vec<String> = master_pages.iter().map(|(path, _)| path.clone()).collect();
-        let embedded_ole_ids: Vec<String> =
-            embedded_oles.iter().map(|(id, _)| id.clone()).collect();
-        let content_hpf = generate_content_hpf(
-            metadata,
-            section_xmls.len(),
-            &image_paths,
-            &chart_paths,
-            &mp_paths,
-            &embedded_ole_ids,
-        );
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml
@@ -397,8 +530,7 @@ impl PackageWriter {
 
         // 9. BinData/* — images stored uncompressed (already compressed formats)
         for (path, data) in images {
-            let safe_path = super::sanitize_zip_entry_name(path);
-            zip.start_file(format!("BinData/{safe_path}"), stored_opts)
+            zip.start_file(image_entry_name(path), stored_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
@@ -414,6 +546,7 @@ impl PackageWriter {
         for (path, xml) in charts {
             zip.start_file(path.as_str(), deflate_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
+            let xml = scan_part(path, xml, &mut warnings);
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
@@ -422,21 +555,60 @@ impl PackageWriter {
         // payload is already a tightly-packed OLE2 compound file, and
         // 한글 reads it raw via `binaryItemIDRef` from content.hpf.
         for (ole_id, data) in embedded_oles {
-            let safe_id = super::sanitize_zip_entry_name(ole_id);
-            zip.start_file(format!("BinData/{safe_id}.ole"), stored_opts)
+            zip.start_file(ole_entry_name(ole_id), stored_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
         let cursor = zip.finish().map_err(|e| HwpxError::Zip(e.to_string()))?;
-        Ok(cursor.into_inner())
+        Ok((cursor.into_inner(), warnings))
     }
+}
+
+/// `xml` without the characters XML 1.0 forbids; each removal is added to
+/// `warnings` under `part`.
+fn scan_part<'a>(part: &str, xml: &'a str, warnings: &mut Vec<EncodeWarning>) -> Cow<'a, str> {
+    let (clean, sites) = crate::wire_xml::strip_xml_forbidden_chars(xml);
+    warnings.extend(super::forbidden_char_warnings(part, sites));
+    clean
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
+
+    /// 이것을 실패시키는 것: writer의 공통 경로 검사 삭제/옛 성분 삭제 정규화 복원.
+    #[test]
+    fn zip9_fix1_writer_rejects_noncanonical_parts() {
+        for name in ["a/../b", "a/./b", "a//b", "a\\b", "/a", "C:/a", ""] {
+            let images = vec![(name.to_string(), vec![])];
+            let result =
+                PackageWriter::write_hwpx_with_content_hpf("", "", &[], &images, &[], &[], &[]);
+            assert!(matches!(result, Err(HwpxError::InvalidStructure { .. })), "{name}");
+            let parts = vec![(name.to_string(), String::new())];
+            let result =
+                PackageWriter::write_hwpx_with_content_hpf("", "", &[], &[], &parts, &[], &[]);
+            assert!(matches!(result, Err(HwpxError::InvalidStructure { .. })), "{name}");
+        }
+    }
+
+    /// 이것을 실패시키는 것: 출력 정규 키 충돌 검사 삭제(이미지/OLE, 고정/동적 파트).
+    #[test]
+    fn zip9_fix1_writer_rejects_duplicate_part_keys() {
+        let images = vec![("asset.ole".to_string(), vec![1])];
+        let oles = vec![("asset".to_string(), vec![2])];
+        let result =
+            PackageWriter::write_hwpx_with_content_hpf("", "", &[], &images, &[], &[], &oles);
+        assert!(matches!(result, Err(HwpxError::InvalidStructure { detail })
+            if detail == "duplicate package part name 'BinData/asset.ole'"));
+        let charts = vec![("mimetype".to_string(), String::new())];
+        let result =
+            PackageWriter::write_hwpx_with_content_hpf("", "", &[], &[], &charts, &[], &[]);
+        assert!(matches!(result, Err(HwpxError::InvalidStructure { detail })
+            if detail == "duplicate package part name 'mimetype'"));
+    }
+
     use zip::ZipArchive;
 
     /// Minimal header XML for testing.
@@ -458,6 +630,7 @@ mod tests {
             &[],
         )
         .unwrap()
+        .0
     }
 
     /// Helper: open a ZipArchive from raw bytes.
@@ -475,7 +648,7 @@ mod tests {
 
         // First entry by index must be "mimetype"
         let entry = archive.by_index(0).unwrap();
-        assert_eq!(entry.name(), "mimetype");
+        assert_eq!(entry.name().expect("ZIP entry name"), "mimetype");
         assert_eq!(
             entry.compression(),
             CompressionMethod::Stored,
@@ -491,7 +664,8 @@ mod tests {
         let bytes = write_minimal(&sections);
         let archive = open_zip(&bytes);
 
-        let names: Vec<&str> = archive.file_names().collect();
+        let names: Vec<String> =
+            archive.file_names().map(|name| name.expect("ZIP entry name").into_owned()).collect();
         let required = [
             "mimetype",
             "version.xml",
@@ -503,7 +677,10 @@ mod tests {
             "Contents/section0.xml",
         ];
         for path in &required {
-            assert!(names.contains(path), "missing required entry: {path}");
+            assert!(
+                names.iter().any(|name| name.as_str() == *path),
+                "missing required entry: {path}"
+            );
         }
     }
 
@@ -539,6 +716,44 @@ mod tests {
         assert!(!hpf3.contains(r#"id="section3""#));
     }
 
+    /// The whole manifest and spine for every kind of item, as a literal.
+    ///
+    /// 이것을 실패시키는 것: manifest 항목의 순서(header·section·settings·
+    /// 이미지·바탕쪽·OLE)나 한 항목의 속성(`isEmbeded` 값, spine 포함 여부)을
+    /// 바꾸는 것.
+    #[test]
+    fn content_hpf_manifest_and_spine_for_every_item_kind() {
+        let hpf = generate_content_hpf(
+            &Metadata::default(),
+            2,
+            &["image1.png".to_string(), "photo.jpg".to_string()],
+            &["Chart/chart0.xml".to_string()],
+            &["Contents/masterpage0.xml".to_string()],
+            &["ole1".to_string()],
+        );
+        let manifest = hpf.split("<opf:manifest>").nth(1).unwrap();
+        assert_eq!(
+            manifest,
+            concat!(
+                r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="section1" href="Contents/section1.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="image1" href="BinData/image1.png" media-type="image/png" isEmbeded="1"/>"#,
+                r#"<opf:item id="photo" href="BinData/photo.jpg" media-type="image/jpeg" isEmbeded="1"/>"#,
+                r#"<opf:item id="masterpage0" href="Contents/masterpage0.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="ole1" href="BinData/ole1.ole" media-type="application/ole" isEmbeded="0"/>"#,
+                r#"</opf:manifest>"#,
+                r#"<opf:spine>"#,
+                r#"<opf:itemref idref="header" linear="yes"/>"#,
+                r#"<opf:itemref idref="section0" linear="yes"/>"#,
+                r#"<opf:itemref idref="section1" linear="yes"/>"#,
+                r#"<opf:itemref idref="masterpage0" linear="yes"/>"#,
+                r#"</opf:spine></opf:package>"#,
+            )
+        );
+    }
+
     // ── Test: content.hpf includes image entries ────────────────
 
     #[test]
@@ -571,9 +786,12 @@ mod tests {
             &[],
         );
         assert!(result.is_ok());
-        let bytes = result.unwrap();
+        let (bytes, _) = result.unwrap();
         let archive = open_zip(&bytes);
-        assert!(archive.file_names().any(|n| n == "Contents/header.xml"));
+        assert!(archive
+            .file_names()
+            .map(|name| name.expect("ZIP entry name").into_owned())
+            .any(|n| n == "Contents/header.xml"));
     }
 
     // ── Test 6: multi-section creates multiple entries ───────────
@@ -590,7 +808,8 @@ mod tests {
             &[],
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .0;
         let mut archive = open_zip(&bytes);
 
         for i in 0..3 {
@@ -635,9 +854,10 @@ mod tests {
             &[],
         );
         assert!(result.is_ok());
-        let bytes = result.unwrap();
+        let (bytes, _) = result.unwrap();
         let archive = open_zip(&bytes);
-        let names: Vec<&str> = archive.file_names().collect();
+        let names: Vec<String> =
+            archive.file_names().map(|name| name.expect("ZIP entry name").into_owned()).collect();
         // No section entries
         assert!(!names.iter().any(|n| n.starts_with("Contents/section")));
     }
@@ -656,11 +876,13 @@ mod tests {
             &[],
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .0;
         let archive = open_zip(&bytes);
 
         let section_entries = archive
             .file_names()
+            .map(|name| name.expect("ZIP entry name").into_owned())
             .filter(|n| n.starts_with("Contents/section") && n.ends_with(".xml"))
             .count();
         assert_eq!(section_entries, 100);
@@ -707,7 +929,8 @@ mod tests {
             &[],
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .0;
 
         let mut archive = open_zip(&bytes);
         let mut entry = archive.by_name("BinData/photo.jpg").unwrap();
@@ -811,13 +1034,58 @@ mod tests {
         assert!(!hpf.contains("<script>"));
     }
 
-    /// C0 control characters (other than tab/LF/CR) must be stripped
-    /// before escape. XML 1.0 rejects them entirely.
+    /// C0 control characters (other than tab/LF/CR) must not reach the
+    /// written `content.hpf`: XML 1.0 rejects them entirely. The encoder
+    /// scans `content.hpf` right after rendering it, removes them and reports
+    /// where.
+    /// 이것을 실패시키는 것: 인코더가 `render_content_hpf` 직후에 하는 `content.hpf` 스캔을 빼는 것.
     #[test]
     fn metadata_strips_xml1_illegal_chars() {
+        use hwpforge_core::run::Run;
+        use hwpforge_core::section::Section;
+        use hwpforge_core::{Document, PageSettings, Paragraph};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
         let meta = Metadata::new().with_title("safe\u{0001}\u{0008}body\u{000B}more\u{FFFE}");
-        let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("body", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        doc.set_metadata(meta);
+        let mut styles = crate::style_store::HwpxStyleStore::with_default_fonts("함초롬돋움");
+        styles.push_char_shape(crate::style_store::HwpxCharShape::default());
+        styles.push_para_shape(crate::style_store::HwpxParaShape::default());
+        let outcome = crate::HwpxEncoder::encode_with_diagnostics(
+            &doc.validate().unwrap(),
+            &styles,
+            &hwpforge_core::image::ImageStore::new(),
+            crate::EncodeOptions::default(),
+        )
+        .unwrap();
+        let mut hpf = String::new();
+        open_zip(&outcome.bytes)
+            .by_name("Contents/content.hpf")
+            .unwrap()
+            .read_to_string(&mut hpf)
+            .unwrap();
         // The control chars are gone, leaving the legitimate text.
-        assert!(hpf.contains("<opf:title>safebodymore</opf:title>"));
+        assert!(hpf.contains("<opf:title>safebodymore</opf:title>"), "{hpf}");
+        let removed: Vec<_> = outcome
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, EncodeWarning::XmlForbiddenCharsRemoved { .. }))
+            .collect();
+        assert_eq!(
+            removed,
+            [&EncodeWarning::XmlForbiddenCharsRemoved {
+                part: "Contents/content.hpf".to_string(),
+                location: "opf:title".to_string(),
+                count: 4,
+            }]
+        );
     }
 }

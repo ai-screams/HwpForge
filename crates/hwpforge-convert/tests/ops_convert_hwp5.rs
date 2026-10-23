@@ -69,20 +69,21 @@ fn meta_carries_exactly_the_warnings() {
 #[test]
 fn carry_layout_cache_decides_whether_line_segments_are_emitted() {
     // A Hancom-saved source, so there is a line-segment cache to carry.
+    // 이것을 실패시키는 것: `ConvertHwp5Options` 의 기본값을 false 로 되돌리는 것.
     let source = fixture("pdf-rules/rules-bold.hwp");
 
-    let off = convert_hwp5(&source, &ConvertHwp5Options::default()).expect("convert");
+    let on = convert_hwp5(&source, &ConvertHwp5Options::default()).expect("convert");
+    assert!(
+        entry_text(&on.bytes, "Contents/section0.xml").contains("linesegarray"),
+        "the default carries the render material"
+    );
+
+    let off = convert_hwp5(&source, &ConvertHwp5Options::default().with_carry_layout_cache(false))
+        .expect("convert");
     assert!(!off.bytes.is_empty());
     assert!(
         !entry_text(&off.bytes, "Contents/section0.xml").contains("linesegarray"),
-        "the default is an editing-safe package with no carried cache"
-    );
-
-    let on = convert_hwp5(&source, &ConvertHwp5Options::default().with_carry_layout_cache(true))
-        .expect("convert");
-    assert!(
-        entry_text(&on.bytes, "Contents/section0.xml").contains("linesegarray"),
-        "opting in carries the render material"
+        "opting out leaves a package with no carried cache"
     );
 
     // Same document either way — only the cache differs.
@@ -91,12 +92,12 @@ fn carry_layout_cache_decides_whether_line_segments_are_emitted() {
 
 #[test]
 fn the_option_builder_is_the_only_way_to_change_the_default() {
-    assert!(!ConvertHwp5Options::default().carry_layout_cache);
-    assert!(ConvertHwp5Options::default().with_carry_layout_cache(true).carry_layout_cache);
+    assert!(ConvertHwp5Options::default().carry_layout_cache);
+    assert!(!ConvertHwp5Options::default().with_carry_layout_cache(false).carry_layout_cache);
     assert!(
-        !ConvertHwp5Options::default()
-            .with_carry_layout_cache(true)
+        ConvertHwp5Options::default()
             .with_carry_layout_cache(false)
+            .with_carry_layout_cache(true)
             .carry_layout_cache
     );
 }

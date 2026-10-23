@@ -7,7 +7,8 @@
 use crate::decoder::Hwp5Warning;
 use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaLineSeg,
-    Hwp5ShapeComponentGeometry, Hwp5ShapePoint, Hwp5ShapeTextArt, TextSegment,
+    Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry, Hwp5ShapePicture, Hwp5ShapePoint,
+    Hwp5ShapeRender, Hwp5ShapeTextArt, TextSegment,
 };
 
 /// A decoded paragraph from a BodyText section.
@@ -30,18 +31,27 @@ pub(crate) struct Hwp5Paragraph {
     pub page_break: bool,
     /// 단 나누기 (ParaHeader divide_sort bit3 — W3).
     pub column_break: bool,
-    /// Character shape runs: (position, char_shape_id) pairs.
+    /// Character shape runs: (position, char_shape_id) pairs, positions in
+    /// [`Self::text`] (UTF-16 units) — moved there from the wire positions
+    /// of `PARA_CHAR_SHAPE` when the paragraph is built, so a tab or an
+    /// object counts one unit and a field marker none.
     pub char_shape_runs: Vec<Hwp5CharShapeRun>,
     /// Format-local line layout cache entries from `ParaLineSeg`.
     pub line_segments: Vec<Hwp5ParaLineSeg>,
     /// Inline control objects found in this paragraph (table refs, footnote refs, etc.).
     pub controls: Vec<Hwp5Control>,
+    /// The paragraph-end mark's char shape as the wire places it (§19.22 D5);
+    /// projection drops it when it equals the last written run's.
+    pub end_char_shape: Option<u32>,
 }
 
 /// A control object reference found inline in paragraph text.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum Hwp5Control {
+    /// Name bound to this exact CtrlHeader's immediate CtrlData child, never
+    /// inferred from cross-reference order. Raw header retains source identity.
+    Bookmark { ctrl_id: u32, header_data: Vec<u8>, name: Option<String> },
     /// Table reference with nested cell paragraphs parsed from child records.
     Table(Hwp5Table),
     /// Image evidence resolved from `gso ` + `ShapeComponent` + `ShapePicture`.
@@ -175,6 +185,7 @@ pub(crate) enum Hwp5Control {
 /// Parsed image evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ImageControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     pub ctrl_id: u32,
     /// Minimal recovered geometry.
@@ -190,11 +201,21 @@ pub(crate) struct Hwp5ImageControl {
     /// bit0 = 글자처럼 취급. W2p: projection 의 `treat_as_char` 판정에 대한
     /// 유일한 진실 — 좌표 `(x,y)==(0,0)` 휴리스틱을 대체한다.
     pub ctrl_properties: u32,
+    /// The whole `ShapePicture` record (crop, effects, border, image size).
+    pub picture: Hwp5ShapePicture,
+    /// The picture's initial (unscaled) box from its `ShapeComponent` —
+    /// HWPX `orgSz`; `None` for a group child or an unreadable component.
+    pub original_size: Option<(u32, u32)>,
+    /// The picture's hyperlink command from its `CtrlData` record
+    /// (`URL;1;0;0;`), or why that record could not be read. `None` = no
+    /// link.
+    pub link: Option<Result<String, String>>,
 }
 
 /// Parsed line evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5LineControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -208,11 +229,20 @@ pub(crate) struct Hwp5LineControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed pure rectangle evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5RectControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -222,11 +252,20 @@ pub(crate) struct Hwp5RectControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed polygon evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5PolygonControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -238,17 +277,31 @@ pub(crate) struct Hwp5PolygonControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// The shape's text (`LIST_HEADER` one level below its component and
+    /// the paragraphs after it); empty for a group child (the group
+    /// projection decides its text) or a shape without text.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+    /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
+    pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
 ///
-/// Only geometry (placement + extent) is carried: projection derives the
-/// ellipse center/axes from the bounding box via `Control::ellipse`. The
-/// precise center/axis points decoded in [`Hwp5ShapeComponentEllipse`] are
-/// not needed downstream yet (they would only matter for exact-geometry
-/// fidelity, a future refinement).
+/// Outside a group, projection derives the ellipse center/axes from the
+/// bounding box via `Control::ellipse`. Inside a group the stored centre and
+/// axes ([`Self::shape`]) are folded with the group's matrices instead.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5EllipseControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -258,6 +311,23 @@ pub(crate) struct Hwp5EllipseControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The stored centre and axis points, in the shape's local coordinates.
+    pub shape: Hwp5ShapeComponentEllipse,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// The shape's text (`LIST_HEADER` one level below its component and
+    /// the paragraphs after it); empty for a group child (the group
+    /// projection decides its text) or a shape without text.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+    /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
+    pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
@@ -278,6 +348,10 @@ pub(crate) struct Hwp5TextArtControl {
     pub text_art: Hwp5ShapeTextArt,
     /// gso CtrlHeader trailer instance ID (mirror `Hwp5ImageControl.instance_id`).
     pub instance_id: u32,
+    /// `ShapeComponent` initial size (HWPX `orgSz`), when read.
+    pub original_size: Option<(u32, u32)>,
+    /// gso CtrlHeader object properties (bit 20 = size lock).
+    pub ctrl_properties: u32,
 }
 
 /// Parsed arc evidence from a `gso ` scope (a `ShapeComponentEllipse` with arc fields).
@@ -288,6 +362,7 @@ pub(crate) struct Hwp5TextArtControl {
 /// are intentionally not propagated here.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ArcControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -297,6 +372,17 @@ pub(crate) struct Hwp5ArcControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The stored centre, axis and arc end points, in the shape's local
+    /// coordinates (used inside a group).
+    pub shape: Hwp5ShapeComponentEllipse,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed connect-line evidence from a `gso ` scope.
@@ -307,6 +393,7 @@ pub(crate) struct Hwp5ArcControl {
 /// `<hp:connectLine>` attribute, so they are intentionally dropped.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ConnectLineControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -320,6 +407,14 @@ pub(crate) struct Hwp5ConnectLineControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed equation evidence from an `eqed` ctrl + `HWPTAG_EQEDIT` child record.
@@ -368,6 +463,7 @@ pub(crate) struct Hwp5MemoControl {
 /// Parsed curve evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5CurveControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -381,11 +477,20 @@ pub(crate) struct Hwp5CurveControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5TextBoxControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     pub ctrl_id: u32,
     /// Minimal recovered geometry from the owning `CtrlHeader`.
@@ -397,11 +502,20 @@ pub(crate) struct Hwp5TextBoxControl {
     /// maps `(props >> 5) & 0x03` → Core `VerticalAlign`. `None` when the
     /// ListHeader was absent or too short to carry the 속성 word.
     pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`. Distinct from
     /// `list_header_properties` (the textbox `HWPTAG_LIST_HEADER` 속성 word).
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed OLE-backed object evidence from a `gso ` scope.
@@ -435,9 +549,18 @@ pub(crate) struct Hwp5GroupControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// Child drawing objects in document (z-) order.
     pub children: Vec<Hwp5GroupChild>,
+    /// The group's own rendering block (initial size and matrix chain), or
+    /// why it could not be read.
+    pub render: Result<Hwp5ShapeRender, String>,
     /// `gso ` CtrlHeader trailer instance ID (mirrored to HWPX
     /// `<hp:container instid>`). `0` when not recoverable.
     pub instance_id: u32,
+    /// The group carries a hyperlink (a `CtrlData` record of its own), which
+    /// a Core group cannot hold.
+    pub has_link: bool,
+    /// Object common properties of the owning `gso ` `CtrlHeader` (bit 20 =
+    /// size lock); `0` for a nested group, which has no `CtrlHeader`.
+    pub ctrl_properties: u32,
 }
 
 /// One child of a [`Hwp5GroupControl`]: a shape control plus any `drawText`
@@ -460,6 +583,15 @@ pub(crate) struct Hwp5GroupChild {
     /// when present. Bits 5–6 carry text vertical alignment; projection maps
     /// `(props >> 5) & 0x03` → Core `VerticalAlign` for text-bearing children.
     pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    /// The child's rendering block (initial size, matrix chain, fill facts),
+    /// or why it could not be read.
+    pub render: Result<Hwp5ShapeRender, String>,
+    /// Control ids of the `CtrlHeader` records found under the child (a
+    /// table in a grouped text box, a bookmark in its text …). The group
+    /// child parser keeps only the text of its paragraphs, so these are
+    /// reported as lost.
+    pub nested_controls: Vec<u32>,
 }
 
 /// Parsed table control content.
@@ -485,6 +617,111 @@ pub(crate) struct Hwp5Table {
     /// attribute 로 emit. 추출 불가하면 0.
     #[allow(dead_code)]
     pub instance_id: u32,
+    /// The table's own `CtrlHeader` placement facts (§19.6 A); `None` when the
+    /// header is too short to hold them.
+    pub ctrl: Option<Hwp5TableCtrl>,
+    /// Default cell padding: table body record bytes 10..18 (left, right,
+    /// top, bottom — §19.22 D1; 5,131/5,131 Hancom twins match `inMargin`).
+    /// `None` when the record is too short.
+    pub inner_margin: Option<Hwp5TableCellMargin>,
+    /// Whether the cell sizes are fixed: table body record property bit 3
+    /// (HWPX `noAdjust`).
+    pub no_adjust: bool,
+    /// Cell zones read from the table body record ("valid zone info"),
+    /// complete entries only — not yet checked against the grid.
+    pub cell_zones: Vec<Hwp5TableCellZone>,
+    /// The table's caption: a `LIST_HEADER` under the table control that
+    /// comes before the table body record, and its paragraphs.
+    pub caption: Option<Hwp5TableCaption>,
+}
+
+/// A table caption (`LIST_HEADER` before the `TABLE` record, 표 71–73):
+/// the caption property word, width, gap and last width at bytes 8..22 of
+/// the list header (31/31 Hancom twins equal `<hp:caption>` attribute for
+/// attribute), and the caption paragraphs.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5TableCaption {
+    /// Property bits 0-1: 0 left, 1 right, 2 top, 3 bottom.
+    pub side: u8,
+    /// Property bit 2: the box spans the object's outer margins.
+    pub full_size: bool,
+    /// Caption width (used by side captions).
+    pub width: u32,
+    /// Gap between caption and table.
+    pub gap: i16,
+    /// The caption box width the file laid out.
+    pub last_width: u32,
+    /// Caption paragraphs.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+}
+
+impl Hwp5TableCaption {
+    /// Reads the caption list header: paragraph count (`u16` at 0) and the
+    /// caption block at 8..22. `None` when the record is shorter.
+    pub(crate) fn parse_list_header(data: &[u8]) -> Option<(usize, Self)> {
+        let b = data.get(..22)?;
+        let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let property = u32_at(8);
+        Some((
+            usize::from(u16::from_le_bytes([b[0], b[1]])),
+            Self {
+                side: (property & 0b11) as u8,
+                full_size: property & 0b100 != 0,
+                width: u32_at(12),
+                gap: i16::from_le_bytes([b[16], b[17]]),
+                last_width: u32_at(18),
+                paragraphs: Vec::new(),
+            },
+        ))
+    }
+}
+
+/// One cell zone of a table body record: 10 bytes, five `u16` in wire
+/// order (start row, start column, end row, end column, border fill id —
+/// 90/94 Hancom twins equal `<hp:cellzone>` value for value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5TableCellZone {
+    pub start_row: u16,
+    pub start_col: u16,
+    pub end_row: u16,
+    pub end_col: u16,
+    pub border_fill_id: u16,
+}
+
+/// Placement facts of a table's `CtrlHeader` (표 70 object common header):
+/// the property word and the position/size block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5TableCtrl {
+    /// Object property word (bytes 4..8).
+    pub properties: u32,
+    /// Offsets (`x` = horizontal, `y` = vertical) and size (bytes 8..24);
+    /// `height` is the table's height as Hancom saved it.
+    pub geometry: crate::schema::section::Hwp5ShapeComponentGeometry,
+    /// Outer margin: bytes 28..36 (left, right, top, bottom — §19.22 D1;
+    /// 5,131/5,131 Hancom twins match `outMargin`). `None` when the header
+    /// is too short.
+    pub outer_margin: Option<Hwp5TableCellMargin>,
+}
+
+impl Hwp5TableCellMargin {
+    /// Four little-endian `i16` (left, right, top, bottom) at `data[at..at+8]`.
+    pub(crate) fn read(data: &[u8], at: usize) -> Option<Self> {
+        let b = data.get(at..at.checked_add(8)?)?;
+        let v = |i: usize| i16::from_le_bytes([b[i], b[i + 1]]);
+        Some(Self { left: v(0), right: v(2), top: v(4), bottom: v(6) })
+    }
+}
+
+impl Hwp5TableCtrl {
+    /// Reads the facts from a table `CtrlHeader` payload.
+    pub(crate) fn parse(data: &[u8]) -> Option<Self> {
+        let properties = u32::from_le_bytes(data.get(4..8)?.try_into().ok()?);
+        let geometry =
+            crate::schema::section::Hwp5ShapeComponentGeometry::parse_from_ctrl_header(data)
+                .ok()?;
+        let outer_margin = Hwp5TableCellMargin::read(data, 28);
+        Some(Self { properties, geometry, outer_margin })
+    }
 }
 
 /// HWP5 table page break policy recovered from the table body record.
@@ -547,6 +784,14 @@ pub(crate) struct Hwp5TableCell {
     pub vertical_align: Hwp5TableCellVerticalAlign,
     /// Whether this cell is marked as belonging to a title/header row.
     pub is_header: bool,
+    /// Property bit 16: the cell has its own margin. Without it the cell
+    /// uses the table's default padding (§19.22 D2; 61,246/61,246 Hancom
+    /// twin cells match `hasMargin`).
+    pub has_margin: bool,
+    /// Property bits 3–4: line wrap (0 break, 1 squeeze, 2 keep — §19.22
+    /// D3; 0 and 1 match `lineWrap` in all Hancom twin cells, 2 has no
+    /// twin, 3 has no meaning).
+    pub line_wrap: u8,
     /// Optional border/fill reference.
     #[allow(dead_code)] // reserved for later border/fill projection work
     pub border_fill_id: Option<u16>,
@@ -557,6 +802,8 @@ pub(crate) struct Hwp5TableCell {
 /// Parsed nested subtree carried by a non-table control.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5NestedSubtree {
+    /// Section-wide CtrlHeader encounter order, independent of the host.
+    pub wire_order: usize,
     /// Original control identifier that owns the subtree.
     pub ctrl_id: u32,
     /// Raw 4-byte property field that follows `ctrl_id` in the
@@ -586,6 +833,8 @@ pub(crate) struct Hwp5NestedSubtree {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct SectionResult {
+    /// Independent section master-page lists, in wire order.
+    pub master_pages: Vec<Hwp5MasterPage>,
     /// Decoded paragraphs in document order.
     pub paragraphs: Vec<Hwp5Paragraph>,
     /// Page definition, if a PageDef record was found.
@@ -609,6 +858,22 @@ pub(crate) struct SectionResult {
     pub column_def: Option<Hwp5ColumnDef>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// Wire provenance of a master list; never a body paragraph or control.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5MasterPage {
+    /// Wire position among the body host's controls (for first-wins asset lookup).
+    pub body_paragraph_index: usize,
+    pub body_control_index: usize,
+    pub raw: Vec<u8>,
+    pub extended: bool,
+    pub index: usize,
+    pub ordinary_index: usize,
+    pub record_index: usize,
+    pub level: u16,
+    pub section_properties: u32,
+    pub paragraphs: Vec<Hwp5Paragraph>,
 }
 
 /// `secd` ctrl 의 시작번호 묶음 (payload `[20..28]`, 각 u16 LE).

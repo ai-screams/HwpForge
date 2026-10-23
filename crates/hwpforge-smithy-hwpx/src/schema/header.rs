@@ -164,6 +164,13 @@ pub struct HxFont {
     pub font_type: String,
     #[serde(rename = "@isEmbedded", default)]
     pub is_embedded: u32,
+    /// Substitute font (comes before `typeInfo`).
+    #[serde(
+        rename(serialize = "hh:substFont", deserialize = "substFont"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub subst_font: Option<HxSubstFont>,
     /// Font classification metadata.
     #[serde(
         rename(serialize = "hh:typeInfo", deserialize = "typeInfo"),
@@ -171,6 +178,19 @@ pub struct HxFont {
         skip_serializing_if = "Option::is_none"
     )]
     pub type_info: Option<HxTypeInfo>,
+}
+
+/// `<hh:substFont face="…" type="HFT" isEmbedded="0" binaryItemIDRef=""/>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxSubstFont {
+    #[serde(rename = "@face", default)]
+    pub face: String,
+    #[serde(rename = "@type", default)]
+    pub font_type: String,
+    #[serde(rename = "@isEmbedded", default)]
+    pub is_embedded: u32,
+    #[serde(rename = "@binaryItemIDRef", default)]
+    pub binary_item_id_ref: String,
 }
 
 /// `<hh:typeInfo>` — font classification metadata (PANOSE-like).
@@ -417,7 +437,7 @@ pub struct HxOutline {
     pub outline_type: String,
 }
 
-/// `<hh:shadow type="NONE" color="#B2B2B2" offsetX="10" offsetY="10"/>`.
+/// `<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>`.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxShadow {
     #[serde(rename = "@type", default)]
@@ -509,6 +529,18 @@ pub struct HxParaPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub border: Option<HxBorder>,
+    #[serde(
+        rename(serialize = "hh:margin", deserialize = "margin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub margin: Option<HxMargin>,
+    #[serde(
+        rename(serialize = "hh:lineSpacing", deserialize = "lineSpacing"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_spacing: Option<HxLineSpacing>,
 }
 
 /// `<hh:align horizontal="LEFT" vertical="BASELINE"/>`.
@@ -592,9 +624,9 @@ pub struct HxSwitch {
     #[serde(
         rename(serialize = "hp:case", deserialize = "case"),
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Vec::is_empty"
     )]
-    pub case: Option<HxSwitchCase>,
+    pub cases: Vec<HxSwitchCase>,
     #[serde(
         rename(serialize = "hp:default", deserialize = "default"),
         default,
@@ -678,11 +710,13 @@ pub struct HxMargin {
     pub next: Option<HxUnitValue>,
 }
 
-/// `<hc:left value="0" unit="HWPUNIT"/>` — generic value+unit pair.
+/// `<hc:left value="0" unit="HWPUNIT"/>` — paragraph margin value+unit pair.
+/// Keep the XML integer wide until the selected branch checks its signed range;
+/// unlike raw object attributes, a margin is not an unsigned bit representation.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxUnitValue {
-    #[serde(rename = "@value", default, deserialize_with = "deser_i32_or_u32")]
-    pub value: i32,
+    #[serde(rename = "@value")]
+    pub value: i64,
     #[serde(rename = "@unit", default)]
     pub unit: String,
 }
@@ -692,7 +726,7 @@ pub struct HxUnitValue {
 pub struct HxLineSpacing {
     #[serde(rename = "@type", default)]
     pub spacing_type: String,
-    #[serde(rename = "@value", default)]
+    #[serde(rename = "@value")]
     pub value: u32,
     #[serde(rename = "@unit", default)]
     pub unit: String,
@@ -1030,13 +1064,13 @@ pub struct HxBulletParaHead {
     pub auto_indent: u32,
     /// Width adjustment.
     #[serde(rename = "@widthAdjust", default)]
-    pub width_adjust: u32,
+    pub width_adjust: i32,
     /// Text offset type (e.g. "PERCENT").
     #[serde(rename = "@textOffsetType", default)]
     pub text_offset_type: String,
     /// Text offset value.
     #[serde(rename = "@textOffset", default)]
-    pub text_offset: u32,
+    pub text_offset: i32,
     /// Number format string.
     #[serde(rename = "@numFormat", default)]
     pub num_format: String,
@@ -1071,13 +1105,13 @@ pub struct HxParaHead {
     pub auto_indent: u32,
     /// Width adjustment.
     #[serde(rename = "@widthAdjust", default)]
-    pub width_adjust: u32,
+    pub width_adjust: i32,
     /// Text offset type (e.g. "PERCENT").
     #[serde(rename = "@textOffsetType", default)]
     pub text_offset_type: String,
     /// Text offset value.
     #[serde(rename = "@textOffset", default)]
-    pub text_offset: u32,
+    pub text_offset: i32,
     /// Number format string (e.g. "DIGIT", "HANGUL_SYLLABLE").
     #[serde(rename = "@numFormat", default)]
     pub num_format: String,
@@ -1128,17 +1162,17 @@ pub struct HxTabPr {
 /// `<hh:tabItem pos="8000" type="LEFT" leader="NONE" unit="HWPUNIT"/>`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTabItem {
-    /// Tab stop position.
+    /// Signed HWPUNIT or unsigned CHAR wire value; checked at the decode boundary.
     #[serde(rename = "@pos")]
-    pub pos: u32,
+    pub pos: i64,
     /// Alignment type (`LEFT`, `RIGHT`, `CENTER`, `DECIMAL`).
     #[serde(rename = "@type", default)]
     pub tab_type: String,
     /// Leader line type.
     #[serde(rename = "@leader", default)]
     pub leader: String,
-    /// Position unit (`HWPUNIT` in practice).
-    #[serde(rename = "@unit", default = "default_hwpunit")]
+    /// Case position unit (`HWPUNIT` or `CHAR`); packed default may omit it.
+    #[serde(rename = "@unit", default)]
     pub unit: String,
 }
 
@@ -1148,9 +1182,9 @@ pub struct HxTabSwitch {
     #[serde(
         rename(serialize = "hp:case", deserialize = "case"),
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Vec::is_empty"
     )]
-    pub case: Option<HxTabSwitchCase>,
+    pub cases: Vec<HxTabSwitchCase>,
     #[serde(
         rename(serialize = "hp:default", deserialize = "default"),
         default,
@@ -1403,14 +1437,14 @@ mod tests {
         assert_eq!(tab_pr.switches.len(), 1);
 
         let switch = &tab_pr.switches[0];
-        let case = switch.case.as_ref().unwrap();
+        let case = switch.cases.first().unwrap();
         assert_eq!(case.required_namespace, "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar");
         assert_eq!(case.items[0].pos, 15000);
         assert_eq!(case.items[0].unit, "HWPUNIT");
 
         let default = switch.default.as_ref().unwrap();
         assert_eq!(default.items[0].pos, 30000);
-        assert_eq!(default.items[0].unit, "HWPUNIT");
+        assert_eq!(default.items[0].unit, "");
     }
 
     #[test]

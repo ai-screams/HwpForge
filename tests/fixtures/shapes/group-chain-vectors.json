@@ -1,0 +1,19 @@
+{
+  "about": "Shared matrix-chain vectors for group children. Each codec stores trans, then one (sca, rot) pair per group level (first pair = outermost group, last pair = the shape's own) and composes M = T * R1 * S1 * ... * Rn * Sn, the scale applying before the rotation inside a pair. Matrices are [a, b, c, d, e, f] for x' = a*x + b*y + c, y' = d*x + e*y + f. Every codec's reader of its own wire form must compose each vector to `expected`.",
+  "vectors": [
+    {
+      "name": "scale_then_turn_inside_the_own_pair",
+      "group_level": 1,
+      "trans": [1, 0, 100, 0, 1, 200],
+      "pairs": [
+        { "sca": [1, 0, 0, 0, 1, 0], "rot": [1, 0, 0, 0, 1, 0] },
+        {
+          "sca": [2, 0, 0, 0, 0.5, 0],
+          "rot": [0.8660254037844387, -0.5, 0, 0.5, 0.8660254037844387, 0]
+        }
+      ],
+      "expected": [1.7320508075688774, -0.25, 100, 1.0, 0.43301270189221935, 200],
+      "wrong_order_s_times_r": [1.7320508075688774, -1.0, 100, 0.25, 0.43301270189221935, 200]
+    }
+  ]
+}

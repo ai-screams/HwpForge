@@ -1,0 +1,242 @@
+{
+  "provenance": "한컴 사용자 실측 2026-10-19. XML 원문 보존, 미리보기 제외; 본문 바이너리 보존. paraPr/charPr는 PDF 실측이며 대응 한컴 재저장본은 제공되지 않음. 나머지 pN은 원본/한컴 재저장 쌍.",
+  "inputs": [
+    {
+      "source": "hancom-probe/e23-charpr-swap.hwpx",
+      "original_bytes": 65477,
+      "original_sha256": "75727a603e96ee4c582b4dc94281f45f333582edd282a4903ecf608f9f435904",
+      "fixture": "e23-charpr-swap.hwpx",
+      "fixture_bytes": 7222,
+      "fixture_sha256": "19a0117f8a7b16b59803835128fd581902aa57b9b0c6f12f5a6857f171850558",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/e23-order-swap.hwpx",
+      "original_bytes": 65478,
+      "original_sha256": "94941cca6e239b1bcd8f04b89f511bec296b6df456598e8df97fa1834e623cf9",
+      "fixture": "e23-order-swap.hwpx",
+      "fixture_bytes": 7223,
+      "fixture_sha256": "16f8720e9ccd8158f1ae83ba0f36af77a349ee7a54b50ad416634c5db69a019b",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/e23-orig-nocache.hwpx",
+      "original_bytes": 65479,
+      "original_sha256": "c6dcf7fa09c9c4e930680f479128f0d861632b62fe2c16472dc979a9a6a58580",
+      "fixture": "e23-orig-nocache.hwpx",
+      "fixture_bytes": 7224,
+      "fixture_sha256": "3534dbfb518360e1f891092e3da13aa4cfc6233a4920c609846cbb33358265cb",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p0-control-hancom.hwpx",
+      "original_bytes": 69528,
+      "original_sha256": "ed7edb2dac9c31c7d20aeb05eed724b057554fccd179e2562072548aec2a66a3",
+      "fixture": "p0-control-hancom.hwpx",
+      "fixture_bytes": 7654,
+      "fixture_sha256": "c91decdfee12566b10dc3bb419f497337d36634b1978281ae58c127a5176211a",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p0-control.hwpx",
+      "original_bytes": 65790,
+      "original_sha256": "677836bea5719ac6fed13d90a23c04a6df565db4314b2bf2a6e44416eba2a095",
+      "fixture": "p0-control.hwpx",
+      "fixture_bytes": 7535,
+      "fixture_sha256": "f8939f4065d64ad7e95c36f0869b6b8f39056102dc6df4ac4e8abe98bd185b99",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p1-borderfill-hancom.hwpx",
+      "original_bytes": 70768,
+      "original_sha256": "da1d130fcc98b750121132967bccec315d36329ae6a0527df4b7a1f45f58d042",
+      "fixture": "p1-borderfill-hancom.hwpx",
+      "fixture_bytes": 7650,
+      "fixture_sha256": "b1602dea7ad307b091a5f5e2a64290354eff4e7ecc939ab8f2890808b8d78825",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p1-borderfill.hwpx",
+      "original_bytes": 65792,
+      "original_sha256": "db38f36497aacdbfdd7e838f5857993f2243febf422d8bbadcc7c11550a22b94",
+      "fixture": "p1-borderfill.hwpx",
+      "fixture_bytes": 7537,
+      "fixture_sha256": "eaa75b790dee42741537352c4f5ab5d1a2f3de37ce625be8b957b76c27ba2f2c",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p2-tab-hancom.hwpx",
+      "original_bytes": 69587,
+      "original_sha256": "ca3f5f7085d22bca7004792447e033f97564cdc5969eddaf35f116d757576df6",
+      "fixture": "p2-tab-hancom.hwpx",
+      "fixture_bytes": 7651,
+      "fixture_sha256": "4b67e511c2fccd13b63d6cb73e4ad7e104c9b606e75bde4def4b0aedbf23f9b8",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p2-tab.hwpx",
+      "original_bytes": 65791,
+      "original_sha256": "62e9691f4e9ecabde00acf76b5c3c2b18c0770fe85c19c339d945995972efde2",
+      "fixture": "p2-tab.hwpx",
+      "fixture_bytes": 7536,
+      "fixture_sha256": "effb46b2dbc114c5c5a433fe6ada78987548deedb4e13bcb3d702bc2583d095d",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p3-numbering-hancom.hwpx",
+      "original_bytes": 69402,
+      "original_sha256": "cc96969d83f13f2af90b6ed979d3b6f413ed5318c0436b53674b52076597a4ae",
+      "fixture": "p3-numbering-hancom.hwpx",
+      "fixture_bytes": 7659,
+      "fixture_sha256": "0e528020bd495154d707cd3a1d0869debd4ba82ea396e3e9842397013252a30b",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p3-numbering.hwpx",
+      "original_bytes": 65790,
+      "original_sha256": "aceb6c9e9e439e58204c32411b0fd9fc8f9daba00b5cecd1b5c57b64e5b9a94d",
+      "fixture": "p3-numbering.hwpx",
+      "fixture_bytes": 7535,
+      "fixture_sha256": "9fd96737b1d08322786c6c6bd46b0404849eeabc3fac98fea81233836d654d4d",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p4-bullet-hancom.hwpx",
+      "original_bytes": 69739,
+      "original_sha256": "d6ec2a2685962c5cd712f385e7264d4230f99e2715f305e2add19d124943d8bc",
+      "fixture": "p4-bullet-hancom.hwpx",
+      "fixture_bytes": 7653,
+      "fixture_sha256": "b9b76512b340a5c281e693f139c1aa52c018b1ba2dd8922fe42e12a6917e2187",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p4-bullet.hwpx",
+      "original_bytes": 65791,
+      "original_sha256": "301f10ce8568d5e529a834d76121531225c6faa5fd813b40e70547cfe0d40a79",
+      "fixture": "p4-bullet.hwpx",
+      "fixture_bytes": 7536,
+      "fixture_sha256": "e2d7e4340b835ed3f263d5c748c4c81af9576c685aab0dad7816c038e6880eda",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p5-font-hancom.hwpx",
+      "original_bytes": 65943,
+      "original_sha256": "bcf01119a5acb42ffeaef9b886fafa540fcb56c614c0887576b7c7b48864a57f",
+      "fixture": "p5-font-hancom.hwpx",
+      "fixture_bytes": 7414,
+      "fixture_sha256": "eb95ddcd700d7ced35951897c6a5717b1a4f2d4000a85f30f376bbf222ee1d00",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p5-font.hwpx",
+      "original_bytes": 65479,
+      "original_sha256": "41b5b5fbf7a2333f9ea2c92e6b0578629c398bee8a04b651088093cb776cdbd8",
+      "fixture": "p5-font.hwpx",
+      "fixture_bytes": 7224,
+      "fixture_sha256": "f83511a088803272f801683708c08e73faf6ac4fa30680125bcc5abbd19b6010",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p6-style-hancom.hwpx",
+      "original_bytes": 66440,
+      "original_sha256": "4f4213db898f96353569cc8cb8518e8f9fb1a1ce9d80546f2ab8067e3661b9eb",
+      "fixture": "p6-style-hancom.hwpx",
+      "fixture_bytes": 7418,
+      "fixture_sha256": "5f04480ca46f9f10c718655fdade68fa720d99e5b76ad93501f6f48f6d5d881e",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/p6-style.hwpx",
+      "original_bytes": 65483,
+      "original_sha256": "31852ea5a373f5bdf765802a3dd100f70f33721bedc1245b358e1ced6affc95b",
+      "fixture": "p6-style.hwpx",
+      "fixture_bytes": 7228,
+      "fixture_sha256": "cd140044616062ba79a58c64b626a74619e5aee525f43829f5fe5177d934a9b9",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/u5-id-gap-hancom-resave.hwpx",
+      "original_bytes": 63574,
+      "original_sha256": "08348d7fe599b9d7ae9f654bc4c929bc79920ad3000a6e5b3da37b5c77c84a21",
+      "fixture": "u5-id-gap-hancom-resave.hwpx",
+      "fixture_bytes": 7321,
+      "fixture_sha256": "08fa236a2f77ea40dd6d407207990b7ca042a4da782ff31d9d48085ac8b1b503",
+      "removed_parts": [
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png"
+      ]
+    },
+    {
+      "source": "hancom-probe/u5-id-gap.hwpx",
+      "original_bytes": 6860,
+      "original_sha256": "f0af6287efc255b8e6e7898de37ec46f79823fbcdc35cf4b339239ec56eaeb60",
+      "fixture": "u5-id-gap.hwpx",
+      "fixture_bytes": 6781,
+      "fixture_sha256": "173591c8159660a7c79d3d1e55e0b522427d3533f5701ece8f2aaccad31ce005",
+      "removed_parts": []
+    }
+  ],
+  "pdf_oracles": [
+    {
+      "source": "hancom-probe/e23-order-swap.pdf",
+      "original_bytes": 14930,
+      "original_sha256": "7328dcf3e508553d104fa4faabb04ba6711502548ab1328302754ed434ab301e"
+    },
+    {
+      "source": "hancom-probe/e23-charpr-swap.pdf",
+      "original_bytes": 17695,
+      "original_sha256": "543811fa7430cc7763bd3250fcc107e3045038d6538256ce942527b33258b85c"
+    }
+  ]
+}

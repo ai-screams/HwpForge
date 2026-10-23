@@ -27,7 +27,15 @@ pub struct HxLineShape {
     #[serde(rename = "@color", default)]
     pub color: String,
     /// Stroke width in HWPUNIT (33 ≈ 0.12mm, the standard thin border).
-    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
+    ///
+    /// `0` is a real width. A missing attribute (the XSD gives no default)
+    /// reads as [`LINE_WIDTH_ABSENT`] and is never written back.
+    #[serde(
+        rename = "@width",
+        default = "line_width_absent",
+        deserialize_with = "deser_i32_or_u32",
+        skip_serializing_if = "is_line_width_absent"
+    )]
     pub width: i32,
     /// Line style: SOLID, DASH, DOT, etc.
     #[serde(rename = "@style", default)]
@@ -59,6 +67,17 @@ pub struct HxLineShape {
     /// Alpha transparency (0 = opaque).
     #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
     pub alpha: i32,
+}
+
+/// [`HxLineShape::width`] when the wire has no `width` attribute.
+pub const LINE_WIDTH_ABSENT: i32 = -1;
+
+fn line_width_absent() -> i32 {
+    LINE_WIDTH_ABSENT
+}
+
+fn is_line_width_absent(width: &i32) -> bool {
+    *width == LINE_WIDTH_ABSENT
 }
 
 impl HxLineShape {
@@ -120,6 +139,14 @@ pub struct HxFillBrush {
         skip_serializing_if = "Option::is_none"
     )]
     pub gradation: Option<HxGradation>,
+    /// Picture fill (`<hc:imgBrush>`, absent when solid or gradient fill is
+    /// used).
+    #[serde(
+        rename(serialize = "hc:imgBrush", deserialize = "imgBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_brush: Option<super::header::HxImgBrush>,
 }
 
 impl HxFillBrush {
@@ -133,6 +160,7 @@ impl HxFillBrush {
                 alpha: 0,
             }),
             gradation: None,
+            img_brush: None,
         }
     }
 }
@@ -627,6 +655,9 @@ pub struct HxLine {
 /// sz → pos → outMargin → caption → drawText
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxEllipse {
+    /// Input element identity; not an XML attribute.
+    #[serde(skip)]
+    pub(crate) axis_endpoints: bool,
     // ── AbstractShapeObjectType attrs ──
     /// Element ID.
     #[serde(rename = "@id", default)]
@@ -669,7 +700,7 @@ pub struct HxEllipse {
     #[serde(rename = "@hasArcPr", default)]
     pub has_arc_pr: u32,
     /// Arc type (NORMAL for full ellipse).
-    #[serde(rename = "@arcType", default)]
+    #[serde(rename = "@arcType", alias = "@type", default)]
     pub arc_type: String,
 
     // ── Shape-common children (ORDER MATTERS!) ──

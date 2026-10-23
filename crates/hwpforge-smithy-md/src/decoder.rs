@@ -5,7 +5,7 @@ use std::path::Path;
 use hwpforge_blueprint::builtins::builtin_default;
 
 /// Maximum markdown file size: 50 MB.
-const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
+pub(crate) const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{

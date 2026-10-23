@@ -153,6 +153,33 @@ fn a_base_package_supplies_the_images_the_json_only_references() {
     );
 }
 
+/// Without the base package the picture's reference names nothing in the
+/// output, and `from_json` says so (a warning, the bytes still come back);
+/// with it, nothing is reported.
+///
+/// 이것을 실패시키는 것: 인코더의 참조 검사 호출을 빼는 것, 또는
+/// `from_json` 이 인코드 경고를 버리는 것.
+#[test]
+fn a_picture_without_its_base_package_is_reported_unresolved() {
+    let bytes = fixture("SimplePicture.hwpx");
+    let json = exported_text("SimplePicture.hwpx");
+
+    let without = from_json(&json, &FromJsonOptions::default()).expect("no base").meta().warnings;
+    let with = from_json(&json, &FromJsonOptions::default().with_base(bytes))
+        .expect("with base")
+        .meta()
+        .warnings;
+
+    let unresolved: Vec<&str> = without
+        .iter()
+        .filter(|w| w.code == "IMAGE_REFERENCE_UNRESOLVED")
+        .map(|w| w.message.as_str())
+        .collect();
+    assert_eq!(unresolved.len(), 1, "{without:?}");
+    assert!(unresolved[0].contains("Contents/section0.xml"), "{unresolved:?}");
+    assert!(!with.iter().any(|w| w.code == "IMAGE_REFERENCE_UNRESOLVED"), "{with:?}");
+}
+
 #[test]
 fn an_undecodable_base_is_a_decode_failure() {
     let json = exported_text("SimpleTable.hwpx");
@@ -311,7 +338,7 @@ fn from_json_reports_no_layout_cache_warning_when_there_is_none_to_drop() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -336,16 +363,18 @@ fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache()
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut caption_para = Paragraph::with_runs(
         vec![Run::text("caption", CharShapeIndex::new(0))],
@@ -370,7 +399,7 @@ fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache()
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -412,16 +441,18 @@ fn from_json_warns_when_only_a_memo_anchor_table_carries_a_layout_cache() {
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut cell_para = Paragraph::with_runs(
         vec![Run::text("anchor cell", CharShapeIndex::new(0))],
@@ -448,7 +479,7 @@ fn from_json_warns_when_only_a_memo_anchor_table_carries_a_layout_cache() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -486,16 +517,18 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
     use hwpforge::foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut boxed_para = Paragraph::with_runs(
         vec![Run::text("boxed", CharShapeIndex::new(0))],
@@ -513,6 +546,8 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
         inst_id: None,
     };
     let text_box = Control::TextBox {
+        frame: hwpforge_core::ObjectFrame::new(),
+        text_margin: None,
         paragraphs: vec![boxed_para],
         width: HwpUnit::new(2000).unwrap(),
         height: HwpUnit::new(2000).unwrap(),
@@ -522,10 +557,14 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
         text_vertical_align: Default::default(),
     };
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         // Source order: the dropped Equation comes first, then the cached
         // text box — the whole point of this test is that the encoder's
         // emitted-index counter does not shift with it.
-        children: vec![equation, text_box],
+        children: vec![
+            hwpforge::core::control::GroupChild::Shape(equation),
+            hwpforge::core::control::GroupChild::Shape(text_box),
+        ],
         width: HwpUnit::new(3000).unwrap(),
         height: HwpUnit::new(2000).unwrap(),
         placement: None,
@@ -540,7 +579,7 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -557,6 +596,179 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
          text box group[0], not the source list's group[1]: {}",
         warning.message
     );
+}
+
+/// A group picture is written as a group child, so the text box after it is
+/// `group[1]` in the encoder's numbering and in `from_json`'s warning.
+///
+/// 이것을 실패시키는 것: `group_child_is_emitted` 의 Picture 갈래를 `false` 로.
+#[test]
+fn from_json_group_child_path_counts_a_group_picture() {
+    use hwpforge::core::control::{Control, GroupChild};
+    use hwpforge::core::image::{Image, ImageFormat};
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
+    };
+    let mut boxed_para = Paragraph::with_runs(
+        vec![Run::text("boxed", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    boxed_para.layout_cache = Some(LayoutCache::new(vec![line]));
+    let w = HwpUnit::new(2000).unwrap();
+    let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
+        children: vec![
+            GroupChild::Picture(Image::new("BinData/image1.png", w, w, ImageFormat::Png)),
+            GroupChild::Shape(Control::text_box(vec![boxed_para], w, w)),
+        ],
+        width: HwpUnit::new(3000).unwrap(),
+        height: w,
+        placement: None,
+        inst_id: None,
+    };
+    let host = Paragraph::with_runs(
+        vec![Run::control(group, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(warning.message.contains("section[0].para[0].group[1]"), "{}", warning.message);
+}
+
+/// A cached paragraph in a group picture's caption is found, and reported
+/// at that caption's place.
+///
+/// 이것을 실패시키는 것: 묶음 경로 탐색의 Picture 갈래에서 캡션을 보지 않는 것.
+#[test]
+fn from_json_finds_a_cache_in_a_group_picture_caption() {
+    use hwpforge::core::caption::{Caption, CaptionSide};
+    use hwpforge::core::control::{Control, GroupChild};
+    use hwpforge::core::image::{Image, ImageFormat};
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
+    };
+    let mut cached = Paragraph::with_runs(
+        vec![Run::text("caption", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    cached.layout_cache = Some(LayoutCache::new(vec![line]));
+    let w = HwpUnit::new(2000).unwrap();
+    let picture = Image::new("BinData/image1.png", w, w, ImageFormat::Png)
+        .with_caption(Caption::new(vec![cached], CaptionSide::Bottom));
+    let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
+        children: vec![GroupChild::Picture(picture)],
+        width: w,
+        height: w,
+        placement: None,
+        inst_id: None,
+    };
+    let host = Paragraph::with_runs(
+        vec![Run::control(group, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(warning.message.contains("group[0].caption"), "{}", warning.message);
+}
+
+/// R1-1: a JSON `Unknown` control has no HWPX form. `from_json` still writes
+/// the document (generation is not fail-closed) but says what it left out,
+/// under its own code, where it was.
+///
+/// 이것을 실패시키는 것: ops `encode_warning_code` 의 위임 갈래를
+/// `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`), 또는 인코더의 `Control::Unknown`
+/// 갈래에서 경고를 지우는 것.
+#[test]
+fn an_unknown_control_comes_back_as_content_lost_with_the_bytes() {
+    use hwpforge::core::control::Control;
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let shape = CharShapeIndex::new(0);
+    let body = Paragraph::with_runs(
+        vec![
+            Run::text("앞", shape),
+            Run::control(Control::Unknown { tag: "zzq".into(), data: None }, shape),
+            Run::text("뒤", shape),
+        ],
+        ParaShapeIndex::new(0),
+    );
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let json = serde_json::to_string(&ExportedDocument {
+        format_version: 2,
+        document,
+        styles: Some(styles),
+    })
+    .expect("json");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("generation does not fail");
+
+    assert!(!out.bytes.is_empty());
+    let lost: Vec<_> =
+        out.meta().warnings.into_iter().filter(|w| w.code == "CONTENT_LOST").collect();
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert!(
+        lost[0].message.contains("Contents/section0.xml:section[0].para[0]"),
+        "{}",
+        lost[0].message
+    );
+    assert!(lost[0].message.contains("zzq"), "{}", lost[0].message);
 }
 
 /// An exported document whose only paragraph carries a footnote whose body
@@ -582,7 +794,7 @@ fn document_with_a_title_mark_footnote() -> String {
     document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
 
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     serde_json::to_string(&exported).expect("serialise")
 }
 
@@ -611,4 +823,115 @@ fn control_whitespace_in_a_style_name_is_written_as_spaces_without_a_warning() {
     let style = &reread["styles"]["styles"][0];
     assert_eq!(style["name"], "A B");
     assert_eq!(style["eng_name"], "C D E F");
+}
+
+/// A cache inside a master page is reported at the master page's real path —
+/// `masterpage[N]` numbered across the package, as the encoder names the part
+/// — not at the bare section.
+///
+/// 이것을 실패시키는 것: 바탕쪽 번호에 앞 구역의 바탕쪽 수를 더하지 않기
+/// (`masterpage[0]`), 또는 바탕쪽 안 문단 경로를 빼고 바탕쪽에서 멈추기.
+#[test]
+fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::section::MasterPage;
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{ApplyPageType, CharShapeIndex, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let para = |text: &str| {
+        Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    };
+    let mut cached = para("master");
+    cached.layout_cache = Some(LayoutCache::new(vec![{
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
+    }]));
+
+    let mut first = Section::with_paragraphs(vec![para("one")], PageSettings::a4());
+    first.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![para("plain")])]);
+    let mut second = Section::with_paragraphs(vec![para("two")], PageSettings::a4());
+    second.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![cached])]);
+    let mut document = Document::new();
+    document.add_section(first);
+    document.add_section(second);
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let dropped: Vec<String> = out
+        .meta()
+        .warnings
+        .into_iter()
+        .filter(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .map(|w| w.message)
+        .collect();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert!(dropped[0].contains("section[1].masterpage[1].npara[0]"), "{}", dropped[0]);
+}
+
+/// W0: `from-json` authors documents, so a memo whose JSON has no time gets
+/// the current time (the encoder alone would write the epoch); a memo with
+/// a time keeps it.
+/// 이것을 실패시키는 것: `from_json` 의 현재 시각 주입 삭제(epoch 가 나온다).
+#[test]
+fn a_memo_without_a_time_gets_the_current_time() {
+    use hwpforge::core::{Control, Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut doc = Document::new();
+    let content = vec![Paragraph::with_runs(
+        vec![Run::text("memo", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )];
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::control(Control::memo(content), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let mut value = serde_json::json!({"document": doc});
+    let mut blanked = 0;
+    blank_memo_times(&mut value, &mut blanked);
+    assert!(blanked > 0, "the fixture has a memo");
+    let out = from_json(&value.to_string(), &FromJsonOptions::default()).expect("from_json");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out.bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("Contents/section0.xml").unwrap(), &mut xml)
+        .unwrap();
+    let tag = r#"<hp:stringParam name="CreateDateTime">"#;
+    let at = xml.find(tag).expect("CreateDateTime") + tag.len();
+    let year: u32 = xml[at..at + 4].parse().unwrap();
+    assert!(year >= 2026, "not the current time: {}", &xml[at..at + 20]);
+}
+
+fn blank_memo_times(value: &mut serde_json::Value, blanked: &mut usize) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(t)) = map.get_mut("create_datetime") {
+                t.clear();
+                *blanked += 1;
+            }
+            for v in map.values_mut() {
+                blank_memo_times(v, blanked);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                blank_memo_times(v, blanked);
+            }
+        }
+        _ => {}
+    }
 }

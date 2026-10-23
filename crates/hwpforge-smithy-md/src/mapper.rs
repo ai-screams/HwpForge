@@ -366,7 +366,7 @@ fn push_task_list_para_shapes(
 /// 각주/미주 본문 스타일을 파생 등록한다 (D6 — 한컴 default 스타일 정합).
 ///
 /// 한컴 native 실측(F1, 2026-08-27): 각주 본문 = 9pt(charPr height 900),
-/// 첫 줄 내어쓰기 −1310, 줄간격 130%. 템플릿이 같은 이름을 이미 제공하면
+/// 첫 줄 내어쓰기 −655 (−6.55 pt), 줄간격 130%. 템플릿이 같은 이름을 이미 제공하면
 /// (향후 커스텀) 그것을 존중하고 파생을 건너뛴다.
 fn install_note_styles(registry: &mut StyleRegistry, body: MdStyleRef) -> MdResult<()> {
     use hwpforge_foundation::LineSpacingType;
@@ -402,7 +402,7 @@ fn install_note_styles(registry: &mut StyleRegistry, body: MdStyleRef) -> MdResu
     note_char.size = HwpUnit::new(900).unwrap_or(note_char.size);
 
     let mut note_para = base_para;
-    note_para.indent_first_line = HwpUnit::new(-1310).unwrap_or(HwpUnit::ZERO);
+    note_para.indent_first_line = HwpUnit::new(-655).unwrap_or(HwpUnit::ZERO);
     note_para.line_spacing_type = LineSpacingType::Percentage;
     note_para.line_spacing_value = 130.0;
     note_para.list = None;

@@ -149,13 +149,21 @@ pub struct TemplateTabStop {
 
 impl From<TemplateTabStop> for TabStop {
     fn from(value: TemplateTabStop) -> Self {
-        Self { position: value.position, align: value.align, leader: value.leader }
+        Self {
+            position: hwpforge_core::ParagraphMeasure::from_hwp_unit(value.position),
+            align: value.align,
+            leader: value.leader,
+        }
     }
 }
 
 impl From<&TemplateTabStop> for TabStop {
     fn from(value: &TemplateTabStop) -> Self {
-        Self { position: value.position, align: value.align, leader: value.leader.clone() }
+        Self {
+            position: hwpforge_core::ParagraphMeasure::from_hwp_unit(value.position),
+            align: value.align,
+            leader: value.leader.clone(),
+        }
     }
 }
 

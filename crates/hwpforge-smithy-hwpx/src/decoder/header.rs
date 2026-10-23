@@ -4,31 +4,44 @@
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
 use hwpforge_foundation::{
-    BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType, FontIndex,
-    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
-    TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
+    BorderFillIndex, BreakType, CharShadow, Color, EmbossType, EmphasisType, EngraveType,
+    FontIndex, HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowOffset, ShadowType,
+    StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 
 use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
+use crate::paragraph_measure::{
+    case_measure, decode_line_spacing, invalid, pack_margin, pack_tab, unpack_margin,
+    unpack_xml_tab, MEASURE_NAMESPACE,
+};
 use crate::schema::header::{
-    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxRefList, HxStyle, HxTabItem, HxTabPr,
+    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxRefList, HxShadow, HxStyle, HxTabItem,
+    HxTabPr,
 };
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape,
-    HwpxDiagonalLine, HwpxFill, HwpxFont, HwpxFontRef, HwpxGradientFill, HwpxImageFill,
-    HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxDiagonalLine, HwpxFill, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo,
+    HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle, HwpxStyleStore, HwpxSubstFont,
 };
 use hwpforge_core::section::BeginNum;
+use hwpforge_core::ParagraphMeasure;
 
 /// Result of parsing `header.xml`.
 #[derive(Debug)]
 pub struct HeaderParseResult {
+    pub(crate) requires_header_normalization: bool,
     /// Style information parsed from `header.xml`.
     pub style_store: HwpxStyleStore,
     /// Starting auto-numbering values from `<hh:beginNum>`, if present.
     pub begin_num: Option<BeginNum>,
+    /// What the style store could not hold (per-language character scalars).
+    pub warnings: Vec<super::DecodeWarning>,
+    pub(crate) memo_count: usize,
+    pub(crate) track_change_count: usize,
+    pub(crate) track_change_author_count: usize,
 }
 
 /// Parses a `header.xml` string into an [`HwpxStyleStore`] and optional [`BeginNum`].
@@ -46,18 +59,397 @@ pub struct HeaderParseResult {
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
-    let head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
+    let mut head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
         file: "header.xml".into(),
         detail: xml_error_detail(&e),
     })?;
     let begin_num = parse_begin_num(&head);
 
     let mut store = HwpxStyleStore::new();
-    if let Some(ref_list) = &head.ref_list {
-        populate_store_from_ref_list(&mut store, ref_list);
+    let mut warnings = Vec::new();
+    let mut memo_count = 0usize;
+    let mut track_change_count = 0usize;
+    let mut track_change_author_count = 0usize;
+    let mut order_mismatches = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let mut reader = quick_xml::Reader::from_str(xml);
+    loop {
+        match reader.read_event().map_err(|e| invalid(e.to_string()))? {
+            quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)
+                if matches!(
+                    e.local_name().as_ref(),
+                    "memoPr" | "trackChange" | "trackChangeAuthor"
+                ) =>
+            {
+                for attr in e.attributes() {
+                    let attr = attr.map_err(|e| invalid(e.to_string()))?;
+                    if attr.key.as_ref() == "id" {
+                        let value = attr
+                            .normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                            .map_err(|e| invalid(e.to_string()))?;
+                        let id: u32 = value.parse().map_err(|_| {
+                            invalid(format!("{} invalid ID {value}", e.local_name().as_ref()))
+                        })?;
+                        let kind = e.local_name();
+                        let kind = kind.as_ref();
+                        let count = match kind {
+                            "memoPr" => &mut memo_count,
+                            "trackChange" => &mut track_change_count,
+                            _ => &mut track_change_author_count,
+                        };
+                        // These unsupported kinds are not yet Hancom-probed; use
+                        // one-based positions (native corpus convention), retaining loss policy.
+                        *count += 1;
+                        let position = u32::try_from(*count)
+                            .map_err(|_| invalid("definition position exceeds u32"))?;
+                        if id != position {
+                            order_mismatches
+                                .entry(kind.to_string())
+                                .or_default()
+                                .push(format!("id {id} -> position {position}"));
+                        }
+                    }
+                }
+                warnings.push(super::DecodeWarning::ContentLost {
+                    part: "Contents/header.xml".into(),
+                    path: super::ParagraphPath::default(),
+                    kind: e.local_name().as_ref().to_string(),
+                    reason: "unsupported header definition and its references are not carried"
+                        .into(),
+                });
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    for (kind, mismatches) in order_mismatches {
+        warn_definition_order(&kind, mismatches, &mut warnings);
+    }
+    let mut normalize_measures = false;
+    if let Some(ref_list) = &mut head.ref_list {
+        let renumbered = normalize_definition_ids(ref_list, &mut warnings);
+        populate_store_from_ref_list(&mut store, ref_list, &mut warnings)?;
+        store.header_fidelity.capture(ref_list);
+        normalize_measures = renumbered || requires_header_normalization(ref_list, &store);
+        warnings.extend(per_language_scalar_losses(ref_list));
+        warnings.extend(border_offset_losses(ref_list));
+        warnings.extend(char_shadow_losses(ref_list));
+        warnings.extend(font_embedding_losses(ref_list));
     }
 
-    Ok(HeaderParseResult { style_store: store, begin_num })
+    crate::header_references::HeaderReferences::build(&store)?;
+    Ok(HeaderParseResult {
+        style_store: store,
+        begin_num,
+        warnings,
+        memo_count,
+        track_change_count,
+        track_change_author_count,
+        requires_header_normalization: normalize_measures,
+    })
+}
+
+/// Hancom reads header references by list position, ignoring id and itemCnt.
+/// Normalize only definition labels; references already contain the positions.
+fn normalize_definition_ids(
+    refs: &mut HxRefList,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> bool {
+    let mut changed = false;
+    macro_rules! renumber {
+        ($items:expr, $kind:expr, $base:expr) => {{
+            let mut mismatches = Vec::new();
+            for (index, def) in $items.iter_mut().enumerate() {
+                let position = index as u32 + $base;
+                if def.id != position {
+                    changed = true;
+                    mismatches.push(format!("id {} -> position {position}", def.id));
+                }
+                def.id = position;
+            }
+            warn_definition_order($kind, mismatches, warnings);
+        }};
+    }
+    if let Some(fonts) = &mut refs.fontfaces {
+        for group in &mut fonts.groups {
+            renumber!(group.fonts, &format!("font {}", group.lang), 0);
+        }
+    }
+    macro_rules! table {
+        ($field:ident, $kind:literal, $base:literal) => {
+            if let Some(defs) = &mut refs.$field {
+                renumber!(defs.items, $kind, $base);
+            }
+        };
+    }
+    table!(char_properties, "charPr", 0);
+    table!(para_properties, "paraPr", 0);
+    table!(tab_properties, "tabPr", 0);
+    table!(styles, "style", 0);
+    table!(border_fills, "borderFill", 1);
+    table!(numberings, "numbering", 1);
+    table!(bullets, "bullet", 1);
+    if let Some(styles) = &mut refs.styles {
+        let count = styles.items.len();
+        for style in &mut styles.items {
+            if let Some((kind, reason)) = hwpforge_core::style_lookup::recover_next_style(
+                &mut style.next_style_id_ref,
+                style.id,
+                count,
+            ) {
+                changed = true;
+                // A stale next-style reference falls back to the owning style.
+                // This recovery applies ONLY to nextStyleIDRef, with explicit loss.
+                warnings.push(super::DecodeWarning::ContentLost {
+                    part: "Contents/header.xml".into(),
+                    path: super::ParagraphPath::default(),
+                    kind: kind.into(),
+                    reason,
+                });
+            }
+        }
+    }
+    changed
+}
+
+fn warn_definition_order(
+    kind: &str,
+    mismatches: Vec<String>,
+    warnings: &mut Vec<super::DecodeWarning>,
+) {
+    if !mismatches.is_empty() {
+        // Definition labels are inactive metadata: positional selection is lossless.
+        warnings.push(super::DecodeWarning::InactiveHeaderReference {
+            part: "Contents/header.xml".into(),
+            kind: format!("definition_order:{kind}"),
+            reason: format!("definition IDs ignored; {}", mismatches.join(", ")),
+        });
+    }
+}
+
+/// Compare the parsed measure payloads with the ordinary encoder's payloads.
+/// Diagnostics are deliberately not an input: the decision rests on the payloads,
+/// so it holds whether or not a form was reported. Output-invalid
+/// values (e.g. odd physical line spacing) remain readable; save preflight rejects them.
+fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bool {
+    if crate::paragraph_measure::validate_measure_output(store).is_err() {
+        return true;
+    }
+    if let Some(paras) = &refs.para_properties {
+        for (raw, shape) in paras.items.iter().zip(store.iter_para_shapes()) {
+            let expected = crate::encoder::header::build_margin_switch(shape);
+            // Ignore switches for unrelated paragraph properties. Margin and
+            // spacing may occupy separate switches; compare their payloads.
+            let case = &expected.cases[0];
+            let default = expected.default.as_ref().unwrap();
+            let margin_matches = select_measure_branch(raw, false)
+                .expect("decoded margin branch")
+                .is_some_and(|(sw, supported)| {
+                    supported
+                        && sw
+                            .cases
+                            .iter()
+                            .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                            .unwrap()
+                            .margin
+                            == case.margin
+                        && sw.default.as_ref().and_then(|d| d.margin.as_ref())
+                            == default.margin.as_ref()
+                });
+            let line_matches = select_measure_branch(raw, true)
+                .expect("decoded spacing branch")
+                .is_some_and(|(sw, supported)| {
+                    supported
+                        && sw
+                            .cases
+                            .iter()
+                            .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                            .unwrap()
+                            .line_spacing
+                            == case.line_spacing
+                        && sw.default.as_ref().and_then(|d| d.line_spacing.as_ref())
+                            == default.line_spacing.as_ref()
+                });
+            if !margin_matches || !line_matches {
+                return true;
+            }
+        }
+    }
+    if let Some(tabs) = &refs.tab_properties {
+        for (raw, tab) in tabs.items.iter().zip(store.iter_tabs()) {
+            if tab.stops.is_empty() {
+                if !raw.switches.is_empty() {
+                    return true;
+                }
+                continue;
+            }
+            let items = |default| {
+                tab.stops
+                    .iter()
+                    .map(|stop| {
+                        crate::encoder::header_tabs::build_tab_item(stop, default)
+                            .expect("validated measure output")
+                    })
+                    .collect()
+            };
+            let expected = crate::schema::header::HxTabSwitch {
+                cases: vec![crate::schema::header::HxTabSwitchCase {
+                    required_namespace: MEASURE_NAMESPACE.into(),
+                    items: items(false),
+                }],
+                default: Some(crate::schema::header::HxTabSwitchDefault { items: items(true) }),
+            };
+            // 이것을 실패시키는 것: 의미가 같은 분할 switch를 구조 차이로 정규화하기.
+            // Each branch must be the supported case plus its packed fallback.
+            // Compare ordered payloads, allowing only the switch boundaries to differ.
+            if raw.switches.iter().any(|sw| {
+                sw.cases.len() != 1
+                    || sw.cases[0].required_namespace != MEASURE_NAMESPACE
+                    || sw.default.is_none()
+                    || sw.cases[0].items.len() != sw.default.as_ref().unwrap().items.len()
+            }) || !raw
+                .switches
+                .iter()
+                .flat_map(|sw| &sw.cases[0].items)
+                .eq(&expected.cases[0].items)
+                || !raw
+                    .switches
+                    .iter()
+                    .flat_map(|sw| &sw.default.as_ref().unwrap().items)
+                    .eq(&expected.default.as_ref().unwrap().items)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// A `paraPr` border offset outside the HWPUNIT range: the style store
+/// cannot hold it and keeps 0 (review r1: it was dropped without a word).
+/// 이것을 실패시키는 것: 이 보고를 지우기
+/// (`para_border_offset_out_of_range_is_reported_lost`).
+fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(para_props) = &ref_list.para_properties else { return Vec::new() };
+    para_props
+        .items
+        .iter()
+        .filter_map(|pp| {
+            let b = pp.border.as_ref()?;
+            let bad: Vec<i32> = [b.offset_left, b.offset_right, b.offset_top, b.offset_bottom]
+                .into_iter()
+                .filter(|&v| HwpUnit::new(v).is_err())
+                .collect();
+            (!bad.is_empty()).then(|| super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".to_string(),
+                path: super::ParagraphPath::default(),
+                kind: "para_border_offset".to_string(),
+                reason: format!(
+                    "paraPr {} border offset {bad:?} is out of range; kept as 0",
+                    pp.id
+                ),
+            })
+        })
+        .collect()
+}
+
+/// A `charPr` shadow the style store cannot hold as written — an unknown
+/// `type`, a `color` that is neither `#RRGGBB` nor `none`, or an offset
+/// outside −100..=100. The store keeps a fallback (kind NONE, the default
+/// color, the clamped offset), so a re-encode would write a different
+/// shadow; the editors refuse the input instead (S21 r1-1).
+fn char_shadow_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
+    char_props
+        .items
+        .iter()
+        .filter_map(|cp| {
+            let problems = parse_char_shadow(cp.shadow.as_ref()?).1;
+            (!problems.is_empty()).then(|| super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".to_string(),
+                path: super::ParagraphPath::default(),
+                kind: "char_shadow".to_string(),
+                reason: format!(
+                    "charPr {} shadow {} cannot be kept as written",
+                    cp.id,
+                    problems.join(", ")
+                ),
+            })
+        })
+        .collect()
+}
+
+/// A `charPr` whose ratio, spacing, relative size or offset differs between
+/// languages: the style store keeps one value per field (the hangul one),
+/// so a re-encode writes it for every language and the other scripts' glyph
+/// widths and positions change. Reported as lost, one warning per `charPr`.
+fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
+    let uniform = |v: &Option<crate::schema::header::HxLangValues>| {
+        v.as_ref().is_none_or(|v| {
+            [v.latin, v.hanja, v.japanese, v.other, v.symbol, v.user].iter().all(|x| *x == v.hangul)
+        })
+    };
+    char_props
+        .items
+        .iter()
+        .filter_map(|cp| {
+            let fields: Vec<&str> = [
+                ("ratio", &cp.ratio),
+                ("spacing", &cp.spacing),
+                ("relSz", &cp.rel_sz),
+                ("offset", &cp.offset),
+            ]
+            .into_iter()
+            .filter(|(_, v)| !uniform(v))
+            .map(|(name, _)| name)
+            .collect();
+            (!fields.is_empty()).then(|| super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".to_string(),
+                path: super::ParagraphPath::default(),
+                kind: "char_shape_per_language".to_string(),
+                reason: format!(
+                    "charPr {} has per-language {} values; only the hangul value is kept",
+                    cp.id,
+                    fields.join(", ")
+                ),
+            })
+        })
+        .collect()
+}
+
+/// An embedded font (`<hh:font isEmbedded="1">`) or substitute font
+/// (`<hh:substFont isEmbedded="1">` or a `binaryItemIDRef`): the style store
+/// keeps neither the flag nor the reference, so a re-encode writes the font
+/// as not embedded and its link to the package binary is cut. Reported as
+/// lost (editors then refuse the input); the Hancom corpus has none (3,828
+/// header parts, 59,531 substitutes, 0 embedded), so carrying the binary
+/// link is left until one is seen.
+/// 이것을 실패시키는 것: 이 보고를 지우기 · 대체 글꼴 참조를 보지 않기
+/// (`embedded_fonts_are_reported_as_lost`).
+fn font_embedding_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(fontfaces) = &ref_list.fontfaces else { return Vec::new() };
+    let lost = |id: u32, lang: &str, what: &str| super::DecodeWarning::ContentLost {
+        part: "Contents/header.xml".to_string(),
+        path: super::ParagraphPath::default(),
+        kind: "font_embedding".to_string(),
+        reason: format!("{lang} font {id}: the embedded {what} is written as not embedded"),
+    };
+    let mut out = Vec::new();
+    for group in &fontfaces.groups {
+        for font in &group.fonts {
+            if font.is_embedded != 0 {
+                out.push(lost(font.id, &group.lang, "font"));
+            }
+            if font
+                .subst_font
+                .as_ref()
+                .is_some_and(|s| s.is_embedded != 0 || !s.binary_item_id_ref.is_empty())
+            {
+                out.push(lost(font.id, &group.lang, "substitute font"));
+            }
+        }
+    }
+    out
 }
 
 fn parse_begin_num(head: &HxHead) -> Option<BeginNum> {
@@ -74,15 +466,20 @@ fn parse_begin_num(head: &HxHead) -> Option<BeginNum> {
     })
 }
 
-fn populate_store_from_ref_list(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+fn populate_store_from_ref_list(
+    store: &mut HwpxStyleStore,
+    ref_list: &HxRefList,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<()> {
     load_fonts(store, ref_list);
     load_border_fills(store, ref_list);
     load_char_shapes(store, ref_list);
-    load_para_shapes(store, ref_list);
-    load_tab_properties(store, ref_list);
+    load_para_shapes(store, ref_list, warnings)?;
+    load_tab_properties(store, ref_list, warnings)?;
     load_numberings(store, ref_list);
     load_bullets(store, ref_list);
     load_styles(store, ref_list);
+    Ok(())
 }
 
 fn load_fonts(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
@@ -98,6 +495,31 @@ fn load_fonts(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
                     // Same cleaning as the encoder, so a no-op round trip stays one.
                     face_name: crate::wire_xml::clean_font_name(&font.face),
                     lang: group.lang.clone(),
+                    // C: kind, substitute and classification round-trip.
+                    // 이것을 실패시키는 것: 셋 중 하나를 읽지 않기
+                    // (`font_metadata_round_trips`).
+                    font_type: HwpxFontType::from_hwpx_str(&font.font_type),
+                    substitute: font.subst_font.as_ref().map(|sub| {
+                        HwpxSubstFont::new(
+                            HwpxFontType::from_hwpx_str(&sub.font_type),
+                            crate::wire_xml::clean_font_name(&sub.face),
+                        )
+                    }),
+                    type_info: font.type_info.as_ref().map(|ti| {
+                        HwpxFontTypeInfo::new(
+                            ti.family_type.clone(),
+                            [
+                                ti.weight,
+                                ti.proportion,
+                                ti.contrast,
+                                ti.stroke_variation,
+                                ti.arm_style,
+                                ti.letterform,
+                                ti.midline,
+                                ti.x_height,
+                            ],
+                        )
+                    }),
                 });
             }
         }
@@ -120,20 +542,35 @@ fn load_char_shapes(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
     }
 }
 
-fn load_para_shapes(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+fn load_para_shapes(
+    store: &mut HwpxStyleStore,
+    ref_list: &HxRefList,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<()> {
     if let Some(para_props) = &ref_list.para_properties {
         for pp in &para_props.items {
-            store.push_para_shape(convert_para_pr(pp));
+            store.push_para_shape(
+                convert_para_pr(pp, warnings)
+                    .map_err(|e| invalid(format!("paraPr {}: {e}", pp.id)))?,
+            );
         }
     }
+    Ok(())
 }
 
-fn load_tab_properties(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+fn load_tab_properties(
+    store: &mut HwpxStyleStore,
+    ref_list: &HxRefList,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<()> {
     if let Some(tab_props) = &ref_list.tab_properties {
         for tp in &tab_props.items {
-            store.push_tab(convert_tab(tp));
+            store.push_tab(
+                convert_tab(tp, warnings).map_err(|e| invalid(format!("tabPr {}: {e}", tp.id)))?,
+            );
         }
     }
+    Ok(())
 }
 
 fn load_numberings(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
@@ -205,59 +642,124 @@ pub(crate) fn parse_number_format_opt(s: &str) -> Option<hwpforge_foundation::Nu
 }
 
 /// Converts an [`HxTabPr`] XML type into a [`hwpforge_core::TabDef`].
-fn convert_tab(hx: &HxTabPr) -> hwpforge_core::TabDef {
-    hwpforge_core::TabDef {
+fn convert_tab(
+    hx: &HxTabPr,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<hwpforge_core::TabDef> {
+    Ok(hwpforge_core::TabDef {
         id: hx.id,
         auto_tab_left: hx.auto_tab_left != 0,
         auto_tab_right: hx.auto_tab_right != 0,
-        stops: collect_tab_items(hx),
-    }
+        stops: collect_tab_items(hx, warnings)
+            .map_err(|e| invalid(format!("tabPr {}.stops: {e}", hx.id)))?,
+    })
 }
 
-fn collect_tab_items(hx: &HxTabPr) -> Vec<hwpforge_core::TabStop> {
+fn collect_tab_items(
+    hx: &HxTabPr,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<Vec<hwpforge_core::TabStop>> {
     if !hx.items.is_empty() {
+        if !hx.switches.is_empty() || hx.items.iter().any(|i| !i.unit.is_empty()) {
+            return Err(invalid(format!(
+                "tabPr {} conflicting or unverified direct tab unit",
+                hx.id
+            )));
+        }
+        // 12 original HWPX/HWP5 twins, 24 direct definitions: positions equal
+        // HWP5 packed raw; preserve that unit conversion for direct definitions.
+        normalized(
+            warnings,
+            "tabPr",
+            hx.id,
+            "stops",
+            "verified unitless direct packed tabs will be emitted as switch",
+        );
         return convert_tab_items(&hx.items, false);
     }
-
-    if let Some(items) = hx
-        .switches
-        .iter()
-        .find_map(|switch| switch.case.as_ref().filter(|case| !case.items.is_empty()))
-        .map(|case| &case.items)
-    {
-        return convert_tab_items(items, false);
+    let mut selected = Vec::new();
+    for sw in &hx.switches {
+        if !sw.cases.iter().any(|c| !c.items.is_empty())
+            && sw.default.as_ref().is_none_or(|d| d.items.is_empty())
+        {
+            continue;
+        }
+        let case = sw.cases.iter().find(|c| c.required_namespace == MEASURE_NAMESPACE);
+        if let Some(c) = case {
+            let stops = convert_tab_items(&c.items, true)?;
+            if let Some(d) = &sw.default {
+                if d.items.len() != stops.len() {
+                    normalized(
+                        warnings,
+                        "tabPr",
+                        hx.id,
+                        "stops",
+                        "default stop count differs from case",
+                    );
+                }
+                for (i, (stop, raw)) in stops.iter().zip(&d.items).enumerate() {
+                    if pack_tab(stop.position).ok() != Some(raw.pos)
+                        || (!raw.unit.is_empty() && raw.unit != "HWPUNIT")
+                        || stop.align != TabAlign::from_hwpx_str(&raw.tab_type)
+                        || stop.leader != TabLeader::from_hwpx_str(&raw.leader)
+                    {
+                        normalized(
+                            warnings,
+                            "tabPr",
+                            hx.id,
+                            &format!("position[{i}]"),
+                            "default differs from selected case; regenerate from case",
+                        );
+                    }
+                }
+            } else {
+                normalized(
+                    warnings,
+                    "tabPr",
+                    hx.id,
+                    "stops",
+                    "case-only tabs; generate packed default",
+                );
+            }
+            selected.extend(stops);
+        } else if let Some(d) = &sw.default {
+            normalized(
+                warnings,
+                "tabPr",
+                hx.id,
+                "stops",
+                "no supported case; selected packed default",
+            );
+            selected.extend(convert_tab_items(&d.items, false)?);
+        } else {
+            return Err(invalid(format!("tabPr {} unsupported namespace without default", hx.id)));
+        }
     }
-
-    if let Some(items) = hx
-        .switches
-        .iter()
-        .find_map(|switch| switch.default.as_ref().filter(|default| !default.items.is_empty()))
-        .map(|default| &default.items)
-    {
-        return convert_tab_items(items, true);
-    }
-
-    Vec::new()
+    Ok(selected)
 }
 
-fn convert_tab_items(
-    items: &[HxTabItem],
-    legacy_default_units: bool,
-) -> Vec<hwpforge_core::TabStop> {
+fn convert_tab_items(items: &[HxTabItem], case: bool) -> HwpxResult<Vec<hwpforge_core::TabStop>> {
     items
         .iter()
-        .map(|item| hwpforge_core::TabStop {
-            position: normalize_tab_pos(item, legacy_default_units),
-            align: TabAlign::from_hwpx_str(&item.tab_type),
-            leader: TabLeader::from_hwpx_str(&item.leader),
+        .map(|item| {
+            let position = if case {
+                case_measure(
+                    i32::try_from(item.pos).map_err(|_| invalid("case tab overflow"))?,
+                    &item.unit,
+                )?
+            } else if item.unit.is_empty() || item.unit == "HWPUNIT" {
+                unpack_xml_tab(item.pos)?
+            } else {
+                return Err(invalid("packed tab unknown unit"));
+            };
+            pack_tab(position)?;
+            Ok(hwpforge_core::TabStop {
+                position,
+                align: TabAlign::from_hwpx_str(&item.tab_type),
+                leader: TabLeader::from_hwpx_str(&item.leader),
+            })
         })
         .collect()
-}
-
-fn normalize_tab_pos(item: &HxTabItem, legacy_default_units: bool) -> HwpUnit {
-    let raw = u64::from(item.pos);
-    let normalized = if legacy_default_units && item.unit.is_empty() { raw / 2 } else { raw };
-    hwpforge_core::TabDef::clamp_position_from_unsigned(normalized)
 }
 
 // ── HWPX string → enum parsing helpers ──────────────────────────
@@ -305,19 +807,6 @@ fn parse_strikeout_shape(s: &str) -> StrikeoutShape {
     }
 }
 
-/// Parses a HWPX line spacing type string to [`LineSpacingType`].
-///
-/// Note: HWPX uses `"PERCENT"` for [`LineSpacingType::Percentage`].
-fn parse_line_spacing_type(s: &str) -> LineSpacingType {
-    match s.to_ascii_uppercase().as_str() {
-        "PERCENT" => LineSpacingType::Percentage,
-        "FIXED" => LineSpacingType::Fixed,
-        "BETWEEN_LINES" => LineSpacingType::BetweenLines,
-        "AT_LEAST" => LineSpacingType::AtLeast,
-        _ => LineSpacingType::Percentage,
-    }
-}
-
 /// Parses a HWPX outline type string to [`OutlineType`].
 fn parse_outline_type(s: &str) -> OutlineType {
     match s.to_ascii_uppercase().as_str() {
@@ -327,13 +816,38 @@ fn parse_outline_type(s: &str) -> OutlineType {
     }
 }
 
-/// Parses a HWPX shadow type string to [`ShadowType`].
-fn parse_shadow_type(s: &str) -> ShadowType {
-    match s.to_ascii_uppercase().as_str() {
+/// Parses `<hh:shadow>` into a [`CharShadow`], naming each value it could
+/// not keep (an unknown type falls back to NONE, a bad color to the default
+/// color, an out-of-range offset is clamped).
+fn parse_char_shadow(s: &HxShadow) -> (CharShadow, Vec<String>) {
+    let mut problems = Vec::new();
+    let kind = match s.shadow_type.to_ascii_uppercase().as_str() {
         "NONE" => ShadowType::None,
         "DROP" => ShadowType::Drop,
-        _ => ShadowType::None,
+        "CONTINUOUS" => ShadowType::Continuous,
+        _ => {
+            problems.push(format!("type {:?}", s.shadow_type));
+            ShadowType::None
+        }
+    };
+    let color = if s.color.eq_ignore_ascii_case("none") {
+        None
+    } else if let Ok(c) = Color::from_hex_rgb(&s.color) {
+        Some(c)
+    } else {
+        problems.push(format!("color {:?}", s.color));
+        CharShadow::DEFAULT.color()
+    };
+    let (x, x_clamped) = ShadowOffset::saturating_from_i32(s.offset_x);
+    let (y, y_clamped) = ShadowOffset::saturating_from_i32(s.offset_y);
+    if x_clamped || y_clamped {
+        problems.push(format!("offset ({}, {})", s.offset_x, s.offset_y));
     }
+    let shadow = CharShadow::new(kind)
+        .with_color(color)
+        .expect("from_hex_rgb and DEFAULT colors have a zero upper byte")
+        .with_offset(x, y);
+    (shadow, problems)
 }
 
 /// Parses a HWPX shade color string into `Option<Color>`.
@@ -425,8 +939,9 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         .as_ref()
         .map(|o| parse_outline_type(&o.outline_type))
         .unwrap_or(OutlineType::None);
-    shape.shadow_type =
-        cp.shadow.as_ref().map(|s| parse_shadow_type(&s.shadow_type)).unwrap_or(ShadowType::None);
+    // No `<hh:shadow>` (older Hancom versions omit it for kind 0): the
+    // default, without a warning — the kind is NONE either way.
+    shape.shadow = cp.shadow.as_ref().map_or(CharShadow::DEFAULT, |s| parse_char_shadow(s).0);
     shape.emboss_type = if cp.emboss.is_some() { EmbossType::Emboss } else { EmbossType::None };
     shape.engrave_type =
         if cp.engrave.is_some() { EngraveType::Engrave } else { EngraveType::None };
@@ -437,8 +952,7 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
     shape.char_offset = cp.offset.as_ref().map_or(0, |o| o.hangul);
     shape.use_kerning = cp.use_kerning != 0;
     shape.use_font_space = cp.use_font_space != 0;
-    shape.border_fill_id =
-        if cp.border_fill_id_ref == 2 { None } else { Some(cp.border_fill_id_ref) };
+    shape.border_fill_id = Some(cp.border_fill_id_ref);
     shape
 }
 
@@ -475,7 +989,10 @@ fn parse_emphasis_type(s: &str) -> EmphasisType {
 }
 
 /// Converts an `HxParaPr` XML type into an `HwpxParaShape`.
-fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
+fn convert_para_pr(
+    pp: &HxParaPr,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<HwpxParaShape> {
     let default_para_shape = HwpxParaShape::default();
     let alignment = pp
         .align
@@ -484,9 +1001,10 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         .unwrap_or(default_para_shape.alignment);
 
     // Margin and line spacing come from hp:switch/hp:default
-    let (margin_left, margin_right, indent, spacing_before, spacing_after) = extract_margins(pp);
+    let (margin_left, margin_right, indent, spacing_before, spacing_after) =
+        extract_margins(pp, warnings)?;
 
-    let (line_spacing, line_spacing_type) = extract_line_spacing(pp);
+    let (line_spacing, line_spacing_type) = extract_line_spacing(pp, warnings)?;
 
     let (break_latin_word, break_non_latin_word, line_wrap) = pp
         .break_setting
@@ -539,8 +1057,21 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
     let checked = pp.checked != 0;
     let tab_pr_id_ref = pp.tab_pr_id_ref;
     let condense = pp.condense;
+    let vertical_align = pp
+        .align
+        .as_ref()
+        .map(|a| a.vertical.trim())
+        .filter(|v| !v.is_empty())
+        .map_or(default_para_shape.vertical_align, str::to_string);
+    let offset = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
+    let border_offset = pp.border.as_ref().map_or(default_para_shape.border_offset, |b| {
+        [b.offset_left, b.offset_right, b.offset_top, b.offset_bottom].map(offset)
+    });
+    let border_connect = pp.border.as_ref().is_some_and(|b| b.connect != 0);
+    let border_ignore_margin = pp.border.as_ref().is_some_and(|b| b.ignore_margin != 0);
 
-    HwpxParaShape {
+    Ok(HwpxParaShape {
+        font_line_height: pp.font_line_height,
         alignment,
         margin_left,
         margin_right,
@@ -564,7 +1095,11 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         checked,
         tab_pr_id_ref,
         condense,
-    }
+        vertical_align,
+        border_offset,
+        border_connect,
+        border_ignore_margin,
+    })
 }
 
 /// Parses `breakLatinWord` wire values into a [`WordBreakType`].
@@ -611,51 +1146,226 @@ fn convert_style(s: &HxStyle) -> HwpxStyle {
     }
 }
 
-/// Extracts margin values from the switch/default block.
-///
-/// Searches all `<hp:switch>` elements for one whose `<hp:default>` contains
-/// a `<hh:margin>` child (some `paraPr` have multiple switches).
-fn extract_margins(pp: &HxParaPr) -> (HwpUnit, HwpUnit, HwpUnit, HwpUnit, HwpUnit) {
-    let z = HwpUnit::ZERO;
-    let margin = pp.switches.iter().find_map(|sw| sw.default.as_ref()?.margin.as_ref());
-    let Some(margin) = margin else {
-        return (z, z, z, z, z);
-    };
-
-    let to_unit = |opt: &Option<crate::schema::header::HxUnitValue>| -> HwpUnit {
-        opt.as_ref().and_then(|v| HwpUnit::new(v.value).ok()).unwrap_or(z)
-    };
-
-    (
-        to_unit(&margin.left),
-        to_unit(&margin.right),
-        to_unit(&margin.indent),
-        to_unit(&margin.prev),
-        to_unit(&margin.next),
-    )
+// The selected branch is the only source of fields; never merge branches.
+fn select_measure_branch(
+    pp: &HxParaPr,
+    line: bool,
+) -> HwpxResult<Option<(&crate::schema::header::HxSwitch, bool)>> {
+    let mut selected = None;
+    for sw in &pp.switches {
+        let has_payload =
+            sw.cases
+                .iter()
+                .any(|c| if line { c.line_spacing.is_some() } else { c.margin.is_some() })
+                || sw.default.as_ref().is_some_and(|d| {
+                    if line {
+                        d.line_spacing.is_some()
+                    } else {
+                        d.margin.is_some()
+                    }
+                });
+        if !has_payload {
+            continue;
+        }
+        if selected.is_some() {
+            return Err(invalid(format!("paraPr {} multiple measure blocks", pp.id)));
+        }
+        let supported = sw.cases.iter().find(|c| c.required_namespace == MEASURE_NAMESPACE);
+        if let Some(c) = supported {
+            if !(if line { c.line_spacing.is_some() } else { c.margin.is_some() }) {
+                return Err(invalid(format!("paraPr {} selected case missing payload", pp.id)));
+            }
+        } else if !sw.default.as_ref().is_some_and(|d| {
+            if line {
+                d.line_spacing.is_some()
+            } else {
+                d.margin.is_some()
+            }
+        }) {
+            return Err(invalid(format!("paraPr {} unsupported namespace without default", pp.id)));
+        }
+        selected = Some((sw, supported.is_some()));
+    }
+    Ok(selected)
 }
 
-/// Extracts line spacing from the switch/default block.
-///
-/// Searches all `<hp:switch>` elements for one whose `<hp:default>` contains
-/// a `<hh:lineSpacing>` child (some `paraPr` have multiple switches).
-fn extract_line_spacing(pp: &HxParaPr) -> (i32, hwpforge_foundation::LineSpacingType) {
-    use hwpforge_foundation::LineSpacingType;
-    let default_ls = (160, LineSpacingType::Percentage);
-    let ls = pp.switches.iter().find_map(|sw| sw.default.as_ref()?.line_spacing.as_ref());
-    let Some(ls) = ls else {
-        return default_ls;
-    };
+fn normalized(
+    warnings: &mut Vec<super::DecodeWarning>,
+    definition: &'static str,
+    id: u32,
+    field: &str,
+    reason: &str,
+) {
+    warnings.push(super::DecodeWarning::ParagraphMeasureNormalized {
+        definition,
+        id,
+        field: field.into(),
+        reason: reason.into(),
+    });
+}
 
-    let spacing_type = if ls.spacing_type.is_empty() {
-        LineSpacingType::Percentage
-    } else {
-        parse_line_spacing_type(&ls.spacing_type)
+type Margins =
+    (ParagraphMeasure, ParagraphMeasure, ParagraphMeasure, ParagraphMeasure, ParagraphMeasure);
+fn margin_values(m: &crate::schema::header::HxMargin, case: bool, id: u32) -> HwpxResult<Margins> {
+    let read = |field: &str, v: &Option<crate::schema::header::HxUnitValue>| {
+        let decode = || {
+            let v = v.as_ref().ok_or_else(|| invalid("partial margin payload"))?;
+            let value = i32::try_from(v.value)
+                .map_err(|_| invalid("margin value outside signed 32-bit range"))?;
+            if case {
+                case_measure(value, &v.unit)
+            } else if v.unit == "HWPUNIT" {
+                unpack_margin(value)
+            } else {
+                Err(invalid(format!("packed margin unknown unit {:?}", v.unit)))
+            }
+        };
+        decode().map_err(|e| invalid(format!("paraPr {id}.{field}: {e}")))
     };
+    Ok((
+        read("left", &m.left)?,
+        read("right", &m.right)?,
+        read("intent", &m.indent)?,
+        read("prev", &m.prev)?,
+        read("next", &m.next)?,
+    ))
+}
 
-    // Saturate to i32::MAX if value exceeds range (extremely rare in real HWPX files)
-    let value = ls.value.min(i32::MAX as u32) as i32;
-    (value, spacing_type)
+fn extract_margins(pp: &HxParaPr, warnings: &mut Vec<super::DecodeWarning>) -> HwpxResult<Margins> {
+    let selected = select_measure_branch(pp, false)?;
+    if pp.margin.is_some() && selected.is_some() {
+        return Err(invalid(format!("paraPr {} direct/switch margin conflict", pp.id)));
+    }
+    if let Some((sw, case)) = selected {
+        if case {
+            let m = sw
+                .cases
+                .iter()
+                .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                .unwrap()
+                .margin
+                .as_ref()
+                .unwrap();
+            let values = margin_values(m, true, pp.id)?;
+            if let Some(default) = sw.default.as_ref().and_then(|d| d.margin.as_ref()) {
+                for (field, value, raw) in [
+                    ("left", values.0, &default.left),
+                    ("right", values.1, &default.right),
+                    ("intent", values.2, &default.indent),
+                    ("prev", values.3, &default.prev),
+                    ("next", values.4, &default.next),
+                ] {
+                    if raw.as_ref().is_none_or(|r| {
+                        r.unit != "HWPUNIT"
+                            || pack_margin(value).ok().map(i64::from) != Some(r.value)
+                    }) {
+                        normalized(
+                            warnings,
+                            "paraPr",
+                            pp.id,
+                            field,
+                            "default differs from selected case; regenerate from case",
+                        );
+                    }
+                }
+            } else {
+                normalized(
+                    warnings,
+                    "paraPr",
+                    pp.id,
+                    "margin",
+                    "case-only margin; generate packed default",
+                );
+            }
+            return Ok(values);
+        }
+        normalized(
+            warnings,
+            "paraPr",
+            pp.id,
+            "margin",
+            "no supported case; selected packed default",
+        );
+        return margin_values(sw.default.as_ref().unwrap().margin.as_ref().unwrap(), false, pp.id);
+    }
+    if let Some(m) = &pp.margin {
+        normalized(
+            warnings,
+            "paraPr",
+            pp.id,
+            "margin",
+            "direct packed margin will be emitted as switch",
+        );
+        return margin_values(m, false, pp.id);
+    }
+    let z = ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO);
+    Ok((z, z, z, z, z))
+}
+
+fn extract_line_spacing(
+    pp: &HxParaPr,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<(i32, LineSpacingType)> {
+    let selected = select_measure_branch(pp, true)?;
+    if pp.line_spacing.is_some() && selected.is_some() {
+        return Err(invalid(format!("paraPr {} direct/switch lineSpacing conflict", pp.id)));
+    }
+    let read = |ls: &crate::schema::header::HxLineSpacing, case| {
+        decode_line_spacing(ls.value, &ls.spacing_type, &ls.unit, case)
+            .map_err(|e| invalid(format!("paraPr {}.lineSpacing: {e}", pp.id)))
+    };
+    if let Some((sw, case)) = selected {
+        if case {
+            let ls = sw
+                .cases
+                .iter()
+                .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                .unwrap()
+                .line_spacing
+                .as_ref()
+                .unwrap();
+            let value = read(ls, true)?;
+            if let Some(d) = sw.default.as_ref().and_then(|d| d.line_spacing.as_ref()) {
+                if read(d, false).ok() != Some(value) {
+                    normalized(
+                        warnings,
+                        "paraPr",
+                        pp.id,
+                        "lineSpacing",
+                        "default differs from selected case; regenerate from case",
+                    );
+                }
+            } else {
+                normalized(
+                    warnings,
+                    "paraPr",
+                    pp.id,
+                    "lineSpacing",
+                    "case-only lineSpacing; generate legacy default",
+                );
+            }
+            return Ok(value);
+        }
+        normalized(
+            warnings,
+            "paraPr",
+            pp.id,
+            "lineSpacing",
+            "no supported case; selected legacy default",
+        );
+        return read(sw.default.as_ref().unwrap().line_spacing.as_ref().unwrap(), false);
+    }
+    if let Some(ls) = &pp.line_spacing {
+        normalized(
+            warnings,
+            "paraPr",
+            pp.id,
+            "lineSpacing",
+            "direct lineSpacing will be emitted as switch",
+        );
+        return read(ls, false);
+    }
+    Ok((160, LineSpacingType::Percentage))
 }
 
 /// Converts an `HxBorderFill` XML type into an `HwpxBorderFill`.
@@ -878,13 +1588,16 @@ mod tests {
         assert_eq!(tabs.len(), 4);
         assert_eq!(tabs[3].id, 3);
         assert_eq!(tabs[3].stops.len(), 1);
-        assert_eq!(tabs[3].stops[0].position, HwpUnit::new(15000).unwrap());
+        assert_eq!(
+            tabs[3].stops[0].position,
+            hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap())
+        );
         assert_eq!(tabs[3].stops[0].align, TabAlign::Left);
         assert_eq!(tabs[3].stops[0].leader.as_hwpx_str(), "DASH");
     }
 
     #[test]
-    fn parse_header_tab_properties_clamps_oversized_positions_without_wrap() {
+    fn parse_header_tab_properties_rejects_oversized_positions_without_wrap() {
         let xml = r##"<head version="1.4" secCnt="1">
             <refList>
                 <tabProperties itemCnt="4">
@@ -905,10 +1618,8 @@ mod tests {
             </refList>
         </head>"##;
 
-        let store = parse_header(xml).unwrap().style_store;
-        let tabs: Vec<_> = store.iter_tabs().cloned().collect();
-        assert_eq!(tabs[3].stops.len(), 1);
-        assert_eq!(tabs[3].stops[0].position, HwpUnit::new(HwpUnit::MAX_VALUE).unwrap());
+        // 이것을 실패시키는 것: 변이 12 — 범위 오류를 clamp로 바꾸기.
+        assert!(parse_header(xml).is_err());
     }
 
     #[test]
@@ -933,9 +1644,47 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert!(matches!(border_fill.fill, Some(HwpxFill::WinBrush { .. })));
         assert_eq!(border_fill.fill_hatch_style.as_deref(), Some("HORIZONTAL"));
+    }
+
+    /// Review r1 HIGH-1: an embedded font or substitute font (flag or a
+    /// binary reference) is reported as lost content; a plain one is not.
+    /// 이것을 실패시키는 것: 보고 삭제 · 대체 글꼴 참조 무시 · 일반 글꼴에도 보고.
+    #[test]
+    fn embedded_fonts_are_reported_as_lost() {
+        let header = |font_embedded: u32, subst: &str| {
+            format!(
+                r#"<head version="1.4" secCnt="1"><refList><fontfaces itemCnt="1"><fontface lang="HANGUL" fontCnt="1"><font id="0" face="A" type="TTF" isEmbedded="{font_embedded}">{subst}</font></fontface></fontfaces></refList></head>"#
+            )
+        };
+        let lost = |xml: String| {
+            parse_header(&xml)
+                .unwrap()
+                .warnings
+                .iter()
+                .filter(|w| matches!(w, crate::DecodeWarning::ContentLost { kind, .. } if kind == "font_embedding"))
+                .count()
+        };
+        let plain = r#"<substFont face="B" type="TTF" isEmbedded="0" binaryItemIDRef=""/>"#;
+        assert_eq!(lost(header(0, plain)), 0);
+        assert_eq!(lost(header(0, "")), 0);
+        assert_eq!(lost(header(1, plain)), 1);
+        assert_eq!(
+            lost(header(
+                0,
+                r#"<substFont face="B" type="TTF" isEmbedded="1" binaryItemIDRef=""/>"#
+            )),
+            1
+        );
+        assert_eq!(
+            lost(header(
+                0,
+                r#"<substFont face="B" type="TTF" isEmbedded="0" binaryItemIDRef="font1"/>"#
+            )),
+            1
+        );
     }
 
     #[test]
@@ -963,7 +1712,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert!(matches!(
             border_fill.gradient_fill,
             Some(ref fill)
@@ -1001,7 +1750,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert!(matches!(
             border_fill.image_fill,
             Some(ref fill)
@@ -1034,7 +1783,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert_eq!(border_fill.slash.border_type, "CENTER_BELOW");
         assert!(border_fill.slash.crooked);
         assert!(!border_fill.slash.is_counter);
@@ -1198,13 +1947,13 @@ mod tests {
                         <switch>
                             <default>
                                 <margin>
-                                    <intent value="200"/>
-                                    <left value="100"/>
-                                    <right value="50"/>
-                                    <prev value="300"/>
-                                    <next value="150"/>
+                                    <intent value="200" unit="HWPUNIT"/>
+                                    <left value="100" unit="HWPUNIT"/>
+                                    <right value="50" unit="HWPUNIT"/>
+                                    <prev value="300" unit="HWPUNIT"/>
+                                    <next value="150" unit="HWPUNIT"/>
                                 </margin>
-                                <lineSpacing type="PERCENT" value="200"/>
+                                <lineSpacing type="PERCENT" value="200" unit="HWPUNIT"/>
                             </default>
                         </switch>
                     </paraPr>
@@ -1214,11 +1963,11 @@ mod tests {
         let store = parse_header(xml).unwrap().style_store;
         let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.indent.as_i32(), 200);
-        assert_eq!(ps.margin_left.as_i32(), 100);
-        assert_eq!(ps.margin_right.as_i32(), 50);
-        assert_eq!(ps.spacing_before.as_i32(), 300);
-        assert_eq!(ps.spacing_after.as_i32(), 150);
+        assert_eq!(ps.indent.as_hwp_unit().unwrap().as_i32(), 100);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 50);
+        assert_eq!(ps.margin_right.as_hwp_unit().unwrap().as_i32(), 25);
+        assert_eq!(ps.spacing_before.as_hwp_unit().unwrap().as_i32(), 150);
+        assert_eq!(ps.spacing_after.as_hwp_unit().unwrap().as_i32(), 75);
         assert_eq!(ps.line_spacing, 200);
         assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
@@ -1236,7 +1985,7 @@ mod tests {
         </head>"#;
         let store = parse_header(xml).unwrap().style_store;
         let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
-        assert_eq!(ps.margin_left, HwpUnit::ZERO);
+        assert_eq!(ps.margin_left, hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO));
         assert_eq!(ps.line_spacing, 160);
         assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
         assert!(ps.snap_to_grid);
@@ -1350,10 +2099,10 @@ mod tests {
                         <switch>
                             <default>
                                 <margin>
-                                    <left value="0"/>
-                                    <right value="0"/>
+                                    <left value="0" unit="HWPUNIT"/>
+                                    <right value="0" unit="HWPUNIT"/><intent value="0" unit="HWPUNIT"/><prev value="0" unit="HWPUNIT"/><next value="0" unit="HWPUNIT"/>
                                 </margin>
-                                <lineSpacing type="PERCENT" value="160"/>
+                                <lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>
                             </default>
                         </switch>
                     </paraPr>

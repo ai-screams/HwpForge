@@ -215,20 +215,25 @@ pub struct CellPlan {
 
 /// Enumerates class-B cell candidates across all tables of the document.
 ///
-/// Read-only. A candidate is a [stampable empty](is_stampable_empty) anchor
-/// cell with at least one [adjacent label](adjacent_labels); orphan empty
+/// Read-only. A candidate is a stampable empty (`is_stampable_empty`) anchor
+/// cell with at least one adjacent label (`adjacent_labels`); orphan empty
 /// cells (53% in the government-form corpus — matrix interiors and spacers)
 /// are NOT candidates and can only be targeted by explicit specs. Tables
 /// whose grid cannot be built are reported in
 /// [`skipped_tables`](CellPlan::skipped_tables).
 pub fn plan_cells(document: &Document<Draft>) -> CellPlan {
     let entries = tables_in_document(document);
+    let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections());
 
     // Pass 1: per-table grids + the document-wide normalized-label tally.
     let mut grids: Vec<Option<TableGrid>> = Vec::with_capacity(entries.len());
     let mut skipped_tables = Vec::new();
     let mut tally = HashMap::new();
     for entry in &entries {
+        if table_in_field(entry, &fields) {
+            grids.push(None);
+            continue;
+        }
         match TableGrid::from_table(entry.table) {
             Ok(grid) => {
                 tally_normalized_labels(entry.table, &grid, &mut tally);
@@ -279,6 +284,15 @@ pub fn plan_cells(document: &Document<Draft>) -> CellPlan {
     }
 
     CellPlan { candidates, skipped_tables }
+}
+
+/// Field interpretation stays in Core; this only translates table addresses.
+pub(crate) fn table_in_field(
+    entry: &TableEntry<'_>,
+    fields: &hwpforge_core::field_inventory::FieldInventory,
+) -> bool {
+    let path = crate::table_inventory::core_path(entry);
+    fields.protects(path.section(), path.relative())
 }
 
 fn table_path(entry: &TableEntry<'_>) -> String {

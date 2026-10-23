@@ -66,8 +66,11 @@ fn build_style_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::new();
 
     // Fonts
-    store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
-    store.push_font(HwpxFont::new(1, "함초롬바탕", "HANGUL"));
+    // 이것을 실패시키는 것: 언어별 원본 글꼴 등록을 HANGUL/LATIN 일부로 되돌리기(실제 example 실행).
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+        store.push_font(HwpxFont::new(1, "함초롬바탕", lang));
+    }
 
     // CS 0: Normal 10pt
     store.push_char_shape(HwpxCharShape::default());

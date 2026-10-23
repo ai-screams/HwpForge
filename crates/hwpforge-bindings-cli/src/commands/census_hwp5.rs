@@ -7,7 +7,10 @@ use serde::Serialize;
 use hwpforge_smithy_hwp5::{census_hwp5, Hwp5CensusReport};
 use hwpforge_smithy_hwpx::{PackageEntryInfo, PackageReader};
 
-use crate::analysis::hwpx_paths::{collect_section_path_inventory, HwpxPathOccurrence};
+use crate::analysis::hwpx_paths::{
+    collect_master_path_inventory, collect_section_path_inventory, HwpxPathOccurrence,
+    MasterPartInventory,
+};
 use crate::error::{check_file_size, read_input, CliError};
 
 #[derive(Debug, Serialize)]
@@ -54,6 +57,8 @@ struct HwpxCompanionCensus {
     bindata_paths: Vec<String>,
     content_hpf_mentions_chart: bool,
     path_inventory: Vec<HwpxPathOccurrence>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    master_path_inventory: Vec<MasterPartInventory>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,7 +172,11 @@ fn census_hwpx_companion(path: &Path, json_mode: bool) -> HwpxCompanionCensus {
         .exit(json_mode, 2)
     });
 
+    let master_path_inventory = collect_master_path_inventory(&mut pkg).unwrap_or_else(|err| {
+        CliError::new("HWPX_CENSUS_FAILED", err.to_string()).exit(json_mode, 2)
+    });
     HwpxCompanionCensus {
+        master_path_inventory,
         path: path.display().to_string(),
         package_entries,
         section_count,
@@ -374,7 +383,14 @@ fn canonicalize_external_hwpx_companion(companion: &mut HwpxCompanionCensus) {
     for path in &mut companion.bindata_paths {
         *path = canonicalize_external_string(path);
     }
-    for occurrence in &mut companion.path_inventory {
+    for master in &mut companion.master_path_inventory {
+        master.part = canonicalize_external_string(&master.part);
+    }
+    for occurrence in companion
+        .path_inventory
+        .iter_mut()
+        .chain(companion.master_path_inventory.iter_mut().flat_map(|m| &mut m.occurrences))
+    {
         occurrence.kind = canonicalize_external_string(&occurrence.kind);
         occurrence.path = canonicalize_external_string(&occurrence.path);
         occurrence.ref_id =

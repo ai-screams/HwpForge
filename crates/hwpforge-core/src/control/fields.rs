@@ -4,6 +4,7 @@
 //! Houses [`PathFieldCommand`], [`RefTarget`], and [`InlinePageKind`] — the
 //! typed payloads carried by the field variants of [`Control`](super::Control).
 
+use hwpforge_foundation::NumberFormatType;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +54,7 @@ impl PathFieldCommand {
 /// Cross-reference target identifier (Wave 12m Phase 2).
 ///
 /// Replaces the previous `target_name: String` field on
-/// [`Control::CrossRef`] with a type-safe enum that distinguishes the
+/// [`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the
 /// three observed wire forms in HWP5 `%xrf` Command strings:
 ///
 /// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).
@@ -113,6 +114,51 @@ pub enum InlinePageKind {
     Unknown,
 }
 
+/// Which counter a [`Control::AutoNumber`] shows (HWPX `<hp:autoNum
+/// numType>`): a caption's picture, table or equation number.
+///
+/// [`Control::AutoNumber`]: crate::control::Control::AutoNumber
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum AutoNumberKind {
+    /// Picture number (`numType="PICTURE"`).
+    Picture,
+    /// Table number (`numType="TABLE"`).
+    Table,
+    /// Equation number (`numType="EQUATION"`).
+    Equation,
+}
+
+/// How a [`Control::AutoNumber`] writes its number (HWPX
+/// `<hp:autoNumFormat>`). The default is a plain digit: `DIGIT`, no user
+/// character, no prefix or suffix, not superscript.
+///
+/// [`Control::AutoNumber`]: crate::control::Control::AutoNumber
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::AutoNumberFormat;
+/// use hwpforge_foundation::NumberFormatType;
+///
+/// let format = AutoNumberFormat::default();
+/// assert_eq!(format.number_type, NumberFormatType::Digit);
+/// assert_eq!(format.prefix, None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
+pub struct AutoNumberFormat {
+    /// Number shape (`type`).
+    pub number_type: NumberFormatType,
+    /// User character (`userChar`); `None` = empty.
+    pub user_char: Option<char>,
+    /// Character before the number (`prefixChar`); `None` = empty.
+    pub prefix: Option<char>,
+    /// Character after the number (`suffixChar`); `None` = empty.
+    pub suffix: Option<char>,
+    /// The number is superscript (`supscript`).
+    pub superscript: bool,
+}
+
 /// Which counter a [`Control::NewNumber`] restarts.
 ///
 /// [`Control::NewNumber`]: crate::control::Control::NewNumber
@@ -138,4 +184,106 @@ pub enum NewNumberKind {
     Equation,
     /// Unmapped wire value (6-15) — preserved as a warning signal only.
     Unknown,
+}
+
+/// A field boundary whose body remains in the surrounding ordinary runs.
+///
+/// Unlike a folded field control, this representation can cross run and
+/// paragraph boundaries. Identifiers and parameters are carried verbatim;
+/// the body is never a synthesized evaluation of a formula or placeholder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum FieldBoundary {
+    /// Start of the range.
+    Start(Box<FieldStart>),
+    /// End of the range, referring to the start's instance identifier.
+    End {
+        /// Identifier of the matching start.
+        begin_id: String,
+        /// Original field tag.
+        field_id: String,
+    },
+}
+
+/// Metadata of a field whose text lives in ordinary runs.
+///
+/// String-valued flags retain the authored spelling without inventing a
+/// value when the source omitted one. Parameters retain their scalar type,
+/// name and value; none are evaluated by Core.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct FieldStart {
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) recovery: crate::source_xml::RecoveryStamp,
+    /// The source has no matching end in this flow. Readers retain the
+    /// original start and body without synthesizing an end. The remaining
+    /// flow is protected from editing. This serialized flag is descriptive,
+    /// not validation authority: recovery requires original package bytes
+    /// with a matching unmatched start. HWPX output also verifies the original
+    /// SourceMap address and the current Core address/ID. Source claims and
+    /// package bytes are never serialized; the flag alone is invalid.
+    #[serde(default)]
+    pub unclosed: bool,
+    /// Instance identifier, shared by the end marker.
+    pub id: String,
+    /// Field kind, such as `CLICK_HERE`, `BOOKMARK` or `FORMULA`.
+    pub kind: String,
+    /// Authored field name.
+    pub name: String,
+    /// Editability flag.
+    pub editable: String,
+    /// Recalculation flag.
+    pub dirty: String,
+    /// Stacking order.
+    pub z_order: String,
+    /// Original field tag.
+    pub field_id: String,
+    /// Authored metadata tag.
+    pub meta_tag: String,
+    /// Optional parameter group name; `None` means no parameter group.
+    pub parameter_name: Option<String>,
+    /// Scalar field parameters in their original cross-type child order.
+    pub parameters: Vec<FieldParameter>,
+    /// Annotation paragraphs owned by the start, distinct from the visible
+    /// range body in ordinary runs. `None` means no annotation list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<Vec<crate::paragraph::Paragraph>>,
+}
+
+/// A typed scalar parameter of a range field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum FieldParameter {
+    /// String parameter, including its whitespace-preservation attribute.
+    String {
+        /// Parameter name.
+        name: String,
+        /// Parameter value.
+        value: String,
+        /// Original whitespace-preservation attribute.
+        xml_space: String,
+    },
+    /// Integer parameter; spelling is retained without numeric coercion.
+    Integer {
+        /// Parameter name.
+        name: String,
+        /// Parameter value.
+        value: String,
+    },
+    /// Boolean parameter; spelling is retained without coercion.
+    Boolean {
+        /// Parameter name.
+        name: String,
+        /// Parameter value.
+        value: String,
+    },
+}
+
+impl FieldStart {
+    /// Descriptive source claim. HWPX output checks the independent base SourceMap;
+    /// local Core pairing validation alone does not certify this correspondence.
+    pub fn source_claim(&self) -> Option<&crate::source_xml::UnclosedOrigin> {
+        self.recovery.0.as_ref()
+    }
 }

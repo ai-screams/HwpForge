@@ -7,15 +7,26 @@
 //! lives in `hwpforge_smithy_hwp5::layout_hint_patch`; only the HWPX-byte
 //! rewriting lives here.
 
-use std::collections::BTreeMap;
-use std::io::{Cursor, Read as _, Write};
+use std::collections::{BTreeMap, VecDeque};
+use std::io::{Cursor, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{CompressionMethod, ZipWriter};
 
 use crate::error::{LayoutPatchError, LayoutPatchResult};
+use hwpforge_core::zip_package::{
+    open_package, PackageLimits, MAX_ENTRIES, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE,
+};
+
+fn package_error(error: hwpforge_core::CoreError) -> LayoutPatchError {
+    let detail = match error {
+        hwpforge_core::CoreError::InvalidStructure { reason, .. } => reason,
+        other => other.to_string(),
+    };
+    LayoutPatchError::Package { detail }
+}
 use hwpforge_smithy_hwp5::layout_hint_patch::{
     ParagraphLayoutHint, SectionLayoutHints, TableLayoutHint,
 };
@@ -28,14 +39,24 @@ struct RawPackage {
 
 #[derive(Debug, Clone)]
 struct RawPackageEntry {
+    opaque: bool,
     path: String,
     bytes: Vec<u8>,
     compression: CompressionMethod,
 }
 
+#[cfg(test)]
 pub(crate) fn patch_hwpx_layout_hints(
     hwpx_bytes: &[u8],
     sections: &[SectionLayoutHints],
+) -> LayoutPatchResult<Vec<u8>> {
+    patch_hwpx_part_layout_hints(hwpx_bytes, sections, &[])
+}
+
+pub(crate) fn patch_hwpx_part_layout_hints(
+    hwpx_bytes: &[u8],
+    sections: &[SectionLayoutHints],
+    masters: &[Vec<SectionLayoutHints>],
 ) -> LayoutPatchResult<Vec<u8>> {
     let mut package = RawPackage::read(hwpx_bytes)?;
     for (section_idx, section) in sections.iter().enumerate() {
@@ -48,21 +69,17 @@ pub(crate) fn patch_hwpx_layout_hints(
         let patched = patch_section_xml(&xml, section.clone())?;
         package.replace_text_entry(&path, patched);
     }
+    for (index, master) in masters.iter().flatten().enumerate() {
+        if !master.has_payload() {
+            continue;
+        }
+        let path = format!("Contents/masterpage{index}.xml");
+        let xml = package.read_text_entry(&path)?;
+        let patched = patch_section_xml(&xml, master.clone())?;
+        package.replace_text_entry(&path, patched);
+    }
     package.write()
 }
-
-/// Maximum decompressed size of a single ZIP entry (50 MiB).
-///
-/// Mirrors `smithy-hwpx::decoder::package::MAX_ENTRY_SIZE` so the secondary
-/// reader used by the HWP5→HWPX layout-hint patcher enforces the same ZIP-bomb
-/// defenses as the primary HWPX decoder.
-const MAX_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
-
-/// Maximum total decompressed size across all entries (500 MiB).
-const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
-
-/// Maximum number of entries in the archive.
-const MAX_ENTRIES: usize = 10_000;
 
 impl RawPackage {
     fn read(bytes: &[u8]) -> LayoutPatchResult<Self> {
@@ -77,56 +94,23 @@ impl RawPackage {
         max_total: u64,
         max_entries: usize,
     ) -> LayoutPatchResult<Self> {
-        let cursor = Cursor::new(bytes);
-        let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| LayoutPatchError::Package { detail: format!("open hwpx package: {e}") })?;
-
-        if archive.len() > max_entries {
-            return Err(LayoutPatchError::Package {
-                detail: format!(
-                    "hwpx package has {} entries, exceeds limit of {max_entries}",
-                    archive.len()
-                ),
-            });
-        }
-
-        let mut entries = Vec::with_capacity(archive.len());
+        let mut archive = open_package(
+            bytes,
+            PackageLimits { entry: max_entry, total: max_total, entries: max_entries },
+        )
+        .map_err(package_error)?;
+        let mut entries = Vec::with_capacity(archive.entries().len());
         let mut index_by_path = BTreeMap::new();
-        let mut total: u64 = 0;
-
-        for index in 0..archive.len() {
-            let file = archive.by_index(index).map_err(|e| LayoutPatchError::Package {
-                detail: format!("read hwpx entry #{index}: {e}"),
-            })?;
-            let path = file.name().to_string();
-            let compression = file.compression();
-            // `file.size()` comes from the ZIP central directory and can be
-            // spoofed, so cap the capacity hint and bound the reader itself
-            // with `take(max_entry + 1)` to detect over-cap entries without
-            // pre-allocating an attacker-controlled buffer.
-            let hint = file.size().min(max_entry) as usize;
-            let mut bytes = Vec::with_capacity(hint);
-            file.take(max_entry + 1).read_to_end(&mut bytes).map_err(|e| {
-                LayoutPatchError::Package { detail: format!("read '{path}' bytes: {e}") }
-            })?;
-            if bytes.len() as u64 > max_entry {
-                return Err(LayoutPatchError::Package {
-                    detail: format!(
-                        "hwpx entry '{path}' decompressed to {} bytes, exceeds limit of {max_entry}",
-                        bytes.len()
-                    ),
-                });
-            }
-            total = total.saturating_add(bytes.len() as u64);
-            if total > max_total {
-                return Err(LayoutPatchError::Package {
-                    detail: format!(
-                        "hwpx package total decompressed data ({total} bytes) exceeds limit of {max_total}"
-                    ),
-                });
-            }
-            index_by_path.insert(path.clone(), entries.len());
-            entries.push(RawPackageEntry { path, bytes, compression });
+        for index in 0..archive.entries().len() {
+            let entry = archive.entries()[index].clone();
+            let bytes = archive.read(index).map_err(package_error)?;
+            index_by_path.insert(entry.path.clone(), entries.len());
+            entries.push(RawPackageEntry {
+                opaque: archive.is_opaque(index),
+                path: entry.path,
+                bytes,
+                compression: entry.compression,
+            });
         }
 
         Ok(Self { entries, index_by_path })
@@ -138,6 +122,11 @@ impl RawPackage {
             .get(path)
             .copied()
             .ok_or_else(|| LayoutPatchError::MissingEntry { name: path.to_string() })?;
+        if self.entries[index].opaque {
+            return Err(LayoutPatchError::Package {
+                detail: format!("opaque ZIP entry selected semantically: '{path}'"),
+            });
+        }
         String::from_utf8(self.entries[index].bytes.clone()).map_err(|e| {
             LayoutPatchError::Package { detail: format!("entry '{path}' is not valid UTF-8: {e}") }
         })
@@ -153,7 +142,10 @@ impl RawPackage {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut zip = ZipWriter::new(cursor);
         for entry in &self.entries {
-            let options = SimpleFileOptions::default().compression_method(entry.compression);
+            // W0: fixed entry time (the ZIP epoch), never the clock.
+            let options = SimpleFileOptions::default()
+                .compression_method(entry.compression)
+                .last_modified_time(zip::DateTime::default());
             zip.start_file(&entry.path, options).map_err(|e| LayoutPatchError::Package {
                 detail: format!("zip start '{}': {e}", entry.path),
             })?;
@@ -171,6 +163,10 @@ impl RawPackage {
 #[derive(Debug)]
 struct SectionXmlPatchState {
     hints: SectionLayoutHints,
+    /// Header and footer table hints, split off the end of `hints.tables`
+    /// ([`Self::split_table_scopes`]); `hints.tables` keeps the body's.
+    header_tables: VecDeque<TableLayoutHint>,
+    footer_tables: VecDeque<TableLayoutHint>,
     element_stack: Vec<String>,
     paragraph_stack: Vec<ParagraphLayoutHint>,
     table_stack: Vec<TableLayoutHint>,
@@ -180,10 +176,59 @@ impl SectionXmlPatchState {
     fn new(hints: SectionLayoutHints) -> Self {
         Self {
             hints,
+            header_tables: VecDeque::new(),
+            footer_tables: VecDeque::new(),
             element_stack: Vec::new(),
             paragraph_stack: Vec::new(),
             table_stack: Vec::new(),
         }
+    }
+
+    /// Splits the table hints (body, then headers, then footers) by the
+    /// number of tables of each scope in `xml`: the encoder writes a
+    /// header/footer into its anchor paragraph, so the scopes' tables
+    /// interleave in the XML while each scope's own order is fixed.
+    ///
+    /// 이것을 실패시키는 것: 나누지 않고 모든 표를 한 큐에서 꺼내기
+    /// (`patch_section_xml_takes_header_tables_from_the_header_queue`).
+    fn split_table_scopes(&mut self, xml: &str) -> LayoutPatchResult<()> {
+        let (mut headers, mut footers) = (0usize, 0usize);
+        let mut scopes: Vec<String> = Vec::new();
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event().map_err(|e| LayoutPatchError::Package {
+                detail: format!("parse generated section xml: {e}"),
+            })? {
+                Event::Start(event) => {
+                    let local = local_name(event.name().as_ref()).to_string();
+                    if local == "tbl" {
+                        match scopes
+                            .iter()
+                            .rev()
+                            .find(|n| matches!(n.as_str(), "header" | "footer"))
+                        {
+                            Some(scope) if scope == "header" => headers += 1,
+                            Some(_) => footers += 1,
+                            None => {}
+                        }
+                    }
+                    scopes.push(local);
+                }
+                Event::End(_) => {
+                    scopes.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let scoped = headers + footers;
+        let body = self.hints.tables.len().checked_sub(scoped).ok_or_else(|| {
+            LayoutPatchError::Package { detail: "table layout hint count underflow".into() }
+        })?;
+        let mut rest = self.hints.tables.split_off(body);
+        self.footer_tables = rest.split_off(headers);
+        self.header_tables = rest;
+        Ok(())
     }
 
     fn handle_start<W: Write>(
@@ -243,6 +288,8 @@ impl SectionXmlPatchState {
     fn finish(self) -> LayoutPatchResult<()> {
         if !self.hints.paragraphs.is_empty()
             || !self.hints.tables.is_empty()
+            || !self.header_tables.is_empty()
+            || !self.footer_tables.is_empty()
             || !self.paragraph_stack.is_empty()
         {
             return Err(LayoutPatchError::Package {
@@ -289,8 +336,26 @@ impl SectionXmlPatchState {
         Ok(())
     }
 
+    /// Takes the next table hint of the scope being streamed: the innermost
+    /// enclosing `<hp:header>`/`<hp:footer>`, else the body. The encoder
+    /// writes a header/footer into its anchor paragraph, so header and body
+    /// tables interleave in the XML; each scope's own order is fixed.
+    ///
+    /// 이것을 실패시키는 것: 모든 표를 본문 큐에서 꺼내기
+    /// (`patch_section_xml_takes_header_tables_from_the_header_queue`).
     fn push_table_hint(&mut self) -> LayoutPatchResult<()> {
-        let hint = self.hints.tables.pop_front().ok_or_else(|| LayoutPatchError::Package {
+        let scope = self
+            .element_stack
+            .iter()
+            .rev()
+            .find(|name| matches!(name.as_str(), "header" | "footer"))
+            .map(String::as_str);
+        let queue = match scope {
+            Some("header") => &mut self.header_tables,
+            Some(_) => &mut self.footer_tables,
+            None => &mut self.hints.tables,
+        };
+        let hint = queue.pop_front().ok_or_else(|| LayoutPatchError::Package {
             detail: "table layout hint count underflow".into(),
         })?;
         self.table_stack.push(hint);
@@ -321,6 +386,7 @@ fn patch_section_xml(xml: &str, hints: SectionLayoutHints) -> LayoutPatchResult<
     let mut writer = Writer::new(Cursor::new(Vec::with_capacity(xml.len() + 1024)));
     let mut buf = Vec::new();
     let mut state = SectionXmlPatchState::new(hints);
+    state.split_table_scopes(xml)?;
 
     loop {
         match reader.read_event_into(&mut buf).map_err(|e| LayoutPatchError::Package {
@@ -385,6 +451,7 @@ mod tests {
     use super::*;
     use hwpforge_smithy_hwp5::schema::section::Hwp5ParaLineSeg;
     use std::collections::VecDeque;
+    use zip::ZipArchive;
 
     fn rewrite_empty_element(xml: &str, target: &str, value: &str) -> String {
         let mut reader = Reader::from_str(xml);
@@ -452,6 +519,45 @@ mod tests {
         assert!(err.to_string().contains("exceeds limit of 3"), "got: {err}");
     }
 
+    /// 이것을 실패시키는 것: layout-hint 읽기가 공용 ZIP 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_layout_rejects_parent_part() {
+        let bytes = make_zip(&[("Contents/../unused.xml", b"x")]);
+        assert!(matches!(patch_hwpx_layout_hints(&bytes, &[]),
+            Err(LayoutPatchError::Package { detail })
+            if detail == "invalid package part name 'Contents/../unused.xml'"));
+    }
+
+    // 이것을 실패시키는 것: convert RawPackage에서 core opaque 표시 전달 또는 의미 읽기 검사를 제거.
+    // 이것을 실패시키는 것: convert 복사 목록에서 빈 opaque 폴더를 제외하기.
+    // 이번 보강을 실패시키는 것: opaque payload 대신 빈 바이트를 저장하기.
+    #[test]
+    fn w2_convert_raw_opaque_semantic_gate_and_copy() {
+        for names in
+            [vec!["Unused/./a.bin"], vec!["Unused/./"], vec!["Unused", "Unused/"], vec!["Unused/"]]
+        {
+            let payload = if names[0] == "Unused/./" { b"".as_slice() } else { b"x".as_slice() };
+            let specs: Vec<_> = names.iter().map(|name| (*name, payload)).collect();
+            let bytes = make_zip(&specs);
+            let package = RawPackage::read(&bytes).unwrap();
+            for name in &names {
+                assert!(package
+                    .read_text_entry(name)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("opaque ZIP"));
+            }
+            let output = patch_hwpx_layout_hints(&bytes, &[]).unwrap();
+            let mut copy = open_package(&output, Default::default()).unwrap();
+            assert_eq!(copy.entries().len(), names.len());
+            for (index, name) in names.iter().enumerate() {
+                assert_eq!(copy.entries()[index].path, *name);
+                assert_eq!(copy.read(index).unwrap(), payload);
+                assert!(copy.is_opaque(index));
+            }
+        }
+    }
+
     #[test]
     fn read_capped_rejects_entry_size_over_cap() {
         // One 100-byte entry against a 10-byte per-entry cap → reject without
@@ -471,6 +577,25 @@ mod tests {
         assert!(err.to_string().contains("total decompressed data"), "got: {err}");
     }
 
+    /// W0: a rewritten package keeps every entry at the fixed ZIP epoch.
+    /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
+    /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
+    #[test]
+    fn rewritten_entries_keep_a_fixed_time() {
+        let zip = make_zip(&[("Contents/section0.xml", b"<sec/>"), ("mimetype", b"x")]);
+        let out = RawPackage::read(&zip).unwrap().write().unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(out)).unwrap();
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i).unwrap();
+            assert_eq!(
+                entry.last_modified(),
+                Some(zip::DateTime::default()),
+                "{}",
+                entry.name().expect("ZIP entry name")
+            );
+        }
+    }
+
     #[test]
     fn read_capped_accepts_normal_small_package() {
         let zip = make_zip(&[("Contents/section0.xml", b"<sec/>"), ("mimetype", b"x")]);
@@ -478,6 +603,63 @@ mod tests {
             .expect("normal small package must parse");
         assert_eq!(pkg.entries.len(), 2);
         assert_eq!(pkg.read_text_entry("Contents/section0.xml").unwrap(), "<sec/>");
+    }
+
+    /// 이것을 실패시키는 것: 디코딩 이름 중복 검사 제거 또는 raw 이름만 비교하기.
+    #[test]
+    fn zip9_layout_rejects_ambiguous_decoded_names() {
+        let mut bytes = make_zip(&[("BinData/cafX.png", b"first"), ("BinData/cafYZ.png", b"last")]);
+        let offsets: Vec<_> = {
+            let mut archive = ZipArchive::new(Cursor::new(&bytes)).expect("archive");
+            (0..archive.len())
+                .map(|index| {
+                    let entry = archive.by_index(index).expect("entry");
+                    (entry.header_start() as usize, entry.central_header_start() as usize)
+                })
+                .collect()
+        };
+        for (name, (local, central)) in
+            [b"BinData/caf\x82.png".as_slice(), "BinData/café.png".as_bytes()]
+                .into_iter()
+                .zip(offsets)
+        {
+            bytes[local + 30..local + 30 + name.len()].copy_from_slice(name);
+            bytes[central + 46..central + 46 + name.len()].copy_from_slice(name);
+        }
+        let err = RawPackage::read(&bytes).expect_err("ambiguous name");
+        assert!(matches!(err, LayoutPatchError::Package { detail }
+            if detail == "duplicate decoded ZIP entry name 'BinData/café.png'"));
+    }
+
+    /// A header anchored to paragraph 0 comes before the body table in the
+    /// XML; its table takes the header queue's hint and the body table the
+    /// body's. 이것을 실패시키는 것: 모든 표를 본문 큐에서 꺼내기(높이가
+    /// 뒤바뀌거나 underflow).
+    #[test]
+    fn patch_section_xml_takes_header_tables_from_the_header_queue() {
+        let table = |id: u32| {
+            format!(
+                r#"<hp:tbl id="{id}" rowCnt="1" colCnt="1"><hp:sz width="1000" height="0"/><hp:tr><hp:tc><hp:subList><hp:p id="9"><hp:run charPrIDRef="0"><hp:t>c</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>"#
+            )
+        };
+        let xml = format!(
+            r#"<hs:sec xmlns:hp="p" xmlns:hs="s"><hp:p id="0"><hp:run charPrIDRef="0"><hp:ctrl><hp:header><hp:subList><hp:p id="1"><hp:run charPrIDRef="0">{}</hp:run></hp:p></hp:subList></hp:header></hp:ctrl></hp:run><hp:run charPrIDRef="0">{}</hp:run></hp:p></hs:sec>"#,
+            table(1),
+            table(2)
+        );
+        let hint = || ParagraphLayoutHint { line_segments: Vec::new() };
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![hint(), hint(), hint(), hint()]),
+            // Body first, then the header's: the scopes' order in the queue.
+            tables: VecDeque::from(vec![
+                TableLayoutHint { height: Some(111) },
+                TableLayoutHint { height: Some(222) },
+            ]),
+        };
+        let patched = patch_section_xml(&xml, hints).expect("patch");
+        let header_h = patched.find(r#"height="222""#).expect("header table height");
+        let body_h = patched.find(r#"height="111""#).expect("body table height");
+        assert!(header_h < body_h, "{patched}");
     }
 
     #[test]
@@ -799,5 +981,35 @@ mod tests {
             !patched.contains("hp:lineseg"),
             "lineseg must NOT be emitted even with non-empty line_segments: {patched}"
         );
+    }
+    // 이것을 실패시키는 것: master 글로벌 번호를 구역마다 초기화 / section과 master 표 큐 혼합 / 빈 hint에서 번호 미소비.
+    #[test]
+    fn master_table_hints_are_part_local_across_sections() {
+        let xml = br#"<hm:masterPage><hp:p><hp:run><hp:tbl><hp:sz height="1"/></hp:tbl></hp:run></hp:p></hm:masterPage>"#;
+        let zip = make_zip(&[
+            ("Contents/section0.xml", xml),
+            ("Contents/masterpage0.xml", b"<master/>"),
+            ("Contents/masterpage1.xml", xml),
+            ("Contents/masterpage2.xml", xml),
+        ]);
+        let hints = |height| SectionLayoutHints {
+            paragraphs: VecDeque::from([ParagraphLayoutHint { line_segments: vec![] }]),
+            tables: VecDeque::from([TableLayoutHint { height: Some(height) }]),
+        };
+        let empty = SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() };
+        let bytes = patch_hwpx_part_layout_hints(
+            &zip,
+            &[hints(111)],
+            &[vec![empty, hints(222)], vec![hints(333)]],
+        )
+        .unwrap();
+        let package = RawPackage::read(&bytes).unwrap();
+        for (part, height) in [("section0", 111), ("masterpage1", 222), ("masterpage2", 333)] {
+            assert!(package
+                .read_text_entry(&format!("Contents/{part}.xml"))
+                .unwrap()
+                .contains(&format!("height=\"{height}\"")));
+        }
+        assert_eq!(package.read_text_entry("Contents/masterpage0.xml").unwrap(), "<master/>");
     }
 }

@@ -9,17 +9,21 @@
 
 use serde::{Deserialize, Serialize};
 
+#[path = "header_fidelity.rs"]
+pub(crate) mod fidelity;
+
 use crate::color::{parse_hex_color_or_black, parse_hex_color_raw};
 use crate::list_bridge::{heading_type_to_para_list_type, list_ref_to_wire_parts};
 use hwpforge_blueprint::registry::StyleRegistry;
+use hwpforge_core::ParagraphMeasure;
 use hwpforge_core::{
     BorderFillLines, BorderLine, BorderLineKind, BulletDef, FillKind, NumberingDef, StyleLookup,
     TabDef,
 };
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
-    EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType, OutlineType,
-    ParaShapeIndex, ShadowType, StrikeoutShape, StyleIndex, UnderlineShape, UnderlineType,
+    Alignment, BorderFillIndex, BreakType, CharShadow, CharShapeIndex, Color, EmbossType,
+    EmphasisType, EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType,
+    OutlineType, ParaShapeIndex, StrikeoutShape, StyleIndex, UnderlineShape, UnderlineType,
     VerticalPosition, WordBreakType,
 };
 
@@ -30,20 +34,111 @@ use crate::error::{HwpxError, HwpxResult};
 
 /// A resolved font from `<hh:fontface>` → `<hh:font>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxFont {
-    /// Original `id` attribute from XML.
+    /// Descriptive label; decoding/encoding normalizes it to the zero-based
+    /// position within its language group.
     pub id: u32,
     /// Face name (e.g. `"함초롬돋움"`, `"Times New Roman"`).
     pub face_name: String,
     /// Language group this font belongs to (e.g. `"HANGUL"`, `"LATIN"`).
     pub lang: String,
+    /// Font kind (`<hh:font type>`). `None` = unknown; the encoder writes
+    /// `TTF`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_type: Option<HwpxFontType>,
+    /// Substitute font (`<hh:substFont>`), used when this face is missing.
+    /// `None` = no substitute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substitute: Option<HwpxSubstFont>,
+    /// Classification (`<hh:typeInfo>`, PANOSE-like). `None` = unknown; the
+    /// encoder writes its default classification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_info: Option<HwpxFontTypeInfo>,
 }
 
 impl HwpxFont {
-    /// Creates a new font entry.
+    /// Creates a new font entry with unknown kind, no substitute and unknown
+    /// classification.
     pub fn new(id: u32, face_name: impl Into<String>, lang: impl Into<String>) -> Self {
-        Self { id, face_name: face_name.into(), lang: lang.into() }
+        Self {
+            id,
+            face_name: face_name.into(),
+            lang: lang.into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        }
+    }
+}
+
+/// Font kind of `<hh:font type>` / `<hh:substFont type>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum HwpxFontType {
+    /// TrueType font (`TTF`).
+    Ttf,
+    /// Hangul font (`HFT`).
+    Hft,
+}
+
+impl HwpxFontType {
+    /// The HWPX attribute value.
+    pub fn as_hwpx_str(self) -> &'static str {
+        match self {
+            Self::Ttf => "TTF",
+            Self::Hft => "HFT",
+        }
+    }
+
+    /// Parses an HWPX attribute value; `None` for anything else.
+    pub fn from_hwpx_str(value: &str) -> Option<Self> {
+        match value {
+            "TTF" => Some(Self::Ttf),
+            "HFT" => Some(Self::Hft),
+            _ => None,
+        }
+    }
+}
+
+/// A substitute font (`<hh:substFont face type>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct HwpxSubstFont {
+    /// Font kind. `None` = unknown; the encoder writes `TTF`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_type: Option<HwpxFontType>,
+    /// Face name of the substitute.
+    pub face_name: String,
+}
+
+impl HwpxSubstFont {
+    /// Creates a substitute font.
+    pub fn new(font_type: Option<HwpxFontType>, face_name: impl Into<String>) -> Self {
+        Self { font_type, face_name: face_name.into() }
+    }
+}
+
+/// A font's classification (`<hh:typeInfo>`): the family type and the eight
+/// PANOSE-like numbers, as the wire carries them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct HwpxFontTypeInfo {
+    /// Family type (`FCAT_UNKNOWN`, `FCAT_MYUNGJO`, `FCAT_GOTHIC` …).
+    pub family_type: String,
+    /// `weight`, `proportion`, `contrast`, `strokeVariation`, `armStyle`,
+    /// `letterform`, `midline`, `xHeight`, in that order.
+    pub values: [u32; 8],
+}
+
+impl HwpxFontTypeInfo {
+    /// Creates a classification from its family type and eight numbers.
+    pub fn new(family_type: impl Into<String>, values: [u32; 8]) -> Self {
+        Self { family_type: family_type.into(), values }
     }
 }
 
@@ -51,9 +146,10 @@ impl HwpxFont {
 
 /// Per-language font index references from `<hh:fontRef>`.
 ///
-/// Each field is a [`FontIndex`] pointing into the store's font list
-/// for that language group.
+/// Each [`FontIndex`] carries a language-local position, resolved within
+/// its language group, never in the combined font vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxFontRef {
     /// Hangul (한글) font index.
@@ -93,6 +189,7 @@ impl Default for HwpxFontRef {
 ///
 /// All raw XML strings have been converted to Foundation types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxCharShape {
     /// Per-language font references.
@@ -121,8 +218,12 @@ pub struct HwpxCharShape {
     pub vertical_position: VerticalPosition,
     /// Text outline type.
     pub outline_type: OutlineType,
-    /// Drop shadow type.
-    pub shadow_type: ShadowType,
+    /// Character shadow: kind, color and offsets (from `<hh:shadow>`).
+    ///
+    /// Older releases wrote only the kind, under `shadow_type`; that JSON
+    /// still reads, with the default color and offsets.
+    #[serde(alias = "shadow_type")]
+    pub shadow: CharShadow,
     /// Emboss effect type.
     pub emboss_type: EmbossType,
     /// Engrave effect type.
@@ -164,7 +265,7 @@ impl Default for HwpxCharShape {
             strikeout_color: None,
             vertical_position: VerticalPosition::Normal,
             outline_type: OutlineType::None,
-            shadow_type: ShadowType::None,
+            shadow: CharShadow::DEFAULT,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
             emphasis: EmphasisType::None,
@@ -187,9 +288,11 @@ impl Default for HwpxCharShape {
 /// properties. This enables full roundtrip of style names like "바탕글",
 /// "본문", etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxStyle {
-    /// Style ID (from `id` attribute).
+    /// Descriptive label; decoding/encoding normalizes it to the zero-based
+    /// definition position.
     pub id: u32,
     /// Style type (e.g. `"PARA"`, `"CHAR"`).
     pub style_type: String,
@@ -198,10 +301,12 @@ pub struct HwpxStyle {
     /// English style name (e.g. `"Normal"`).
     pub eng_name: String,
     /// Reference to paragraph properties (from `paraPrIDRef`).
+    /// Zero-based paragraph definition position (inactive for CHAR styles).
     pub para_pr_id_ref: u32,
     /// Reference to character properties (from `charPrIDRef`).
+    /// Zero-based character definition position.
     pub char_pr_id_ref: u32,
-    /// Reference to next style (from `nextStyleIDRef`).
+    /// Zero-based position of the next style (from `nextStyleIDRef`).
     pub next_style_id_ref: u32,
     /// Language ID (from `langID`).
     pub lang_id: u32,
@@ -241,21 +346,27 @@ impl HwpxStyle {
 
 /// Resolved paragraph properties from `<hh:paraPr>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxParaShape {
+    // Header fidelity belongs to the definition: Clone and JSON must carry it
+    // including clones appended at a new position.
+    #[serde(default)]
+    pub(crate) font_line_height: u32,
     /// Horizontal alignment.
     pub alignment: Alignment,
     /// Left indent (from `<hc:left value="..."/>`).
-    pub margin_left: HwpUnit,
+    pub margin_left: ParagraphMeasure,
     /// Right indent.
-    pub margin_right: HwpUnit,
+    pub margin_right: ParagraphMeasure,
     /// Paragraph indent (from `<hc:intent value="..."/>`).
-    pub indent: HwpUnit,
+    pub indent: ParagraphMeasure,
     /// Space before paragraph (from `<hc:prev value="..."/>`).
-    pub spacing_before: HwpUnit,
+    pub spacing_before: ParagraphMeasure,
     /// Space after paragraph (from `<hc:next value="..."/>`).
-    pub spacing_after: HwpUnit,
+    pub spacing_after: ParagraphMeasure,
     /// Line spacing value.
+    #[cfg_attr(feature = "schemars", schemars(range(min = 0)))]
     pub line_spacing: i32,
     /// Line spacing type.
     pub line_spacing_type: LineSpacingType,
@@ -298,17 +409,47 @@ pub struct HwpxParaShape {
     pub tab_pr_id_ref: u32,
     /// Condense value for tight outline spacing.
     pub condense: u32,
+    /// Vertical alignment of a line's characters (`<hh:align vertical>`):
+    /// `BASELINE`, `TOP`, `CENTER` or `BOTTOM`, kept as written.
+    #[serde(default = "baseline", skip_serializing_if = "is_baseline")]
+    pub vertical_align: String,
+    /// Offsets of the paragraph border from the text (`<hh:border
+    /// offsetLeft/offsetRight/offsetTop/offsetBottom>`): left, right, top,
+    /// bottom.
+    #[serde(default, skip_serializing_if = "all_zero")]
+    pub border_offset: [HwpUnit; 4],
+    /// The border joins the next paragraph's of the same border
+    /// (`<hh:border connect>`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub border_connect: bool,
+    /// The border is drawn ignoring the paragraph margins
+    /// (`<hh:border ignoreMargin>`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub border_ignore_margin: bool,
+}
+
+fn baseline() -> String {
+    "BASELINE".to_string()
+}
+
+fn is_baseline(value: &str) -> bool {
+    value == "BASELINE"
+}
+
+fn all_zero(offsets: &[HwpUnit; 4]) -> bool {
+    offsets.iter().all(|v| *v == HwpUnit::ZERO)
 }
 
 impl Default for HwpxParaShape {
     fn default() -> Self {
         Self {
+            font_line_height: 0,
             alignment: Alignment::Left,
-            margin_left: HwpUnit::ZERO,
-            margin_right: HwpUnit::ZERO,
-            indent: HwpUnit::ZERO,
-            spacing_before: HwpUnit::ZERO,
-            spacing_after: HwpUnit::ZERO,
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            margin_right: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            indent: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            spacing_before: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
             line_spacing: 160,
             line_spacing_type: LineSpacingType::Percentage,
             snap_to_grid: true,
@@ -326,6 +467,10 @@ impl Default for HwpxParaShape {
             checked: false,
             tab_pr_id_ref: 0,
             condense: 0,
+            vertical_align: baseline(),
+            border_offset: [HwpUnit::ZERO; 4],
+            border_connect: false,
+            border_ignore_margin: false,
         }
     }
 }
@@ -337,9 +482,11 @@ impl Default for HwpxParaShape {
 /// Stores border line styles for all 4 sides plus diagonal borders,
 /// 3D/shadow flags, and optional fill configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxBorderFill {
-    /// Border fill ID (1-based, matching `borderFillIDRef` in charPr/paraPr).
+    /// Descriptive ID label. References use the 1-based definition position;
+    /// encoding replaces this label with that position.
     pub id: u32,
     /// Whether 3D border effect is enabled.
     pub three_d: bool,
@@ -384,6 +531,7 @@ pub struct HwpxBorderFill {
 
 /// Resolved diagonal border metadata from `<hh:slash>` / `<hh:backSlash>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxDiagonalLine {
     /// Border type string (for example, `"NONE"` or `"CENTER"`).
     pub border_type: String,
@@ -401,6 +549,7 @@ impl Default for HwpxDiagonalLine {
 
 /// A single border line configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxBorderLine {
     /// Border line type (e.g. `"NONE"`, `"SOLID"`).
     pub line_type: String,
@@ -418,6 +567,7 @@ impl Default for HwpxBorderLine {
 
 /// Fill brush configuration for a [`HwpxBorderFill`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum HwpxFill {
     /// Solid or hatch fill via `<hc:winBrush>`.
     WinBrush {
@@ -444,6 +594,7 @@ pub(crate) enum ActiveBorderFillBrush<'a> {
 
 /// Gradient fill payload for table border fills.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxGradientFill {
     /// Gradient type.
     pub gradient_type: GradientType,
@@ -465,6 +616,7 @@ pub struct HwpxGradientFill {
 
 /// Image fill payload for table border fills.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxImageFill {
     /// HWPX image fill mode string (for example, `TOTAL`).
     pub mode: String,
@@ -774,7 +926,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
         strikeout_color: None,
         vertical_position: VerticalPosition::Normal,
         outline_type: OutlineType::None,
-        shadow_type: ShadowType::None,
+        shadow: CharShadow::DEFAULT,
         emboss_type: EmbossType::None,
         engrave_type: EngraveType::None,
         emphasis: EmphasisType::None,
@@ -822,11 +974,11 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
     // Base: JUSTIFY, no margins/indent, 160% line spacing, no widow/orphan
     let base = HwpxParaShape {
         alignment: justify,
-        margin_left: HwpUnit::ZERO,
-        margin_right: HwpUnit::ZERO,
-        indent: HwpUnit::ZERO,
-        spacing_before: HwpUnit::ZERO,
-        spacing_after: HwpUnit::ZERO,
+        margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        margin_right: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        indent: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        spacing_before: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
         line_spacing: 160,
         line_spacing_type: LineSpacingType::Percentage,
         snap_to_grid: true,
@@ -844,16 +996,20 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         checked: false,
         tab_pr_id_ref: 0,
         condense: 0,
+        ..HwpxParaShape::default()
     };
 
     [
         //  0: 바탕글 — JUSTIFY left=0 160%
         base.clone(),
         //  1: 본문 — JUSTIFY left=1500 160%
-        HwpxParaShape { margin_left: HwpUnit::new(1500).unwrap(), ..base.clone() },
+        HwpxParaShape {
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(750).unwrap()),
+            ..base.clone()
+        },
         //  2: 개요 1 — JUSTIFY left=1000 160% OUTLINE level=0
         HwpxParaShape {
-            margin_left: HwpUnit::new(1000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 0,
@@ -863,7 +1019,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  3: 개요 2 — JUSTIFY left=2000 160% OUTLINE level=1
         HwpxParaShape {
-            margin_left: HwpUnit::new(2000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(1000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 1,
@@ -873,7 +1029,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  4: 개요 3 — JUSTIFY left=3000 160% OUTLINE level=2
         HwpxParaShape {
-            margin_left: HwpUnit::new(3000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(1500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 2,
@@ -883,7 +1039,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  5: 개요 4 — JUSTIFY left=4000 160% OUTLINE level=3
         HwpxParaShape {
-            margin_left: HwpUnit::new(4000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(2000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 3,
@@ -893,7 +1049,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  6: 개요 5 — JUSTIFY left=5000 160% OUTLINE level=4
         HwpxParaShape {
-            margin_left: HwpUnit::new(5000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(2500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 4,
@@ -903,7 +1059,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  7: 개요 6 — JUSTIFY left=6000 160% OUTLINE level=5
         HwpxParaShape {
-            margin_left: HwpUnit::new(6000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(3000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 5,
@@ -913,7 +1069,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  8: 개요 7 — JUSTIFY left=7000 160% OUTLINE level=6
         HwpxParaShape {
-            margin_left: HwpUnit::new(7000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(3500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 6,
@@ -923,40 +1079,44 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  9: 머리말 — JUSTIFY left=0 150%
         HwpxParaShape { line_spacing: 150, ..base.clone() },
-        // 10: 각주/미주 — JUSTIFY indent=-1310 130%
-        HwpxParaShape { indent: HwpUnit::new(-1310).unwrap(), line_spacing: 130, ..base.clone() },
+        // 10: 각주/미주 — JUSTIFY indent=-655 HWPUNIT (-6.55 pt), 130%
+        HwpxParaShape {
+            indent: ParagraphMeasure::from_hwp_unit(HwpUnit::new(-655).unwrap()),
+            line_spacing: 130,
+            ..base.clone()
+        },
         // 11: 메모 — LEFT left=0 130%
         HwpxParaShape { alignment: left, line_spacing: 130, ..base.clone() },
         // 12: 차례 제목 — LEFT left=0 prev=1200 next=300 160%
         HwpxParaShape {
             alignment: left,
-            spacing_before: HwpUnit::new(1200).unwrap(),
-            spacing_after: HwpUnit::new(300).unwrap(),
+            spacing_before: ParagraphMeasure::from_hwp_unit(HwpUnit::new(600).unwrap()),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(150).unwrap()),
             ..base.clone()
         },
         // 13: 차례 1 — LEFT left=0 next=700 160%
         HwpxParaShape {
             alignment: left,
-            spacing_after: HwpUnit::new(700).unwrap(),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(350).unwrap()),
             ..base.clone()
         },
         // 14: 차례 2 — LEFT left=1100 next=700 160%
         HwpxParaShape {
             alignment: left,
-            margin_left: HwpUnit::new(1100).unwrap(),
-            spacing_after: HwpUnit::new(700).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(550).unwrap()),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(350).unwrap()),
             ..base.clone()
         },
         // 15: 차례 3 — LEFT left=2200 next=700 160%
         HwpxParaShape {
             alignment: left,
-            margin_left: HwpUnit::new(2200).unwrap(),
-            spacing_after: HwpUnit::new(700).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(1100).unwrap()),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(350).unwrap()),
             ..base.clone()
         },
         // 16: 개요 9 (style 10→paraPr 16) — JUSTIFY left=9000 160% OUTLINE level=8
         HwpxParaShape {
-            margin_left: HwpUnit::new(9000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(4500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 8,
@@ -966,7 +1126,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         // 17: 개요 10 (style 11→paraPr 17) — JUSTIFY left=10000 160% OUTLINE level=9
         HwpxParaShape {
-            margin_left: HwpUnit::new(10000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(5000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 9,
@@ -976,7 +1136,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         // 18: 개요 8 (style 9→paraPr 18) — JUSTIFY left=8000 160% OUTLINE level=7
         HwpxParaShape {
-            margin_left: HwpUnit::new(8000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(4000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 7,
@@ -985,7 +1145,11 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
             ..base.clone()
         },
         // 19: 캡션 — JUSTIFY left=0 next=800 150%
-        HwpxParaShape { line_spacing: 150, spacing_after: HwpUnit::new(800).unwrap(), ..base },
+        HwpxParaShape {
+            line_spacing: 150,
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(400).unwrap()),
+            ..base
+        },
     ]
 }
 
@@ -1011,17 +1175,20 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 /// assert!(store.char_shape(CharShapeIndex::new(0)).is_err());
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxStyleStore {
     /// The 한글 version style set used when injecting default styles.
     style_set: HancomStyleSet,
     fonts: Vec<HwpxFont>,
     char_shapes: Vec<HwpxCharShape>,
     para_shapes: Vec<HwpxParaShape>,
-    styles: Vec<HwpxStyle>,
+    pub(crate) styles: Vec<HwpxStyle>,
     border_fills: Vec<HwpxBorderFill>,
     numberings: Vec<NumberingDef>,
     bullets: Vec<BulletDef>,
     tabs: Vec<TabDef>,
+    #[serde(default, skip_serializing_if = "fidelity::HeaderFidelity::is_empty")]
+    pub(crate) header_fidelity: fidelity::HeaderFidelity,
 }
 
 #[derive(Debug)]
@@ -1032,6 +1199,43 @@ pub(crate) struct RegistryStoreBuild {
 }
 
 impl HwpxStyleStore {
+    /// Output labels are dense; all references in the store and Core are positions.
+    /// Keep public definition id fields for 0.16 compatibility, but never emit gaps.
+    pub(crate) fn numbered_for_output(&self) -> Self {
+        let mut out = self.clone();
+        let mut fonts = std::collections::BTreeMap::<String, u32>::new();
+        for font in &mut out.fonts {
+            let position = fonts.entry(font.lang.clone()).or_default();
+            font.id = *position;
+            *position += 1;
+        }
+        macro_rules! renumber {
+            ($defs:expr, $base:expr) => {
+                for (index, def) in $defs.iter_mut().enumerate() {
+                    def.id = index as u32 + $base;
+                }
+            };
+        }
+        renumber!(out.border_fills, 1);
+        renumber!(out.numberings, 1);
+        renumber!(out.bullets, 1);
+        renumber!(out.styles, 0);
+        // Built-in 0/1/2 remain available to existing authoring callers.
+        out.tabs.extend(TabDef::defaults().into_iter().skip(out.tabs.len()));
+        renumber!(out.tabs, 0);
+        out
+    }
+
+    /// Retains the HWP5 font-line-height flag for an imported paragraph definition.
+    pub fn set_para_font_line_height(
+        &mut self,
+        index: ParaShapeIndex,
+        value: u32,
+    ) -> HwpxResult<()> {
+        self.para_shape_mut(index)?.font_line_height = value;
+        Ok(())
+    }
+
     /// Creates an empty store.
     pub fn new() -> Self {
         Self::default()
@@ -1111,14 +1315,17 @@ impl HwpxStyleStore {
 
     // ── Fonts ────────────────────────────────────────────────────
 
-    /// Adds a font and returns its index.
+    /// Appends a font and returns its zero-based position in the complete font
+    /// vector, as used by [`Self::font`]. HWPX `fontRef` fields instead use
+    /// positions within each language group. The supplied `id` is ignored
+    /// for lookup and renumbered within its language group when encoding.
     pub fn push_font(&mut self, font: HwpxFont) -> FontIndex {
         let idx = FontIndex::new(self.fonts.len());
         self.fonts.push(font);
         idx
     }
 
-    /// Returns the font at `index`.
+    /// Returns the font at the zero-based position in the complete font vector.
     pub fn font(&self, index: FontIndex) -> HwpxResult<&HwpxFont> {
         self.fonts.get(index.get()).ok_or_else(|| HwpxError::IndexOutOfBounds {
             kind: "font",
@@ -1139,10 +1346,21 @@ impl HwpxStyleStore {
     /// replicated across 7 language groups, so all matching entries are updated.
     ///
     /// Specialty fonts (e.g., D2Coding for code blocks) are preserved because
-    /// they don't match `old_face`.
+    /// they don't match `old_face`. A replaced entry whose name changes loses
+    /// its kind, substitute and classification (they described the old face),
+    /// so the encoder writes its defaults for them.
     pub fn replace_font(&mut self, old_face: &str, new_face: &str) {
         for font in &mut self.fonts {
             if font.face_name == old_face {
+                // The kind, substitute and classification described the old
+                // face; a different face's are not known. 이것을 실패시키는
+                // 것: 초기화 생략(`replace_font_clears_metadata_of_a_new_face`) /
+                // 같은 이름에서도 초기화.
+                if new_face != old_face {
+                    font.font_type = None;
+                    font.substitute = None;
+                    font.type_info = None;
+                }
                 font.face_name = new_face.to_string();
             }
         }
@@ -1150,7 +1368,7 @@ impl HwpxStyleStore {
 
     // ── Character Shapes ─────────────────────────────────────────
 
-    /// Adds a char shape and returns its index.
+    /// Appends a char shape and returns its zero-based position.
     pub fn push_char_shape(&mut self, shape: HwpxCharShape) -> CharShapeIndex {
         let idx = CharShapeIndex::new(self.char_shapes.len());
         self.char_shapes.push(shape);
@@ -1187,7 +1405,7 @@ impl HwpxStyleStore {
 
     // ── Paragraph Shapes ─────────────────────────────────────────
 
-    /// Adds a para shape and returns its index.
+    /// Appends a para shape and returns its zero-based position.
     pub fn push_para_shape(&mut self, shape: HwpxParaShape) -> ParaShapeIndex {
         let idx = ParaShapeIndex::new(self.para_shapes.len());
         self.para_shapes.push(shape);
@@ -1241,12 +1459,13 @@ impl HwpxStyleStore {
 
     // ── Styles ───────────────────────────────────────────────────
 
-    /// Adds a style definition.
+    /// Appends a style at the next zero-based position. The supplied `id` is
+    /// ignored for lookup and renumbered when encoding.
     pub fn push_style(&mut self, style: HwpxStyle) {
         self.styles.push(style);
     }
 
-    /// Returns the style at `index`.
+    /// Returns the style at the zero-based position `index`, ignoring its `id`.
     pub fn style(&self, index: usize) -> HwpxResult<&HwpxStyle> {
         self.styles.get(index).ok_or(HwpxError::IndexOutOfBounds {
             kind: "style",
@@ -1267,26 +1486,27 @@ impl HwpxStyleStore {
 
     // ── Border Fills ─────────────────────────────────────────────
 
-    /// Adds a border fill to the store and returns its 1-based ID.
-    ///
-    /// Border fill IDs in HWPX are 1-based (unlike other indices which are 0-based).
+    /// Appends a border fill and returns its 1-based position, usable directly
+    /// in body references. The supplied `id` is ignored for lookup and is
+    /// renumbered to the position when encoding.
     pub fn push_border_fill(&mut self, bf: HwpxBorderFill) -> u32 {
-        let id = bf.id;
         self.border_fills.push(bf);
-        id
+        self.border_fills.len() as u32
     }
 
-    /// Returns the border fill with the given 1-based ID.
+    /// Returns the `id`-th border fill (1-based position, not its public `id` label).
     ///
     /// # Errors
     ///
-    /// Returns [`HwpxError::IndexOutOfBounds`] if no border fill with that ID exists.
+    /// Returns [`HwpxError::IndexOutOfBounds`] if the position is zero or out of range.
     pub fn border_fill(&self, id: u32) -> HwpxResult<&HwpxBorderFill> {
-        self.border_fills.iter().find(|bf| bf.id == id).ok_or(HwpxError::IndexOutOfBounds {
-            kind: "border_fill",
-            index: id,
-            max: self.border_fills.len() as u32,
-        })
+        id.checked_sub(1).and_then(|index| self.border_fills.get(index as usize)).ok_or(
+            HwpxError::IndexOutOfBounds {
+                kind: "border_fill",
+                index: id,
+                max: self.border_fills.len() as u32,
+            },
+        )
     }
 
     /// Returns the number of border fills in the store.
@@ -1299,17 +1519,103 @@ impl HwpxStyleStore {
         self.border_fills.iter()
     }
 
-    /// Adds a numbering definition to the store.
+    /// Appends a numbering definition at the next one-based position.
+    /// References use this position; the supplied `id` is ignored and
+    /// renumbered when encoding.
     pub fn push_numbering(&mut self, ndef: NumberingDef) {
         self.numberings.push(ndef);
     }
 
-    /// Adds a bullet definition to the store.
+    /// Appends a bullet definition at the next one-based position.
+    /// References use this position; the supplied `id` is ignored and
+    /// renumbered when encoding.
     pub fn push_bullet(&mut self, bullet: BulletDef) {
         self.bullets.push(bullet);
     }
 
-    /// Adds a tab property definition to the store.
+    /// Sets the preserved layout of one existing numbering or bullet paragraph head.
+    ///
+    /// `position` is the one-based definition position, not its public ID label.
+    /// `level` uses the Core head level (one-based for HWP5); bullet storage maps
+    /// it to the wire's zero-based level, just like the ordinary bullet writer.
+    /// Width and text distance are signed; `offset_in_hwpunit` selects HWPUNIT
+    /// instead of percent. `char_pr_id_ref == u32::MAX` means inherit.
+    /// Values are carried in the existing private fidelity/JSON path, without
+    /// adding fields to Core paragraph heads. Reference validation still applies.
+    ///
+    /// # Errors
+    /// Returns an error for an absent definition/level or unsupported heading/alignment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_paragraph_head_metrics(
+        &mut self,
+        kind: HeadingType,
+        position: u32,
+        level: u32,
+        align: Alignment,
+        use_inst_width: bool,
+        auto_indent: bool,
+        width_adjust: i32,
+        text_offset: i32,
+        offset_in_hwpunit: bool,
+        char_pr_id_ref: u32,
+    ) -> HwpxResult<()> {
+        let invalid = || HwpxError::InvalidStructure {
+            detail: format!(
+                "paragraph head metrics: invalid {kind:?} position {position} level {level}"
+            ),
+        };
+        let index = position.checked_sub(1).ok_or_else(invalid)? as usize;
+        let (target, wire_level, default_width) = match kind {
+            HeadingType::Number | HeadingType::Outline => {
+                if !self
+                    .numberings
+                    .get(index)
+                    .is_some_and(|d| d.levels.iter().any(|h| h.level == level))
+                {
+                    return Err(invalid());
+                }
+                (&mut self.header_fidelity.numbering, level, 1)
+            }
+            HeadingType::Bullet => {
+                if self.bullets.get(index).is_none_or(|d| d.para_head.level != level) {
+                    return Err(invalid());
+                }
+                (&mut self.header_fidelity.bullet, level.saturating_sub(1), 0)
+            }
+            _ => return Err(invalid()),
+        };
+        let align = match align {
+            Alignment::Left => "LEFT",
+            Alignment::Center => "CENTER",
+            Alignment::Right => "RIGHT",
+            _ => return Err(invalid()),
+        };
+        let metrics = fidelity::HeadMetrics {
+            align: align.into(),
+            use_inst_width: u32::from(use_inst_width),
+            auto_indent: u32::from(auto_indent),
+            width_adjust,
+            text_offset_type: if offset_in_hwpunit { "HWPUNIT" } else { "PERCENT" }.into(),
+            text_offset,
+            char_pr_id_ref,
+        };
+        // 이것을 실패시키는 것: 새 값만 인코더에 직접 쓰거나 기존 JSON 보존 경로를 우회하기.
+        if metrics == fidelity::HeadMetrics::generated(default_width) {
+            if let Some(levels) = target.get_mut(&position) {
+                levels.remove(&wire_level);
+                if levels.is_empty() {
+                    target.remove(&position);
+                }
+            }
+        } else {
+            target.entry(position).or_default().insert(wire_level, metrics);
+        }
+        Ok(())
+    }
+
+    /// Appends a tab property definition at the next zero-based position.
+    /// References use this position; the supplied `id` is ignored and
+    /// renumbered when encoding.
     pub fn push_tab(&mut self, tab: TabDef) {
         self.tabs.push(tab);
     }
@@ -1376,6 +1682,9 @@ fn build_store_from_registry_with(
                     id: i as u32,
                     face_name: font_id.as_str().to_string(),
                     lang: lang.to_string(),
+                    font_type: None,
+                    substitute: None,
+                    type_info: None,
                 });
             }
         }
@@ -1385,6 +1694,9 @@ fn build_store_from_registry_with(
                 id: 0,
                 face_name: default_font.to_string(),
                 lang: lang.to_string(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
         }
     }
@@ -1427,7 +1739,7 @@ fn build_store_from_registry_with(
             strikeout_color: cs.strikeout_color,
             vertical_position: cs.vertical_position,
             outline_type: cs.outline,
-            shadow_type: cs.shadow,
+            shadow: cs.shadow,
             emboss_type: cs.emboss,
             engrave_type: cs.engrave,
             emphasis: cs.emphasis,
@@ -1448,16 +1760,17 @@ fn build_store_from_registry_with(
         store.push_bullet(bullet.clone());
     }
 
+    let tabs = TabDef::merged_with_defaults(registry.tabs.iter());
     let mut para_shape_map = Vec::with_capacity(registry.para_shapes.len());
     for ps in &registry.para_shapes {
         let wire_parts = list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
         para_shape_map.push(store.push_para_shape(HwpxParaShape {
             alignment: ps.alignment,
-            margin_left: ps.indent_left,
-            margin_right: ps.indent_right,
-            indent: ps.indent_first_line,
-            spacing_before: ps.space_before,
-            spacing_after: ps.space_after,
+            margin_left: ParagraphMeasure::from_hwp_unit(ps.indent_left),
+            margin_right: ParagraphMeasure::from_hwp_unit(ps.indent_right),
+            indent: ParagraphMeasure::from_hwp_unit(ps.indent_first_line),
+            spacing_before: ParagraphMeasure::from_hwp_unit(ps.space_before),
+            spacing_after: ParagraphMeasure::from_hwp_unit(ps.space_after),
             line_spacing: ps.line_spacing_value.round() as i32,
             line_spacing_type: ps.line_spacing_type,
             snap_to_grid: true,
@@ -1473,13 +1786,22 @@ fn build_store_from_registry_with(
             heading_id_ref: wire_parts.id_ref,
             heading_level: wire_parts.level,
             checked: wire_parts.checked,
-            tab_pr_id_ref: ps.tab_def_id,
+            // Blueprint tab ids are authoring keys; HWPX uses emitted positions.
+            tab_pr_id_ref: tabs.iter().position(|tab| tab.id == ps.tab_def_id).ok_or(
+                HwpxError::IndexOutOfBounds {
+                    kind: "tab definition",
+                    index: ps.tab_def_id,
+                    max: tabs.len() as u32,
+                },
+            )? as u32,
             condense: 0,
+            ..HwpxParaShape::default()
         }));
     }
 
-    for tab in &registry.tabs {
-        store.push_tab(tab.clone());
+    for (index, mut tab) in tabs.into_iter().enumerate() {
+        tab.id = index as u32;
+        store.push_tab(tab);
     }
 
     store.push_border_fill(HwpxBorderFill::default_page_border());
@@ -1579,7 +1901,7 @@ pub fn parse_heading_level_from_name(name: &str) -> Option<u8> {
 
 fn heading_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
     if ps.heading_type == HeadingType::Outline {
-        Some((ps.heading_level as u8).saturating_add(1).clamp(1, 6))
+        Some(u8::try_from(ps.heading_level).ok()?.saturating_add(1).clamp(1, 6))
     } else {
         None
     }
@@ -1622,14 +1944,14 @@ impl StyleLookup for HwpxStyleStore {
 
     fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
         let cs = self.char_shapes.get(id.get())?;
-        let font = self.fonts.get(cs.font_ref.hangul.get())?;
+        let font =
+            self.fonts.iter().filter(|f| f.lang == "HANGUL").nth(cs.font_ref.hangul.get())?;
         Some(font.face_name.as_str())
     }
 
     fn char_font_axis_names(&self, id: CharShapeIndex) -> Vec<&str> {
-        // fontRef 인덱스는 언어 그룹-로컬 — (lang, id) 쌍으로 정확 조회한다
-        // (char_font_name 의 평탄 인덱스는 HANGUL-선두 관례에 의존하는 기존
-        // 동작이라 유지). hangul 축을 먼저 넣어 [0] 이 char_font_name 과
+        // fontRef 인덱스는 언어 그룹-로컬 — (lang, position)으로 조회한다
+        // hangul 축을 먼저 넣어 [0] 이 char_font_name 과
         // 일치하게 한다 (양쪽 다 해석될 때).
         let Some(cs) = self.char_shapes.get(id.get()) else {
             return Vec::new();
@@ -1645,8 +1967,7 @@ impl StyleLookup for HwpxStyleStore {
         ];
         let mut out: Vec<&str> = Vec::new();
         for (lang, idx) in axes {
-            let Some(font) = self.fonts.iter().find(|f| f.lang == lang && f.id as usize == idx)
-            else {
+            let Some(font) = self.fonts.iter().filter(|f| f.lang == lang).nth(idx) else {
                 continue; // 그룹 미존재/미등록 축은 판정에서 제외 (거짓 불일치 방지)
             };
             if !out.contains(&font.face_name.as_str()) {
@@ -1668,6 +1989,14 @@ impl StyleLookup for HwpxStyleStore {
         self.para_shapes.get(id.get()).map(|ps| ps.alignment)
     }
 
+    fn para_indent_left(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure> {
+        self.para_shapes.get(id.get()).map(|p| p.margin_left)
+    }
+
+    fn para_indent_first_line(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure> {
+        self.para_shapes.get(id.get()).map(|p| p.indent)
+    }
+
     fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
         let ps = self.para_shapes.get(id.get())?;
         heading_type_to_para_list_type(ps.heading_type)
@@ -1683,12 +2012,15 @@ impl StyleLookup for HwpxStyleStore {
         if ps.heading_type != HeadingType::Bullet {
             return None;
         }
-        let bullet = self.iter_bullets().find(|bullet| bullet.id == ps.heading_id_ref)?;
+        let bullet = self.iter_bullets().nth(ps.heading_id_ref.checked_sub(1)? as usize)?;
         bullet.is_checkable().then_some(ps.checked)
     }
 
     fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
-        let para_id = u32::try_from(id.get()).ok()?;
+        let para_id = crate::header_references::HeaderReferences::build(self)
+            .ok()?
+            .output_ids("paraPr", id.get())
+            .ok()?;
         self.styles
             .iter()
             .find(|style| style.style_type == "PARA" && style.para_pr_id_ref == para_id)
@@ -1708,12 +2040,22 @@ impl StyleLookup for HwpxStyleStore {
         self.styles
             .iter()
             .find(|s| s.style_type == "CHAR" && (s.name == name || s.eng_name == name))
-            .map(|s| CharShapeIndex::new(s.char_pr_id_ref as usize))
+            .and_then(|s| {
+                crate::header_references::HeaderReferences::build(self)
+                    .ok()?
+                    .char_index(s.char_pr_id_ref)
+                    .ok()
+            })
     }
 
     fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
         let style = self.styles.get(id.get())?;
-        if let Some(para_shape) = self.para_shapes.get(style.para_pr_id_ref as usize) {
+        if let Some(para_shape) = crate::header_references::HeaderReferences::build(self)
+            .ok()
+            .and_then(|r| r.para_index(style.para_pr_id_ref).ok())
+            .and_then(|id| self.para_shapes.get(id.get()))
+            .filter(|_| style.style_type == "PARA")
+        {
             if let Some(level) = heading_level_from_para_shape(para_shape) {
                 return Some(level);
             }
@@ -1734,6 +2076,24 @@ impl StyleLookup for HwpxStyleStore {
             border_line_from_hwpx(&bf.top),
             border_line_from_hwpx(&bf.bottom),
         ))
+    }
+
+    // Review r1 MEDIUM-4: a diagonal or a center line is a line too (a cell
+    // zone that only has those must still warn). 이것을 실패시키는 것: 대각선
+    // 판정 삭제(`border_fill_inner_lines`).
+    fn border_fill_has_inner_lines(&self, id: u32) -> Option<bool> {
+        let bf = self.border_fill(id).ok()?;
+        let set = |v: &str| !v.is_empty() && !v.eq_ignore_ascii_case("NONE");
+        let diagonal = [
+            &bf.slash_type,
+            &bf.back_slash_type,
+            &bf.slash.border_type,
+            &bf.back_slash.border_type,
+        ]
+        .iter()
+        .any(|v| set(v));
+        let line_drawn = bf.diagonal.as_ref().is_none_or(|d| set(&d.line_type));
+        Some((diagonal && line_drawn) || set(&bf.center_line))
     }
 
     fn border_fill_face(&self, id: u32) -> Option<FillKind> {
@@ -1839,6 +2199,25 @@ mod tests {
     // ── HwpxStyleStore basic operations ──────────────────────────
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn fix2_style_lookup_does_not_wrap_font_or_heading() {
+        // 이것을 실패시키는 것: usize 글꼴 ID / u32 heading level의 좁히는 as 캐스트.
+        let mut store = HwpxStyleStore::with_default_fonts("바탕");
+        let mut shape = HwpxCharShape::default();
+        shape.font_ref.hangul = FontIndex::new(usize::try_from(u64::from(u32::MAX) + 1).unwrap());
+        let id = store.push_char_shape(shape);
+        assert_eq!(store.char_font_name(id), None);
+        assert_eq!(
+            heading_level_from_para_shape(&HwpxParaShape {
+                heading_type: HeadingType::Outline,
+                heading_level: 256,
+                ..Default::default()
+            }),
+            None
+        );
+    }
+
+    #[test]
     fn empty_store_returns_errors() {
         let store = HwpxStyleStore::new();
         assert!(store.font(FontIndex::new(0)).is_err());
@@ -1853,6 +2232,9 @@ mod tests {
             id: 0,
             face_name: "함초롬돋움".into(),
             lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         assert_eq!(idx.get(), 0);
         let font = store.font(idx).unwrap();
@@ -1935,6 +2317,9 @@ mod tests {
                 id: i,
                 face_name: format!("Font{i}"),
                 lang: "LATIN".into(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
             assert_eq!(idx.get(), i as usize);
         }
@@ -1949,7 +2334,14 @@ mod tests {
         assert_eq!(store.char_shape_count(), 0);
         assert_eq!(store.para_shape_count(), 0);
 
-        store.push_font(HwpxFont { id: 0, face_name: "A".into(), lang: "LATIN".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "A".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
         store.push_char_shape(HwpxCharShape::default());
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape::default());
@@ -1965,10 +2357,30 @@ mod tests {
         // 이름을 hangul-우선으로 돌려준다 (blank-HPC 실측: 한글=휴먼명조 +
         // 영문=별도 폰트 구성이 국룰).
         let mut store = HwpxStyleStore::new();
-        store
-            .push_font(HwpxFont { id: 0, face_name: "휴먼명조".into(), lang: "HANGUL".into() });
-        store.push_font(HwpxFont { id: 0, face_name: "HCI Poppy".into(), lang: "LATIN".into() });
-        store.push_font(HwpxFont { id: 0, face_name: "휴먼명조".into(), lang: "HANJA".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "휴먼명조".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "HCI Poppy".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "휴먼명조".into(),
+            lang: "HANJA".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
         store.push_char_shape(HwpxCharShape::default()); // 모든 축 = 그룹-로컬 0
         let names = store.char_font_axis_names(CharShapeIndex::new(0));
         assert_eq!(names, vec!["휴먼명조", "HCI Poppy"]);
@@ -1997,6 +2409,9 @@ mod tests {
                 id: i,
                 face_name: format!("Font{i}"),
                 lang: "LATIN".into(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
         }
         let names: Vec<&str> = store.iter_fonts().map(|f| f.face_name.as_str()).collect();
@@ -2066,8 +2481,8 @@ mod tests {
     fn para_shape_default_values() {
         let ps = HwpxParaShape::default();
         assert_eq!(ps.alignment, Alignment::Left);
-        assert_eq!(ps.margin_left, HwpUnit::ZERO);
-        assert_eq!(ps.indent, HwpUnit::ZERO);
+        assert_eq!(ps.margin_left, hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO));
+        assert_eq!(ps.indent, hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO));
         assert_eq!(ps.line_spacing, 160);
         assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
@@ -2297,7 +2712,7 @@ mod tests {
             assert_eq!(hwpx_cs.strikeout_color, bp_cs.strikeout_color);
             assert_eq!(hwpx_cs.vertical_position, bp_cs.vertical_position);
             assert_eq!(hwpx_cs.outline_type, bp_cs.outline);
-            assert_eq!(hwpx_cs.shadow_type, bp_cs.shadow);
+            assert_eq!(hwpx_cs.shadow, bp_cs.shadow);
             assert_eq!(hwpx_cs.emboss_type, bp_cs.emboss);
             assert_eq!(hwpx_cs.engrave_type, bp_cs.engrave);
         }
@@ -2321,6 +2736,23 @@ mod tests {
         assert_eq!(hwpx_cs.underline_type, UnderlineType::Bottom);
     }
 
+    /// A Blueprint shadow reaches the store whole: kind, color and offsets.
+    /// 이것을 실패시키는 것: 다리가 종류만 옮기는 것(`CharShadow::new(cs.shadow.kind())`).
+    #[test]
+    fn from_registry_carries_the_whole_char_shadow() {
+        use hwpforge_foundation::{ShadowOffset, ShadowType};
+        let template = builtin_default().unwrap();
+        let mut registry = StyleRegistry::from_template(&template).unwrap();
+        let shadow = CharShadow::new(ShadowType::Continuous)
+            .with_color(Some(Color::from_rgb(0x12, 0x34, 0x56)))
+            .unwrap()
+            .with_offset(ShadowOffset::new(-3).unwrap(), ShadowOffset::new(4).unwrap());
+        registry.char_shapes[0].shadow = shadow;
+
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        assert_eq!(store.char_shape(CharShapeIndex::new(7)).unwrap().shadow, shadow);
+    }
+
     #[test]
     fn from_registry_para_shape_properties() {
         let template = builtin_default().unwrap();
@@ -2331,11 +2763,26 @@ mod tests {
         for (i, bp_ps) in registry.para_shapes.iter().enumerate() {
             let hwpx_ps = store.para_shape(ParaShapeIndex::new(20 + i)).unwrap();
             assert_eq!(hwpx_ps.alignment, bp_ps.alignment);
-            assert_eq!(hwpx_ps.margin_left, bp_ps.indent_left);
-            assert_eq!(hwpx_ps.margin_right, bp_ps.indent_right);
-            assert_eq!(hwpx_ps.indent, bp_ps.indent_first_line);
-            assert_eq!(hwpx_ps.spacing_before, bp_ps.space_before);
-            assert_eq!(hwpx_ps.spacing_after, bp_ps.space_after);
+            assert_eq!(
+                hwpx_ps.margin_left,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.indent_left)
+            );
+            assert_eq!(
+                hwpx_ps.margin_right,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.indent_right)
+            );
+            assert_eq!(
+                hwpx_ps.indent,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.indent_first_line)
+            );
+            assert_eq!(
+                hwpx_ps.spacing_before,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.space_before)
+            );
+            assert_eq!(
+                hwpx_ps.spacing_after,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.space_after)
+            );
             assert_eq!(hwpx_ps.line_spacing, bp_ps.line_spacing_value.round() as i32);
         }
     }
@@ -2366,7 +2813,7 @@ mod tests {
             auto_tab_left: false,
             auto_tab_right: false,
             stops: vec![TabStop {
-                position: HwpUnit::new(15000).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::dot(),
             }],
@@ -2378,10 +2825,13 @@ mod tests {
         assert_eq!(hwpx_ps.tab_pr_id_ref, 3);
 
         let tabs: Vec<_> = store.iter_tabs().cloned().collect();
-        assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].id, 3);
-        assert_eq!(tabs[0].stops.len(), 1);
-        assert_eq!(tabs[0].stops[0].position, HwpUnit::new(15000).unwrap());
+        assert_eq!(tabs.len(), 4);
+        assert_eq!(tabs[3].id, 3);
+        assert_eq!(tabs[3].stops.len(), 1);
+        assert_eq!(
+            tabs[3].stops[0].position,
+            hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap())
+        );
     }
 
     #[test]
@@ -2411,7 +2861,7 @@ mod tests {
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
         assert_eq!(hwpx_ps.heading_type, HeadingType::Number);
-        assert_eq!(hwpx_ps.heading_id_ref, 42);
+        assert_eq!(hwpx_ps.heading_id_ref, 1);
         assert_eq!(hwpx_ps.heading_level, 2);
     }
 
@@ -2742,6 +3192,7 @@ mod tests {
 
     #[test]
     fn push_user_border_fill() {
+        // 이것을 실패시키는 것: push/get이 위치 1 대신 공개 label 4를 사용.
         let mut store = HwpxStyleStore::new();
         let bf = HwpxBorderFill {
             id: 4,
@@ -2767,9 +3218,9 @@ mod tests {
             image_fill: None,
         };
         let returned_id = store.push_border_fill(bf);
-        assert_eq!(returned_id, 4);
+        assert_eq!(returned_id, 1);
         assert_eq!(store.border_fill_count(), 1);
-        let fetched = store.border_fill(4).unwrap();
+        let fetched = store.border_fill(returned_id).unwrap();
         assert_eq!(fetched.left.line_type, "DASH");
         assert_eq!(fetched.left.width, "0.2 mm");
     }
@@ -3009,7 +3460,7 @@ mod tests {
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let ps = store.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 0);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 0);
         assert_eq!(ps.line_spacing, 160);
     }
 
@@ -3023,7 +3474,7 @@ mod tests {
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let ps = store.para_shape(ParaShapeIndex::new(2)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 1000);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 500);
         assert_eq!(ps.heading_type, HeadingType::Outline);
         assert_eq!(ps.heading_id_ref, 0);
         assert_eq!(ps.heading_level, 0);
@@ -3039,6 +3490,9 @@ mod tests {
                 id: 1,
                 face_name: "D2Coding".to_string(),
                 lang: lang.to_string(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
         }
         assert_eq!(store.font_count(), 14); // 7 (함초롬돋움) + 7 (D2Coding)
@@ -3055,6 +3509,56 @@ mod tests {
 
         // Total count unchanged
         assert_eq!(store.font_count(), 14);
+    }
+
+    /// Review r1 MEDIUM-4: a diagonal (slash or back-slash with a drawn
+    /// diagonal line) or a center line counts as an inner line; none of them
+    /// does not, nor an unknown id.
+    /// 이것을 실패시키는 것: 대각선 판정 삭제 · 대각선 선 종류 무시(NONE 선에도 참) ·
+    /// 중심선 무시.
+    #[test]
+    fn border_fill_inner_lines() {
+        use hwpforge_core::StyleLookup;
+        let mut store = HwpxStyleStore::new();
+        let mut add = |id: u32, edit: &dyn Fn(&mut HwpxBorderFill)| {
+            let mut bf = HwpxBorderFill::default_page_border();
+            bf.id = id;
+            edit(&mut bf);
+            store.push_border_fill(bf);
+        };
+        add(1, &|_| {});
+        add(2, &|bf| bf.slash.border_type = "CENTER".into());
+        add(3, &|bf| {
+            bf.back_slash_type = "CENTER".into();
+            bf.diagonal =
+                Some(HwpxBorderLine { line_type: "NONE".into(), ..HwpxBorderLine::default() });
+        });
+        add(4, &|bf| bf.center_line = "VERTICAL".into());
+        let got: Vec<Option<bool>> =
+            (1..=5).map(|id| store.border_fill_has_inner_lines(id)).collect();
+        assert_eq!(got, [Some(false), Some(true), Some(false), Some(true), None]);
+    }
+
+    /// C: replacing a face with a different one clears its kind, substitute
+    /// and classification; replacing it with itself keeps them.
+    /// 이것을 실패시키는 것: 초기화 생략 · 같은 이름에서도 초기화.
+    #[test]
+    fn replace_font_clears_metadata_of_a_new_face() {
+        let known = || {
+            let mut font = HwpxFont::new(0, "휴먼명조", "HANGUL");
+            font.font_type = Some(HwpxFontType::Hft);
+            font.substitute = Some(HwpxSubstFont::new(Some(HwpxFontType::Hft), "한컴바탕"));
+            font.type_info = Some(HwpxFontTypeInfo::new("FCAT_MYUNGJO", [5, 4, 0, 1, 1, 1, 1, 1]));
+            font
+        };
+        let mut store = HwpxStyleStore::new();
+        store.push_font(known());
+        store.replace_font("휴먼명조", "휴먼명조");
+        assert_eq!(store.font(FontIndex::new(0)).unwrap(), &known());
+        store.replace_font("휴먼명조", "함초롬바탕");
+        let font = store.font(FontIndex::new(0)).unwrap();
+        assert_eq!(font.face_name, "함초롬바탕");
+        assert_eq!((font.font_type, &font.substitute, &font.type_info), (None, &None, &None));
     }
 
     // ── StyleLookup impl tests ──────────────────────────────────
@@ -3219,13 +3723,13 @@ mod tests {
         });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Bullet,
-            heading_id_ref: 7,
+            heading_id_ref: 1,
             checked: true,
             ..Default::default()
         });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Bullet,
-            heading_id_ref: 8,
+            heading_id_ref: 2,
             checked: true,
             ..Default::default()
         });

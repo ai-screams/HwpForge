@@ -4,6 +4,8 @@
 //! `HwpxBorderFill`/`HwpxFill` representation, emitting projection-fallback
 //! warnings for fill semantics the HWPX surface cannot carry.
 
+use std::collections::BTreeMap;
+
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_foundation::{Color, GradientType, PatternType};
 use hwpforge_smithy_hwp5::schema::border_fill::{
@@ -25,14 +27,26 @@ pub(crate) fn push_required_border_fills(store: &mut HwpxStyleStore) {
     store.push_border_fill(HwpxBorderFill::default_table_border()); // id=3
 }
 
+/// Maps the HWP5 border/fill slots.
+///
+/// `image_ids` maps a border fill's image reference (the 1-based `DocInfo`
+/// position of its `BIN_DATA` record) to the manifest id written for it
+/// (image store key stem, `BIN0006` for `BIN0006.png`), when the caller
+/// knows the `DocInfo` order. An image fill whose reference is not in it is
+/// left out — the decoder already warned that the asset is missing
+/// (`style.border_fill.image`), and a reference to nothing would only
+/// produce a broken fill. `None` writes every reference as `BIN{N:04X}`,
+/// which names the wrong image when stored ids are not `1..n`, and says so
+/// with a `style.border_fill.image_reference` warning per fill.
 pub(crate) fn push_hwp5_border_fills(
     store: &mut HwpxStyleStore,
     border_fills: &[Hwp5DocInfoBorderFillSlot],
+    image_ids: Option<&BTreeMap<u16, String>>,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     for slot in border_fills {
         let border_fill = match &slot.fill {
-            Some(fill) => hwp5_border_fill_to_hwpx(slot.id, fill, warnings),
+            Some(fill) => hwp5_border_fill_to_hwpx(slot.id, fill, image_ids, warnings),
             None => unresolved_hwp5_border_fill_placeholder(slot.id),
         };
         store.push_border_fill(border_fill);
@@ -42,9 +56,10 @@ pub(crate) fn push_hwp5_border_fills(
 fn hwp5_border_fill_to_hwpx(
     id: u32,
     fill: &Hwp5RawBorderFill,
+    image_ids: Option<&BTreeMap<u16, String>>,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> HwpxBorderFill {
-    let fill_projection = hwp5_fill_to_hwpx(id, &fill.fill, warnings);
+    let fill_projection = hwp5_fill_to_hwpx(id, &fill.fill, image_ids, warnings);
     let mut border_fill = HwpxBorderFill::new(
         id,
         fill.three_d,
@@ -141,6 +156,7 @@ fn hwp5_diagonal_shape_to_hwpx(shape: u8) -> &'static str {
 fn hwp5_fill_to_hwpx(
     border_fill_id: u32,
     fill: &Hwp5RawBorderFillFill,
+    image_ids: Option<&BTreeMap<u16, String>>,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> BorderFillFillProjection {
     match fill {
@@ -181,13 +197,28 @@ fn hwp5_fill_to_hwpx(
                     ),
                 );
             }
+            // HWP5 `blur` is HWPX `step` (Hancom twins 144/144). The spec
+            // says 0-100 but Hancom writes 255 too, so 0-255 is carried and a
+            // larger value is clamped to 255 and reported.
+            // 이것을 실패시키는 것: 255 고정 복귀(`gradient_blur_becomes_step`) /
+            // 자르기 없이 300 / 자르기 경고 삭제.
+            if fill.blur > 255 {
+                push_projection_fallback(
+                    warnings,
+                    "style.border_fill.gradation_step",
+                    format!(
+                        "border_fill_id={border_fill_id}, gradation blur {} is above 255; clamped to 255",
+                        fill.blur
+                    ),
+                );
+            }
             BorderFillFillProjection {
                 gradient_fill: Some(HwpxGradientFill {
                     gradient_type: hwp5_gradation_type_to_hwpx(fill.gradation_type),
                     angle: fill.angle as i32,
                     center_x: fill.center_x,
                     center_y: fill.center_y,
-                    step: 255,
+                    step: fill.blur.min(255) as i32,
                     step_center: fill.blur_center.map(i32::from).unwrap_or(50),
                     alpha: 0,
                     colors: fill.colors.iter().copied().map(Color::from_raw).collect(),
@@ -207,10 +238,27 @@ fn hwp5_fill_to_hwpx(
                 );
                 return BorderFillFillProjection::default();
             };
+            let binary_item_id_ref = match image_ids {
+                Some(ids) => match ids.get(&fill.bindata_id) {
+                    Some(id) => id.clone(),
+                    None => return BorderFillFillProjection::default(),
+                },
+                None => {
+                    push_projection_fallback(
+                        warnings,
+                        "style.border_fill.image_reference",
+                        format!(
+                            "reference {0} written as BIN{0:04X} without a DocInfo order resolver",
+                            fill.bindata_id
+                        ),
+                    );
+                    format!("BIN{:04X}", fill.bindata_id)
+                }
+            };
             BorderFillFillProjection {
                 image_fill: Some(HwpxImageFill {
                     mode: mode.to_string(),
-                    binary_item_id_ref: format!("BIN{:04X}", fill.bindata_id),
+                    binary_item_id_ref,
                     bright: i32::from(fill.brightness),
                     contrast: i32::from(fill.contrast),
                     effect: hwp5_image_fill_effect_to_hwpx(fill.effect).to_string(),
@@ -395,7 +443,7 @@ mod tests {
 
     fn warnings_for(fill: &Hwp5RawBorderFillFill) -> Vec<Hwp5Warning> {
         let mut warnings = Vec::new();
-        let _ = hwp5_fill_to_hwpx(7, fill, &mut warnings);
+        let _ = hwp5_fill_to_hwpx(7, fill, None, &mut warnings);
         warnings
     }
 

@@ -90,6 +90,19 @@ fn replay_fixture(name: &str) -> Option<hwpforge_smithy_pdf::source::ReplayLayou
     Some(replay_layout(&input, &PdfOptions::default()).expect("replay"))
 }
 
+/// An outside `StyleLookup` that forwards the four edges and the fill but
+/// not the newer inner-line query (its default answers "unknown").
+struct FillsOnly<'a>(&'a hwpforge_smithy_hwpx::HwpxStyleStore);
+
+impl hwpforge_core::StyleLookup for FillsOnly<'_> {
+    fn border_fill_lines(&self, id: u32) -> Option<hwpforge_core::BorderFillLines> {
+        self.0.border_fill_lines(id)
+    }
+    fn border_fill_face(&self, id: u32) -> Option<hwpforge_core::FillKind> {
+        self.0.border_fill_face(id)
+    }
+}
+
 /// 쪽의 표 데이터 첫 줄 텍스트 (번호 열) 를 찾는다.
 fn first_table_number_on_page(page: &hwpforge_smithy_pdf::source::PageLayout) -> Option<String> {
     page.lines
@@ -190,5 +203,219 @@ fn probe_blank_hpc_replay() {
             eprintln!("warnings = {warn_kinds:?}");
         }
         Err(e) => eprintln!("REJECTED: {e}"),
+    }
+}
+
+// ── F 셀 영역 채우기 (rules-table 의 첫 표에 영역을 얹는 합성) ──
+
+/// rules-table 을 디코드해 첫 표의 칸 (0,0) 에 `zone_fill`·`zone_left_line` 인
+/// borderFill 영역을 얹고 재생한다.
+fn replay_with_zone(
+    zone_fill: &str,
+    zone_left_line: &str,
+) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
+    use hwpforge_smithy_hwpx::style_store::HwpxBorderLine;
+    let left = zone_left_line.to_string();
+    replay_with_zone_fill(zone_fill, true, false, &move |f| {
+        f.left = HwpxBorderLine { line_type: left.clone(), ..HwpxBorderLine::default() }
+    })
+}
+
+/// [`replay_with_zone`] with the zone's border fill edited by `edit`, and
+/// left out of the store when `register` is false.
+fn replay_with_zone_fill(
+    zone_fill: &str,
+    register: bool,
+    adapter: bool,
+    edit: &dyn Fn(&mut hwpforge_smithy_hwpx::style_store::HwpxBorderFill),
+) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
+    use hwpforge_core::run::RunContent;
+    use hwpforge_core::table::CellZone;
+    use hwpforge_smithy_hwpx::style_store::{HwpxBorderFill, HwpxFill};
+    let bytes = fixture("rules-table.hwpx")?;
+    let mut decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let id = decoded.style_store.iter_border_fills().map(|b| b.id).max().unwrap_or(0) + 1;
+    let mut fill = HwpxBorderFill::default_page_border();
+    fill.id = id;
+    fill.fill = Some(HwpxFill::WinBrush {
+        face_color: zone_fill.into(),
+        hatch_color: "#000000".into(),
+        alpha: "0".into(),
+    });
+    edit(&mut fill);
+    if register {
+        decoded.style_store.push_border_fill(fill);
+    }
+    // The cell under the zone gets its own blue fill, so a test can tell the
+    // cell's fill from none.
+    let mut blue = HwpxBorderFill::default_page_border();
+    blue.id = id + 1;
+    blue.fill = Some(HwpxFill::WinBrush {
+        face_color: "#0000FF".into(),
+        hatch_color: "#000000".into(),
+        alpha: "0".into(),
+    });
+    let blue_id = decoded.style_store.push_border_fill(blue);
+    // Positions are dense: an unregistered zone must be beyond the blue fill.
+    let zone_id = if register { id } else { blue_id + 1 };
+    let mut zoned = false;
+    decoded.document.for_each_paragraph_mut(|p| {
+        for run in &mut p.runs {
+            if let RunContent::Table(t) = &mut run.content {
+                if !zoned {
+                    t.cell_zones = vec![CellZone::new(0, 0, 0, 0, zone_id)];
+                    t.rows[0].cells[0].border_fill_id = Some(blue_id);
+                    zoned = true;
+                }
+            }
+        }
+    });
+    assert!(zoned, "rules-table has a table");
+    let validated = decoded.document.validate().expect("validate");
+    let wrapped = FillsOnly(&decoded.style_store);
+    let styles: &dyn hwpforge_core::StyleLookup =
+        if adapter { &wrapped } else { &decoded.style_store };
+    let input = PdfInput { document: &validated, styles };
+    Some(replay_layout(&input, &PdfOptions::default()).expect("replay"))
+}
+
+/// F: a cell inside a zone is filled with the zone's border fill; cells
+/// outside keep theirs; a zone whose border fill has a line warns (zone
+/// lines are not drawn).
+/// 이것을 실패시키는 것: 영역 무시(칸 (0,0) 이 빨강이 아님) · 영역을 모든 칸에
+/// (칸 (0,1) 도 빨강) · 선 있는 영역 경고 삭제 · 선 없는 영역에도 경고.
+#[test]
+fn cell_zone_fill_replaces_the_cell_fill() {
+    use hwpforge_foundation::Color;
+    let Some(layout) = replay_with_zone("#FF0000", "NONE") else { return };
+    let red = Color::from_rgb(255, 0, 0);
+    let rect = |suffix: &str| {
+        layout.pages[0].rects.iter().find(|r| r.location.ends_with(suffix)).map(|r| r.color)
+    };
+    assert_eq!(rect("t0r0c0"), Some(red), "{:?}", layout.pages[0].rects);
+    assert_ne!(rect("t0r0c1"), Some(red));
+    let zone_warn = |l: &hwpforge_smithy_pdf::source::ReplayLayout| {
+        l.warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    hwpforge_smithy_pdf::PdfWarning::UnsupportedTableStyle {
+                        what: "cell zone border",
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    assert_eq!(zone_warn(&layout), 0);
+    let lined = replay_with_zone("#FF0000", "SOLID").expect("fixture");
+    assert_eq!(zone_warn(&lined), 1);
+}
+
+fn zone_warnings(l: &hwpforge_smithy_pdf::source::ReplayLayout, what: &str) -> usize {
+    l.warnings
+        .iter()
+        .filter(|w| {
+            matches!(w, hwpforge_smithy_pdf::PdfWarning::UnsupportedTableStyle { what: x, .. } if *x == what)
+        })
+        .count()
+}
+
+/// Review r1 MEDIUM-4: a zone whose border fill has only a diagonal (no
+/// edge lines) still warns that zone lines are not drawn.
+/// 이것을 실패시키는 것: 대각선 판정을 경고 조건에서 빼기.
+#[test]
+fn cell_zone_with_only_a_diagonal_warns() {
+    let Some(layout) =
+        replay_with_zone_fill("#FF0000", true, false, &|f| f.slash.border_type = "CENTER".into())
+    else {
+        return;
+    };
+    assert_eq!(zone_warnings(&layout, "cell zone border"), 1);
+}
+
+/// Review r1 HIGH-2: a zone whose border fill is not in the store leaves
+/// the cell's own fill and is reported, instead of erasing the background.
+/// 이것을 실패시키는 것: 조회 실패 분기 삭제(배경 사라짐) · 경고 삭제.
+#[test]
+fn cell_zone_with_a_missing_border_fill_keeps_the_cell_fill() {
+    let Some(missing) = replay_with_zone_fill("#FF0000", false, false, &|_| {}) else { return };
+    let rect = |l: &hwpforge_smithy_pdf::source::ReplayLayout| {
+        l.pages[0].rects.iter().find(|r| r.location.ends_with("t0r0c0")).map(|r| r.color)
+    };
+    assert_eq!(rect(&missing), Some(hwpforge_foundation::Color::from_rgb(0, 0, 255)));
+    assert_eq!(zone_warnings(&missing, "cell zone without its border fill"), 1);
+}
+
+/// Review r2 MEDIUM-4: a style lookup that does not answer the inner-line
+/// query (the trait default, "unknown") gets the zone-line warning instead
+/// of a silent "no lines".
+/// 이것을 실패시키는 것: 미확인을 선 없음으로 취급(`!= Some(false)` 를 `== Some(true)` 로).
+#[test]
+fn cell_zone_with_an_unknown_inner_line_answer_warns() {
+    let Some(layout) = replay_with_zone_fill("#FF0000", true, true, &|_| {}) else { return };
+    assert_eq!(zone_warnings(&layout, "cell zone border"), 1);
+}
+
+/// 이것을 실패시키는 것: validate 정규화 누락 · HWPX 칸 값의 행 복제 ·
+/// PDF 반복행을 0 또는 첫 행으로 고정. 실제 반복 줄 수를 왕복 전후 대조한다.
+#[test]
+fn cell_header_pdf_repetition_survives_hwpx_roundtrip() {
+    use hwpforge_smithy_hwpx::{EncodeOptions, HwpxDecoder, HwpxEncoder};
+    let bytes = include_bytes!("../../../tests/fixtures/pdf-rules/rules-pagespan3-repeat.hwpx");
+    for (flag, marker, mixed, expected_rows) in [
+        (false, Some(true), false, 1),
+        (true, Some(false), false, 0),
+        (true, None, true, 0),
+        (true, None, false, 1),
+    ] {
+        let mut decoded = HwpxDecoder::decode(bytes).unwrap();
+        decoded.document.for_each_table_mut(|t| {
+            t.repeat_header = true;
+            let row = &mut t.rows[0];
+            row.is_header = flag;
+            for cell in &mut row.cells {
+                cell.header = marker;
+            }
+            if mixed {
+                row.cells[1].header = Some(false);
+            }
+        });
+        let doc = decoded.document.validate().unwrap();
+        doc.for_each_table(|t| assert_eq!(t.header_row_count(), expected_rows));
+        let before = replay_layout(
+            &PdfInput { document: &doc, styles: &decoded.style_store },
+            &PdfOptions::default(),
+        )
+        .unwrap();
+        let mut options = EncodeOptions::default();
+        options.emit_layout_cache = true;
+        let encoded = HwpxEncoder::encode_with_options(
+            &doc,
+            &decoded.style_store,
+            &decoded.image_store,
+            options,
+        )
+        .unwrap();
+        let back = HwpxDecoder::decode(&encoded).unwrap();
+        let doc = back.document.validate().unwrap();
+        doc.for_each_table(|t| assert_eq!(t.header_row_count(), expected_rows));
+        let after = replay_layout(
+            &PdfInput { document: &doc, styles: &back.style_store },
+            &PdfOptions::default(),
+        )
+        .unwrap();
+        let repeated = |layout: &hwpforge_smithy_pdf::source::ReplayLayout| {
+            layout
+                .pages
+                .iter()
+                .map(|p| p.lines.iter().filter(|l| l.location.contains("/rep")).count())
+                .collect::<Vec<_>>()
+        };
+        let counts = repeated(&before);
+        assert!(counts.len() >= 3);
+        assert_eq!(counts.iter().sum::<usize>() > 0, expected_rows > 0);
+        assert_eq!(repeated(&after), counts);
     }
 }

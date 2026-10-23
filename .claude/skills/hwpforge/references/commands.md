@@ -7,7 +7,7 @@ Run `hwpforge <command> --help` for every flag. Add `--json` for machine-readabl
 hwpforge convert in.md -o out.hwpx --preset default
 echo "# 제목" | hwpforge convert - -o out.hwpx       # stdin has no base dir: images only as data: URIs (50 MB cap)
 hwpforge convert-hwp5 old.hwp -o new.hwpx
-hwpforge convert-hwp5 old.hwp -o new.pdfsrc.hwpx --carry-layout-cache   # for to-pdf only, not for 한컴 re-open
+hwpforge convert-hwp5 old.hwp -o new.hwpx --no-layout-cache       # leave the line layout cache out (carried by default)
 
 # read
 hwpforge outline doc.hwpx --json                    # headings, tables (ordinal, rows, cols, at), fields, bookmarks

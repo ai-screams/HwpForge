@@ -212,6 +212,9 @@ pub(crate) struct SilentWire {
     pub start: u32,
     /// wire 소비 유닛 수 (확장/인라인 컨트롤=8, 단일 제어문자=1).
     pub len: u32,
+    /// 8 유닛 컨트롤의 ctrl id (`extra[0..4]`), 단일 제어문자는 0 — 줄 경계의
+    /// 토큰 종류(S22, 예: 승격하지 않는 쪽 번호 위치 `pgnp`).
+    pub ctrl_id: u32,
 }
 
 /// Parsed from a `ParaText` (tag `0x43`) record in a BodyText section.
@@ -308,7 +311,7 @@ impl Hwp5ParaText {
                 // (segments_to_string 결과는 동일).
                 0x00 => {
                     flush_text!();
-                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1 });
+                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1, ctrl_id: 0 });
                 }
 
                 // Extended controls: 8 wchars total (1 control + 7 extra u16).
@@ -316,8 +319,12 @@ impl Hwp5ParaText {
                 0x01 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
-                    let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    let extra = read_extra!(i - 1);
+                    silent_wires.push(SilentWire {
+                        start: seg_start,
+                        len: 8,
+                        ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                    });
                 }
                 0x02 => {
                     flush_text!();
@@ -342,8 +349,12 @@ impl Hwp5ParaText {
                 0x13 | 0x14 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
-                    let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    let extra = read_extra!(i - 1);
+                    silent_wires.push(SilentWire {
+                        start: seg_start,
+                        len: 8,
+                        ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                    });
                 }
                 // 0x17: dutmal (덧말) inline marker.
                 // `extra[0..4]` carries the BE-ascii ctrl_id `tdut` for the
@@ -357,7 +368,7 @@ impl Hwp5ParaText {
                 }
                 // 0x16: IndexMark (찾아보기) inline marker (Wave 12k).
                 // `extra[0..4]` carries the LE-stored ctrl_id `idxm`.
-                // Only `idxm`-tagged `0x16` markers are promoted to a
+                // `idxm` and named point bookmark `bokm` markers are promoted to a
                 // `ControlRef`; other 0x16 owners (unknown extended
                 // controls) keep falling through to the silent-consume
                 // arm below so we don't accidentally promote a control
@@ -366,10 +377,17 @@ impl Hwp5ParaText {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
-                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK {
+                    if matches!(
+                        ctrl_id_from_inline_extra_bytes(&extra),
+                        CTRL_ID_INDEXMARK | crate::ctrl_ids::CTRL_ID_BOOKMARK_POINT
+                    ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x12: extended control — Wave 12n discovered that
@@ -385,7 +403,11 @@ impl Hwp5ParaText {
                     if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_ATNO {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x11: 각주/미주 (footnote/endnote) inline reference marker
@@ -412,27 +434,33 @@ impl Hwp5ParaText {
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
-                // 0x15: page-control marker (새 번호 `nwno`·감추기 `pghd`·
-                // 쪽번호 위치 `pgnp` 공유 — F1/F2 실측 2026-08-12). `nwno`
-                // 만 `ControlRef` 로 승격해 위치를 보존한다 (0x11 각주
-                // 선례): 마커를 버리면 컨트롤이 문단 꼬리로 밀려 재시작이
-                // 엉뚱한 쪽에 적용된다. `pgnp` 는 구역 수준에서 소비되므로
-                // (object_controls 큐에 안 들어감) 마커도 승격하지 않아야
-                // 큐 정렬이 유지된다.
+                // Number restart, page hiding and page-number placement all
+                // retain their inline anchor. Their CtrlHeaders share the
+                // paragraph's object queue (including pgnp).
                 0x15 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
                     if matches!(
                         ctrl_id_from_inline_extra_bytes(&extra),
-                        CTRL_ID_NEW_NUMBER | CTRL_ID_PAGE_HIDING
+                        CTRL_ID_NEW_NUMBER
+                            | CTRL_ID_PAGE_HIDING
+                            | crate::ctrl_ids::CTRL_ID_PAGE_NUMBER
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x0E-0x10: extended controls (bookmarks, change tracking,
@@ -442,8 +470,12 @@ impl Hwp5ParaText {
                 0x0E..=0x10 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
-                    let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    let extra = read_extra!(i - 1);
+                    silent_wires.push(SilentWire {
+                        start: seg_start,
+                        len: 8,
+                        ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                    });
                 }
 
                 // Inline controls: 8 wchars total (1 control + 7 extra u16).
@@ -456,14 +488,15 @@ impl Hwp5ParaText {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    // An inline control's payload holds no control id.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8, ctrl_id: 0 });
                 }
                 0x08 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
                     // Title mark is not modeled in Core IR yet — 무음 8유닛.
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    silent_wires.push(SilentWire { start: seg_start, len: 8, ctrl_id: 0 });
                 }
                 0x09 => {
                     flush_text!();
@@ -496,7 +529,7 @@ impl Hwp5ParaText {
                 0x1E => {
                     flush_text!();
                     // Hard hyphen — not modeled in Core yet; consumed silently.
-                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1 });
+                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1, ctrl_id: 0 });
                 }
 
                 // Everything else: normal character.
@@ -648,6 +681,10 @@ pub(crate) struct Hwp5ShapeComponentGeometry {
     pub width: u32,
     /// Object height in HWPUNIT.
     pub height: u32,
+    /// Outer margin (left, right, top, bottom) from bytes 28–36 of the
+    /// object's `CtrlHeader` (S18); zeros when the header is shorter or the
+    /// geometry comes from elsewhere (a group child's component).
+    pub outer_margin: [i16; 4],
 }
 
 impl Hwp5ShapeComponentGeometry {
@@ -672,7 +709,10 @@ impl Hwp5ShapeComponentGeometry {
         let x = cur.read_i32::<LittleEndian>()?;
         let width = cur.read_u32::<LittleEndian>()?;
         let height = cur.read_u32::<LittleEndian>()?;
-        Ok(Self { x, y, width, height })
+        let outer_margin = data.get(28..36).map_or([0; 4], |b| {
+            std::array::from_fn(|i| i16::from_le_bytes([b[2 * i], b[2 * i + 1]]))
+        });
+        Ok(Self { x, y, width, height, outer_margin })
     }
 
     /// Minimum `ShapeComponent` (`0x4C`) payload to recover child geometry.
@@ -712,7 +752,276 @@ impl Hwp5ShapeComponentGeometry {
         let _flags = cur.read_u32::<LittleEndian>()?;
         let width = cur.read_u32::<LittleEndian>()?;
         let height = cur.read_u32::<LittleEndian>()?;
-        Ok(Self { x, y, width, height })
+        Ok(Self { x, y, width, height, outer_margin: [0; 4] })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hwp5ShapeRender
+// ---------------------------------------------------------------------------
+
+/// A 2D affine matrix as stored in a `ShapeComponent`: `[a, b, c, d, e, f]`
+/// for `x' = a·x + b·y + c`, `y' = d·x + e·y + f`.
+pub(crate) type Hwp5Matrix = [f64; 6];
+
+/// Fill facts read after a shape's matrix chain — only what decides how a
+/// group child folds and whether its fill is reported lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hwp5ShapeFill {
+    /// No fill, or one colour without a hatch pattern (turns with nothing).
+    Plain,
+    /// A fill with a direction: `"gradient"`, `"picture"` or `"pattern"`.
+    Directional(&'static str),
+    /// The fill block is missing, cut short, or uses kind bits we do not
+    /// know (a group component has none).
+    Unreadable,
+}
+
+/// A shape's outline as stored after its matrix chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5ShapeLine {
+    /// COLORREF (`0x00BBGGRR`).
+    pub color: u32,
+    /// Thickness in HWPUNIT.
+    pub thickness: i32,
+    /// Property word; bits 0–5 = line type (0 none, 1 solid, 2 dot, 3 dash —
+    /// confirmed against Hancom's HWPX twins).
+    pub properties: u32,
+}
+
+/// A single shape's outline and fill (§19.5 1b).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Hwp5ShapeLook {
+    /// The outline.
+    pub line: Hwp5ShapeLine,
+    /// Raw fill kind bits (0 none, 1 colour/hatch, 2 picture, 4 gradient),
+    /// or `None` when the kind header itself is cut short.
+    pub fill_kind: Option<u32>,
+    /// The fill block, or why it could not be read.
+    pub fill: Result<super::border_fill::Hwp5RawBorderFillFill, String>,
+    /// Corner ratio of a rectangle (byte 0 of its `ShapeComponentRect`
+    /// record, §19.5 1c); 0 for other shapes.
+    pub corner_ratio: u8,
+}
+
+/// The rendering block of a `ShapeComponent` (`0x4C`): the shape's initial
+/// size and its matrix chain — `trans`, then one `(sca, rot)` pair per group
+/// level, the first pair given by the outermost group and the last the
+/// shape's own. The same chain HWPX writes in `<hp:renderingInfo>`.
+///
+/// | bytes | field |
+/// | -- | -- |
+/// | `[0..4]` | type tag (`$rec` …); the component right under a `gso` control header writes it twice |
+/// | `[4..8]` `[8..12]` | x, y (i32) |
+/// | `[12..14]` | group level (u16) |
+/// | `[14..16]` | version (u16) |
+/// | `[16..24]` | initial width, height (u32) — what local coordinates refer to |
+/// | `[24..32]` | current width, height (u32) |
+/// | `[32..36]` | flags |
+/// | `[36..38]` | angle (i16) |
+/// | `[38..46]` | rotation centre x, y (i32) |
+/// | `[46..48]` | pair count (u16) = group level + 1 |
+/// | `[48..96]` | `trans` (6 × f64) |
+/// | then | `(sca, rot)` × pair count (12 × f64 each) |
+/// | then (drawing shapes) | line information (13 bytes), fill kind (u32), fill payload … |
+///
+/// Checked against the Hancom HWPX twins of the same documents: every group
+/// child in the HWP5 corpus (3,936) has `pair count = group level + 1`, and
+/// the HWPX resave of a corpus document carries the same matrices.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Hwp5ShapeRender {
+    /// Owning CtrlHeader instance ID, set for independent objects.
+    pub source_id: u32,
+    /// Wire caches for diagnostics only; never folded into Core geometry.
+    pub angle: i16,
+    pub flip: (bool, bool),
+    /// Initial (unscaled) width and height.
+    pub initial: (u32, u32),
+    /// `transMatrix`.
+    pub trans: Hwp5Matrix,
+    /// `(scaMatrix, rotMatrix)` pairs in stored order.
+    pub pairs: Vec<(Hwp5Matrix, Hwp5Matrix)>,
+    /// Fill facts after the chain.
+    pub fill: Hwp5ShapeFill,
+}
+
+impl Hwp5ShapeRender {
+    /// Compose every pair including translations in wire order.
+    pub(crate) fn map(&self) -> hwpforge_core::control::geometry::ShapeTransform {
+        use hwpforge_core::control::geometry::ShapeTransform;
+        self.pairs.iter().fold(ShapeTransform::from_matrix(self.trans), |m, (s, r)| {
+            m.then(ShapeTransform::from_matrix(*r)).then(ShapeTransform::from_matrix(*s))
+        })
+    }
+    const HEADER: usize = 48;
+    const MATRIX: usize = 48;
+    /// Line information before the fill kind: colour, thickness, properties
+    /// (u32 each) and the outline style byte.
+    const LINE_INFO: usize = 13;
+
+    /// Parses the rendering block of a `ShapeComponent` payload.
+    /// `type_repeated` is set for the component right under a `gso` control
+    /// header, which writes its type tag twice.
+    ///
+    /// # Errors
+    ///
+    /// [`Hwp5Error::RecordParse`] when the block is short, its pair count is
+    /// not its group level + 1, or a matrix entry is not finite — never a
+    /// guessed matrix.
+    pub(crate) fn parse(data: &[u8], type_repeated: bool) -> Hwp5Result<Self> {
+        let err = |detail: String| Hwp5Error::RecordParse { offset: 0, detail };
+        let data = if type_repeated { data.get(4..).unwrap_or(&[]) } else { data };
+        if data.len() < Self::HEADER {
+            return Err(err(format!("shape rendering block too short: {} bytes", data.len())));
+        }
+        let mut cur = Cursor::new(&data[12..Self::HEADER]);
+        let group_level = cur.read_u16::<LittleEndian>()?;
+        let _version = cur.read_u16::<LittleEndian>()?;
+        let initial = (cur.read_u32::<LittleEndian>()?, cur.read_u32::<LittleEndian>()?);
+        let flags = u32::from_le_bytes(data[32..36].try_into().expect("checked header"));
+        let angle = i16::from_le_bytes(data[36..38].try_into().expect("checked header"));
+        let flip = (flags & 1 != 0, flags & 2 != 0);
+        cur.set_position(34);
+        let pair_count = usize::from(cur.read_u16::<LittleEndian>()?);
+        if pair_count != usize::from(group_level) + 1 {
+            return Err(err(format!(
+                "matrix pair count {pair_count} does not match group level {group_level} + 1"
+            )));
+        }
+        let chain_end = Self::HEADER + Self::MATRIX * (1 + 2 * pair_count);
+        if data.len() < chain_end {
+            return Err(err(format!(
+                "matrix chain cut short: {} bytes, {chain_end} needed",
+                data.len()
+            )));
+        }
+        let mut cur = Cursor::new(&data[Self::HEADER..chain_end]);
+        let mut matrix = || -> Hwp5Result<Hwp5Matrix> {
+            let mut m = [0.0; 6];
+            for v in &mut m {
+                *v = cur.read_f64::<LittleEndian>()?;
+                if !v.is_finite() {
+                    return Err(err("matrix entry is not a finite number".to_string()));
+                }
+            }
+            Ok(m)
+        };
+        let trans = matrix()?;
+        let mut pairs = Vec::with_capacity(pair_count);
+        for _ in 0..pair_count {
+            pairs.push((matrix()?, matrix()?));
+        }
+        Ok(Self {
+            source_id: 0,
+            angle,
+            flip,
+            initial,
+            trans,
+            pairs,
+            fill: Self::fill_after(&data[chain_end..]),
+        })
+    }
+
+    /// The initial (unscaled) width and height of a `ShapeComponent`
+    /// rendering block (bytes 16–24 after the type tag) — HWPX `orgSz`.
+    pub(crate) fn initial_size(data: &[u8], type_repeated: bool) -> Option<(u32, u32)> {
+        let data = if type_repeated { data.get(4..)? } else { data };
+        let word =
+            |at: usize| data.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        Some((word(16)?, word(20)?))
+    }
+
+    /// Read the complete 13-byte line independently of the following fill.
+    /// An error means the line cannot be recovered; fill errors stay in `look.fill`.
+    pub(crate) fn parse_look(data: &[u8], type_repeated: bool) -> Hwp5Result<Hwp5ShapeLook> {
+        let data = if type_repeated { data.get(4..).unwrap_or(&[]) } else { data };
+        let chain_end = Self::chain_end(data)?;
+        let tail = &data[chain_end..];
+        if tail.len() < Self::LINE_INFO {
+            return Err(Hwp5Error::RecordParse {
+                offset: chain_end,
+                detail: format!("line information cut short: {} bytes, 13 needed", tail.len()),
+            });
+        }
+        let mut cur = Cursor::new(tail);
+        let color = cur.read_u32::<LittleEndian>()?;
+        let thickness = cur.read_i32::<LittleEndian>()?;
+        let properties = cur.read_u32::<LittleEndian>()?;
+        let _outline = cur.read_u8()?;
+        // 이것을 실패시키는 것: 채우기 헤더 잘림을 선 정보 전체 실패로 올리기.
+        let (fill_kind, fill) = match cur.read_u32::<LittleEndian>() {
+            Ok(kind) => (
+                Some(kind),
+                super::border_fill::parse_fill_payload(kind, &mut cur).map_err(|e| e.to_string()),
+            ),
+            Err(_) => (
+                None,
+                Err(format!(
+                    "fill kind cut short: {} bytes, 4 needed",
+                    tail.len() - Self::LINE_INFO
+                )),
+            ),
+        };
+        Ok(Hwp5ShapeLook {
+            corner_ratio: 0,
+            line: Hwp5ShapeLine { color, thickness, properties },
+            fill_kind,
+            fill,
+        })
+    }
+
+    /// End of the matrix chain in a rendering block whose type tag is not
+    /// repeated: the header, `trans`, and the `(sca, rot)` pairs.
+    fn chain_end(data: &[u8]) -> Hwp5Result<usize> {
+        let err = |detail: String| Hwp5Error::RecordParse { offset: 0, detail };
+        if data.len() < Self::HEADER {
+            return Err(err(format!("shape rendering block too short: {} bytes", data.len())));
+        }
+        let mut cur = Cursor::new(&data[12..Self::HEADER]);
+        let group_level = cur.read_u16::<LittleEndian>()?;
+        cur.set_position(34);
+        let pair_count = usize::from(cur.read_u16::<LittleEndian>()?);
+        if pair_count != usize::from(group_level) + 1 {
+            return Err(err(format!(
+                "matrix pair count {pair_count} does not match group level {group_level} + 1"
+            )));
+        }
+        let chain_end = Self::HEADER + Self::MATRIX * (1 + 2 * pair_count);
+        if data.len() < chain_end {
+            return Err(err(format!("matrix chain cut short: {} bytes", data.len())));
+        }
+        Ok(chain_end)
+    }
+
+    /// Reads the fill kind after the line information, the layout of the
+    /// `DocInfo` border fill (`border_fill.rs`): bit 0 = one colour plus a
+    /// hatch pattern (pattern kind `-1` = none), bit 1 = picture, bit 2 =
+    /// gradient.
+    fn fill_after(tail: &[u8]) -> Hwp5ShapeFill {
+        let at = Self::LINE_INFO;
+        let word = |i: usize| tail.get(i..i + 4).map(|b| [b[0], b[1], b[2], b[3]]);
+        let Some(kind) = word(at).map(u32::from_le_bytes) else {
+            return Hwp5ShapeFill::Unreadable;
+        };
+        if kind & !0b111 != 0 {
+            return Hwp5ShapeFill::Unreadable;
+        }
+        if kind & 0b100 != 0 {
+            return Hwp5ShapeFill::Directional("gradient");
+        }
+        if kind & 0b010 != 0 {
+            return Hwp5ShapeFill::Directional("picture");
+        }
+        if kind & 0b001 != 0 {
+            // Background colour, pattern colour, then the pattern kind.
+            let Some(pattern) = word(at + 12).map(i32::from_le_bytes) else {
+                return Hwp5ShapeFill::Unreadable;
+            };
+            if pattern >= 0 {
+                return Hwp5ShapeFill::Directional("pattern");
+            }
+        }
+        Hwp5ShapeFill::Plain
     }
 }
 
@@ -841,9 +1150,8 @@ impl Hwp5ShapeComponentPolygon {
 
 /// Minimal `ShapeComponentEllipse` (tag `0x50`) payload.
 ///
-/// 한컴 stores **both** plain ellipses and arcs in this 60-byte record — it does
-/// not emit a separate `ShapeComponentArc` (`0x51`) for arcs (empirically
-/// confirmed from 한컴 output). The discriminator is content: a plain ellipse
+/// Hancom stores ellipse-derived arcs in this 60-byte record; native axis
+/// arcs also use tag `0x51` (fixture 29). A plain ellipse
 /// leaves `property` at zero and all four arc endpoints at the origin, while an
 /// arc carries a non-zero `property` and real arc endpoints.
 ///
@@ -855,6 +1163,8 @@ impl Hwp5ShapeComponentPolygon {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapeComponentEllipse {
+    /// Native 0x51 closure type; absent for an ellipse-derived arc.
+    pub native_type: Option<u8>,
     /// Raw property bitfield (`0` for a plain ellipse; non-zero marks an arc).
     pub property: u32,
     /// Ellipse center in local object coordinates.
@@ -899,17 +1209,50 @@ impl Hwp5ShapeComponentEllipse {
         let end1 = read_point(&mut cur)?;
         let start2 = read_point(&mut cur)?;
         let end2 = read_point(&mut cur)?;
-        Ok(Self { property, center, axis1, axis2, start1, end1, start2, end2 })
+        Ok(Self { native_type: None, property, center, axis1, axis2, start1, end1, start2, end2 })
     }
 
-    /// Whether this record describes an arc rather than a plain ellipse.
+    /// A native Arc (0x51): type byte followed by centre and two axes.
+    /// This internal carrier reuses ellipse storage; property=2 routes it as an
+    /// arc, while native_type distinguishes AxisEndpoints from EllipseSweep.
+    /// The four zero sweep slots are unused, not inferred defining points.
+    pub(crate) fn parse_arc(data: &[u8]) -> Hwp5Result<Self> {
+        if data.len() < 25 {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!("ShapeComponentArc too short: {}", data.len()),
+            });
+        }
+        let mut cur = Cursor::new(&data[1..]);
+        let center = read_point(&mut cur)?;
+        let axis1 = read_point(&mut cur)?;
+        let axis2 = read_point(&mut cur)?;
+        let zero = Hwp5ShapePoint { x: 0, y: 0 };
+        Ok(Self {
+            native_type: Some(data[0]),
+            property: 2,
+            center,
+            axis1,
+            axis2,
+            start1: zero,
+            end1: zero,
+            start2: zero,
+            end2: zero,
+        })
+    }
+
+    /// Whether this record describes an arc rather than a plain ellipse:
+    /// property bit 1 ("changed into an arc"). Hancom leaves uninitialised
+    /// values in a plain ellipse's arc-point fields (§19.22 C: all 102
+    /// ellipse records in the corpus have property 0, 95 of them with such
+    /// points, and the Hancom HWPX files available for them write no arc),
+    /// so the points do not decide it.
     ///
-    /// True when the property bitfield is set or any arc endpoint is non-origin.
-    /// This content-based check is robust against unknown `property` bits.
+    /// 이것을 실패시키는 것: 끝점 판정 복귀
+    /// (`shape_component_ellipse_arc_points_alone_do_not_mark_arc`) / 다른
+    /// 속성 비트도 호로 보기(`..._other_property_bits_do_not_mark_arc`).
     pub(crate) fn is_arc(&self) -> bool {
-        let arc_points_present =
-            [self.start1, self.end1, self.start2, self.end2].iter().any(|p| p.x != 0 || p.y != 0);
-        self.property != 0 || arc_points_present
+        self.property & 0x2 != 0
     }
 }
 
@@ -1539,7 +1882,7 @@ impl Hwp5DutmalControl {
 /// | `[N+3..N+4]` | `0A` | `char_pr_cnt` | u8 — fixed `10` per HWPX schema |
 /// | `[N+4..N+4+40]` | `07 00 00 00 …` | `char_pr_ids[0..10]` | 10 × LE u32 (`u32::MAX` = no-override sentinel) |
 ///
-/// `compose_text` has no length prefix on the wire. We infer
+/// The body has no separate `compose_text` length prefix. We infer
 /// `N = payload_len - 44` (4 metadata bytes + 40 charPr bytes) given the
 /// `charPrCnt = 10` invariant. If the result is negative, odd, or
 /// `char_pr_cnt` is not exactly `10`, the payload is treated as
@@ -1587,7 +1930,7 @@ impl Hwp5ComposeControl {
     /// `properties` low half (`data[4..6]` as LE u16). Task #74 ran the
     /// full 14-circleType × 2-composeType matrix
     /// (`sample-compose-all-shapes.hwp`, `probe_compose_variants`) and
-    /// confirmed these are the **only** layouts 한컴 emits:
+    /// observed the following layouts with two-character inputs:
     ///
     /// - **`0x0003` (unpacked)** — `composeText` is fully in the body
     ///   (`data[8..]`). `properties[2..4]` is a decoration glyph that is
@@ -1610,10 +1953,11 @@ impl Hwp5ComposeControl {
     ///   body trailer layout is unchanged; only the leading
     ///   char-region shrinks by one `u16`.
     ///
-    /// Any other `properties.low` value falls through to `None`
-    /// (treated as malformed) — the full-matrix probe found no third
-    /// layout, so an unknown discriminator really is malformed rather
-    /// than an unobserved variant.
+    /// The purpose-made `hancom_controls/f2-compose-links.hwp` additionally
+    /// stores `efg` with low half 4 and the decoration glyph U+25C6 in the
+    /// high half. Longer unpacked text counts its UTF-16 units plus that
+    /// glyph; accept it only when the payload length agrees. Preserve the
+    /// already supported 2/3 layouts and reject other inconsistent values.
     pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
         // CtrlHeader payload is `[0..8] = ctrl_id + properties`, then
         // the compose-specific data lives in `[8..]`. We mirror the
@@ -1632,13 +1976,12 @@ impl Hwp5ComposeControl {
             return None;
         }
 
-        // Layout discriminator: `0x0003` = unpacked (default), `0x0002`
-        // = packed (one char carried in properties.high; len encoded
-        // in properties.low). See struct doc for the empirical
-        // rationale and which fixture surfaced the variant.
+        // Legacy two-character layouts, plus a length-checked longer
+        // unpacked layout (f2: 4 = decoration glyph + e/f/g).
         let packed_first_char: Option<u16> = match props_low {
             0x0003 => None,
             0x0002 => Some(props_high),
+            count if count > 3 && usize::from(count) == text_bytes_end / 2 + 1 => None,
             _ => return None,
         };
 
@@ -1815,6 +2158,8 @@ pub(crate) struct Hwp5ClickHereControl {
     /// Owning control identifier, always `0x2563_6C6B` (`"%clk"` BE-ascii).
     #[allow(dead_code)]
     pub ctrl_id: u32,
+    /// Original command for a range field; retain the authored hint/help encoding.
+    pub command: String,
     /// Hint text shown as visible placeholder (`<hp:stringParam name="Direction">`).
     /// `None` when the wire encoded an empty hint (Hancom collapses
     /// `Some("")` and `None` to the same wire form).
@@ -1938,7 +2283,14 @@ impl Hwp5ClickHereControl {
         // recommended warning-not-error on mismatch which the decoder
         // does at the dispatch layer.
 
-        Ok(Self { ctrl_id, hint_text, help_text, name: None, field_unique_id })
+        Ok(Self {
+            ctrl_id,
+            command: String::from_utf16_lossy(&command_units_vec),
+            hint_text,
+            help_text,
+            name: None,
+            field_unique_id,
+        })
     }
 
     /// Decodes a `0x57 lvl=2` sub-record's `data` into the field
@@ -2628,11 +2980,42 @@ impl Hwp5EqEdit {
 // Hwp5ShapePicture
 // ---------------------------------------------------------------------------
 
-/// Minimal `ShapePicture` payload needed to resolve a `DocInfo/BinData` entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `ShapePicture` payload: the `DocInfo/BinData` entry it shows, and what
+/// a group picture is judged by (border, crop, effects, image size).
+///
+/// Layout (HWP 5.0 표 107, checked against Hancom's HWPX twins of the F3
+/// group-picture fixtures): border colour `[0..4]`, border thickness
+/// `[4..8]`, border properties `[8..12]`, image rectangle `[12..44]`, crop
+/// left/top/right/bottom `[44..60]` (= HWPX `imgClip`), inner margins
+/// `[60..68]`, brightness/contrast/effect `[68..71]` (effect 1 = HWPX
+/// `GRAY_SCALE`), BinData id `[71..73]`, border alpha `[73]`, instance id
+/// `[74..78]`, picture-effect flags `[78..82]`, then — only when no effect
+/// is set, as the effect blocks come in between — the image's own size
+/// `[82..90]` (= HWPX `imgDim`). Older records stop at 73 or 78 bytes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapePicture {
+    /// Ordered destination rectangle points (x,y) in the initial box.
+    pub rectangle: [(i32, i32); 4],
+    /// Left, right, top, bottom inner margins (HWPUNIT).
+    pub in_margin: [u16; 4],
     /// 1-based binary item identifier.
     pub binary_data_id: u16,
+    /// Border thickness (HWPUNIT); `0` = no border drawn.
+    pub border_thickness: i32,
+    /// Crop rectangle: left, top, right, bottom.
+    pub crop: [i32; 4],
+    /// Brightness, contrast and effect (0 = the picture as it is).
+    pub brightness: i8,
+    /// See [`Self::brightness`].
+    pub contrast: i8,
+    /// See [`Self::brightness`].
+    pub effect: u8,
+    /// Picture-effect flags (shadow, glow, …); `None` in a record too short
+    /// to hold them.
+    pub effect_flags: Option<u32>,
+    /// The image's own size, the extent of an uncropped crop rectangle;
+    /// `None` when the record does not hold it.
+    pub dimension: Option<(u32, u32)>,
 }
 
 impl Hwp5ShapePicture {
@@ -2653,11 +3036,59 @@ impl Hwp5ShapePicture {
                 ),
             });
         }
-
+        let i32_at =
+            |at: usize| i32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+        let u32_at =
+            |at: usize| data.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
         let start = Self::BINARY_DATA_ID_OFFSET;
-        let binary_data_id = u16::from_le_bytes([data[start], data[start + 1]]);
-        Ok(Self { binary_data_id })
+        let effect_flags = u32_at(78);
+        let dimension = match (effect_flags, u32_at(82), u32_at(86)) {
+            (Some(0), Some(w), Some(h)) => Some((w, h)),
+            _ => None,
+        };
+        Ok(Self {
+            rectangle: [12, 20, 28, 36].map(|i| (i32_at(i), i32_at(i + 4))),
+            in_margin: [60, 62, 64, 66].map(|i| u16::from_le_bytes([data[i], data[i + 1]])),
+            binary_data_id: u16::from_le_bytes([data[start], data[start + 1]]),
+            border_thickness: i32_at(4),
+            crop: [i32_at(44), i32_at(48), i32_at(52), i32_at(56)],
+            brightness: i8::from_le_bytes([data[68]]),
+            contrast: i8::from_le_bytes([data[69]]),
+            effect: data[70],
+            effect_flags,
+            dimension,
+        })
     }
+}
+
+/// The link a shape's `CtrlData` (`0x57`) record holds: Hancom's object
+/// hyperlink, a parameter set `0x021B` with one nested set `0x026F` whose
+/// one string item `0x0265` is the link command (HWPX `href`; every shape
+/// `CtrlData` in the corpus has exactly this form).
+///
+/// Returns the command with its `\` escapes undone
+/// (`http\://www.korea.kr;1;0;0;` → `http://www.korea.kr;1;0;0;`), or why
+/// the record is not in that form.
+pub(crate) fn parse_object_link(data: &[u8]) -> Result<String, String> {
+    const PREFIX: [u8; 20] = [
+        0x1b, 0x02, 0x01, 0x00, 0x00, 0x00, // set 0x021B, one item
+        0x6f, 0x02, 0x00, 0x80, // item 0x026F, a parameter set
+        0x6f, 0x02, 0x01, 0x00, 0x00, 0x00, // set 0x026F, one item
+        0x65, 0x02, 0x01, 0x00, // item 0x0265, a string
+    ];
+    let rest = data.strip_prefix(&PREFIX[..]).ok_or("not an object hyperlink parameter set")?;
+    let len = rest.get(..2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])));
+    let units = len
+        .and_then(|n| rest.get(2..2 + n * 2))
+        .ok_or("object hyperlink string runs past the record")?;
+    let units: Vec<u16> = units.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let raw = String::from_utf16(&units).map_err(|_| "object hyperlink is not UTF-16")?;
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' { chars.next().unwrap_or(c) } else { c });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -3133,15 +3564,22 @@ mod tests {
         assert_eq!(arc.property, 2);
         assert_eq!(arc.start1, Hwp5ShapePoint { x: 11339, y: 4252 });
         assert_eq!(arc.end2, Hwp5ShapePoint { x: 5671, y: 27 });
-        assert!(arc.is_arc(), "non-zero property marks an arc");
+        assert!(arc.is_arc(), "property bit 1 marks an arc");
     }
 
     #[test]
-    fn shape_component_ellipse_arc_points_alone_mark_arc() {
-        // Even with property 0, a non-origin arc endpoint means an arc.
-        let data = ellipse_bytes(0, [(10, 10), (20, 10), (10, 20), (5, 5), (0, 0), (0, 0), (0, 0)]);
+    fn shape_component_ellipse_arc_points_alone_do_not_mark_arc() {
+        // Property 0 with leftover arc points is a plain ellipse (§19.22 C).
+        let data = ellipse_bytes(0, [(10, 10), (20, 10), (10, 20), (5, 5), (7, 3), (9, 9), (1, 2)]);
         let parsed = Hwp5ShapeComponentEllipse::parse(&data).unwrap();
-        assert!(parsed.is_arc(), "content-based arc detection ignores unknown property bits");
+        assert!(!parsed.is_arc(), "leftover arc points do not make an arc");
+    }
+
+    #[test]
+    fn shape_component_ellipse_other_property_bits_do_not_mark_arc() {
+        // Only bit 1 marks an arc.
+        let data = ellipse_bytes(1, [(10, 10), (20, 10), (10, 20), (0, 0), (0, 0), (0, 0), (0, 0)]);
+        assert!(!Hwp5ShapeComponentEllipse::parse(&data).unwrap().is_arc());
     }
 
     #[test]
@@ -3606,7 +4044,13 @@ mod tests {
         let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&data).unwrap();
         assert_eq!(
             geometry,
-            Hwp5ShapeComponentGeometry { x: 1440, y: -720, width: 28_800, height: 14_400 }
+            Hwp5ShapeComponentGeometry {
+                x: 1440,
+                y: -720,
+                width: 28_800,
+                height: 14_400,
+                outer_margin: [0; 4]
+            }
         );
     }
 
@@ -3634,8 +4078,247 @@ mod tests {
         let geometry = Hwp5ShapeComponentGeometry::parse_from_shape_component(&data).unwrap();
         assert_eq!(
             geometry,
-            Hwp5ShapeComponentGeometry { x: 17_360, y: 0, width: 6998, height: 12_426 }
+            Hwp5ShapeComponentGeometry {
+                x: 17_360,
+                y: 0,
+                width: 6998,
+                height: 12_426,
+                outer_margin: [0; 4]
+            }
         );
+    }
+
+    // -----------------------------------------------------------------------
+    /// 이것을 실패시키는 것: wire flags/angle 바이트를 읽지 않거나 위치를 혼동.
+    #[test]
+    fn render_keeps_raw_metadata_only_for_diagnostics() {
+        let mut data = vec![0u8; 48 + 48 * 3];
+        data[32..36].copy_from_slice(&3u32.to_le_bytes());
+        data[36..38].copy_from_slice(&(-30i16).to_le_bytes());
+        data[46..48].copy_from_slice(&1u16.to_le_bytes());
+        let render = Hwp5ShapeRender::parse(&data, false).unwrap();
+        assert_eq!(render.angle, -30);
+        assert_eq!(render.flip, (true, true));
+    }
+
+    // Hwp5ShapeRender
+    // -----------------------------------------------------------------------
+
+    const ID: Hwp5Matrix = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+    /// A `ShapeComponent` payload: the 48-byte header (type tag, x, y,
+    /// group level, version, initial and current size, flags, angle, centre,
+    /// pair count), `trans`, the `(sca, rot)` pairs, then `tail`.
+    fn render_record(
+        repeated: bool,
+        level: u16,
+        initial: (u32, u32),
+        pair_count: u16,
+        matrices: &[Hwp5Matrix],
+        tail: &[u8],
+    ) -> Vec<u8> {
+        let mut d = Vec::new();
+        if repeated {
+            d.extend_from_slice(b"noc$");
+        }
+        d.extend_from_slice(b"cer$");
+        d.extend_from_slice(&111i32.to_le_bytes());
+        d.extend_from_slice(&222i32.to_le_bytes());
+        d.extend_from_slice(&level.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&initial.0.to_le_bytes());
+        d.extend_from_slice(&initial.1.to_le_bytes());
+        d.extend_from_slice(&(initial.0 * 2).to_le_bytes());
+        d.extend_from_slice(&(initial.1 * 2).to_le_bytes());
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.extend_from_slice(&0i16.to_le_bytes());
+        d.extend_from_slice(&0i32.to_le_bytes());
+        d.extend_from_slice(&0i32.to_le_bytes());
+        d.extend_from_slice(&pair_count.to_le_bytes());
+        assert_eq!(d.len(), if repeated { 52 } else { 48 });
+        for m in matrices {
+            for v in m {
+                d.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        d.extend_from_slice(tail);
+        d
+    }
+
+    fn m(k: f64) -> Hwp5Matrix {
+        [k, 0.0, k * 10.0, 0.0, k, k * 100.0]
+    }
+
+    /// The fill block after the 13-byte line information: fill kind, then
+    /// (for kind bit 0) background colour, pattern colour, pattern kind.
+    fn fill_tail(kind: u32, pattern: Option<i32>) -> Vec<u8> {
+        let mut t = vec![0u8; 13];
+        t.extend_from_slice(&kind.to_le_bytes());
+        if let Some(p) = pattern {
+            t.extend_from_slice(&0x00FF_FFFFu32.to_le_bytes());
+            t.extend_from_slice(&0u32.to_le_bytes());
+            t.extend_from_slice(&p.to_le_bytes());
+            t.push(0);
+        }
+        t
+    }
+
+    /// A shape colour fill that ends right after its hatch kind still gives
+    /// its colours. 이것을 실패시키는 것: 짧은 블록 대체 읽기를 지우기.
+    #[test]
+    fn shape_look_reads_a_colour_fill_without_its_alpha_byte() {
+        let mut tail = vec![0u8; 13];
+        tail.extend_from_slice(&1u32.to_le_bytes());
+        tail.extend_from_slice(&0x00F1_F1F1u32.to_le_bytes());
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        tail.extend_from_slice(&(-1i32).to_le_bytes());
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        let data = render_record(true, 0, (700, 300), 1, &[m(1.0), m(1.0), m(1.0)], &tail);
+        let look = Hwp5ShapeRender::parse_look(&data, true).expect("look");
+        let Ok(super::super::border_fill::Hwp5RawBorderFillFill::Color(c)) = &look.fill else {
+            panic!("{:?}", look.fill)
+        };
+        assert_eq!(c.background_color, 0x00F1_F1F1);
+    }
+
+    /// Only the short form is read past the parser's error: a colour fill
+    /// with alpha 128 and an extra-data length of 1 but no extra byte, or a
+    /// 16-byte block whose last four bytes are not zero, or a gradient fill
+    /// cut to the short form's 16 bytes, keeps its error
+    /// (review r2 — it came out as an opaque fill and the transparency
+    /// warning was lost).
+    ///
+    /// 이것을 실패시키는 것: 대체 읽기의 끝 네 바이트 조건 / 색 채우기 종류
+    /// 조건을 지우기.
+    #[test]
+    fn only_the_short_colour_fill_form_is_read_past_its_error() {
+        let look_of = |kind: u32, block: &[u8]| {
+            let mut tail = vec![0u8; 13];
+            tail.extend_from_slice(&kind.to_le_bytes());
+            tail.extend_from_slice(block);
+            let data = render_record(true, 0, (700, 300), 1, &[m(1.0), m(1.0), m(1.0)], &tail);
+            Hwp5ShapeRender::parse_look(&data, true).expect("look").fill
+        };
+        let look = |block: &[u8]| look_of(1, block);
+        let mut colours = Vec::new();
+        colours.extend_from_slice(&0x00F1_F1F1u32.to_le_bytes());
+        colours.extend_from_slice(&0u32.to_le_bytes());
+        colours.extend_from_slice(&(-1i32).to_le_bytes());
+        // alpha 128, extra length 1, no extra byte.
+        let mut damaged = colours.clone();
+        damaged.push(128);
+        damaged.extend_from_slice(&1u32.to_le_bytes());
+        assert!(look(&damaged).is_err(), "{:?}", look(&damaged));
+        // 16 bytes, but the last four are not zero.
+        let mut not_zero = colours.clone();
+        not_zero.extend_from_slice(&[128, 1, 0, 0]);
+        assert!(look(&not_zero).is_err(), "{:?}", look(&not_zero));
+        // The short form itself still reads — as a colour fill only.
+        let mut short = colours;
+        short.extend_from_slice(&[0; 4]);
+        assert!(look(&short).is_ok());
+        assert!(look_of(4, &short).is_err(), "{:?}", look_of(4, &short));
+    }
+
+    /// A level-1 child: `trans`, then two pairs in stored order, each `sca`
+    /// before its `rot`.
+    ///
+    /// 이것을 실패시키는 것: 쌍 순서를 뒤집어 읽는 것, 한 쌍 안에서 sca·rot 를
+    /// 바꿔 읽는 것, 초기 크기를 [24..32](현재 크기)에서 읽는 것.
+    #[test]
+    fn shape_render_reads_trans_and_pairs_in_stored_order() {
+        let data = render_record(
+            false,
+            1,
+            (700, 300),
+            2,
+            &[m(1.0), m(2.0), m(3.0), m(4.0), m(5.0)],
+            &fill_tail(0, None),
+        );
+        let r = Hwp5ShapeRender::parse(&data, false).unwrap();
+        assert_eq!(r.initial, (700, 300));
+        assert_eq!(r.trans, m(1.0));
+        assert_eq!(r.pairs, vec![(m(2.0), m(3.0)), (m(4.0), m(5.0))]);
+        assert_eq!(r.fill, Hwp5ShapeFill::Plain);
+    }
+
+    /// A level-2 child (inside a nested group) carries three pairs.
+    ///
+    /// 이것을 실패시키는 것: 쌍 개수를 group level 로(1 적게) 읽는 것.
+    #[test]
+    fn shape_render_reads_three_pairs_at_level_two() {
+        let mats = [m(1.0), m(2.0), m(3.0), m(4.0), m(5.0), m(6.0), m(7.0)];
+        let data = render_record(false, 2, (10, 20), 3, &mats, &fill_tail(0, None));
+        let r = Hwp5ShapeRender::parse(&data, false).unwrap();
+        assert_eq!(r.pairs.len(), 3);
+        assert_eq!(r.pairs[2], (m(6.0), m(7.0)));
+    }
+
+    /// The component right under a top-level `gso` control header writes its
+    /// type tag twice; every field after it moves by four bytes.
+    ///
+    /// 이것을 실패시키는 것: 반복 type tag 를 건너뛰지 않는 것(필드가 4바이트
+    /// 밀려 크기·쌍 개수가 틀려진다).
+    #[test]
+    fn shape_render_skips_the_repeated_type_tag_of_a_top_level_component() {
+        let data = render_record(true, 0, (5000, 4000), 1, &[m(1.0), m(2.0), m(3.0)], &[]);
+        let r = Hwp5ShapeRender::parse(&data, true).unwrap();
+        assert_eq!(r.initial, (5000, 4000));
+        assert_eq!(r.pairs, vec![(m(2.0), m(3.0))]);
+        // A group component has no fill block.
+        assert_eq!(r.fill, Hwp5ShapeFill::Unreadable);
+    }
+
+    /// `pairCount = groupLevel + 1` on every group child in the corpus; any
+    /// other count is a reason, not a guess.
+    ///
+    /// 이것을 실패시키는 것: 쌍 개수 검사를 지우는 것.
+    #[test]
+    fn shape_render_rejects_a_pair_count_off_the_group_level() {
+        let data = render_record(false, 1, (10, 10), 1, &[ID, ID, ID], &fill_tail(0, None));
+        let err = Hwp5ShapeRender::parse(&data, false).unwrap_err();
+        assert!(err.to_string().contains("pair count 1"), "{err}");
+    }
+
+    /// 이것을 실패시키는 것: 머리 길이 검사, 또는 행렬열 길이 검사를 지우는 것
+    /// (각각 범위 밖 읽기로 panic).
+    #[test]
+    fn shape_render_rejects_a_short_block() {
+        let data = render_record(false, 0, (10, 10), 1, &[ID, ID, ID], &[]);
+        assert!(Hwp5ShapeRender::parse(&data[..40], false).is_err());
+        assert!(Hwp5ShapeRender::parse(&data[..48 + 48 * 2], false).is_err());
+    }
+
+    /// 이것을 실패시키는 것: 행렬 성분의 유한성 검사를 지우는 것.
+    #[test]
+    fn shape_render_rejects_a_non_finite_matrix_entry() {
+        let bad = [1.0, 0.0, f64::NAN, 0.0, 1.0, 0.0];
+        let data = render_record(false, 0, (10, 10), 1, &[ID, ID, bad], &fill_tail(0, None));
+        let err = Hwp5ShapeRender::parse(&data, false).unwrap_err();
+        assert!(err.to_string().contains("finite"), "{err}");
+    }
+
+    /// Fill kind bits: 1 = one colour plus an optional hatch pattern (the
+    /// pattern kind tells them apart, `-1` = none), 2 = picture, 4 =
+    /// gradient. Solid and pattern share the kind bits.
+    ///
+    /// 이것을 실패시키는 것: 무늬 종류를 보지 않고 종류 비트만 보는 것(단색과
+    /// 무늬가 같은 결과), 그러데이션·그림 비트 판정을 지우는 것, 모르는 비트를
+    /// 단색으로 접는 것.
+    #[test]
+    fn shape_render_tells_solid_from_pattern_and_directional_fills() {
+        let fill = |tail: Vec<u8>| {
+            let data = render_record(false, 0, (10, 10), 1, &[ID, ID, ID], &tail);
+            Hwp5ShapeRender::parse(&data, false).unwrap().fill
+        };
+        assert_eq!(fill(fill_tail(0, None)), Hwp5ShapeFill::Plain);
+        assert_eq!(fill(fill_tail(1, Some(-1))), Hwp5ShapeFill::Plain);
+        assert_eq!(fill(fill_tail(1, Some(3))), Hwp5ShapeFill::Directional("pattern"));
+        assert_eq!(fill(fill_tail(2, None)), Hwp5ShapeFill::Directional("picture"));
+        assert_eq!(fill(fill_tail(4, None)), Hwp5ShapeFill::Directional("gradient"));
+        assert_eq!(fill(fill_tail(5, Some(-1))), Hwp5ShapeFill::Directional("gradient"));
+        assert_eq!(fill(fill_tail(8, None)), Hwp5ShapeFill::Unreadable);
+        assert_eq!(fill(fill_tail(1, None)), Hwp5ShapeFill::Unreadable);
     }
 
     #[test]
@@ -3650,12 +4333,76 @@ mod tests {
     // Hwp5ShapePicture
     // -----------------------------------------------------------------------
 
+    /// The picture fields a group picture is judged by, at the offsets the
+    /// F3 twins show (F3c crop (0, 0, 7474, 15000) of a 22500 x 15000 image,
+    /// F3e effect 1 = HWPX GRAY_SCALE); the image size is read only when no
+    /// picture effect comes before it.
+    ///
+    /// 이것을 실패시키는 것: 오프셋을 하나씩 바꾸는 것 / 효과 플래그가 있어도 크기를
+    /// 읽는 것.
+    #[test]
+    fn shape_picture_parses_crop_effect_border_and_size() {
+        let mut data = vec![0u8; 91];
+        data[4..8].copy_from_slice(&28i32.to_le_bytes());
+        for (i, v) in [0i32, 0, 7474, 15_000].iter().enumerate() {
+            data[44 + 4 * i..48 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        data[68] = 0xF6; // brightness −10
+        data[69] = 5;
+        data[70] = 1;
+        data[71..73].copy_from_slice(&3u16.to_le_bytes());
+        data[82..86].copy_from_slice(&22_500u32.to_le_bytes());
+        data[86..90].copy_from_slice(&15_000u32.to_le_bytes());
+        let p = Hwp5ShapePicture::parse(&data).unwrap();
+        assert_eq!(
+            p,
+            Hwp5ShapePicture {
+                rectangle: [(0, 0); 4],
+                in_margin: [0; 4],
+                binary_data_id: 3,
+                border_thickness: 28,
+                crop: [0, 0, 7474, 15_000],
+                brightness: -10,
+                contrast: 5,
+                effect: 1,
+                effect_flags: Some(0),
+                dimension: Some((22_500, 15_000)),
+            }
+        );
+        data[78] = 4;
+        let p = Hwp5ShapePicture::parse(&data).unwrap();
+        assert_eq!((p.effect_flags, p.dimension), (Some(4), None));
+        let p = Hwp5ShapePicture::parse(&data[..73]).unwrap();
+        assert_eq!((p.effect_flags, p.dimension), (None, None));
+    }
+
+    /// The object-link parameter set: the string item, `\\` escapes undone;
+    /// any other shape is an error, not a guess.
+    ///
+    /// 이것을 실패시키는 것: 접두 검사 삭제 / 길이 검사 삭제 / 역슬래시 해제 삭제.
+    #[test]
+    fn object_link_record_is_parsed_strictly() {
+        let units = |s: &str| s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+        let mut rec = hex_bytes("1b02010000006f0200806f020100000065020100");
+        rec.extend_from_slice(&27u16.to_le_bytes());
+        rec.extend(units("http\\://www.korea.kr;1;0;0;"));
+        assert_eq!(parse_object_link(&rec).as_deref(), Ok("http://www.korea.kr;1;0;0;"));
+        assert!(parse_object_link(&rec[..rec.len() - 2]).is_err());
+        let mut other = rec.clone();
+        other[0] = 0x1c;
+        assert!(parse_object_link(&other).is_err());
+    }
+
+    fn hex_bytes(h: &str) -> Vec<u8> {
+        (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect()
+    }
+
     #[test]
     fn shape_picture_parses_binary_data_id() {
         let mut data = vec![0u8; 73];
         data[71..73].copy_from_slice(&1u16.to_le_bytes());
         let picture = Hwp5ShapePicture::parse(&data).unwrap();
-        assert_eq!(picture, Hwp5ShapePicture { binary_data_id: 1 });
+        assert_eq!(picture, Hwp5ShapePicture { binary_data_id: 1, ..Default::default() });
     }
 
     #[test]

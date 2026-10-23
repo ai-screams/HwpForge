@@ -404,6 +404,7 @@ pub fn stamp(
     let mut warnings: Vec<OpsWarning> =
         decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &bytes)?;
     Ok(StampOutput {
         bytes,
         manifest: opts.manifest.then_some(manifest),

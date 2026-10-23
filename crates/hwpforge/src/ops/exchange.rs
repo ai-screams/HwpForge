@@ -20,11 +20,12 @@
 //! [`from_json`] **generates** a package from JSON: there is no original to
 //! preserve, so encode warnings are reported rather than fatal. [`patch`]
 //! **preserves**: it rewrites one section's text inside the existing package
-//! and leaves every other byte alone, so it has no encode stage and no
-//! encode warnings.
+//! and leaves every other byte alone, so it has no encode stage. Its only
+//! encode warnings are about the edited text itself: characters XML 1.0
+//! cannot represent are removed from it and reported.
 
 use hwpforge_core::caption::Caption;
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -159,7 +160,7 @@ pub fn to_json(hwpx: &[u8], opts: &ToJsonOptions) -> Result<ToJsonOutput, OpsErr
     let mut warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
     let styles = opts.styles.then_some(decoded.style_store);
-    let exported = ExportedDocument { document: decoded.document, styles };
+    let exported = ExportedDocument { format_version: 2, document: decoded.document, styles };
 
     let mut document = serde_json::to_value(&exported).map_err(OpsError::json_serialize)?;
     let unaddressed = annotate_document_addresses(&mut document, &exported.document)
@@ -314,7 +315,7 @@ pub fn export_section(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FromJsonOptions {
-    /// An existing package to inherit the image store from.
+    /// An existing package supplying images and trusted unchanged line caches.
     ///
     /// JSON carries image *references*, never image bytes, so a document
     /// whose JSON mentions images produces a package with broken references
@@ -323,7 +324,7 @@ pub struct FromJsonOptions {
 }
 
 impl FromJsonOptions {
-    /// Inherits images from an existing package.
+    /// Inherits images and trusted unchanged line caches from an existing package.
     #[must_use]
     pub fn with_base(mut self, base: impl Into<Vec<u8>>) -> Self {
         self.base = Some(base.into());
@@ -347,10 +348,10 @@ pub struct FromJsonOutput {
     /// counted before the encode consumes it (same reason as
     /// [`sections`](Self::sections)).
     pub paragraphs: usize,
-    /// Encode warnings, then one `LAYOUT_CACHE_DROPPED` per section whose
-    /// input JSON carried a non-empty layout cache that this encode did not
-    /// re-emit. Generation has no original meaning to preserve, so these are
-    /// reported, never fatal.
+    /// Encode and cache-selection warnings. Without a base, cache omission
+    /// is reported once per section carrying a non-empty JSON cache. With a
+    /// base, reasons distinguish intentional invalidation, missing trusted
+    /// correspondence and ledger failures. These warnings are never fatal.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -404,14 +405,16 @@ impl FromJsonOutput {
 ///
 /// # Warnings
 ///
-/// Besides the encoder's own diagnostics, one `LAYOUT_CACHE_DROPPED` per
-/// section whose JSON carried a non-empty layout cache — [`to_json`] exports
-/// each paragraph's promoted `linesegarray` cache, but this function always
-/// encodes with [`EncodeOptions::default`], whose `emit_layout_cache` stays
-/// off (a stale cache after edits is worse than none). Without this warning
-/// the round trip is silently render-degraded: 한글 recomputes layout on
-/// open regardless, but `hwpforge`'s own PDF path needs the cache and would
-/// otherwise fail later with no link back to this step.
+/// With a base, unchanged paragraphs retain only the base's trusted caches,
+/// re-emitted through the encoder's coordinate ledger. Core content, referenced
+/// styles and page/container settings determine edits; the shared flow rule
+/// invalidates their tails and host chains. Structural changes admit only the
+/// identical prefix of an affected paragraph list. Supplied JSON caches are
+/// never trusted, including manual changes or removals.
+///
+/// Intentional invalidation, missing correspondence and ledger failures have
+/// distinct `LAYOUT_CACHE_DROPPED` reasons. Without a base, caches are omitted
+/// as before, with one warning per section carrying a non-empty JSON cache.
 ///
 /// The warning's `path` points at the *first* cached paragraph found,
 /// walking every paragraph the encoder would serialize — including
@@ -419,10 +422,9 @@ impl FromJsonOutput {
 /// [`Section::for_each_paragraph`] deliberately does not visit (see
 /// [`hwpforge_core::document::Document::for_each_paragraph_mut`]) but the
 /// encoder drops that cache too, so a bare `section[i]` marker would miss
-/// it silently. The one exception is a cache inside a master page: the
-/// encoder itself keeps no path there (master pages never reach the
-/// per-paragraph encode path that tracks one), so the warning still stops
-/// at the bare section marker in that case.
+/// it silently. A cache inside a master page is reported at
+/// `section[i].masterpage[N]…`, `N` being the package-wide master page
+/// number the encoder writes it under.
 ///
 /// # Errors
 ///
@@ -452,8 +454,21 @@ impl FromJsonOutput {
 pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, OpsError> {
     // Parsed once: the typed document deserialises from the tree by
     // reference, and the same tree carries the addresses to verify.
-    let value: serde_json::Value = serde_json::from_str(json)?;
-    let exported = ExportedDocument::deserialize(&value)?;
+    let mut value: serde_json::Value = serde_json::from_str(json)?;
+    let exchange_warnings =
+        hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
+    let mut exported = ExportedDocument::deserialize(&value)?;
+    let base = opts
+        .base
+        .as_ref()
+        .map(|bytes| {
+            hwpforge_smithy_hwpx::decoder::HwpxEditBase::read(bytes).map_err(OpsError::decode)
+        })
+        .transpose()?;
+    if let Some(base) = &base {
+        HwpxDecoder::restore_source_provenance(&mut exported.document, base.decoded())
+            .map_err(OpsError::decode)?;
+    }
 
     verify_document_addresses(&value, &exported.document)?;
 
@@ -463,27 +478,33 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     let paragraphs: usize =
         exported.document.sections().iter().map(|section| section.paragraphs.len()).sum();
 
-    // Same reason this must run before `validate()` consumes the tree: the
-    // encode below always runs with `EncodeOptions::default` (emit off), so
+    // Without a base, encode runs with `emit_layout_cache` off, so
     // a cache the input carried is dropped without a trace unless flagged
     // here. `first_layout_cache_path` walks every paragraph the encoder
     // would serialize (including image captions — see its doc), so one
     // warning per section that carries at least one non-empty cache, with
     // `path` naming the first such paragraph rather than just the section.
+    // Master pages are numbered across the package (`masterpage{N}`), as
+    // the encoder numbers them.
+    let mut masterpage_offset = 0usize;
     let layout_cache_warnings: Vec<OpsWarning> = exported
         .document
         .sections()
         .iter()
         .enumerate()
         .filter_map(|(index, section)| {
-            first_layout_cache_path(section, index).map(|path| {
-                OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
-                    path,
-                    reason: "layout cache present in the JSON was not re-emitted — from_json \
+            let offset = masterpage_offset;
+            masterpage_offset += section.master_pages.as_ref().map_or(0, Vec::len);
+            first_layout_cache_path(section, index, offset)
+                .filter(|_| opts.base.is_none() || !exchange_warnings.is_empty())
+                .map(|path| {
+                    OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
+                        path,
+                        reason: "layout cache present in the JSON was not re-emitted — from_json \
                              encodes with emit_layout_cache off by design"
-                        .to_string(),
+                            .to_string(),
+                    })
                 })
-            })
         })
         .collect();
 
@@ -494,23 +515,56 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     };
     let validated = exported.document.validate()?;
 
-    let image_store = match &opts.base {
-        Some(base) => HwpxDecoder::decode(base).map_err(OpsError::decode)?.image_store,
-        None => ImageStore::new(),
+    let empty_images = ImageStore::new();
+    let image_store = match &base {
+        Some(base) => &base.decoded().image_store,
+        None => &empty_images,
     };
 
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &validated,
-        &style_store,
-        &image_store,
-        EncodeOptions::default(),
-    )
+    // W0: `from-json` writes documents the caller authors, so a memo the
+    // JSON gives no time gets the current time — the encoder itself never
+    // reads the clock (conversions and edits stay byte-stable).
+    // 이것을 실패시키는 것: 현재 시각 주입 삭제(`a_memo_without_a_time_gets_the_current_time`).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let options = EncodeOptions::default().with_memo_create_time(now);
+    // 이것을 실패시키는 것: base가 있어도 일반 캐시 없는 인코더로 보내기.
+    let outcome = match &base {
+        Some(base) if exchange_warnings.is_empty() => {
+            HwpxEncoder::encode_with_edit_base(base, &validated, &style_store, image_store, options)
+        }
+        _ => HwpxEncoder::encode_with_diagnostics(&validated, &style_store, image_store, options),
+    }
     .map_err(OpsError::encode)?;
 
     let mut warnings: Vec<OpsWarning> =
         outcome.warnings.into_iter().map(OpsWarning::Encode).collect();
     warnings.extend(layout_cache_warnings);
+    if let Some(base) = &base {
+        warnings.extend(
+            base.decoded()
+                .warnings
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w,
+                        hwpforge_smithy_hwpx::DecodeWarning::ParagraphMeasureNormalized { .. }
+                    )
+                })
+                .cloned()
+                .map(OpsWarning::Decode),
+        );
+    }
+    warnings.extend(
+        exchange_warnings
+            .into_iter()
+            .map(|w| OpsWarning::LegacyParagraphMeasures { message: w.message }),
+    );
 
+    if let Some(input) = &opts.base {
+        super::ensure_opaque_carried(input, &outcome.bytes)?;
+    }
     Ok(FromJsonOutput {
         bytes: outcome.bytes,
         sections: validated.section_count(),
@@ -534,16 +588,22 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
 /// `hwpforge-smithy-hwpx::encoder`, so the path this returns reads the
 /// same way a real encoder-side `LayoutCacheDropped` warning would.
 ///
-/// One spot the encoder itself never path-tracks falls back to a bare
-/// `section[i]` path instead of inventing a segment it never emits: master
-/// pages (`build_masterpage_entries` never receives a sink). A memo's
-/// `anchor_runs` get a similar fallback but one step deeper — the memo's own
-/// path rather than the section's — because the encoder flattens
-/// `anchor_runs` to plain text and never recurses into a non-text run there
-/// (see [`first_in_control`]), yet a cache nested inside one is still real
-/// and still dropped, so it must still be found, just reported at the
-/// nearest real container instead of a path the encoder never builds.
-fn first_layout_cache_path(section: &Section, section_index: usize) -> Option<ParagraphPath> {
+/// Master pages get `MasterPage(masterpage_offset + i)` — the package-wide
+/// number the encoder gives this section's `i`-th master page — followed by
+/// `NestedParagraph`, as the encoder's master page sink builds them.
+///
+/// One spot the encoder itself never path-tracks falls back to the nearest
+/// real container: a memo's `anchor_runs` report the memo's own path,
+/// because the encoder flattens `anchor_runs` to plain text and never
+/// recurses into a non-text run there (see [`first_in_control`]), yet a
+/// cache nested inside one is still real and still dropped, so it must
+/// still be found, just reported at the nearest real container instead of
+/// a path the encoder never builds.
+fn first_layout_cache_path(
+    section: &Section,
+    section_index: usize,
+    masterpage_offset: usize,
+) -> Option<ParagraphPath> {
     let base = vec![PathSeg::Section(section_index)];
 
     first_in_paragraphs(&section.paragraphs, &base, PathSeg::BodyParagraph)
@@ -562,17 +622,11 @@ fn first_layout_cache_path(section: &Section, section_index: usize) -> Option<Pa
             })
         })
         .or_else(|| {
-            // The encoder never path-tracks master pages (see this
-            // function's doc), so there is no real segment to append here
-            // — but the *detection* must still recurse into runs (table
-            // cells, captions, …), not just check each top-level paragraph
-            // directly, or a cache nested one level deeper than before
-            // would stop being caught at all (a real narrowing, not just
-            // an imprecise path).
-            let carries_cache = section.master_pages.iter().flatten().any(|mp| {
-                mp.paragraphs.iter().any(|p| first_in_paragraph(p, base.clone()).is_some())
-            });
-            carries_cache.then(|| ParagraphPath(base.clone()))
+            section.master_pages.iter().flatten().enumerate().find_map(|(i, mp)| {
+                let mut path = base.clone();
+                path.push(PathSeg::MasterPage(masterpage_offset + i));
+                first_in_paragraphs(&mp.paragraphs, &path, PathSeg::NestedParagraph)
+            })
         })
 }
 
@@ -696,7 +750,13 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
             children.iter().find_map(|child| {
                 let mut child_path = path.to_vec();
                 child_path.push(PathSeg::GroupChild(emitted_idx));
-                let found = first_in_control(child, &child_path);
+                let found = match child {
+                    GroupChild::Picture(image) => {
+                        first_in_caption(image.caption.as_ref(), &child_path)
+                    }
+                    GroupChild::Shape(control) => first_in_control(control, &child_path),
+                    _ => None,
+                };
                 if group_child_is_emitted(child) {
                     emitted_idx += 1;
                 }
@@ -716,8 +776,7 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
                 // it either. `first_in_run` is reused only to *detect* a
                 // cache there (same descent as everywhere else); the path
                 // it would have built is discarded in favour of the memo's
-                // own path, the nearest real container — the same fallback
-                // shape master pages use above, one level deeper.
+                // own path, the nearest real container.
                 anchor_runs
                     .iter()
                     .any(|run| first_in_run(run, &memo_path).is_some())
@@ -735,7 +794,13 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
 /// `Memo`, …) is dropped rather than fabricated (Wave A group support), so
 /// it never advances the encoder's own `emitted_idx` counter — see
 /// [`first_in_control`]'s `Control::Group` arm above.
-fn group_child_is_emitted(child: &Control) -> bool {
+fn group_child_is_emitted(child: &GroupChild) -> bool {
+    let child = match child {
+        // A picture is written as a `<hp:pic>` group child.
+        GroupChild::Picture(_) => return true,
+        GroupChild::Shape(control) => control,
+        _ => return false,
+    };
     matches!(
         child,
         Control::TextBox { .. }
@@ -789,12 +854,17 @@ pub struct PatchOutput {
     pub section: usize,
     /// Section count of the output package, which a patch never changes.
     pub sections: usize,
-    /// Decoder warnings for the base package, in decoder order.
+    /// Decoder warnings for the base package, in decoder order, then one
+    /// `XML_FORBIDDEN_CHARS_REMOVED` per edited text slot that had
+    /// characters removed.
     ///
-    /// There are no *encode* warnings here and there never will be: a
-    /// preserving patch splices one section's XML and leaves every other ZIP
-    /// entry alone, so no encoder runs. The base is still decoded, to check
-    /// the replacement against it, and that decode reports.
+    /// A preserving patch splices one section's XML and leaves every other
+    /// ZIP entry alone, so no encoder runs. The base is still decoded, to
+    /// check the replacement against it, and that decode reports. A slot
+    /// whose new text holds characters XML 1.0 cannot represent (the C0
+    /// controls other than TAB, LF, CR and U+001F, plus U+FFFE/U+FFFF) is
+    /// written without them, and the warning's location is the slot path.
+    /// Slots handed back unchanged are never looked at.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -860,21 +930,51 @@ impl PatchOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> {
-    let value: serde_json::Value = serde_json::from_str(&opts.patch)?;
+    let mut value: serde_json::Value = serde_json::from_str(&opts.patch)?;
+    let exchange_warnings =
+        hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
     let exported = ExportedSection::deserialize(&value)?;
 
     verify_section_addresses(&value, &exported.section, exported.section_index)?;
 
     let diagnosed =
-        HwpxPatcher::patch_exported_section_with_diagnostics(hwpx, opts.section, &exported)?;
-    let SectionPatchOutcome { bytes, patched_section, sections } = diagnosed.value;
+        HwpxPatcher::patch_exported_section_with_codec_diagnostics(hwpx, opts.section, &exported)?;
+    let SectionPatchOutcome { mut bytes, patched_section, sections } = diagnosed.value;
+    let mut warnings: Vec<OpsWarning> =
+        diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    if !exchange_warnings.is_empty() {
+        // Legacy positional IDs do not prove cache identity, even if the
+        // text-only patch itself passed the existing preservation checks.
+        let decoded = HwpxDecoder::decode(&bytes).map_err(OpsError::decode)?;
+        let mut masterpage_offset = 0;
+        for (index, section) in decoded.document.sections().iter().enumerate() {
+            if let Some(path) = first_layout_cache_path(section, index, masterpage_offset) {
+                warnings.push(OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
+                    path,
+                    reason: "legacy JSON cannot prove original layout cache identity; re-export the original document".into(),
+                }));
+            }
+            masterpage_offset += section.master_pages.as_ref().map_or(0, Vec::len);
+        }
+        let outcome = HwpxEncoder::encode_with_diagnostics(
+            &decoded.document.validate()?,
+            &decoded.style_store,
+            &decoded.image_store,
+            EncodeOptions::default(),
+        )
+        .map_err(OpsError::encode)?;
+        bytes = outcome.bytes;
+        warnings.extend(outcome.warnings.into_iter().map(OpsWarning::Encode));
+    }
+    warnings.extend(
+        exchange_warnings
+            .into_iter()
+            .map(|w| OpsWarning::LegacyParagraphMeasures { message: w.message }),
+    );
 
-    Ok(PatchOutput {
-        bytes,
-        section: patched_section,
-        sections,
-        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
-    })
+    super::ensure_opaque_carried(hwpx, &bytes)?;
+    Ok(PatchOutput { bytes, section: patched_section, sections, warnings })
 }
 
 #[cfg(test)]

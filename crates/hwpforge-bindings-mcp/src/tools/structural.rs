@@ -48,10 +48,16 @@ fn render_warning(warning: &OpsWarning) -> String {
 /// renders (`out.warnings.iter().map(render_warning)`, no reordering there
 /// either). Every existing `Structural` string stays byte-identical:
 /// [`render_warning`] still calls `sw.to_string()` for that variant.
+///
+/// Encode warnings pass too: `insert_para` reports a text it cleaned of
+/// characters XML cannot carry as `XML_FORBIDDEN_CHARS_REMOVED`, after the
+/// decode warnings.
 fn structural_advisories(warnings: &[OpsWarning]) -> Vec<String> {
     warnings
         .iter()
-        .filter(|w| matches!(w, OpsWarning::Structural(_) | OpsWarning::Decode(_)))
+        .filter(|w| {
+            matches!(w, OpsWarning::Structural(_) | OpsWarning::Decode(_) | OpsWarning::Encode(_))
+        })
         .map(render_warning)
         .collect()
 }
@@ -206,6 +212,27 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{json}");
         let first = warnings[0].as_str().expect("warning entries are strings");
         assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
+    }
+
+    /// A text holding a character XML cannot carry is inserted without it,
+    /// and the removal reaches the MCP caller.
+    // 이것을 실패시키는 것: `structural_advisories` 필터에서 `OpsWarning::Encode` 를 빼는 것.
+    #[test]
+    fn insert_para_surfaces_a_removed_control_character() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = base_doc(&dir);
+        let out = dir.path().join("out.hwpx");
+        let data =
+            run_insert_para(&base, 0, 1, false, Some("삽\u{1}입"), None, out.to_str().unwrap())
+                .unwrap();
+
+        assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
+        assert!(
+            data.warnings[0].starts_with("XML_FORBIDDEN_CHARS_REMOVED: "),
+            "{:?}",
+            data.warnings
+        );
+        assert!(data.warnings[0].contains("new paragraph 2"), "{:?}", data.warnings);
     }
 
     /// The documented merge order — what the decode reported, then what the

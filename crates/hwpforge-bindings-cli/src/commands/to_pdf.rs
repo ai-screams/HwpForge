@@ -316,6 +316,18 @@ mod tests {
                 "ledger",
                 None,
             ),
+            // 이것을 실패시키는 것: ops `hwp5_warning_parts` 의 `ContentLost` 갈래를 빼는 것
+            // (`OTHER`·Debug 문구로 떨어짐).
+            (
+                ConvertWarning::Hwp5(Hwp5Warning::ContentLost {
+                    kind: "pic".into(),
+                    reason: "unsupported group child".into(),
+                    location: "group[0].child[1]".into(),
+                }),
+                "CONTENT_LOST",
+                "pic lost: unsupported group child",
+                Some("group[0].child[1]"),
+            ),
             (
                 ConvertWarning::HwpxEncode(EncodeWarning::LayoutCacheDropped {
                     path: paragraph_path(),
@@ -376,6 +388,119 @@ mod tests {
         assert_eq!(dto.code, "OTHER");
         assert!(dto.message.contains("LayoutCacheDropped"), "{}", dto.message);
         assert_eq!(dto.location, None);
+    }
+
+    /// 새 디코드 변형(`ContentLost`)은 폴백(`OTHER`·Debug)이 아니라 자기 코드,
+    /// 자리 없는 문구, `part:경로` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `decode_warning_parts` 마지막 갈래를
+    /// `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn decode_stage_dto_reports_content_lost_by_its_own_code() {
+        let warning = ConvertOpsWarning::Decode(DecodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::GroupChild(2)]),
+            kind: "pic".into(),
+            reason: "unsupported group child".into(),
+        });
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "decode");
+        assert_eq!(dto.code, "CONTENT_LOST");
+        assert_eq!(dto.message, "pic lost: unsupported group child");
+        assert_eq!(dto.location.as_deref(), Some("Contents/section0.xml:section[0].group[2]"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
+    /// header 시작 번호 0 고침(`BeginNumRepaired`)도 자기 코드·자리 없는 문구·
+    /// `hh:beginNum` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `decode_warning_parts` 마지막 갈래를
+    /// `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn decode_stage_dto_reports_begin_num_repaired_by_its_own_code() {
+        let warning = ConvertOpsWarning::Decode(DecodeWarning::BeginNumRepaired {
+            axes: vec!["page", "pic"],
+        });
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "decode");
+        assert_eq!(dto.code, "BEGIN_NUM_REPAIRED");
+        assert_eq!(dto.message, "start number 0 on page, pic is not valid; a re-encode writes 1");
+        assert_eq!(dto.location.as_deref(), Some("hh:beginNum"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
+    /// 새 인코드 변형(`ContentLost`)은 폴백(`OTHER`·Debug)이 아니라 자기 코드,
+    /// 자리 없는 문구, `part:경로` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
+    /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn convert_stage_dto_reports_encode_content_lost_by_its_own_code() {
+        let warning =
+            ConvertOpsWarning::Convert(ConvertWarning::HwpxEncode(EncodeWarning::ContentLost {
+                part: "Contents/section0.xml".into(),
+                path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
+                kind: "unknown".into(),
+                reason: "no HWPX form".into(),
+            }));
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "convert");
+        assert_eq!(dto.code, "CONTENT_LOST");
+        assert_eq!(dto.message, "unknown lost: no HWPX form");
+        assert_eq!(dto.location.as_deref(), Some("Contents/section0.xml:section[0].para[1]"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
+    /// C4 의 manifest id 겹침은 자기 코드와 `content.hpf` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
+    /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn convert_stage_dto_reports_package_id_conflict_by_its_own_code() {
+        let warning = ConvertOpsWarning::Convert(ConvertWarning::HwpxEncode(
+            EncodeWarning::PackageIdConflict {
+                id: "header".into(),
+                hrefs: vec!["Contents/header.xml".into(), "BinData/header.png".into()],
+            },
+        ));
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "convert");
+        assert_eq!(dto.code, "PACKAGE_ID_CONFLICT");
+        assert_eq!(
+            dto.message,
+            "2 manifest items share id \"header\": Contents/header.xml, BinData/header.png"
+        );
+        assert_eq!(dto.location.as_deref(), Some("Contents/content.hpf opf:item@id"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
+    /// C4 의 해석되지 않은 이미지 참조는 자기 코드와 `part 요소@속성` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
+    /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn convert_stage_dto_reports_image_reference_unresolved_by_its_own_code() {
+        let warning = ConvertOpsWarning::Convert(ConvertWarning::HwpxEncode(
+            EncodeWarning::ImageReferenceUnresolved {
+                part: "Contents/header.xml".into(),
+                location: "hc:img@binaryItemIDRef".into(),
+                reference: "BIN0005".into(),
+            },
+        ));
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "convert");
+        assert_eq!(dto.code, "IMAGE_REFERENCE_UNRESOLVED");
+        assert_eq!(
+            dto.message,
+            "binaryItemIDRef \"BIN0005\" does not resolve to image or OLE data in the package"
+        );
+        assert_eq!(dto.location.as_deref(), Some("Contents/header.xml hc:img@binaryItemIDRef"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
     }
 
     /// W5(`6ef353b`)의 `render_warning_dto` match(같은 파일 133–249 행)가
@@ -497,6 +622,12 @@ mod tests {
                 Some("s0/p1/l2"),
             ),
             (
+                PdfWarning::TableCaptionWidthMismatch { location: loc(), saved: 1, expected: 2 },
+                "TABLE_CAPTION_WIDTH_MISMATCH",
+                "table caption saved width 1 differs from the placed width 2",
+                Some("s0/p1/l2"),
+            ),
+            (
                 PdfWarning::TableDeficitDistributed { location: loc() },
                 "TABLE_DEFICIT_DISTRIBUTED",
                 "merged-cell height deficit redistributed",
@@ -571,6 +702,7 @@ mod tests {
                 PdfWarning::NonTextRunDropped { .. } => "NonTextRunDropped",
                 PdfWarning::AnchorMarkerOnLineBoundary { .. } => "AnchorMarkerOnLineBoundary",
                 PdfWarning::TablePaginationComputed { .. } => "TablePaginationComputed",
+                PdfWarning::TableCaptionWidthMismatch { .. } => "TableCaptionWidthMismatch",
                 PdfWarning::TableDeficitDistributed { .. } => "TableDeficitDistributed",
                 PdfWarning::UnsupportedTableStyle { .. } => "UnsupportedTableStyle",
                 PdfWarning::BandOverflow { .. } => "BandOverflow",

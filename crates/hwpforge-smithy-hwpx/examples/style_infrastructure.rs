@@ -103,6 +103,27 @@ fn build_style_store() -> HwpxStyleStore {
     ps4.alignment = Alignment::DistributeFlush;
     store.push_para_shape(ps4);
 
+    // 이것을 실패시키는 것: 본문이 쓰는 named style 0..4 원본 정의 제거(실제 example 실행).
+    for (id, name, char_id) in [
+        (0, "바탕글", CS_NORMAL),
+        (1, "본문", CS_NORMAL),
+        (2, "개요 1", CS_HEADING),
+        (3, "개요 2", CS_HEADING),
+        (4, "개요 3", CS_HEADING),
+    ] {
+        store.push_style(hwpforge_smithy_hwpx::HwpxStyle::new(
+            id,
+            "PARA",
+            name,
+            name,
+            PS_LEFT as u32,
+            char_id as u32,
+            1,
+            1042,
+            0,
+        ));
+    }
+
     // Default border fills (id=1-3): always required for 한글 compatibility.
     // from_registry_with() injects these automatically; with_default_fonts() does not.
     store.push_border_fill(HwpxBorderFill::default_page_border()); // id=1
