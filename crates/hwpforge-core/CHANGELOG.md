@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.11...hwpforge-core-v0.17.0) - 2026-10-23
+
+### Changed (BREAKING)
+
+- 그리기 개체 열 가지와 `Image`·`Table` 에 `frame: ObjectFrame`(원본 크기, 크기 잠금)이 생겼다. `Image::original_size` 는 `Image::frame.original_size` 로 옮겼다.
+- `Control::Group::children` 이 `Vec<GroupChild>` 가 되어 묶음이 그림을 담는다. `Control::Arc` 에 `definition: ArcDefinition` 이 생겼다(없는 JSON 은 `EllipseSweep`).
+- `LineSeg`(`boundary` 추가, `Copy` 아님)·`Caption`(`full_size`, `last_width`)·`ObjectPlacement`(정렬, `affect_line_spacing`, `hold_anchor_and_so`)·`MasterPage`(범위·겹침·앞쪽 표시·본문 영역)가 `#[non_exhaustive]` 가 되었다. 생성자와 `with_*` 빌더를 쓴다.
+- `Paragraph::end_char_shape`, `TextBox::text_margin`, `ShapeStyle::corner_ratio`(0–50, 넘으면 검증 오류), `Fill::Gradient` 의 `center_x`·`center_y`·`step`·`step_center`, `HeaderFooter::anchor_paragraph`, `Table::placement` 가 생겼다.
+- 문단 여백 다섯 가지와 `TabStop.position` 이 `ParagraphMeasure`(HWPUNIT 또는 1/500 글자)가 되었다.
+- `CoreErrorCode` 에 `InvalidMasterPageScope`, `HeaderFooterAnchorOutOfRange` 등이 늘어 전수 매칭에는 와일드카드가 필요하다.
+
+### Added
+
+- `Control::AutoNumber`(캡션 번호), `Table::cell_zones`, `Table::no_adjust`(고정 셀 크기), 셀 줄 바꿈, 개체 바깥 여백, 그림의 자르기·이미지 크기·하이퍼링크, 채우기 없음을 나타내는 도형 스타일, 형식에 묶이지 않는 도형 기하 정의.
+
 ## [0.16.9](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.8...hwpforge-core-v0.16.9) - 2026-10-03
 
 ### Fixed

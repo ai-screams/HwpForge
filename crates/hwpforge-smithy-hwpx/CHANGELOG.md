@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.11...hwpforge-smithy-hwpx-v0.17.0) - 2026-10-23
+
+### Changed (BREAKING)
+
+- 헤더 참조를 정의의 `id` 가 아니라 목록 위치로 해석한다(한컴 방식). `push_border_fill` 의 반환값과 `border_fill` 의 인자가 1부터 세는 위치가 되었고, 글자·문단 모양의 `source_id` 가 없어졌다. 인코더는 빈칸 없이 다시 번호를 매긴다.
+- `HwpxCharShape.shadow_type` 이 `shadow: CharShadow` 가 되었다. 이전 `shadow_type` JSON 은 계속 읽힌다.
+- 문단 여백과 탭을 단위 그대로(`ParagraphMeasure`) 읽고 쓴다. 물리 줄 간격이 홀수인 고정 줄 간격은 쓸 때 오류다.
+- 교환 JSON(`exchange`)이 `format_version: 2` 와 `{"unit", "value"}` 여백·탭을 쓴다. 버전 없는 JSON 은 탭 위치가 있으면 `LegacyJsonTabs` 로 거부하고, 없으면 여백을 풀어 읽으며 경고한다.
+
+### Changed
+
+- 패키지 읽기를 하나의 검사된 진입점으로 통일했다. 중복·비정상 이름, 한컴 이름 변환으로 바뀌는 이름, 대소문자만 다른 항목 둘 이상을 거부하고, 한컴이 여는 패키지(끝 레코드 뒤 바이트, `application/hwp+zip` 접두 mimetype, UTF-16 패키지 XML, 쓰이지 않는 비정형 항목)는 받아들인다.
+- 새 경고: `CONTENT_LOST`(디코드·인코드), 개체·manifest id 충돌, 풀리지 않는 그림 참조, 쪽 시작 번호 보정. 편집 표면은 XML 1.0 금지 문자를 제거하고 알린다.
+- 쪽 시작 번호를 1로 쓰고, 인코딩에 현재 시각을 쓰지 않으며 개체 id 를 1부터 매긴다.
+
+### Fixed
+
+- 필드 시작과 같은 run 의 글자가 필드 본문으로 접혀 사라지던 문제, 상호참조 표시 본문, run 사이 공백.
+- 표 구역·`noAdjust`·배치, 캡션 번호와 속성, 글꼴 종류, 글자 그림자, 그림 하이퍼링크와 자르기, 개체 틀, 묶음 안 그림·글맵시·글상자 속 표와 그림, 표 머리말 행의 셀별 제목 셀 표시.
+- 묶음 도형의 행렬 체인 디코드, 회전과 대칭이 함께 있는 도형, 바탕쪽의 범위·겹침·본문 영역, 모양 없음 도형과 두께 0 선.
+- `from-json --base` 가 변경하지 않은 문단의 줄 캐시를 유지하고, 편집 명령은 움직인 문단의 캐시를 함께 버린다. 의미가 같은 탭 정의를 내용으로 비교한다.
+- zip 9 로 올려 RUSTSEC-2026-0367, -0368, -0369 를 해소한다.
+
 ## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.9...hwpforge-smithy-hwpx-v0.16.10) - 2026-10-04
 
 ### Documentation

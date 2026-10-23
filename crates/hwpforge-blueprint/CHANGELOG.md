@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.16.11...hwpforge-blueprint-v0.17.0) - 2026-10-23
+
+### Changed (BREAKING)
+
+- `CharShape.shadow` 와 `PartialCharShape.shadow` 가 `CharShadow`(종류·색·오프셋)가 되었다. YAML 은 종류 문자열(`shadow: drop`)과 `{kind, color, offset_x, offset_y}` 맵을 모두 받는다. 널 색, 모르는 키, -100–100 밖 오프셋은 오류다.
+- 색을 주지 않은 그림자의 기본 색이 `#B2B2B2` 에서 한컴 새 문서와 같은 `#C0C0C0` 으로 바뀐다. 이전 색은 `shadow: {kind: drop, color: '#B2B2B2'}` 로 유지한다.
+
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.16.5...hwpforge-blueprint-v0.16.6) - 2026-09-22
 
 ### Added

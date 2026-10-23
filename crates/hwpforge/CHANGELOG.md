@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/ai-screams/HwpForge/compare/v0.16.11...v0.17.0) - 2026-10-23
+
+한컴이 저장한 HWPX 와 HWP5 문서를 변환하고 다시 쓸 때 조용히 사라지거나 바뀌던 값을 Core 에 담아 보존한다. 손실이 남는 자리는 경고(`CONTENT_LOST` 등)로 드러내고, 다시 쓰는 편집 명령은 그런 입력을 거부한다. 공개 Rust 타입이 여럿 바뀌므로 breaking 릴리스다 (#249).
+
+### Changed (BREAKING)
+
+- **Core 개체**: 그리기 개체 열 가지(TextBox, Line, Ellipse, Rect, Polygon, Arc, Curve, ConnectLine, Group, TextArt)와 `Image`·`Table` 에 `frame: ObjectFrame`(원본 크기, 크기 잠금)이 생겼다. `Image::original_size` 는 `Image::frame.original_size` 로 옮겼다. `Control::Group::children` 이 `Vec<GroupChild>` 가 되었고, `Control::Arc` 에 `definition: ArcDefinition` 이 생겼다.
+- **Core 구조**: `LineSeg`(`Copy` 도 아님, `boundary` 추가)·`Caption`(`full_size`, `last_width`)·`ObjectPlacement`(정렬, `affect_line_spacing`, `hold_anchor_and_so`)·`MasterPage`(범위·겹침·앞쪽 표시·본문 영역)가 `#[non_exhaustive]` 가 되었다. `Paragraph::end_char_shape`, `TextBox::text_margin`, `ShapeStyle::corner_ratio`(0–50, 넘으면 검증 오류), `Fill::Gradient` 의 중심·단계, `HeaderFooter::anchor_paragraph`, `Table::placement` 가 생겼다. `CoreErrorCode` 에 새 코드가 늘어 전수 매칭에는 와일드카드가 필요하다.
+- **글자 그림자**: `HwpxCharShape.shadow_type` 과 Blueprint `shadow` 가 종류·색·오프셋을 담는 `CharShadow` 가 되었다. 색을 주지 않은 그림자의 기본 색이 `#B2B2B2` 에서 한컴 새 문서와 같은 `#C0C0C0` 으로 바뀐다.
+- **헤더 참조**: 정의의 `id` 속성이 아니라 목록 위치로 해석한다(한컴 방식). 글자 모양·문단 모양·탭·스타일·글꼴은 0부터, 테두리/배경·번호 매기기·글머리표는 1부터 센다. `push_border_fill` 의 반환값과 `border_fill` 의 인자가 1부터 세는 위치로 바뀌었고 글자·문단 모양의 `source_id` 가 없어졌다. 범위를 벗어난 참조는 오류다.
+- **문단 여백·탭 단위**: 문단 여백 다섯 가지와 `TabStop.position` 이 `ParagraphMeasure`(HWPUNIT 또는 1/500 글자)가 되어 원래 단위를 잃지 않는다. `hwp5_style_store_to_hwpx` 는 `Result` 를 반환한다.
+- **JSON**: 문서·구역·스타일 JSON 이 `"format_version": 2` 를 쓰고 여백·탭을 `{"unit", "value"}` 로 쓴다. 버전 없는 이전 JSON 은 여백은 `LEGACY_PARAGRAPH_MEASURES` 경고와 함께 읽고, 탭 위치가 들어 있으면 `LEGACY_JSON_TABS` 로 거부한다.
+- **HWP5 변환 기본값**: `convert-hwp5`, `ConvertOptions`/`ConvertHwp5Options`, Python `convert_hwp5` 가 줄 배치 캐시를 기본으로 옮긴다. 이전 출력은 `--no-layout-cache`, `with_carry_layout_cache(false)`, `carry_layout_cache=False` 로 얻는다.
+- **Markdown·PDF 타입**: `MdOutput` 에 `warnings` 가 생겨 `#[non_exhaustive]` 가 되었다(`MdWarning::ContainerTooDeep`). smithy-pdf 의 `LineImage`·`LaidAnchoredImage` 에 `crop` 이 생겼다.
+
+### Migration
+
+- 구조체 리터럴로 만들던 코드는 생성자와 `with_*` 빌더를 쓰거나 새 필드를 넣고, 패턴에는 `..` 를 붙인다. 예전 JSON 의 개체·그룹·바탕쪽·그림자는 그대로 읽힌다.
+- 묶음 자식은 도형을 `GroupChild::Shape(..)` 로 감싸 만들고, 읽을 때는 `GroupChild` 가 non-exhaustive 이므로 와일드카드 팔을 둔다.
+- `hwp5_style_store_to_hwpx` 와 `hwp5_style_store_to_hwpx_with_bin_data` 가 반환하는 `Result` 를 처리한다. 선언하지 않은 정의를 가리키는 저장소는 채워 주지 않고 거부한다.
+- 그림자의 이전 색이 필요하면 `shadow: {kind: drop, color: '#B2B2B2'}` 처럼 색을 적는다.
+- 버전 없는 JSON 으로 편집하던 흐름은 원본 HWPX/HWP5 에서 `to-json` 을 다시 실행한다.
+- 테두리/배경을 위치로 조회할 때는 `push_border_fill` 의 반환값을 그대로 쓴다.
+
+### Changed
+
+- **새로 거부하는 입력**: 물리 줄 간격이 홀수인 고정 줄 간격(정확히 쓸 수 없음), 범위 밖 style 을 참조하는 본문, 잘렸거나 모순된 HWP5 IdMappings, 중복되거나 비정상인 ZIP 항목 이름, 한컴의 이름 변환을 거치면 다른 부품을 가리키게 되는 이름, 대소문자만 다른 항목이 둘 이상인 패키지. 다음 스타일이 범위 밖이면 거부하지 않고 자기 자신을 가리키게 하며 손실 경고를 낸다.
+- **한컴이 여는 패키지를 받아들임**: 끝 레코드 뒤에 바이트가 붙은 ZIP, `application/hwp+zip` 으로 시작하는 mimetype, UTF-16 으로 쓴 `container.xml`·`content.hpf`, 쓰이지 않는 비정형 항목(바이트 그대로 옮기고, 그 항목을 버리게 되는 저장은 거부).
+- **편집 표면**: `restyle`, `set-cell`, `stamp` 는 디코드가 내용을 잃은 입력(`CONTENT_LOST`)을 거부한다. `fill`, `patch`, `insert-para`, `set-cell`, `stamp` 는 XML 1.0 이 쓸 수 없는 문자를 제거하고 `XML_FORBIDDEN_CHARS_REMOVED` 로 알린다. 현재 값과 같은 값의 `fill` 은 변경 없음으로 처리한다.
+- **새 경고**: 같은 id 를 쓰는 개체(`OBJECT_ID_CONFLICT`), 같은 manifest id 를 쓰는 항목(`PACKAGE_ID_CONFLICT`), 풀리지 않는 그림 참조(`IMAGE_REFERENCE_UNRESOLVED`), 쪽 시작 번호 0 을 1로 고쳐 씀(`BEGIN_NUM_REPAIRED`), 줄 시작을 정확히 옮길 수 없어 버린 줄 캐시(`LAYOUT_CACHE_DROPPED`).
+- **출력이 바뀌는 경우**: 머리말·꼬리말이 컨트롤이 놓인 본문 문단에 고정되고 PDF 도 그 문단의 쪽부터 적용한다. 재인코딩한 HWPX 의 쪽 시작 번호를 1로 쓴다(0 이면 한컴이 0쪽부터 세고 홀짝 바탕쪽을 맞바꿨다). 인코딩에 현재 시각을 쓰지 않고 개체 id 를 1부터 매겨 같은 문서는 같은 바이트로 나온다. 의미가 같은 탭 정의를 내용으로 비교해 무편집 왕복이 원본 바이트를 돌려주는 범위가 넓어졌다. 선 화살표와 호 정의를 보존하므로 이런 선과 호가 든 문서는 JSON·Markdown·HWPX 출력이 달라진다.
+- **읽기용 Markdown**: CommonMark 가 마크업으로 읽을 글자만 이스케이프하고, 표 칸 결합 전에 원문을 한 번 이스케이프해 표 칸 안 `<`·`~` 앞에 역슬래시가 붙는 문서가 많다. 링크는 `http://`, `https://`, `mailto:` 만 링크로 쓰고 나머지는 글자만 남긴다. 글상자·각주·도형 안의 표와 그림, 묶음, 표·그림 캡션, 한컴이 저장한 필드의 표시값이 새로 나온다. 표가 8겹을 넘으면 `(중첩 표 생략)` 으로 쓰고 `CONTAINER_TOO_DEEP` 로 알린다. 컨테이너가 32겹을 넘으면 읽기용 출력은 오류로 거부하고, 스타일 출력은 그 아래를 생략하며 같은 경고를 낸다.
+- **무손실 Markdown**: 묶음과 그 그림, 글상자·선·타원·다각형·사각형·호·곡선·연결선, 본문 그림의 배치와 캡션, 개체 틀, 표 캡션 속성·셀 구역·고정 셀 크기·셀 줄 바꿈, 그림 하이퍼링크를 왕복한다. 이전에는 이런 문서를 거부했다.
+- **PDF**: 자른 그림을 잘라 그리고, 기본 흐름 표의 캡션과 셀 구역 배경을 그린다. 둥근 모서리 글상자, 칠할 수 없는 글상자 채우기, 캡션 번호, 묶음이 든 문단, 위/왼쪽 정렬이 아닌 앵커 그림은 새로 거부한다.
+
+### Fixed
+
+- **HWP5 변환**:
+  - 표 캡션, 셀 구역, 고정 셀 크기, 표 여백과 배치, 셀 줄 바꿈을 옮긴다. 이전에는 표 캡션이 경고 없이 사라졌다.
+  - 머리말·꼬리말과 그 안의 표·도형, 표 셀 안 머리말·꼬리말을 읽는다. 셀·캡션·글상자·도형·묶음·메모·머리말·각주 안의 컨트롤이 본문과 같은 경로로 읽힌다(묶음 글상자 글자 소실, 쪽 번호가 엉뚱한 문단으로 옮겨져 쪽이 밀리던 문제, 셀 안 겹글자 소실).
+  - 도형의 선·채우기(검은 실선과 흰 채우기 대신 원본 값), 선 화살표 모양과 크기, 묶음 자식의 선·채우기·모서리 곡률, 호 종류(NORMAL·PIE·CHORD)와 호 정의 방식을 옮긴다.
+  - 묶음이 아닌 도형·그림의 회전과 대칭, 묶음 배치(글자처럼·감싸기·기준·오프셋), 묶음 자식 그림 채우기의 원본 상자를 옮긴다.
+  - 개체 원본 크기·크기 잠금, 그림 자르기(이전에는 자른 그림이 전체 이미지로 나왔다), 둥근 모서리, 그러데이션 단계, 글자 그림자, 문단 끝 표시의 글자 모양, 글꼴 종류·대체 글꼴, 단일 줄 입력 모드, 글머리표 너비 조정을 옮긴다.
+  - 바탕쪽이 첫 본문 문단을 덮어쓰지 않고 구역의 바탕쪽이 된다. 짧은 색 채우기 형식의 테두리/배경, 구형 14바이트와 체크 글리프 없는 23바이트 글머리표 레코드를 읽는다.
+  - 글자 모양 경계를 텍스트 위치로 읽어 탭·개체 뒤 글자가 엉뚱한 모양을 받던 문제, 개체 감싸기 값을 공개 스펙 순서로 읽던 문제, 요약 정보의 생성 시각과 마지막 저장 시각이 뒤바뀐 문제를 고친다.
+  - 장식 글자를 포함해 세 글자 이상인 글자 겹치기가 통째로 빠지던 문제를 고친다.
+  - 클릭 필드(누름틀)의 채워진 본문과 필드 안 글자 모양들을 유지한다.
+- **HWPX**:
+  - 필드 시작과 같은 run 의 글자가 필드 본문으로 접혀 사라지던 문제를 고친다. 필드 범위를 한 곳에서 계산해 `fill`·`patch`·`stamp`·Markdown·PDF 가 같은 범위를 쓴다.
+  - 상호참조의 표시 본문, run 사이 공백, 표 구역·`noAdjust`·표 배치, 캡션 번호와 속성, 글꼴 종류, 그림 하이퍼링크와 자르기, 개체 틀, 묶음 안 그림·글맵시·글상자 속 표와 그림을 읽고 쓴다.
+  - 묶음 도형을 행렬 체인으로 디코드하고, 회전과 대칭이 함께 있는 도형을 한컴 방식으로 쓴다. 바탕쪽을 문단 디코더·인코더로 읽고 쓰며 범위·겹침·본문 영역을 보존한다.
+  - 표 머리말 행의 셀별 제목 셀 표시를 읽는다(이전에는 그런 문서가 열리지 않았다). 모양 없음 도형·그림으로 채운 도형이 흰색으로 바뀌던 문제, 두께 0 선이 두꺼워지던 문제를 고친다.
+  - `from-json --base` 가 변경하지 않은 문단의 줄 캐시를 유지하고, `fill`·`patch`·`set-cell`·`stamp` 는 편집이 움직인 문단의 캐시를 함께 버린다.
+  - Core 가 담지 못하는 값(내장 글꼴, 글맵시 윤곽·그림자, 묶음 하이퍼링크, 묶음 안 수식·차트 등)은 `CONTENT_LOST` 로 알린다.
+- **Markdown**: 읽기용 출력의 이스케이프를 하나의 계층으로 모으고 최종 출력을 다시 파싱해 확인한다. 중첩 표 출력이 층마다 두 배로 불어나던 문제와 묶음 안 그림 링크·캡션 그림 바이트가 빠지던 문제를 고친다.
+- **PDF**: 머리말·꼬리말이 앵커 문단의 쪽부터 시작하고, 쪽마다 머리말·꼬리말 선택이 선형이 된다.
+- **성능**: 글자 모양 경계, OLE 검사, 이미지 자산 복사, 줄 경계 조회, `fill` 캐시 무효화, 중첩 묶음 디코드가 이차 비용에서 선형이 되었다.
+
+### Security
+
+- zip 9 로 올려 zip 8 의 보안 권고 RUSTSEC-2026-0367, -0368, -0369 를 해소한다. 권고는 추출 경로에 있고 이 워크스페이스는 그 경로를 호출하지 않지만 의존성 감사가 실패했다.
+- 패키지 읽기를 하나의 검사된 진입점으로 통일한다(이전에는 `patch`·`stamp` 와 레이아웃 힌트 패처가 검사를 건너뛰었다). 실패한 읽기의 바이트도 누적 상한에 센다. 바탕쪽을 디코드 크기 예산에 센다.
+- HWP5 채우기 길이를 할당 전에 검사하고(수 바이트 레코드가 기가바이트를 요청하던 문제), 도형 안 도형을 16단계, 표 레코드가 선언한 셀 수를 예산으로 제한한다. 잘못된 입력에서 패닉하던 묶음 자식 비교를 고친다.
+
+### Known limitations
+
+- 패키지의 manifest 연결을 부품 찾기가 따르지 않는 경우가 있고, 대소문자만 다른 항목은 거부한다. 한컴과 같은 항목을 고르는 지원은 다음 판에서 다룬다.
+- HWP5 변환이 여러 문단에 걸친 누름틀을 첫 문단 끝에서 닫는다. 화면은 같지만 필드 범위가 줄어든다.
+- 서식이 섞인 누름틀(본문 run 이 둘 이상)은 `fill` 이 거부한다.
+- `to-json` 다음 `from-json` 은 그림 채우기의 이미지를 패키지로 옮기지 않아 경고와 함께 그림이 빠진다.
+- 내장 글꼴과 그림 글머리표의 이미지는 옮기지 않고 경고로 알린다. 묶음 안 차트와 글맵시는 원본 배치 속성을 따르지 않는다.
+- 무손실 Markdown 은 안쪽 여백이 기본값(283)이 아닌 글상자, 둥근 모서리 글상자, 캡션 번호, 문단이 없는 글상자, 점이 세 개 미만인 다각형, 32겹을 넘는 컨테이너를 거부한다.
+- 무손실 Markdown 은 이전 판이 읽지 못하는 요소를 쓰고, 머리말·꼬리말처럼 다루는 범위 밖의 값을 오류 없이 뺀다. `Unknown` 컨트롤은 바탕쪽 문단과 메모 앵커 run 에서 경고 없이 빠진다.
+- 표 제목 칸 테두리 일부, 기울이기 개체, 일부 문서의 줄바꿈 위치와 쪽 번호 높이가 한컴 결과와 다르다.
+
 ## [0.16.11](https://github.com/ai-screams/HwpForge/compare/v0.16.10...v0.16.11) - 2026-10-13
 
 ### Fixed
