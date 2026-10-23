@@ -1,0 +1,35 @@
+# =============================================================================
+# HwpForge PR Title — Conventional Commits check
+# =============================================================================
+# The merge queue squashes each PR, so the PR title becomes the commit
+# subject on main and release-plz reads it to decide whether to release and
+# how far to bump. A title without a conventional type would land silently
+# outside any release; a breaking change without `!` would bump too little.
+# =============================================================================
+
+name: PR Title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, edited, synchronize]
+
+permissions: {}
+
+jobs:
+  title:
+    name: "Meta › PR Title"
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the title follows Conventional Commits
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|perf|refactor|docs|test|chore|build|ci|style|revert)(\([^)]+\))?!?: [^ ].*$'
+          if [[ "$TITLE" =~ $pattern ]]; then
+            echo "ok: $TITLE"
+          else
+            echo "::error::PR title must be '<type>(<scope>)!: <summary>' (Conventional Commits), got: $TITLE"
+            exit 1
+          fi
