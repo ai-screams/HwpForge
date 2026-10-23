@@ -1436,6 +1436,76 @@ fn preserving_patch_uses_decoder_text_locations_with_alternate_prefix() {
     }
 }
 
+fn whitespace_only_preservation(wire: &str, text: &str) {
+    use hwpforge_smithy_hwpx::{ExportedSection, HwpxPatcher, TextLocator};
+
+    // Place a blank on both sides of a multibyte edit: offsets must address
+    // the original XML, before either provenance attributes or marks exist.
+    let body = run(&format!("<hp:t>{wire}</hp:t>"))
+        + &run("<hp:t>가상 편집 대상</hp:t>")
+        + &run(&format!("<hp:t>{wire}</hp:t>"));
+    let bytes = package(&para(&body, &[]));
+    let original_xml = section_xml(&bytes);
+    let outcome = HwpxPatcher::export_section_for_edit(&bytes, 0, true).unwrap();
+    assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+    let mut exported: ExportedSection =
+        serde_json::from_str(&serde_json::to_string(&outcome.exported).unwrap()).unwrap();
+    let preservation = exported.preservation.as_ref().expect("preservation metadata");
+    for ri in [0, 2] {
+        assert_eq!(exported.section.paragraphs[1].runs[ri].content.plain_text().unwrap(), text);
+        let path = format!("paragraphs[1].runs[{ri}].text");
+        let slot = preservation.text_slots.iter().find(|slot| slot.path == path).unwrap();
+        assert_eq!(slot.original_text, text);
+        let TextLocator::TextElement {
+            element_start,
+            element_end,
+            content_start: Some(start),
+            content_end: Some(end),
+        } = slot.locator
+        else {
+            panic!("whitespace has an original text element");
+        };
+        assert_eq!(&original_xml[element_start..element_end], format!("<hp:t>{wire}</hp:t>"));
+        assert_eq!(&original_xml[start..end], wire);
+    }
+    exported.section.paragraphs[1].runs[1].content =
+        hwpforge_core::RunContent::Text("수정한 가상 문장".into());
+    let patched = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap().bytes;
+    assert_eq!(section_xml(&patched), original_xml.replace("가상 편집 대상", "수정한 가상 문장"));
+
+    let mut before = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut after = zip::ZipArchive::new(Cursor::new(&patched)).unwrap();
+    for i in 0..before.len() {
+        let mut entry = before.by_index(i).unwrap();
+        let name = entry.name().unwrap();
+        if name == "Contents/section0.xml" {
+            continue;
+        }
+        let mut other = after.by_name(&name).unwrap();
+        let mut original = Vec::new();
+        let mut unchanged = Vec::new();
+        entry.read_to_end(&mut original).unwrap();
+        other.read_to_end(&mut unchanged).unwrap();
+        assert_eq!(unchanged, original);
+    }
+}
+
+/// #206. 이것을 실패시키는 것: 공백 전처리 생략, 표식 제거 생략,
+/// source map 원문 trim/슬롯 누락, 원본 바이트 위치 이동,
+/// 패치 때 공백 재작성 또는 무관한 ZIP 엔트리 변경.
+#[test]
+fn preserving_patch_keeps_space_only_runs() {
+    whitespace_only_preservation(" ", " ");
+}
+
+/// #206. 이것을 실패시키는 것: 공백 전처리 생략, 표식 제거 생략,
+/// source map 원문 trim/슬롯 누락, 원본 바이트 위치 이동,
+/// 패치 때 CR 참조 재작성 또는 무관한 ZIP 엔트리 변경.
+#[test]
+fn preserving_patch_keeps_cr_only_runs() {
+    whitespace_only_preservation("&#13;", "\r");
+}
+
 /// 이것을 실패시키는 것: claim의 A 패키지로 B 검증, 또는 복원 시 기존 A claim 유지.
 #[test]
 fn foreign_package_claim_cannot_authorize_base_b() {
