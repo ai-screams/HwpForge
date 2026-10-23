@@ -4248,7 +4248,7 @@ fn project_shape_line(
     use hwpforge_core::control::LineStyle;
     style.line_color = Some(hwpforge_foundation::Color::from_raw(line.color & 0x00FF_FFFF));
     style.line_width = u32::try_from(line.thickness).ok();
-    style.line_style = Some(match line.properties & 0x3F {
+    style.line_style = Some(match line.line_type() {
         0 => LineStyle::None,
         1 => LineStyle::Solid,
         2 => LineStyle::Dot,

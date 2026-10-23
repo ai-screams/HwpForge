@@ -778,7 +778,7 @@ pub(crate) enum Hwp5ShapeFill {
 }
 
 /// A shape's outline as stored after its matrix chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapeLine {
     /// COLORREF (`0x00BBGGRR`).
     pub color: u32,
@@ -787,6 +787,14 @@ pub(crate) struct Hwp5ShapeLine {
     /// Property word; bits 0–5 = line type (0 none, 1 solid, 2 dot, 3 dash —
     /// confirmed against Hancom's HWPX twins).
     pub properties: u32,
+}
+
+impl Hwp5ShapeLine {
+    /// The line type shared by standalone shapes and picture borders.
+    /// Width, colour and the remaining property bits do not enable a NONE line.
+    pub(crate) fn line_type(&self) -> u32 {
+        self.properties & 0x3F
+    }
 }
 
 /// A single shape's outline and fill (§19.5 1b).
@@ -3000,8 +3008,8 @@ pub(crate) struct Hwp5ShapePicture {
     pub in_margin: [u16; 4],
     /// 1-based binary item identifier.
     pub binary_data_id: u16,
-    /// Border thickness (HWPUNIT); `0` = no border drawn.
-    pub border_thickness: i32,
+    /// Border line; type 0 = NONE even with positive thickness (Hancom F3).
+    pub border: Hwp5ShapeLine,
     /// Crop rectangle: left, top, right, bottom.
     pub crop: [i32; 4],
     /// Brightness, contrast and effect (0 = the picture as it is).
@@ -3050,7 +3058,11 @@ impl Hwp5ShapePicture {
             rectangle: [12, 20, 28, 36].map(|i| (i32_at(i), i32_at(i + 4))),
             in_margin: [60, 62, 64, 66].map(|i| u16::from_le_bytes([data[i], data[i + 1]])),
             binary_data_id: u16::from_le_bytes([data[start], data[start + 1]]),
-            border_thickness: i32_at(4),
+            border: Hwp5ShapeLine {
+                color: u32_at(0).expect("picture minimum includes border colour"),
+                thickness: i32_at(4),
+                properties: u32_at(8).expect("picture minimum includes border properties"),
+            },
             crop: [i32_at(44), i32_at(48), i32_at(52), i32_at(56)],
             brightness: i8::from_le_bytes([data[68]]),
             contrast: i8::from_le_bytes([data[69]]),
@@ -4343,7 +4355,9 @@ mod tests {
     #[test]
     fn shape_picture_parses_crop_effect_border_and_size() {
         let mut data = vec![0u8; 91];
+        data[0..4].copy_from_slice(&0x0017_9EDEu32.to_le_bytes());
         data[4..8].copy_from_slice(&28i32.to_le_bytes());
+        data[8..12].copy_from_slice(&0xD100_0041u32.to_le_bytes());
         for (i, v) in [0i32, 0, 7474, 15_000].iter().enumerate() {
             data[44 + 4 * i..48 + 4 * i].copy_from_slice(&v.to_le_bytes());
         }
@@ -4360,7 +4374,11 @@ mod tests {
                 rectangle: [(0, 0); 4],
                 in_margin: [0; 4],
                 binary_data_id: 3,
-                border_thickness: 28,
+                border: Hwp5ShapeLine {
+                    color: 0x0017_9EDE,
+                    thickness: 28,
+                    properties: 0xD100_0041,
+                },
                 crop: [0, 0, 7474, 15_000],
                 brightness: -10,
                 contrast: 5,

@@ -591,7 +591,7 @@ fn plan_picture<'a>(
 
 /// What a group picture shows that a Core picture cannot (the HWPX
 /// decoder's rule on the same fields): an effect (brightness, contrast,
-/// effect, or any picture-effect flag); a border (a thickness above zero).
+/// effect, or any picture-effect flag); a border whose line type is not NONE.
 /// A crop is carried (`build_group_picture`).
 fn picture_losses(image: &Hwp5ImageControl) -> Vec<String> {
     let p = &image.picture;
@@ -606,8 +606,8 @@ fn picture_losses(image: &Hwp5ImageControl) -> Vec<String> {
             p.effect, p.brightness, p.contrast, p.effect_flags
         ));
     }
-    if p.border_thickness > 0 {
-        out.push(format!("border: thickness {}", p.border_thickness));
+    if p.border.line_type() != 0 {
+        out.push(format!("border: thickness {}", p.border.thickness));
     }
     out
 }
@@ -2163,6 +2163,60 @@ mod tests {
         assert_eq!(picture_crop(&g), None);
     }
 
+    /// NONE can retain a positive width and non-type bits (Hancom F3).
+    /// A non-NONE type remains a loss even at zero width or for an unknown type,
+    /// consistent with the standalone shape line projection.
+    /// 이것을 실패시키는 것: 두께만 검사 / 속성 전체를 선 종류로 사용 /
+    /// 테두리 경고 삭제 / 두께 > 0 추가 / 알려진 선 종류만 경고 / 속성 오프셋 변경.
+    #[test]
+    fn group_picture_border_uses_line_type() {
+        use crate::schema::section::Hwp5ShapeLine;
+        use hwpforge_core::control::{LineStyle, ShapeStyle};
+
+        for (properties, thickness, expected) in [
+            (0xD100_0040u32, 33i32, false),
+            (0, 33, false),
+            (0xD100_0041, 33, true),
+            (2, 0, true),
+            (3, -1, true),
+            (63, 33, true),
+        ] {
+            let mut data = [0u8; 73];
+            data[4..8].copy_from_slice(&thickness.to_le_bytes());
+            data[8..12].copy_from_slice(&properties.to_le_bytes());
+            data[71..73].copy_from_slice(&1u16.to_le_bytes());
+            let top = picture_group(|i| i.picture = Hwp5ShapePicture::parse(&data).unwrap());
+            let (g, lost) = project(&top);
+            assert!(matches!(g, Some(Control::Group { .. })));
+            assert_eq!(
+                lost,
+                if expected { vec!["group_child_picture"] } else { vec![] },
+                "properties={properties:#x}, thickness={thickness}"
+            );
+
+            let line = Hwp5ShapeLine { color: 0, thickness, properties };
+            let mut style = ShapeStyle::default();
+            super::super::project_shape_line(&line, &mut style, &mut Vec::new(), "test");
+            assert_eq!(style.line_style != Some(LineStyle::None), expected);
+        }
+    }
+
+    /// The Hancom HWPX twin has no lineShape for its one picture.
+    /// 이것을 실패시키는 것: 선 종류 NONE인데 두께 33을 테두리 손실로 보고.
+    #[test]
+    fn hancom_group_picture_without_line_has_no_border_loss() {
+        let bytes =
+            include_bytes!("../../../../tests/fixtures/hancom_controls/f3-group-tables.hwp");
+        let doc = crate::decode_hwp5_with_images(bytes).unwrap();
+        assert!(
+            !doc.warnings.iter().any(|w| matches!(w,
+                Hwp5Warning::ContentLost { kind, .. } if kind == "group_child_picture"
+            )),
+            "{:?}",
+            doc.warnings
+        );
+    }
+
     /// Effects and a border are reported; a plain picture is not.
     ///
     /// 이것을 실패시키는 것: 밝기·명암·효과·효과 플래그·테두리 조건을 각각 지우는 것.
@@ -2174,7 +2228,10 @@ mod tests {
             |i| i.picture.contrast = 5,
             |i| i.picture.effect = 1,
             |i| i.picture.effect_flags = Some(4),
-            |i| i.picture.border_thickness = 28,
+            |i| {
+                i.picture.border.thickness = 28;
+                i.picture.border.properties = 1;
+            },
         ];
         for (n, edit) in edits.into_iter().enumerate() {
             assert_eq!(project(&picture_group(edit)).1, ["group_child_picture"], "edit {n}");
