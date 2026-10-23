@@ -888,9 +888,9 @@ impl HwpxBorderFill {
 /// id=6: 함초롬돋움 11pt #000000  (차례 1-3)
 /// ```
 ///
-/// Font indices: 0 = 함초롬돋움, 1 = 함초롬바탕 (as in fixture font table).
-pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
-    let batang = FontIndex::new(1); // 함초롬바탕
+/// The caller resolves the Batang slot against the registered fonts. Dotum
+/// uses slot 0; the fixture's Batang slot is 1 when a second font exists.
+pub(crate) fn default_char_shapes_modern(batang: FontIndex) -> [HwpxCharShape; 7] {
     let dotum = FontIndex::new(0); // 함초롬돋움
 
     let batang_ref = HwpxFontRef {
@@ -1294,8 +1294,12 @@ impl HwpxStyleStore {
     /// - [`Modern`][HancomStyleSet::Modern] — 22 styles (한글 2022+)
     /// - [`Latest`][HancomStyleSet::Latest] — 23 styles (한글 2025+)
     ///
+    /// Default character shapes use the template's sole font when only one is
+    /// registered, or 함초롬바탕 when no fonts are registered. With two or more
+    /// fonts, the existing default font slots (0 and 1) are preserved.
+    ///
     /// Mapping:
-    /// - `registry.fonts` → [`HwpxFont`] (assigned to HANGUL group)
+    /// - `registry.fonts` → [`HwpxFont`] (copied to all 7 language groups)
     /// - `registry.char_shapes` → [`HwpxCharShape`] (font ref mirrors same index for all lang groups)
     /// - `registry.para_shapes` → [`HwpxParaShape`]
     /// - `registry.style_entries` → [`HwpxStyle`] (PARA type, Korean langID)
@@ -1701,7 +1705,11 @@ fn build_store_from_registry_with(
         }
     }
 
-    for cs in default_char_shapes_modern() {
+    // Preserve the existing 0/1 slots for multi-font templates and presets.
+    // A single-font template (or the empty registry's 함초롬바탕 fallback)
+    // uses its only registered font for both default families, in every language.
+    let batang = FontIndex::new(usize::from(registry.fonts.len() > 1));
+    for cs in default_char_shapes_modern(batang) {
         store.push_char_shape(cs);
     }
     for ps in default_para_shapes_modern() {
