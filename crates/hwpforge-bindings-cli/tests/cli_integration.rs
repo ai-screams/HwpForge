@@ -6580,3 +6580,191 @@ fn master_part_leading_zero_is_shared_by_decoder_audit_census_and_raw_counts() {
         "{census}"
     );
 }
+
+mod hancom_wire {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support/hancom.rs"));
+}
+
+/// 이것을 실패시키는 것: HWP5 bit 18 오독 / 감사에서 셀 제목값을 행 단위로 복제.
+#[test]
+fn audit_hwp5_cell_header_hancom_matches_source() {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/tables");
+    let (value, _, code) = run_json(&[
+        "audit-hwp5",
+        base.join("f1-cell-headers.hwp").to_str().unwrap(),
+        base.join("f1-cell-headers.hwpx").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    for side in ["source", "output"] {
+        let cells =
+            value[side]["table_properties"]["cell_evidence"].as_array().expect("cell evidence");
+        let flags: Vec<_> = cells
+            .iter()
+            .filter(|c| c["table_ordinal"] == 0 && c["row"] == 0)
+            .map(|c| c["is_header"].as_bool().unwrap_or(false))
+            .collect();
+        let expected: Vec<_> =
+            hancom_wire::wire_headers(&std::fs::read(base.join("f1-cell-headers.hwpx")).unwrap())
+                .into_iter()
+                .map(|v| v != 0)
+                .collect();
+        assert_eq!(flags, expected, "{side}");
+    }
+}
+
+/// 이것을 실패시키는 것: 원시 compose/table/table_controls 비교를 강제 일치시킴 /
+/// 중첩 표 텍스트 집계를 강제 일치시킴 / 원시 비교 제거 /
+/// 원본 표 집계를 semantic parser로 되돌림. 각각 실제 변이로 실패를 확인한다.
+/// 실제 nextest 변이 확인: raw_counts의 문자 source/output에 모두 +1을 적용하면
+/// 표 제거 후 30/2로 차이 28 단언은 통과하지만 source 절대값 30 != 29로 실패한다.
+/// 표가 남은 output에만 +1을 적용해도 차이 단언은 통과하고 native output의
+/// 절대값 30 != 29로 실패한다. 두 변이는 실행 후 원복했다.
+#[test]
+fn audit_hwp5_raw_records_detect_nested_content_loss() {
+    for (name, tag, metric) in [
+        ("hancom_controls/f2-compose-links.hwp", "compose", "compose_controls"),
+        ("hancom_controls/f3-group-tables.hwp", "tbl", "table_records"),
+    ] {
+        let source = fixture(name);
+        let twin = source.with_extension("hwpx");
+        let twin_bytes = std::fs::read(&twin).unwrap();
+        let twin_xml = hwpforge_smithy_hwpx::PackageReader::new(&twin_bytes)
+            .unwrap()
+            .read_section_xml(0)
+            .unwrap();
+        let mut reader = quick_xml::Reader::from_str(&twin_xml);
+        reader.config_mut().expand_empty_elements = true;
+        let mut count = 0;
+        let mut all_text = String::new();
+        let mut table_text = String::new();
+        let mut table_depth = 0;
+        let mut in_text = false;
+        loop {
+            use quick_xml::events::Event;
+            match reader.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) => {
+                    if e.local_name().as_ref() == tag {
+                        count += 1;
+                    }
+                    if e.local_name().as_ref() == "tbl" {
+                        table_depth += 1;
+                    }
+                    if e.local_name().as_ref() == "t" {
+                        in_text = true;
+                    }
+                }
+                Event::Text(t) if in_text => {
+                    let text = t.xml_content(quick_xml::XmlVersion::Explicit1_0);
+                    all_text.push_str(&text);
+                    if table_depth > 0 {
+                        table_text.push_str(&text);
+                    }
+                }
+                Event::End(e) => {
+                    if e.local_name().as_ref() == "tbl" {
+                        table_depth -= 1;
+                    }
+                    if e.local_name().as_ref() == "t" {
+                        in_text = false;
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert!(count > 0);
+        let expected = count.to_string();
+        let tmp = test_tmp();
+        let full = tmp.join("full.hwpx");
+        hwpforge_convert::hwp5_to_hwpx(&source, &full).unwrap();
+        let (good, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), full.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        let key = format!("raw.sections[0].{metric}");
+        let find = |v: &serde_json::Value| {
+            v["comparisons"].as_array().unwrap().iter().find(|v| v["field"] == key).unwrap().clone()
+        };
+        let (native, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), twin.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        assert_eq!(find(&native)["source"], expected);
+        assert_eq!(find(&native)["verdict"], "MATCH");
+        assert_eq!(find(&good)["source"], expected);
+        assert_eq!(find(&good)["verdict"], "MATCH");
+        if tag == "tbl" {
+            assert_eq!(good["source"]["totals"]["tables"], count);
+            assert_eq!(good["source"]["sections"][0]["tables"], count);
+        }
+        let input = std::fs::read(&full).unwrap();
+        let mut zip = ZipArchive::new(std::io::Cursor::new(input)).unwrap();
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
+                let mut xml = String::from_utf8(bytes).unwrap();
+                let open = format!("<hp:{tag} ");
+                let close = format!("</hp:{tag}>");
+                while let Some(start) = xml.find(&open) {
+                    let end = start + xml[start..].find(&close).unwrap() + close.len();
+                    xml.replace_range(start..end, "");
+                }
+                bytes = xml.into_bytes();
+            }
+            writer
+                .start_file(
+                    entry.name().expect("ZIP entry name"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let damaged = tmp.join("lost.hwpx");
+        std::fs::write(&damaged, writer.finish().unwrap().into_inner()).unwrap();
+        let (bad, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), damaged.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        assert_eq!(bad["status"], "mismatch");
+        assert_eq!(find(&bad)["source"], expected);
+        assert_eq!(find(&bad)["output"], "0");
+        assert_eq!(find(&bad)["verdict"], "DIFF");
+        if tag == "tbl" {
+            let controls = bad["comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["field"] == "raw.sections[0].table_controls")
+                .unwrap();
+            assert_eq!(controls["source"], expected);
+            assert_eq!(controls["output"], "0");
+            assert_eq!(controls["verdict"], "DIFF");
+            let chars = bad["comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["field"] == "raw.sections[0].para_text_chars")
+                .unwrap();
+            let before: usize = chars["source"].as_str().unwrap().parse().unwrap();
+            let after: usize = chars["output"].as_str().unwrap().parse().unwrap();
+            let total_chars = all_text.chars().count();
+            let table_chars = table_text.chars().count();
+            assert_eq!(before - after, table_chars);
+            for (label, report, output_chars) in [
+                ("table-removed", &bad, total_chars - table_chars),
+                ("native", &native, total_chars),
+                ("converted", &good, total_chars),
+            ] {
+                let metric = report["comparisons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v["field"] == "raw.sections[0].para_text_chars")
+                    .unwrap();
+                assert_eq!(metric["source"], total_chars.to_string(), "{label}: source chars");
+                assert_eq!(metric["output"], output_chars.to_string(), "{label}: output chars");
+            }
+            assert_eq!(chars["verdict"], "DIFF");
+        }
+    }
+}
