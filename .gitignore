@@ -509,3 +509,6 @@ tests/fixtures/hwp5/crossref/*.hwpx
 
 # uv lockfile — untracked, same policy as Cargo.lock (CI resolves latest deps)
 uv.lock
+
+# Paper material lives in the private paper repository
+/papers/
