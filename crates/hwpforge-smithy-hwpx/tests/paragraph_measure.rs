@@ -11,6 +11,104 @@ fn fixture(name: &str) -> Vec<u8> {
     ))
     .unwrap()
 }
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct MarginValue {
+    #[serde(rename = "@value")]
+    value: i64,
+    #[serde(rename = "@unit")]
+    unit: String,
+}
+
+/// Read the wire values directly, without the codec's unit conversion.
+fn margin_branches(header: &str, id: u32) -> [std::collections::BTreeMap<String, MarginValue>; 2] {
+    let start = header.find(&format!("<hh:paraPr id=\"{id}\"")).expect("paraPr");
+    let para = header[start..].split_once("</hh:paraPr>").unwrap().0;
+    let case = para.split_once("<hp:case ").expect("case").1;
+    let case = case.split_once("</hp:case>").unwrap().0;
+    assert!(case.contains("http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"));
+    let default = para.split_once("<hp:default>").expect("default").1;
+    let default = default.split_once("</hp:default>").unwrap().0;
+    [case, default].map(|branch| {
+        let start = branch.find("<hh:margin>").expect("margin");
+        let end = branch.find("</hh:margin>").expect("margin end") + "</hh:margin>".len();
+        // Trusted fixture/generated fragment; compare wire values without the codec.
+        #[allow(clippy::disallowed_methods)]
+        let values = quick_xml::de::from_str(&branch[start..end]).expect("margin values and units");
+        values
+    })
+}
+
+/// #242: YAML -> registry -> style store -> document encoder -> header.xml.
+/// 이것을 실패시키는 것: style store의 왼쪽 여백을 CharCount로 옮기기,
+/// 또는 인코더 default 여백의 ×2 제거. 실제 실행에서 각각 case/default 비교 실패.
+#[test]
+fn blueprint_margins_match_hancom_case_and_default() {
+    use hwpforge_blueprint::{registry::StyleRegistry, template::Template};
+    use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::HwpxStyleStore;
+
+    // 글꼴 하나짜리 템플릿의 기본 charPr 글꼴 참조 결함은 별도 추적
+    let template = Template::from_yaml(
+        r#"
+meta:
+  name: margin_regression
+styles:
+  code:
+    char_shape:
+      font: D2Coding
+      size: 10pt
+  measured:
+    char_shape:
+      font: 한컴바탕
+      size: 10pt
+    para_shape:
+      indent:
+        left: 10pt
+        right: 5pt
+        first_line: 3pt
+      spacing:
+        before: 2pt
+        after: 4pt
+"#,
+    )
+    .unwrap();
+    let registry = StyleRegistry::from_template(&template).unwrap();
+    let store = HwpxStyleStore::from_registry(&registry).unwrap();
+    // Resolve the template's own style: built-in definitions precede it.
+    let style = store.iter_styles().find(|s| s.name == "measured").unwrap();
+    let para_id = style.para_pr_id_ref;
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text(
+                "가상의 문단입니다.",
+                CharShapeIndex::new(style.char_pr_id_ref as usize),
+            )],
+            ParaShapeIndex::new(para_id as usize),
+        )],
+        PageSettings::a4(),
+    ));
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let output = PackageReader::new(&bytes).unwrap().read_header_xml().unwrap();
+    let actual = margin_branches(&output, para_id);
+
+    let source = fixture("para-margins");
+    let header = PackageReader::new(&source).unwrap().read_header_xml().unwrap();
+    // This fixture was typed into Hancom and saved there (manifest.json
+    // pins its SHA-256). paraPr 37 has
+    // left/right/first-line/before/after = 10/5/3/2/4 pt.
+    // Expected wire values and units come entirely from header.xml.
+    let expected = margin_branches(&header, 37);
+    for branch in &expected {
+        assert_eq!(branch.len(), 5, "all five measured fields must be present");
+    }
+    for ((actual, expected), branch) in actual.iter().zip(&expected).zip(["case", "default"]) {
+        assert_eq!(actual, expected, "{branch}: Blueprint must match the Hancom wire values");
+    }
+}
+
 fn replace_part(bytes: &[u8], part: &str, xml: &str) -> Vec<u8> {
     let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
