@@ -3,12 +3,11 @@
   "fixtures_scanned": 192,
   "fixtures_decoded": 192,
   "fixtures_failed": 0,
-  "total_warnings": 53,
+  "total_warnings": 52,
   "categories": {
     "ContentLost:group_child_picture": {
-      "count": 3,
+      "count": 2,
       "fixtures": {
-        "tests/fixtures/hancom_controls/f3-group-tables.hwp": 1,
         "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 1,
         "tests/fixtures/shapes/group-f3e-gray.hwp": 1
       }
