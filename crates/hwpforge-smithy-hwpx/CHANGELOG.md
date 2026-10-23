@@ -5,14 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- *(hwpx)* 미지원 화살표 모양·크기로 끝점을 버릴 때 위치가 있는 `ContentLost`를 추가하여 stamp·셀 편집이 기존 손실 차단 계약대로 거부하게 한다. 보존 가능한 무화살표 값과 일반 enum 경고의 분류는 유지한다.
-
-- *(hwpx)* 독립·묶음 도형의 면 색 없음과 무늬가 흰 배경으로 대체되면 위치가 있는 `ContentLost`를 보고한다. 읽기 결과와 Core 모델은 유지하며, 의미 손실 입력의 편집은 거부한다.
-
 ## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.9...hwpforge-smithy-hwpx-v0.16.10) - 2026-10-04
 
 ### Documentation
