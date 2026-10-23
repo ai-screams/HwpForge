@@ -62,6 +62,8 @@ This enables:
 make ci               # push 전 필수 — ci-fast 별칭 (fmt·clippy·test·deny·lint-md, CI 플래그 일치)
 make ci-full          # 위 + coverage + MSRV (릴리스·큰 변경 전)
 make py-all           # Python 바인딩 (lint·타입·Rust/Python 테스트·coverage)
+make audit-hwp5-gate  # HWP5 감사 게이트 — 현재 결과 vs .audit/hwp5_baseline.json (CI 필수, 기준선 갱신은 근거를 커밋 메시지에)
+make site-check       # 문서 사이트 빌드·후처리 (CI Docs Build 와 같은 경로, mdBook 0.4 필요)
 mdbook build          # 문서 변경 시 — mdBook 0.4 라인 필수 (`make install-tools`)
 cargo nextest run -p <crate>          # 크레이트 한정 (전 워크스페이스 cold 15분+ 금지)
 cargo clippy -p <crate> --all-targets -- -D warnings   # 커밋 전 touched 크레이트 사전 점검
@@ -90,10 +92,10 @@ bacon / bacon test    # watch 모드
 1. **Color 는 BGR** — `Color::from_rgb()` 만 사용 (`from_raw(0xFF0000)` 은 파랑).
 2. **`.docs` 는 git 에 절대 커밋/푸시 금지** (내부 문서).
 3. **commit/push 는 `run_in_background` + 파일 리다이렉트** — 파이프(`| tail`) 연결 금지 (훅 출력이 push 를 죽임 · 실패 라인 유실). 성공 판정은 `git ls-remote` 실측.
-4. **버전/태그/publish 수동 조작 금지** — release-plz 소유. 머지는 GraphQL `enqueuePullRequest` 로만 (`gh pr merge` 거부됨).
+4. **버전/태그/publish 수동 조작 금지** — release-plz 소유. 머지는 GraphQL `enqueuePullRequest` 로만 (`gh pr merge` 거부됨), 큐 방식 = **squash**.
 5. **테스트 실행 중 소스 편집 금지** (rebuild 유발) · nextest 필터는 **substring** (`'a|b'` 무효).
 6. `examples/README.md` 미커밋 변경 = 사용자 낙서 — 보존 말고 **항상 원복**, 커밋 절대 금지.
-7. PR/이슈 생성 시 **assignee = 나** (`gh --assignee @me`) · 제목 **English**·본문 **한글** · PR 생성/큐 등록은 **사용자 명시 승인 후에만**.
+7. PR/이슈 생성 시 **assignee = 나** (`gh --assignee @me`) · 제목 **English conventional**(squash 라 PR 제목 = main 커밋 = release-plz 입력, breaking 은 `type!:`)·본문 **한글** · PR 생성/큐 등록은 **사용자 명시 승인 후에만**.
 8. stale `.git/index.lock`(0바이트·git 프로세스 없음 확인) 은 `rm -f` — 반복 사고.
 
 ---
