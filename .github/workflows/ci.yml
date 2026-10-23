@@ -463,9 +463,12 @@ jobs:
         # `#![cfg(not(debug_assertions))]` 로 묶여 있고, `Verify › Test` 의 test
         # 프로필 실행에서는 빠진다. 바로 위 단계가 만든 release 의존성
         # 아티팩트를 재사용하는 이 잡에서 그 한 개만 돌린다. 넘치면 테스트
-        # 프로세스가 abort 하므로 실패는 SIGABRT 로 보인다.
+        # 프로세스가 abort 하므로 실패는 SIGABRT 로 보인다. `--test decode_stack`
+        # 이 그 바이너리만 빌드한다 — 없으면 `-E` 는 실행만 거르고 이 크레이트의
+        # 시험 바이너리 전부를 release(LTO)로 빌드해 단계가 20분을 넘었다.
         run: >-
           cargo nextest run -p hwpforge-smithy-hwpx --cargo-profile release
+          --test decode_stack
           -E 'test(xml_limit_release)'
       - name: Build candidate wheel (manylinux_2_28, x86_64)
         # 릴리스와 **같은 방식**으로 만든다: SHA 핀한 maturin-action 의
