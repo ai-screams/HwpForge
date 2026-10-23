@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/ai-screams/HwpForge/compare/v0.16.11...v0.17.0) - 2026-10-23
+
+### Added
+
+- **BREAKING** keep the HWPX and HWP5 values that conversion and rewriting silently lost ([#249](https://github.com/ai-screams/HwpForge/pull/249))
+
+
 ## [0.16.11](https://github.com/ai-screams/HwpForge/compare/v0.16.10...v0.16.11) - 2026-10-13
 
 ### Fixed
