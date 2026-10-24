@@ -172,9 +172,11 @@ fn patch_para1(base: &[u8], text: &str) -> Vec<u8> {
 #[test]
 fn a_patched_slot_with_a_cr_keeps_it_and_an_untouched_reference_keeps_its_bytes() {
     // 이것을 실패시키는 것: `encode_inline_text_xml` 의 `'\r'` 갈래를 빼는 것
-    // (편집된 slot 이 raw CR 로 쓰여 `\n` 으로 되읽힌다). 미편집 slot 의
-    // 바이트 보존은 patch 가 그 slot 을 다시 쓰는 것을 잡는다.
-    let base = splice(&encode(vec![text_para("keep"), text_para("edit me")]), "keep", "가&#13;나");
+    // (편집된 slot 이 raw CR 로 쓰여 `\n` 으로 되읽힌다). 미편집 slot 은 인코더가
+    // 쓰지 않는 표기 `&#x0D;` 로 두어, patch 가 그 slot 을 다시 쓰면(`&#13;` 이 된다)
+    // 잡힌다 — patch.rs 의 미편집 slot 건너뛰기 두 곳(정리 전·후 비교)을 모두 빼는
+    // 변이로 실패 확인(`&#13;` 표기였다면 다시 써도 같은 바이트라 이 변이가 살아남는다).
+    let base = splice(&encode(vec![text_para("keep"), text_para("edit me")]), "keep", "가&#x0D;나");
 
     let noop = {
         let exported =
@@ -188,7 +190,7 @@ fn a_patched_slot_with_a_cr_keeps_it_and_an_untouched_reference_keeps_its_bytes(
 
     let patched = patch_para1(&base, "다\r라\t마");
     assert_wire_has_reference_only(&patched);
-    assert!(section_xml(&patched).contains("가&#13;나"), "the untouched slot keeps its bytes");
+    assert!(section_xml(&patched).contains("가&#x0D;나"), "the untouched slot keeps its bytes");
     assert_eq!(texts(&patched), ["가\r나", "다\r라\t마"]);
 }
 
