@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.0...hwpforge-bindings-mcp-v0.17.1) - 2026-10-24
 
-### Fixed
+### Changed
 
-- *(mcp)* bound the length of one stdin request line ([#264](https://github.com/ai-screams/HwpForge/pull/264))
-
+- 표준 입력 JSON-RPC 한 줄의 길이 상한을 32 MiB 로 둔다. 넘는 줄은 개행까지 버리고 오류 로그를 남기며, 연결은 다음 요청을 계속 받는다. 이 값은 줄 길이 상한이고 버퍼 할당이나 프로세스 메모리 상한이 아니다. 전에는 아주 긴 한 줄(또는 개행 없는 입력)이 메모리를 계속 쓰게 할 수 있었다. rmcp 최소 버전을 3.6 으로 올린다(MSRV 1.89 그대로) (#264)
+- 도구의 인라인 입력 상한(`convert` Markdown, `from_json` 구조)을 50 MiB 에서 24 MiB 로 낮춘다. 더 큰 문서는 파일 기반 도구를 쓴다. 측정한 가장 큰 요청 한 줄은 14.7 MiB 였다 (#264)
+- 도구 결과가 0.17.1 라이브러리의 변경(빈 그림 틀 보존, 깊이 관문, `paragraph_content` 경고, XML 이벤트 버퍼 한도)을 그대로 따른다.
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.11...hwpforge-bindings-mcp-v0.17.0) - 2026-10-23
 
