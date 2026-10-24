@@ -578,3 +578,101 @@ def test_convert_md_rejects_an_unknown_preset() -> None:
         _hwpforge.convert_md("# 제목\n\n본문입니다.\n", preset="no-such-preset")
 
     assert caught.value.code == "PRESET_NOT_FOUND"
+
+
+def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
+    # 이것을 실패시키는 것: OSError 포장/복원 제거, DECODE_FAILED를 INVALID_INPUT으로 치환.
+    import copy
+    import errno
+    import pickle
+    from functools import partial
+    from pathlib import Path
+
+    from hwpforge import Document, HwpForgeFileNotFoundError, HwpForgeIOError
+
+    manifest = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "hwpforge/tests/data/error_contract_018.json"
+        ).read_text()
+    )
+    calls = {
+        "decode.input": partial(
+            Document(
+                (
+                    Path(__file__).resolve().parents[2] / "hwpforge/tests/data/corrupt-input.hwpx"
+                ).read_bytes()
+            ).read,
+            section=0,
+        ),
+        "io.missing": partial(Document.open, tmp_path / "missing.hwpx"),
+        "io.read": partial(Document.open, tmp_path / "unreadable.hwpx"),
+        "io.write": partial(Document(b"x").save, tmp_path / "unwritable.hwpx"),
+        "read.section": partial(Document(table_bytes).read, section=999),
+        "read.table": partial(Document(table_bytes).read, table=999),
+        "read.field": partial(Document(table_bytes).read, field="missing"),
+    }
+    for case in manifest["cases"]:
+        if "python" not in case["surfaces"]:
+            continue
+        operation = case["surfaces"]["python"]["operation"]
+        source = OSError(errno.EACCES, "denied", "first", None, "second")
+        source.winerror = 5  # ty: ignore[unresolved-attribute]  # Synthetic Windows field.
+        with monkeypatch.context() as patch:
+            if operation in ("io.read", "io.write"):
+
+                def fail(*args, error=source, **kwargs):
+                    raise error
+
+                patch.setattr("builtins.open", fail)
+            with pytest.raises(HwpForgeError) as caught:
+                calls[operation]()
+        error = caught.value
+        assert error.code == case["expected_code"]
+        if operation.startswith("io."):
+            assert isinstance(error, HwpForgeIOError)
+            assert isinstance(error, OSError)
+            if operation == "io.missing":
+                assert isinstance(error, HwpForgeFileNotFoundError)
+                assert isinstance(error, FileNotFoundError)
+                source = error.__cause__
+            assert error.__cause__ is source
+            assert isinstance(source, OSError)
+            for name in ("errno", "strerror", "filename", "filename2", "winerror"):
+                assert getattr(error, name, None) == getattr(source, name, None)
+            constructed = type(error)(
+                case["expected_code"], "detail", "hint", {"stage": "io"}, {"x": 1}, source
+            )
+            for original in [error, constructed]:
+                for restored in [
+                    copy.copy(original),
+                    copy.deepcopy(original),
+                    pickle.loads(pickle.dumps(original)),
+                ]:
+                    assert type(restored) is type(original)
+                    for name in (
+                        "code",
+                        "message",
+                        "hint",
+                        "cause",
+                        "details",
+                        "errno",
+                        "strerror",
+                        "filename",
+                        "filename2",
+                        "winerror",
+                    ):
+                        assert getattr(restored, name, None) == getattr(original, name, None)
+
+
+def test_io_repr_preserves_subclass_and_os_fields():
+    # 이것을 실패시키는 것: repr 클래스 이름 고정 또는 OS 필드 분기 제거.
+    from hwpforge import HwpForgeFileNotFoundError, HwpForgeIOError
+
+    source = OSError(13, "denied", "first", None, "second")
+    source.winerror = 5  # ty: ignore[unresolved-attribute]
+    for cls in (HwpForgeIOError, HwpForgeFileNotFoundError):
+        error = cls("FILE_READ_FAILED", "failed", os_error=source)
+        rendered = repr(error)
+        assert rendered.startswith(f"{cls.__name__}(")
+        for name in ("errno", "strerror", "filename", "filename2", "winerror"):
+            assert f"{name}={getattr(source, name)!r}" in rendered

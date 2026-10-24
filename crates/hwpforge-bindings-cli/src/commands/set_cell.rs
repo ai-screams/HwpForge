@@ -6,6 +6,8 @@
 //! (`--right-of` / `--below`, normalized exact match). Batches go through
 //! `--map` (JSON array of CellSpec). All-or-nothing behind the same
 //! fail-closed admission gate as `stamp`.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -39,17 +41,14 @@ pub fn run(
     map: Option<&PathBuf>,
     json_mode: bool,
 ) {
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::SetCell);
+    let bytes = read_input(file, json_mode, Command::SetCell);
 
     let opts = build_options(single, map, json_mode);
 
     let result = match ops_set_cell(&bytes, &opts) {
         Ok(r) => r,
-        // set-cell's legacy exit is 1 for every code it emits (compat.rs
-        // module docs); `TABLE`/`DYNAMIC_EXIT` both record it that way, so
-        // the shared `exit_ops_error` reproduces it without a local
-        // override.
+        // Command and typed code determine the exit status.
         Err(e) => compat::exit_ops_error(Command::SetCell, e, json_mode),
     };
     // Decoder warnings, then the successful encode's non-semantic warnings
@@ -59,8 +58,11 @@ pub fn run(
     let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();
 
     if let Err(e) = std::fs::write(output, &result.bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::SetCell);
     }
 
     if json_mode {
@@ -121,10 +123,10 @@ fn build_options(
         || single.text.is_some();
     if map.is_some() && has_single_flags {
         CliError::new(
-            "INVALID_SET_CELL_ARGS",
+            CliCode::Ops(OpsCode::InvalidSetCellArgs),
             "--map cannot be combined with --table/--at/--right-of/--below/--text",
         )
-        .exit(json_mode, 1);
+        .exit(json_mode, Command::SetCell);
     }
 
     let mut opts = SetCellOptions::default();
@@ -148,21 +150,21 @@ fn build_options(
             Ok(t) => t,
             Err(e) => {
                 CliError::new(
-                    "FILE_READ_FAILED",
+                    CliCode::Ops(e.code()),
                     format!("Cannot read '{}': {e}", map_path.display()),
                 )
-                .exit(json_mode, 1);
+                .exit(json_mode, Command::SetCell);
             }
         };
         let specs: Vec<CellSpec> = match serde_json::from_str(&map_text) {
             Ok(specs) => specs,
             Err(e) => {
-                CliError::new("INVALID_SET_CELL_MAP", format!("'{}': {e}", map_path.display()))
+                CliError::new(CliCode::Ops(OpsCode::InvalidSetCellMap), format!("'{}': {e}", map_path.display()))
                     .with_hint(
                         "맵은 CellSpec JSON 배열: [{\"table\":0,\"at\":{\"row\":1,\"col\":2},\"text\":\"값\"}] \
                          또는 {\"right_of\":\"성명\"} / {\"below\":\"항목\"}",
                     )
-                    .exit(json_mode, 1);
+                    .exit(json_mode, Command::SetCell);
             }
         };
         opts = opts.with_specs(specs);

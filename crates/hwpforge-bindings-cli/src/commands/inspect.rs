@@ -2,6 +2,8 @@
 //!
 //! This command is intentionally HWPX-only. HWP5 sources should flow through
 //! `convert-hwp5` or `audit-hwp5` first.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -86,15 +88,14 @@ struct SectionInfo {
 /// is never silently dropped that way — a decoded count and a raw count of
 /// the same bytes are deterministically identical there.
 pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Inspect);
+    let bytes = read_input(file, json_mode, Command::Inspect);
 
     let out = match ops::inspect(&bytes, &InspectOptions::default().with_styles(show_styles)) {
         Ok(o) => o,
         Err(e) => {
             let err = compat::cli_error(Command::Inspect, e);
-            let exit = compat::exit_code(Command::Inspect, &err);
-            err.exit(json_mode, exit);
+            err.exit(json_mode, Command::Inspect);
         }
     };
     // W5 follow-up: the pre-migration CLI never captured decode warnings
@@ -109,8 +110,11 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     let raw_scan = match raw_scan_counts_per_section(&bytes, report.section_details.len()) {
         Ok(counts) => counts,
         Err(err) => {
-            CliError::new("ANALYSIS_FAILED", format!("Cannot analyze '{}': {err}", file.display()))
-                .exit(json_mode, 2);
+            CliError::new(
+                CliCode::Ops(OpsCode::AnalysisFailed),
+                format!("Cannot analyze '{}': {err}", file.display()),
+            )
+            .exit(json_mode, Command::Inspect);
         }
     };
 

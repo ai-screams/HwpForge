@@ -1,4 +1,6 @@
 //! Convert HWP5 to HWPX.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::Path;
 
@@ -31,36 +33,22 @@ struct ConvertHwp5Result {
 
 /// Run the convert-hwp5 command: HWP5 -> HWPX.
 pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: bool) {
-    check_file_size(input, json_mode);
+    check_file_size(input, json_mode, Command::ConvertHwp5);
 
-    // Read the input once, bounded by `read_bounded`'s cap. This used to be
-    // two reads of the same path — an unbounded `std::fs::read` inside the
-    // now-removed `inspect_hwp5_file` call, followed by a bounded
-    // `read_bounded` for conversion. That let an oversized FIFO grow memory
-    // without limit through the first, unbounded read before the second,
-    // bounded read ever ran (audit finding), and made a *finite* FIFO hang
-    // on the second `open`: a FIFO reader blocks until a new writer shows
-    // up, and the original writer had already exited after the first read
-    // drained it. A read failure here reports the same `HWP5_DECODE_FAILED`
-    // the legacy first read (`inspect_hwp5_file`) always produced for an
-    // unreadable/missing file — it was always the first thing this command
-    // touched on the path.
+    // Read once with a hard cap, including FIFOs. Read failures exit 2; size refusals exit 1.
     let bytes = read_bounded(input).unwrap_or_else(|err| {
-        CliError::new("HWP5_DECODE_FAILED", format!("Cannot decode '{}': {err}", input.display()))
-            .with_hint("Check that the file is a valid HWP5 document")
-            .exit(json_mode, 2)
+        CliError::new(CliCode::Ops(err.code()), format!("Cannot read '{}': {err}", input.display()))
+            .exit(json_mode, Command::ConvertHwp5)
     });
 
-    // `hwpforge_convert::ops::convert_hwp5` takes bytes and reports no
-    // document summary (version/sections/paragraphs) — `inspect_hwp5` (the
-    // bytes-based twin of the removed `inspect_hwp5_file`) stays for that,
-    // now decoding the bytes already in hand instead of re-opening the
-    // path, which also keeps the legacy `HWP5_DECODE_FAILED` message/hint
-    // byte-identical for the most-hit failure (unreadable/corrupt file).
+    // Inspect the same bytes for the summary; corrupt HWP5 stays HWP5_DECODE_FAILED.
     let summary = inspect_hwp5(&bytes).unwrap_or_else(|err| {
-        CliError::new("HWP5_DECODE_FAILED", format!("Cannot decode '{}': {err}", input.display()))
-            .with_hint("Check that the file is a valid HWP5 document")
-            .exit(json_mode, 2)
+        CliError::new(
+            CliCode::Ops(OpsCode::Hwp5DecodeFailed),
+            format!("Cannot decode '{}': {err}", input.display()),
+        )
+        .with_hint("Check that the file is a valid HWP5 document")
+        .exit(json_mode, Command::ConvertHwp5)
     });
 
     let opts = ConvertHwp5Options::default().with_carry_layout_cache(carry_layout_cache);
@@ -74,31 +62,27 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
     // and failed as `HWP5_CONVERT_FAILED`, exit 2, with the convert hint,
     // message keyed on the *input* path (W3 remediation finding 8).
     // `convert_hwp5()` now returns bytes and this command does the write
-    // itself, but the failure envelope must stay the one that call site
-    // produced — including `Hwp5Error::Io`'s `"I/O error: {0}"` Display
+    // itself. W1 uses FileWriteFailed and exit 2 while preserving the
+    // message, including `Hwp5Error::Io`'s `"I/O error: {0}"` Display
     // wrapping the raw `io::Error`, not the raw error alone (independent
     // review round 2, finding B).
     if let Err(e) = std::fs::write(output, &converted.bytes) {
         let wrapped = hwpforge_smithy_hwp5::Hwp5Error::Io(e);
         CliError::new(
-            "HWP5_CONVERT_FAILED",
+            CliCode::Ops(OpsCode::FileWriteFailed),
             format!("Cannot convert '{}' to HWPX: {wrapped}", input.display()),
         )
         .with_hint(
             "Check that the source is a supported HWP5 document and the output path is writable",
         )
-        .exit(json_mode, 2);
+        .exit(json_mode, Command::ConvertHwp5);
     }
     // Legacy re-`stat`'d the file it just wrote for `size_bytes` — a
     // failure there (e.g. the output vanishing between write and stat) was
-    // `FILE_WRITE_FAILED`, exit 1, no hint (W3 remediation finding 9).
-    let size_bytes = std::fs::metadata(output).map(|meta| meta.len()).unwrap_or_else(|e| {
-        CliError::new(
-            "FILE_WRITE_FAILED",
-            format!("Converted output '{}' is not readable: {e}", output.display()),
-        )
-        .exit(json_mode, 1)
-    });
+    // `FILE_WRITE_FAILED`, exit 1, no hint. The approved 0.18 policy now
+    // uses exit 2 for both write and post-write stat failures.
+    let size_bytes =
+        output_size(output).unwrap_or_else(|err| err.exit(json_mode, Command::ConvertHwp5));
 
     // `convert_hwp5` only ever emits `ConvertOpsWarning::Convert` (it never
     // decodes HWPX or renders); the `_` arm exists only because the enum is
@@ -156,5 +140,43 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
             result.warnings,
             result.size_bytes
         );
+    }
+}
+
+// Both output failure paths use the same typed code and exit policy.
+fn output_size(output: &Path) -> Result<u64, Box<CliError>> {
+    std::fs::metadata(output).map(|meta| meta.len()).map_err(|e| {
+        Box::new(CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Converted output '{}' is not readable: {e}", output.display()),
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    // 이것을 실패시키는 것: 후속 stat 코드를 FileReadFailed로 변경하거나 manifest 후속 stat 기대 종료를 1로 변경.
+    fn output_metadata_failure_uses_write_exit() {
+        let err =
+            output_size(Path::new("/nonexistent-hwpforge-output-size/vanished.hwpx")).unwrap_err();
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hwpforge/tests/data/error_contract_018.json"
+        ))
+        .unwrap();
+        let case = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "io.convert-hwp5.output_metadata")
+            .unwrap();
+        assert_eq!(serde_json::to_value(&err).unwrap()["code"], case["expected_code"]);
+        assert_eq!(
+            compat::exit_code(Command::ConvertHwp5, err.code),
+            case["surfaces"]["cli"]["exit"].as_i64().unwrap() as i32
+        );
+        assert!(err.hint.is_none());
     }
 }

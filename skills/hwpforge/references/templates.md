@@ -1,6 +1,6 @@
 # Style Presets
 
-A preset is a built-in style set (fonts, sizes, page setup) for **new** documents. `hwpforge templates list` catalogs four, and every interface accepts all four. Any other name fails (`UNKNOWN_PRESET` in the CLI, `PRESET_NOT_FOUND` in Python).
+A preset is a built-in style set (fonts, sizes, page setup) for **new** documents. `hwpforge templates list` catalogs four, and every interface accepts all four. Any other name fails (`PRESET_NOT_FOUND` in CLI, MCP and Python).
 
 | Preset    | 본문 글꼴       | 용지 | 설명                    |
 | --------- | --------------- | ---- | ----------------------- |

@@ -68,7 +68,7 @@ for warning in rebuilt.report["warnings"]:
 
 같은 경고를 `validate()`의 `warnings`로도 볼 수 있으므로, 문서를 처음 받았을 때 한 번 `validate()`를 부르는 것이 좋은 시작입니다.
 
-## `HwpForgeError` — 하나의 예외, 다섯 속성
+## `HwpForgeError` — 공통 예외, 다섯 속성
 
 입력을 받아들인 뒤 연산이 거부하면 `HwpForgeError`를 던집니다. `str(exc)`는 `"CODE: message"`(힌트가 있으면 둘째 줄에 `hint: …`)입니다.
 
@@ -92,16 +92,16 @@ except hwpforge.HwpForgeError as exc:
         raise
 ```
 
-`code`는 CLI·MCP와 대체로 같지만 **같은 실패라도 창구마다 동결된 문자열이 다를 수 있습니다**(예: CLI `DECODE_FAILED`와 MCP `DECODE_ERROR`). Python 코드는 이 패키지의 계약이므로 이 문서의 표를 기준으로 삼으세요.
+`code`는 대응하는 연산에서 같은 단계·사유라면 CLI·MCP·Python 모두 canonical `OpsCode` 문자열을 사용합니다. 검사 순서와 메시지·힌트는 창구마다 다를 수 있습니다.
 
 ### 다른 예외
 
-| 예외                          | 언제                                                                                          |
-| ----------------------------- | --------------------------------------------------------------------------------------------- |
-| `TypeError` / `ValueError`    | 인자 변환 실패 — `fill` 값에 정수, `font_dirs`에 문자열 하나, `Document(…)`에 `bytes` 아닌 것 |
-| `OSError`                     | `Document.open`·`save`의 파일 I/O                                                             |
-| `AttributeError`              | `Document` 속성 대입·삭제(불변)                                                               |
-| `pyo3_runtime.PanicException` | 내부 Rust panic — 버그이니 이슈로 알려 주세요                                                 |
+| 예외                                 | 언제                                                                                          |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `TypeError` / `ValueError`           | 인자 변환 실패 — `fill` 값에 정수, `font_dirs`에 문자열 하나, `Document(…)`에 `bytes` 아닌 것 |
+| `HwpForgeIOError` (`OSError`도 포착) | `Document.open`·`save`의 파일 I/O                                                             |
+| `AttributeError`                     | `Document` 속성 대입·삭제(불변)                                                               |
+| `pyo3_runtime.PanicException`        | 내부 Rust panic — 버그이니 이슈로 알려 주세요                                                 |
 
 ## 코드 표
 
@@ -111,7 +111,7 @@ except hwpforge.HwpForgeError as exc:
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Document.open`                | `INPUT_TOO_LARGE`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 그 밖에 HWPX를 디코드하는 연산 | `DECODE_FAILED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `read`                         | `READ_TARGET_REQUIRED` · `READ_PARAS_INVALID` · `READ_PARAS_WITHOUT_SECTION` · `READ_SECTION_OUT_OF_RANGE` · `READ_PARA_RANGE_INVALID` · `READ_TABLE_OUT_OF_RANGE` · `READ_FIELD_NOT_FOUND` · `TABLE_GRID_INVALID`                                                                                                                                                                                                                                                                                                                                                                |
+| `read`                         | `READ_TARGET_REQUIRED` · `READ_PARAS_INVALID` · `READ_PARAS_WITHOUT_SECTION` · `SECTION_OUT_OF_RANGE` · `READ_PARA_RANGE_INVALID` · `TABLE_NOT_FOUND` · `FIELD_NOT_FOUND` · `TABLE_GRID_INVALID`                                                                                                                                                                                                                                                                                                                                                                                  |
 | `export_section`               | `SECTION_OUT_OF_RANGE` · `GRID_ADDR_PROJECTION_FAILED` · `JSON_SERIALIZE_FAILED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `to_json`                      | `GRID_ADDR_PROJECTION_FAILED` · `JSON_SERIALIZE_FAILED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `to_md`                        | `INVALID_INPUT` (알 수 없는 `mode`) · `ENCODE_FAILED` (`mode="lossless"`) · `VALIDATION_FAILED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -149,3 +149,11 @@ except hwpforge.HwpForgeError as exc:
 ## 예외를 직렬화·복제할 때
 
 `HwpForgeError`는 `copy`·`pickle`이 다섯 속성을 그대로 보존하도록 `__reduce__`를 정의합니다. 멀티프로세스 워커에서 예외를 부모로 넘겨도 `code`·`details`가 살아 있습니다.
+
+### 파일 I/O 예외 (0.18)
+
+`Document.open`의 입력 부재는 `HwpForgeFileNotFoundError`/`FILE_NOT_FOUND`, 기타 읽기 실패는 `HwpForgeIOError`/`FILE_READ_FAILED`, `save`의 쓰기 실패는 `HwpForgeIOError`/`FILE_WRITE_FAILED`입니다. 크기 상한은 `HwpForgeError`/`INPUT_TOO_LARGE`를 유지합니다.
+
+두 I/O 클래스는 `HwpForgeError`와 `OSError`로 모두 포착할 수 있고, 입력 부재는 `FileNotFoundError`로도 포착됩니다. 정확한 타입 비교(`type(exc) is OSError`)와 `PermissionError` 등 세부 OS 예외 포착은 보존하지 않습니다. `.errno`, `.strerror`, `.filename`, `.filename2`, 원래 오류에 있던 `.winerror`를 보존하며 원래 예외는 `__cause__`로 연결됩니다. copy·pickle은 클래스·다섯 공통 속성·OS 필드를 보존합니다. native extension과 Python 패키지는 같은 버전을 사용해야 합니다.
+
+`Document.save`의 부모 디렉터리가 없을 때도 이제 `FileNotFoundError` 대신 `HwpForgeIOError` (`FILE_WRITE_FAILED`)가 발생합니다. `save` 주변의 `except FileNotFoundError`는 `except HwpForgeIOError` 또는 `except OSError`로 바꾸세요. 입력 부재인 `Document.open`의 `FileNotFoundError` 포착은 유지됩니다.

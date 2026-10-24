@@ -7,6 +7,8 @@
 //! Warnings keep their provenance across the three pipeline stages
 //! (`convert` → `decode` → `render`) as structured DTOs — flattening them
 //! would hide HWP5 conversion loss behind a green render.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::{Path, PathBuf};
 
@@ -93,10 +95,10 @@ fn parse_discovery(s: &str, json_mode: bool) -> FontDiscovery {
         "hancom" => FontDiscovery::HancomBundle,
         "platform" => FontDiscovery::Platform,
         other => CliError::new(
-            "INVALID_DISCOVERY",
+            CliCode::Ops(OpsCode::InvalidDiscovery),
             format!("unknown discovery mode '{other}' (expected explicit|hancom|platform)"),
         )
-        .exit(json_mode, 2),
+        .exit(json_mode, Command::ToPdf),
     }
 }
 
@@ -113,16 +115,16 @@ pub fn run(
 ) {
     // 플래그 오류는 파이프라인 진입 전에 (독립 리뷰 L1 — .hwp 변환 후 exit 방지).
     let discovery = parse_discovery(discovery, json_mode);
-    check_file_size(input, json_mode);
-    let bytes = crate::error::read_input(input, json_mode);
+    check_file_size(input, json_mode, Command::ToPdf);
+    let bytes = crate::error::read_input(input, json_mode, Command::ToPdf);
 
     let Some(detected) = detect_format(&bytes) else {
         CliError::new(
-            "UNRECOGNIZED_FORMAT",
+            CliCode::Ops(OpsCode::UnrecognizedFormat),
             format!("'{}' is neither an OLE2 (HWP5) nor a ZIP (HWPX) container", input.display()),
         )
         .with_hint("to-pdf detects the format by content — the extension is only a hint")
-        .exit(json_mode, 2)
+        .exit(json_mode, Command::ToPdf)
     };
 
     let mut warnings: Vec<WarningDto> = Vec::new();
@@ -171,10 +173,10 @@ pub fn run(
         .unwrap_or_else(|err| {
             let _ = std::fs::remove_file(&tmp_path);
             CliError::new(
-                "FILE_WRITE_FAILED",
+                CliCode::Ops(OpsCode::FileWriteFailed),
                 format!("Cannot write '{}': {err}", out_path.display()),
             )
-            .exit(json_mode, 1)
+            .exit(json_mode, Command::ToPdf)
         });
 
     let counts = WarningCounts {

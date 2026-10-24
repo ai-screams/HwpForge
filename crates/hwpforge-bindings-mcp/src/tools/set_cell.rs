@@ -38,7 +38,7 @@ pub fn run_set_cell(
 ) -> Result<SetCellData, ToolErrorInfo> {
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
@@ -49,7 +49,7 @@ pub fn run_set_cell(
     // check order.
     if specs.is_empty() {
         return Err(ToolErrorInfo::new(
-            "INVALID_SET_CELL_MAP",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidSetCellMap,
             "specs is empty",
             "Pass at least one CellSpec: {table, at|right_of|below, text}.",
         ));

@@ -1,4 +1,3879 @@
 {
   "audited_variants": [],
-  "cases": []
+  "cases": [
+    {
+      "id": "read.section",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "read.section"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "read.section"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "read.table",
+      "expected_code": "TABLE_NOT_FOUND",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "read.table"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "read.table"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "read.field",
+      "expected_code": "FIELD_NOT_FOUND",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "read.field"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "read.field"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "io.missing",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "io.missing"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "io.missing"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "io.read",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "io.read"
+        },
+        "python": {
+          "mode": "injected",
+          "operation": "io.read"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.hwp5_decode_failed",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.hwp5_convert_failed",
+      "expected_code": "HWP5_CONVERT_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.hwp5_decode_failed",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.hwp5_convert_failed",
+      "expected_code": "HWP5_CONVERT_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.unrecognized_format",
+      "expected_code": "UNRECOGNIZED_FORMAT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.pdf_render_failed",
+      "expected_code": "PDF_RENDER_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.invalid_discovery",
+      "expected_code": "INVALID_DISCOVERY",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.preset_not_found",
+      "expected_code": "PRESET_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.md_decode_failed",
+      "expected_code": "MD_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.style_store_failed",
+      "expected_code": "STYLE_STORE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.style_rebind_failed",
+      "expected_code": "STYLE_REBIND_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.grid_addr_projection_failed",
+      "expected_code": "GRID_ADDR_PROJECTION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.json_parse_failed",
+      "expected_code": "JSON_PARSE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.grid_addr_invalid",
+      "expected_code": "GRID_ADDR_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.delete_no_target",
+      "expected_code": "DELETE_NO_TARGET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.duplicate_target",
+      "expected_code": "DUPLICATE_TARGET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.reference_stranded",
+      "expected_code": "REFERENCE_STRANDED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.hard_break_loss",
+      "expected_code": "HARD_BREAK_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.empty_section",
+      "expected_code": "EMPTY_SECTION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.insert_text_required",
+      "expected_code": "INSERT_TEXT_REQUIRED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.multi_paragraph_text",
+      "expected_code": "MULTI_PARAGRAPH_TEXT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.insert_before_section_properties",
+      "expected_code": "INSERT_BEFORE_SECTION_PROPERTIES",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.paragraph_out_of_range",
+      "expected_code": "PARAGRAPH_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.paragraph_out_of_range",
+      "expected_code": "PARAGRAPH_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.section_properties_paragraph",
+      "expected_code": "SECTION_PROPERTIES_PARAGRAPH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.section_properties_paragraph",
+      "expected_code": "SECTION_PROPERTIES_PARAGRAPH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.span_count_mismatch",
+      "expected_code": "SPAN_COUNT_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.span_count_mismatch",
+      "expected_code": "SPAN_COUNT_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.structural_codec",
+      "expected_code": "STRUCTURAL_CODEC",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.structural_codec",
+      "expected_code": "STRUCTURAL_CODEC",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.read_target_required",
+      "expected_code": "READ_TARGET_REQUIRED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.read_paras_without_section",
+      "expected_code": "READ_PARAS_WITHOUT_SECTION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.read_paras_invalid",
+      "expected_code": "READ_PARAS_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "decode.input",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "read",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "read"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "decode.input"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.read_para_range_invalid",
+      "expected_code": "READ_PARA_RANGE_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.table_grid_invalid",
+      "expected_code": "TABLE_GRID_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.no_values",
+      "expected_code": "NO_VALUES",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.empty_field_value",
+      "expected_code": "EMPTY_FIELD_VALUE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.field_name_ambiguous",
+      "expected_code": "FIELD_NAME_AMBIGUOUS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.field_not_fillable",
+      "expected_code": "FIELD_NOT_FILLABLE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.fill_failed",
+      "expected_code": "FILL_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.invalid_set_cell_args",
+      "expected_code": "INVALID_SET_CELL_ARGS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.invalid_set_cell_map",
+      "expected_code": "INVALID_SET_CELL_MAP",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.table_grid_invalid",
+      "expected_code": "TABLE_GRID_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.cell_not_found",
+      "expected_code": "CELL_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.cell_label_ambiguous",
+      "expected_code": "CELL_LABEL_AMBIGUOUS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.cell_has_non_text_content",
+      "expected_code": "CELL_HAS_NON_TEXT_CONTENT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.cell_target_duplicate",
+      "expected_code": "CELL_TARGET_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.cell_target_conflict",
+      "expected_code": "CELL_TARGET_CONFLICT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.set_cell_codec_failed",
+      "expected_code": "SET_CELL_CODEC_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.stamp_codec_failed",
+      "expected_code": "STAMP_CODEC_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_manifest_invariant",
+      "expected_code": "STAMP_MANIFEST_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_codec_failed",
+      "expected_code": "STAMP_CODEC_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_source_hash_mismatch",
+      "expected_code": "STAMP_SOURCE_HASH_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_delta_mismatch",
+      "expected_code": "STAMP_DELTA_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.table_not_found",
+      "expected_code": "TABLE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.table_grid_invalid",
+      "expected_code": "TABLE_GRID_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_cell_not_empty",
+      "expected_code": "STAMP_CELL_NOT_EMPTY",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_label_drift",
+      "expected_code": "STAMP_LABEL_DRIFT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_cell_not_candidate",
+      "expected_code": "STAMP_CELL_NOT_CANDIDATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_cell_target_duplicate",
+      "expected_code": "STAMP_CELL_TARGET_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_name_empty",
+      "expected_code": "STAMP_NAME_EMPTY",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_hint_blank",
+      "expected_code": "STAMP_HINT_BLANK",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_spec_stale",
+      "expected_code": "STAMP_SPEC_STALE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_marker_mismatch",
+      "expected_code": "STAMP_MARKER_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_spec_duplicate",
+      "expected_code": "STAMP_SPEC_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.json_parse_failed",
+      "expected_code": "JSON_PARSE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.grid_addr_invalid",
+      "expected_code": "GRID_ADDR_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.patch_failed",
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.templates.preset_not_found",
+      "expected_code": "PRESET_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "templates",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "templates"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.patch_failed",
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.table_not_found",
+      "expected_code": "TABLE_NOT_FOUND",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.preset_not_found",
+      "expected_code": "PRESET_NOT_FOUND",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.no_fonts",
+      "expected_code": "NO_FONTS",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwp5_decode_failed",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.field_not_found",
+      "expected_code": "FIELD_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.analysis_failed",
+      "expected_code": "ANALYSIS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.section_index_mismatch",
+      "expected_code": "SECTION_INDEX_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.schema.unknown_schema_type",
+      "expected_code": "UNKNOWN_SCHEMA_TYPE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "schema",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.invalid_stamp_map",
+      "expected_code": "INVALID_STAMP_MAP",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.manifest_path_conflict",
+      "expected_code": "MANIFEST_PATH_CONFLICT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_candidate_uncovered",
+      "expected_code": "STAMP_CANDIDATE_UNCOVERED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_cell_not_anchor",
+      "expected_code": "STAMP_CELL_NOT_ANCHOR",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_name_collision",
+      "expected_code": "STAMP_NAME_COLLISION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_name_duplicate",
+      "expected_code": "STAMP_NAME_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.section_index_mismatch",
+      "expected_code": "SECTION_INDEX_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.invalid_set",
+      "expected_code": "INVALID_SET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.duplicate_set",
+      "expected_code": "DUPLICATE_SET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwp5_census_failed",
+      "expected_code": "HWP5_CENSUS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwp5_semantic_failed",
+      "expected_code": "HWP5_SEMANTIC_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwpx_analysis_failed",
+      "expected_code": "HWPX_ANALYSIS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.hwpx_census_failed",
+      "expected_code": "HWPX_CENSUS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "io.write",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "python": {
+          "mode": "injected",
+          "operation": "io.write"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.missing_source_sha256",
+      "expected_code": "MISSING_SOURCE_SHA256",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.output_too_large",
+      "expected_code": "OUTPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.output_too_large",
+      "expected_code": "OUTPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.output_too_large",
+      "expected_code": "OUTPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.invalid_input",
+      "expected_code": "INVALID_INPUT",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.hwp5_census_failed",
+      "expected_code": "HWP5_CENSUS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "io.to-md.input_size_preflight",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "to-md",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.to-md.fifo_over_limit",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "to-md",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.convert-hwp5.input_size_preflight",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "convert-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.convert-hwp5.fifo_over_limit",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "convert-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.convert-hwp5.output_metadata",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    }
+  ]
 }

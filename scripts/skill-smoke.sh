@@ -74,11 +74,11 @@ assert_file tpl.hwpx
 # W3 (CLI -> hwpforge::ops migration, decision I17): `convert` now resolves
 # every catalogued preset (default/modern/classic/latest), not just
 # `default` — `ops::convert_md` applies each preset's font uniformly.
-# UNKNOWN_PRESET still fires for a name no built-in preset has at all.
+# PRESET_NOT_FOUND still fires for a name no built-in preset has at all.
 for p in default modern classic latest; do
   assert_ok "$BIN" convert tpl.md -o "p_$p.hwpx" --preset "$p"
 done
-assert_fail_grep "$BIN" convert tpl.md -o p_bogus.hwpx --preset bogus -- "UNKNOWN_PRESET"
+assert_fail_grep "$BIN" convert tpl.md -o p_bogus.hwpx --preset bogus -- "PRESET_NOT_FOUND"
 printf '# stdin\n\n본문.\n' | "$BIN" convert - -o stdin.hwpx >/dev/null 2>&1 && assert_file stdin.hwpx || fail "stdin convert"
 
 echo "== inspect / to-md / to-json =="
@@ -100,7 +100,7 @@ rc=$?
 [[ $rc -eq 1 ]] && pass "missing file exits 1" || fail "missing file exit (want 1, got $rc)"
 [[ -s env_stdout.txt ]] && fail "error wrote to stdout" || pass "error keeps stdout empty"
 assert_grep env_stderr.txt '"status":"error"'
-assert_grep env_stderr.txt '"code":"FILE_READ_FAILED"'
+assert_grep env_stderr.txt '"code":"FILE_NOT_FOUND"'
 if grep -qF '"error":{' env_stderr.txt; then fail "envelope is nested, not flat"; else pass "envelope is flat"; fi
 printf 'not a container' > validate_nonhwpx.bin
 "$BIN" --json inspect validate_nonhwpx.bin >/dev/null 2>env_decode.txt

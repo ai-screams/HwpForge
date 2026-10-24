@@ -4,6 +4,8 @@
 //! (every unguarded candidate named or ignored); `stamp` applies it
 //! all-or-nothing behind the fail-closed admission gate and writes the
 //! stamped `.hwpx` plus a manifest.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::{Path, PathBuf};
 
@@ -19,8 +21,8 @@ use crate::error::{check_file_size, read_bounded_string, read_input, CliError};
 
 /// Run the `stamp-plan` command (candidate discovery, both classes).
 pub fn run_plan(file: &PathBuf, json_mode: bool) {
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::StampPlan);
+    let bytes = read_input(file, json_mode, Command::StampPlan);
     let out = match ops_stamp_plan(&bytes) {
         Ok(o) => o,
         Err(e) => compat::exit_ops_error(Command::StampPlan, e, json_mode),
@@ -115,25 +117,28 @@ pub fn run(
     manifest_path: Option<&Path>,
     json_mode: bool,
 ) {
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Stamp);
+    let bytes = read_input(file, json_mode, Command::Stamp);
 
     let map_text = match read_bounded_string(map) {
         Ok(t) => t,
         Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", map.display()))
-                .exit(json_mode, 1);
+            CliError::new(CliCode::Ops(e.code()), format!("Cannot read '{}': {e}", map.display()))
+                .exit(json_mode, Command::Stamp);
         }
     };
     let parsed = match parse_stamp_map(&map_text) {
         Ok(p) => p,
         Err(e) => {
-            CliError::new("INVALID_STAMP_MAP", format!("'{}': {e}", map.display()))
-                .with_hint(
-                    "맵은 StampSpec JSON 배열(legacy) 또는 {schema_version:2, source_sha256, \
+            CliError::new(
+                CliCode::Ops(OpsCode::InvalidStampMap),
+                format!("'{}': {e}", map.display()),
+            )
+            .with_hint(
+                "맵은 StampSpec JSON 배열(legacy) 또는 {schema_version:2, source_sha256, \
                      text[], cells[]} 객체(v2) — `stamp-plan --json` 출력을 기반으로 작성",
-                )
-                .exit(json_mode, 1);
+            )
+            .exit(json_mode, Command::Stamp);
         }
     };
 
@@ -143,11 +148,11 @@ pub fn run(
     // the manifest JSON and still report success.
     if output == &manifest_file {
         CliError::new(
-            "MANIFEST_PATH_CONFLICT",
+            CliCode::Ops(OpsCode::ManifestPathConflict),
             format!("manifest path equals output path: {}", output.display()),
         )
         .with_hint("--manifest 경로는 -o 경로와 달라야 합니다")
-        .exit(json_mode, 1);
+        .exit(json_mode, Command::Stamp);
     }
 
     // `ops::stamp::stamp` handles both the legacy spec-array and v2 envelope
@@ -249,18 +254,21 @@ fn write_artifacts(
     json_mode: bool,
 ) {
     if let Err(e) = std::fs::write(output, bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::Stamp);
     }
     if let Err(e) = std::fs::write(manifest_file, manifest_json) {
         // Review L1: a stamped .hwpx without its manifest is a partial
         // artifact — remove it so a failed command leaves nothing behind.
         let _ = std::fs::remove_file(output);
         CliError::new(
-            "FILE_WRITE_FAILED",
+            CliCode::Ops(OpsCode::FileWriteFailed),
             format!("Cannot write '{}': {e}", manifest_file.display()),
         )
         .with_hint("manifest 기록 실패로 산출물을 남기지 않았습니다 (fail-closed)")
-        .exit(json_mode, 1);
+        .exit(json_mode, Command::Stamp);
     }
 }

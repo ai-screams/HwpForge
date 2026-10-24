@@ -3,8 +3,7 @@ r"""Tongs — read, edit and generate Korean HWP/HWPX documents.
 The package is a thin layer over the HwpForge Rust library, so it performs the
 same operations, with the same meaning, as the command line tool and the MCP
 server. What each frontend calls them differs: method names, argument spellings
-and some failure codes are this package's own public contract, and the other two
-keep theirs.
+are frontend-specific; corresponding operation failures share canonical codes.
 
 Documents are immutable values: an editing method returns a new
 [`Document`][hwpforge.Document] in a result object next to the operation's
@@ -26,7 +25,7 @@ from typing import TYPE_CHECKING
 # The extension module resolves `hwpforge.errors.HwpForgeError` by name every
 # time it raises, so that module has to be importable before any operation
 # runs. Importing it first makes the dependency explicit rather than incidental.
-from .errors import HwpForgeError
+from .errors import HwpForgeError, HwpForgeFileNotFoundError, HwpForgeIOError
 
 # isort: split
 
@@ -51,6 +50,8 @@ __all__ = [
     "Document",
     "DocumentResult",
     "HwpForgeError",
+    "HwpForgeFileNotFoundError",
+    "HwpForgeIOError",
     "TextResult",
     "__version__",
     "convert_hwp5",

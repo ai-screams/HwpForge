@@ -10,8 +10,8 @@ use crate::error::{check_file_size, read_input};
 
 /// Run the outline command.
 pub fn run(file: &PathBuf, json_mode: bool) {
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Outline);
+    let bytes = read_input(file, json_mode, Command::Outline);
 
     // Decoder warnings (`OutlineOutput::warnings`) were not surfaced pre-W5
     // (the pre-migration CLI never captured them; W3 kept that byte-for-byte).

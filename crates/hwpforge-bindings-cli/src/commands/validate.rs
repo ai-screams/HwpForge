@@ -4,10 +4,10 @@
 //! MCP already exposes this over `hwpforge_validate`
 //! (`crates/hwpforge-bindings-mcp/src/tools/validate.rs`) and Python over
 //! `Document.validate()`, both through [`ops::validate`] — this command was
-//! the one purpose-fit gap (W5b finding). It is a new command, not part of
-//! the W3/W4 `ops` migration `compat.rs`'s module docs describe, so its
-//! `(code, hint, exit)` shape has no legacy CLI to reproduce; it is frozen
-//! from this commit forward instead (`tests/data/new_codes.txt`'s header).
+//! the one purpose-fit gap (W5b finding). Its `(code, hint, exit)` contract
+//! is recorded in `tests/data/codes-0.18.txt` with a shared manifest case ID.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::Path;
 
@@ -43,14 +43,7 @@ struct ValidateResult {
     /// / `errors` omission convention"), not the omit-if-empty shape
     /// existing commands keep for 0.16.5 wire compatibility.
     ///
-    /// `errors[].code` is `ops::style::validate`'s own `"VALIDATION_FAILED"`
-    /// (its rustdoc: "the code the caller asked for"), NOT `to-md`'s legacy
-    /// `"VALIDATE_FAILED"` spelling for the same underlying
-    /// `Document::validate` failure (`compat.rs`'s `TABLE` row for
-    /// `Command::ToMd`). `to-md` reconstructs a frozen pre-migration error
-    /// code for its own pipeline failure; this command has no legacy
-    /// spelling to preserve and passes `ops`'s report field through
-    /// verbatim.
+    /// Validation reports and to-md both use canonical `VALIDATION_FAILED`.
     errors: Vec<WarningInfo>,
     /// Decode warnings raised on the way in — present whether the document
     /// validated or not (same fixed-key-set convention as `errors` above).
@@ -114,8 +107,8 @@ struct ValidateResult {
 /// `[cmd]` lines (those commands' final JSON carries no `warnings` field at
 /// all, so stderr is their only channel in either mode).
 pub fn run(file: &Path, json_mode: bool) {
-    check_file_size(file, json_mode);
-    let bytes = crate::error::read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Validate);
+    let bytes = crate::error::read_input(file, json_mode, Command::Validate);
 
     let out = match ops::validate(&bytes) {
         Ok(o) => o,
@@ -153,10 +146,10 @@ pub fn run(file: &Path, json_mode: bool) {
             Ok(s) => println!("{s}"),
             Err(e) => {
                 CliError::new(
-                    "JSON_SERIALIZE_FAILED",
+                    CliCode::Ops(OpsCode::JsonSerializeFailed),
                     format!("Failed to serialize validate result: {e}"),
                 )
-                .exit(json_mode, 2);
+                .exit(json_mode, Command::Validate);
             }
         }
     } else {

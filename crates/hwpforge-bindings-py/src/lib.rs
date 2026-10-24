@@ -9,7 +9,7 @@
 //! back. No document logic lives here — if something about an operation looks
 //! wrong, the answer is in the operation, not in this crate.
 //!
-//! The module also exports one constant, `MAX_FILE_SIZE` (W6b audit
+//! The module also exports canonical I/O codes and `MAX_FILE_SIZE` (W6b audit
 //! follow-up) — the shared frontend input size limit `Document.open` checks
 //! against, re-exported verbatim from `hwpforge::ops::fs::MAX_FILE_SIZE` so
 //! it cannot drift from what the CLI and the MCP server enforce. It is not
@@ -64,7 +64,21 @@ mod style;
 /// wraps it, and these functions may change without notice.
 #[pymodule]
 mod _hwpforge {
-    /// The shared frontend input size limit (100 MB) — see the crate docs.
+    /// Canonical file boundary code.
+    #[pymodule_export]
+    const FILE_NOT_FOUND: &str = hwpforge_foundation::diagnostics::OpsCode::FileNotFound.as_str();
+    /// Canonical file boundary code.
+    #[pymodule_export]
+    const FILE_READ_FAILED: &str =
+        hwpforge_foundation::diagnostics::OpsCode::FileReadFailed.as_str();
+    /// Canonical file boundary code.
+    #[pymodule_export]
+    const FILE_WRITE_FAILED: &str =
+        hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed.as_str();
+    /// Canonical file boundary code.
+    #[pymodule_export]
+    const INPUT_TOO_LARGE: &str = hwpforge_foundation::diagnostics::OpsCode::InputTooLarge.as_str();
+    /// The shared frontend input size limit (100 MB).
     #[pymodule_export]
     const MAX_FILE_SIZE: u64 = hwpforge::ops::fs::MAX_FILE_SIZE;
     #[pymodule_export]

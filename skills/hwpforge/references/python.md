@@ -46,7 +46,7 @@ with open("table0.csv", "w", newline="", encoding="utf-8-sig") as f:   # utf-8-s
     csv.writer(f).writerows(grid)
 ```
 
-Run on a 3×2 form whose `비고` label spans two rows (the HwpForge repo's `tests/fixtures/tables/merged_grid_form.hwpx`) this prints `[(0, 3, 2)]` and writes `성명,` / `비고,` / `비고,`. `read(table=N)` returns `{"table": {"ordinal", "at", "rows", "cols", "cells": [{"row","col","row_span","col_span","text"}]}, "paragraphs": None, "fields": None, "warnings": [...]}`; an out-of-range ordinal raises `READ_TABLE_OUT_OF_RANGE`. `.hwp` input must go through `convert_hwp5` first.
+Run on a 3×2 form whose `비고` label spans two rows (the HwpForge repo's `tests/fixtures/tables/merged_grid_form.hwpx`) this prints `[(0, 3, 2)]` and writes `성명,` / `비고,` / `비고,`. `read(table=N)` returns `{"table": {"ordinal", "at", "rows", "cols", "cells": [{"row","col","row_span","col_span","text"}]}, "paragraphs": None, "fields": None, "warnings": [...]}`; an out-of-range ordinal raises `TABLE_NOT_FOUND`. `.hwp` input must go through `convert_hwp5` first.
 
 ## Example: fill a 한컴-saved form and verify
 
@@ -80,20 +80,20 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 
 ## API
 
-| `Document` method                                                                           | Returns          | Characteristic failures                                                      |
-| ------------------------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------- |
-| `inspect(*, styles=False)`, `outline()`, `fields()`, `validate()`, `stamp_plan()`           | report           | `DECODE_FAILED`                                                              |
-| `read(*, section, paras, table, field)` — exactly one target; `paras="0..3"` with `section` | `ReadReport`     | `READ_TARGET_REQUIRED`, `READ_TABLE_OUT_OF_RANGE`, `READ_PARA_RANGE_INVALID` |
-| `diff(revised)`                                                                             | `DiffReport`     | `DECODE_FAILED`                                                              |
-| `to_json(*, styles=True)`, `export_section(*, section, styles=True)`                        | `TextResult`     | `SECTION_OUT_OF_RANGE`                                                       |
-| `to_md(*, mode="styled")` (`"lossy"`, `"lossless"`)                                         | `TextResult`     | `ENCODE_FAILED`                                                              |
-| `to_pdf(*, font_dirs=(), discovery="explicit", degraded=False, partial_cache_reject=False)` | `BytesResult`    | `PDF_RENDER_FAILED` — pass `discovery="platform"`; see [pdf.md](pdf.md)      |
-| `fill(values)`                                                                              | `DocumentResult` | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                 |
-| `patch(*, section, patch)` — `patch` is the JSON text                                       | `DocumentResult` | `JSON_PARSE_FAILED`, `PATCH_FAILED`                                          |
-| `set_cell(*, table, at, right_of, below, text, specs)`                                      | `DocumentResult` | `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                |
-| `insert_para(*, section, anchor, text, before=False)`, `delete_para(*, section, indexes)`   | `DocumentResult` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                        |
-| `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                                  |
-| `restyle(*, preset)`                                                                        | `DocumentResult` | `PRESET_NOT_FOUND` — lossy, see [templates.md](templates.md)                 |
+| `Document` method                                                                           | Returns          | Characteristic failures                                                 |
+| ------------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------- |
+| `inspect(*, styles=False)`, `outline()`, `fields()`, `validate()`, `stamp_plan()`           | report           | `DECODE_FAILED`                                                         |
+| `read(*, section, paras, table, field)` — exactly one target; `paras="0..3"` with `section` | `ReadReport`     | `READ_TARGET_REQUIRED`, `TABLE_NOT_FOUND`, `READ_PARA_RANGE_INVALID`    |
+| `diff(revised)`                                                                             | `DiffReport`     | `DECODE_FAILED`                                                         |
+| `to_json(*, styles=True)`, `export_section(*, section, styles=True)`                        | `TextResult`     | `SECTION_OUT_OF_RANGE`                                                  |
+| `to_md(*, mode="styled")` (`"lossy"`, `"lossless"`)                                         | `TextResult`     | `ENCODE_FAILED`                                                         |
+| `to_pdf(*, font_dirs=(), discovery="explicit", degraded=False, partial_cache_reject=False)` | `BytesResult`    | `PDF_RENDER_FAILED` — pass `discovery="platform"`; see [pdf.md](pdf.md) |
+| `fill(values)`                                                                              | `DocumentResult` | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`            |
+| `patch(*, section, patch)` — `patch` is the JSON text                                       | `DocumentResult` | `JSON_PARSE_FAILED`, `PATCH_FAILED`                                     |
+| `set_cell(*, table, at, right_of, below, text, specs)`                                      | `DocumentResult` | `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                           |
+| `insert_para(*, section, anchor, text, before=False)`, `delete_para(*, section, indexes)`   | `DocumentResult` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                   |
+| `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                             |
+| `restyle(*, preset)`                                                                        | `DocumentResult` | `PRESET_NOT_FOUND` — lossy, see [templates.md](templates.md)            |
 
 | Module function                                                               | Returns                                                            |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -102,4 +102,4 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 | `convert_hwp5(data, *, carry_layout_cache=True)` — `data` is the `.hwp` bytes | `DocumentResult`                                                   |
 | `templates()`, `schema(*, kind="document")`                                   | report                                                             |
 
-Python names some refusals differently from the CLI (for example `INPUT_ENTRIES_NOT_CARRIED` where the CLI says `UNCARRIED_ZIP_ENTRIES`) — see [errors.md](errors.md).
+Python names some refusals differently from the CLI (for example `INPUT_ENTRIES_NOT_CARRIED` where the CLI says `INPUT_ENTRIES_NOT_CARRIED`) — see [errors.md](errors.md).

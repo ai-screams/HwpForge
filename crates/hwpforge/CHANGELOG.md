@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 0.18 error contract (W1)
+
+- CLI·MCP는 공통 `OpsCode::as_str()`를 출력합니다. `DECODE_ERROR`, `UNKNOWN_PRESET`, `INDEX_OUT_OF_RANGE` 등의 창구별 별명은 제거했습니다. 정밀한 기존 도메인 코드와 의미 손실 코드도 그대로 전달합니다.
+- read의 구역·표·필드 부재는 `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`로 통합했습니다. 관련 read variant 3개와 소비자가 없어진 `SectionWorkflowFailed`, `SetCellFailed`, `StampFailed`, `StructuralEditFailed` 및 옛 lookup을 삭제했습니다(breaking).
+- 입력 부재/기타 읽기/크기 상한/출력 I/O는 `FILE_NOT_FOUND`/`FILE_READ_FAILED`/`INPUT_TOO_LARGE`/`FILE_WRITE_FAILED`입니다. MCP 출력 경로 정책 거부는 `INVALID_OUTPUT_PATH`입니다.
+- CLI 종료 상태는 명령과 비공개 typed 코드로 결정합니다. `INVALID_SET`·`DUPLICATE_SET`과 진단용 네 코드, 총 여섯 CLI 전용 코드는 CLI 안에서 유지합니다. 입력 부재·읽기 실패는 to-md·convert-hwp5 2, 나머지 1이며 출력 I/O는 구조 편집·convert-hwp5 2, 나머지 1입니다. `INPUT_TOO_LARGE`는 일반 파일 사전 검사·FIFO 모두 1, convert-hwp5의 `FILE_WRITE_FAILED`는 쓰기·후속 stat 실패 모두 2입니다.
+- Python 파일 I/O는 `HwpForgeError`+`OSError` 계층과 입력 부재 하위 클래스를 사용합니다. 광역 catch·OS 필드·copy·pickle을 보존하며 정확한 타입 비교·`PermissionError` 포착에는 변경이 있습니다. 부모 디렉터리가 없는 `Document.save`는 `FileNotFoundError` 대신 `HwpForgeIOError`로 포착해야 합니다.
+- to-pdf·convert-hwp5의 HWP5 디코드 실패는 `HWP5_CONVERT_FAILED` 대신 `HWP5_DECODE_FAILED`를 출력합니다. convert-hwp5 출력 쓰기 실패는 `FILE_WRITE_FAILED`, to-md 입력 실패는 `FILE_NOT_FOUND`·`FILE_READ_FAILED`·`INPUT_TOO_LARGE`로 구분합니다. 아래 드문 두 경로 외의 W1 종료 값은 유지합니다.
+- MCP 직렬화 실패 `SERIALIZE_ERROR`·`STAMP_MANIFEST_SERIALIZE`는 `JSON_SERIALIZE_FAILED`로 통합합니다.
+- CLI 구조 편집의 `UNCARRIED_ZIP_ENTRIES`는 `INPUT_ENTRIES_NOT_CARRIED`, `STRUCTURAL_EDIT_FAILED`는 구체 도메인 코드 또는 `UPSTREAM_UNMAPPED`로 전달합니다.
+- set-cell·stamp의 의미 손실은 `SET_CELL_CODEC_FAILED`·`STAMP_CODEC_FAILED` 대신 `ENCODE_SEMANTIC_LOSS`입니다.
+
+설계 §14의 종료 값 변경 안내에 대응하는 W1 변경은 다음과 같습니다. 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않습니다. 기존 승인 네 건(admission·출력 검증 등의 단계 분리)은 W3 소유이며 이 W1 목록에서 구현 완료로 간주하지 않습니다.
+
+| 명령·실패 | 이전 코드·종료 | 0.18 코드·종료 |
+|---|---|---|
+| to-md·convert-hwp5의 크기 한도를 넘는 FIFO 입력 | `DECODE_FAILED`·`HWP5_DECODE_FAILED` / 2 | `INPUT_TOO_LARGE` / **1** |
+| convert-hwp5의 쓰기 성공 직후 stat 실패 | `FILE_WRITE_FAILED` / 1 | `FILE_WRITE_FAILED` / **2** |
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/v0.17.0...v0.17.1) - 2026-10-24
 
 0.17.0 뒤에 나온 결함 수정과 입력 한도를 모은 패치 릴리스다. 공개 Rust API 는 바뀌지 않고, `Section::check_nesting_depth()` 하나가 더해진다. 새로 거부하는 입력과 출력이 바뀌는 경우는 아래 "업그레이드 주의" 에 모았다.

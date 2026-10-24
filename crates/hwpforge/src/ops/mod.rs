@@ -317,13 +317,11 @@ impl OpsError {
             Self::Rejected { code, .. } => *code,
             Self::NoFonts => OpsCode::NoFonts,
             Self::EncodeSemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
-            // No frontend consults this code today — each keeps its own
-            // legacy string for "the file could not be read" and only
-            // special-cases the wrapped `io::ErrorKind` (see the variant
-            // doc), never `OpsError::code()`. `UpstreamUnmapped` is still the
-            // honest answer: `std::io::Error` has no `OpsCode` of its own.
             #[cfg(feature = "ops-hwpx")]
-            Self::Io(_) => OpsCode::UpstreamUnmapped,
+            Self::Io(err) => match err.kind() {
+                std::io::ErrorKind::NotFound => OpsCode::FileNotFound,
+                _ => OpsCode::FileReadFailed,
+            },
         }
     }
 
@@ -333,21 +331,9 @@ impl OpsError {
     /// value (the list of available field names, for example) are not
     /// static, so they stay with the frontend that formats them.
     ///
-    /// [`Self::Io`] is excluded from the [`OpsCode::UpstreamUnmapped`] table
-    /// lookup on purpose: `code()` still reports `UpstreamUnmapped` for it
-    /// (an `std::io::Error` has no `OpsCode` of its own — see that variant's
-    /// doc), but that code's hint text ("an upstream error this version
-    /// doesn't know, upgrade or file an issue") is written for a genuinely
-    /// unclassified error, not a missing file or a permission failure. No
-    /// frontend calls this for `Io` today (each special-cases
-    /// `io::ErrorKind` before it would), so this only guards against a
-    /// future caller printing the wrong advice.
+    /// File errors use canonical I/O codes with no generic recovery hint.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
-        #[cfg(feature = "ops-hwpx")]
-        if matches!(self, Self::Io(_)) {
-            return None;
-        }
         hint_for(self.code())
     }
 
@@ -639,11 +625,11 @@ fn cell_edit_code(error: &CellEditError) -> OpsCode {
 fn read_code(error: &ReadError) -> OpsCode {
     match error {
         ReadError::Codec(_) => OpsCode::DecodeFailed,
-        ReadError::SectionOutOfRange { .. } => OpsCode::ReadSectionOutOfRange,
+        ReadError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
         ReadError::ParaRangeInvalid { .. } => OpsCode::ReadParaRangeInvalid,
-        ReadError::TableOutOfRange { .. } => OpsCode::ReadTableOutOfRange,
+        ReadError::TableOutOfRange { .. } => OpsCode::TableNotFound,
         ReadError::TableUnaddressable { .. } => OpsCode::TableGridInvalid,
-        ReadError::FieldNotFound { .. } => OpsCode::ReadFieldNotFound,
+        ReadError::FieldNotFound { .. } => OpsCode::FieldNotFound,
     }
 }
 
@@ -1045,13 +1031,11 @@ mod tests {
 
     #[cfg(feature = "ops-hwpx")]
     #[test]
+    // 이것을 실패시키는 것: 기타 OpsError::Io를 FileNotFound로 변경.
     fn io_error_hint_does_not_borrow_upstream_unmapped_advice() {
-        // `Io`'s code() is UpstreamUnmapped (no OpsCode fits std::io::Error),
-        // but that code's hint text ("unknown upstream error, upgrade or
-        // file an issue") is wrong advice for a missing file or a
-        // permission error — `hint()` must not surface it here.
+        // File failures must not suggest upgrading or reporting an unknown upstream error.
         let error = OpsError::Io(std::io::Error::other("boom"));
-        assert_eq!(error.code(), OpsCode::UpstreamUnmapped);
+        assert_eq!(error.code(), OpsCode::FileReadFailed);
         assert!(error.hint().is_none());
     }
 

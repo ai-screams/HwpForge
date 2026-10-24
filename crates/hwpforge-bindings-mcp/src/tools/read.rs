@@ -228,6 +228,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn read_paras_validation_and_range_errors() {
         let dir = tempfile::tempdir().unwrap();
         let path = probe_doc(&dir);
@@ -240,31 +241,41 @@ mod tests {
         let err = run_read(&path, Some(0), Some("5..1"), None, None).unwrap_err();
         assert_eq!(err.code, "READ_PARA_RANGE_INVALID");
         let err = run_read(&path, Some(99), None, None, None).unwrap_err();
-        assert_eq!(err.code, "READ_SECTION_OUT_OF_RANGE");
+        assert_eq!(err.code, "SECTION_OUT_OF_RANGE");
 
         let view = run_read(&path, Some(0), Some("0..0"), None, None).unwrap().paragraphs.unwrap();
         assert_eq!((view.from, view.to), (0, 0));
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn read_field_and_table_error_mappings() {
         let dir = tempfile::tempdir().unwrap();
         let path = probe_doc(&dir);
 
         let err = run_read(&path, None, None, Some(42), None).unwrap_err();
-        assert_eq!(err.code, "READ_TABLE_OUT_OF_RANGE");
+        assert_eq!(err.code, "TABLE_NOT_FOUND");
         let err = run_read(&path, None, None, None, Some("없는이름")).unwrap_err();
-        assert_eq!(err.code, "READ_FIELD_NOT_FOUND");
+        assert_eq!(err.code, "FIELD_NOT_FOUND");
     }
 
     #[test]
-    fn read_non_hwpx_bytes_reports_decode_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let garbage = dir.path().join("garbage.hwpx");
-        std::fs::write(&garbage, b"not a zip").unwrap();
-
-        let err = run_read(garbage.to_str().unwrap(), Some(0), None, None, None).unwrap_err();
-        assert_eq!(err.code, "DECODE_ERROR");
+    // 이것을 실패시키는 것: ReadError::Codec을 InvalidInput으로 매핑.
+    fn decode_input_shared_fixture() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hwpforge/tests/data/error_contract_018.json"
+        ))
+        .unwrap();
+        let case = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "decode.input")
+            .unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hwpforge/tests/data/corrupt-input.hwpx");
+        let err = run_read(path.to_str().unwrap(), Some(0), None, None, None).unwrap_err();
+        assert_eq!(err.code, case["expected_code"].as_str().unwrap());
     }
 
     #[test]

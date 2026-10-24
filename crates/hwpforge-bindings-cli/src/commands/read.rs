@@ -1,4 +1,6 @@
 //! Targeted text reads (E5): paragraph range, table grid, or field by name.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -29,16 +31,19 @@ pub fn run(
         + usize::from(table.is_some())
         + usize::from(field.is_some());
     if targets != 1 {
-        CliError::new("READ_TARGET_REQUIRED", "Pass exactly one of --section, --table, --field")
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::ReadTargetRequired),
+            "Pass exactly one of --section, --table, --field",
+        )
+        .exit(json_mode, Command::Read);
     }
     if paras.is_some() && section.is_none() {
-        CliError::new("READ_PARAS_WITHOUT_SECTION", "--paras requires --section")
-            .exit(json_mode, 1);
+        CliError::new(CliCode::Ops(OpsCode::ReadParasWithoutSection), "--paras requires --section")
+            .exit(json_mode, Command::Read);
     }
 
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Read);
+    let bytes = read_input(file, json_mode, Command::Read);
 
     let mut opts = ReadOptions::default();
     if let Some(section) = section {

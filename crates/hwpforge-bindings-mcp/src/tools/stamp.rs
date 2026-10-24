@@ -97,7 +97,7 @@ pub fn run_stamp(
 ) -> Result<StampData, ToolErrorInfo> {
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
@@ -110,7 +110,7 @@ pub fn run_stamp(
     } else {
         let Some(sha) = source_sha256 else {
             return Err(ToolErrorInfo::new(
-                "MISSING_SOURCE_SHA256",
+                hwpforge_foundation::diagnostics::OpsCode::MissingSourceSha256,
                 "cell specs require source_sha256 (drift pinning)",
                 "hwpforge_stamp_plan 의 source_sha256 을 그대로 전달하세요.",
             ));
@@ -130,15 +130,13 @@ pub fn run_stamp(
     // never `None` in practice; handled as an error rather than a panic
     // because it crosses an API boundary this tool does not own.
     let manifest = out.manifest.as_ref().ok_or_else(|| {
-        ToolErrorInfo::new(
-            "STAMP_MANIFEST_SERIALIZE",
+        crate::output::json_serialize_error(
             "manifest missing from a default-options stamp result",
             "Report this as a bug.",
         )
     })?;
     let manifest_json = serde_json::to_string_pretty(manifest).map_err(|e| {
-        ToolErrorInfo::new(
-            "STAMP_MANIFEST_SERIALIZE",
+        crate::output::json_serialize_error(
             format!("manifest serialization failed: {e}"),
             "Report this as a bug.",
         )
@@ -160,7 +158,7 @@ pub fn run_stamp(
     // the manifest JSON and still report success.
     if std::path::Path::new(output_path) == std::path::Path::new(&manifest_file) {
         return Err(ToolErrorInfo::new(
-            "MANIFEST_PATH_CONFLICT",
+            hwpforge_foundation::diagnostics::OpsCode::ManifestPathConflict,
             format!("manifest path equals output path: {output_path}"),
             "manifest_path 는 output_path 와 달라야 합니다.",
         ));
@@ -382,6 +380,31 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: manifest 경로 충돌의 코드를 InvalidInput으로 변경.
+    fn stamp_manifest_path_conflict_is_canonical() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_template(&dir);
+        let plan = run_stamp_plan(&src).unwrap();
+        let unguarded: Vec<_> = plan.candidates.iter().filter(|c| c.guard.is_none()).collect();
+        let specs = vec![named(unguarded[0], "성명"), named(unguarded[1], "소속")];
+        let out = dir.path().join("stamped.hwpx");
+        let err =
+            run_stamp(&src, &specs, &[], None, out.to_str().unwrap(), out.to_str()).unwrap_err();
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hwpforge/tests/data/error_contract_018.json"
+        ))
+        .unwrap();
+        let case = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "adapter.stamp.manifest_path_conflict")
+            .unwrap();
+        assert_eq!(err.code, case["expected_code"].as_str().unwrap());
+        assert!(!out.exists());
+    }
+
+    #[test]
     fn stamp_happy_path_writes_output_and_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let src = make_template(&dir);
@@ -460,6 +483,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn stamp_manifest_write_failure_removes_output() {
         // Review L1: manifest 기록 실패 시 .hwpx 산출물도 제거되어야 한다
         // (fail-closed — 부분 산출물 금지).
@@ -478,7 +502,7 @@ mod tests {
             Some("/nonexistent-dir/never.manifest.json"),
         )
         .unwrap_err();
-        assert_eq!(err.code, "WRITE_ERROR");
+        assert_eq!(err.code, "FILE_WRITE_FAILED");
         assert!(!out.exists(), "manifest 실패 시 산출물이 제거되어야 한다");
     }
 }

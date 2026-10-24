@@ -47,11 +47,11 @@ pub fn run_diff(
     let report_path = match output_path {
         Some(path) => {
             let report = serde_json::to_string_pretty(&diff).map_err(|e| {
-                ToolErrorInfo::new("SERIALIZE_ERROR", format!("Report serialize failed: {e}"), "")
+                crate::output::json_serialize_error(format!("Report serialize failed: {e}"), "")
             })?;
             std::fs::write(path, report).map_err(|e| {
                 ToolErrorInfo::new(
-                    "FILE_WRITE_FAILED",
+                    hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed,
                     format!("Cannot write '{path}': {e}"),
                     "Check the output path and permissions.",
                 )
@@ -85,7 +85,7 @@ fn build_diff_data(
     if inline_size > MAX_INLINE_RESPONSE {
         if data.report_path.is_none() {
             return Err(ToolErrorInfo::new(
-                "OUTPUT_TOO_LARGE",
+                hwpforge_foundation::diagnostics::OpsCode::OutputTooLarge,
                 format!("Diff response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
                 "Pass output_path to write the full report to a file.",
             ));
@@ -205,13 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn diff_non_hwpx_bytes_reports_decode_error() {
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
+    fn diff_non_hwpx_bytes_reports_decode_failed() {
         let dir = tempfile::tempdir().unwrap();
         let garbage = dir.path().join("garbage.hwpx");
         std::fs::write(&garbage, b"not a zip").unwrap();
 
         let err = run_diff(garbage.to_str().unwrap(), garbage.to_str().unwrap(), None).unwrap_err();
-        assert_eq!(err.code, "DECODE_ERROR");
+        assert_eq!(err.code, "DECODE_FAILED");
     }
 
     #[test]

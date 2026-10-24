@@ -147,8 +147,6 @@ ops_codes! {
     SectionIndexMismatch => "SECTION_INDEX_MISMATCH",
     /// Preserving patch could not be applied.
     PatchFailed => "PATCH_FAILED",
-    /// Section export/patch workflow failed for another reason.
-    SectionWorkflowFailed => "SECTION_WORKFLOW_FAILED",
     // ── read ───────────────────────────────────────────────────────
     /// `read` needs exactly one target (section, paragraphs, table or field).
     ReadTargetRequired => "READ_TARGET_REQUIRED",
@@ -156,14 +154,8 @@ ops_codes! {
     ReadParasInvalid => "READ_PARAS_INVALID",
     /// Paragraph range given without a section.
     ReadParasWithoutSection => "READ_PARAS_WITHOUT_SECTION",
-    /// `read` section index is outside the document.
-    ReadSectionOutOfRange => "READ_SECTION_OUT_OF_RANGE",
     /// `read` paragraph range is outside the section.
     ReadParaRangeInvalid => "READ_PARA_RANGE_INVALID",
-    /// `read` table ordinal is outside the document.
-    ReadTableOutOfRange => "READ_TABLE_OUT_OF_RANGE",
-    /// `read` field name does not exist.
-    ReadFieldNotFound => "READ_FIELD_NOT_FOUND",
     // ── table / cell ───────────────────────────────────────────────
     /// Table ordinal does not exist.
     TableNotFound => "TABLE_NOT_FOUND",
@@ -187,15 +179,11 @@ ops_codes! {
     InputEntriesNotCarried => "INPUT_ENTRIES_NOT_CARRIED",
     /// Cell edit failed inside the codec.
     SetCellCodecFailed => "SET_CELL_CODEC_FAILED",
-    /// Cell edit failed for another reason.
-    SetCellFailed => "SET_CELL_FAILED",
     /// Cell edit arguments are inconsistent (single target and spec list mixed, …).
     InvalidSetCellArgs => "INVALID_SET_CELL_ARGS",
     /// Cell edit spec list is malformed.
     InvalidSetCellMap => "INVALID_SET_CELL_MAP",
     // ── stamp ──────────────────────────────────────────────────────
-    /// Stamping failed for another reason.
-    StampFailed => "STAMP_FAILED",
     /// Stamping failed inside the codec.
     StampCodecFailed => "STAMP_CODEC_FAILED",
     /// Stamp manifest violated an invariant.
@@ -235,8 +223,6 @@ ops_codes! {
     /// A v2 stamp request lacks `source_sha256`.
     MissingSourceSha256 => "MISSING_SOURCE_SHA256",
     // ── structural edit ────────────────────────────────────────────
-    /// Structural edit failed for another reason.
-    StructuralEditFailed => "STRUCTURAL_EDIT_FAILED",
     /// Structural edit failed inside the codec.
     StructuralCodec => "STRUCTURAL_CODEC",
     /// Paragraph index is outside the section.

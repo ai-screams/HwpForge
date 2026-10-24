@@ -1,6 +1,7 @@
 //! Convert Markdown to HWPX.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::io::Read;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -33,8 +34,8 @@ struct ConvertResult {
 /// `latest`), all of which succeed, `default` included. Before this
 /// migration only `"default"` was accepted and every other catalogued preset
 /// name (`modern`/`classic`/`latest`) returned `UNKNOWN_PRESET` — that was a
-/// CLI limitation, not a real gap in the preset table. `UNKNOWN_PRESET`
-/// still fires, with its legacy hint, for a name no built-in preset has at
+/// CLI limitation, not a real gap in the preset table. `PRESET_NOT_FOUND`
+/// now fires, with its legacy hint, for a name no built-in preset has at
 /// all (`compat::TABLE`'s `(Convert, PresetNotFound)` row).
 ///
 /// `convert_md` also swaps `"default"`'s own font to `builtin_presets()`'s
@@ -61,29 +62,25 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
 
     // Read input (file or stdin)
     let markdown = if input == "-" {
-        let mut buf = String::new();
-        // Use take() to limit reads BEFORE buffering, preventing OOM on infinite streams.
-        if let Err(e) = std::io::stdin().take((MAX_STDIN_SIZE + 1) as u64).read_to_string(&mut buf)
-        {
-            CliError::new("STDIN_READ_FAILED", format!("Failed to read stdin: {e}"))
-                .exit(json_mode, 1);
-        }
-        if buf.len() > MAX_STDIN_SIZE {
-            CliError::new(
-                "INPUT_TOO_LARGE",
-                format!("Stdin input exceeds {} MB limit", MAX_STDIN_SIZE / 1024 / 1024),
-            )
-            .exit(json_mode, 1);
-        }
-        buf
+        crate::error::read_capped_string(std::io::stdin(), MAX_STDIN_SIZE as u64).unwrap_or_else(
+            |err| {
+                CliError::new(CliCode::Ops(err.code()), format!("Failed to read stdin: {err}"))
+                    .exit(json_mode, Command::Convert)
+            },
+        )
     } else {
-        check_file_size(std::path::Path::new(input), json_mode);
+        check_file_size(std::path::Path::new(input), json_mode, Command::Convert);
         match read_bounded_string(input) {
             Ok(s) => s,
             Err(e) => {
-                CliError::new("FILE_READ_FAILED", format!("Cannot read '{input}': {e}"))
-                    .with_hint("Check that the file exists and is valid UTF-8")
-                    .exit(json_mode, 1);
+                let hint = if e.code() == OpsCode::InputTooLarge {
+                    "Use an input smaller than the 100 MB limit"
+                } else {
+                    "Check that the file exists and is valid UTF-8"
+                };
+                CliError::new(CliCode::Ops(e.code()), format!("Cannot read '{input}': {e}"))
+                    .with_hint(hint)
+                    .exit(json_mode, Command::Convert);
             }
         }
     };
@@ -140,8 +137,11 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
 
     // Write output
     if let Err(e) = std::fs::write(output, &output_result.bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::Convert);
     }
 
     // Report

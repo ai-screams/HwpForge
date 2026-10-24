@@ -1,4 +1,7 @@
 //! Output JSON Schema for document/style types.
+use crate::compat::Command;
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use schemars::schema_for;
 
@@ -54,9 +57,12 @@ pub fn run(type_name: &str, json_mode: bool) {
             serde_json::to_value(&schema).unwrap()
         }
         _ => {
-            CliError::new("UNKNOWN_SCHEMA_TYPE", format!("Unknown type '{type_name}'"))
-                .with_hint("Available types: document, exported-document, exported-section")
-                .exit(json_mode, 1);
+            CliError::new(
+                CliCode::Ops(OpsCode::UnknownSchemaType),
+                format!("Unknown type '{type_name}'"),
+            )
+            .with_hint("Available types: document, exported-document, exported-section")
+            .exit(json_mode, Command::Schema);
         }
     };
     document_cell_addr(&mut schema_value);

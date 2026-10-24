@@ -1,4 +1,6 @@
 //! Structural paragraph editing (E4): insert / delete top-level paragraphs.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -36,9 +38,10 @@ pub fn run_delete(
     json_mode: bool,
 ) {
     if indices.is_empty() {
-        CliError::new("DELETE_NO_TARGET", "Pass at least one --index").exit(json_mode, 1);
+        CliError::new(CliCode::Ops(OpsCode::DeleteNoTarget), "Pass at least one --index")
+            .exit(json_mode, Command::DeletePara);
     }
-    let bytes = read_input(file, json_mode);
+    let bytes = read_input(file, json_mode, Command::DeletePara);
     let opts = DeleteParaOptions::default().with_section(section).with_indexes(indices.to_vec());
     match ops_delete_para(&bytes, &opts) {
         Ok(out) => {
@@ -56,7 +59,7 @@ pub fn run_delete(
                     eprintln!("warning: {warning}");
                 }
             }
-            write_output(&out.bytes, output, json_mode, |v| {
+            write_output(&out.bytes, output, json_mode, Command::DeletePara, |v| {
                 *v = serde_json::json!({
                     "status": "ok",
                     "deleted": indices.len(),
@@ -86,7 +89,7 @@ pub fn run_insert(
     output: &PathBuf,
     json_mode: bool,
 ) {
-    let bytes = read_input(file, json_mode);
+    let bytes = read_input(file, json_mode, Command::InsertPara);
     let opts = InsertParaOptions::default()
         .with_section(section)
         .with_anchor(anchor)
@@ -106,7 +109,7 @@ pub fn run_insert(
                     eprintln!("warning: {warning}");
                 }
             }
-            write_output(&out.bytes, output, json_mode, |v| {
+            write_output(&out.bytes, output, json_mode, Command::InsertPara, |v| {
                 *v = serde_json::json!({
                     "status": "ok",
                     "inserted": texts.len(),
@@ -122,20 +125,24 @@ pub fn run_insert(
     }
 }
 
-fn read_input(file: &PathBuf, json_mode: bool) -> Vec<u8> {
-    check_file_size(file, json_mode);
-    crate::error::read_input(file, json_mode)
+fn read_input(file: &PathBuf, json_mode: bool, command: Command) -> Vec<u8> {
+    check_file_size(file, json_mode, command);
+    crate::error::read_input(file, json_mode, command)
 }
 
 fn write_output(
     bytes: &[u8],
     output: &PathBuf,
     json_mode: bool,
+    command: Command,
     fill: impl FnOnce(&mut serde_json::Value),
 ) {
     if let Err(e) = std::fs::write(output, bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 2);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, command);
     }
     if json_mode {
         let mut v = serde_json::Value::Null;

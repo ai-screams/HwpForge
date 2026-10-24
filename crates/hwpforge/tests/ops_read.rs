@@ -134,13 +134,14 @@ fn a_point_range_returns_exactly_one_paragraph() {
 }
 
 #[test]
+// 이것을 실패시키는 것: read 구역 범위를 InvalidInput으로 변경.
 fn a_section_outside_the_document_is_the_library_s_error() {
     let opts = ReadOptions::default().with_section(99);
 
     let err = read(&hwpx_fixture("SimpleTable.hwpx"), &opts).expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::ReadSectionOutOfRange, "{err}");
-    assert_eq!(err.code().as_str(), "READ_SECTION_OUT_OF_RANGE");
+    assert_eq!(err.code(), OpsCode::SectionOutOfRange, "{err}");
+    assert_eq!(err.code().as_str(), "SECTION_OUT_OF_RANGE");
 }
 
 #[test]
@@ -190,12 +191,13 @@ fn a_table_read_returns_the_grid() {
 }
 
 #[test]
+// 이것을 실패시키는 것: read 표 부재를 InvalidInput으로 변경.
 fn a_table_ordinal_outside_the_document_is_the_library_s_error() {
     let opts = ReadOptions::default().with_table(99);
 
     let err = read(&hwpx_fixture("SimpleTable.hwpx"), &opts).expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::ReadTableOutOfRange, "{err}");
+    assert_eq!(err.code(), OpsCode::TableNotFound, "{err}");
 }
 
 // ── field reads ─────────────────────────────────────────────────
@@ -214,12 +216,13 @@ fn a_field_read_returns_every_field_of_that_name() {
 }
 
 #[test]
+// 이것을 실패시키는 것: read 필드 부재를 InvalidInput으로 변경.
 fn an_unknown_field_name_is_the_library_s_error() {
     let opts = ReadOptions::default().with_field("존재하지 않는 필드");
 
     let err = read(&repo_fixture("fields/clickhere_named.hwpx"), &opts).expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::ReadFieldNotFound, "{err}");
+    assert_eq!(err.code(), OpsCode::FieldNotFound, "{err}");
 }
 
 // ── wire shape ──────────────────────────────────────────────────
