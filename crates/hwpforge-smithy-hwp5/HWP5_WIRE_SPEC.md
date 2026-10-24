@@ -1170,6 +1170,20 @@ details and missing picture assets retain the existing warnings.
 | 22–25 / 26–29 | Head / tail arrow size                                       |
 | 30 / 31       | Head / tail filled                                           |
 
+`ShapePicture` (`0x55`) starts with the same colour/thickness/properties
+triple at payload offsets 0/4/8. In Hancom's
+`hancom_controls/f3-group-tables.hwp`, Section0 record 148 (zero-based,
+inflated stream offset 5917), these 12 bytes are
+`00 00 00 00 21 00 00 00 40 00 00 D1`: black, thickness 33,
+properties `0xD1000040`. Its type (`properties & 0x3F`) is NONE;
+the paired Hancom HWPX picture has no `lineShape`. Neither the stored
+thickness nor the other property bits imply a visible border. Group picture
+loss detection shares the line-type accessor with standalone shape projection.
+Standalone **pictures** currently do not project or report borders; this is
+distinct from the standalone shape rule. Repository picture fixtures have no
+non-NONE border, so positive picture cases are covered by synthetic records,
+not claimed as Hancom-confirmed picture rendering.
+
 | HWP5 shape | Core ArrowType | HWPX          |
 | ---------- | -------------- | ------------- |
 | 0          | None           | NORMAL        |
