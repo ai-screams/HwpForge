@@ -38,7 +38,7 @@ use crate::schema::section::{
 /// Prevents stack overflow from maliciously crafted HWPX files with
 /// deeply nested table structures. 32 levels is far beyond any
 /// legitimate document.
-pub(crate) const MAX_NESTING_DEPTH: usize = 32;
+pub(crate) const MAX_NESTING_DEPTH: usize = hwpforge_core::MAX_NESTING_DEPTH;
 
 fn decode_table_page_break(value: &str) -> HwpxResult<TablePageBreak> {
     match value {
@@ -331,7 +331,7 @@ pub(crate) struct DecodeCtx {
     pub(crate) warnings: Vec<super::DecodeWarning>,
     path: Vec<super::PathSeg>,
     /// 지금 디코드하는 패키지 part 이름 — `ContentLost` 가 싣는다.
-    part: String,
+    pub(super) part: String,
     /// 묶음 자식 안으로 들어간 깊이 (0 = 묶음 밖).
     group_child_depth: usize,
     /// 들어간 묶음 자식마다 그때의 경로 길이 — 경로가 그 길이 그대로면
@@ -1623,7 +1623,12 @@ fn convert_ctrl_child<'a>(
 fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Table> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
-            detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
+            detail: format!(
+                "table nesting depth {} exceeds limit of {} in {}",
+                depth + 1,
+                MAX_NESTING_DEPTH,
+                ctx.part
+            ),
         });
     }
 
@@ -2776,8 +2781,10 @@ fn decode_sublist_paragraphs_skipping(
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
-                "sublist nesting depth {} exceeds limit of {}",
-                depth, MAX_NESTING_DEPTH
+                "sublist nesting depth {} exceeds limit of {} in {}",
+                depth + 1,
+                MAX_NESTING_DEPTH,
+                ctx.part
             ),
         });
     }

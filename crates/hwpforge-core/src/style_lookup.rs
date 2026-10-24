@@ -49,6 +49,9 @@ pub fn recover_next_style(
 
 /// Check body border IDs against the supplied original definition IDs.
 /// Call before synthesizing any output definitions. Zero denotes no border.
+/// Traversal is iterative, so this function needs no nesting-depth gate.
+/// HWPX decode checks semantic depth before calling it; encode accepts a
+/// validated document.
 /// # Errors
 /// Returns an error for any active body border ID missing from definitions.
 #[doc(hidden)]

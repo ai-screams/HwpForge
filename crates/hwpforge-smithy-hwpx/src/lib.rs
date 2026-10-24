@@ -54,6 +54,7 @@ pub mod cell_edit;
 mod color;
 pub mod decoder;
 pub mod default_styles;
+mod depth;
 pub mod diagnostics;
 mod diff;
 mod encoder;

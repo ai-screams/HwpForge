@@ -75,15 +75,7 @@ impl HwpxRegistryBridge {
     ) -> HwpxResult<Document<Draft>> {
         // 이것을 실패시키는 것: rebind_draft_document의 깊이 관문 삭제.
         for (si, section) in document.sections().iter().enumerate() {
-            section.check_nesting_depth().map_err(|error| match error {
-                hwpforge_core::CoreError::InvalidStructure { context, reason } => {
-                    hwpforge_core::CoreError::InvalidStructure {
-                        context,
-                        reason: reason.replace("section=0", &format!("section={si}")),
-                    }
-                }
-                other => other,
-            })?;
+            crate::depth::check_section_depth(section, si)?;
         }
 
         self.rebind_sections(document.sections_mut())?;

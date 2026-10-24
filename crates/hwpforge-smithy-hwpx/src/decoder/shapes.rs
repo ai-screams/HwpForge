@@ -2551,9 +2551,10 @@ fn decode_group_children(
     if depth >= crate::decoder::section::MAX_NESTING_DEPTH {
         return Err(crate::HwpxError::InvalidStructure {
             detail: format!(
-                "group nesting depth {} exceeds limit of {}",
-                depth,
+                "group nesting depth {} exceeds limit of {} in {}",
+                depth + 1,
                 crate::decoder::section::MAX_NESTING_DEPTH,
+                ctx.part,
             ),
         });
     }

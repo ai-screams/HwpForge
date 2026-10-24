@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Core 의미 깊이 상한 `MAX_NESTING_DEPTH`(32)를 공개한다. MD·HWPX·HWP5 파서의 총량 예산도 이 값을 참조하지만 카운터의 의미가 같다는 뜻은 아니다.
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.17.0...hwpforge-core-v0.17.1) - 2026-10-24
 
 ### Added

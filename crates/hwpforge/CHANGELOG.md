@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `to_json` 은 파서는 통과하지만 Core 중첩 깊이 32단계를 넘는 HWPX 입력에서 `GRID_ADDR_PROJECTION_FAILED` 대신 읽기 단계의 `DECODE_FAILED` 를 반환한다.
+- `stamp-plan` 은 이전에 성공하던 같은 깊이 초과 입력을 읽기 단계에서 `STAMP_CODEC_FAILED` 로 거부한다.
+- `fill`·`stamp`·`insert-para`·`delete-para`·`set-cell`·`patch` 는 같은 깊이 초과 입력에서 이제 decode 단계에서 실패한다. 오류 코드는 그대로이고, 메시지는 `Core error:` 를 포함한 깊이 초과 진단으로 바뀐다.
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/v0.17.0...v0.17.1) - 2026-10-24
 
 0.17.0 뒤에 나온 결함 수정과 입력 한도를 모은 패치 릴리스다. 공개 Rust API 는 바뀌지 않고, `Section::check_nesting_depth()` 하나가 더해진다. 새로 거부하는 입력과 출력이 바뀌는 경우는 아래 "업그레이드 주의" 에 모았다.

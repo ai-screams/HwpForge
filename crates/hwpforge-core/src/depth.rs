@@ -4,7 +4,12 @@ use crate::image::Image;
 use crate::{CoreError, CoreResult, Paragraph, Run, RunContent, Section, Table};
 
 // 이것을 실패시키는 것: 상한 31/33 또는 >= 비교 (31/32/33 전 간선 시험).
-const LIMIT: usize = 32;
+/// Maximum semantic nesting depth accepted by Core validation.
+///
+/// Objects and captions each consume a level; section, header/footer and
+/// master-page packaging does not. Format parsers share this numeric budget,
+/// but their counters need not measure the same semantic depth.
+pub const MAX_NESTING_DEPTH: usize = 32;
 
 // All semantic costs live here. Packaging edges cost zero.
 // 이것을 실패시키는 것: 객체/캡션 비용 0 (every_edge_boundaries_and_cleanup).
@@ -236,12 +241,12 @@ fn measure(sections: &[Section]) -> Maximum {
 
 pub(crate) fn check(sections: &[Section]) -> CoreResult<()> {
     let max = measure(sections);
-    if max.depth > LIMIT {
+    if max.depth > MAX_NESTING_DEPTH {
         Err(CoreError::InvalidStructure {
             context: "nesting_depth".into(),
             reason: format!(
                 "nesting depth {} exceeds {}; section={}, root={}, paragraph={} (zero-based)",
-                max.depth, LIMIT, max.section, max.root, max.paragraph
+                max.depth, MAX_NESTING_DEPTH, max.section, max.root, max.paragraph
             ),
         })
     } else {

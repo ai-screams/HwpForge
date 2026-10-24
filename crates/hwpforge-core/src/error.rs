@@ -62,6 +62,9 @@ pub enum CoreError {
     #[error("Invalid document structure in {context}: {reason}")]
     InvalidStructure {
         /// Where in the document the issue was found.
+        /// `"nesting_depth"` identifies semantic depth above
+        /// [`crate::MAX_NESTING_DEPTH`]; `reason` carries the measured depth
+        /// and zero-based section, root and paragraph location.
         context: String,
         /// What went wrong.
         reason: String,
