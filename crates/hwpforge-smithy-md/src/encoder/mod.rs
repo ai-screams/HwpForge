@@ -1,6 +1,8 @@
 //! Core -> Markdown encoders.
 
 mod guard;
+#[cfg(test)]
+mod guarded_tests;
 mod list_format;
 mod lossless;
 mod lossy;
@@ -180,6 +182,57 @@ pub(crate) fn auto_number_text(
     out.push_str(&num.to_string());
     out.extend(format.suffix);
     out
+}
+
+/// The parser options the Markdown decoder reads with. The styled view's
+/// final check parses with the same ones, so what it lets through is what
+/// the decoder reads (`guard`).
+pub(crate) fn md_options() -> pulldown_cmark::Options {
+    use pulldown_cmark::Options;
+    Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_GFM
+}
+
+/// The text the styled view shows for a control whose text is not its own
+/// document text: a cross reference without display text shows its target
+/// in brackets, a field its value, else its hint, else `____`, an unknown
+/// control `[tag]`. The styled renderers and the styled plain-text fallback
+/// (`guard::deep_text`) both use it, so a fallback keeps what the view
+/// showed.
+/// 이것을 실패시키는 것: 갈래 하나씩 삭제(`fallback_text_shows_what_styled_shows`).
+pub(crate) fn styled_display(
+    control: &hwpforge_core::Control,
+) -> Option<std::borrow::Cow<'_, str>> {
+    use hwpforge_core::Control;
+    match control {
+        Control::CrossRef { target, display_text, .. } => Some(if display_text.is_empty() {
+            format!("[{}]", target.as_display()).into()
+        } else {
+            display_text.as_str().into()
+        }),
+        Control::Field { hint_text, display_text, .. } => Some(if display_text.is_empty() {
+            hint_text.as_deref().unwrap_or("____").into()
+        } else {
+            display_text.as_str().into()
+        }),
+        Control::Unknown { tag, .. } => Some(format!("[{tag}]").into()),
+        _ => None,
+    }
+}
+
+/// A memo's anchor runs as a paragraph: styled draws a memo control still
+/// standing after `expand_memos` (one in another memo's anchor) this way,
+/// one container deeper, and its plain-text fallback reads it the same way
+/// (`guard::deep_text`).
+pub(crate) fn memo_anchor(anchor_runs: &[hwpforge_core::Run]) -> hwpforge_core::Paragraph {
+    hwpforge_core::Paragraph::with_runs(
+        anchor_runs.to_vec(),
+        hwpforge_foundation::ParaShapeIndex::new(0),
+    )
 }
 
 /// Whether a link may be written as a link by the readable views. The same

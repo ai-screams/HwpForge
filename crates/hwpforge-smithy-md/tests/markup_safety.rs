@@ -1,7 +1,8 @@
 //! The readable views (styled, lossy) cannot be made to write markup by the
 //! document's text: every attack string is put in every place text reaches
-//! the output, and the output is parsed with pulldown-cmark (tables,
-//! footnotes, strikethrough — no math) to check what a renderer would see:
+//! the output, and the output is parsed with pulldown-cmark (the Markdown
+//! decoder's options: tables, footnotes, strikethrough, task lists,
+//! definition lists, GFM — no math) to check what a renderer would see:
 //!
 //! - raw HTML is only what the encoder itself writes ([`ALLOWED_TAGS`],
 //!   comments), with `a href` an allowed URL put in and `img src` an asset
@@ -10,8 +11,15 @@
 //!   destination is the picture's own key (styled: an `images` key; lossy:
 //!   its path);
 //! - a GFM table keeps its one column in every row;
-//! - styled: the attack's text comes back whole as text (not for line
-//!   breaks, which become breaks, or equations, which have their own test).
+//! - styled: the attack's text comes back whole as text (equations have
+//!   their own test). Where styled guarantees text makes no block (a Body
+//!   paragraph, a text box in it, a table cell: [`in_scope`]), every attack
+//!   counts — one with a line ending compared without whitespace — and the
+//!   attack makes no block structure the same output for `a` does not
+//!   have. Elsewhere (a caption, a note, a memo, a code block) styled is as
+//!   it was: its output must be byte for byte the base output
+//!   (`fixtures/markup_safety_base.txt`, written by the commit before the
+//!   guarantee), and lossy's everywhere.
 //!
 //! - the final check (re-parsing the output) never has to step in: the
 //!   escaping rules hold on their own (`MarkupWrittenAsText` fails it).
@@ -20,7 +28,7 @@
 //! only what CommonMark reads as raw HTML, links, images or entities is
 //! escaped), so only the safety properties are checked for it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::{Control, RefTarget};
@@ -523,19 +531,44 @@ fn html_text(html: &str) -> String {
     html_unescape(&out)
 }
 
-/// Problems a renderer would show for `markdown`, and its visible text.
+/// The block structure document text must not make where styled
+/// guarantees it (Body blocks, cells), by kind.
+fn forbidden_kind(event: &Event<'_>) -> Option<&'static str> {
+    Some(match event {
+        Event::Start(Tag::List(_)) => "list",
+        Event::Start(Tag::Item) => "item",
+        Event::Start(Tag::Heading { .. }) => "heading",
+        Event::Start(Tag::CodeBlock(_)) => "code block",
+        Event::Start(Tag::BlockQuote(_)) => "block quote",
+        Event::Start(Tag::FootnoteDefinition(_)) => "note definition",
+        Event::Start(Tag::DefinitionList) => "definition list",
+        Event::Start(Tag::MetadataBlock(_)) => "metadata",
+        Event::Rule => "rule",
+        Event::TaskListMarker(_) => "task marker",
+        _ => return None,
+    })
+}
+
+/// Problems a renderer would show for `markdown`, its visible text, and
+/// how many of each [`forbidden_kind`] it holds.
 fn inspect(
     markdown: &str,
     assets: &BTreeSet<String>,
     urls: &BTreeSet<String>,
     expect: Expect,
-) -> (Vec<String>, String) {
+) -> (Vec<String>, String, BTreeMap<&'static str, usize>) {
+    let mut forbidden = BTreeMap::new();
     let mut problems = Vec::new();
     let (mut tables, mut images, mut links) = (0, 0, 0);
     let mut visible = String::new();
     let mut cells_in_row = 0usize;
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES | Options::ENABLE_STRIKETHROUGH;
+    // The Markdown decoder's options.
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_GFM;
     // An HTML block comes line by line: its lines are checked together.
     let mut html = String::new();
     let flush = |html: &mut String, problems: &mut Vec<String>, visible: &mut String| {
@@ -548,6 +581,9 @@ fn inspect(
     for event in Parser::new_ext(markdown, options) {
         if !matches!(event, Event::Html(_)) {
             flush(&mut html, &mut problems, &mut visible);
+        }
+        if let Some(kind) = forbidden_kind(&event) {
+            *forbidden.entry(kind).or_default() += 1;
         }
         match event {
             Event::Html(h) => html.push_str(&h),
@@ -589,7 +625,7 @@ fn inspect(
     if expect.link && links == 0 {
         problems.push("the link is not a link".into());
     }
-    (problems, visible)
+    (problems, visible, forbidden)
 }
 
 /// What must still be there: a GFM table, a Markdown image, a Markdown
@@ -624,13 +660,32 @@ fn asset_key(path: &str) -> String {
     format!("images/{}", name.replace('(', "%28").replace(')', "%29"))
 }
 
+/// Whether styled guarantees here that document text makes no block: a
+/// Body paragraph, a text box in one, a table cell — not a caption, a note
+/// or a memo, and not a note carrier or a Body code block (their blocks
+/// are the encoder's). A code-font paragraph in a cell or text box is
+/// ordinary guarded text.
+/// 이것을 실패시키는 것: 범위 안 조합을 범위 밖으로 돌리기(기준 바이트 비교가
+/// 실패) · 범위 밖 조합을 범위 안으로(차분 검사가 실패).
+fn in_scope(container: Container, carrier: Carrier) -> bool {
+    matches!(
+        container,
+        Container::Body
+            | Container::TextBox
+            | Container::Cell
+            | Container::NestedCell
+            | Container::MergedCell
+    ) && !matches!(carrier, Carrier::Footnote)
+        && !(matches!(carrier, Carrier::Code) && matches!(container, Container::Body))
+}
+
 /// Whether the styled view's text for `attack` in `carrier` must come back.
 fn text_must_return(container: Container, carrier: Carrier, attack: &str) -> bool {
-    // A list marker at a paragraph's start makes a list in styled too (a
-    // known gap, not markup made from text: followups).
+    // Outside the guarantee a list marker at a paragraph's start makes a
+    // list (a known gap, not markup made from text: followups), and line
+    // endings become breaks.
     let list_start = attack.starts_with("- ") || attack.starts_with("1. ");
-    !attack.contains(['\n', '\r'])
-        && !list_start
+    (in_scope(container, carrier) || !attack.contains(['\n', '\r']) && !list_start)
         && !matches!(container, Container::Memo)
         && matches!(
             carrier,
@@ -653,9 +708,63 @@ fn text_must_return(container: Container, carrier: Carrier, attack: &str) -> boo
         )
 }
 
+/// Output that must stay the base's, folded per view, container and
+/// carrier (FNV-1a 64 over each output and a separator, in case order).
+type Digests = BTreeMap<String, u64>;
+
+fn digest(digests: &mut Digests, view: &str, container: Container, carrier: Carrier, out: &str) {
+    let h =
+        digests.entry(format!("{view} {container:?} {carrier:?}")).or_insert(0xcbf2_9ce4_8422_2325);
+    for b in out.bytes().chain([0xff]) {
+        *h = (*h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+}
+
+/// The digests as lines (`view container carrier hash`).
+fn digest_lines(digests: &Digests) -> String {
+    digests.iter().map(|(k, h)| format!("{k} {h:016x}\n")).collect()
+}
+
+/// Every case's digests (the harness loop without its checks): what the
+/// base commit wrote, for `fixtures/markup_safety_base.txt`.
+///
+/// To write the fixture again, run this file against the base commit's
+/// crates (`496371cf`, before the guarantee) from the workspace root:
+///
+/// ```sh
+/// git worktree add /tmp/g-base 496371cf
+/// mkdir -p /tmp/g-gen/src
+/// printf '[package]\nname = "g-gen"\nversion = "0.0.0"\nedition = "2021"\n[workspace]\n[dependencies]\nhwpforge-core = { path = "/tmp/g-base/crates/hwpforge-core" }\nhwpforge-foundation = { path = "/tmp/g-base/crates/hwpforge-foundation" }\nhwpforge-smithy-md = { path = "/tmp/g-base/crates/hwpforge-smithy-md" }\npulldown-cmark = "0.13"\n' > /tmp/g-gen/Cargo.toml
+/// grep -v '^//!' crates/hwpforge-smithy-md/tests/markup_safety.rs > /tmp/g-gen/src/harness.rs
+/// printf '#![allow(dead_code, unused_imports)]\ninclude!("harness.rs");\nfn main() { print!("{}", base_digests()); }\n' > /tmp/g-gen/src/main.rs
+/// cargo run --release -q --manifest-path /tmp/g-gen/Cargo.toml > crates/hwpforge-smithy-md/tests/fixtures/markup_safety_base.txt
+/// git worktree remove /tmp/g-base
+/// ```
+#[allow(dead_code)]
+fn base_digests() -> String {
+    let mut base = Digests::new();
+    for &attack in ATTACKS {
+        for &carrier in CARRIERS {
+            for runs in carry(carrier, attack) {
+                for &container in CONTAINERS {
+                    let doc = document(container, runs.clone());
+                    if !in_scope(container, carrier) {
+                        let styled = MdEncoder::encode_styled(&doc, &Styles);
+                        digest(&mut base, "styled", container, carrier, &styled.markdown);
+                    }
+                    let lossy = MdEncoder::encode_lossy_with_report(&doc).expect("lossy").0;
+                    digest(&mut base, "lossy", container, carrier, &lossy);
+                }
+            }
+        }
+    }
+    digest_lines(&base)
+}
+
 #[test]
 fn readable_views_write_no_markup_from_text() {
     let mut problems = Vec::new();
+    let mut base = Digests::new();
     for &attack in ATTACKS {
         let mut urls: BTreeSet<String> = [URL.to_string()].into();
         let link_url = format!("{URL}{attack}");
@@ -694,11 +803,44 @@ fn readable_views_write_no_markup_from_text() {
                     let link = linked(carrier, &urls, attack);
                     let expect =
                         Expect { table: gfm, image: picture && !html, link: link && markdown };
-                    let (found, visible) = inspect(&styled.markdown, &assets, &urls, expect);
+                    let (found, visible, forbidden) =
+                        inspect(&styled.markdown, &assets, &urls, expect);
                     for why in found {
                         problems.push(fail("styled", container, carrier, attack, why));
                     }
-                    if text_must_return(container, carrier, attack) && !visible.contains(attack) {
+                    if in_scope(container, carrier) {
+                        // The same case with `a` for the attack: what the
+                        // encoder makes on its own.
+                        let control = MdEncoder::encode_styled(
+                            &document(container, carry(carrier, "a").remove(0)),
+                            &Styles,
+                        );
+                        let (_, _, expected) =
+                            inspect(&control.markdown, &assets, &urls, Expect::default());
+                        for (kind, n) in &forbidden {
+                            if expected.get(kind).copied().unwrap_or(0) < *n {
+                                problems.push(fail(
+                                    "styled",
+                                    container,
+                                    carrier,
+                                    attack,
+                                    format!("text made a {kind} in {:?}", styled.markdown),
+                                ));
+                            }
+                        }
+                    } else {
+                        digest(&mut base, "styled", container, carrier, &styled.markdown);
+                    }
+                    // A line ending may become a break or a blank line: the
+                    // text is compared without whitespace.
+                    let squeeze =
+                        |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+                    let returned = if attack.contains(['\n', '\r']) {
+                        squeeze(&visible).contains(&squeeze(attack))
+                    } else {
+                        visible.contains(attack)
+                    };
+                    if text_must_return(container, carrier, attack) && !returned {
                         problems.push(fail(
                             "styled",
                             container,
@@ -743,7 +885,8 @@ fn readable_views_write_no_markup_from_text() {
                             container,
                             Container::TextBox | Container::Footnote | Container::Memo
                         );
-                    let (found, _) =
+                    digest(&mut base, "lossy", container, carrier, &lossy);
+                    let (found, _, _) =
                         inspect(&lossy, &path, &urls, Expect { table, image: picture, link });
                     for why in found {
                         problems.push(fail("lossy", container, carrier, attack, why));
@@ -751,6 +894,18 @@ fn readable_views_write_no_markup_from_text() {
                 }
             }
         }
+    }
+    // Outside the guarantee, and lossy everywhere: the base's bytes.
+    // 이것을 실패시키는 것: 범위 밖에 규칙 적용 · 범위 밖 표에 빈 줄.
+    let expected = include_str!("fixtures/markup_safety_base.txt");
+    let actual = digest_lines(&base);
+    for (want, got) in expected.lines().zip(actual.lines()) {
+        if want != got {
+            problems.push(format!("not the base output: {got} (base {want})"));
+        }
+    }
+    if expected.lines().count() != actual.lines().count() {
+        problems.push("the base digests list other cases".into());
     }
     problems.sort();
     problems.dedup();

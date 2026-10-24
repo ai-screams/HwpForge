@@ -65,7 +65,11 @@ fn encode_body(
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
-            blocks.push(Block { markdown: SECTION_MARKER_COMMENT.to_string(), source: None });
+            blocks.push(Block {
+                markdown: SECTION_MARKER_COMMENT.to_string(),
+                source: None,
+                body: false,
+            });
             continuation_level = None;
         }
 
@@ -85,7 +89,7 @@ fn encode_body(
                 }
             }
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph, 0);
+                let text = super::guard::deep_text(paragraph, 0, false);
                 let at = (section_index, paragraph_index);
                 match (current_continuation_level, blocks.last_mut()) {
                     (Some(level), Some(last)) => {
@@ -103,7 +107,7 @@ fn encode_body(
                         };
                         let source =
                             Source { prefix: String::new(), texts: vec![text], at: vec![at] };
-                        blocks.push(Block { markdown, source: Some(source) });
+                        blocks.push(Block { markdown, source: Some(source), body: false });
                     }
                 }
             }
@@ -117,8 +121,11 @@ fn encode_body(
     }
 
     // The finished Markdown, parsed again, may hold only what lossy writes.
-    let allowed =
-        super::guard::Allowed { tags: super::guard::LOSSY_TAGS, destinations: &destinations };
+    let allowed = super::guard::Allowed {
+        tags: super::guard::LOSSY_TAGS,
+        destinations: &destinations,
+        decoder_structure: false,
+    };
     super::guard::checked(blocks, &allowed, warnings)
 }
 
@@ -890,6 +897,7 @@ mod tests {
                 &super::super::guard::Allowed {
                     tags: super::super::guard::LOSSY_TAGS,
                     destinations: &destinations,
+                    decoder_structure: false,
                 }
             ));
         }

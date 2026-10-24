@@ -12,7 +12,7 @@ use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, StyleIndex};
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use unicase::UniCase;
 
 use crate::error::{MdError, MdResult};
@@ -526,15 +526,7 @@ impl<'a> DecoderState<'a> {
     }
 
     fn decode_markdown(&mut self, content: &str) -> MdResult<()> {
-        let mut options = Options::empty();
-        options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_STRIKETHROUGH);
-        options.insert(Options::ENABLE_TASKLISTS);
-        options.insert(Options::ENABLE_FOOTNOTES);
-        options.insert(Options::ENABLE_DEFINITION_LIST);
-        options.insert(Options::ENABLE_GFM);
-
-        let parser = Parser::new_ext(content, options);
+        let parser = Parser::new_ext(content, crate::encoder::md_options());
         for event in parser {
             self.handle_event(event)?;
         }

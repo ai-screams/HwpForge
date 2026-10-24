@@ -1,8 +1,9 @@
 //! The readable views' last check: the finished Markdown is parsed again
-//! (pulldown-cmark — tables, footnotes, strikethrough) and must hold only
-//! what the encoder itself writes — raw HTML from its own tag list,
-//! links and images to the destinations it wrote, no link reference
-//! definition. A block that holds anything else is written again as
+//! (pulldown-cmark — tables, footnotes, strikethrough; styled with the
+//! decoder's options) and must hold only what the encoder itself writes —
+//! raw HTML from its own tag list, links and images to the destinations it
+//! wrote, no link reference definition, and for styled no definition list
+//! and no block structure made by a Body block's text. A block that holds anything else is written again as
 //! escaped plain text ([`plain_text`]) and reported. The escaping rules
 //! (`markup.rs`) are meant to make this never happen; this catches what a
 //! rule misses.
@@ -17,6 +18,10 @@ pub(crate) struct Allowed<'a> {
     pub(crate) tags: &'static [&'static str],
     /// Link and image destinations the encoder wrote (`a href`, `img src`).
     pub(crate) destinations: &'a HashSet<String>,
+    /// Parse as the Markdown decoder does ([`super::md_options`]) and count
+    /// a definition list as foreign too: the decoder fails on it. The
+    /// styled view sets it; lossy keeps its own check.
+    pub(crate) decoder_structure: bool,
 }
 
 /// The tags the styled view writes.
@@ -29,8 +34,11 @@ pub(crate) const LOSSY_TAGS: &[&str] = &["br"];
 /// Whether `markdown` holds markup the encoder does not write.
 /// 이것을 실패시키는 것: 갈래 하나씩 삭제(`guard_finds_what_the_encoder_does_not_write`).
 pub(crate) fn foreign_markup(markdown: &str, allowed: &Allowed<'_>) -> bool {
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES | Options::ENABLE_STRIKETHROUGH;
+    let options = if allowed.decoder_structure {
+        super::md_options()
+    } else {
+        Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES | Options::ENABLE_STRIKETHROUGH
+    };
     let parser = Parser::new_ext(markdown, options);
     // Definitions are read before any event: the encoder writes none.
     if parser.reference_definitions().iter().next().is_some() {
@@ -48,6 +56,9 @@ pub(crate) fn foreign_markup(markdown: &str, allowed: &Allowed<'_>) -> bool {
             // An HTML block comes line by line: its lines are checked together.
             Event::Html(h) => html.push_str(&h),
             Event::InlineHtml(h) if foreign_html(&h, allowed) => return true,
+            // `md_options` reads no metadata block, so a definition list is
+            // the one structure the decoder fails on.
+            Event::Start(Tag::DefinitionList) if allowed.decoder_structure => return true,
             Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. })
                 if !allowed.destinations.contains(dest_url.as_ref()) =>
             {
@@ -172,14 +183,22 @@ pub(crate) const TOO_DEEP: &str = "(중첩 깊이 초과로 생략)";
 
 /// Paragraph text for [`plain_text`], with the same container-depth limit
 /// as styled rendering. A cut-off subtree contributes only its notice;
-/// groups are spread without consuming a level, as in the renderer.
-pub(crate) fn deep_text(paragraph: &hwpforge_core::Paragraph, depth: usize) -> String {
-    deep_text_at(paragraph, depth, &mut || {})
+/// groups are spread without consuming a level, as in the renderer. For
+/// the styled view (`styled`) a cross reference, field or unknown control
+/// gives the text styled shows for it ([`super::styled_display`]); lossy
+/// keeps the value and hint it writes.
+pub(crate) fn deep_text(
+    paragraph: &hwpforge_core::Paragraph,
+    depth: usize,
+    styled: bool,
+) -> String {
+    deep_text_at(paragraph, depth, styled, &mut || {})
 }
 
 fn deep_text_at(
     paragraph: &hwpforge_core::Paragraph,
     depth: usize,
+    styled: bool,
     visit: &mut impl FnMut(),
 ) -> String {
     visit();
@@ -194,7 +213,7 @@ fn deep_text_at(
             if !out.is_empty() {
                 out.push(' ');
             }
-            out.push_str(&deep_text_at(p, inner, visit));
+            out.push_str(&deep_text_at(p, inner, styled, visit));
         }
     };
     for (part, _) in super::spread_groups(&paragraph.runs) {
@@ -222,6 +241,11 @@ fn deep_text_at(
                 }
             }
             super::Part::Control(control) => match control {
+                Control::CrossRef { .. } | Control::Field { .. } | Control::Unknown { .. }
+                    if styled =>
+                {
+                    out.push_str(&super::styled_display(control).unwrap_or_default());
+                }
                 Control::Hyperlink { text, .. } => out.push_str(text),
                 Control::Footnote { paragraphs, .. }
                 | Control::Endnote { paragraphs, .. }
@@ -234,6 +258,15 @@ fn deep_text_at(
                     if let Some(content) = &start.annotation {
                         paras(&mut out, content);
                     }
+                }
+                // A memo's anchor read as a paragraph, as styled draws it
+                // (`super::memo_anchor`): a memo in it is read too. Styled
+                // expands a top-level memo first; that changes only the
+                // order and, at the depth limit, the level.
+                // 이것을 실패시키는 것: 앵커 순회 삭제(`memo_anchor_follows_the_renderer`).
+                Control::Memo { content, anchor_runs, .. } if styled => {
+                    paras(&mut out, &[super::memo_anchor(anchor_runs)]);
+                    paras(&mut out, content);
                 }
                 Control::Memo { content, anchor_runs, .. } => {
                     for run in anchor_runs {
@@ -274,6 +307,11 @@ pub(crate) struct Block {
     /// What to write instead (the paragraphs' plain text, or a note
     /// definition's label and text), with where it came from.
     pub(crate) source: Option<Source>,
+    /// A styled Body block: a top-level paragraph, not a continuation,
+    /// drawn as body text. Its document text must make no block structure;
+    /// [`checked`] parses it alone and writes it as plain text if it does.
+    /// Set by the branch that drew it, never guessed again.
+    pub(crate) body: bool,
 }
 
 /// Where a block came from, for its plain-text fallback.
@@ -286,11 +324,13 @@ pub(crate) struct Source {
     pub(crate) at: Vec<(usize, usize)>,
 }
 
-/// The view's blocks joined, after the check: each block holding foreign
-/// markup on its own is written as plain text; if the whole still fails
-/// (a block's markup working with another's), every block is. One
-/// warning per paragraph written as plain text.
-/// 이것을 실패시키는 것: 검사 삭제 · 대체 삭제(`guard_falls_back_to_plain_text`).
+/// The view's blocks joined, after the check: a Body block whose text
+/// makes block structure ([`body_structure`]) is written as plain text;
+/// then each block holding foreign markup on its own is; if the whole
+/// still fails (a block's markup working with another's), every block is.
+/// One warning per paragraph written as plain text.
+/// 이것을 실패시키는 것: 검사 삭제 · 대체 삭제(`guard_falls_back_to_plain_text`) ·
+/// Body 단계 삭제(`body_check_and_table_end_close_the_rest`).
 pub(crate) fn checked(
     mut blocks: Vec<Block>,
     allowed: &Allowed<'_>,
@@ -302,10 +342,6 @@ pub(crate) fn checked(
             blocks.iter().map(|b| b.markdown.as_str()).filter(|m| !m.is_empty()).collect();
         parts.join("\n\n")
     };
-    let all = join(&blocks);
-    if !foreign_markup(&all, allowed) {
-        return all;
-    }
     let fall_back = |b: &mut Block, warnings: &mut Vec<super::MdWarning>| {
         if let Some(src) = b.source.take() {
             let text: Vec<String> = src.texts.iter().map(|t| plain_text(t)).collect();
@@ -315,6 +351,15 @@ pub(crate) fn checked(
             }
         }
     };
+    for b in &mut blocks {
+        if b.body && b.source.is_some() && body_structure(&b.markdown) {
+            fall_back(b, warnings);
+        }
+    }
+    let all = join(&blocks);
+    if !foreign_markup(&all, allowed) {
+        return all;
+    }
     for b in &mut blocks {
         if b.source.is_some() && foreign_markup(&b.markdown, allowed) {
             fall_back(b, warnings);
@@ -330,16 +375,128 @@ pub(crate) fn checked(
     join(&blocks)
 }
 
+/// Whether a Body block, parsed alone as the decoder parses, holds block
+/// structure its text must not make: a list (its items and task markers
+/// are inside one), heading, code block, block quote, note definition,
+/// definition list (its titles and definitions are inside one) or
+/// thematic break — or text after a comment that opens an HTML block
+/// (`<!-- chart -->x`: the block takes `x` in as raw HTML). The decoder's
+/// options read no metadata block. Paragraphs, tables, other HTML blocks
+/// and inline events are allowed.
+/// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제 · 주석 꼬리 검사 삭제
+/// (`body_structure_finds_what_body_text_must_not_make`).
+fn body_structure(markdown: &str) -> bool {
+    let mut html: Option<String> = None;
+    for event in Parser::new_ext(markdown, super::md_options()) {
+        match event {
+            Event::Start(
+                Tag::List(_)
+                | Tag::Heading { .. }
+                | Tag::CodeBlock(_)
+                | Tag::BlockQuote(_)
+                | Tag::FootnoteDefinition(_)
+                | Tag::DefinitionList,
+            )
+            | Event::Rule => return true,
+            Event::Start(Tag::HtmlBlock) => html = Some(String::new()),
+            Event::Html(h) => {
+                if let Some(block) = &mut html {
+                    block.push_str(&h);
+                }
+            }
+            Event::End(pulldown_cmark::TagEnd::HtmlBlock) => {
+                let block = html.take().unwrap_or_default();
+                if let Some(comment) = block.trim_start().strip_prefix("<!--") {
+                    let tail = comment.find("-->").map_or("", |end| &comment[end + 3..]);
+                    // The block ends with the line holding `-->`: the tail is
+                    // that line's rest.
+                    if !tail.trim().is_empty() {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each structure Body text must not make is found; a paragraph, a
+    /// table, an HTML block, a whole comment and inline markup are not.
+    /// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제 · 주석 꼬리 검사 삭제.
+    #[test]
+    fn body_structure_finds_what_body_text_must_not_make() {
+        for found in [
+            "- x",
+            "# h",
+            "```\nx\n```",
+            "a\n\n    b",
+            "> q",
+            "[^1]: x",
+            "a\n: b",
+            "***",
+            "<!-- chart -->x",
+            "a\n\n<!-- memo: m -->- x",
+        ] {
+            assert!(body_structure(found), "{found:?}");
+        }
+        for allowed in [
+            "a",
+            "a\nb",
+            "| a |\n| --- |",
+            "<table>\n<tbody>\n</tbody>\n</table>",
+            "<!-- chart -->",
+            "<!-- chart -->\nx",
+            "a <!-- memo: m --> b",
+            "**a** [t](https://e.invalid) `c`",
+        ] {
+            assert!(!body_structure(allowed), "{allowed:?}");
+        }
+    }
+
+    /// The styled fallback text shows what styled shows for a cross
+    /// reference without display text, an empty field and an unknown
+    /// control; lossy's keeps the value and hint it writes.
+    /// 이것을 실패시키는 것: styled 갈래 삭제 · lossy 에도 styled 표시값.
+    #[test]
+    fn fallback_text_follows_its_view() {
+        use hwpforge_core::control::{Control, RefTarget};
+        use hwpforge_core::{Paragraph, Run};
+        use hwpforge_foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
+        let run = |c| Run::control(c, CharShapeIndex::new(0));
+        let p = Paragraph::with_runs(
+            vec![
+                run(Control::cross_ref(
+                    RefTarget::Name("ref".into()),
+                    Default::default(),
+                    Default::default(),
+                )),
+                run(Control::Field {
+                    field_type: FieldType::ClickHere,
+                    hint_text: None,
+                    help_text: None,
+                    name: None,
+                    display_text: String::new(),
+                }),
+                run(Control::Unknown { tag: "x".into(), data: None }),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        assert_eq!(deep_text(&p, 0, true), "[ref]____[x]");
+        assert_eq!(deep_text(&p, 0, false), "");
+    }
 
     /// Parsing errors cannot be accepted as an arbitrary image alt value.
     /// 이것을 실패시키는 것: 속성 실패를 값으로 반환 · 따옴표 안에서 태그 종료.
     #[test]
     fn guard_rejects_malformed_image_attributes() {
         let destinations = HashSet::new();
-        let allowed = Allowed { tags: STYLED_TAGS, destinations: &destinations };
+        let allowed =
+            Allowed { tags: STYLED_TAGS, destinations: &destinations, decoder_structure: true };
         for bad in [
             "<img alt=x src=x onerror=alert(1)>",
             "<img alt=\">\" src=x onerror=alert(1)>",
@@ -376,7 +533,7 @@ mod tests {
             }
             for depth in [0, 1, 31, 32] {
                 let mut visits = 0;
-                let raw = deep_text_at(&p, depth, &mut || visits += 1);
+                let raw = deep_text_at(&p, depth, true, &mut || visits += 1);
                 assert_eq!(visits, (32 - depth).min(containers) + 1);
                 let expected = if containers + depth <= 32 { "core" } else { TOO_DEEP };
                 assert_eq!(raw, expected);
@@ -387,9 +544,14 @@ mod tests {
                         texts: vec![raw],
                         at: vec![(0, 0)],
                     }),
+                    body: false,
                 };
                 let destinations = HashSet::new();
-                let allowed = Allowed { tags: STYLED_TAGS, destinations: &destinations };
+                let allowed = Allowed {
+                    tags: STYLED_TAGS,
+                    destinations: &destinations,
+                    decoder_structure: true,
+                };
                 let mut warnings = Vec::new();
                 assert_eq!(checked(vec![block], &allowed, &mut warnings), plain_text(expected));
                 assert_eq!(warnings.len(), 1);
@@ -405,7 +567,7 @@ mod tests {
     #[test]
     fn guard_finds_what_the_encoder_does_not_write() {
         let dests: HashSet<String> = ["https://e.invalid".to_string()].into();
-        let allowed = Allowed { tags: STYLED_TAGS, destinations: &dests };
+        let allowed = Allowed { tags: STYLED_TAGS, destinations: &dests, decoder_structure: true };
         for ok in [
             "a [t](https://e.invalid) <strong>b</strong>",
             "<table>\n<tbody>\n<tr>\n  <td colspan=\"2\"><a href=\"https://e.invalid\">t</a></td>\n</tr>\n</tbody>\n</table>",
@@ -426,7 +588,7 @@ mod tests {
         ] {
             assert!(foreign_markup(bad, &allowed), "{bad}");
         }
-        let lossy = Allowed { tags: LOSSY_TAGS, destinations: &dests };
+        let lossy = Allowed { tags: LOSSY_TAGS, destinations: &dests, decoder_structure: false };
         assert!(foreign_markup("<strong>b</strong>", &lossy));
         assert!(!foreign_markup("a<br>b <!-- hwpforge:section -->", &lossy));
     }
@@ -439,7 +601,7 @@ mod tests {
     #[test]
     fn guard_falls_back_to_plain_text() {
         let dests = HashSet::new();
-        let allowed = Allowed { tags: LOSSY_TAGS, destinations: &dests };
+        let allowed = Allowed { tags: LOSSY_TAGS, destinations: &dests, decoder_structure: false };
         let block = |md: &str, raw: &str, at| Block {
             markdown: md.to_string(),
             source: Some(Source {
@@ -447,6 +609,7 @@ mod tests {
                 texts: vec![raw.to_string()],
                 at: vec![at],
             }),
+            body: false,
         };
         let mut warnings = Vec::new();
         let out = checked(

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- styled Markdown 출력에서 본문 문단과 표 칸의 글자가 줄 머리에서 `- `·`1. `·`: `·`===`·표 구분 행처럼 Markdown 구조로 다시 읽히지 않도록 그 표지 앞에 `\` 를 붙인다. 목록·제목·각주·캡션과 lossy 출력은 이전과 같다(정의 목록이 생기던 블록만 아래처럼 바뀐다).
+- 문단 안 표 바로 뒤의 글이 표에 흡수되던 문제를 고쳤다. 표 뒤에 빈 줄을 넣어 뒤 글이 새 문단으로 남고, GFM 표 행에서 버려지던 글자도 보존된다.
+- 위 규칙으로 막을 수 없는 드문 본문 문단은 서식 없는 글로 바꾸고 `MarkupWrittenAsText` 경고를 남긴다. 상호참조·필드·알 수 없는 컨트롤은 대체 글에서도 정상 출력과 같은 표시값을 쓴다.
+- 출력에 정의 목록이 남지 않아, 그 때문에 from-md 가 실패하던 경우가 없어진다.
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.0...hwpforge-smithy-md-v0.17.1) - 2026-10-24
 
 ### Changed
