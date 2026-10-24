@@ -13,18 +13,18 @@ use crate::encoder::escape_xml;
 /// Returns `true` when a plain-text payload requires inline HWPX child
 /// elements inside `<hp:t>`.
 pub(crate) fn requires_inline_text_markup(text: &str) -> bool {
-    text.chars().any(|ch| matches!(ch, '\n' | '\t' | '\u{00A0}' | '\u{001F}'))
+    text.chars().any(|ch| matches!(ch, '\r' | '\n' | '\t' | '\u{00A0}' | '\u{001F}'))
 }
 
 /// Encodes plain-text content into the inner XML for an `<hp:t>` element.
 ///
-/// The mapping is intentionally narrow and lossless for the characters that
-/// Core can currently represent:
+/// Body line breaks follow `wire_xml::body_text_line_breaks`; other
+/// supported inline characters keep their existing mapping:
 ///
 /// - `\n` → `<hp:lineBreak/>`
 /// - `\t` → `<hp:tab/>`
 /// - `U+00A0` → `<hp:nbSpace/>`
-/// - `\r` → `&#13;` (a raw CR would be read back as `\n`)
+/// - `\r` / `\r\n` → one `<hp:lineBreak/>` within this fragment
 /// - `U+001F` → `<hp:fwSpace/>` (mirrors the HWP5 wire control byte for the
 ///   "fixed-width space" so the round-trip through Core is lossless)
 pub(crate) fn encode_inline_text_xml(text: &str) -> String {
@@ -43,7 +43,7 @@ pub(crate) fn encode_inline_text_xml(text: &str) -> String {
         plain.clear();
     };
 
-    for ch in text.chars() {
+    for ch in crate::wire_xml::body_text_line_breaks(text, true).chars() {
         match ch {
             '\n' => {
                 flush_plain(&mut plain, &mut encoded);
@@ -60,12 +60,6 @@ pub(crate) fn encode_inline_text_xml(text: &str) -> String {
             '\u{001F}' => {
                 flush_plain(&mut plain, &mut encoded);
                 encoded.push_str("<hp:fwSpace/>");
-            }
-            // XML parsers normalise a raw CR to LF; the serde run path already
-            // writes the character reference, so this path must match it.
-            '\r' => {
-                flush_plain(&mut plain, &mut encoded);
-                encoded.push_str("&#13;");
             }
             _ => plain.push(ch),
         }
@@ -127,6 +121,7 @@ mod tests {
     fn requires_inline_text_markup_detects_tab_and_breaks() {
         assert!(requires_inline_text_markup("left\tright"));
         assert!(requires_inline_text_markup("line1\nline2"));
+        assert!(requires_inline_text_markup("line1\rline2"));
         assert!(requires_inline_text_markup("a\u{00A0}b"));
         assert!(requires_inline_text_markup("a\u{001F}b"));
         assert!(!requires_inline_text_markup("plain text"));

@@ -261,7 +261,7 @@
       "description": "The content of a run.\n\nMarked `#[non_exhaustive]` so future content types can be added\nwithout a breaking change.\n\n# Design Decision\n\n`Table` and `Control` are boxed to keep the enum size small.\nThe common case (`Text`) is 24 bytes (a `String`). Without boxing,\nthe enum would be ~88 bytes (dominated by the `Control` variant).\n\n# Examples\n\n```\nuse hwpforge_core::run::RunContent;\n\nlet text = RunContent::Text(\"Hello\".to_string());\nassert!(text.is_text());\nassert_eq!(text.as_text(), Some(\"Hello\"));\n```",
       "oneOf": [
         {
-          "description": "Plain text.",
+          "description": "Plain text. Use `\\n` for line breaks; HWPX writes and reads CR as\na line break, folding CRLF only when encoding one text fragment.",
           "type": "object",
           "properties": {
             "Text": {
@@ -347,7 +347,7 @@
       "description": "One typed segment inside an [`InlineText`].\n\nMarked `#[non_exhaustive]` so future inline elements (ruby, hyphen\nhints, etc.) can be added without breaking existing matches.",
       "oneOf": [
         {
-          "description": "Plain text. May contain `\\n`, `U+00A0` (NBSP), `U+001F` (fwSpace)\n— those are still handled as character-level sentinels by the\nHWPX encoder, matching the `Text(String)` behavior.",
+          "description": "Plain text. May contain `\\n`, `U+00A0` (NBSP), `U+001F` (fwSpace)\n— those are still handled as character-level sentinels by the\nHWPX encoder, matching the `Text(String)` behavior. Use `\\n` for\nline breaks; HWPX reads CR as a break and folds CRLF within this\nsegment when writing.",
           "type": "object",
           "properties": {
             "Plain": {

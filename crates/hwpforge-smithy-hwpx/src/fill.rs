@@ -232,7 +232,8 @@ impl HwpxFiller {
     /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
     /// 하나(`location` = `field 'NAME'`)를 싣는다. 지운 뒤의 값이 쓰기·"값이
     /// 바뀌었나" 비교·`filled` 보고에 모두 쓰이므로, 지운 뒤 현재 값과 같으면
-    /// 그 필드는 채우지 않은 것으로 남는다(경고만, 바이트 그대로). 지운 뒤
+    /// 그 필드는 채우지 않은 것으로 남는다(경고만, 바이트 그대로). 본문 CR/CRLF도
+    /// 공용 인코드 규칙으로 정규화한 뒤 비교한다. 지운 뒤
     /// 비면 [`FillError::EmptyValue`]. 현재 값과 원문 그대로 같은 요청은
     /// 정리하지 않는다 — 원본이 이미 그런 문자를 담고 있어도 경고 없는 no-op 이다.
     ///
@@ -336,6 +337,7 @@ impl HwpxFiller {
                 &format!("field '{name}'"),
                 &mut encode_warnings,
             );
+            let value = crate::wire_xml::body_text_line_breaks(&value, true).into_owned();
             if value == previous {
                 continue;
             }

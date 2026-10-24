@@ -45,7 +45,9 @@ pub struct InlineText {
 pub enum InlineSegment {
     /// Plain text. May contain `\n`, `U+00A0` (NBSP), `U+001F` (fwSpace)
     /// — those are still handled as character-level sentinels by the
-    /// HWPX encoder, matching the `Text(String)` behavior.
+    /// HWPX encoder, matching the `Text(String)` behavior. Use `\n` for
+    /// line breaks; HWPX reads CR as a break and folds CRLF within this
+    /// segment when writing.
     Plain(String),
     /// An inline tab with explicit per-occurrence attributes.
     Tab(InlineTabAttr),

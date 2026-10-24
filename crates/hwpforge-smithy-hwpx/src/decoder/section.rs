@@ -7254,12 +7254,13 @@ mod ws_preserve_tests {
     // 또는 CDATA 공백을 무시하거나 ledger 에서 표식을 글자로 세기.
     // Expected wire lengths come from the source fixture, never the parsed tree.
     #[test]
+    // 이것을 실패시키는 것: HxText::text의 CR 1:1 정규화 제거.
     fn mixed_spaces_keep_core_text_and_independent_wire_lengths() {
         for (body, text, wire_len) in [
             ("  <hp:fwSpace/>작계훈련", "  \u{1f}작계훈련", 7),
             ("□<hp:fwSpace/> ", "□\u{1f} ", 3),
             (" <hp:fwSpace/>  <hp:tab/>   <hp:lineBreak/> ", " \u{1f}  \t   \n ", 17),
-            ("&#32;<hp:nbSpace/>&#x20;<hp:fwSpace/>&#13;", " \u{a0} \u{1f}\r", 5),
+            ("&#32;<hp:nbSpace/>&#x20;<hp:fwSpace/>&#13;", " \u{a0} \u{1f}\n", 5),
             ("\n \t<hp:fwSpace/>\n \t", "\n \t\u{1f}\n \t", 7),
             ("<![CDATA[ ]]><hp:fwSpace/><![CDATA[ ]]>", " \u{1f} ", 3),
             (" <![CDATA[ ]]> <!--x--><?pi x?><hp:fwSpace/> <![CDATA[끝]]>", "   \u{1f} 끝", 6),
@@ -7320,15 +7321,16 @@ mod ws_preserve_tests {
     // CR now reaches the decoder as a character reference.
     // 이것을 실패시키는 것: 판정을 literal 공백만으로 되돌리는 것(`&#13;` run 이 사라짐).
     #[test]
+    // 이것을 실패시키는 것: HxText::text의 CR 1:1 정규화 제거.
     fn a_run_of_whitespace_character_references_survives() {
         for (wire, want) in [
-            ("&#13;", "\r"),
+            ("&#13;", "\n"),
             ("&#10;", "\n"),
             ("&#9;", "\t"),
             ("&#32;", " "),
-            ("&#xD;", "\r"),
-            ("&#x0d;", "\r"),
-            ("&#x20;&#13; ", " \r "),
+            ("&#xD;", "\n"),
+            ("&#x0d;", "\n"),
+            ("&#x20;&#13; ", " \n "),
         ] {
             let xml = format!(
                 r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t></run><run charPrIDRef="0"><t>{wire}</t></run><run charPrIDRef="0"><t>나</t></run></p></sec>"#

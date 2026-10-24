@@ -3256,10 +3256,10 @@ mod attr_control_whitespace_call_site_tests {
         assert_eq!(attr_value(&section, "name", "HEAD"), "HEADA B C D");
     }
 
-    // 텍스트 `hp:t` 와 수식 `hp:script` 는 0.42 escape(`&#13;`) 그대로 둔다 — 한컴이 이것을
-    // 0.41 의 literal CR 과 같게 표시하고 저장한다. 속성은 decode 하면 공백으로 돌아온다.
+    // 본문 CR 은 lineBreak, 수식 `hp:script` 는 기존 `&#13;` 유지.
+    // 이것을 실패시키는 것: 본문 CR 인라인 라우팅 또는 CR 정규화 제거.
     // 이것을 실패시키는 것: `encoder/header.rs` 정규화 호출을 빼는 것(decode 값이 제어 문자가 됨),
-    // 또는 정규화를 텍스트 구간까지 넓히는 것(`&#13;` 이 사라짐).
+    // 또는 정규화를 수식 `hp:script` 구간까지 넓히는 것(수식의 `&#13;` 이 사라짐).
     #[test]
     fn normalized_output_decodes_to_spaces() {
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
@@ -3279,20 +3279,17 @@ mod attr_control_whitespace_call_site_tests {
         let bytes =
             HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
         let (_, section) = read_parts(&bytes);
-        assert!(section.contains("<hp:t>가&#13;나</hp:t>"), "text keeps the 0.42 escape");
+        assert!(section.contains("<hp:t>가<hp:lineBreak/>나</hp:t>"), "body CR is a break");
         assert!(section.contains("a+b&#13;\n+c</hp:script>"), "script keeps the 0.42 escape");
         let decoded = HwpxDecoder::decode(&bytes).expect("decode");
         let style = decoded.style_store.iter_styles().next().expect("one style");
         assert_eq!((style.name.as_str(), style.eng_name.as_str()), ("A B C D", "E F"));
         let text = decoded.document.sections()[0].paragraphs[0].text_content();
-        assert_eq!(text, "가\r나", "text keeps its CR (Hancom reads &#13; like 0.41's literal CR)");
+        assert_eq!(text, "가\n나", "body CR is read as a line break");
     }
 
-    /// quick-xml 0.42 writes a run holding only a CR as `<hp:t>&#13;</hp:t>`;
-    /// reading it back must keep the run (0.41 wrote a literal CR, which a
-    /// parser reads as LF, so it survived as `"\n"`).
-    // 이것을 실패시키는 것: 디코더의 ws-only 판정(`is_ws_only_wire_text`)을 literal 공백만으로
-    // 되돌리는 것 — run 이 경고 없이 사라진다.
+    /// A CR-only body run is written as lineBreak and survives as an LF run.
+    // 이것을 실패시키는 것: encode_inline_text_xml의 lineBreak 방출 제거.
     #[test]
     fn a_run_holding_only_a_cr_survives_the_round_trip() {
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
@@ -3313,7 +3310,7 @@ mod attr_control_whitespace_call_site_tests {
             .iter()
             .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
             .collect();
-        assert_eq!(texts, vec!["가", "\r", "나"]);
+        assert_eq!(texts, vec!["가", "\n", "나"]);
     }
 
     /// The other serde attributes a Core string reaches (found by filling every
