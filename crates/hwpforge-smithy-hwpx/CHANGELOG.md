@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24
+
+### Changed
+
+- HWPX 파트(`header.xml`·`section*.xml`)를 읽을 때 XML 이벤트 재생 버퍼가 65,536 이벤트를 넘게 필요하면 `more than 65536 buffered XML events; HwpForge does not read documents that require more` 로 거부한다. 흩어진 목록 항목을 모으느라 쌓는 버퍼에 한도가 없어, 조작한 파트 하나가 디코드 한 번에 이벤트 수백만 개를 붙잡을 수 있었다. 측정한 실제 HWPX 3,671개 중 가장 많이 필요한 문서가 90 이벤트라 해당하는 문서는 없다. 보존형 `patch` 경로는 기존 오류 코드 `PATCH_FAILED` 를 낸다 (#254, #205)
+- 보존형 patch, preservation export, 셀 편집(`apply_set_cells`), provenance 확인·복원이 사용자가 넘긴 `Section` 의 중첩 깊이를 먼저 검사해 32단계를 넘으면 각 입구의 기존 오류로 거부한다. 전에는 수천 단계 이상 중첩한 값에서 스택이 넘쳐 프로세스가 죽을 수 있었다 (#267)
+
+### Fixed
+
+- 이미지 자산을 잃은 채 저장된 그림(`binaryItemIDRef=""`)을 버리지 않고 빈 그림 틀로 읽고 다시 쓴다. 한컴은 이런 그림을 원래 크기의 빈 틀로 보여 준다. 크기·위치·감싸기·자르기 같은 틀 속성은 그대로이고, 매니페스트에 가짜 항목을 만들지 않으며, 새 경고도 없다. `<hc:img>` 자체가 없는 그림과 비어 있지 않은 끊긴 참조는 전과 같다 (#266)
+- 글꼴을 하나만 등록한 템플릿으로 HWPX 를 만들면 기본 글자 모양이 존재하지 않는 글꼴 슬롯 1을 가리켜 인코드가 멈추던 문제를 고친다. 글꼴이 하나뿐이면 그 글꼴을 쓴다. 글꼴이 둘 이상인 템플릿과 프리셋의 출력은 바이트까지 그대로다 (#255)
+- `<hp:p>` 바로 아래에 `<hp:run>` 밖으로 놓인 `<hp:t>`·글·모르는 요소를 조용히 버리던 것을 `CONTENT_LOST` (`paragraph_content`) 경고로 알린다. 읽은 문서 내용은 바뀌지 않고, 버려진 글을 추측해 읽지도 않는다. 측정한 HWPX 372개에는 새 경고가 생긴 문서가 없다 (#263)
+- `<hp:run>`·`<hp:t>` 없이 줄 조판 정보(`<hp:linesegarray>`)만 든 빈 문단이 있는 section 도 보존형 `patch` 로 편집할 수 있다. 전에는 `to-json --section` 이 "no original slot" 경고를 내고 그 section 전체에서 보존형 patch 를 쓸 수 없었다. 편집하지 않은 patch 는 패키지를 바이트 그대로 돌려주고, 다른 문단을 고치면 빈 문단의 줄 캐시도 함께 지워 자식 없는 `<hp:p ...></hp:p>` 로 나간다. 그런 빈 문단에 글자를 넣는 편집은 구조 변경이라 기존 `InvalidStructure` 로 거부한다 (#260)
+- 본문 글자의 CR(`\r`)을 모든 text 경로에서 `&#13;` 로 쓴다. 탭·줄바꿈이 섞인 run, InlineText 조각, 필드·메모 본문, `patch` 로 고친 칸이 쓰던 공유 경로는 날 CR 바이트를 써서, 읽을 때 LF 로 바뀌어 같은 글자가 경로에 따라 `\r` 또는 `\n` 으로 돌아왔다. 이 때문에 한 run 에 CR 과 탭이 함께 든 문서를 `set-cell` 이 거부하던 문제도 풀린다. 편집하지 않은 칸은 원본 바이트를 그대로 둔다 (#262, Refs #207)
+
+### Tests
+
+- 공백 하나나 CR 하나만 든 run 이 있어도 보존형 `patch` 가 원본 바이트를 지키는 동작을 회귀 시험으로 고정한다. 0.17.0 에서 이미 고쳐졌고 제품 코드는 바뀌지 않는다 (#257, Closes #206)
+
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.11...hwpforge-smithy-hwpx-v0.17.0) - 2026-10-23
 
 ### Changed (BREAKING)

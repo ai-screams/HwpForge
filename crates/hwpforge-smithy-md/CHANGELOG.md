@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.0...hwpforge-smithy-md-v0.17.1) - 2026-10-24
+
+### Changed
+
+- 인코더의 자체 중첩 깊이 계산을 지우고, 검증된 문서가 깊이 32단계 이하라는 Core 의 보장에 맡긴다. 검증된 문서의 출력은 같다 (#267)
+
+### Fixed
+
+- 이미지 자산이 없는 그림(빈 경로)은 styled·lossy 출력에서 빈 링크를 내지 않고 캡션만 남기며, 이미지 자산 계획에서도 뺀다 (#266)
+
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.11...hwpforge-smithy-md-v0.17.0) - 2026-10-23
 
 ### Changed (BREAKING)

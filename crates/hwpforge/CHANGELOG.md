@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1](https://github.com/ai-screams/HwpForge/compare/v0.17.0...v0.17.1) - 2026-10-24
+
+0.17.0 뒤에 나온 결함 수정과 입력 한도를 모은 패치 릴리스다. 공개 Rust API 는 바뀌지 않고, `Section::check_nesting_depth()` 하나가 더해진다. 새로 거부하는 입력과 출력이 바뀌는 경우는 아래 "업그레이드 주의" 에 모았다.
+
+### Changed
+
+- HWPX 파트를 읽을 때 XML 이벤트 재생 버퍼가 65,536 이벤트를 넘게 필요하면 한도를 밝힌 오류로 거부한다. 측정한 실제 HWPX 3,671개 중 해당하는 문서는 없다 (#254, #205)
+- `Document::validate` 와 사용자 `Section` 을 받는 편집 입구(보존형 patch·preservation export·`set-cell`·provenance·JSON `from-json`·`patch`)가 중첩 깊이 32단계를 넘는 문서를 기존 오류로 거부한다. 전에는 아주 깊게 중첩한 값에서 스택이 넘쳐 프로세스가 죽을 수 있었다 (#267)
+- HWP 파일의 다각형·곡선 레코드 하나가 점을 1,048,576개 넘게 선언하면 메모리를 잡기 전에 그 도형을 거부하고 기존 경고를 낸다. 실제 문서에서 측정한 최대는 33점이다 (#265)
+
+### Fixed
+
+- 이미지 자산을 잃은 채 저장된 그림(`binaryItemIDRef=""`)이 변환·재저장 뒤에도 빈 그림 틀로 남고 `inspect` 의 그림 수에 잡힌다. Markdown 은 빈 링크 없이 캡션만 쓰고, `to-pdf` 는 그 자리만 차지한 채 그리지 않는다 (#266)
+- 문단 직속에 놓여 읽지 못하는 글·요소를 `CONTENT_LOST` 경고로 알린다. `validate`·`inspect`·`read`·`to-md`·`to-json` 이 그런 문서에서 경고를 함께 내고, `restyle`·`set-cell`·`stamp` 는 의미 손상으로 보고 `INPUT_NOT_ROUNDTRIP_SAFE` 로 거부한다. 전에는 그 글을 뺀 채 다시 썼다 (#263)
+- HWP 를 HWPX 로 바꿀 때 여러 문단에 걸친 누름틀이 첫 문단 끝에서 닫히지 않고 끝까지 이어진다. 뒷 문단 글자가 누름틀 밖으로 빠지던 문제다. 표 칸의 계산식 필드는 여전히 변환에서 빠지고 경고만 남는다 (#258)
+- HWP 의 묶음 안 그림이 테두리를 잃는다고 잘못 경고하던 문제를 고친다. 이 거짓 경고 때문에 그런 문서의 `stamp`·`set-cell` 이 거부됐다 (#256)
+- 글꼴 하나짜리 템플릿 인코드, run 없는 빈 문단이 있는 section 의 보존형 `patch`, 본문 CR 표기 통일은 `hwpforge-smithy-hwpx` 항목을 따른다 (#255, #260, #262)
+
+### 업그레이드 주의
+
+- **새로 거부하는 입력**: XML 이벤트를 65,536개 넘게 버퍼링해야 읽히는 HWPX 파트(#254), 중첩 깊이 32단계를 넘는 문서(#267), 점 1,048,576개를 넘게 선언한 HWP 다각형·곡선(#265). 측정한 실제 문서에는 셋 다 해당하지 않는다.
+- **`CONTENT_LOST` 증가 (#263)**: run 밖 글·요소가 문단 바로 아래에 있는 문서는 `CONTENT_LOST (paragraph_content)` 경고를 내고, `restyle`·`set-cell`·`stamp` 는 그 문서를 거부한다. 읽은 내용은 그대로다.
+- **출력 바이트 변화**: 본문 CR 은 모든 경로에서 `&#13;` 로 나간다(#262). HWP→HWPX 변환에서 여러 문단 누름틀의 범위와 줄 캐시가 바뀐다(표본 259개 중 5개, #258). 자산 없는 그림이 출력에 남는다(#266). 한컴이 다시 저장할 때 CR 을 지우는 문제(#207)는 다음 minor 에서 다룬다.
+- **MCP 입력 상한 (#264)**: `hwpforge-bindings-mcp` 항목을 본다.
+
+### Tests
+
+- 템플릿 여백과 BorderFill 길이 수정을 끝에서 끝까지 고정하는 시험을 더한다 (#253). 공백·CR 하나만 든 run 의 보존형 patch 회귀 시험을 더한다 (#257, Closes #206)
+
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/v0.16.11...v0.17.0) - 2026-10-23
 
 한컴이 저장한 HWPX 와 HWP5 문서를 변환하고 다시 쓸 때 조용히 사라지거나 바뀌던 값을 Core 에 담아 보존한다. 손실이 남는 자리는 경고(`CONTENT_LOST` 등)로 드러내고, 다시 쓰는 편집 명령은 그런 입력을 거부한다. 공개 Rust 타입이 여럿 바뀌므로 breaking 릴리스다 (#249).
