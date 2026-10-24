@@ -16,7 +16,7 @@ use hwpforge_core::field_inventory::FieldInventory;
 use hwpforge_core::node_path::{CorePath, NodeKind};
 use hwpforge_core::source_xml::{UnclosedOrigin, XmlSource};
 use hwpforge_core::{Control, Paragraph, RunContent, Section};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Range;
 
 /// An original node location in a package part.
@@ -83,6 +83,8 @@ pub(crate) struct ParagraphSource {
 pub struct SourceMap {
     nodes: BTreeMap<CorePath, SourceNode>,
     slots: Vec<PreservedTextSlot>,
+    // Core validation placeholders without a wire run, not editable wire slots.
+    pub(crate) synthetic_empty_texts: BTreeSet<String>,
     pub(crate) text_elements: BTreeMap<usize, hwpforge_core::source_xml::XmlElement>,
     pub(crate) paragraphs: Vec<ParagraphSource>,
     pub(crate) unclosed: Vec<UnclosedOrigin>,
@@ -106,6 +108,7 @@ impl SourceMap {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RunOrigin {
     pub(crate) node: usize,
+    pub(crate) synthetic_empty: bool,
     pub(crate) texts: Vec<usize>,
     pub(crate) anchors: Vec<RunOrigin>,
     pub(crate) boundaries: Vec<usize>,
@@ -261,6 +264,9 @@ impl SourceRecorder {
                 }
                 for (ri, (run, source)) in paragraph.runs.iter().zip(&origin.runs).enumerate() {
                     let path = format!("{path}.runs[{ri}]");
+                    if source.synthetic_empty && self.source.element(origin.node).is_some() {
+                        result.synthetic_empty_texts.insert(format!("{path}.text"));
+                    }
                     self.record_run(&mut result, section_index, &path, &run.content, source, part);
                 }
             }

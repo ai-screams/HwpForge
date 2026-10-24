@@ -1020,6 +1020,7 @@ fn convert_paragraph_from(
         let text = ctx.source.child(node, "t", 0);
         origins.push(super::source_map::RunOrigin {
             node,
+            synthetic_empty: hx_runs.is_empty(),
             texts: (text != 0).then_some(text).into_iter().collect(),
             ..Default::default()
         });

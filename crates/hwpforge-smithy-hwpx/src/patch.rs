@@ -309,7 +309,11 @@ impl HwpxPatcher {
             });
         }
 
-        let replacement_slots = collect_semantic_text_slots(replacement, section_idx);
+        let replacement_slots = collect_preserving_text_slots(
+            replacement,
+            section_idx,
+            &decoded.source_maps[section_idx],
+        )?;
         if replacement_slots.len() != rebuilt_preservation.text_slots.len() {
             return Err(HwpxError::InvalidStructure {
                 detail: format!(
@@ -463,7 +467,7 @@ fn preservation_from_map(
 ) -> HwpxResult<SectionPreservation> {
     let recorded: BTreeMap<_, _> = map.text_slots().iter().map(|s| (s.path.as_str(), s)).collect();
     let mut slots = Vec::new();
-    for slot in collect_semantic_text_slots(section, section_idx) {
+    for slot in collect_preserving_text_slots(section, section_idx, map)? {
         let original =
             recorded.get(slot.path.as_str()).ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!(
@@ -487,6 +491,31 @@ fn preservation_from_map(
         section_sha256: sha256_hex(xml.as_bytes()),
         text_slots: slots,
     })
+}
+
+// Both export and patch project only real wire text slots. Absence alone
+// never authorizes skipping a slot: the decoder must identify a placeholder.
+fn collect_preserving_text_slots(
+    section: &Section,
+    section_idx: usize,
+    map: &crate::decoder::source_map::SourceMap,
+) -> HwpxResult<Vec<SemanticTextSlot>> {
+    let mut slots = Vec::new();
+    for slot in collect_semantic_text_slots(section, section_idx) {
+        if map.synthetic_empty_texts.contains(&slot.path) {
+            if !slot.text.is_empty() {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!(
+                        "preserving patch cannot insert text at '{}': no original run; structural insertion is required",
+                        slot.path
+                    ),
+                });
+            }
+        } else {
+            slots.push(slot);
+        }
+    }
+    Ok(slots)
 }
 
 #[cfg(test)]
