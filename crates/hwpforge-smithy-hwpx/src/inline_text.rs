@@ -24,6 +24,7 @@ pub(crate) fn requires_inline_text_markup(text: &str) -> bool {
 /// - `\n` → `<hp:lineBreak/>`
 /// - `\t` → `<hp:tab/>`
 /// - `U+00A0` → `<hp:nbSpace/>`
+/// - `\r` → `&#13;` (a raw CR would be read back as `\n`)
 /// - `U+001F` → `<hp:fwSpace/>` (mirrors the HWP5 wire control byte for the
 ///   "fixed-width space" so the round-trip through Core is lossless)
 pub(crate) fn encode_inline_text_xml(text: &str) -> String {
@@ -59,6 +60,12 @@ pub(crate) fn encode_inline_text_xml(text: &str) -> String {
             '\u{001F}' => {
                 flush_plain(&mut plain, &mut encoded);
                 encoded.push_str("<hp:fwSpace/>");
+            }
+            // XML parsers normalise a raw CR to LF; the serde run path already
+            // writes the character reference, so this path must match it.
+            '\r' => {
+                flush_plain(&mut plain, &mut encoded);
+                encoded.push_str("&#13;");
             }
             _ => plain.push(ch),
         }
