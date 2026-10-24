@@ -314,7 +314,7 @@ pub struct FinishedAssets {
 // ---------------------------------------------------------------------------
 
 /// 문서의 이미지 run 을 문서 순서로 훑어 자산 계획을 만든다 (I/O 없음,
-/// 복제 없음).
+/// 복제 없음). 빈 경로의 자산 없는 그림 틀은 계획에서 제외한다.
 ///
 /// [`Document::for_each_paragraph`] 를 쓴다 — 완성 단계가 쓰는
 /// [`Document::for_each_paragraph_mut`] 의 불변 쌍둥이이고 Core 가 두
@@ -329,6 +329,9 @@ pub fn collect_asset_plan(document: &Document) -> Vec<AssetPlanEntry> {
     document.for_each_paragraph(|para| {
         for (run, item) in para.runs.iter().enumerate() {
             if let RunContent::Image(img) = &item.content {
+                if img.path.is_empty() {
+                    continue;
+                }
                 plan.push(AssetPlanEntry {
                     occurrence: RunLocator::new(paragraph, run),
                     source: AssetSource::classify(&img.path),
@@ -641,7 +644,7 @@ impl Embedder {
 /// 준비된 결정을 문서에 적용한다 — 무오류.
 ///
 /// `plan` 과 `prepared` 는 [`collect_asset_plan`] 이 만든 계획과 1:1
-/// 정렬이므로, 같은 순회를 다시 돌며 이미지 run 마다 하나씩 소비한다.
+/// 정렬이므로, 같은 순회를 다시 돌며 비어 있지 않은 이미지 경로마다 소비한다.
 ///
 /// 경고는 결과를 만드는 **바로 그 자리에서** 함께 만든다 — 길이가 어긋날
 /// 여지가 없으므로 호출자 쪽에 패닉 경로가 생기지 않는다. 결과→경고 사상
@@ -667,6 +670,9 @@ pub(crate) fn apply(
             next_run += 1;
             let char_shape_id = item.char_shape_id;
             let RunContent::Image(img) = &mut item.content else { return true };
+            if img.path.is_empty() {
+                return true;
+            }
             let occurrence = RunLocator::new(paragraph, run);
             let (entry, ready) =
                 queue.next().expect("prepared is aligned 1:1 with the document's plan");
@@ -850,6 +856,19 @@ mod tests {
 
     fn data_uri(mime: &str, bytes: &[u8]) -> String {
         format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    /// 이것을 실패시키는 것: collect_asset_plan의 빈 경로 제외 삭제.
+    #[test]
+    fn assetless_picture_is_not_an_asset_request() {
+        let doc = doc_with_srcs(&["", "https://example.com/a.png"]);
+        let plan = collect_asset_plan(&doc);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].occurrence, RunLocator::new(0, 1));
+        let finished = finish_assets(doc, &plan, Vec::new()).unwrap();
+        assert_eq!(image_paths(&finished.document), vec![""]);
+        assert!(finished.image_store.is_empty());
+        assert_eq!(finished.outcomes.len(), 1);
     }
 
     #[test]

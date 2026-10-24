@@ -68,15 +68,16 @@ struct SectionInfo {
 /// `rectangles`/`polygons`. `ops::InspectSection`'s `all_*` fields have the
 /// same scope but are a decoded-object count, and matching scope is not
 /// matching values: an element the decoder accepts but cannot represent —
-/// an `<hp:pic>` with no usable `binaryItemIDRef`, which `convert_picture`
+/// an `<hp:pic>` without `<hc:img>`, which `convert_picture`
 /// (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
 /// rather than an error — is in the section XML but never becomes a
 /// `Control`/`Image`. Reading the decode here would make this command
 /// report fewer objects than its `--json` contract has always reported, on
 /// exactly those documents. The raw scan keeps that contract by
 /// construction rather than by fixture luck; see
-/// `crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence` in
-/// `cli_integration.rs` for the reproduction. Two of the eight have their
+/// `crafted_pic_without_img_is_counted_only_by_raw_scan` in
+/// `cli_integration.rs`. Its companion empty-reference test has an
+/// `<hc:img>` element, so both counts include that frame. Two of the eight have their
 /// own reasons on top: Core has no HWPX representation for `<hp:ole>` at
 /// all, and it cannot reconstruct a chart nested below a section's own
 /// top-level paragraphs (`ops::InspectSection`'s scope table).

@@ -131,6 +131,44 @@ fn picture(path: &str) -> Image {
     Image::new(path, u(1000), u(1000), ImageFormat::Png)
 }
 
+/// 빈 틀에는 링크/자산이 없지만 캡션은 그대로 읽을 수 있다.
+/// 이것을 실패시키는 것: styled Markdown/HTML 또는 lossy 빈 경로 가드 삭제.
+#[test]
+fn assetless_pictures_emit_no_readable_links() {
+    for container in [Container::Body, Container::Cell, Container::MergedCell] {
+        let mut image = picture("");
+        image.caption =
+            Some(Caption::new(vec![para(vec![text("kept caption")])], CaptionSide::Bottom));
+        let doc = document(container, vec![Run::image(image, cs(PLAIN))]);
+        let styled = MdEncoder::encode_styled(&doc, &Styles);
+        assert!(styled.images.is_empty(), "{container:?}");
+        for md in [styled.markdown, MdEncoder::encode_lossy(&doc).unwrap()] {
+            assert!(!md.contains("![") && !md.contains("<img"), "{container:?}: {md}");
+            assert!(md.contains("kept caption"), "{container:?}: {md}");
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: styled의 그림 앞 공백 조건에서 빈 경로 검사 삭제.
+#[test]
+fn assetless_picture_does_not_insert_a_separator() {
+    for container in [Container::Body, Container::Cell, Container::MergedCell] {
+        for tail in [vec![], vec![text("right")]] {
+            let mut runs = vec![text("left"), Run::image(picture(""), cs(PLAIN))];
+            runs.extend(tail.clone());
+            let actual = document(container, runs);
+            let mut expected = vec![text("left")];
+            expected.extend(tail);
+            let expected = document(container, expected);
+            assert_eq!(
+                MdEncoder::encode_styled(&actual, &Styles).markdown,
+                MdEncoder::encode_styled(&expected, &Styles).markdown,
+                "{container:?}"
+            );
+        }
+    }
+}
+
 /// Where an attack string is put: the runs of one paragraph.
 #[derive(Clone, Copy, Debug)]
 enum Carrier {

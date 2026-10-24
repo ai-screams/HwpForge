@@ -2736,7 +2736,7 @@ fn decode_group_picture(
     use hwpforge_core::control::geometry::{fold_box, FoldInput, FoldLossKind};
 
     let Some(mut image) = super::section::convert_picture(pic, depth, ctx)? else {
-        ctx.content_lost("pic", "picture without an image reference");
+        ctx.content_lost("pic", "picture without an hc:img element");
         return Ok(None);
     };
     let Some(map) = child_chain(pic.rendering_info.as_ref(), pic.offset.as_ref()) else {
@@ -2845,7 +2845,7 @@ fn decode_nested_container(
         return Ok(None);
     };
     // The nested group's own matrices should describe the same box. A
-    // child Core cannot carry (a picture) still counts in the wire box but
+    // child Core cannot carry (a picture without hc:img) counts in the wire box but
     // not in the shapes' bounds; it is reported on its own, so the boxes
     // are not compared then.
     let (org_w, org_h) = container_org_size(nested);
@@ -3001,7 +3001,7 @@ fn shift_child(child: &mut GroupChild, dx: i32, dy: i32) {
 }
 
 /// Whether `container` or a group under it has a child Core cannot carry
-/// (an unsupported element, or a picture with no image to show).
+/// (an unsupported element, or a picture without `<hc:img>`).
 fn has_unsupported_child(container: &crate::schema::section::HxContainer) -> bool {
     use crate::schema::section::HxContainerChildKind as K;
     container.child_order.iter().any(|&(kind, idx)| match kind {
@@ -3011,9 +3011,10 @@ fn has_unsupported_child(container: &crate::schema::section::HxContainer) -> boo
     }) || container.containers.iter().any(has_unsupported_child)
 }
 
-/// Whether a picture names an image (one that does not is not carried).
+/// Whether a picture has `<hc:img>`; an empty reference still carries its frame.
+/// 이것을 실패시키는 것: 빈 참조를 false 로 판정(중첩 묶음의 그림 경계 소실).
 fn has_image(pic: &crate::schema::section::HxPic) -> bool {
-    pic.img.as_ref().is_some_and(|i| !i.binary_item_id_ref.is_empty())
+    pic.img.is_some()
 }
 
 /// How far a nested group's own box may sit from the bounds of its shapes.
@@ -6985,6 +6986,45 @@ mod group_tests {
             w = org.0,
             h = org.1
         )
+    }
+
+    /// 빈 참조는 중첩 묶음에서도 실제 경계를 가진 그림 틀이다.
+    /// 이것을 실패시키는 것: convert_picture 빈 참조 버리기 / has_image 의
+    /// 빈 참조 거부 복원 / Core 묶음 빈 경로 거부 복원.
+    #[test]
+    fn assetless_picture_survives_nested_group_roundtrip() {
+        let picture = pic((1000, 600), &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]), "", "");
+        let inner = nested((1000, 600), &ri(ID, &[(ID, ID), (ID, ID)]), &picture);
+        let bytes = package_with_group(&container((1000, 600), &inner));
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+        let group = first_group(&decoded);
+        let inner = children(&group)[0];
+        assert_eq!(pictures(inner), [(String::new(), 1000, 600, (0.0, 0.0))]);
+        let encoded = encode(&decoded);
+        let xml = section0_xml(&encoded);
+        assert_eq!(xml.matches("<hp:pic ").count(), 1);
+        assert!(xml.contains(r#"binaryItemIDRef="""#));
+        let back = HwpxDecoder::decode(&encoded).unwrap();
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+        let group = first_group(&back);
+        let inner = children(&group)[0];
+        assert_eq!(pictures(inner), [(String::new(), 1000, 600, (0.0, 0.0))]);
+    }
+
+    /// 기존 계약 고정: 크기 0 묶음 그림은 fold_box에서 CONTENT_LOST 후 제외된다.
+    #[test]
+    fn zero_size_assetless_group_picture_is_dropped_without_rejecting_document() {
+        for size in [(0, 600), (1000, 0), (0, 0)] {
+            let picture = pic(size, &ri(ID, &[(ID, ID), (ID, ID)]), "", "");
+            let bytes = package_with_group(&container((1000, 600), &picture));
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            assert!(lost(&decoded.warnings)
+                .iter()
+                .any(|(kind, _)| kind == "group_child_degenerate"));
+            assert!(!section0_xml(&encode(&decoded)).contains("<hp:pic "));
+            assert!(decoded.document.validate().is_ok());
+        }
     }
 
     /// (path, width, height, offset) of each picture child of `group`, in

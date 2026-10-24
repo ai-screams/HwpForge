@@ -142,15 +142,18 @@ pub struct InspectMetadata {
 ///   `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
 ///   reproduction.
 /// - **The `all_` row counts decoded objects, not XML elements.** An element
-///   the decoder accepts but cannot represent — an `<hp:pic>` with no usable
-///   `binaryItemIDRef`, which `convert_picture`
+///   the decoder accepts but cannot represent — an `<hp:pic>` without
+///   `<hc:img>`, which `convert_picture`
 ///   (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
 ///   rather than an error — is genuinely in the section XML yet invisible
 ///   here. `hwpforge-bindings-cli`'s `inspect --json` carries same-scoped
 ///   keys under its own legacy spelling (`tables`, `images`, `text_boxes`,
 ///   …) sourced from a raw XML scan, which has no such gap; the two can
 ///   disagree on such a document, and that CLI deliberately does not read
-///   these six. The paragraph rows carry no equivalent caveat: paragraph
+///   these six. The CLI test `crafted_pic_without_img_is_counted_only_by_raw_scan`
+///   pins that gap; an existing `<hc:img binaryItemIDRef="">` instead remains
+///   a decoded image and is included by both counts.
+///   The paragraph rows carry no equivalent caveat: paragraph
 ///   presence is never silently dropped, so those do agree with the CLI's
 ///   by construction.
 /// - **`#[serde(default)]` marks the twelve fields 0.16.5 never wrote.**

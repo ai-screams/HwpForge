@@ -958,17 +958,20 @@ fn inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page
     assert_eq!(sec0["deep_paragraphs"], 1, "{val}");
 }
 
-/// Audit follow-up regression: `ops::InspectSection`'s decoded-object counts
-/// and the CLI's raw-XML-scan counts of the same scope can genuinely
-/// disagree on a document with an accepted-but-dropped element — a
-/// `<hp:pic>` with no usable `binaryItemIDRef` decodes to `Ok(None)`
-/// (`convert_picture`, `hwpforge-smithy-hwpx/src/decoder/section.rs`), so no
-/// `Control`/`Image` run is ever constructed for it, but the element is
-/// still genuinely present in the section XML. The CLI must keep counting
-/// it; `ops::InspectSection`'s `all_images` must not (it is a decoded-object
-/// count, not a raw scan — see its scope table).
+/// An empty reference carries Hancom's assetless frame; both inspect counts see it.
+/// 이것을 실패시키는 것: convert_picture 의 빈 참조 조기 반환 복원.
 #[test]
-fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
+fn crafted_assetless_pic_is_counted_by_raw_scan_and_decode() {
+    check_crafted_picture_counts(false);
+}
+
+/// 기존 raw-scan 계약 고정. 이것을 실패시키는 것: CLI images를 all_images로 대체.
+#[test]
+fn crafted_pic_without_img_is_counted_only_by_raw_scan() {
+    check_crafted_picture_counts(true);
+}
+
+fn check_crafted_picture_counts(remove_img: bool) {
     use hwpforge_core::image::{Image, ImageFormat, ImageStore};
     use hwpforge_core::page::PageSettings;
     use hwpforge_core::run::Run;
@@ -1005,10 +1008,7 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     let validated = doc.validate().expect("validate");
     let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
 
-    // Tamper: strip the picture's `binaryItemIDRef` so a re-decode hits
-    // `convert_picture`'s `Ok(None)` arm instead of constructing an
-    // `Image` — the `<hp:pic>` element itself stays exactly where the
-    // encoder put it.
+    // Hancom clears a lost asset reference while retaining the picture frame.
     let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
     let mut section_xml = String::new();
     archive
@@ -1020,7 +1020,13 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
         section_xml.contains(r#"binaryItemIDRef="host""#),
         "encoder must have written the reference to tamper with: {section_xml}"
     );
-    let tampered_xml = section_xml.replace(r#"binaryItemIDRef="host""#, r#"binaryItemIDRef="""#);
+    let tampered_xml = if remove_img {
+        let start = section_xml.find("<hc:img ").expect("img start");
+        let end = start + section_xml[start..].find("/>").expect("img end") + 2;
+        format!("{}{}", &section_xml[..start], &section_xml[end..])
+    } else {
+        section_xml.replace(r#"binaryItemIDRef="host""#, r#"binaryItemIDRef="""#)
+    };
 
     let names: Vec<String> = (0..archive.len())
         .map(|i| archive.by_index(i).expect("entry").name().expect("ZIP entry name").to_string())
@@ -1043,13 +1049,12 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     let path = dir.join("crafted-pic-no-binary-ref.hwpx");
     std::fs::write(&path, &tampered_bytes).expect("write fixture");
 
-    // `ops::inspect`: decoded-object count sees no image at all — the run
-    // was never constructed, so there is nothing for the walk to visit.
     let out = hwpforge::ops::inspect(&tampered_bytes, &hwpforge::ops::InspectOptions::default())
-        .expect("Ok(None) on one picture is not a decode error");
+        .expect("assetless picture is valid");
     assert_eq!(
-        out.report.section_details[0].all_images, 0,
-        "decoded-object count must not see the dropped picture: {:?}",
+        out.report.section_details[0].all_images,
+        usize::from(!remove_img),
+        "decoded-object count requires hc:img, even with an empty reference: {:?}",
         out.report.section_details[0]
     );
 
@@ -1059,8 +1064,7 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     assert_eq!(code, 0, "{val}");
     assert_eq!(
         val["sections"][0]["images"], 1,
-        "CLI's raw scan must still count the element even though the \
-         decoder could not represent it: {val}"
+        "raw scan includes hp:pic regardless of hc:img presence: {val}"
     );
 }
 
@@ -5385,6 +5389,68 @@ fn to_pdf_renders_hwpx_fixture() {
     assert_eq!(value["warning_counts"]["render"], 0);
     let bytes = std::fs::read(&out).expect("output pdf");
     assert!(bytes.starts_with(b"%PDF-"), "PDF 헤더");
+}
+
+/// 이것을 실패시키는 것: PDF is_assetless_picture 가드 무력화.
+#[test]
+#[ignore = "requires Hancom TTF bundle (macOS) — run with --run-ignored all"]
+fn to_pdf_assetless_f6_keeps_page_count_and_nonempty_missing_contract() {
+    let dir = test_tmp();
+    for degraded in [false, true] {
+        let src = fixture("images/f6-dangling-image-resaved.hwpx");
+        let out = dir.join(if degraded { "degraded.pdf" } else { "default.pdf" });
+        let mut args = vec![
+            "to-pdf",
+            src.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--discovery",
+            "hancom",
+        ];
+        if degraded {
+            args.push("--degraded");
+        }
+        let (value, _, code) = run_json(&args);
+        assert_eq!(code, 0, "{value}");
+        assert_eq!(value["warning_counts"]["render"], 0, "{value}");
+        let bytes = std::fs::read(out).unwrap();
+        let pdf = String::from_utf8_lossy(&bytes);
+        // origin/main CLI의 F6 기본 출력에서 확인한 1쪽을 고정한다.
+        assert_eq!(pdf.matches("/Type/Page").count() - pdf.matches("/Type/Pages").count(), 1);
+    }
+    // 원래 F6는 캐시가 없으므로 재저장본의 참조만 바꿔 자산 조회까지 도달시킨다.
+    let src = dir.join("nonempty.hwpx");
+    let mut archive = ZipArchive::new(
+        std::fs::File::open(fixture("images/f6-dangling-image-resaved.hwpx")).unwrap(),
+    )
+    .unwrap();
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(&src).unwrap());
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == "Contents/section0.xml" {
+            let xml = String::from_utf8(bytes).unwrap();
+            assert!(xml.contains(r#"binaryItemIDRef="""#));
+            bytes =
+                xml.replace(r#"binaryItemIDRef="""#, r#"binaryItemIDRef="missing""#).into_bytes();
+        }
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    writer.finish().unwrap();
+    let out = dir.join("nonempty.pdf");
+    let (value, _, code) = run_json(&[
+        "to-pdf",
+        src.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--discovery",
+        "hancom",
+    ]);
+    assert_ne!(code, 0, "{value}");
+    assert_eq!(value["cause"]["code"], "IMAGE_DATA_MISSING", "{value}");
 }
 
 #[test]

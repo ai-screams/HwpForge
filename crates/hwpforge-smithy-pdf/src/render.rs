@@ -111,6 +111,11 @@ impl FontTable {
     }
 }
 
+// 자산 없는 틀은 배치만 유지하고 조회·그리기를 생략한다.
+fn is_assetless_picture(key: &str) -> bool {
+    key.is_empty()
+}
+
 /// 이미지 원자의 바이트를 interner 경유로 해석한다 (§3 D1/D3).
 ///
 /// `Ok(Some)` = 자산 확보, `Ok(None)` = Degraded 생략(경고 push 완료),
@@ -254,6 +259,9 @@ fn picture_item(
 
 enum PreparedAtom<'a> {
     Run(PreparedRun),
+    BlankImage {
+        width: i32,
+    },
     Image {
         canonical_key: String,
         data: std::sync::Arc<Vec<u8>>,
@@ -311,6 +319,9 @@ pub(crate) fn build_paint_pages(
         // W5 w1b: 앵커 이미지 = 배경 (본문이 회피하므로 맨 아래에 깔린다 —
         // §9e z-order). 인라인 이미지와 같은 asset interner 를 공유한다.
         for ai in &page.anchored_images {
+            if is_assetless_picture(&ai.canonical_key) {
+                continue;
+            }
             let Some(data) = resolve_image_asset(
                 input,
                 &mut image_assets,
@@ -509,6 +520,10 @@ fn render_line(
     for (atom_idx, atom) in line.atoms.iter().enumerate() {
         let run = match atom {
             crate::source::LineAtom::Image(img) => {
+                if is_assetless_picture(&img.canonical_key) {
+                    prepared.push(PreparedAtom::BlankImage { width: img.width });
+                    continue;
+                }
                 let data = match resolve_image_asset(
                     input,
                     image_assets,
@@ -589,7 +604,9 @@ fn render_line(
             .iter()
             .map(|a| match a {
                 PreparedAtom::Run(p) => p.shaped.natural_width(),
-                PreparedAtom::Image { width, .. } => f64::from(*width),
+                PreparedAtom::Image { width, .. } | PreparedAtom::BlankImage { width } => {
+                    f64::from(*width)
+                }
                 PreparedAtom::TextBox { tb } => f64::from(tb.width),
             })
             .sum(),
@@ -598,7 +615,9 @@ fn render_line(
             .iter()
             .map(|a| match a {
                 PreparedAtom::Run(p) => p.shaped.space_count(),
-                PreparedAtom::Image { .. } | PreparedAtom::TextBox { .. } => 0,
+                PreparedAtom::Image { .. }
+                | PreparedAtom::BlankImage { .. }
+                | PreparedAtom::TextBox { .. } => 0,
             })
             .sum(),
     };
@@ -621,6 +640,10 @@ fn render_line(
     let mut x = placement.origin_x;
     for atom in prepared {
         let p = match atom {
+            PreparedAtom::BlankImage { width } => {
+                x += f64::from(width);
+                continue;
+            }
             PreparedAtom::Image { canonical_key, data, width, height, crop } => {
                 // 세로 배치 = §10c-2 분기 (이미지-지배는 line_top, sub-line 은
                 // baseline + 상수 k descent). baseline = baseline_y − top_y.
@@ -862,6 +885,62 @@ mod atom_tests {
                 alignment: Alignment::Left,
             }],
             page_number: None,
+        }
+    }
+
+    /// 이것을 실패시키는 것: is_assetless_picture를 false로 바꾸기 / 빈 틀 뒤 x 전진 제거 /
+    /// 빈 틀의 자연폭을 0으로 계산.
+    #[test]
+    fn assetless_pictures_keep_space_without_lookup_or_paint() {
+        struct NoEmptyLookup;
+        impl StyleLookup for NoEmptyLookup {
+            fn image_data(&self, key: &str) -> Option<&[u8]> {
+                assert!(!key.is_empty(), "assetless frames must not request bytes");
+                ImgStyles.image_data(key)
+            }
+        }
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &NoEmptyLookup };
+        for failure_mode in [RenderFailureMode::Fatal, RenderFailureMode::Degraded] {
+            for (alignment, shift) in [
+                (Alignment::Left, 0.0),
+                (Alignment::Center, (42520.0 - 4000.0) / 2.0),
+                (Alignment::Right, 42520.0 - 4000.0),
+            ] {
+                let mut layout = image_only_layout();
+                let mut blank = layout.lines[0].atoms[0].clone();
+                let LineAtom::Image(ref mut img) = blank else { unreachable!() };
+                img.canonical_key.clear();
+                layout.lines[0].atoms.insert(0, blank);
+                layout.lines[0].alignment = alignment;
+                layout.anchored_images.push(LaidAnchoredImage {
+                    location: "s0/p0".into(),
+                    canonical_key: String::new(),
+                    x: 1234,
+                    y: 5678,
+                    width: 4000,
+                    height: 3000,
+                    crop: None,
+                });
+                let options = PdfOptions { failure_mode, ..PdfOptions::default() };
+                let mut table = FontTable::new(
+                    FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                        .expect("resolver"),
+                );
+                let mut warnings = Vec::new();
+                let pages =
+                    build_paint_pages(&input, &options, &[layout], &mut table, &mut warnings)
+                        .expect("assetless frames are valid in both modes");
+                assert!(warnings.is_empty(), "{warnings:?}");
+                assert_eq!(pages.len(), 1);
+                assert_eq!(pages[0].items.len(), 1, "only the nonempty image paints");
+                let PaintItem::Image(img) = &pages[0].items[0] else { panic!("image") };
+                assert_eq!(img.canonical_key, "img1.png");
+                assert!(
+                    (img.origin.x.0 - Pt::from_hwpunit_f64(8504.0 + shift + 2000.0).0).abs() < 1e-9
+                );
+                assert_eq!(img.origin.y, Pt::from_hwpunit(5000));
+            }
         }
     }
 
