@@ -168,3 +168,20 @@ fn the_core_paragraph_stays_empty() {
     let last = doc.sections()[0].paragraphs.last().expect("paragraph");
     assert_eq!(last.text_content(), "");
 }
+
+/// 이것을 실패시키는 것: 문단 직속 요소를 잡으면서 그 옆 정상 run 까지 버리는
+/// 회귀(디코더가 잔여 내용을 보고하며 run 을 잘라 내는 변이로 실패 확인).
+/// 경고는 하나, run 글자 `A`·`B` 는 그대로 남아야 한다.
+#[test]
+fn an_element_between_runs_is_reported_and_the_runs_keep_their_text() {
+    let para = format!(
+        r#"<hp:p {ATTRS}><hp:run charPrIDRef="0"><hp:t>A</hp:t></hp:run><hp:imaginary/><hp:run charPrIDRef="0"><hp:t>B</hp:t></hp:run></hp:p>"#
+    );
+    let bytes = with_paragraph(&editable(), &para);
+    let lost = lost_kinds(&bytes);
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    let doc = HwpxDecoder::decode(&bytes).expect("decode").document;
+    let last = doc.sections()[0].paragraphs.last().expect("paragraph");
+    let text: String = last.runs.iter().filter_map(|run| run.content.plain_text()).collect();
+    assert_eq!(text, "AB");
+}
