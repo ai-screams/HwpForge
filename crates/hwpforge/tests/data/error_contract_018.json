@@ -3874,6 +3874,196 @@
           "exit": 2
         }
       }
+    },
+    {
+      "id": "params.convert",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "params.inspect",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "params.to-json",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "params.from-json",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "params.patch",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "params.outline",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "params.diff",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "params.delete-para",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "params.insert-para",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "params.read",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "params.fields",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "params.fill",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "params.stamp-plan",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "params.stamp",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "params.set-cell",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "params.validate",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "params.restyle",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "params.templates",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "templates"
+        }
+      }
+    },
+    {
+      "id": "params.to-md",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "to-md"
+        }
+      }
     }
   ]
 }

@@ -1,0 +1,514 @@
+{
+  "params.convert": {
+    "valid": {
+      "markdown": "INPUT",
+      "output_path": "OUTPUT",
+      "preset": "default",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "markdown": [],
+          "output_path": "OUTPUT",
+          "preset": "default"
+        },
+        "message": "markdown: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.inspect": {
+    "valid": {
+      "file_path": "INPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.to-json": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "section": 0,
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "section": 0
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.from-json": {
+    "valid": {
+      "structure": "{}",
+      "output_path": "OUTPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "structure": [],
+          "output_path": "OUTPUT"
+        },
+        "message": "structure: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.patch": {
+    "valid": {
+      "base_path": "INPUT",
+      "output_path": "OUTPUT",
+      "section": 0,
+      "unknown_top_level": 1,
+      "section_json_path": "INPUT"
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "base_path": "INPUT",
+          "output_path": "OUTPUT",
+          "section": [],
+          "section_json_path": "INPUT"
+        },
+        "message": "section: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.outline": {
+    "valid": {
+      "file_path": "INPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.diff": {
+    "valid": {
+      "base_path": "INPUT",
+      "revised_path": "INPUT",
+      "output_path": "OUTPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "base_path": [],
+          "revised_path": "INPUT",
+          "output_path": "OUTPUT"
+        },
+        "message": "base_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.delete-para": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "section": 0,
+      "indices": [
+        0
+      ],
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "section": 0,
+          "indices": [
+            0
+          ]
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "section": 0,
+          "indices": [
+            "bad"
+          ]
+        },
+        "message": "indices[0]: invalid type: string"
+      }
+    ]
+  },
+  "params.insert-para": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "section": 0,
+      "anchor": 0,
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "section": 0,
+          "anchor": 0
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "section": 0,
+          "anchor": 0,
+          "texts": [
+            7
+          ]
+        },
+        "message": "texts[0]: invalid type: integer"
+      }
+    ]
+  },
+  "params.read": {
+    "valid": {
+      "file_path": "INPUT",
+      "section": 0,
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "section": 0
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.fields": {
+    "valid": {
+      "file_path": "INPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.fill": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "values": {
+        "x": "y"
+      },
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "values": {
+            "x": "y"
+          }
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "values": {
+            "name": 3
+          }
+        },
+        "message": "values.name: invalid type: integer"
+      }
+    ]
+  },
+  "params.stamp-plan": {
+    "valid": {
+      "file_path": "INPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.stamp": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "specs": [],
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "specs": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "cells": [
+            {
+              "table": 0,
+              "at": {
+                "row": "bad",
+                "col": 0
+              },
+              "action": "ignore"
+            }
+          ]
+        },
+        "message": "cells[0].at.row: invalid type: string"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "cells": [
+            {
+              "table": 0,
+              "at": {
+                "row": 0,
+                "col": 0
+              },
+              "action": "ignore",
+              "extra": 1
+            }
+          ]
+        },
+        "message": "cells[0].extra: unknown field `extra`"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "cells": [
+            {
+              "table": 0,
+              "at": {
+                "col": 0
+              },
+              "action": "ignore"
+            }
+          ]
+        },
+        "message": "cells[0].at: missing field `row`"
+      }
+    ]
+  },
+  "params.set-cell": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "specs": [],
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "specs": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "specs": [
+            {
+              "table": 0,
+              "at": {
+                "row": 0,
+                "col": 0
+              },
+              "text": 7
+            }
+          ]
+        },
+        "message": "specs[0].text: invalid type: integer"
+      },
+      {
+        "arguments": {
+          "file_path": "INPUT",
+          "output_path": "OUTPUT",
+          "specs": [
+            {
+              "table": 0,
+              "at": {
+                "row": 0,
+                "col": 0
+              }
+            }
+          ]
+        },
+        "message": "specs[0]: missing field `text`"
+      }
+    ]
+  },
+  "params.validate": {
+    "valid": {
+      "file_path": "INPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.restyle": {
+    "valid": {
+      "file_path": "INPUT",
+      "output_path": "OUTPUT",
+      "preset": "default",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": [],
+          "output_path": "OUTPUT",
+          "preset": "default"
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  },
+  "params.templates": {
+    "valid": {
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "name": []
+        },
+        "message": "name: invalid type: sequence"
+      }
+    ]
+  },
+  "params.to-md": {
+    "valid": {
+      "file_path": "INPUT",
+      "unknown_top_level": 1
+    },
+    "invalid": [
+      {
+        "arguments": {
+          "file_path": []
+        },
+        "message": "file_path: invalid type: sequence"
+      },
+      {
+        "arguments": {},
+        "message": "$: missing field `"
+      }
+    ]
+  }
+}
