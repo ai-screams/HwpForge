@@ -141,6 +141,8 @@ pub struct FieldInventory<'a> {
     positions: HashMap<CorePath, (String, usize)>,
     protected: HashMap<(usize, String), Vec<bool>>,
     protection_work: std::cell::Cell<usize>,
+    #[cfg(test)]
+    prefix_steps: std::cell::Cell<usize>,
 }
 impl<'a> FieldInventory<'a> {
     /// Visit all independent paragraph flows using the common semantic paths.
@@ -582,6 +584,8 @@ impl<'a> FieldInventory<'a> {
         let mut prefix = path;
         let mut positions = Vec::new();
         loop {
+            #[cfg(test)]
+            self.prefix_steps.set(self.prefix_steps.get() + 1);
             if let Some(p) = self.positions.get(&CorePath::new(section, prefix)) {
                 positions.push(p);
             }
@@ -601,10 +605,15 @@ impl<'a> FieldInventory<'a> {
     }
     /// True if a slot belongs to any field body.
     pub fn contains_body(&self, section: usize, path: &str) -> bool {
-        self.fields_at(section, path).next().is_some()
+        // 이것을 실패시키는 것: 빈 contains_body의 prefix 순회 복원 (empty_inventory_skips_prefixes의 prefix_steps 계수).
+        !self.fields.is_empty() && self.fields_at(section, path).next().is_some()
     }
     /// Common value-edit preflight, including ancestor runs.
     pub fn protects(&self, section: usize, path: &str) -> bool {
+        // 이것을 실패시키는 것: 빈 inventory에서도 prefix 루프 실행 (empty_inventory_skips_prefixes).
+        if self.fields.is_empty() {
+            return false;
+        }
         // An inner flow can lie in the body of an outer field.
         let mut prefix = path;
         loop {
@@ -631,6 +640,15 @@ impl<'a> FieldInventory<'a> {
             p.section() == section
                 && p.relative().starts_with(&prefix)
                 && self.contains_body(section, p.relative())
+        }) || self.fields.iter().filter(|f| f.section == section).any(|f| {
+            // Field-free child flows have no position entries. Borrow the already
+            // stored body to check actual paragraph presence, including empty and
+            // out-of-range paragraphs; an ancestor prefix alone is insufficient.
+            // 이것을 실패시키는 것: 하위 일반 문단 보호 누락 또는 빈 문단도 보호.
+            f.body()
+                .iter()
+                .chain((f.editability == FieldEditability::Unclosed).then(|| &f.runs[f.begin]))
+                .any(|body| body_has_paragraph(body, &prefix))
         })
     }
     /// Protect gaps inside ranges. `None` is before a paragraph; `Some(run)`
@@ -752,6 +770,11 @@ impl<'a> FieldInventory<'a> {
         replaced == edits.len()
     }
     fn flow(&mut self, section: usize, paragraphs: &'a [Paragraph], flow: &str) {
+        // Shallow only: the walker must still descend into field-bearing children.
+        // 이것을 실패시키는 것: 필드 없는 부모에서 자손 flow 하강까지 생략.
+        if !paragraphs.iter().flat_map(|p| &p.runs).any(field_related) {
+            return;
+        }
         let runs: Vec<_> = paragraphs
             .iter()
             .enumerate()
@@ -778,12 +801,11 @@ impl<'a> FieldInventory<'a> {
             let mut active: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
             let mut seen = HashSet::new();
             for (i, (_, path, run)) in runs.iter().enumerate() {
-                let Some(control) = run.content.as_control() else {
-                    continue;
-                };
+                let Some(control) = run.content.as_control() else { continue };
+                let Some(kind) = field_kind(control) else { continue };
                 let mut entry = FieldEntry {
                     section,
-                    kind: String::new(),
+                    kind: kind.into(),
                     name: None,
                     id: None,
                     flow: flow.into(),
@@ -847,12 +869,6 @@ impl<'a> FieldInventory<'a> {
                         }
                     }
                     Control::Field { field_type, name, hint_text, .. } => {
-                        entry.kind = if *field_type == FieldType::ClickHere {
-                            "CLICK_HERE"
-                        } else {
-                            "SUMMERY"
-                        }
-                        .into();
                         entry.name = name.clone();
                         entry.hint = hint_text.clone();
                         entry.range = i..i + 1;
@@ -861,39 +877,17 @@ impl<'a> FieldInventory<'a> {
                         }
                         self.fields.push(entry);
                     }
-                    Control::Hyperlink { .. }
-                    | Control::CrossRef { .. }
-                    | Control::UnknownSummary { .. }
-                    | Control::PathField { .. }
-                    | Control::DateCodeField { .. }
-                    | Control::Memo { .. } => {
-                        entry.kind = match control {
-                            Control::Hyperlink { .. } => "HYPERLINK",
-                            Control::CrossRef { .. } => "CROSSREF",
-                            Control::UnknownSummary { .. } => "SUMMERY",
-                            Control::DateCodeField { .. } => "DATE",
-                            Control::Memo { .. } => "MEMO",
-                            _ => "PATH",
-                        }
-                        .into();
-                        entry.range = i..i + 1;
-                        self.fields.push(entry);
-                    }
                     Control::Bookmark { name, .. } => {
-                        entry.kind = "BOOKMARK".into();
                         entry.name = Some(name.clone());
                         self.fields.push(entry);
                     }
                     Control::InlinePageNumber { .. } | Control::AutoNumber { .. } => {
-                        entry.kind = if matches!(control, Control::InlinePageNumber { .. }) {
-                            "PAGE_NUM"
-                        } else {
-                            "AUTO_NUMBER"
-                        }
-                        .into();
                         self.fields.push(entry);
                     }
-                    _ => {}
+                    _ => {
+                        entry.range = i..i + 1;
+                        self.fields.push(entry);
+                    }
                 }
             }
             for (id, (field, begin)) in active {
@@ -921,6 +915,11 @@ impl<'a> FieldInventory<'a> {
             // Anchors are an independent run flow; no temporary Paragraph or subtree copy.
             for (_, path, run) in runs.into_iter().rev() {
                 if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
+                    // A Memo itself is field-related, so nested anchors still descend.
+                    // 이것을 실패시키는 것: 일반 anchor 위치 저장 복원 (plain_anchor_has_no_positions).
+                    if !anchor_runs.iter().any(field_related) {
+                        continue;
+                    }
                     let prefix = format!("{path}.control.memo.anchor");
                     let anchor = anchor_runs
                         .iter()
@@ -940,6 +939,58 @@ impl<'a> FieldInventory<'a> {
         });
     }
 }
+// One shallow classification for flow filtering and run_flow discovery.
+// 이것을 실패시키는 것: Memo를 일반 control로 분류하여 필드와 anchor 하강 누락.
+fn field_kind(control: &Control) -> Option<&'static str> {
+    Some(match control {
+        Control::FieldBoundary { .. } => "", // The start supplies the authored kind.
+        Control::Field { field_type: FieldType::ClickHere, .. } => "CLICK_HERE",
+        Control::Field { .. } | Control::UnknownSummary { .. } => "SUMMERY",
+        Control::Hyperlink { .. } => "HYPERLINK",
+        Control::CrossRef { .. } => "CROSSREF",
+        Control::PathField { .. } => "PATH",
+        Control::DateCodeField { .. } => "DATE",
+        Control::Memo { .. } => "MEMO",
+        Control::Bookmark { .. } => "BOOKMARK",
+        Control::InlinePageNumber { .. } => "PAGE_NUM",
+        Control::AutoNumber { .. } => "AUTO_NUMBER",
+        _ => return None,
+    })
+}
+fn field_related(run: &crate::Run) -> bool {
+    run.content.as_control().and_then(field_kind).is_some()
+}
+
+fn body_has_paragraph(body: &FieldBodyLocation<'_>, prefix: &str) -> bool {
+    // Fast rejection only; the walk below compares the complete paragraph prefix.
+    if !prefix.strip_prefix(body.path()).is_some_and(|tail| tail.starts_with('.')) {
+        return false;
+    }
+    let mut candidate = String::from(body.path());
+    // Anchors are independent run flows, not part of visit_flows.
+    if let Some(Control::Memo { anchor_runs, .. }) = body.content().as_control() {
+        candidate.push_str(".control.memo.anchor[0].");
+        if !anchor_runs.is_empty() && candidate.starts_with(prefix) {
+            return true;
+        }
+    }
+    walk_flow(Flow::Content(body.content()), body.path(), &mut |ps, path| {
+        // Preserve container-prefix queries, reusing one buffer for all paragraphs.
+        candidate.clear();
+        candidate.push_str(path);
+        let restore = candidate.len();
+        ps.iter().enumerate().any(|(pi, p)| {
+            if p.runs.is_empty() {
+                return false;
+            }
+            candidate.truncate(restore);
+            use std::fmt::Write;
+            write!(candidate, "[{pi}].").expect("write to String");
+            candidate.starts_with(prefix)
+        })
+    })
+}
+
 fn body<'a>(section: usize, path: &str, content: &'a RunContent) -> FieldBodyLocation<'a> {
     let suffix = match content {
         RunContent::Text(_) | RunContent::InlineText(_) => ".text",
@@ -991,67 +1042,93 @@ fn walk_section<'a>(section: &'a Section, f: &mut impl FnMut(&'a [Paragraph], &s
 enum Flow<'a> {
     Paragraphs(&'a [Paragraph]),
     Control(&'a Control),
+    Content(&'a RunContent),
 }
 fn walk_paragraphs<'a>(
     paragraphs: &'a [Paragraph],
     prefix: &str,
     f: &mut impl FnMut(&'a [Paragraph], &str),
 ) {
-    let mut stack = vec![(Flow::Paragraphs(paragraphs), prefix.to_owned())];
+    walk_flow(Flow::Paragraphs(paragraphs), prefix, &mut |ps, path| {
+        f(ps, path);
+        false
+    });
+}
+#[cfg(test)]
+thread_local! {
+    // Bytes actually appended from frames, isolated between parallel test threads.
+    static WALK_PATH_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+// A true visitor result stops traversal before queuing that flow's descendants.
+fn walk_flow<'a>(
+    node: Flow<'a>,
+    prefix: &str,
+    f: &mut impl FnMut(&'a [Paragraph], &str) -> bool,
+) -> bool {
+    // Frames own only a relative suffix and the parent's cursor length.
+    // 이것을 실패시키는 것: cursor 복구 길이를 한 바이트 줄이기.
+    let mut path = String::new();
+    let mut stack = vec![(node, prefix.to_owned(), 0)];
     let mut pending = Vec::new();
-    while let Some((node, path)) = stack.pop() {
+    while let Some((node, suffix, restore)) = stack.pop() {
+        path.truncate(restore);
+        path.push_str(&suffix);
+        #[cfg(test)]
+        WALK_PATH_BYTES.with(|work| work.set(work.get() + suffix.len()));
         match node {
             Flow::Paragraphs(ps) => {
-                f(ps, &path);
-                queue_paragraphs(ps, &path, &mut pending);
+                if f(ps, &path) {
+                    return true;
+                }
+                queue_paragraphs(ps, &mut pending);
             }
-            Flow::Control(c) => queue_control(c, &path, &mut pending),
+            Flow::Control(c) => queue_control(c, &mut pending),
+            Flow::Content(c) => queue_content(c, "", &mut pending),
         }
-        stack.extend(pending.drain(..).rev());
+        let restore = path.len();
+        stack.extend(pending.drain(..).rev().map(|(node, suffix)| (node, suffix, restore)));
     }
+    false
 }
-fn queue_paragraphs<'a>(
-    paragraphs: &'a [Paragraph],
-    prefix: &str,
-    pending: &mut Vec<(Flow<'a>, String)>,
-) {
+fn queue_paragraphs<'a>(paragraphs: &'a [Paragraph], pending: &mut Vec<(Flow<'a>, String)>) {
     for (pi, p) in paragraphs.iter().enumerate() {
         for (ri, r) in p.runs.iter().enumerate() {
-            let path = format!("{prefix}[{pi}].runs[{ri}]");
-            match &r.content {
-                RunContent::Table(t) => {
-                    if let Some(c) = &t.caption {
-                        pending.push((
-                            Flow::Paragraphs(&c.paragraphs),
-                            format!("{path}.table.caption.paragraphs"),
-                        ));
-                    }
-                    for (row, tr) in t.rows.iter().enumerate() {
-                        for (cell, tc) in tr.cells.iter().enumerate() {
-                            pending.push((
-                                Flow::Paragraphs(&tc.paragraphs),
-                                format!("{path}.table.rows[{row}].cells[{cell}].paragraphs"),
-                            ));
-                        }
-                    }
-                }
-                RunContent::Image(image) => {
-                    if let Some(c) = &image.caption {
-                        pending.push((
-                            Flow::Paragraphs(&c.paragraphs),
-                            format!("{path}.image.caption.paragraphs"),
-                        ));
-                    }
-                }
-                RunContent::Control(c) => {
-                    pending.push((Flow::Control(c), format!("{path}.control")))
-                }
-                _ => {}
-            }
+            let path = format!("[{pi}].runs[{ri}]");
+            queue_content(&r.content, &path, pending);
         }
     }
 }
-fn queue_control<'a>(c: &'a Control, path: &str, pending: &mut Vec<(Flow<'a>, String)>) {
+fn queue_content<'a>(content: &'a RunContent, path: &str, pending: &mut Vec<(Flow<'a>, String)>) {
+    match content {
+        RunContent::Table(t) => {
+            if let Some(c) = &t.caption {
+                pending.push((
+                    Flow::Paragraphs(&c.paragraphs),
+                    format!("{path}.table.caption.paragraphs"),
+                ));
+            }
+            for (row, tr) in t.rows.iter().enumerate() {
+                for (cell, tc) in tr.cells.iter().enumerate() {
+                    pending.push((
+                        Flow::Paragraphs(&tc.paragraphs),
+                        format!("{path}.table.rows[{row}].cells[{cell}].paragraphs"),
+                    ));
+                }
+            }
+        }
+        RunContent::Image(image) => {
+            if let Some(c) = &image.caption {
+                pending.push((
+                    Flow::Paragraphs(&c.paragraphs),
+                    format!("{path}.image.caption.paragraphs"),
+                ));
+            }
+        }
+        RunContent::Control(c) => pending.push((Flow::Control(c), format!("{path}.control"))),
+        _ => {}
+    }
+}
+fn queue_control<'a>(c: &'a Control, pending: &mut Vec<(Flow<'a>, String)>) {
     let (tag, paragraphs, caption) = match c {
         Control::TextBox { paragraphs, caption, .. } => {
             ("textbox", Some(paragraphs), caption.as_ref())
@@ -1077,13 +1154,13 @@ fn queue_control<'a>(c: &'a Control, path: &str, pending: &mut Vec<(Flow<'a>, St
             for (i, child) in children.iter().enumerate() {
                 match child {
                     GroupChild::Shape(s) => {
-                        pending.push((Flow::Control(s), format!("{path}.group.children[{i}]")))
+                        pending.push((Flow::Control(s), format!(".group.children[{i}]")))
                     }
                     GroupChild::Picture(p) => {
                         if let Some(c) = &p.caption {
                             pending.push((
                                 Flow::Paragraphs(&c.paragraphs),
-                                format!("{path}.group.children[{i}].caption.paragraphs"),
+                                format!(".group.children[{i}].caption.paragraphs"),
                             ));
                         }
                     }
@@ -1094,13 +1171,10 @@ fn queue_control<'a>(c: &'a Control, path: &str, pending: &mut Vec<(Flow<'a>, St
         _ => return,
     };
     if let Some(paragraphs) = paragraphs {
-        pending.push((Flow::Paragraphs(paragraphs), format!("{path}.{tag}.paragraphs")));
+        pending.push((Flow::Paragraphs(paragraphs), format!(".{tag}.paragraphs")));
     }
     if let Some(caption) = caption {
-        pending.push((
-            Flow::Paragraphs(&caption.paragraphs),
-            format!("{path}.{tag}.caption.paragraphs"),
-        ));
+        pending.push((Flow::Paragraphs(&caption.paragraphs), format!(".{tag}.caption.paragraphs")));
     }
 }
 
@@ -1256,6 +1330,164 @@ mod walker_tests {
     use super::*;
     use crate::Run;
     use hwpforge_foundation::CharShapeIndex;
+
+    // 이것을 실패시키는 것: 필드 없는 flow의 주소 수집 복원 또는 빈 inventory의 조기 반환 삭제.
+    #[test]
+    fn empty_inventory_skips_prefixes() {
+        let mut p = Paragraph::with_runs(
+            vec![Run::text("leaf", CharShapeIndex::new(0))],
+            hwpforge_foundation::ParaShapeIndex::new(0),
+        );
+        for _ in 0..1_000 {
+            p = Paragraph::with_runs(
+                vec![Run::control(
+                    Control::text_box(
+                        vec![p],
+                        hwpforge_foundation::HwpUnit::ZERO,
+                        hwpforge_foundation::HwpUnit::ZERO,
+                    ),
+                    CharShapeIndex::new(0),
+                )],
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            );
+        }
+        let sections = [Section::with_paragraphs(vec![p], crate::PageSettings::a4())];
+        let inventory = FieldInventory::from_sections(&sections);
+        assert!(inventory.positions.is_empty());
+        assert_eq!(inventory.stored_run_count(), 0);
+        let path =
+            format!("paragraphs[0]{}.text", ".runs[0].control.textbox.paragraphs[0]".repeat(1_000));
+        let work = inventory.protection_work();
+        assert!(!inventory.contains_body(0, &path));
+        assert_eq!(inventory.prefix_steps.get(), 0);
+        // Check that the counter observes real fields_at prefix lookups as well.
+        assert!(inventory.fields_at(0, "paragraphs[0].runs[0].text").next().is_none());
+        assert_eq!(inventory.prefix_steps.get(), 3);
+        assert!(!inventory.protects(0, &path));
+        assert_eq!(inventory.protection_work(), work);
+    }
+
+    // 이것을 실패시키는 것: frame suffix에 전체 조상 경로 재삽입.
+    #[test]
+    fn walker_path_copy_work_is_linear() {
+        let mut p = Paragraph::new(hwpforge_foundation::ParaShapeIndex::new(0));
+        const DEPTH: usize = 256;
+        for _ in 0..DEPTH {
+            p = Paragraph::with_runs(
+                vec![Run::control(
+                    Control::text_box(
+                        vec![p],
+                        hwpforge_foundation::HwpUnit::ZERO,
+                        hwpforge_foundation::HwpUnit::ZERO,
+                    ),
+                    CharShapeIndex::new(0),
+                )],
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            );
+        }
+        WALK_PATH_BYTES.with(|work| work.set(0));
+        let mut visited = 0;
+        walk_paragraphs(&[p], "paragraphs", &mut |_, _| visited += 1);
+        assert_eq!(visited, DEPTH + 1);
+        let copied = WALK_PATH_BYTES.with(|work| work.get());
+        assert_eq!(
+            copied,
+            "paragraphs".len() + DEPTH * "[0].runs[0].control.textbox.paragraphs".len()
+        );
+    }
+
+    // 이것을 실패시키는 것: 일치 뒤에도 보호 subtree의 하위 flow를 계속 순회.
+    #[test]
+    fn body_paragraph_search_stops_at_match() {
+        let run = Run::control(
+            Control::text_box(
+                vec![Paragraph::with_runs(
+                    vec![Run::control(
+                        Control::text_box(
+                            vec![],
+                            hwpforge_foundation::HwpUnit::ZERO,
+                            hwpforge_foundation::HwpUnit::ZERO,
+                        ),
+                        CharShapeIndex::new(0),
+                    )],
+                    hwpforge_foundation::ParaShapeIndex::new(0),
+                )],
+                hwpforge_foundation::HwpUnit::ZERO,
+                hwpforge_foundation::HwpUnit::ZERO,
+            ),
+            CharShapeIndex::new(0),
+        );
+        let body = body(0, "paragraphs[0].runs[0]", &run.content);
+        WALK_PATH_BYTES.with(|work| work.set(0));
+        assert!(body_has_paragraph(&body, "paragraphs[0].runs[0].control.textbox.paragraphs[0]."));
+        assert_eq!(
+            WALK_PATH_BYTES.with(|work| work.get()),
+            body.path().len() + ".control.textbox.paragraphs".len()
+        );
+    }
+
+    // 이것을 실패시키는 것: 필드 없는 Memo anchor의 positions 저장 복원.
+    #[test]
+    fn plain_anchor_has_no_positions() {
+        let p = Paragraph::with_runs(
+            vec![Run::control(
+                Control::memo_with_anchor(
+                    vec![],
+                    vec![Run::text("anchor", CharShapeIndex::new(0))],
+                ),
+                CharShapeIndex::new(0),
+            )],
+            hwpforge_foundation::ParaShapeIndex::new(0),
+        );
+        let sections = [Section::with_paragraphs(vec![p], crate::PageSettings::a4())];
+        let inventory = FieldInventory::from_sections(&sections);
+        assert_eq!(inventory.positions.len(), 1);
+        assert_eq!(inventory.stored_run_count(), 1);
+        assert!(inventory.protects_paragraph(0, "paragraphs[0].runs[0].control.memo.anchor", 0));
+        assert!(!inventory.protects_paragraph(0, "paragraphs[0].runs[0].control.memo.anchor", 1));
+    }
+
+    // 이것을 실패시키는 것: unclosed 시작 run을 하위 문단 보호 검사에서 제외.
+    #[test]
+    fn unclosed_start_protects_annotation_paragraphs() {
+        let (_, source) = crate::source_xml::XmlSource::read(
+            "<sec><p><run><fieldBegin id=\"open\"/></run></p></sec>",
+        )
+        .unwrap();
+        let mut start = crate::control::FieldStart {
+            id: "open".into(),
+            kind: "FORMULA".into(),
+            unclosed: true,
+            ..Default::default()
+        };
+        start.recovery.0 = source.unclosed_origin(
+            4,
+            CorePath::new(0, "paragraphs[0].runs[0]"),
+            "Contents/section0.xml",
+        );
+        assert!(start.recovery.0.is_some());
+        start.annotation = Some(vec![
+            Paragraph::new(hwpforge_foundation::ParaShapeIndex::new(0)),
+            Paragraph::with_runs(
+                vec![Run::text("annotation", CharShapeIndex::new(0))],
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            ),
+        ]);
+        let p = Paragraph::with_runs(
+            vec![Run::control(
+                Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) },
+                CharShapeIndex::new(0),
+            )],
+            hwpforge_foundation::ParaShapeIndex::new(0),
+        );
+        let sections = [Section::with_paragraphs(vec![p], crate::PageSettings::a4())];
+        let inventory = FieldInventory::from_sections(&sections);
+        assert_eq!(inventory.fields()[0].editability(), FieldEditability::Unclosed);
+        let flow = "paragraphs[0].runs[0].control.annotation.paragraphs";
+        assert!(!inventory.protects_paragraph(0, flow, 0));
+        assert!(inventory.protects_paragraph(0, flow, 1));
+        assert!(!inventory.protects_paragraph(0, flow, 2));
+    }
 
     // 이것을 실패시키는 것: visible_value의 Memo 재귀 복원 또는 anchor 역순.
     #[test]

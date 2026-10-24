@@ -572,33 +572,39 @@ fn text_runs(
     patchable_only: bool,
     slots: &mut Vec<SemanticTextSlot>,
 ) {
-    let mut stack: Vec<_> = runs
-        .iter()
-        .enumerate()
-        .rev()
-        .map(|(ri, run)| (run, format!("{prefix}.runs[{ri}]")))
-        .collect();
-    while let Some((run, path)) = stack.pop() {
+    let mut path = prefix.to_owned();
+    let mut stack: Vec<_> =
+        runs.iter().enumerate().rev().map(|(ri, run)| (run, ri, path.len())).collect();
+    while let Some((run, ri, restore)) = stack.pop() {
+        // 비텍스트 run 경로 선별의 비용 효과는 레포 밖 비용 probe로만 확인했다.
+        // /private/tmp/codex-fpath/cost-mutations.json (CI 비용 시험 아님).
+        if !has_text_or_anchor(run) {
+            continue;
+        }
+        path.truncate(restore);
+        use std::fmt::Write;
+        write!(path, ".runs[{ri}]").expect("write to String");
         if let Some(text) = run.content.plain_text() {
-            let path = format!("{path}.text");
+            path.push_str(".text");
             if !patchable_only || !inventory.protects(section, &path) {
                 slots.push(SemanticTextSlot {
-                    path,
+                    path: path.clone(),
                     text: text.into_owned(),
                     inline: matches!(run.content, RunContent::InlineText(_)),
                 });
             }
         }
         if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
-            stack.extend(
-                anchor_runs
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .map(|(ri, run)| (run, format!("{path}.control.memo.anchor[0].runs[{ri}]"))),
-            );
+            path.push_str(".control.memo.anchor[0]");
+            let restore = path.len();
+            stack.extend(anchor_runs.iter().enumerate().rev().map(|(ri, run)| (run, ri, restore)));
         }
     }
+}
+
+fn has_text_or_anchor(run: &Run) -> bool {
+    matches!(run.content, RunContent::Text(_) | RunContent::InlineText(_))
+        || matches!(run.content.as_control(), Some(Control::Memo { .. }))
 }
 
 fn collect_text_slots(
@@ -616,6 +622,10 @@ fn collect_text_slots(
             return;
         }
         for (pi, paragraph) in paragraphs.iter().enumerate() {
+            // No full paragraph path for a container-only flow.
+            if !paragraph.runs.iter().any(has_text_or_anchor) {
+                continue;
+            }
             text_runs(
                 &paragraph.runs,
                 &format!("{prefix}[{pi}]"),
@@ -1310,3 +1320,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/field_path_contract.rs"]
+mod field_path_contract;

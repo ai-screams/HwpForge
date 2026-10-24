@@ -583,3 +583,24 @@ mod tests {
         assert_eq!(counts.images, 2);
     }
 }
+
+#[cfg(test)]
+mod field_path_names_contract {
+    // Workspace-only contract: share the HWPX fixtures to keep field_names and
+    // inventory snapshots aligned. Standalone published-package tests need this sibling.
+    mod fixtures {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hwpforge-smithy-hwpx/tests/support/field_path_fixtures.rs"
+        ));
+    }
+    // 이것을 실패시키는 것: 필드 없는 부모 flow에서 하강까지 생략하여 깊은 이름 누락.
+    #[test]
+    fn field_names_contract() {
+        let actual = fixtures::fixtures()
+            .into_iter()
+            .map(|(name, d)| format!("{name}: {:?}\n", super::field_names(d.sections())))
+            .collect::<String>();
+        assert_eq!(actual, include_str!("../../tests/field_path_names.txt"));
+    }
+}
