@@ -582,6 +582,7 @@ fn convert_unknown_preset() {
 }
 
 #[test]
+// 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn convert_unknown_preset_rejected_before_missing_input_is_read() {
     // W3 remediation finding 6: legacy validated `--preset` before any
     // input I/O — a bogus preset must still report UNKNOWN_PRESET even
@@ -597,11 +598,12 @@ fn convert_unknown_preset_rejected_before_missing_input_is_read() {
         "bogus",
     ]);
     assert_eq!(code, 1);
-    assert_eq!(err["code"], "UNKNOWN_PRESET");
+    assert_eq!(err["code"], "PRESET_NOT_FOUND");
     assert_eq!(err["hint"], "Available presets: default, modern, classic, latest");
 }
 
 #[test]
+// 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn convert_unknown_preset_rejected_before_stdin_is_read() {
     // Same guard, `-` (stdin) input this time — an empty stdin would
     // otherwise either block or surface as a different failure; the
@@ -611,7 +613,7 @@ fn convert_unknown_preset_rejected_before_stdin_is_read() {
     assert_eq!(code, 1);
     let err: serde_json::Value = serde_json::from_str(&stderr)
         .unwrap_or_else(|e| panic!("invalid JSON stderr: {e}\n{stderr}"));
-    assert_eq!(err["code"], "UNKNOWN_PRESET");
+    assert_eq!(err["code"], "PRESET_NOT_FOUND");
 }
 
 #[test]
@@ -2160,6 +2162,7 @@ fn convert_hwp5_json_mode() {
 }
 
 #[test]
+// 이것을 실패시키는 것: to-md/convert-hwp5 입력 I/O 종료를 2에서 1로 변경.
 fn convert_hwp5_nonexistent_file() {
     let tmp = test_tmp();
     let out = tmp.join("missing.hwpx");
@@ -2169,18 +2172,19 @@ fn convert_hwp5_nonexistent_file() {
 }
 
 #[test]
-fn convert_hwp5_output_write_failure_reports_hwp5_convert_failed() {
+// 이것을 실패시키는 것: convert-hwp5를 출력 I/O 종료 2 예외에서 제거.
+fn convert_hwp5_output_write_failure_reports_file_write_failed() {
     // W3 remediation finding 8: legacy wrote the output *inside*
     // `hwp5_to_hwpx_with_options`, so a write failure there (missing
     // parent directory) failed as HWP5_CONVERT_FAILED, exit 2, with the
-    // convert hint — not a generic FILE_WRITE_FAILED.
+    // convert hint. W1 keeps exit 2 and emits canonical FILE_WRITE_FAILED.
     let source = fixture("hwp5_02.hwp");
     let out = std::path::Path::new("/nonexistent-dir-convert-hwp5/out.hwpx");
 
     let (err, _, code) =
         run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(code, 2);
-    assert_eq!(err["code"], "HWP5_CONVERT_FAILED");
+    assert_eq!(err["code"], "FILE_WRITE_FAILED");
     assert_eq!(
         err["hint"],
         "Check that the source is a supported HWP5 document and the output path is writable"
@@ -2656,7 +2660,7 @@ fn to_json_nonexistent_file() {
         run(&["--json", "to-json", "/nonexistent/file.hwpx", "-o", json_out.to_str().unwrap()]);
     assert_eq!(code, 1);
     let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
-    assert_eq!(err["code"], "FILE_READ_FAILED");
+    assert_eq!(err["code"], "FILE_NOT_FOUND");
 }
 
 #[test]
@@ -3930,6 +3934,7 @@ fn read_text_mode_renders_all_three_targets() {
 }
 
 #[test]
+// 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn read_error_paths_report_stable_codes() {
     let f = fixture("clickhere_named.hwpx");
 
@@ -3940,15 +3945,15 @@ fn read_error_paths_report_stable_codes() {
 
     let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--section", "9"]);
     assert_eq!(code, 1);
-    assert_eq!(err["code"], "READ_SECTION_OUT_OF_RANGE");
+    assert_eq!(err["code"], "SECTION_OUT_OF_RANGE");
 
     let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--field", "없는이름"]);
     assert_eq!(code, 1);
-    assert_eq!(err["code"], "READ_FIELD_NOT_FOUND");
+    assert_eq!(err["code"], "FIELD_NOT_FOUND");
 
     let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "42"]);
     assert_eq!(code, 1);
-    assert_eq!(err["code"], "READ_TABLE_OUT_OF_RANGE");
+    assert_eq!(err["code"], "TABLE_NOT_FOUND");
 
     let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--paras", "0"]);
     assert_eq!(code, 1);
@@ -3961,7 +3966,7 @@ fn read_error_paths_report_stable_codes() {
     // Text-mode error rendering path.
     let (_, stderr, code) = run(&["read", f.to_str().unwrap(), "--field", "없는이름"]);
     assert_eq!(code, 1);
-    assert!(stderr.contains("READ_FIELD_NOT_FOUND"), "stderr: {stderr}");
+    assert!(stderr.contains("FIELD_NOT_FOUND"), "stderr: {stderr}");
 }
 
 #[test]
@@ -4001,6 +4006,7 @@ fn read_shape_rejections_spell_this_frontend_s_flag_names() {
 }
 
 #[test]
+// 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn diff_text_mode_renders_identical_and_delta() {
     let f = fixture("clickhere_named.hwpx");
     let (stdout, _, code) = run(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
@@ -4028,7 +4034,7 @@ fn diff_text_mode_renders_identical_and_delta() {
 
     let (err, _, code) = run_json(&["diff", f.to_str().unwrap(), "/nonexistent/x.hwpx"]);
     assert_eq!(code, 1);
-    assert_eq!(err["code"], "FILE_READ_FAILED");
+    assert_eq!(err["code"], "FILE_NOT_FOUND");
 }
 
 #[test]
@@ -5566,6 +5572,7 @@ fn to_pdf_human_mode_error_output() {
 /// `stamper_fails_closed_on_note_head_skip` 과 같은 구성이다: 각주 본문의
 /// 첫 문단이 heading 이라 번호 머리를 넣을 안전한 지점이 없다.
 #[test]
+// 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn stamp_semantic_loss_keeps_the_codec_error_contract() {
     use hwpforge_core::control::Control;
     use hwpforge_core::image::ImageStore;
@@ -5620,7 +5627,7 @@ fn stamp_semantic_loss_keeps_the_codec_error_contract() {
     ]);
 
     assert_eq!(code, 2, "exit code 는 과거 Codec 경로와 같아야 한다: {err}");
-    assert_eq!(err["code"], "STAMP_CODEC_FAILED", "{err}");
+    assert_eq!(err["code"], "ENCODE_SEMANTIC_LOSS", "{err}");
     let message = err["message"].as_str().unwrap_or_default();
     assert!(
         message.starts_with("encode produced a semantic-loss warning (fail-closed): "),
@@ -6233,38 +6240,54 @@ fn fifo_input_under_the_size_cap_reads_successfully() {
 
 #[cfg(unix)]
 #[test]
+// 이것을 실패시키는 것: to-md InputTooLarge 종료를 2로 변경하거나 convert 상한 힌트를 UTF-8 안내로 교체.
 fn fifo_input_over_the_size_cap_reports_input_too_large() {
-    let tmp = test_tmp();
-    let fifo_path = tmp.join("oversized.hwpx");
-    create_fifo(&fifo_path);
+    for command in ["inspect", "to-md", "convert"] {
+        let tmp = test_tmp();
+        let fifo_path = tmp.join("oversized.hwpx");
+        create_fifo(&fifo_path);
 
-    let writer_path = fifo_path.clone();
-    let writer = std::thread::spawn(move || {
-        let Ok(mut f) = std::fs::File::create(&writer_path) else { return };
-        let chunk = vec![0u8; 1024 * 1024];
-        // Comfortably over the 100 MB cap; the reader (`read_input`'s
-        // `take(MAX_FILE_SIZE + 1)`) stops consuming once it has the extra
-        // byte it needs to detect the overflow and exits, so this loop
-        // reliably breaks on the first write past that point — `write_all`
-        // then reports `BrokenPipe` (Rust ignores `SIGPIPE`, so a write past
-        // a closed reader is an ordinary `io::Error`, not a fatal signal).
-        for _ in 0..150 {
-            if f.write_all(&chunk).is_err() {
-                break;
+        let writer_path = fifo_path.clone();
+        let writer = std::thread::spawn(move || {
+            let Ok(mut f) = std::fs::File::create(&writer_path) else { return };
+            let chunk = vec![0u8; 1024 * 1024];
+            // Comfortably over the 100 MB cap; the reader (`read_input`'s
+            // `take(MAX_FILE_SIZE + 1)`) stops consuming once it has the extra
+            // byte it needs to detect the overflow and exits, so this loop
+            // reliably breaks on the first write past that point — `write_all`
+            // then reports `BrokenPipe` (Rust ignores `SIGPIPE`, so a write past
+            // a closed reader is an ordinary `io::Error`, not a fatal signal).
+            for _ in 0..150 {
+                if f.write_all(&chunk).is_err() {
+                    break;
+                }
             }
+        });
+
+        let output = tmp.join("out.hwpx");
+        let args = if command == "convert" {
+            vec![command, fifo_path.to_str().unwrap(), "-o", output.to_str().unwrap()]
+        } else {
+            vec![command, fifo_path.to_str().unwrap()]
+        };
+        let (val, stderr, code) = run_json(&args);
+        let _ = writer.join();
+
+        assert_eq!(code, 1, "stderr: {stderr}, value: {val}");
+        if command == "to-md" {
+            assert_cli_manifest_case("io.to-md.fifo_over_limit", &val, code);
         }
-    });
-
-    let (val, stderr, code) = run_json(&["inspect", fifo_path.to_str().unwrap()]);
-    let _ = writer.join();
-
-    assert_eq!(code, 1, "stderr: {stderr}, value: {val}");
-    assert_eq!(val["code"], "INPUT_TOO_LARGE", "{val}");
+        assert_eq!(val["code"], "INPUT_TOO_LARGE", "{val}");
+        if command == "convert" {
+            assert_eq!(val["hint"], "Use an input smaller than the 100 MB limit");
+        }
+    }
 }
 
 #[cfg(unix)]
 #[test]
-fn set_cell_fifo_map_over_the_size_cap_reports_file_read_failed() {
+// 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
+fn set_cell_fifo_map_over_the_size_cap_reports_input_too_large() {
     // `set-cell --map` had no `check_file_size` preflight at all before the
     // `read_to_string` bounded-read fix (audit follow-up) — unlike every
     // other read site, it never had an `INPUT_TOO_LARGE` code of its own to
@@ -6299,13 +6322,14 @@ fn set_cell_fifo_map_over_the_size_cap_reports_file_read_failed() {
     let _ = writer.join();
 
     assert_eq!(code, 1, "stderr: {stderr}, value: {val}");
-    assert_eq!(val["code"], "FILE_READ_FAILED", "{val}");
+    assert_eq!(val["code"], "INPUT_TOO_LARGE", "{val}");
     assert!(!out.exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn convert_hwp5_fifo_over_the_size_cap_reports_hwp5_decode_failed() {
+// 이것을 실패시키는 것: convert-hwp5 InputTooLarge 종료를 1에서 2로 변경.
+fn convert_hwp5_fifo_over_the_size_cap_reports_input_too_large() {
     // `convert-hwp5` used to read its input path twice — an unbounded
     // `std::fs::read` inside the (now removed) `inspect_hwp5_file` call,
     // then a bounded `read_bounded` for conversion. That let an oversized
@@ -6314,9 +6338,7 @@ fn convert_hwp5_fifo_over_the_size_cap_reports_hwp5_decode_failed() {
     // would have hung a *finite* FIFO on the second `open` once the
     // original writer had already exited. The command now reads the FIFO
     // exactly once through `read_bounded`, so this exits promptly with the
-    // command's own `HWP5_DECODE_FAILED`/exit 2 — the code the legacy
-    // first read already produced for an unreadable input — instead of
-    // hanging or growing without bound.
+    // canonical `INPUT_TOO_LARGE`/exit 1, matching regular-file preflight.
     let tmp = test_tmp();
     let out = tmp.join("never.hwpx");
     let fifo_path = tmp.join("oversized.hwp");
@@ -6341,8 +6363,9 @@ fn convert_hwp5_fifo_over_the_size_cap_reports_hwp5_decode_failed() {
         run_json(&["convert-hwp5", fifo_path.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     writer.join().expect("writer thread panicked");
 
-    assert_eq!(code, 2, "stderr: {stderr}, value: {val}");
-    assert_eq!(val["code"], "HWP5_DECODE_FAILED", "{val}");
+    assert_eq!(code, 1, "stderr: {stderr}, value: {val}");
+    assert_eq!(val["code"], "INPUT_TOO_LARGE", "{val}");
+    assert_cli_manifest_case("io.convert-hwp5.fifo_over_limit", &val, code);
     assert!(!out.exists());
 }
 
@@ -6834,4 +6857,78 @@ fn audit_hwp5_raw_records_detect_nested_content_loss() {
             assert_eq!(chars["verdict"], "DIFF");
         }
     }
+}
+
+#[test]
+// 이것을 실패시키는 것: 변환 명령 입력 I/O 종료를 1로 변경, InputTooLarge 종료를 2로 변경, 사전 검사 코드를 FileReadFailed로 변경.
+fn w1_input_path_and_metadata_boundaries() {
+    let dir = test_tmp();
+    let missing = dir.join("missing.hwpx");
+    let output = dir.join("out.hwpx");
+    for args in [
+        vec!["inspect", missing.to_str().unwrap()],
+        vec!["to-md", missing.to_str().unwrap()],
+        vec!["convert-hwp5", missing.to_str().unwrap(), "-o", output.to_str().unwrap()],
+        vec!["convert", missing.to_str().unwrap(), "-o", output.to_str().unwrap()],
+    ] {
+        let (err, _, exit) = run_json(&args);
+        assert_eq!(err["code"], "FILE_NOT_FOUND", "{args:?}");
+        assert_eq!(exit, if matches!(args[0], "to-md" | "convert-hwp5") { 2 } else { 1 });
+    }
+    for command in ["to-md", "convert-hwp5"] {
+        let args = if command == "convert-hwp5" {
+            vec![command, dir.to_str().unwrap(), "-o", output.to_str().unwrap()]
+        } else {
+            vec![command, dir.to_str().unwrap()]
+        };
+        let (err, _, exit) = run_json(&args);
+        assert_eq!(err["code"], "FILE_READ_FAILED");
+        assert_eq!(exit, 2, "unreadable directory: {command}");
+    }
+    let exact = dir.join("exact.hwpx");
+    std::fs::File::create(&exact).unwrap().set_len(hwpforge::ops::fs::MAX_FILE_SIZE).unwrap();
+    let (err, _, exit) = run_json(&["inspect", exact.to_str().unwrap()]);
+    assert_eq!(err["code"], "DECODE_FAILED", "exact cap must reach the codec");
+    assert_eq!(exit, 2);
+    let large = dir.join("large.hwpx");
+    std::fs::File::create(&large).unwrap().set_len(hwpforge::ops::fs::MAX_FILE_SIZE + 1).unwrap();
+    for command in ["to-md", "convert-hwp5"] {
+        let args = if command == "convert-hwp5" {
+            vec![command, large.to_str().unwrap(), "-o", output.to_str().unwrap()]
+        } else {
+            vec![command, large.to_str().unwrap()]
+        };
+        let (err, _, exit) = run_json(&args);
+        assert_eq!(err["code"], "INPUT_TOO_LARGE");
+        assert_eq!(exit, 1, "metadata preflight: {command}");
+        assert_cli_manifest_case(&format!("io.{command}.input_size_preflight"), &err, exit);
+    }
+    let (err, _, exit) = run_json(&["inspect", large.to_str().unwrap()]);
+    assert_eq!(err["code"], "INPUT_TOO_LARGE");
+    assert!(err["message"].as_str().unwrap().contains("is 100 MB"));
+    assert_eq!(exit, 1);
+}
+
+#[test]
+// 이것을 실패시키는 것: ReadError::Codec을 InvalidInput으로 매핑하거나 typed 직렬화의 code 키를 바꿈.
+fn decode_input_shared_fixture() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
+            .unwrap();
+    let case =
+        manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == "decode.input").unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../hwpforge/tests/data/corrupt-input.hwpx");
+    let (err, _, exit) = run_json(&["read", path.to_str().unwrap(), "--section", "0"]);
+    assert_eq!(err["code"], case["expected_code"]);
+    assert_eq!(exit, case["surfaces"]["cli"]["exit"].as_i64().unwrap() as i32);
+}
+
+fn assert_cli_manifest_case(id: &str, error: &serde_json::Value, exit: i32) {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
+            .unwrap();
+    let case = manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
+    assert_eq!(error["code"], case["expected_code"], "{id}");
+    assert_eq!(exit, case["surfaces"]["cli"]["exit"].as_i64().unwrap() as i32, "{id}");
 }

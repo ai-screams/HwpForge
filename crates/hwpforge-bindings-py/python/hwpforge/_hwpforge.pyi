@@ -506,6 +506,10 @@ SchemaReport: TypeAlias = Json
 # a read against — the same cap the CLI and the MCP server enforce on their
 # own file reads. Not one of the 23 operations below: a plain module
 # attribute, not a callable.
+FILE_NOT_FOUND: str
+FILE_READ_FAILED: str
+FILE_WRITE_FAILED: str
+INPUT_TOO_LARGE: str
 MAX_FILE_SIZE: int
 
 # ── the 23 operations ───────────────────────────────────────────

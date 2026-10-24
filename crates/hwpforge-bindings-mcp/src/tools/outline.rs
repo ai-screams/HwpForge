@@ -49,7 +49,7 @@ fn build_outline_data(
     let inline_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(usize::MAX);
     if inline_size > MAX_INLINE_RESPONSE {
         return Err(ToolErrorInfo::new(
-            "OUTPUT_TOO_LARGE",
+            hwpforge_foundation::diagnostics::OpsCode::OutputTooLarge,
             format!("Navigation response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
             "Use the CLI instead: hwpforge outline <file> --json",
         ));
@@ -120,13 +120,14 @@ mod tests {
     }
 
     #[test]
-    fn outline_non_hwpx_bytes_reports_decode_error() {
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
+    fn outline_non_hwpx_bytes_reports_decode_failed() {
         let dir = tempfile::tempdir().unwrap();
         let garbage = dir.path().join("garbage.hwpx");
         std::fs::write(&garbage, b"not a zip").unwrap();
 
         let err = run_outline(garbage.to_str().unwrap()).unwrap_err();
-        assert_eq!(err.code, "DECODE_ERROR");
+        assert_eq!(err.code, "DECODE_FAILED");
     }
 
     /// The outline itself is empty here — the oversized total comes

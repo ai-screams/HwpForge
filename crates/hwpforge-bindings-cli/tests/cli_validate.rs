@@ -196,11 +196,11 @@ fn non_hwpx_file_is_decode_failed_exit_2() {
 }
 
 #[test]
-fn missing_file_is_file_read_failed_exit_1() {
+fn missing_file_is_file_not_found_exit_1() {
     let (stdout, stderr, code) = run(&["--json", "validate", "/nonexistent/does-not-exist.hwpx"]);
     assert_eq!(code, 1, "stdout: {stdout:?} stderr: {stderr:?}");
     assert!(stdout.is_empty());
     let err: Value = serde_json::from_str(stderr.trim()).expect("stderr is JSON");
     assert_eq!(err["status"], "error");
-    assert_eq!(err["code"], "FILE_READ_FAILED");
+    assert_eq!(err["code"], "FILE_NOT_FOUND");
 }

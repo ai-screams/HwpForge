@@ -1,4 +1,7 @@
 //! Audit a converted HWPX file against its original HWP5 source.
+use crate::compat::Command;
+use crate::error::{CliCode, CliOnly};
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::Path;
 
@@ -152,8 +155,8 @@ struct SectionComparison {
 }
 
 pub fn run(source: &Path, result: &Path, json_mode: bool) {
-    check_file_size(source, json_mode);
-    check_file_size(result, json_mode);
+    check_file_size(source, json_mode, Command::AuditHwp5);
+    check_file_size(result, json_mode, Command::AuditHwp5);
 
     let source_bytes = read_required(source, "source HWP5", json_mode);
     let result_bytes = read_required(result, "result HWPX", json_mode);
@@ -161,39 +164,39 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
     let source_metadata = match inspect_hwp5(&source_bytes) {
         Ok(summary) => summary,
         Err(err) => CliError::new(
-            "HWP5_DECODE_FAILED",
+            CliCode::Ops(OpsCode::Hwp5DecodeFailed),
             format!("Cannot decode '{}': {err}", source.display()),
         )
         .with_hint("Check that the file is a valid HWP5 document")
-        .exit(json_mode, 2),
+        .exit(json_mode, Command::AuditHwp5),
     };
     let source_semantic = match build_hwp5_semantic(&source_bytes) {
         Ok(document) => document,
         Err(err) => CliError::new(
-            "HWP5_SEMANTIC_FAILED",
+            CliCode::Cli(CliOnly::Hwp5SemanticFailed),
             format!("Cannot build semantic truth for '{}': {err}", source.display()),
         )
         .with_hint("Check that the file is a valid HWP5 document")
-        .exit(json_mode, 2),
+        .exit(json_mode, Command::AuditHwp5),
     };
 
     let hwpx_doc = match HwpxDecoder::decode(&result_bytes) {
         Ok(doc) => doc,
         Err(err) => CliError::new(
-            "HWPX_DECODE_FAILED",
+            CliCode::Ops(OpsCode::DecodeFailed),
             format!("Cannot decode '{}': {err}", result.display()),
         )
         .with_hint("Check that the file is a valid HWPX document")
-        .exit(json_mode, 2),
+        .exit(json_mode, Command::AuditHwp5),
     };
     let output_deep = match summarize_hwpx_document(&result_bytes, &hwpx_doc) {
         Ok(summary) => summary,
         Err(err) => CliError::new(
-            "HWPX_ANALYSIS_FAILED",
+            CliCode::Cli(CliOnly::HwpxAnalysisFailed),
             format!("Cannot analyze '{}' deeply: {err}", result.display()),
         )
         .with_hint("Check that the file is a valid HWPX document")
-        .exit(json_mode, 2),
+        .exit(json_mode, Command::AuditHwp5),
     };
 
     let mut source_side = audit_side_from_hwp5_semantic(
@@ -205,10 +208,12 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
     let mut output_side = audit_side_from_hwpx(&hwpx_doc, &output_deep);
     output_side.master_pages =
         master_pages::from_hwpx(&hwpx_doc, &result_bytes).unwrap_or_else(|err| {
-            CliError::new("HWPX_ANALYSIS_FAILED", err.to_string()).exit(json_mode, 2)
+            CliError::new(CliCode::Cli(CliOnly::HwpxAnalysisFailed), err.to_string())
+                .exit(json_mode, Command::AuditHwp5)
         });
     let raw = hwpforge_smithy_hwp5::census_hwp5(&source_bytes).unwrap_or_else(|err| {
-        CliError::new("HWP5_CENSUS_FAILED", err.to_string()).exit(json_mode, 2)
+        CliError::new(CliCode::Cli(CliOnly::Hwp5CensusFailed), err.to_string())
+            .exit(json_mode, Command::AuditHwp5)
     });
     // TABLE counts must not inherit losses from the parser being audited.
     source_side.totals.tables = 0;
@@ -240,7 +245,10 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
         );
     }
     raw_counts::compare(&raw, &result_bytes, &mut comparisons, &mut mismatch_found).unwrap_or_else(
-        |err| CliError::new("HWPX_ANALYSIS_FAILED", err.to_string()).exit(json_mode, 2),
+        |err| {
+            CliError::new(CliCode::Cli(CliOnly::HwpxAnalysisFailed), err.to_string())
+                .exit(json_mode, Command::AuditHwp5)
+        },
     );
     let checklist = build_checklist(source, result, &source_side, mismatch_found);
 
@@ -265,10 +273,10 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
 fn read_required(path: &Path, label: &str, json_mode: bool) -> Vec<u8> {
     read_bounded(path).unwrap_or_else(|err| {
         CliError::new(
-            "FILE_READ_FAILED",
+            CliCode::Ops(err.code()),
             format!("Cannot read {label} '{}': {err}", path.display()),
         )
-        .exit(json_mode, 1)
+        .exit(json_mode, Command::AuditHwp5)
     })
 }
 

@@ -1,4 +1,6 @@
 //! `to-md` subcommand: convert HWPX to Markdown.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -10,19 +12,14 @@ use crate::MdMode;
 
 /// Run the to-md command.
 pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: bool) {
-    check_file_size(input, json_mode);
+    check_file_size(input, json_mode, Command::ToMd);
 
-    // Pre-migration `to-md` used `HwpxDecoder::decode_file`, which bundles
-    // file I/O into the decode stage (`HwpxError::Io`) — so a missing or
-    // unreadable input reports `DECODE_FAILED`/exit 2 here, unlike every
-    // other command's `FILE_READ_FAILED`/exit 1. `ops::to_md` takes bytes,
-    // not a path, so the read has to happen here; reproduced with the
-    // legacy code/exit/message shape rather than introducing a
-    // `FILE_READ_FAILED` this command's frozen contract never had.
+    // Input I/O retains its canonical code before the codec runs.
     let bytes = match read_bounded(input) {
         Ok(b) => b,
         Err(e) => {
-            CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}")).exit(json_mode, 2);
+            CliError::new(CliCode::Ops(e.code()), format!("Cannot read HWPX input: {e}"))
+                .exit(json_mode, Command::ToMd);
         }
     };
 
@@ -32,15 +29,8 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
         MdMode::Lossless => OpsMdMode::Lossless,
     };
 
-    // `ops::to_md` reproduces decode → validate → encode in one call. Its
-    // `DECODE_FAILED`/`VALIDATION_FAILED`/`ENCODE_FAILED` route through the
-    // shared compat table; only the legacy `VALIDATE_FAILED` spelling (this
-    // command's own code, not `ops`'s `VALIDATION_FAILED`) differs, and
-    // `compat::cli_error`'s `TABLE` already carries that remap. Decode
-    // warnings (`MdExportOutput::warnings`'s `Decode` entries, for example
-    // `LAYOUT_CACHE_DROPPED`) were not surfaced pre-W5 — only `Md` (lossy
-    // `TABLE_MERGE_FLATTENED`) warnings were printed pre-migration. W5
-    // follow-up: `Decode` now prints through the same shape, additively.
+    // Decode, validation and encode errors retain their canonical ops codes.
+    // Both Markdown and decode warnings are surfaced below.
     let out = match ops::to_md(&bytes, &MdExportOptions::default().with_mode(ops_mode)) {
         Ok(o) => o,
         Err(e) => compat::exit_ops_error(Command::ToMd, e, json_mode),
@@ -82,14 +72,20 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
 
     // 5. Create output directory if needed
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        CliError::new("DIR_CREATE_FAILED", format!("Cannot create '{}': {e}", out_dir.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot create '{}': {e}", out_dir.display()),
+        )
+        .exit(json_mode, Command::ToMd);
     }
 
     // 6. Write markdown
     if let Err(e) = std::fs::write(&md_path, &markdown) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", md_path.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", md_path.display()),
+        )
+        .exit(json_mode, Command::ToMd);
     }
 
     // 7. Write images (styled mode only)
@@ -98,10 +94,10 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
         let images_dir = out_dir.join("images");
         if let Err(e) = std::fs::create_dir_all(&images_dir) {
             CliError::new(
-                "DIR_CREATE_FAILED",
+                CliCode::Ops(OpsCode::FileWriteFailed),
                 format!("Cannot create '{}': {e}", images_dir.display()),
             )
-            .exit(json_mode, 1);
+            .exit(json_mode, Command::ToMd);
         }
         for (rel_path, data) in &images {
             let img_filename = std::path::Path::new(rel_path.as_str())
@@ -111,10 +107,10 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
             let img_path = images_dir.join(img_filename);
             if let Err(e) = std::fs::write(&img_path, data) {
                 CliError::new(
-                    "FILE_WRITE_FAILED",
+                    CliCode::Ops(OpsCode::FileWriteFailed),
                     format!("Cannot write '{}': {e}", img_path.display()),
                 )
-                .exit(json_mode, 1);
+                .exit(json_mode, Command::ToMd);
             }
         }
     }

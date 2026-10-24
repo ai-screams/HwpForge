@@ -62,7 +62,7 @@ pub fn run_to_json(
     if let Some(out_path) = output_path {
         if !out_path.ends_with(".json") {
             return Err(ToolErrorInfo::new(
-                "INVALID_EXTENSION",
+                hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
                 format!("Output path must end with .json: {out_path}"),
                 "Use a .json output_path, or omit output_path to receive the JSON inline.",
             ));
@@ -179,7 +179,7 @@ fn build_to_json_data(
 
 fn output_too_large_error(inline_size: usize) -> ToolErrorInfo {
     ToolErrorInfo::new(
-        "OUTPUT_TOO_LARGE",
+        hwpforge_foundation::diagnostics::OpsCode::OutputTooLarge,
         format!("JSON response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
         "Use output_path to write to a file, or use section parameter to export a single section.",
     )
@@ -204,8 +204,7 @@ impl std::io::Write for CountingWriter {
 
 fn render_pretty_value(value: &serde_json::Value) -> Result<String, ToolErrorInfo> {
     serde_json::to_string_pretty(value).map_err(|e| {
-        ToolErrorInfo::new(
-            "SERIALIZE_ERROR",
+        crate::output::json_serialize_error(
             format!("Failed to serialize export: {e}"),
             "This may be a bug.",
         )

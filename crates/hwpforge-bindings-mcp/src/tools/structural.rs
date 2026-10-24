@@ -71,7 +71,7 @@ pub fn run_delete_para(
 ) -> Result<StructuralData, ToolErrorInfo> {
     if indices.is_empty() {
         return Err(ToolErrorInfo::new(
-            "DELETE_NO_TARGET",
+            hwpforge_foundation::diagnostics::OpsCode::DeleteNoTarget,
             "Pass at least one paragraph index",
             "indices must be a non-empty list of top-level paragraph indices.",
         ));
@@ -108,7 +108,7 @@ pub fn run_insert_para(
         (None, Some(ts)) if !ts.is_empty() => ts.to_vec(),
         _ => {
             return Err(ToolErrorInfo::new(
-                "INSERT_TEXT_REQUIRED",
+                hwpforge_foundation::diagnostics::OpsCode::InsertTextRequired,
                 "Provide exactly one of `text` or `texts` (non-empty)",
                 "Use `text` for a single paragraph or `texts` for a contiguous block.",
             ));
@@ -142,7 +142,7 @@ pub fn run_insert_para(
 fn write_bytes(bytes: &[u8], path: &str) -> Result<(), ToolErrorInfo> {
     std::fs::write(path, bytes).map_err(|e| {
         ToolErrorInfo::new(
-            "FILE_WRITE_FAILED",
+            hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed,
             format!("Cannot write '{path}': {e}"),
             "Check the output path and permissions.",
         )
@@ -313,6 +313,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn error_code_mapping_covers_common_rejections() {
         let dir = tempfile::tempdir().unwrap();
         let base = base_doc(&dir);
@@ -321,9 +322,9 @@ mod tests {
         // out-of-range anchor / index.
         let err = run_insert_para(&base, 0, 99, false, Some("x"), None, out.to_str().unwrap())
             .unwrap_err();
-        assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
+        assert_eq!(err.code, "PARAGRAPH_OUT_OF_RANGE");
         let err = run_delete_para(&base, 9, &[0], out.to_str().unwrap()).unwrap_err();
-        assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
+        assert_eq!(err.code, "SECTION_OUT_OF_RANGE");
 
         // multiline text.
         let err = run_insert_para(&base, 0, 1, false, Some("a\nb"), None, out.to_str().unwrap())

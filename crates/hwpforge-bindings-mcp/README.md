@@ -139,3 +139,7 @@ stdio (JSON-RPC 2.0). All logging goes to stderr.
 ## License
 
 MIT OR Apache-2.0
+
+### 0.18 canonical errors
+
+Tool errors use `OpsCode` strings directly: `DECODE_FAILED`, `ENCODE_FAILED`, `VALIDATION_FAILED`, and precise domain codes. Input I/O uses `FILE_NOT_FOUND`, `FILE_READ_FAILED` and `INPUT_TOO_LARGE`; output I/O uses `FILE_WRITE_FAILED`, while rejected output paths use `INVALID_OUTPUT_PATH`. Error messages/hints and protocol-level errors keep their own contracts. The committed `tests/data/codes-0.18.txt` links every baseline row to the shared error manifest.

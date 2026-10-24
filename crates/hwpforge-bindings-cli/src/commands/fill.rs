@@ -1,4 +1,6 @@
 //! Fill named click-here fields with values (delta edit, preserve-first).
+use crate::error::{CliCode, CliOnly};
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,13 +16,13 @@ use crate::error::{check_file_size, read_input, CliError};
 pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     let values = parse_sets(sets, json_mode);
     if values.is_empty() {
-        CliError::new("NO_VALUES", "no --set name=value pairs given")
+        CliError::new(CliCode::Ops(OpsCode::NoValues), "no --set name=value pairs given")
             .with_hint("예: hwpforge fill doc.hwpx --set 과제명=\"AI 문서 자동화\" -o out.hwpx")
-            .exit(json_mode, 1);
+            .exit(json_mode, Command::Fill);
     }
 
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Fill);
+    let bytes = read_input(file, json_mode, Command::Fill);
 
     let values: Vec<(String, String)> = values.into_iter().collect();
     let outcome = match ops_fill(&bytes, &values, &FillOptions::default()) {
@@ -34,8 +36,11 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();
 
     if let Err(e) = std::fs::write(output, &outcome.bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::Fill);
     }
 
     if json_mode {
@@ -65,13 +70,19 @@ fn parse_sets(sets: &[String], json_mode: bool) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
     for set in sets {
         let Some((name, value)) = set.split_once('=') else {
-            CliError::new("INVALID_SET", format!("'--set {set}' is not name=value"))
-                .with_hint("--set 이름=값 형식으로 지정하세요 (값에 공백이 있으면 따옴표)")
-                .exit(json_mode, 1);
+            CliError::new(
+                CliCode::Cli(CliOnly::InvalidSet),
+                format!("'--set {set}' is not name=value"),
+            )
+            .with_hint("--set 이름=값 형식으로 지정하세요 (값에 공백이 있으면 따옴표)")
+            .exit(json_mode, Command::Fill);
         };
         if values.insert(name.to_string(), value.to_string()).is_some() {
-            CliError::new("DUPLICATE_SET", format!("'--set {name}=…' given more than once"))
-                .exit(json_mode, 1);
+            CliError::new(
+                CliCode::Cli(CliOnly::DuplicateSet),
+                format!("'--set {name}=…' given more than once"),
+            )
+            .exit(json_mode, Command::Fill);
         }
     }
     values

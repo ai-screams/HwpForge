@@ -123,11 +123,11 @@ const ERROR_MAPPING: Table = &[
         "ReadError",
         &[
             ("Codec", "DECODE_FAILED"),
-            ("SectionOutOfRange", "READ_SECTION_OUT_OF_RANGE"),
+            ("SectionOutOfRange", "SECTION_OUT_OF_RANGE"),
             ("ParaRangeInvalid", "READ_PARA_RANGE_INVALID"),
-            ("TableOutOfRange", "READ_TABLE_OUT_OF_RANGE"),
+            ("TableOutOfRange", "TABLE_NOT_FOUND"),
             ("TableUnaddressable", "TABLE_GRID_INVALID"),
-            ("FieldNotFound", "READ_FIELD_NOT_FOUND"),
+            ("FieldNotFound", "FIELD_NOT_FOUND"),
         ],
     ),
     (
@@ -1090,6 +1090,7 @@ fn every_wrapped_variant_has_a_mapping() {
 }
 
 #[test]
+// 이것을 실패시키는 것: read 구역 범위를 InvalidInput으로 변경; 기존 inventory 시험으로 검출.
 fn constructed_errors_produce_the_mapped_code() {
     let samples = wrapped_errors();
 

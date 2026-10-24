@@ -1,0 +1,256 @@
+# Retired: shared INPUT_TOO_LARGE is covered at each caller; old aliases use canonical case IDs.
+# 0.18: command, code, manifest case ID, hint; exit policy is tested against the manifest.
+audit-hwp5	DECODE_FAILED	adapter.audit-hwp5.decode_failed	null
+audit-hwp5	FILE_NOT_FOUND	adapter.audit-hwp5.file_not_found	"@dynamic"
+audit-hwp5	FILE_READ_FAILED	adapter.audit-hwp5.file_read_failed	"@dynamic"
+audit-hwp5	HWP5_CENSUS_FAILED	adapter.audit-hwp5.hwp5_census_failed	"@dynamic"
+audit-hwp5	HWP5_DECODE_FAILED	adapter.audit-hwp5.hwp5_decode_failed	null
+audit-hwp5	HWP5_SEMANTIC_FAILED	adapter.audit-hwp5.hwp5_semantic_failed	"@dynamic"
+audit-hwp5	HWPX_ANALYSIS_FAILED	adapter.audit-hwp5.hwpx_analysis_failed	"@dynamic"
+audit-hwp5	INPUT_TOO_LARGE	adapter.audit-hwp5.input_too_large	"@dynamic"
+census-hwp5	FILE_NOT_FOUND	adapter.census-hwp5.file_not_found	"@dynamic"
+census-hwp5	FILE_READ_FAILED	adapter.census-hwp5.file_read_failed	"@dynamic"
+census-hwp5	FILE_WRITE_FAILED	adapter.census-hwp5.file_write_failed	"@dynamic"
+census-hwp5	HWPX_CENSUS_FAILED	adapter.census-hwp5.hwpx_census_failed	"@dynamic"
+census-hwp5	INPUT_TOO_LARGE	adapter.census-hwp5.input_too_large	"@dynamic"
+convert	ENCODE_FAILED	adapter.convert.encode_failed	null
+convert	FILE_NOT_FOUND	adapter.convert.file_not_found	"@dynamic"
+convert	FILE_READ_FAILED	adapter.convert.file_read_failed	"@dynamic"
+convert	FILE_WRITE_FAILED	adapter.convert.file_write_failed	"@dynamic"
+convert	INPUT_TOO_LARGE	adapter.convert.input_too_large	"@dynamic"
+convert	MD_DECODE_FAILED	adapter.convert.md_decode_failed	null
+convert	PRESET_NOT_FOUND	adapter.convert.preset_not_found	"Available presets: default, modern, classic, latest"
+convert	STYLE_REBIND_FAILED	adapter.convert.style_rebind_failed	null
+convert	STYLE_STORE_FAILED	adapter.convert.style_store_failed	null
+convert	VALIDATION_FAILED	adapter.convert.validation_failed	null
+convert-hwp5	FILE_NOT_FOUND	adapter.convert-hwp5.file_not_found	"@dynamic"
+convert-hwp5	FILE_READ_FAILED	adapter.convert-hwp5.file_read_failed	"@dynamic"
+convert-hwp5	FILE_WRITE_FAILED	adapter.convert-hwp5.file_write_failed	"@dynamic"
+convert-hwp5	HWP5_CONVERT_FAILED	adapter.convert-hwp5.hwp5_convert_failed	"Check that the source is a supported HWP5 document and the output path is writable"
+convert-hwp5	HWP5_DECODE_FAILED	adapter.convert-hwp5.hwp5_decode_failed	"Check that the source is a supported HWP5 document and the output path is writable"
+convert-hwp5	INPUT_TOO_LARGE	adapter.convert-hwp5.input_too_large	"@dynamic"
+delete-para	DECODE_FAILED	adapter.delete-para.decode_failed	"Check that the file is a valid HWPX document"
+delete-para	DELETE_NO_TARGET	adapter.delete-para.delete_no_target	null
+delete-para	DUPLICATE_TARGET	adapter.delete-para.duplicate_target	null
+delete-para	EMPTY_SECTION	adapter.delete-para.empty_section	null
+delete-para	ENCODE_FAILED	adapter.delete-para.encode_failed	null
+delete-para	ENCODE_SEMANTIC_LOSS	adapter.delete-para.encode_semantic_loss	null
+delete-para	FILE_NOT_FOUND	adapter.delete-para.file_not_found	"@dynamic"
+delete-para	FILE_READ_FAILED	adapter.delete-para.file_read_failed	"@dynamic"
+delete-para	FILE_WRITE_FAILED	adapter.delete-para.file_write_failed	"@dynamic"
+delete-para	HARD_BREAK_LOSS	adapter.delete-para.hard_break_loss	null
+delete-para	INPUT_ENTRIES_NOT_CARRIED	adapter.delete-para.input_entries_not_carried	"한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)"
+delete-para	INPUT_NOT_ROUNDTRIP_SAFE	adapter.delete-para.input_not_roundtrip_safe	null
+delete-para	INPUT_TOO_LARGE	adapter.delete-para.input_too_large	"@dynamic"
+delete-para	INTERNAL_INVARIANT	adapter.delete-para.internal_invariant	null
+delete-para	PARAGRAPH_OUT_OF_RANGE	adapter.delete-para.paragraph_out_of_range	null
+delete-para	PROTECTED_FIELD_RANGE	adapter.delete-para.protected_field_range	null
+delete-para	REFERENCE_STRANDED	adapter.delete-para.reference_stranded	null
+delete-para	SECTION_OUT_OF_RANGE	adapter.delete-para.section_out_of_range	null
+delete-para	SECTION_PROPERTIES_PARAGRAPH	adapter.delete-para.section_properties_paragraph	null
+delete-para	SELF_VERIFY_FAILED	adapter.delete-para.self_verify_failed	null
+delete-para	SPAN_COUNT_MISMATCH	adapter.delete-para.span_count_mismatch	null
+delete-para	STRUCTURAL_CODEC	adapter.delete-para.structural_codec	null
+delete-para	UPSTREAM_UNMAPPED	adapter.delete-para.upstream_unmapped	null
+delete-para	VALIDATION_FAILED	adapter.delete-para.validation_failed	null
+diff	DECODE_FAILED	adapter.diff.decode_failed	null
+diff	FILE_NOT_FOUND	adapter.diff.file_not_found	"@dynamic"
+diff	FILE_READ_FAILED	adapter.diff.file_read_failed	"@dynamic"
+diff	FILE_WRITE_FAILED	io.write	"@dynamic"
+diff	INPUT_TOO_LARGE	adapter.diff.input_too_large	"@dynamic"
+fields	DECODE_FAILED	adapter.fields.decode_failed	null
+fields	FILE_NOT_FOUND	adapter.fields.file_not_found	"@dynamic"
+fields	FILE_READ_FAILED	adapter.fields.file_read_failed	"@dynamic"
+fields	INPUT_TOO_LARGE	adapter.fields.input_too_large	"@dynamic"
+fill	DECODE_FAILED	adapter.fill.decode_failed	"Check that the file is a valid HWPX document"
+fill	DUPLICATE_SET	adapter.fill.duplicate_set	"@dynamic"
+fill	EMPTY_FIELD_VALUE	adapter.fill.empty_field_value	"빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요"
+fill	ENCODE_FAILED	adapter.fill.encode_failed	null
+fill	ENCODE_SEMANTIC_LOSS	adapter.fill.encode_semantic_loss	null
+fill	FIELD_NAME_AMBIGUOUS	adapter.fill.field_name_ambiguous	"같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요"
+fill	FIELD_NOT_FILLABLE	adapter.fill.field_not_fillable	"병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요"
+fill	FIELD_NOT_FOUND	adapter.fill.field_not_found	null
+fill	FILE_NOT_FOUND	adapter.fill.file_not_found	"@dynamic"
+fill	FILE_READ_FAILED	adapter.fill.file_read_failed	"@dynamic"
+fill	FILE_WRITE_FAILED	adapter.fill.file_write_failed	"@dynamic"
+fill	FILL_FAILED	adapter.fill.fill_failed	null
+fill	INPUT_TOO_LARGE	adapter.fill.input_too_large	"@dynamic"
+fill	INTERNAL_INVARIANT	adapter.fill.internal_invariant	null
+fill	INVALID_SET	adapter.fill.invalid_set	"@dynamic"
+fill	NO_VALUES	adapter.fill.no_values	"예: hwpforge fill doc.hwpx --set 과제명=\"AI 문서 자동화\" -o out.hwpx"
+fill	PROTECTED_FIELD_RANGE	adapter.fill.protected_field_range	null
+fill	VALIDATION_FAILED	adapter.fill.validation_failed	null
+from-json	DECODE_FAILED	adapter.from-json.decode_failed	null
+from-json	ENCODE_FAILED	adapter.from-json.encode_failed	null
+from-json	FILE_NOT_FOUND	adapter.from-json.file_not_found	"@dynamic"
+from-json	FILE_READ_FAILED	adapter.from-json.file_read_failed	"@dynamic"
+from-json	FILE_WRITE_FAILED	adapter.from-json.file_write_failed	"@dynamic"
+from-json	GRID_ADDR_INVALID	adapter.from-json.grid_addr_invalid	"Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry"
+from-json	INPUT_TOO_LARGE	adapter.from-json.input_too_large	"@dynamic"
+from-json	JSON_PARSE_FAILED	adapter.from-json.json_parse_failed	null
+from-json	VALIDATION_FAILED	adapter.from-json.validation_failed	null
+insert-para	DECODE_FAILED	adapter.insert-para.decode_failed	"Check that the file is a valid HWPX document"
+insert-para	ENCODE_FAILED	adapter.insert-para.encode_failed	null
+insert-para	ENCODE_SEMANTIC_LOSS	adapter.insert-para.encode_semantic_loss	null
+insert-para	FILE_NOT_FOUND	adapter.insert-para.file_not_found	"@dynamic"
+insert-para	FILE_READ_FAILED	adapter.insert-para.file_read_failed	"@dynamic"
+insert-para	FILE_WRITE_FAILED	adapter.insert-para.file_write_failed	"@dynamic"
+insert-para	INPUT_ENTRIES_NOT_CARRIED	adapter.insert-para.input_entries_not_carried	"한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)"
+insert-para	INPUT_NOT_ROUNDTRIP_SAFE	adapter.insert-para.input_not_roundtrip_safe	null
+insert-para	INPUT_TOO_LARGE	adapter.insert-para.input_too_large	"@dynamic"
+insert-para	INSERT_BEFORE_SECTION_PROPERTIES	adapter.insert-para.insert_before_section_properties	null
+insert-para	INSERT_TEXT_REQUIRED	adapter.insert-para.insert_text_required	null
+insert-para	INTERNAL_INVARIANT	adapter.insert-para.internal_invariant	null
+insert-para	MULTI_PARAGRAPH_TEXT	adapter.insert-para.multi_paragraph_text	null
+insert-para	PARAGRAPH_OUT_OF_RANGE	adapter.insert-para.paragraph_out_of_range	null
+insert-para	PROTECTED_FIELD_RANGE	adapter.insert-para.protected_field_range	null
+insert-para	SECTION_OUT_OF_RANGE	adapter.insert-para.section_out_of_range	null
+insert-para	SECTION_PROPERTIES_PARAGRAPH	adapter.insert-para.section_properties_paragraph	null
+insert-para	SELF_VERIFY_FAILED	adapter.insert-para.self_verify_failed	null
+insert-para	SPAN_COUNT_MISMATCH	adapter.insert-para.span_count_mismatch	null
+insert-para	STRUCTURAL_CODEC	adapter.insert-para.structural_codec	null
+insert-para	UPSTREAM_UNMAPPED	adapter.insert-para.upstream_unmapped	null
+insert-para	VALIDATION_FAILED	adapter.insert-para.validation_failed	null
+inspect	ANALYSIS_FAILED	adapter.inspect.analysis_failed	null
+inspect	DECODE_FAILED	adapter.inspect.decode_failed	"Check that the file is a valid HWPX document"
+inspect	FILE_NOT_FOUND	io.missing	"@dynamic"
+inspect	FILE_READ_FAILED	io.read	"@dynamic"
+inspect	FILE_WRITE_FAILED	adapter.inspect.file_write_failed	"@dynamic"
+inspect	INPUT_TOO_LARGE	adapter.inspect.input_too_large	"@dynamic"
+outline	DECODE_FAILED	adapter.outline.decode_failed	null
+outline	FILE_NOT_FOUND	adapter.outline.file_not_found	"@dynamic"
+outline	FILE_READ_FAILED	adapter.outline.file_read_failed	"@dynamic"
+outline	INPUT_TOO_LARGE	adapter.outline.input_too_large	"@dynamic"
+patch	DECODE_FAILED	adapter.patch.decode_failed	null
+patch	ENCODE_FAILED	adapter.patch.encode_failed	null
+patch	ENCODE_SEMANTIC_LOSS	adapter.patch.encode_semantic_loss	null
+patch	FILE_NOT_FOUND	adapter.patch.file_not_found	"@dynamic"
+patch	FILE_READ_FAILED	adapter.patch.file_read_failed	"@dynamic"
+patch	FILE_WRITE_FAILED	adapter.patch.file_write_failed	"@dynamic"
+patch	GRID_ADDR_INVALID	adapter.patch.grid_addr_invalid	"Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry"
+patch	INPUT_TOO_LARGE	adapter.patch.input_too_large	"@dynamic"
+patch	INTERNAL_INVARIANT	adapter.patch.internal_invariant	null
+patch	JSON_PARSE_FAILED	adapter.patch.json_parse_failed	null
+patch	PATCH_FAILED	adapter.patch.patch_failed	"Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow."
+patch	PROTECTED_FIELD_RANGE	adapter.patch.protected_field_range	null
+patch	SECTION_INDEX_MISMATCH	adapter.patch.section_index_mismatch	null
+patch	SECTION_OUT_OF_RANGE	adapter.patch.section_out_of_range	null
+patch	UPSTREAM_UNMAPPED	adapter.patch.upstream_unmapped	"Update hwpforge so the CLI understands the newer section workflow error."
+patch	VALIDATION_FAILED	adapter.patch.validation_failed	null
+read	DECODE_FAILED	decode.input	null
+read	FIELD_NOT_FOUND	read.field	null
+read	FILE_NOT_FOUND	adapter.read.file_not_found	"@dynamic"
+read	FILE_READ_FAILED	adapter.read.file_read_failed	"@dynamic"
+read	INPUT_TOO_LARGE	adapter.read.input_too_large	"@dynamic"
+read	READ_PARAS_INVALID	adapter.read.read_paras_invalid	null
+read	READ_PARAS_WITHOUT_SECTION	adapter.read.read_paras_without_section	null
+read	READ_PARA_RANGE_INVALID	adapter.read.read_para_range_invalid	null
+read	READ_TARGET_REQUIRED	adapter.read.read_target_required	null
+read	SECTION_OUT_OF_RANGE	read.section	null
+read	TABLE_GRID_INVALID	adapter.read.table_grid_invalid	null
+read	TABLE_NOT_FOUND	read.table	null
+schema	UNKNOWN_SCHEMA_TYPE	adapter.schema.unknown_schema_type	null
+set-cell	CELL_HAS_NON_TEXT_CONTENT	adapter.set-cell.cell_has_non_text_content	"표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다"
+set-cell	CELL_LABEL_AMBIGUOUS	adapter.set-cell.cell_label_ambiguous	"라벨이 여러 셀과 일치합니다 — --at 좌표로 직접 지정하세요"
+set-cell	CELL_NOT_FOUND	adapter.set-cell.cell_not_found	null
+set-cell	CELL_TARGET_CONFLICT	adapter.set-cell.cell_target_conflict	"바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다"
+set-cell	CELL_TARGET_DUPLICATE	adapter.set-cell.cell_target_duplicate	null
+set-cell	DECODE_FAILED	adapter.set-cell.decode_failed	"Check that the file is a valid HWPX document"
+set-cell	ENCODE_FAILED	adapter.set-cell.encode_failed	null
+set-cell	ENCODE_SEMANTIC_LOSS	adapter.set-cell.encode_semantic_loss	null
+set-cell	FILE_NOT_FOUND	adapter.set-cell.file_not_found	"@dynamic"
+set-cell	FILE_READ_FAILED	adapter.set-cell.file_read_failed	"@dynamic"
+set-cell	FILE_WRITE_FAILED	adapter.set-cell.file_write_failed	"@dynamic"
+set-cell	INPUT_ENTRIES_NOT_CARRIED	adapter.set-cell.input_entries_not_carried	"한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)"
+set-cell	INPUT_NOT_ROUNDTRIP_SAFE	adapter.set-cell.input_not_roundtrip_safe	"이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"
+set-cell	INPUT_TOO_LARGE	adapter.set-cell.input_too_large	"@dynamic"
+set-cell	INTERNAL_INVARIANT	adapter.set-cell.internal_invariant	null
+set-cell	INVALID_SET_CELL_ARGS	adapter.set-cell.invalid_set_cell_args	null
+set-cell	INVALID_SET_CELL_MAP	adapter.set-cell.invalid_set_cell_map	null
+set-cell	SELF_VERIFY_FAILED	adapter.set-cell.self_verify_failed	null
+set-cell	SET_CELL_CODEC_FAILED	adapter.set-cell.set_cell_codec_failed	null
+set-cell	TABLE_GRID_INVALID	adapter.set-cell.table_grid_invalid	"이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다"
+set-cell	TABLE_NOT_FOUND	adapter.set-cell.table_not_found	null
+set-cell	UPSTREAM_UNMAPPED	adapter.set-cell.upstream_unmapped	null
+set-cell	VALIDATION_FAILED	adapter.set-cell.validation_failed	null
+stamp	DECODE_FAILED	adapter.stamp.decode_failed	"Check that the file is a valid HWPX document"
+stamp	ENCODE_FAILED	adapter.stamp.encode_failed	null
+stamp	ENCODE_SEMANTIC_LOSS	adapter.stamp.encode_semantic_loss	null
+stamp	FILE_NOT_FOUND	adapter.stamp.file_not_found	"@dynamic"
+stamp	FILE_READ_FAILED	adapter.stamp.file_read_failed	"@dynamic"
+stamp	FILE_WRITE_FAILED	adapter.stamp.file_write_failed	"@dynamic"
+stamp	INPUT_ENTRIES_NOT_CARRIED	adapter.stamp.input_entries_not_carried	"한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)"
+stamp	INPUT_NOT_ROUNDTRIP_SAFE	adapter.stamp.input_not_roundtrip_safe	"이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다"
+stamp	INPUT_TOO_LARGE	adapter.stamp.input_too_large	"@dynamic"
+stamp	INTERNAL_INVARIANT	adapter.stamp.internal_invariant	null
+stamp	INVALID_STAMP_MAP	adapter.stamp.invalid_stamp_map	null
+stamp	MANIFEST_PATH_CONFLICT	adapter.stamp.manifest_path_conflict	null
+stamp	SELF_VERIFY_FAILED	adapter.stamp.self_verify_failed	null
+stamp	STAMP_CANDIDATE_UNCOVERED	adapter.stamp.stamp_candidate_uncovered	null
+stamp	STAMP_CELL_NOT_ANCHOR	adapter.stamp.stamp_cell_not_anchor	null
+stamp	STAMP_CELL_NOT_CANDIDATE	adapter.stamp.stamp_cell_not_candidate	null
+stamp	STAMP_CELL_NOT_EMPTY	adapter.stamp.stamp_cell_not_empty	"클래스-B 대상은 whitespace-only 빈 셀이어야 합니다"
+stamp	STAMP_CELL_TARGET_DUPLICATE	adapter.stamp.stamp_cell_target_duplicate	null
+stamp	STAMP_CODEC_FAILED	adapter.stamp.stamp_codec_failed	null
+stamp	STAMP_DELTA_MISMATCH	adapter.stamp.stamp_delta_mismatch	"산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"
+stamp	STAMP_HINT_BLANK	adapter.stamp.stamp_hint_blank	"빈 셀엔 마커가 없어 hint 가 필수입니다 (plan 의 suggested_hint 참고)"
+stamp	STAMP_LABEL_DRIFT	adapter.stamp.stamp_label_drift	"문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"
+stamp	STAMP_MANIFEST_INVARIANT	adapter.stamp.stamp_manifest_invariant	null
+stamp	STAMP_MARKER_MISMATCH	adapter.stamp.stamp_marker_mismatch	null
+stamp	STAMP_NAME_COLLISION	adapter.stamp.stamp_name_collision	null
+stamp	STAMP_NAME_DUPLICATE	adapter.stamp.stamp_name_duplicate	null
+stamp	STAMP_NAME_EMPTY	adapter.stamp.stamp_name_empty	null
+stamp	STAMP_SOURCE_HASH_MISMATCH	adapter.stamp.stamp_source_hash_mismatch	"문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요"
+stamp	STAMP_SPEC_DUPLICATE	adapter.stamp.stamp_spec_duplicate	null
+stamp	STAMP_SPEC_STALE	adapter.stamp.stamp_spec_stale	"문서가 변경됐거나 span 이 어긋났습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"
+stamp	TABLE_GRID_INVALID	adapter.stamp.table_grid_invalid	null
+stamp	TABLE_NOT_FOUND	adapter.stamp.table_not_found	null
+stamp	UPSTREAM_UNMAPPED	adapter.stamp.upstream_unmapped	null
+stamp	VALIDATION_FAILED	adapter.stamp.validation_failed	null
+stamp-plan	DECODE_FAILED	adapter.stamp-plan.decode_failed	"Check that the file is a valid HWPX document"
+stamp-plan	FILE_NOT_FOUND	adapter.stamp-plan.file_not_found	"@dynamic"
+stamp-plan	FILE_READ_FAILED	adapter.stamp-plan.file_read_failed	"@dynamic"
+stamp-plan	INPUT_TOO_LARGE	adapter.stamp-plan.input_too_large	"@dynamic"
+stamp-plan	STAMP_CODEC_FAILED	adapter.stamp-plan.stamp_codec_failed	null
+templates	PRESET_NOT_FOUND	adapter.templates.preset_not_found	"Run 'hwpforge templates list' to see available presets"
+to-json	DECODE_FAILED	adapter.to-json.decode_failed	null
+to-json	FILE_NOT_FOUND	adapter.to-json.file_not_found	"@dynamic"
+to-json	FILE_READ_FAILED	adapter.to-json.file_read_failed	"@dynamic"
+to-json	FILE_WRITE_FAILED	adapter.to-json.file_write_failed	"@dynamic"
+to-json	GRID_ADDR_PROJECTION_FAILED	adapter.to-json.grid_addr_projection_failed	null
+to-json	INPUT_TOO_LARGE	adapter.to-json.input_too_large	"@dynamic"
+to-json	INVALID_EXTENSION	adapter.to-json.invalid_extension	null
+to-json	JSON_SERIALIZE_FAILED	adapter.to-json.json_serialize_failed	"Check for NaN/Infinity values in chart data"
+to-json	PATCH_FAILED	adapter.to-json.patch_failed	null
+to-json	SECTION_INDEX_MISMATCH	adapter.to-json.section_index_mismatch	null
+to-json	SECTION_OUT_OF_RANGE	adapter.to-json.section_out_of_range	null
+to-json	UPSTREAM_UNMAPPED	adapter.to-json.upstream_unmapped	null
+to-md	DECODE_FAILED	adapter.to-md.decode_failed	null
+to-md	ENCODE_FAILED	adapter.to-md.encode_failed	null
+to-md	FILE_NOT_FOUND	adapter.to-md.file_not_found	"@dynamic"
+to-md	FILE_READ_FAILED	adapter.to-md.file_read_failed	"@dynamic"
+to-md	FILE_WRITE_FAILED	adapter.to-md.file_write_failed	"@dynamic"
+to-md	INPUT_TOO_LARGE	adapter.to-md.input_too_large	"@dynamic"
+to-md	VALIDATION_FAILED	adapter.to-md.validation_failed	null
+to-pdf	DECODE_FAILED	adapter.to-pdf.decode_failed	null
+to-pdf	FILE_NOT_FOUND	adapter.to-pdf.file_not_found	"@dynamic"
+to-pdf	FILE_READ_FAILED	adapter.to-pdf.file_read_failed	"@dynamic"
+to-pdf	FILE_WRITE_FAILED	adapter.to-pdf.file_write_failed	"@dynamic"
+to-pdf	HWP5_CONVERT_FAILED	adapter.to-pdf.hwp5_convert_failed	null
+to-pdf	HWP5_DECODE_FAILED	adapter.to-pdf.hwp5_decode_failed	null
+to-pdf	INPUT_TOO_LARGE	adapter.to-pdf.input_too_large	"@dynamic"
+to-pdf	INVALID_DISCOVERY	adapter.to-pdf.invalid_discovery	null
+to-pdf	PDF_RENDER_FAILED	adapter.to-pdf.pdf_render_failed	"cacheless documents need a Hancom re-save; font errors may need --font-dir/--discovery or --degraded"
+to-pdf	UNRECOGNIZED_FORMAT	adapter.to-pdf.unrecognized_format	"to-pdf detects the format by content — the extension is only a hint"
+to-pdf	VALIDATION_FAILED	adapter.to-pdf.validation_failed	null
+validate	DECODE_FAILED	adapter.validate.decode_failed	null
+validate	FILE_NOT_FOUND	adapter.validate.file_not_found	"@dynamic"
+validate	FILE_READ_FAILED	adapter.validate.file_read_failed	"@dynamic"
+validate	INPUT_TOO_LARGE	adapter.validate.input_too_large	"@dynamic"
+validate	JSON_SERIALIZE_FAILED	adapter.validate.json_serialize_failed	null
+census-hwp5	HWP5_CENSUS_FAILED	adapter.census-hwp5.hwp5_census_failed	null
+to-md	INPUT_TOO_LARGE	io.to-md.input_size_preflight	"@dynamic"
+to-md	INPUT_TOO_LARGE	io.to-md.fifo_over_limit	"@dynamic"
+convert-hwp5	INPUT_TOO_LARGE	io.convert-hwp5.input_size_preflight	"@dynamic"
+convert-hwp5	INPUT_TOO_LARGE	io.convert-hwp5.fifo_over_limit	"@dynamic"
+convert-hwp5	FILE_WRITE_FAILED	io.convert-hwp5.output_metadata	"@dynamic"

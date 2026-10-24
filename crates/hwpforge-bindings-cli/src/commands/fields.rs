@@ -10,8 +10,8 @@ use crate::error::{check_file_size, read_input};
 
 /// Run the fields command.
 pub fn run(file: &PathBuf, json_mode: bool) {
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::Fields);
+    let bytes = read_input(file, json_mode, Command::Fields);
 
     // Decoder warnings (`FieldsOutput::warnings`) were not surfaced pre-W5
     // (matches the pre-migration behaviour, which never captured them

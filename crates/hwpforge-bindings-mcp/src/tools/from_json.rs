@@ -30,14 +30,14 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
     // JSON string).
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
     }
     if structure.len() > MAX_INLINE_SIZE {
         return Err(ToolErrorInfo::new(
-            "INPUT_TOO_LARGE",
+            hwpforge_foundation::diagnostics::OpsCode::InputTooLarge,
             format!(
                 "JSON input is {} MB, exceeds {} MB limit",
                 structure.len() / 1024 / 1024,
@@ -86,17 +86,19 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn from_json_invalid_json() {
         let err = run_from_json("not json", "/tmp/out.hwpx").unwrap_err();
-        assert_eq!(err.code, "JSON_PARSE_ERROR");
+        assert_eq!(err.code, "JSON_PARSE_FAILED");
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn from_json_empty_document() {
         // Empty document structure fails deserialization (Document<Draft> requires valid structure)
         let json = r#"{"document":{"sections":[]}}"#;
         let err = run_from_json(json, "/tmp/out.hwpx").unwrap_err();
-        assert_eq!(err.code, "JSON_PARSE_ERROR");
+        assert_eq!(err.code, "JSON_PARSE_FAILED");
     }
 
     #[test]

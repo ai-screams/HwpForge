@@ -29,6 +29,18 @@ pub const MAX_INLINE_SIZE: usize = 24 * 1024 * 1024;
 /// This used to be three copies of the same literal, one per tool module.
 pub const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
+/// Keep serializer failures canonical across diff, export and stamp.
+pub(crate) fn json_serialize_error(
+    message: impl Into<String>,
+    hint: impl Into<String>,
+) -> ToolErrorInfo {
+    ToolErrorInfo::new(
+        hwpforge_foundation::diagnostics::OpsCode::JsonSerializeFailed,
+        message,
+        hint,
+    )
+}
+
 /// Read a file as bytes with size check and structured errors.
 ///
 /// Uses `metadata()` for size guard (prevents OOM in the common case), then
@@ -45,32 +57,35 @@ pub fn read_file_bytes(file_path: &str) -> Result<Vec<u8>, ToolErrorInfo> {
     // check_file_size handles it. Also the guarantee for a source
     // (FIFO/process substitution) whose `metadata().len()` under-reports:
     // `read_bounded` still caps it here.
-    hwpforge::ops::fs::read_bounded(path, MAX_FILE_SIZE).map_err(|e| match e {
-        hwpforge::ops::OpsError::Io(io_err) => match io_err.kind() {
-            std::io::ErrorKind::NotFound => ToolErrorInfo::new(
-                "FILE_NOT_FOUND",
-                format!("File not found: {file_path}"),
-                "Check the file path and try again.",
+    hwpforge::ops::fs::read_bounded(path, MAX_FILE_SIZE).map_err(|e| {
+        let code = e.code();
+        match e {
+            hwpforge::ops::OpsError::Io(io_err) => match io_err.kind() {
+                std::io::ErrorKind::NotFound => ToolErrorInfo::new(
+                    code,
+                    format!("File not found: {file_path}"),
+                    "Check the file path and try again.",
+                ),
+                _ => ToolErrorInfo::new(
+                    code,
+                    format!("Failed to read file: {io_err}"),
+                    "Check file permissions.",
+                ),
+            },
+            hwpforge::ops::OpsError::Rejected {
+                code: hwpforge_foundation::diagnostics::OpsCode::InputTooLarge,
+                ..
+            } => ToolErrorInfo::new(
+                code,
+                format!("File '{file_path}' exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
+                "Use a smaller file or split the document into sections.",
             ),
-            _ => ToolErrorInfo::new(
-                "READ_ERROR",
-                format!("Failed to read file: {io_err}"),
+            other => ToolErrorInfo::new(
+                code,
+                format!("Failed to read file: {other}"),
                 "Check file permissions.",
             ),
-        },
-        hwpforge::ops::OpsError::Rejected {
-            code: hwpforge_foundation::diagnostics::OpsCode::InputTooLarge,
-            ..
-        } => ToolErrorInfo::new(
-            "INPUT_TOO_LARGE",
-            format!("File '{file_path}' exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
-            "Use a smaller file or split the document into sections.",
-        ),
-        other => ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read file: {other}"),
-            "Check file permissions.",
-        ),
+        }
     })
 }
 
@@ -81,7 +96,7 @@ pub fn read_file_string(file_path: &str) -> Result<String, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
     String::from_utf8(bytes).map_err(|e| {
         ToolErrorInfo::new(
-            "READ_ERROR",
+            hwpforge_foundation::diagnostics::OpsCode::FileReadFailed,
             format!("File is not valid UTF-8: {e}"),
             "Ensure the file is UTF-8 encoded.",
         )
@@ -139,7 +154,7 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
     let out = Path::new(output_path);
     if out.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err(ToolErrorInfo::new(
-            "WRITE_ERROR",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidOutputPath,
             format!("Unsafe output path contains '..': {output_path}"),
             "Provide an output path without any '..' parent-directory segments.",
         ));
@@ -148,7 +163,7 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
         if let Some(home) = home_dir() {
             if is_sensitive_output_path(out, &home) {
                 return Err(ToolErrorInfo::new(
-                    "WRITE_ERROR",
+                    hwpforge_foundation::diagnostics::OpsCode::InvalidOutputPath,
                     format!("Refusing to write to a sensitive location: {output_path}"),
                     "Choose an output path outside SSH/credential/config directories.",
                 ));
@@ -157,7 +172,7 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
     }
     if out.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
         return Err(ToolErrorInfo::new(
-            "WRITE_ERROR",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidOutputPath,
             format!("Refusing to write through a symlink: {output_path}"),
             "Provide a real (non-symlink) output path.",
         ));
@@ -166,7 +181,7 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 ToolErrorInfo::new(
-                    "WRITE_ERROR",
+                    hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed,
                     format!("Cannot create output directory: {e}"),
                     "Check write permissions.",
                 )
@@ -175,7 +190,7 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
     }
     std::fs::write(out, data).map_err(|e| {
         ToolErrorInfo::new(
-            "WRITE_ERROR",
+            hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed,
             format!("Failed to write file: {e}"),
             "Check disk space and permissions.",
         )
@@ -189,7 +204,7 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
 fn check_file_size(path: &Path) -> Result<(), ToolErrorInfo> {
     match std::fs::metadata(path) {
         Ok(m) if m.len() > MAX_FILE_SIZE => Err(ToolErrorInfo::new(
-            "INPUT_TOO_LARGE",
+            hwpforge_foundation::diagnostics::OpsCode::InputTooLarge,
             format!(
                 "File '{}' is {} MB, exceeds {} MB limit",
                 path.display(),
@@ -200,15 +215,18 @@ fn check_file_size(path: &Path) -> Result<(), ToolErrorInfo> {
         )),
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
+            hwpforge::ops::OpsError::Io(e).code(),
             format!("File not found: '{}'", path.display()),
             "Check the file path and try again.",
         )),
-        Err(e) => Err(ToolErrorInfo::new(
-            "METADATA_ERROR",
-            format!("Cannot read file metadata for '{}': {e}", path.display()),
-            "Check file permissions.",
-        )),
+        Err(e) => {
+            let message = format!("Cannot read file metadata for '{}': {e}", path.display());
+            Err(ToolErrorInfo::new(
+                hwpforge::ops::OpsError::Io(e).code(),
+                message,
+                "Check file permissions.",
+            ))
+        }
     }
 }
 
@@ -254,11 +272,11 @@ pub struct ToolErrorInfo {
 impl ToolErrorInfo {
     /// Create a new structured error.
     pub fn new(
-        code: impl Into<String>,
+        code: hwpforge_foundation::diagnostics::OpsCode,
         message: impl Into<String>,
         hint: impl Into<String>,
     ) -> Self {
-        Self { code: code.into(), message: message.into(), hint: hint.into() }
+        Self { code: code.as_str().into(), message: message.into(), hint: hint.into() }
     }
 
     /// Serialize to JSON string for MCP error responses.
@@ -372,13 +390,14 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn read_file_string_non_utf8() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("binary.dat");
         std::fs::write(&path, [0xFF, 0xFE, 0x00, 0x80]).unwrap();
 
         let err = read_file_string(path.to_str().unwrap()).unwrap_err();
-        assert_eq!(err.code, "READ_ERROR");
+        assert_eq!(err.code, "FILE_READ_FAILED");
         assert!(err.message.contains("UTF-8"));
     }
 
@@ -422,6 +441,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn write_output_file_rejects_parent_dir_traversal() {
         // A relative path containing '..' must be rejected (CWE-22) and no file
         // may be written.
@@ -432,7 +452,7 @@ mod tests {
         let escape_str = escape.to_str().unwrap();
 
         let err = write_output_file(escape_str, b"x").unwrap_err();
-        assert_eq!(err.code, "WRITE_ERROR");
+        assert_eq!(err.code, "INVALID_OUTPUT_PATH");
         assert!(err.message.contains(".."), "error must mention the '..' rejection");
 
         // The normalized escape target must not exist.
@@ -441,10 +461,11 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn write_output_file_rejects_relative_parent_dir() {
         // A purely relative '../escape' path must be rejected without writing.
         let err = write_output_file("../escape-e1-test.txt", b"x").unwrap_err();
-        assert_eq!(err.code, "WRITE_ERROR");
+        assert_eq!(err.code, "INVALID_OUTPUT_PATH");
         assert!(!Path::new("../escape-e1-test.txt").exists(), "must not write outside cwd");
     }
 
@@ -479,6 +500,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn write_output_file_refuses_sensitive_home_target() {
         // End-to-end: a write into a sensitive $HOME subdir is rejected before
         // any directory is created or file written. Uses the real home + a
@@ -486,12 +508,13 @@ mod tests {
         let Some(home) = home_dir() else { return };
         let target = home.join(".ssh").join("hwpforge-e1-guard-probe.tmp");
         let err = write_output_file(target.to_str().unwrap(), b"x").unwrap_err();
-        assert_eq!(err.code, "WRITE_ERROR");
+        assert_eq!(err.code, "INVALID_OUTPUT_PATH");
         assert!(!target.exists(), "sensitive target must not be written");
     }
 
     #[cfg(unix)]
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn write_output_file_refuses_symlink_final_component() {
         // A planted symlink as the final component must not be followed.
         let dir = tempfile::tempdir().unwrap();
@@ -500,7 +523,7 @@ mod tests {
         std::os::unix::fs::symlink(&real_target, &link).unwrap();
 
         let err = write_output_file(link.to_str().unwrap(), b"data").unwrap_err();
-        assert_eq!(err.code, "WRITE_ERROR");
+        assert_eq!(err.code, "INVALID_OUTPUT_PATH");
         assert!(!real_target.exists(), "symlink target must not be written through");
     }
 
@@ -510,5 +533,31 @@ mod tests {
     #[test]
     fn max_inline_response_is_one_megabyte() {
         assert_eq!(MAX_INLINE_RESPONSE, 1024 * 1024);
+    }
+}
+
+#[cfg(test)]
+mod serialization_contract {
+    #[test]
+    // 이것을 실패시키는 것: 공용 JSON 직렬화 실패 코드를 InvalidInput으로 변경.
+    fn a07_serialization_cases_are_canonical() {
+        // Limit: this pins the shared helper's code, not its four callers in
+        // diff, to-json, and stamp. A caller reverting to a direct error
+        // constructor can bypass this test; no serializer fault is injected
+        // through those tool entry points here.
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
+                .unwrap();
+        for id in [
+            "adapter.diff.json_serialize_failed",
+            "adapter.to-json.json_serialize_failed",
+            "adapter.stamp.json_serialize_failed",
+        ] {
+            let case =
+                manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
+            let err = super::json_serialize_error("serialization rejected", "context hint");
+            assert_eq!(err.code, case["expected_code"].as_str().unwrap(), "{id}");
+            assert_eq!(err.hint, "context hint");
+        }
     }
 }

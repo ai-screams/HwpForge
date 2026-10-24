@@ -1,10 +1,10 @@
-"""The single exception type every HwpForge operation raises."""
+"""Common operation errors and OS-compatible file errors."""
 
 from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["HwpForgeError"]
+__all__ = ["HwpForgeError", "HwpForgeFileNotFoundError", "HwpForgeIOError"]
 
 
 class HwpForgeError(Exception):
@@ -68,12 +68,60 @@ class HwpForgeError(Exception):
         return rendered
 
     def __repr__(self) -> str:
-        """Render as a call that would rebuild this error."""
+        """Render the concrete class and its diagnostic fields."""
+        os_fields = ""
+        if isinstance(self, OSError):
+            os_fields = "".join(
+                f", {name}={getattr(self, name)!r}"
+                for name in ("errno", "strerror", "filename", "filename2", "winerror")
+                if hasattr(self, name)
+            )
         return (
-            f"HwpForgeError(code={self.code!r}, message={self.message!r}, "
-            f"hint={self.hint!r}, cause={self.cause!r}, details={self.details!r})"
+            f"{type(self).__name__}(code={self.code!r}, message={self.message!r}, "
+            f"hint={self.hint!r}, cause={self.cause!r}, details={self.details!r}{os_fields})"
         )
 
     def __reduce__(self) -> tuple[Any, ...]:
         """Keep copy and pickle working even though ``args`` holds only the message."""
         return (self.__class__, (self.code, self.message, self.hint, self.cause, self.details))
+
+
+class HwpForgeIOError(HwpForgeError, OSError):
+    """A coded file error, also catchable as :class:`OSError`.
+
+    The original OS fields are copied explicitly; HwpForge's five arguments
+    are never passed to the OSError constructor.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        hint: str | None = None,
+        cause: dict[str, str] | None = None,
+        details: dict[str, Any] | None = None,
+        os_error: OSError | None = None,
+    ) -> None:
+        """Build a coded error while retaining the OS diagnostic fields."""
+        HwpForgeError.__init__(self, code, message, hint, cause, details)
+        for name in ("errno", "strerror", "filename", "filename2"):
+            setattr(self, name, getattr(os_error, name, None))
+        if hasattr(os_error, "winerror"):
+            self.winerror = os_error.winerror
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Restore the exact subclass, five HwpForge fields and OS fields."""
+        state = {
+            name: getattr(self, name) for name in ("errno", "strerror", "filename", "filename2")
+        }
+        if hasattr(self, "winerror"):
+            state["winerror"] = self.winerror
+        return (
+            self.__class__,
+            (self.code, self.message, self.hint, self.cause, self.details),
+            state,
+        )
+
+
+class HwpForgeFileNotFoundError(HwpForgeIOError, FileNotFoundError):
+    """An absent input file, also catchable as :class:`FileNotFoundError`."""

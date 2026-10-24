@@ -42,7 +42,7 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
         .unwrap_or(false);
     if !ext_ok {
         return Err(ToolErrorInfo::new(
-            "INVALID_INPUT",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidInput,
             format!("Expected a .hwpx file, got: {file_path}"),
             "Provide a path to a valid .hwpx document.",
         ));
@@ -83,7 +83,7 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
         // Ensure the images directory exists
         std::fs::create_dir_all(&images_dir).map_err(|e| {
             ToolErrorInfo::new(
-                "DIR_CREATE_ERROR",
+                hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed,
                 format!("Cannot create images directory '{}': {e}", images_dir_str),
                 "Check write permissions for the output directory.",
             )

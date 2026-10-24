@@ -1,4 +1,5 @@
 //! Convert JSON back to HWPX.
+use crate::error::CliCode;
 
 use std::path::PathBuf;
 
@@ -19,9 +20,9 @@ pub(crate) const SCHEMA_MISMATCH_HINT: &str =
 
 /// Run the from-json command.
 pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode: bool) {
-    check_file_size(input, json_mode);
+    check_file_size(input, json_mode, Command::FromJson);
 
-    let json_str = read_input_string(input, json_mode);
+    let json_str = read_input_string(input, json_mode, Command::FromJson);
 
     // Legacy two-step JSON_PARSE_FAILED classification (5ff81af `run`):
     // syntax errors ("Invalid JSON: {e}", no hint) versus a schema mismatch
@@ -34,7 +35,8 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // `ops::from_json` still returns below is necessarily the schema case —
     // the hint is attached at that arm, where this preflight makes it true.
     if let Err(e) = serde_json::from_str::<serde_json::Value>(&json_str) {
-        CliError::new("JSON_PARSE_FAILED", format!("Invalid JSON: {e}")).exit(json_mode, 2);
+        CliError::new(CliCode::Ops(OpsCode::JsonParseFailed), format!("Invalid JSON: {e}"))
+            .exit(json_mode, Command::FromJson);
     }
 
     // Image store: inherit from base HWPX if provided. Read up front —
@@ -43,15 +45,15 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // FILE_READ_FAILED/INPUT_TOO_LARGE, same as before.
     let mut opts = FromJsonOptions::default();
     if let Some(base_path) = base {
-        check_file_size(base_path, json_mode);
+        check_file_size(base_path, json_mode, Command::FromJson);
         let base_bytes = match read_bounded(base_path) {
             Ok(b) => b,
             Err(e) => {
                 CliError::new(
-                    "FILE_READ_FAILED",
+                    CliCode::Ops(e.code()),
                     format!("Cannot read base '{}': {e}", base_path.display()),
                 )
-                .exit(json_mode, 1);
+                .exit(json_mode, Command::FromJson);
             }
         };
         opts = opts.with_base(base_bytes);
@@ -79,8 +81,11 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     }
 
     if let Err(e) = std::fs::write(output, &bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::FromJson);
     }
 
     let result = serde_json::json!({

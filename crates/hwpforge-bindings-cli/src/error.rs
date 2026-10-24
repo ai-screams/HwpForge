@@ -1,73 +1,54 @@
-//! CLI error types with JSON-friendly output.
-//!
-//! # What an oversized input reports, per command
-//!
-//! An input past [`MAX_FILE_SIZE`] does not report the same code/exit
-//! everywhere — which one depends on the input's *kind* (primary document
-//! vs. an auxiliary map/spec/JSON file) and, for the primary document, on
-//! whether that command reads through [`read_input`]/[`read_input_string`]
-//! or calls [`read_bounded`]/[`read_bounded_string`] directly.
-//!
-//! Every command that takes a path (all but `templates`/`schema`) calls
-//! [`check_file_size`] on its **primary document** first, so a **regular
-//! file whose `metadata()` already reports it oversized** always reports the
-//! same thing, regardless of command: `INPUT_TOO_LARGE`, exit 1, message
-//! `"File '{path}' is {N} MB, exceeds {M} MB limit"` (`check_file_size`,
-//! below). `legacy_codes.txt` attributes this to the pseudo-command `shared`
-//! for exactly this reason. Auxiliary files (a `stamp`/`set-cell` `--map`,
-//! `from-json --base`) get no such pre-check — only the bounded read below
-//! stands between them and the cap.
-//!
-//! What differs by command is the **second gate**, the bounded read itself
-//! — the one that also catches a source whose `metadata()` lied (a FIFO or
-//! process substitution reports `0`, see [`hwpforge::ops::fs::read_bounded`]
-//! and this module's own [`read_capped`]):
-//!
-//! | Input kind | Commands | Code | Exit | Message source |
-//! | --- | --- | --- | --- | --- |
-//! | Primary document | `inspect`, `to-json`, `to-pdf`, `outline`, `diff` (both files), `delete-para`/`insert-para`, `read`, `fields`, `fill`, `set-cell`, `stamp`/`stamp-plan`, `validate`, `census-hwp5`, and `from-json`'s own JSON input, `patch`'s base *and* its section-JSON input | `INPUT_TOO_LARGE` (cap hit) or `FILE_READ_FAILED` (any other I/O error) | 1 | [`read_input`]/[`read_input_string`] itself distinguishes the two — same code as the pre-check, different message: `"File '{path}' exceeds {M} MB limit"` |
-//! | Primary document | `convert` (Markdown) | `FILE_READ_FAILED` | 1 | [`read_bounded_string`] called directly in `commands/convert.rs` — does not special-case the cap hit, so it reports the same code as a missing file |
-//! | Primary document | `to-md` (HWPX) | `DECODE_FAILED` | 2 | `commands/to_md.rs` reads via [`read_bounded`] directly and reports every read failure as a decode failure — pre-migration, `to-md` bundled its file read into the decode stage, and this reproduces that byte-for-byte (see that call site's own comment) |
-//! | Primary document | `convert-hwp5` (HWP5) | `HWP5_DECODE_FAILED` | 2 | `commands/convert_hwp5.rs` reads via [`read_bounded`] directly; same reasoning as `to-md`, HWP5-flavoured — the legacy first read this replaced always reported `HWP5_DECODE_FAILED` for an unreadable file, cap hit included |
-//! | Primary document (diagnostic-only, no `ops` counterpart) | `audit-hwp5` (source and result) | `FILE_READ_FAILED` | 1 | `commands/audit_hwp5.rs`'s `read_required` helper wraps [`read_bounded`] directly |
-//! | Auxiliary — base HWPX | `from-json --base` | `FILE_READ_FAILED` | 1 | `commands/from_json.rs` reads via [`read_bounded`] directly — an optional file this command can run without, so it never earned the primary input's split |
-//! | Auxiliary — stamp/set-cell map | `stamp --map`, `set-cell --map` | `FILE_READ_FAILED` | 1 | `commands/stamp.rs`/`commands/set_cell.rs` read via [`read_bounded_string`] directly |
-//!
-//! `patch`'s section-JSON file is *not* in the auxiliary rows above on
-//! purpose: unlike the other two frontend-shared map/JSON files (`stamp`'s
-//! and `set-cell`'s), it goes through [`read_input_string`] like a primary
-//! document, so it gets the same `INPUT_TOO_LARGE`/`FILE_READ_FAILED` split.
-//!
-//! `convert`'s own `INPUT_TOO_LARGE`/exit-1 row in `legacy_codes.txt` is a
-//! third source, unrelated to either gate above: a dedicated stdin-size
-//! check (`MAX_STDIN_SIZE`) that only exists for `convert -`, the one
-//! command that reads from stdin.
-//!
-//! # `warnings`/`errors` omission convention
-//!
-//! Existing commands (`inspect`, `read`, `fields`, `outline`, `diff`, `fill`,
-//! `patch`, `set-cell`, `stamp`, `stamp-plan`) omit an empty `warnings` key
-//! from `--json` output entirely — required for byte compatibility with the
-//! 0.16.5 wire shape those commands already shipped. A new command emits a
-//! fixed key set instead (`errors`/`warnings` always present, including an
-//! empty array) — `validate` (`commands/validate.rs`) is today's example.
-//! When adding a new command, the default is the latter: there is no legacy
-//! shape to preserve, so there is nothing to omit for.
-
+//! Typed CLI errors and bounded input I/O. Every exit uses (command, code).
+use crate::compat::Command;
+use hwpforge::ops::OpsError;
+use hwpforge_foundation::diagnostics::OpsCode;
 use serde::Serialize;
-use std::fmt;
-use std::io::Read;
-use std::process;
+use std::{fmt, io::Read, process};
 
-/// Maximum file size: 100 MB.
-///
-/// W6b audit follow-up: re-exported from the shared operation layer
-/// (`hwpforge::ops::fs::MAX_FILE_SIZE`) rather than declared here, so this
-/// crate, the MCP server and the Python bindings all read the one constant
-/// instead of three copies of the same literal.
 pub use hwpforge::ops::fs::MAX_FILE_SIZE;
-/// Maximum stdin size: 50 MB.
 pub const MAX_STDIN_SIZE: usize = 50 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliCode {
+    Ops(OpsCode),
+    Cli(CliOnly),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliOnly {
+    InvalidSet,
+    DuplicateSet,
+    Hwp5CensusFailed,
+    Hwp5SemanticFailed,
+    HwpxAnalysisFailed,
+    HwpxCensusFailed,
+}
+
+impl CliCode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ops(code) => code.as_str(),
+            Self::Cli(CliOnly::InvalidSet) => "INVALID_SET",
+            Self::Cli(CliOnly::DuplicateSet) => "DUPLICATE_SET",
+            Self::Cli(CliOnly::Hwp5CensusFailed) => "HWP5_CENSUS_FAILED",
+            Self::Cli(CliOnly::Hwp5SemanticFailed) => "HWP5_SEMANTIC_FAILED",
+            Self::Cli(CliOnly::HwpxAnalysisFailed) => "HWPX_ANALYSIS_FAILED",
+            Self::Cli(CliOnly::HwpxCensusFailed) => "HWPX_CENSUS_FAILED",
+        }
+    }
+}
+
+impl Serialize for CliCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl fmt::Display for CliCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Structured CLI error for both human and machine consumption.
 #[derive(Debug, Serialize)]
@@ -75,7 +56,7 @@ pub struct CliError {
     /// Always `"error"`.
     pub status: &'static str,
     /// Machine-readable error code (e.g. `"FILE_READ_FAILED"`).
-    pub code: String,
+    pub code: CliCode,
     /// Human-readable error message.
     pub message: String,
     /// Optional hint for resolution.
@@ -104,14 +85,8 @@ pub struct ErrorCause {
 
 impl CliError {
     /// Creates a new error with the given code and message.
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            status: "error",
-            code: code.into(),
-            message: message.into(),
-            hint: None,
-            cause: None,
-        }
+    pub fn new(code: CliCode, message: impl Into<String>) -> Self {
+        Self { status: "error", code, message: message.into(), hint: None, cause: None }
     }
 
     /// Adds a hint to this error.
@@ -127,7 +102,7 @@ impl CliError {
     }
 
     /// Print error and exit with given code.
-    pub fn exit(self, json_mode: bool, exit_code: i32) -> ! {
+    pub fn exit(self, json_mode: bool, command: Command) -> ! {
         if json_mode {
             let _ = serde_json::to_writer(std::io::stderr(), &self);
             eprintln!();
@@ -137,7 +112,7 @@ impl CliError {
                 eprintln!("Hint: {hint}");
             }
         }
-        process::exit(exit_code);
+        process::exit(crate::compat::exit_code(command, self.code));
     }
 }
 
@@ -147,12 +122,12 @@ impl fmt::Display for CliError {
     }
 }
 
-/// Check file size against the maximum limit before reading.
-pub fn check_file_size(path: &std::path::Path, json_mode: bool) {
-    match std::fs::metadata(path) {
-        Ok(m) if m.len() > MAX_FILE_SIZE => {
+/// Cheap regular-file check; the bounded reader remains the authoritative cap.
+pub fn check_file_size(path: &std::path::Path, json_mode: bool, command: Command) {
+    if let Ok(m) = std::fs::metadata(path) {
+        if m.len() > MAX_FILE_SIZE {
             CliError::new(
-                "INPUT_TOO_LARGE",
+                CliCode::Ops(OpsCode::InputTooLarge),
                 format!(
                     "File '{}' is {} MB, exceeds {} MB limit",
                     path.display(),
@@ -160,155 +135,65 @@ pub fn check_file_size(path: &std::path::Path, json_mode: bool) {
                     MAX_FILE_SIZE / 1024 / 1024
                 ),
             )
-            .exit(json_mode, 1);
+            .exit(json_mode, command);
         }
-        _ => {} // File doesn't exist or is within limit — let the subsequent read handle missing files
     }
 }
 
-/// Reads `reader` fully, but never more than `max + 1` bytes.
-///
-/// Backs [`read_capped_string`]/[`read_bounded_string`]/[`read_input_string`]
-/// — the bytes path ([`read_bounded`]/[`read_input`]) shares
-/// `hwpforge::ops::fs::read_bounded` instead (W6b audit follow-up: one
-/// bounded reader for every frontend), but that function takes a path, not
-/// an arbitrary [`Read`]er, so this generic cap stays here for the string
-/// variants. [`check_file_size`]'s `metadata().len()` guard is only accurate
-/// for regular files — a FIFO or process substitution reports `0` and would
-/// otherwise be read to completion by a plain [`std::fs::read`] (measured: an
-/// unbounded read of a 200 MB FIFO drove RSS to 2.8 GB in 20 s). Capping the
-/// read itself, not just the pre-check, is the actual guarantee; `metadata()`
-/// is just the cheap fast path for the common case where it happens to be
-/// accurate. Generic over `impl Read` so unit tests can exercise the cap with
-/// a small `max` against a `Cursor` instead of allocating real megabytes.
-fn read_capped(mut reader: impl Read, max: u64) -> std::io::Result<Vec<u8>> {
+fn read_capped(mut reader: impl Read, max: u64) -> Result<Vec<u8>, OpsError> {
     let mut buf = Vec::new();
-    reader.by_ref().take(max + 1).read_to_end(&mut buf)?;
+    reader.by_ref().take(max.saturating_add(1)).read_to_end(&mut buf).map_err(OpsError::Io)?;
     if buf.len() as u64 > max {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::FileTooLarge,
-            format!("input exceeds {} MB limit", max / 1024 / 1024),
-        ));
+        return Err(OpsError::Rejected {
+            code: OpsCode::InputTooLarge,
+            reason: format!("input exceeds {} MB limit", max / 1024 / 1024),
+        });
     }
     Ok(buf)
 }
 
-/// Reads `path` into memory, bounded by [`MAX_FILE_SIZE`] regardless of what
-/// `metadata()` reports.
-///
-/// A drop-in replacement for `std::fs::read(path)` at call sites that
-/// already build their own [`CliError`] around the read result — their
-/// existing code/message/exit shape stays untouched; only the previously
-/// unbounded read underneath it is fixed. Exceeding the cap reports
-/// [`std::io::ErrorKind::FileTooLarge`] so those call sites can still tell
-/// it apart from a plain I/O failure if they choose to. Generic over
-/// `impl AsRef<Path>`, matching `std::fs::read`'s own signature, so callers
-/// that hold a `&PathBuf` keep passing it directly (no `clippy::ptr_arg`
-/// pressure to widen their own parameter to `&Path` just to call this).
-///
-/// W6b audit follow-up: the actual open-and-cap work now happens in
-/// `hwpforge::ops::fs::read_bounded`, the reader every frontend shares; this
-/// function only translates that shared result back onto the
-/// `std::io::Result<Vec<u8>>` shape every caller here already handles, so
-/// none of them had to change.
-pub fn read_bounded(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>> {
-    hwpforge::ops::fs::read_bounded(path.as_ref(), MAX_FILE_SIZE).map_err(io_error_from_ops)
+pub fn read_bounded(path: impl AsRef<std::path::Path>) -> Result<Vec<u8>, OpsError> {
+    hwpforge::ops::fs::read_bounded(path, MAX_FILE_SIZE)
 }
 
-/// Translates a [`hwpforge::ops::fs::read_bounded`] failure back onto the
-/// `std::io::Result` shape [`read_bounded`]'s callers already handle.
-///
-/// The size violation becomes [`std::io::ErrorKind::FileTooLarge`] — the same
-/// signal [`read_capped`] itself raises — and an actual I/O failure keeps its
-/// own [`std::io::Error`] verbatim, [`std::io::ErrorKind`] included.
-fn io_error_from_ops(err: hwpforge::ops::OpsError) -> std::io::Error {
-    use hwpforge::ops::OpsError;
-    use hwpforge_foundation::diagnostics::OpsCode;
-    match err {
-        OpsError::Io(io_err) => io_err,
-        OpsError::Rejected { code: OpsCode::InputTooLarge, .. } => std::io::Error::new(
-            std::io::ErrorKind::FileTooLarge,
-            format!("input exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
-        ),
-        other => std::io::Error::other(other.to_string()),
-    }
-}
-
-/// Reads `path` for the common CLI read-command contract: exits with
-/// `FILE_READ_FAILED`/exit 1 on I/O failure (the same code/message shape
-/// every sibling read command already used for a plain `std::fs::read`
-/// failure), and `INPUT_TOO_LARGE`/exit 1 — the same code
-/// [`check_file_size`] uses for the metadata-caught case — when
-/// [`read_bounded`]'s cap catches a source whose `metadata()` lied (a FIFO
-/// or process substitution).
-pub fn read_input(path: impl AsRef<std::path::Path>, json_mode: bool) -> Vec<u8> {
-    let path = path.as_ref();
-    read_bounded(path).unwrap_or_else(|e| {
-        if e.kind() == std::io::ErrorKind::FileTooLarge {
-            CliError::new(
-                "INPUT_TOO_LARGE",
-                format!(
-                    "File '{}' exceeds {} MB limit",
-                    path.display(),
-                    MAX_FILE_SIZE / 1024 / 1024
-                ),
-            )
-            .exit(json_mode, 1)
-        } else {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", path.display()))
-                .exit(json_mode, 1)
-        }
+pub fn read_input(path: impl AsRef<std::path::Path>, json_mode: bool, command: Command) -> Vec<u8> {
+    read_bounded(path.as_ref()).unwrap_or_else(|err| {
+        CliError::new(
+            CliCode::Ops(err.code()),
+            format!("Cannot read '{}': {err}", path.as_ref().display()),
+        )
+        .exit(json_mode, command)
     })
 }
 
-/// Reads `reader` fully as UTF-8, but never more than `max + 1` bytes.
-///
-/// The `read_to_string` twin of [`read_capped`]: bounds the read the same
-/// way, then validates UTF-8 with the exact message
-/// `std::io::Read::read_to_string` itself uses ("stream did not contain
-/// valid UTF-8") — so a non-UTF-8 file reports identically to before this
-/// guard existed, whether the size cap ever comes into play or not.
-fn read_capped_string(reader: impl Read, max: u64) -> std::io::Result<String> {
-    let bytes = read_capped(reader, max)?;
+pub fn read_capped_string(reader: impl Read, max: u64) -> Result<String, OpsError> {
+    utf8(read_capped(reader, max)?)
+}
+
+fn utf8(bytes: Vec<u8>) -> Result<String, OpsError> {
     String::from_utf8(bytes).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8")
+        OpsError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        ))
     })
 }
 
-/// Reads `path` as a UTF-8 string, bounded by [`MAX_FILE_SIZE`] regardless
-/// of what `metadata()` reports (see [`read_capped_string`]).
-///
-/// The `std::fs::read_to_string(path)` twin of [`read_bounded`] — a drop-in
-/// replacement at call sites that already build their own [`CliError`]
-/// around the read result, for the same reason [`read_bounded`] exists: a
-/// `read_to_string` this size guard doesn't touch is exactly as exploitable
-/// via a FIFO/process substitution as `std::fs::read` was.
-pub fn read_bounded_string(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
-    let file = std::fs::File::open(path.as_ref())?;
-    read_capped_string(file, MAX_FILE_SIZE)
+pub fn read_bounded_string(path: impl AsRef<std::path::Path>) -> Result<String, OpsError> {
+    utf8(read_bounded(path)?)
 }
 
-/// Reads `path` as a UTF-8 string for the common CLI read-command contract
-/// — the `read_to_string` twin of [`read_input`]: `FILE_READ_FAILED`/exit 1
-/// on I/O or non-UTF-8 failure, `INPUT_TOO_LARGE`/exit 1 when
-/// [`read_bounded_string`]'s cap catches a source whose `metadata()` lied.
-pub fn read_input_string(path: impl AsRef<std::path::Path>, json_mode: bool) -> String {
-    let path = path.as_ref();
-    read_bounded_string(path).unwrap_or_else(|e| {
-        if e.kind() == std::io::ErrorKind::FileTooLarge {
-            CliError::new(
-                "INPUT_TOO_LARGE",
-                format!(
-                    "File '{}' exceeds {} MB limit",
-                    path.display(),
-                    MAX_FILE_SIZE / 1024 / 1024
-                ),
-            )
-            .exit(json_mode, 1)
-        } else {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", path.display()))
-                .exit(json_mode, 1)
-        }
+pub fn read_input_string(
+    path: impl AsRef<std::path::Path>,
+    json_mode: bool,
+    command: Command,
+) -> String {
+    read_bounded_string(path.as_ref()).unwrap_or_else(|err| {
+        CliError::new(
+            CliCode::Ops(err.code()),
+            format!("Cannot read '{}': {err}", path.as_ref().display()),
+        )
+        .exit(json_mode, command)
     })
 }
 
@@ -332,20 +217,22 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: bounded reader의 초과 guard 비활성화.
     fn read_capped_over_limit_errors_file_too_large() {
         // 11 bytes through a 10-byte cap: `take(max + 1)` lets the 11th
         // byte through so the length check can distinguish "exactly at the
         // limit" from "over it" — this exercises that off-by-one boundary.
         let data = vec![7u8; 11];
         let err = read_capped(Cursor::new(data), 10).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(err.code(), OpsCode::InputTooLarge);
     }
 
     #[test]
+    // 이것을 실패시키는 것: NotFound→FileReadFailed; CLI bounded helper 시험으로 검출.
     fn read_bounded_missing_file_is_not_found() {
         let err =
             read_bounded(std::path::Path::new("/nonexistent/hwpforge-w6a-probe.hwpx")).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(err.code(), OpsCode::FileNotFound);
     }
 
     #[test]
@@ -368,26 +255,29 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: bounded reader의 초과 guard 비활성화.
     fn read_capped_string_over_limit_errors_file_too_large() {
         // Same off-by-one boundary as `read_capped_over_limit_errors_file_too_large`,
         // through the UTF-8-validating twin.
         let data = vec![b'a'; 11];
         let err = read_capped_string(Cursor::new(data), 10).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(err.code(), OpsCode::InputTooLarge);
     }
 
     #[test]
+    // 이것을 실패시키는 것: UTF-8 InvalidData를 NotFound로 변경.
     fn read_capped_string_non_utf8_reports_the_std_message() {
         let err = read_capped_string(Cursor::new(vec![0xFF, 0xFE]), 10).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(err.code(), OpsCode::FileReadFailed);
         assert_eq!(err.to_string(), "stream did not contain valid UTF-8");
     }
 
     #[test]
+    // 이것을 실패시키는 것: NotFound→FileReadFailed; CLI bounded helper 시험으로 검출.
     fn read_bounded_string_missing_file_is_not_found() {
         let err = read_bounded_string(std::path::Path::new("/nonexistent/hwpforge-w6a-probe2.txt"))
             .unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(err.code(), OpsCode::FileNotFound);
     }
 
     #[test]
@@ -401,5 +291,28 @@ mod tests {
         assert_eq!(read_bounded_string(&path).unwrap(), "hello");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod w1_tests {
+    use super::*;
+
+    #[test]
+    // 이것을 실패시키는 것: bounded reader의 초과 guard 비활성화, bounded reader의 >를 >=로 변경, reader I/O를 InputTooLarge로 오분류.
+    fn w1_stdin_cap_and_io_classification() {
+        // 이것을 실패시키는 것: cap의 >를 >=로 변경, cap 제거, reader I/O를 InputTooLarge로 변경.
+        assert_eq!(read_capped_string(&b"abcd"[..], 4).unwrap(), "abcd");
+        assert_eq!(
+            read_capped_string(&b"abcde"[..], 4).unwrap_err().code(),
+            OpsCode::InputTooLarge
+        );
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            }
+        }
+        assert_eq!(read_capped_string(Broken, 4).unwrap_err().code(), OpsCode::FileReadFailed);
     }
 }

@@ -33,7 +33,7 @@ pub fn run_restyle(
     // 1. Validate output extension (MCP-local — stays outside `ops`).
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));

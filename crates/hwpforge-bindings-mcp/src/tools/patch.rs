@@ -36,7 +36,7 @@ pub fn run_patch(
 ) -> Result<PatchData, ToolErrorInfo> {
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
@@ -181,6 +181,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn patch_rejects_legacy_preservation_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let hwpx_path = dir.path().join("source.hwpx");
@@ -217,7 +218,7 @@ mod tests {
         )
         .expect_err("legacy preservation metadata must be rejected");
 
-        assert_eq!(error.code, "PATCH_ERROR");
+        assert_eq!(error.code, "PATCH_FAILED");
         assert!(error.message.contains("preservation metadata version"));
         assert!(error.hint.contains("Re-export the target section"));
     }

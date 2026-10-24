@@ -39,14 +39,14 @@ pub fn run_fill(
 ) -> Result<FillData, ToolErrorInfo> {
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
     }
     if values.is_empty() {
         return Err(ToolErrorInfo::new(
-            "NO_VALUES",
+            hwpforge_foundation::diagnostics::OpsCode::NoValues,
             "values map is empty",
             "Pass at least one name→value pair. Use hwpforge_fields to discover names.",
         ));
