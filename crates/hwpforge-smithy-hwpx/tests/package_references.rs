@@ -384,7 +384,7 @@ fn zip9_fix1_group_picture_with_absolute_asset_key_is_rejected() {
 /// F6: a picture whose reference names no item (`image2`, written by an
 /// older encoder). The reference is reported and kept: Hancom opens such a
 /// file without a warning and draws an empty picture box at the picture's
-/// size, and an empty reference would make our own decoder drop the picture.
+/// size. Keep the nonempty reference as the key for a later asset repair.
 ///
 /// 이것을 실패시키는 것: 해석되지 않은 참조를 빈 값으로 바꾸거나 그림을 빼는
 /// 것 (한컴이 다시 저장할 때 쓰는 형태로의 정규화).
@@ -402,10 +402,10 @@ fn a_dangling_picture_reference_is_reported_and_kept() {
 
 /// F6, after Hancom saved it again: the lost picture's reference is empty
 /// (`binaryItemIDRef=""`), which is not a reference, and `image1` resolves.
-/// (The empty-reference picture does not reach the Core document at all —
-/// the decoder drops a picture without a reference.)
+/// The empty reference still carries a picture frame through Core.
 ///
-/// 이것을 실패시키는 것: 이미지 항목 id 를 해석 집합에서 빼는 것.
+/// 이것을 실패시키는 것: 빈 참조 그림 버리기 / C4 빈 참조 제외 삭제 /
+/// 빈 경로의 가짜 manifest 항목 생성 / 정상 image1 참조 삭제.
 #[test]
 fn hancom_resave_of_a_dangling_reference_reports_nothing() {
     let bytes = fixture("images/f6-dangling-image-resaved.hwpx");
@@ -414,5 +414,83 @@ fn hancom_resave_of_a_dangling_reference_reports_nothing() {
 
     let outcome = reencode(&bytes, None);
     assert_eq!(unresolved(&outcome.warnings), []);
-    assert!(part(&outcome.bytes, "Contents/section0.xml").contains("binaryItemIDRef=\"image1\""));
+    assert!(!outcome.warnings.iter().any(EncodeWarning::is_semantic_loss));
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    assert!(!decoded.warnings.iter().any(|w| w.is_content_loss()));
+    let section = part(&outcome.bytes, "Contents/section0.xml");
+    assert_eq!(section.matches("<hp:pic ").count(), wire.matches("<hp:pic ").count());
+    fn assetless_picture(xml: &str) -> &str {
+        let reference = xml.find(r#"binaryItemIDRef="""#).expect("empty reference");
+        let start = xml[..reference].rfind("<hp:pic ").expect("picture start");
+        let end = reference
+            + xml[reference..].find("</hp:pic>").expect("picture end")
+            + "</hp:pic>".len();
+        &xml[start..end]
+    }
+    // 기존 인코더 정규화 세 가지를 명시한 뒤 요소 전체 문자열을 비교한다:
+    // curSz=표시 크기, hc:img의 스키마 순서, 빈 effects 생략.
+    // 이것을 실패시키는 것: 빈 참조 그림의 hp:offset 등 그 외 틀 속성 변경.
+    let expected = assetless_picture(&wire).replace(
+        r#"<hp:curSz width="0" height="0"/>"#,
+        r#"<hp:curSz width="8504" height="5669"/>"#,
+    );
+    let img_start = expected.find("<hc:img ").unwrap();
+    let img_end = img_start + expected[img_start..].find("/>").unwrap() + 2;
+    let img = &expected[img_start..img_end];
+    let expected = expected.replacen(img, "", 1).replace("<hp:effects/>", img);
+    assert_eq!(expected, assetless_picture(&section));
+    assert!(section.contains(r#"binaryItemIDRef="image1""#));
+    let manifest = part(&outcome.bytes, "Contents/content.hpf");
+    assert!(!written_ids(&manifest).iter().any(String::is_empty));
+    assert!(!manifest.contains(r#"href="BinData/""#));
+}
+
+/// 이것을 실패시키는 것: 빈 참조 버리기 / 빈 경로 대신 BinData/ 저장 /
+/// decode_picture_frame 호출 제거 / decode_image_placement 기본값화.
+#[test]
+fn assetless_body_picture_keeps_frame_attributes() {
+    use hwpforge_core::image::ImageCrop;
+    use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+    use hwpforge_core::table::TableMargin;
+    use hwpforge_core::RunContent;
+    use hwpforge_foundation::Size;
+
+    let u = |v| HwpUnit::new(v).unwrap();
+    for treat_as_char in [false, true] {
+        let mut image = Image::from_path("", u(1200), u(700));
+        image.crop = Some(ImageCrop { left: u(10), top: u(20), right: u(1900), bottom: u(1000) });
+        image.image_extent = Some((u(2000), u(1100)));
+        image.frame.original_size = Some(Size::new(u(2400), u(1400)));
+        let mut placement = ObjectPlacement::legacy_inline_defaults();
+        placement.treat_as_char = treat_as_char;
+        placement.text_wrap = ObjectTextWrap::Square;
+        placement.vert_rel_to = ObjectRelativeTo::Page;
+        placement.vert_offset = u(123);
+        placement.horz_offset = u(456);
+        placement.out_margin =
+            Some(TableMargin { left: u(1), right: u(2), top: u(3), bottom: u(4) });
+        image.placement = Some(placement);
+        let source =
+            encode_runs(vec![Run::image(image, CharShapeIndex::new(0))], &ImageStore::new());
+        let decoded = HwpxDecoder::decode(&source.bytes).unwrap();
+        let image = decoded.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|r| if let RunContent::Image(i) = &r.content { Some(i) } else { None })
+            .expect("assetless frame");
+        assert!(image.path.is_empty(), "no fake BinData key");
+        assert!(decoded.image_store.is_empty());
+        let output = reencode(&source.bytes, None);
+        assert!(!output.warnings.iter().any(EncodeWarning::is_semantic_loss));
+        let before = part(&source.bytes, "Contents/section0.xml");
+        let after = part(&output.bytes, "Contents/section0.xml");
+        for tag in ["hp:sz", "hp:pos", "hp:imgClip", "hp:imgDim", "hp:orgSz", "hp:outMargin"] {
+            let element = |xml: &str| {
+                let start = xml.find(&format!("<{tag} ")).unwrap();
+                xml[start..start + xml[start..].find("/>").unwrap() + 2].to_string()
+            };
+            assert_eq!(element(&before), element(&after), "{tag}, treatAsChar={treat_as_char}");
+        }
+        assert!(after.contains(r#"textWrap="SQUARE""#));
+    }
 }

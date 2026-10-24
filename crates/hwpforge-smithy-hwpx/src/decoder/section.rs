@@ -1941,18 +1941,23 @@ fn convert_table_cell(
     Ok(cell)
 }
 
-/// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
+/// Converts an `HxPic` with `<hc:img>` into a Core `Image`, including an assetless frame.
 pub(crate) fn convert_picture(
     hx: &HxPic,
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Image>> {
     let img = match hx.img.as_ref() {
-        Some(img) if !img.binary_item_id_ref.is_empty() => img,
+        Some(img) => img,
         _ => return Ok(None),
     };
 
-    let path = format!("BinData/{}", img.binary_item_id_ref);
+    // 이것을 실패시키는 것: 빈 참조 그림을 버리거나 `BinData/` 가짜 키로 만들기.
+    let path = if img.binary_item_id_ref.is_empty() {
+        String::new()
+    } else {
+        format!("BinData/{}", img.binary_item_id_ref)
+    };
     let format = guess_image_format(&img.binary_item_id_ref);
 
     // 표시 크기 선택 (W2b fixture 실측 — 에픽 문서 §4): `<hp:sz>` 가

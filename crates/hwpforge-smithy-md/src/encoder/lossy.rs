@@ -426,11 +426,18 @@ fn paragraph_pieces_at<S: Sink>(
                 }
             }
             Part::Image(image) => {
-                if written(&pieces) {
-                    pieces.push(Piece::Markup(S::from_md(Md::syntax(" "))));
+                // 이것을 실패시키는 것: 빈 경로 가드 삭제(`![]()` 방출).
+                if !image.path.is_empty() {
+                    if written(&pieces) {
+                        pieces.push(Piece::Markup(S::from_md(Md::syntax(" "))));
+                    }
+                    let alt = Md::lossy_label(&image_alt_text(&image.path));
+                    pieces.push(Piece::Markup(S::from_md(Md::image(
+                        alt,
+                        &image.path,
+                        destinations,
+                    ))));
                 }
-                let alt = Md::lossy_label(&image_alt_text(&image.path));
-                pieces.push(Piece::Markup(S::from_md(Md::image(alt, &image.path, destinations))));
                 pieces.push(Piece::Block(lossy_caption(
                     image.caption.as_ref(),
                     warnings,

@@ -82,7 +82,7 @@ use hwpforge_core::table::Table;
 ///
 /// "Matching scope" is not "matching values": this walks the *decoded* Core
 /// tree, so an element the decoder accepts but cannot represent — an
-/// `<hp:pic>` with no usable `binaryItemIDRef`, which `convert_picture`
+/// `<hp:pic>` without `<hc:img>`, which `convert_picture`
 /// (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
 /// rather than an error, for example — silently undercounts here relative to
 /// a genuine raw-XML element scan over the same bytes. `hwpforge-bindings-cli`

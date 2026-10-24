@@ -38,6 +38,16 @@ fn picture() -> Image {
     Image::new("BinData/BIN0002", u(6860), u(2388), ImageFormat::Unknown("BIN0002".into()))
 }
 
+/// 기존 동작 고정: lossless는 이 변경 전부터 빈 경로와 crop을 왕복 보존한다.
+#[test]
+fn assetless_picture_round_trips_losslessly() {
+    let mut image = picture();
+    image.path.clear();
+    image.crop = Some(ImageCrop { left: u(1), top: u(2), right: u(30), bottom: u(40) });
+    let run = Run::image(image, CharShapeIndex::new(0));
+    assert_eq!(round_trip(run.clone()), run);
+}
+
 fn with_caption(paragraphs: Vec<Paragraph>) -> Run {
     let mut image = picture();
     image.caption = Some(Caption::new(paragraphs, CaptionSide::Bottom));

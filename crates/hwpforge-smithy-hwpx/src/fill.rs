@@ -807,12 +807,10 @@ mod tests {
     }
 
     #[test]
-    fn picture_caption_fields_follow_the_image_reference() {
+    fn picture_caption_fields_survive_an_empty_image_reference() {
         // 그림 캡션 문단 = 9000, 그림이 든 문단 = 9001, 본문 필드 문단 = 9002.
-        // 이것을 실패시키는 것: (a) `binaryItemIDRef` 와 무관하게 그림 캡션을
-        // 늘 범위 밖으로 두기 → 정상 그림의 캡션 필드 `cap` 이 wire 에서 빠져
-        // 위치 불일치 오류. (b) 빈 `binaryItemIDRef`(디코더가 그림째 버림)의 캡션
-        // 필드를 되돌리지 않기 → wire 후보가 하나 남아 위치 불일치 오류.
+        // 이것을 실패시키는 것: 빈 참조 그림을 버리기(캡션 필드 cap 소실).
+        // 자산이 없어도 그림 틀과 캡션은 남아 필드 채우기가 가능하다.
         let mut images = ImageStore::new();
         images.insert("image1.png", vec![0x89, b'P', b'N', b'G']);
         let image = Image::new("BinData/image1.png", size(2000), size(2000), ImageFormat::Png)
@@ -830,10 +828,12 @@ mod tests {
 
         let start = xml.find("binaryItemIDRef=\"").expect("img ref") + "binaryItemIDRef=\"".len();
         let end = xml[start..].find('"').unwrap() + start;
-        let dropped = with_section_xml(&doc, format!("{}{}", &xml[..start], &xml[end..]));
-        let listed = HwpxFiller::list_fields(&dropped).expect("list");
-        assert_eq!(listed.len(), 1, "premise: the decoder drops the picture and its caption");
-        let filled = fill_xml(&dropped, &[("body", "1")]).expect("fill body field");
+        let assetless = with_section_xml(&doc, format!("{}{}", &xml[..start], &xml[end..]));
+        let listed = HwpxFiller::list_fields(&assetless).expect("list");
+        assert_eq!(listed.len(), 2, "assetless frame keeps its caption field");
+        let filled = fill_xml(&assetless, &[("cap", "1")]).expect("fill assetless caption");
+        assert_eq!(caches(&filled), Vec::<usize>::new());
+        let filled = fill_xml(&assetless, &[("body", "1")]).expect("fill body field");
         assert_eq!(caches(&filled), vec![0, 1]);
     }
 

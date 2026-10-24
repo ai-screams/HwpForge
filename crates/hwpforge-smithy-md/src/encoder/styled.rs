@@ -322,6 +322,10 @@ fn emit_picture(
     st: &mut State,
     ctx: Ctx,
 ) -> Md {
+    // 이것을 실패시키는 것: 빈 경로 가드 삭제(빈 그림 링크/자산 생성).
+    if image.path.is_empty() {
+        return Md::syntax("");
+    }
     let key = st.assets.key(&image.path, styles, !ctx.in_comment);
     Md::image(Md::text(image_stem(&image.path)), &key, &mut st.destinations)
 }
@@ -336,6 +340,10 @@ fn emit_picture_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Html {
+    // 이것을 실패시키는 것: 빈 경로 가드 삭제(HTML 표에 빈 img 생성).
+    if image.path.is_empty() {
+        return Html::syntax("");
+    }
     let key = st.assets.key(&image.path, styles, !ctx.in_comment);
     Html::image(&key, image_stem(&image.path), &mut st.destinations)
 }
@@ -592,7 +600,7 @@ fn paragraph_text_styled(
                 current_text.push_str(&cow);
             }
             Part::Image(image) => {
-                if !output.is_empty() {
+                if !image.path.is_empty() && !output.is_empty() {
                     output.push_syntax(" ");
                 }
                 output.push(emit_picture(image, styles, st, ctx));

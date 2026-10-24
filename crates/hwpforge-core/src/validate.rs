@@ -596,9 +596,8 @@ fn validate_control_run(
         // are rejected so a malformed builder caller can't smuggle a
         // hyperlink/field/memo into a `<hp:container>`.
         //
-        // A picture child must name its image and have a size: an empty path
-        // is reported as `InvalidGroupChild` (there is no picture to draw), a
-        // width or height of zero or less as `InvalidShapeDimension`.
+        // An empty path carries an assetless picture frame, as in body runs.
+        // A width or height of zero or less is `InvalidShapeDimension`.
         Control::Group { children, .. } => {
             let invalid_child = || ValidationError::InvalidGroupChild {
                 section_index: ctx.section_index,
@@ -608,9 +607,6 @@ fn validate_control_run(
             for child in children {
                 match child {
                     GroupChild::Picture(image) => {
-                        if image.path.is_empty() {
-                            return Err(invalid_child());
-                        }
                         if image.width.as_i32() <= 0 || image.height.as_i32() <= 0 {
                             return Err(ValidationError::InvalidShapeDimension {
                                 section_index: ctx.section_index,
@@ -2458,13 +2454,11 @@ mod tests {
         assert_eq!(validate_sections(&group_doc(children)), Ok(()));
     }
 
-    /// 이것을 실패시키는 것: Picture 의 빈 경로 검사 삭제.
+    /// 한컴의 빈 참조 그림도 크기가 있는 틀이다. 본문과 같이 빈 경로를 허용한다.
+    /// 이것을 실패시키는 것: Picture 의 빈 경로 거부 복원.
     #[test]
-    fn group_picture_without_a_path_is_rejected() {
-        assert!(matches!(
-            validate_sections(&group_doc(vec![picture("", 10, 10)])),
-            Err(ValidationError::InvalidGroupChild { .. })
-        ));
+    fn group_picture_without_a_path_is_accepted() {
+        assert_eq!(validate_sections(&group_doc(vec![picture("", 10, 10)])), Ok(()));
     }
 
     /// 이것을 실패시키는 것: 크기 검사 삭제, 또는 `<= 0` 을 `== 0` 으로(음수 통과).
