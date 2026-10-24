@@ -6170,11 +6170,12 @@ mod group_tests {
 
     /// A chart switch (or an element we do not know) inside a group child's
     /// text box, caption, or a nested group's text box is lost; nothing
-    /// recovers it later inside a group. Outside groups it stays as before.
+    /// recovers it later inside a group. Outside groups the same loss is
+    /// reported under its own kind (`switch`), not as a group loss.
     ///
     /// 이것을 실패시키는 것: `convert_run` 의 `Switch`·`Other` 갈래에서
-    /// `note_unsupported_in_group_child` 호출을 지우는 것, 또는 그 안의 깊이
-    /// 조건을 `true` 로 바꾸는 것 (묶음 밖 글상자에도 경고).
+    /// `note_unsupported_run_child` 호출을 지우는 것, 또는 그 안의 깊이
+    /// 조건을 `true` 로 바꾸는 것 (묶음 밖 글상자에도 묶음 경고).
     #[test]
     fn unsupported_run_inside_group_content_is_reported() {
         let in_box = text_box(SWITCH, 1);
@@ -6196,13 +6197,13 @@ mod group_tests {
         ));
         assert_eq!(lost_kinds(&w), ["group_nested_switch"]);
 
-        // A text box that is not in a group: no group warning. (This one is
-        // written without `<hp:sz>`, so its `orgSz` 1000 × 400 cannot be
-        // drawn at the 0 × 0 it decodes to — reported as `shape_drawn_extent`,
-        // S20.)
+        // A text box that is not in a group: no group warning, the switch is
+        // reported as `switch`. (This one is written without `<hp:sz>`, so its
+        // `orgSz` 1000 × 400 cannot be drawn at the 0 × 0 it decodes to —
+        // reported as `shape_drawn_extent`, S20.)
         let free = text_box(SWITCH, 0);
         let (_, w) = decode(&free);
-        assert_eq!(lost_kinds(&w), ["shape_drawn_extent"], "{w:?}");
+        assert_eq!(lost_kinds(&w), ["switch", "shape_drawn_extent"], "{w:?}");
     }
 
     /// 이것을 실패시키는 것: 묶음 그림 채우기를 지우거나 회전을 점에 굽기.
