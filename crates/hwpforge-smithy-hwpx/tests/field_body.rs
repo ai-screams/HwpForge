@@ -1916,3 +1916,164 @@ fn memo_cache_drops_unproven_folded_wire_content() {
         );
     }
 }
+
+fn runless_paragraph_cases() -> Vec<String> {
+    vec![para("", &[]), para("", &[0]), "<hp:p/>".into()]
+}
+
+/// 이것을 실패시키는 것: 가상 빈 run 출처 기록/슬롯 제외 생략,
+/// 가상 빈 문단 캐시 예외 필터 복원(변이 시험으로 실패 확인),
+/// 무편집 출력 바이트 추가, 무관한 ZIP 엔트리 변경.
+#[test]
+fn preserving_patch_keeps_runless_paragraphs() {
+    use hwpforge_smithy_hwpx::{ExportedSection, HwpxPatcher};
+    for empty in runless_paragraph_cases() {
+        for wrapped in containers(&empty) {
+            // Keep the preceding container intact; all three following body
+            // paragraphs share the edited flow, including the runless one.
+            let body = wrapped.clone()
+                + &para(&run("<hp:t>가상 편집 대상</hp:t>"), &[0])
+                + &empty
+                + &para(&run("<hp:t>뒤 보통 문단</hp:t>"), &[0]);
+            let bytes = package(&body);
+            let original_xml = section_xml(&bytes);
+            let outcome = HwpxPatcher::export_section_for_edit(&bytes, 0, true).unwrap();
+            assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+            let mut exported: ExportedSection =
+                serde_json::from_str(&serde_json::to_string(&outcome.exported).unwrap()).unwrap();
+            let noop = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap();
+            assert_eq!(noop.bytes, bytes);
+            exported.section.for_each_paragraph_mut(|p| {
+                for r in &mut p.runs {
+                    if r.content.as_text() == Some("가상 편집 대상") {
+                        r.content = hwpforge_core::RunContent::Text("수정한 가상 문장".into());
+                    }
+                }
+            });
+            let patched = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap().bytes;
+            let uncached_empty = if empty == "<hp:p/>" { empty.clone() } else { para("", &[]) };
+            let expected_body = wrapped
+                + &para(&run("<hp:t>수정한 가상 문장</hp:t>"), &[])
+                + &uncached_empty
+                + &para(&run("<hp:t>뒤 보통 문단</hp:t>"), &[]);
+            assert_eq!(section_xml(&patched), original_xml.replace(&body, &expected_body));
+            let mut before = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            let mut after = zip::ZipArchive::new(Cursor::new(&patched)).unwrap();
+            assert_eq!(before.len(), after.len());
+            for i in 0..before.len() {
+                let mut entry = before.by_index(i).unwrap();
+                let name = entry.name().unwrap().to_string();
+                if name == "Contents/section0.xml" {
+                    continue;
+                }
+                let mut original = Vec::new();
+                let mut unchanged = Vec::new();
+                entry.read_to_end(&mut original).unwrap();
+                after.by_name(&name).unwrap().read_to_end(&mut unchanged).unwrap();
+                assert_eq!(unchanged, original, "{name}");
+            }
+        }
+    }
+}
+
+fn assert_runless_container_contract(body: &str, path: &str) {
+    use hwpforge_smithy_hwpx::{HwpxError, HwpxPatcher, SectionWorkflowError};
+    let bytes = package(body);
+    let outcome = HwpxPatcher::export_section_for_edit_with_diagnostics(&bytes, 0, false).unwrap();
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert!(outcome.value.warning.is_none(), "{:?}", outcome.value.warning);
+    let mut exported = outcome.value.exported;
+    let noop = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap();
+    assert_eq!(noop.bytes, bytes);
+    let mut empty_count = 0;
+    exported.section.for_each_paragraph_mut(|p| {
+        if p.runs.len() == 1 && p.runs[0].content.as_text() == Some("") {
+            empty_count += 1;
+            p.runs[0].content = hwpforge_core::RunContent::Text("가상 삽입 문장".into());
+        }
+    });
+    assert_eq!(empty_count, 1, "the nested paragraph must contain only its placeholder");
+    let error = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap_err();
+    assert!(
+        matches!(error, SectionWorkflowError::PreservingPatch(HwpxError::InvalidStructure { ref detail })
+            if detail.contains("no original run") && detail.contains(path)),
+        "{error}"
+    );
+}
+
+/// 이것을 실패시키는 것: skip 뒤 hx_runs 대신 원본 hx.runs로 가상 여부 판정
+/// (변이 시험으로 실패 확인).
+#[test]
+fn preserving_patch_handles_note_head_only_paragraphs() {
+    for (tag, kind, path) in [
+        ("footNote", "FOOTNOTE", "footnote.paragraphs[0].runs[0].text"),
+        ("endNote", "ENDNOTE", "endnote.paragraphs[0].runs[0].text"),
+    ] {
+        let head = run(&format!(
+            r#"<hp:ctrl><hp:autoNum num="1" numType="{kind}"><hp:autoNumFormat type="DIGIT"/></hp:autoNum></hp:ctrl>"#
+        )) + &run("<hp:t> </hp:t>");
+        let body = para(&run(&format!(
+            "<hp:ctrl><hp:{tag}><hp:subList>{}</hp:subList></hp:{tag}></hp:ctrl><hp:t>가상 앵커</hp:t>",
+            para(&head, &[])
+        )), &[]);
+        assert_runless_container_contract(&body, path);
+    }
+}
+
+/// 이것을 실패시키는 것: 머리말·꼬리말 안 run 없는 문단의 원본 출처가 source map 에서
+/// 빠져 슬롯 누락 경고가 다시 나는 회귀(출처 기록을 생략하는 변이로 실패 확인).
+#[test]
+fn preserving_patch_handles_runless_headers_and_footers() {
+    for tag in ["header", "footer"] {
+        for empty in runless_paragraph_cases() {
+            let body = para(&run(&format!(
+                "<hp:ctrl><hp:{tag} id=\"1\" applyPageType=\"BOTH\"><hp:subList>{empty}</hp:subList></hp:{tag}></hp:ctrl><hp:t>가상 앵커</hp:t>"
+            )), &[]);
+            assert_runless_container_contract(&body, &format!("{tag}.paragraphs[0].runs[0].text"));
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: 가상 빈 텍스트 편집 거부를 생략하고 슬롯에서 제외.
+#[test]
+fn preserving_patch_rejects_runless_paragraph_text_insertion() {
+    use hwpforge_smithy_hwpx::{HwpxError, HwpxPatcher, SectionWorkflowError};
+    for empty in runless_paragraph_cases() {
+        for wrapped in containers(&empty).into_iter().take(3) {
+            let bytes = package(&wrapped);
+            let outcome = HwpxPatcher::export_section_for_edit(&bytes, 0, false).unwrap();
+            assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+            let mut exported = outcome.exported;
+            exported.section.for_each_paragraph_mut(|p| {
+                for r in &mut p.runs {
+                    if r.content.as_text() == Some("") {
+                        r.content = hwpforge_core::RunContent::Text("가상 삽입 문장".into());
+                    }
+                }
+            });
+            let error = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap_err();
+            assert!(
+                matches!(error, SectionWorkflowError::PreservingPatch(HwpxError::InvalidStructure { ref detail })
+                if detail.contains("no original run") && detail.contains(".runs[0].text")),
+                "{error}"
+            );
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: 원본 run이 있는 정규화까지 가상 빈 텍스트로 분류.
+#[test]
+fn preserving_patch_still_edits_authored_empty_runs() {
+    use hwpforge_smithy_hwpx::HwpxPatcher;
+    for body in ["", "<hp:t/>", "<hp:t></hp:t>", "<hp:titleMark ignore=\"0\"/>"] {
+        let bytes = package(&para(&run(body), &[]));
+        let mut exported = HwpxPatcher::export_section_for_edit(&bytes, 0, false).unwrap().exported;
+        exported.section.paragraphs[1].runs[0].content =
+            hwpforge_core::RunContent::Text("가상 삽입 문장".into());
+        let patched = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap().bytes;
+        assert_eq!(
+            visible(&HwpxDecoder::decode(&patched).unwrap().document.sections()[0].paragraphs[1]),
+            "가상 삽입 문장"
+        );
+    }
+}
