@@ -37,9 +37,9 @@ use crate::style_store::HwpxStyleStore;
 ///
 /// quick-xml 0.42 caps serde nesting at 128 by default, which rejects
 /// tables nested 21 deep — well inside our own
-/// [`MAX_NESTING_DEPTH`](section::MAX_NESTING_DEPTH) guard of 32, which the
-/// encoder also honours. A nested table spans six XML element levels and a
-/// text box five (measured on real fixtures), so seven per nesting level —
+/// [`hwpforge_core::MAX_NESTING_DEPTH`] numeric budget (32). The parser
+/// counters differ from Core semantic depth. A nested table spans six XML
+/// element levels and a text box five (measured on real fixtures), so seven per nesting level —
 /// `7 * 32 = 224` — keeps even the 33rd level inside the budget: that level
 /// is rejected by our structural nesting guards rather than by the serde
 /// budget, the boundary quick-xml 0.41 had.
@@ -778,6 +778,14 @@ impl HwpxDecoder {
     /// [`HwpxError::XmlParse`](crate::HwpxError::XmlParse). Other parts
     /// (`content.hpf`, charts) are read without these two limits.
     ///
+    /// Successful decode guarantees that every section, including headers,
+    /// footers and master pages, is within [`hwpforge_core::MAX_NESTING_DEPTH`].
+    /// Semantic overflow returns [`HwpxError::Core`](crate::HwpxError::Core)
+    /// (E4008), with `nesting_depth` context and the actual section index.
+    /// This does not perform other Core structural validation.
+    /// Parser guard messages (E4006) report the one-based level the decoder
+    /// tried to open and its part; that level need not equal Core depth.
+    ///
     /// # Stack
     ///
     /// Deeply nested input recurses on the calling thread's stack, and an
@@ -1012,6 +1020,10 @@ impl HwpxDecoder {
                 },
                 text_direction: result.text_direction,
             };
+
+            // 이것을 실패시키는 것: 관문 삭제/본문만 검사/section 색인 보정 삭제
+            // (tests/decode_depth.rs). Keep this before source.finish.
+            crate::depth::check_section_depth(&section, i)?;
 
             source_maps.push(result.source.finish(&section, i, &section_part));
             document.add_section(section);
@@ -3079,7 +3091,9 @@ mod xml_limit_tests {
     }
 
     fn assert_nesting_guard_with(xml: String, guard: &str) {
-        let expected = format!("{guard} nesting depth 32 exceeds limit of 32");
+        // 이것을 실패시키는 것: 각 가드의 depth + 1 → depth.
+        let expected =
+            format!("{guard} nesting depth 33 exceeds limit of 32 in Contents/section0.xml");
         match decode_on_big_stack(xml) {
             Err(HwpxError::InvalidStructure { detail }) if detail == expected => {}
             other => panic!("must hit the {guard} guard, got: {other:?}"),
