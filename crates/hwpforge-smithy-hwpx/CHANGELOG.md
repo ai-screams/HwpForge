@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24
+
+### Fixed
+
+- *(core)* refuse documents nested too deeply before walking them ([#267](https://github.com/ai-screams/HwpForge/pull/267))
+
+- *(hwpx)* keep pictures whose image asset was lost as empty frames ([#266](https://github.com/ai-screams/HwpForge/pull/266))
+
+- *(hwpx)* report content placed directly under a paragraph as lost ([#263](https://github.com/ai-screams/HwpForge/pull/263))
+
+- *(hwpx)* write body CR as a character reference on every text path ([#262](https://github.com/ai-screams/HwpForge/pull/262))
+
+- *(hwpx)* keep preservation slots for sections with run-less empty paragraphs ([#260](https://github.com/ai-screams/HwpForge/pull/260))
+
+- *(hwpx)* point default char shapes at a font a single-font template registers ([#255](https://github.com/ai-screams/HwpForge/pull/255))
+
+- *(hwpx)* bound the event replay buffer when decoding HWPX parts ([#254](https://github.com/ai-screams/HwpForge/pull/254))
+
+
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.11...hwpforge-smithy-hwpx-v0.17.0) - 2026-10-23
 
 ### Changed (BREAKING)

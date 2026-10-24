@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.0...hwpforge-bindings-mcp-v0.17.1) - 2026-10-24
+
+### Fixed
+
+- *(mcp)* bound the length of one stdin request line ([#264](https://github.com/ai-screams/HwpForge/pull/264))
+
+
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.11...hwpforge-bindings-mcp-v0.17.0) - 2026-10-23
 
 ### Changed (BREAKING)
