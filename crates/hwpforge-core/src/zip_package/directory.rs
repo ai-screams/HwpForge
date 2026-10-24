@@ -901,11 +901,22 @@ mod tests {
             bytes.extend(vec![b'x'; 100]);
             let mut work = Work::default();
             let directory = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
-            assert_eq!(work.metadata.borrow().records, directory.count * 2);
+            // Our own name scan charges exactly one record per entry; checked
+            // directly so the zip version cannot hide a wrong charge.
+            // 이것을 실패시키는 것: 이름 스캔의 레코드 과금 삭제·두 배로.
+            let cd_start = u32_at(&bytes, end + 16).unwrap() as usize;
+            let mut scan = Work::default();
+            directory_names(&bytes, cd_start, end, directory.count as u64, LIMIT, &mut scan)
+                .unwrap();
+            assert_eq!(scan.metadata.borrow().records, directory.count);
+            // zip may add at most one probe per entry and pass, depending on
+            // how it walks the directory (9.0 does, 9.1 does not).
+            let records = work.metadata.borrow().records;
+            assert!((directory.count..=directory.count * 2).contains(&records), "{records}");
             let before = work.metadata.borrow().read;
             directory.open(Cursor::new(&bytes)).unwrap();
             let budget = work.metadata.borrow();
-            assert_eq!(budget.records, directory.count * 3);
+            assert!(budget.records - records <= directory.count, "{}", budget.records);
             assert!(budget.read > before);
             assert!(budget.read <= 8 * (bytes.len() + EOCD_WINDOW));
             eprintln!(
@@ -959,9 +970,13 @@ mod tests {
     }
 
     /// 이것을 실패시키는 것: 실패 프로브 읽기 비용을 초기화 / 누적 읽기 상한 삭제 / 자원 오류를 fallback으로 삼키기.
+    // 64 candidates exhaust the read budget with zip 9.0 and 9.1 alike. Each
+    // candidate's directory abuts its end record, and zip 9.1 stops falling
+    // back after such a header fails, so 16 candidates no longer reach the
+    // limit there (the input is still rejected).
     #[test]
     fn w1_repeated_large_variable_reads_exhaust_budget() {
-        let bytes = repeated_variable_reads(16);
+        let bytes = repeated_variable_reads(64);
         let mut work = Work::default();
         let result = preflight_with_work(&bytes, LIMIT, &mut work);
         assert!(
