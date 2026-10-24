@@ -196,15 +196,13 @@ struct Ctx {
     /// How many containers (tables, captions, shape texts, note and memo
     /// bodies) enclose this content — each one is a level of recursion. A
     /// group or a picture is not one (groups are spread by an iterator), so
-    /// this is not the structural depth lossless and lossy check
-    /// (`nests_too_deep`).
+    /// this differs from the semantic depth checked by Core validation.
     depth: usize,
 }
 
 impl Ctx {
     /// The context one container deeper, or `None` past the limit.
-    /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제
-    /// (`deep_containers_are_cut_off`).
+    /// Validated inputs cannot exceed this defensive rendering budget.
     fn enter(self) -> Option<Self> {
         super::guard::enter_depth(self.depth).map(|depth| Self { depth, ..self })
     }
@@ -235,7 +233,7 @@ impl State {
 
     /// The notice written for a `container` past the depth limit, recorded
     /// as a warning at the current place.
-    /// 이것을 실패시키는 것: 경고 기록 삭제(`deep_containers_are_cut_off`).
+    /// Retained for the public warning contract; validated inputs stay within the limit.
     fn too_deep(&mut self, container: &'static str) -> &'static str {
         self.warnings.push(super::MdWarning::ContainerTooDeep {
             container,
@@ -1402,10 +1400,14 @@ mod tests {
         }
     }
 
-    fn validated_document(paragraphs: Vec<Paragraph>) -> Document<Validated> {
+    fn draft_document(paragraphs: Vec<Paragraph>) -> Document {
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(paragraphs, hwpforge_core::PageSettings::a4()));
-        doc.validate().unwrap()
+        doc
+    }
+
+    fn validated_document(paragraphs: Vec<Paragraph>) -> Document<Validated> {
+        draft_document(paragraphs).validate().unwrap()
     }
 
     // -----------------------------------------------------------------------
@@ -3645,27 +3647,6 @@ mod tests {
         assert!(md.contains("(주: \\*x\\*)"), "{md}");
     }
 
-    /// The views count depth differently (guide, `markdown-bridge.md`):
-    /// lossless and lossy count the structure, where a group and a text box
-    /// are a level each, so group → text box 17 times (34 levels) is refused;
-    /// styled counts what it draws through, the 17 text boxes, and draws it
-    /// whole.
-    ///
-    /// 이것을 실패시키는 것: styled 가 묶음도 세기 · lossy·lossless 가 구조
-    /// 깊이 검사를 건너뛰기.
-    #[test]
-    fn views_count_depth_differently() {
-        use hwpforge_core::control::GroupChild;
-        let mut run = t("core");
-        for _ in 0..17 {
-            run = group(vec![GroupChild::Shape(text_box(vec![para(vec![run])]))]);
-        }
-        let doc = validated_document(vec![para(vec![run])]);
-        assert_eq!(encode_styled(&doc, &MockStyles::new()).markdown, "core");
-        assert!(super::super::lossy::encode_without_template(&doc).is_err());
-        assert!(super::super::lossless::encode_lossless(&doc).is_err());
-    }
-
     /// A callback may encode another document after the outer link was
     /// drawn. Its destinations belong only to that inner encode.
     /// 이것을 실패시키는 것: 목적지 기록을 중첩 호출에서 초기화하거나 공유하기.
@@ -3732,67 +3713,27 @@ mod tests {
         }
     }
 
-    /// Containers nested past the limit are cut off with a visible notice
-    /// and one warning naming the container and its place, instead of
-    /// recursing (group → text box → group …); a shallower nesting is drawn
-    /// whole with no warning. A cut-off inside a memo is reported the same.
-    ///
-    /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제 · 경고 기록 삭제 ·
-    /// 자리(`at`) 갱신 삭제 · 메모에서 깊이 증가 삭제.
+    /// Core validation admits depth 32 and rejects deeper styled inputs.
     #[test]
-    fn deep_containers_are_cut_off() {
+    fn validation_limits_styled_input_depth() {
         use hwpforge_core::control::GroupChild;
         let styles = MockStyles::new();
         let nest = |n: usize| {
             let mut run = t("core");
             for _ in 0..n {
-                let tb = text_box(vec![para(vec![run])]);
-                run = group(vec![GroupChild::Shape(tb)]);
+                run = group(vec![GroupChild::Shape(text_box(vec![para(vec![run])]))]);
             }
             run
         };
-        let out = encode_styled(&validated_document(vec![para(vec![nest(32)])]), &styles);
+        let out = encode_styled(&validated_document(vec![para(vec![nest(16)])]), &styles);
         assert_eq!(out.markdown, "core");
         assert!(out.warnings.is_empty());
-        let out = encode_styled(
-            &validated_document(vec![para(vec![t("x")]), para(vec![nest(33)])]),
-            &styles,
-        );
-        assert_eq!(out.markdown, format!("x\n\n{TOO_DEEP}"));
-        assert_eq!(
-            out.warnings,
-            vec![super::super::MdWarning::ContainerTooDeep {
-                container: "shape text",
-                limit: 32,
-                section: 0,
-                paragraph: 1,
-            }]
-        );
-        // In a memo the notice sits inside the comment, out of sight: the
-        // warning still reports it. The memo takes one level, so 32 text
-        // boxes in it reach the limit.
-        let memo = Control::Memo {
-            content: vec![para(vec![nest(32)])],
-            anchor_runs: vec![t("a")],
-            metadata: Default::default(),
-        };
-        let out = encode_styled(
-            &validated_document(vec![
-                para(vec![t("x")]),
-                para(vec![Run::control(memo, CharShapeIndex::new(0))]),
-            ]),
-            &styles,
-        );
-        assert_eq!(out.markdown, format!("x\n\n<!-- memo: {TOO_DEEP} -->a"));
-        assert_eq!(
-            out.warnings,
-            vec![super::super::MdWarning::ContainerTooDeep {
-                container: "shape text",
-                limit: 32,
-                section: 0,
-                paragraph: 1,
-            }]
-        );
+        for run in [
+            nest(17),
+            Run::control(Control::memo(vec![para(vec![nest(16)])]), CharShapeIndex::new(0)),
+        ] {
+            assert!(draft_document(vec![para(vec![t("x")]), para(vec![run])]).validate().is_err());
+        }
     }
 
     /// An equation in Markdown text writes no executable HTML and no

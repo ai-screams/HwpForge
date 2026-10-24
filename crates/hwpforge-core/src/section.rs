@@ -673,6 +673,26 @@ pub struct Section {
 }
 
 impl Section {
+    /// Checks this section's maximum semantic nesting depth without recursion.
+    ///
+    /// Tables, images, shapes, groups, notes, memos and field starts cost one;
+    /// image/shape captions cost one more, table captions cost zero. Memo
+    /// anchors and field annotations are included. Body, header, footer and
+    /// master-page paragraphs start at zero; siblings are not added together.
+    /// Empty containers count too. The maximum permitted depth is 32.
+    ///
+    /// Use this when constructing a section to pass to a patch operation.
+    /// [`crate::Document::validate`] applies the same check to every section
+    /// in the document before normalization. This borrowed check does not
+    /// dispose of the tree.
+    ///
+    /// # Errors
+    /// Returns [`crate::CoreError::InvalidStructure`] with context `nesting_depth`
+    /// and the maximum depth and zero-based root location when over the limit.
+    pub fn check_nesting_depth(&self) -> crate::CoreResult<()> {
+        crate::depth::check(std::slice::from_ref(self))
+    }
+
     /// Whether the legacy page-number setting needs a default anchor.
     pub fn needs_page_number_injection(&self) -> bool {
         self.page_number.is_some() && PageNumber::first_in(&self.paragraphs).is_none()

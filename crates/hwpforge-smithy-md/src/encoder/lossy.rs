@@ -26,7 +26,6 @@ pub(crate) fn encode_with_template_report(
     document: &Document<Validated>,
     template: &Template,
 ) -> MdResult<(String, Vec<super::MdWarning>)> {
-    refuse_too_deep(document)?;
     let mut warnings = Vec::new();
     let (mapping, registry) = resolve_mapping(template)?;
     let body = encode_body(document, Some(&mapping), Some(&registry), &mut warnings);
@@ -48,25 +47,9 @@ pub(crate) fn encode_without_template(document: &Document<Validated>) -> MdResul
 pub(crate) fn encode_without_template_report(
     document: &Document<Validated>,
 ) -> MdResult<(String, Vec<super::MdWarning>)> {
-    refuse_too_deep(document)?;
     let mut warnings = Vec::new();
     let body = encode_body(document, None, None, &mut warnings);
     Ok((body, warnings))
-}
-
-/// The lossy view recurses through tables and captions; a document nested
-/// deeper than the lossless limit is refused before drawing starts.
-/// 이것을 실패시키는 것: 이 검사를 지우기(`lossy_refuses_too_deep_nesting`).
-fn refuse_too_deep(document: &Document<Validated>) -> MdResult<()> {
-    if super::nests_too_deep(document) {
-        return Err(crate::error::MdError::UnsupportedStructure {
-            detail: format!(
-                "structure nests deeper than {} containers",
-                crate::lossless_grammar::MAX_NESTING_DEPTH
-            ),
-        });
-    }
-    Ok(())
 }
 
 fn encode_body(
@@ -2688,13 +2671,13 @@ mod tests {
         }
     }
 
-    /// A document nested past the lossless limit is refused before
-    /// drawing; at the limit it is drawn. Notes exercise the container limit
-    /// independently of the smaller table nesting budget.
+    /// A document nested past the Core limit is refused during validation;
+    /// at the limit it is drawn. Notes exercise the container limit
+    /// independently of the smaller table rendering budget.
     ///
-    /// 이것을 실패시키는 것: 이 검사를 지우기.
+    /// 이것을 실패시키는 것: Core validate의 깊이 검사 삭제.
     #[test]
-    fn lossy_refuses_too_deep_nesting() {
+    fn validation_limits_lossy_input_depth() {
         let nest = |n: usize| {
             let mut run = Run::text("core", CharShapeIndex::new(0));
             for _ in 0..n {
@@ -2711,13 +2694,12 @@ mod tests {
                 vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
                 hwpforge_core::PageSettings::a4(),
             ));
-            d.validate().unwrap()
+            d
         };
-        assert!(encode_without_template(&nest(32)).is_ok());
-        assert!(matches!(
-            encode_without_template(&nest(33)),
-            Err(crate::error::MdError::UnsupportedStructure { .. })
-        ));
+        let accepted = nest(32);
+        assert!(encode_without_template(&accepted.validate().unwrap()).is_ok());
+        let rejected = nest(33);
+        assert!(rejected.validate().is_err());
     }
 
     /// Tables nested in cells stay small: the output of 24 nested tables is

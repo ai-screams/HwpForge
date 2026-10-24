@@ -48,6 +48,9 @@ impl HwpxPatcher {
         section_idx: usize,
         section: &Section,
     ) -> HwpxResult<SectionPreservation> {
+        section
+            .check_nesting_depth()
+            .map_err(|error| HwpxError::InvalidStructure { detail: error.to_string() })?;
         let raw_package = RawPackage::read(base_bytes)?;
         let section_path = raw_package.section_path(section_idx)?;
         let section_xml = raw_package.read_text_entry(&section_path)?;
@@ -173,6 +176,10 @@ impl HwpxPatcher {
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
     ) -> HwpxResult<crate::diagnostics::WithCodecWarnings<Vec<u8>>> {
+        // 이것을 실패시키는 것: replacement.clone() 앞 관문 삭제.
+        replacement
+            .check_nesting_depth()
+            .map_err(|error| HwpxError::InvalidStructure { detail: error.to_string() })?;
         let preservation = preservation.ok_or_else(|| HwpxError::InvalidStructure {
             detail:
                 "missing preservation metadata; re-export the section with the current to-json command"

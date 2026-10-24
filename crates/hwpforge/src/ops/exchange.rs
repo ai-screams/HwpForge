@@ -458,6 +458,10 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     let exchange_warnings =
         hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
     let mut exported = ExportedDocument::deserialize(&value)?;
+    // 이것을 실패시키는 것: typed 관문 삭제 (json_gates_before_base_and_addresses).
+    for section in exported.document.sections() {
+        section.check_nesting_depth()?;
+    }
     let base = opts
         .base
         .as_ref()
@@ -934,6 +938,7 @@ pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> 
     let exchange_warnings =
         hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
     let exported = ExportedSection::deserialize(&value)?;
+    exported.section.check_nesting_depth()?;
 
     verify_section_addresses(&value, &exported.section, exported.section_index)?;
 

@@ -280,6 +280,9 @@ pub fn apply_set_cells(
     document: &mut Document<Draft>,
     specs: &[CellSpec],
 ) -> Result<SetCellOutcome, CellEditError> {
+    for section in document.sections() {
+        section.check_nesting_depth().map_err(|error| CellEditError::Codec(error.to_string()))?;
+    }
     // ── preflight: resolve every spec before touching anything ──────
     let entries = tables_in_document(document);
     let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections());

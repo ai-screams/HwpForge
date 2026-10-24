@@ -136,12 +136,6 @@ fn next_marker(prefix: &str, field_id: usize) -> String {
     format!("__{prefix}_{salt}x{nonce}_{field_id}__", salt = marker_salt())
 }
 
-/// Maximum nesting depth for tables-within-tables.
-///
-/// Mirrors the decoder's limit. Prevents stack overflow from deeply nested
-/// table structures (e.g. a table cell containing another table, ad infinitum).
-const MAX_NESTING_DEPTH: usize = 32;
-
 fn encode_table_page_break(value: TablePageBreak) -> &'static str {
     match value {
         TablePageBreak::Cell => "CELL",
@@ -204,8 +198,8 @@ pub(crate) struct SectionEncodeResult {
 ///
 /// # Errors
 ///
-/// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails,
-/// or [`HwpxError::InvalidStructure`] if table nesting exceeds the limit.
+/// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails.
+/// Core validation enforces the semantic nesting limit before encoding.
 /// 인코드 경고 sink + 현재 문단 경로 (W1b — 디코더 `DecodeCtx` 대칭).
 /// One context per document, shared by every body and nested encoder.
 /// Part/path scopes change; asset collections and allocators never reset.
@@ -937,7 +931,8 @@ fn build_section(
 ///
 /// When `inject_sec_pr` is true (first paragraph of the section), page
 /// settings are embedded in the first run's `<hp:secPr>`.
-/// `depth` tracks table nesting level for overflow prevention.
+/// `depth` is passed through without comparisons; removing it is follow-up work.
+/// Core validation enforces the semantic nesting limit before encoding.
 #[allow(clippy::too_many_arguments)]
 fn build_paragraph(
     para: &Paragraph,
@@ -3165,25 +3160,6 @@ mod tests {
     fn strip_root_element_with_attributes() {
         let xml = r#"<sec attr="val"><hp:p>x</hp:p></sec>"#;
         assert_eq!(strip_root_element(xml), "<hp:p>x</hp:p>");
-    }
-
-    #[test]
-    fn nesting_depth_exceeded() {
-        let hx_table = Table::new(vec![]);
-        let err = build_table(
-            &hx_table,
-            MAX_NESTING_DEPTH,
-            &mut Vec::new(),
-            EncodeOptions::default(),
-            &mut DocumentEncodeContext::new(0),
-        )
-        .unwrap_err();
-        match &err {
-            HwpxError::InvalidStructure { detail } => {
-                assert!(detail.contains("nesting depth"));
-            }
-            _ => panic!("expected InvalidStructure, got: {err:?}"),
-        }
     }
 
     #[test]

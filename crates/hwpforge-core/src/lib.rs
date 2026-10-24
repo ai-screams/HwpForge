@@ -107,6 +107,7 @@ pub mod style_lookup;
 pub mod tab;
 pub mod table;
 
+mod depth;
 mod validate;
 
 // ---------------------------------------------------------------------------

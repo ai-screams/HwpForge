@@ -1100,19 +1100,31 @@ impl HwpxDecoder {
     /// Submitted claim package bytes never select the verification base.
     ///
     /// # Errors
-    /// Rejects missing/stale claims and any mismatch with the base SourceMap.
+    /// Rejects excessive section nesting, missing/stale claims and any mismatch
+    /// with the base SourceMap.
     pub fn verify_source_provenance(sections: &[Section], base: &HwpxDocument) -> HwpxResult<()> {
+        for section in sections {
+            section.check_nesting_depth().map_err(|error| crate::HwpxError::InvalidStructure {
+                detail: error.to_string(),
+            })?;
+        }
         Self::verify_against_basis(sections, base.source_basis.as_deref())
     }
 
     /// Replace submitted claims and bind the caller's base independently of those claims.
     ///
     /// # Errors
-    /// Rejects claims that cannot be restored from this base.
+    /// Rejects excessive nesting in the submitted document or base document,
+    /// and claims that cannot be restored from this base.
     pub fn restore_source_provenance(
         document: &mut Document<Draft>,
         base: &HwpxDocument,
     ) -> HwpxResult<()> {
+        for section in document.sections().iter().chain(base.document.sections()) {
+            section.check_nesting_depth().map_err(|error| crate::HwpxError::InvalidStructure {
+                detail: error.to_string(),
+            })?;
+        }
         hwpforge_core::field_inventory::FieldInventory::restore_source_provenance(
             document.sections_mut(),
             base.document.sections(),
