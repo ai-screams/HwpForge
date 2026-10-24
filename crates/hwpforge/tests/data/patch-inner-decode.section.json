@@ -1,0 +1,123 @@
+{
+  "format_version": 2,
+  "section_index": 0,
+  "section": {
+    "paragraphs": [
+      {
+        "runs": [
+          {
+            "content": {
+              "Text": "본문입니다."
+            },
+            "char_shape_id": 7
+          }
+        ],
+        "para_shape_id": 20,
+        "column_break": false,
+        "page_break": false
+      }
+    ],
+    "page_settings": {
+      "width": 59528,
+      "height": 84189,
+      "margin_left": 5669,
+      "margin_right": 5669,
+      "margin_top": 5669,
+      "margin_bottom": 5669,
+      "header_margin": 4252,
+      "footer_margin": 4252,
+      "gutter_type": "LeftOnly",
+      "mirror_margins": false,
+      "landscape": false
+    },
+    "visibility": {
+      "hide_first_header": false,
+      "hide_first_footer": false,
+      "hide_first_master_page": false,
+      "hide_first_page_num": false,
+      "hide_first_empty_line": false,
+      "show_line_number": false,
+      "border": "ShowAll",
+      "fill": "ShowAll"
+    },
+    "line_number_shape": {
+      "restart_type": 0,
+      "count_by": 0,
+      "distance": 0,
+      "start_number": 0
+    },
+    "page_border_fills": [
+      {
+        "apply_type": "BOTH",
+        "border_fill_id": 1,
+        "text_border": "PAPER",
+        "header_inside": false,
+        "footer_inside": false,
+        "fill_area": "PAPER",
+        "offset": [
+          1417,
+          1417,
+          1417,
+          1417
+        ]
+      },
+      {
+        "apply_type": "EVEN",
+        "border_fill_id": 1,
+        "text_border": "PAPER",
+        "header_inside": false,
+        "footer_inside": false,
+        "fill_area": "PAPER",
+        "offset": [
+          1417,
+          1417,
+          1417,
+          1417
+        ]
+      },
+      {
+        "apply_type": "ODD",
+        "border_fill_id": 1,
+        "text_border": "PAPER",
+        "header_inside": false,
+        "footer_inside": false,
+        "fill_area": "PAPER",
+        "offset": [
+          1417,
+          1417,
+          1417,
+          1417
+        ]
+      }
+    ],
+    "begin_num": {
+      "page": 0,
+      "footnote": 1,
+      "endnote": 1,
+      "pic": 0,
+      "tbl": 0,
+      "equation": 0
+    },
+    "text_direction": "Horizontal"
+  },
+  "preservation": {
+    "preservation_version": 2,
+    "section_path": "Contents/section0.xml",
+    "section_sha256": "3b928655d51a973f77d005e6245848029f1055fd346b8acdbfdef1e7afc6af14",
+    "text_slots": [
+      {
+        "path": "paragraphs[0].runs[0].text",
+        "original_text": "본문입니다.",
+        "has_inline_markup": false,
+        "locator": {
+          "TextElement": {
+            "element_start": 3195,
+            "element_end": 3224,
+            "content_start": 3201,
+            "content_end": 3217
+          }
+        }
+      }
+    ]
+  }
+}

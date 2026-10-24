@@ -26,7 +26,7 @@ use error_inventory::{Inventory, SiteKey};
 /// Enums whose every variant the manifest must register. A wave adds an
 /// enum here in the change that registers its cases; until then the
 /// inventory comparison only checks that registered variants exist.
-const CONTRACT_INVENTORY_SCOPE: &[&str] = &[];
+const CONTRACT_INVENTORY_SCOPE: &[&str] = &["FillError", "PatchError", "SectionWorkflowError"];
 
 /// Files the design names as generation-site homes; the scan must reach
 /// each of them and visit its fns, so an empty result cannot come from a
@@ -230,6 +230,25 @@ fn manifest_inventory_refs_match_the_enum_inventory() {
     assert_eq!(
         unlisted_audit_targets(&manifest.audited_variants, &inventory),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn deleting_a_w2_workflow_reference_is_reported() {
+    // 이것을 실패시키는 것: CONTRACT_INVENTORY_SCOPE 에서 SectionWorkflowError 를 빼기.
+    // The real manifest with one reference removed: the scope check must name it.
+    let manifest = error_contract::load(&error_inventory::workspace_root());
+    let refs: Vec<(String, String, Option<String>)> = manifest
+        .cases
+        .iter()
+        .flat_map(|case| &case.inventory)
+        .map(|r| (r.enum_name.clone(), r.variant.clone(), r.stage.clone()))
+        .filter(|(e, v, _)| !(e == "SectionWorkflowError" && v == "PreservingPatch"))
+        .collect();
+    let inventory = error_inventory::collect();
+    assert_eq!(
+        compare_inventory(&refs, &inventory, CONTRACT_INVENTORY_SCOPE),
+        vec!["SectionWorkflowError::PreservingPatch is not registered".to_owned()]
     );
 }
 

@@ -220,6 +220,19 @@ pub struct CodecFailure {
     pub detail: String,
 }
 
+impl CodecFailure {
+    /// Reduces an HWPX codec error to the values a failure carries.
+    pub(crate) fn hwpx(stage: CodecStage, error: &HwpxError) -> Self {
+        Self { stage, code: error.code(), detail: error.to_string() }
+    }
+
+    /// Reduces a Core error met directly (not through [`HwpxError::Core`]);
+    /// its code is recorded as [`HwpxErrorCode::Core`].
+    pub(crate) fn core(stage: CodecStage, error: &hwpforge_core::CoreError) -> Self {
+        Self { stage, code: HwpxErrorCode::Core, detail: error.to_string() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

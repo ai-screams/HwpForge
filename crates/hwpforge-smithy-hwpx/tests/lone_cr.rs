@@ -762,7 +762,9 @@ fn f1_patch_uses_original_prefix_and_refuses_lossy_children() {
         let err = HwpxPatcher::patch_exported_section_with_codec_diagnostics(&source, 0, &exported)
             .unwrap_err();
         let hwpforge_smithy_hwpx::SectionWorkflowError::PreservingPatch(
-            hwpforge_smithy_hwpx::HwpxError::InvalidStructure { detail },
+            hwpforge_smithy_hwpx::PatchError::Rejected(
+                hwpforge_smithy_hwpx::HwpxError::InvalidStructure { detail },
+            ),
         ) = err
         else {
             panic!("{err}");

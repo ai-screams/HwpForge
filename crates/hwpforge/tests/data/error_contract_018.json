@@ -1,5 +1,9 @@
 {
-  "audited_variants": [],
+  "audited_variants": [
+    "FillError::Invariant",
+    "PatchError::Invariant",
+    "PatchError::ProtectedFieldRange"
+  ],
   "cases": [
     {
       "id": "read.section",
@@ -184,6 +188,12 @@
     },
     {
       "id": "adapter.patch.decode_failed",
+      "inventory": [
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "Decode"
+        }
+      ],
       "expected_code": "DECODE_FAILED",
       "surfaces": {
         "cli": {
@@ -1420,6 +1430,12 @@
     },
     {
       "id": "adapter.fill.empty_field_value",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "EmptyValue"
+        }
+      ],
       "expected_code": "EMPTY_FIELD_VALUE",
       "surfaces": {
         "cli": {
@@ -1435,6 +1451,12 @@
     },
     {
       "id": "adapter.fill.field_name_ambiguous",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "DuplicateFieldName"
+        }
+      ],
       "expected_code": "FIELD_NAME_AMBIGUOUS",
       "surfaces": {
         "cli": {
@@ -1450,6 +1472,12 @@
     },
     {
       "id": "adapter.fill.field_not_fillable",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "UnfillableField"
+        }
+      ],
       "expected_code": "FIELD_NOT_FILLABLE",
       "surfaces": {
         "cli": {
@@ -2155,6 +2183,12 @@
     },
     {
       "id": "adapter.fill.field_not_found",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "UnknownField"
+        }
+      ],
       "expected_code": "FIELD_NOT_FOUND",
       "surfaces": {
         "cli": {
@@ -2181,6 +2215,12 @@
     },
     {
       "id": "adapter.patch.section_index_mismatch",
+      "inventory": [
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "SectionIndexMismatch"
+        }
+      ],
       "expected_code": "SECTION_INDEX_MISMATCH",
       "surfaces": {
         "cli": {
@@ -2196,6 +2236,12 @@
     },
     {
       "id": "adapter.patch.section_out_of_range",
+      "inventory": [
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "SectionOutOfRange"
+        }
+      ],
       "expected_code": "SECTION_OUT_OF_RANGE",
       "surfaces": {
         "cli": {
@@ -4062,6 +4108,648 @@
         "mcp": {
           "mode": "fixture",
           "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "patch.input_decode",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "원본 패키지 읽기(RawPackage::read)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Decode",
+          "occurrence": 2,
+          "anchor": "원본 구역 XML 읽기"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "원본 패키지 읽기(RawPackage::read)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2,
+          "anchor": "입구 metadata 검사 뒤 원본 decode"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 구역 XML 읽기"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "section_path",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "구역 수를 확인한 뒤의 구역 경로 해석"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Decode"
+        },
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "PreservingPatch"
+        }
+      ],
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "patch.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "patch"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "patch.input_decode"
+        }
+      }
+    },
+    {
+      "id": "patch.missing_metadata_first",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Rejected"
+        }
+      ],
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "patch.missing_metadata_first"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "patch"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "patch.missing_metadata_first"
+        }
+      }
+    },
+    {
+      "id": "patch.validation",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Validation",
+          "occurrence": 1,
+          "anchor": "내보낼 구역의 깊이 검사"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1,
+          "anchor": "replacement 깊이 검사"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 2,
+          "anchor": "출력 가능한 measure 검증"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 3,
+          "anchor": "source 의미 검사(verify_document_source)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 4,
+          "anchor": "편집 문서 validate"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.validation"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.encode",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1,
+          "anchor": "출력용 header reference 구성"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 2,
+          "anchor": "정규화가 필요한 header 의 재인코드"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 3,
+          "anchor": "출력 ZIP 작성"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.encode"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.codec.admission",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.codec.admission"
+        }
+      }
+    },
+    {
+      "id": "patch.codec.verification",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.codec.verification"
+        }
+      }
+    },
+    {
+      "id": "patch.protected_field",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::ProtectedFieldRange",
+          "occurrence": 1,
+          "anchor": "보호 필드 값·범위 변경"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "ProtectedFieldRange"
+        }
+      ],
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.protected_field"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.invariant",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "variant": "PatchError::Invariant",
+          "occurrence": 1,
+          "anchor": "decoder source map 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 1,
+          "anchor": "decoder source map 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 2,
+          "anchor": "검증된 slot 의 text element 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 3,
+          "anchor": "검증된 slot 의 inline 내용 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 4,
+          "anchor": "text slot 이 어느 문단에도 없음"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 5,
+          "anchor": "검증된 locator 교체 실패"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 6,
+          "anchor": "splice 범위 겹침"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "preservation_from_map",
+          "variant": "PatchError::Invariant",
+          "occurrence": 1,
+          "anchor": "원본 source-map slot 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "preservation_from_map",
+          "variant": "PatchError::Invariant",
+          "occurrence": 2,
+          "anchor": "원본 source-map 값 불일치"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Invariant"
+        }
+      ],
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.invariant"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.section_out_of_range",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "SectionOutOfRange"
+        }
+      ],
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "patch.section_out_of_range"
+        }
+      }
+    },
+    {
+      "id": "fill.input_decode",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "입력 decode"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2,
+          "anchor": "원본 패키지 읽기(RawPackage::read)"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "fill.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "fill"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "fill.input_decode"
+        }
+      }
+    },
+    {
+      "id": "fill.invariant",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "variant": "FillError::Invariant",
+          "occurrence": 1,
+          "anchor": "확인된 필드 구역의 패키지 경로 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "variant": "FillError::Invariant",
+          "occurrence": 2,
+          "anchor": "preflight 뒤 필드 목록 변화"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Invariant"
+        }
+      ],
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.invariant"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.admission",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.admission"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.validation",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.validation"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.encode",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.encode"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.verification",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.verification"
+        }
+      }
+    },
+    {
+      "id": "fill.workflow",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Workflow"
+        }
+      ],
+      "expected_code": "FILL_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.workflow"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.rejected",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Patch"
+        }
+      ],
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.rejected"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.validation"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.encode"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.protected_field",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.protected_field"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.section_out_of_range"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.invariant"
         }
       }
     }

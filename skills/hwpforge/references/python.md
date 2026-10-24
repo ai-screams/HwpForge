@@ -89,7 +89,7 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 | `to_md(*, mode="styled")` (`"lossy"`, `"lossless"`)                                         | `TextResult`     | `ENCODE_FAILED`                                                         |
 | `to_pdf(*, font_dirs=(), discovery="explicit", degraded=False, partial_cache_reject=False)` | `BytesResult`    | `PDF_RENDER_FAILED` — pass `discovery="platform"`; see [pdf.md](pdf.md) |
 | `fill(values)`                                                                              | `DocumentResult` | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`            |
-| `patch(*, section, patch)` — `patch` is the JSON text                                       | `DocumentResult` | `JSON_PARSE_FAILED`, `PATCH_FAILED`                                     |
+| `patch(*, section, patch)` — `patch` is the JSON text                                       | `DocumentResult` | `JSON_PARSE_FAILED`, `PATCH_FAILED`, `PROTECTED_FIELD_RANGE`            |
 | `set_cell(*, table, at, right_of, below, text, specs)`                                      | `DocumentResult` | `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                           |
 | `insert_para(*, section, anchor, text, before=False)`, `delete_para(*, section, indexes)`   | `DocumentResult` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                   |
 | `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                             |

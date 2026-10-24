@@ -56,6 +56,12 @@ pub const MANIFEST: &[ManifestEntry] = &[
     },
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
+        file: "crates/hwpforge-smithy-hwpx/src/patch.rs",
+        wrapped: &["PatchError"],
+        not_wrapped: &[],
+    },
+    ManifestEntry {
+        krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
         wrapped: &["CellEditError"],
         not_wrapped: &[],

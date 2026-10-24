@@ -86,6 +86,31 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: fill 입력 decode 를 Workflow 로 되돌리기(FILL_FAILED), 또는 MCP
+    // (fill, DECODE_FAILED) 힌트 행 삭제.
+    fn fill_input_decode_shared_fixture() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hwpforge/tests/data/error_contract_018.json"
+        ))
+        .unwrap();
+        let case = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "fill.input_decode")
+            .unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hwpforge/tests/data/corrupt-input.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx");
+        let values = std::collections::BTreeMap::from([("a".to_string(), "b".to_string())]);
+        let err = run_fill(path.to_str().unwrap(), &values, out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, case["expected_code"].as_str().unwrap());
+        assert_eq!(err.hint, "Check that the file is valid HWPX.");
+        assert!(!out.exists());
+    }
+
+    #[test]
     fn fill_via_mcp_surface_has_no_warnings_on_a_clean_document() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("probe.hwpx");

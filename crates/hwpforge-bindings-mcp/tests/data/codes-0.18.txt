@@ -228,3 +228,17 @@ validate	INVALID_PARAMS	params.validate	"Check the tool arguments against its in
 restyle	INVALID_PARAMS	params.restyle	"Check the tool arguments against its input schema."
 templates	INVALID_PARAMS	params.templates	"Check the tool arguments against its input schema."
 to-md	INVALID_PARAMS	params.to-md	"Check the tool arguments against its input schema."
+# W2 patch·fill: patch delegates PatchError causes, fill delegates decode, invariant and patch causes.
+patch	DECODE_FAILED	patch.input_decode	"Check that the base file is valid HWPX."
+patch	PATCH_FAILED	patch.missing_metadata_first	"Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow."
+patch	VALIDATION_FAILED	patch.validation	null
+patch	ENCODE_FAILED	patch.encode	null
+patch	PROTECTED_FIELD_RANGE	patch.protected_field	null
+patch	INTERNAL_INVARIANT	patch.invariant	null
+fill	DECODE_FAILED	fill.input_decode	"Check that the file is valid HWPX."
+fill	INTERNAL_INVARIANT	fill.invariant	null
+fill	PATCH_FAILED	fill.patch.rejected	null
+fill	VALIDATION_FAILED	fill.patch.validation	null
+fill	ENCODE_FAILED	fill.patch.encode	null
+fill	PROTECTED_FIELD_RANGE	fill.patch.protected_field	null
+fill	SECTION_OUT_OF_RANGE	fill.patch.section_out_of_range	null

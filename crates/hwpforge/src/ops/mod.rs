@@ -78,9 +78,9 @@ use hwpforge_smithy_hwpx::{
     grid_addr::{GridAddrError, GridAddrWarning},
     partition_semantic_loss,
     stamp::{CellStampError, StampError, StampMapError, StamperError},
-    CellEditError, DecodeWarning, EncodeOutcome, EncodeWarning, FillError, HwpxError,
-    HwpxErrorCode, ReadError, SectionWorkflowError, SectionWorkflowWarning, StructuralEditError,
-    StructuralWarning,
+    CellEditError, CodecFailure, CodecStage, DecodeWarning, EncodeOutcome, EncodeWarning,
+    FillError, HwpxError, HwpxErrorCode, PatchError, ReadError, SectionWorkflowError,
+    SectionWorkflowWarning, StructuralEditError, StructuralWarning,
 };
 
 #[cfg(feature = "ops-md")]
@@ -601,6 +601,33 @@ fn fill_code(error: &FillError) -> OpsCode {
         FillError::DuplicateFieldName { .. } => OpsCode::FieldNameAmbiguous,
         FillError::UnfillableField { .. } => OpsCode::FieldNotFillable,
         FillError::Workflow(_) => OpsCode::FillFailed,
+        FillError::Codec(failure) => codec_code(failure),
+        FillError::Patch(inner) => patch_code(inner),
+        FillError::Invariant { .. } => OpsCode::InternalInvariant,
+    }
+}
+
+// The stage alone decides the code; the leaf code and the message are
+// diagnostic detail. No wildcard: `CodecStage` is a closed set, so a new
+// stage is a compile error here.
+fn codec_code(failure: &CodecFailure) -> OpsCode {
+    match failure.stage {
+        CodecStage::Decode => OpsCode::DecodeFailed,
+        CodecStage::Admission => OpsCode::InputNotRoundtripSafe,
+        CodecStage::Validation => OpsCode::ValidationFailed,
+        CodecStage::Encode => OpsCode::EncodeFailed,
+        CodecStage::Verification => OpsCode::SelfVerifyFailed,
+    }
+}
+
+fn patch_code(error: &PatchError) -> OpsCode {
+    match error {
+        PatchError::Codec(failure) => codec_code(failure),
+        PatchError::Rejected(_) => OpsCode::PatchFailed,
+        PatchError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
+        PatchError::ProtectedFieldRange { .. } => OpsCode::ProtectedFieldRange,
+        PatchError::Invariant { .. } => OpsCode::InternalInvariant,
+        _ => OpsCode::UpstreamUnmapped,
     }
 }
 
@@ -672,7 +699,7 @@ fn section_workflow_code(error: &SectionWorkflowError) -> OpsCode {
         SectionWorkflowError::Decode { .. } => OpsCode::DecodeFailed,
         SectionWorkflowError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
         SectionWorkflowError::SectionIndexMismatch { .. } => OpsCode::SectionIndexMismatch,
-        SectionWorkflowError::PreservingPatch(_) => OpsCode::PatchFailed,
+        SectionWorkflowError::PreservingPatch(inner) => patch_code(inner),
         _ => OpsCode::UpstreamUnmapped,
     }
 }

@@ -97,6 +97,7 @@ const TABLE: &[Row] = &[
     row!(Fill, EmptyFieldValue, "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요."),
     row!(Fill, FieldNameAmbiguous, "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요."),
     row!(Fill, FieldNotFillable, "병합-run 모호 필드 또는 빈 본문(patch 슬롯 없음)이라 이 필드는 채우기 표면이 아닙니다 — 한컴에서 열어 다시 저장한 뒤 재시도하세요. 서버 안에서 끝내려면 hwpforge_to_json(section 없이 전체 문서) → 편집 → hwpforge_from_json 재구성이 가능하지만 이미지 바이너리는 유지되지 않습니다 (이미지를 지키는 재구성은 CLI hwpforge from-json --base)."),
+    row!(Fill, DecodeFailed, "Check that the file is valid HWPX."),
     row!(Fill, FillFailed, "Check that the file is valid HWPX."),
 
     row!(SetCell, InvalidSetCellMap, "Pass at least one CellSpec: {table, at|right_of|below, text}."),
@@ -369,7 +370,9 @@ mod tests {
     use hwpforge_core::table::grid::GridCoord;
     use hwpforge_smithy_hwpx::grid_addr::GridAddrError;
     use hwpforge_smithy_hwpx::stamp::StampMapError;
-    use hwpforge_smithy_hwpx::{CellEditError, HwpxError, ReadError, StructuralEditError};
+    use hwpforge_smithy_hwpx::{
+        CellEditError, HwpxError, PatchError, ReadError, StructuralEditError,
+    };
 
     fn assert_code(tool: Tool, err: OpsError, expected: &str) {
         let got = tool_error(tool, err);
@@ -491,7 +494,9 @@ mod tests {
             assert_code(
                 tool,
                 OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(
-                    HwpxError::InvalidStructure { detail: "preservation metadata version".into() },
+                    PatchError::Rejected(HwpxError::InvalidStructure {
+                        detail: "preservation metadata version".into(),
+                    }),
                 )),
                 "PATCH_FAILED",
             );
@@ -513,9 +518,9 @@ mod tests {
                 requested: 0,
                 actual: 1,
             }),
-            OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(
+            OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(PatchError::Rejected(
                 HwpxError::InvalidStructure { detail: "x".into() },
-            )),
+            ))),
         ] {
             assert_ne!(err.code(), OpsCode::UpstreamUnmapped, "{err}");
         }

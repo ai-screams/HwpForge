@@ -181,6 +181,36 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: patch 원본 decode 를 Rejected 로 감싸기(PATCH_FAILED), metadata 검사를
+    // 원본 decode 뒤로 옮기기(DECODE_FAILED).
+    fn patch_inner_decode_shared_fixtures() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hwpforge/tests/data/error_contract_018.json"
+        ))
+        .unwrap();
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
+        let base = data.join("patch-inner-decode.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx");
+        for (id, json) in [
+            ("patch.input_decode", "patch-inner-decode.section.json"),
+            ("patch.missing_metadata_first", "patch-no-metadata.section.json"),
+        ] {
+            let case =
+                manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
+            let err = run_patch(
+                base.to_str().unwrap(),
+                0,
+                data.join(json).to_str().unwrap(),
+                out.to_str().unwrap(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, case["expected_code"].as_str().unwrap(), "{id}");
+            assert!(!out.exists(), "{id}");
+        }
+    }
+
+    #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn patch_rejects_legacy_preservation_metadata() {
         let dir = tempfile::tempdir().unwrap();

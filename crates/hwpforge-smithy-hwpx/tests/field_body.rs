@@ -438,16 +438,18 @@ fn automatic_boundary_values_are_not_patch_slots() {
                 }
             }
             assert!(changed, "{kind} retains its displayed value");
+            // 이것을 실패시키는 것: 보호 필드 값 변경 거부를 `PatchError::Rejected` 로 되돌리기.
+            let error = HwpxPatcher::patch_section_preserving(
+                &bytes,
+                0,
+                &section,
+                None,
+                Some(&preservation),
+            )
+            .unwrap_err();
             assert!(
-                HwpxPatcher::patch_section_preserving(
-                    &bytes,
-                    0,
-                    &section,
-                    None,
-                    Some(&preservation)
-                )
-                .is_err(),
-                "{kind}"
+                matches!(error, hwpforge_smithy_hwpx::PatchError::ProtectedFieldRange { .. }),
+                "{kind}: {error}"
             );
         }
     }
@@ -1997,7 +1999,7 @@ fn assert_runless_container_contract(body: &str, path: &str) {
     assert_eq!(empty_count, 1, "the nested paragraph must contain only its placeholder");
     let error = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap_err();
     assert!(
-        matches!(error, SectionWorkflowError::PreservingPatch(HwpxError::InvalidStructure { ref detail })
+        matches!(error, SectionWorkflowError::PreservingPatch(hwpforge_smithy_hwpx::PatchError::Rejected(HwpxError::InvalidStructure { ref detail }))
             if detail.contains("no original run") && detail.contains(path)),
         "{error}"
     );
@@ -2055,7 +2057,7 @@ fn preserving_patch_rejects_runless_paragraph_text_insertion() {
             });
             let error = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap_err();
             assert!(
-                matches!(error, SectionWorkflowError::PreservingPatch(HwpxError::InvalidStructure { ref detail })
+                matches!(error, SectionWorkflowError::PreservingPatch(hwpforge_smithy_hwpx::PatchError::Rejected(HwpxError::InvalidStructure { ref detail }))
                 if detail.contains("no original run") && detail.contains(".runs[0].text")),
                 "{error}"
             );

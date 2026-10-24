@@ -916,10 +916,14 @@ impl PatchOutput {
 ///   JSON or does not match the exported-section schema.
 /// - [`OpsError::GridAddr`] (code `GRID_ADDR_INVALID`) when a supplied cell
 ///   address does not match the section.
-/// - [`OpsError::SectionWorkflow`] for an undecodable base (`DECODE_FAILED`),
-///   a section outside the document (`SECTION_OUT_OF_RANGE`), a section index
-///   that disagrees with the JSON (`SECTION_INDEX_MISMATCH`), or a patch the
-///   preservation metadata cannot apply (`PATCH_FAILED`).
+/// - [`OpsError::SectionWorkflow`] for an undecodable base (`DECODE_FAILED`,
+///   also when the base fails to decode inside the patch after the entry
+///   checks passed), a section outside the document (`SECTION_OUT_OF_RANGE`),
+///   a section index that disagrees with the JSON (`SECTION_INDEX_MISMATCH`),
+///   a patch the preservation metadata cannot apply (`PATCH_FAILED`), a
+///   changed protected field (`PROTECTED_FIELD_RANGE`), a patched document
+///   that fails validation (`VALIDATION_FAILED`) or cannot be written
+///   (`ENCODE_FAILED`), or a broken internal invariant (`INTERNAL_INVARIANT`).
 ///
 /// # Examples
 ///
