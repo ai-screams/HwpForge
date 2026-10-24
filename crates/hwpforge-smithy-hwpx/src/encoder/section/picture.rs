@@ -24,7 +24,6 @@ use super::*;
 pub(crate) fn build_picture(
     img: &Image,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -183,7 +182,7 @@ pub(crate) fn build_picture(
         caption: img
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, bw, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, bw, hyperlink_entries, options, sink))
             .transpose()?,
         line_shape: None,
         effects: None,

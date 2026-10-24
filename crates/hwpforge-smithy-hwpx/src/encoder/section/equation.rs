@@ -8,7 +8,6 @@ use super::*;
 ///
 /// Equations have NO shape common block (no offset, orgSz, curSz, flip,
 /// rotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.
-/// Does not take `depth` because equations have no recursive sub-content.
 pub(super) fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
     let (script, width, height, base_line, text_color, font, inst_id) = match ctrl {
         Control::Equation { script, width, height, base_line, text_color, font, inst_id } => {
