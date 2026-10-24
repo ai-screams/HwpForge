@@ -81,6 +81,22 @@ pub struct HxParagraph {
         skip_serializing_if = "Option::is_none"
     )]
     pub linesegarray: Option<HxLineSegArray>,
+    /// Whether text or an element the schema does not name sits directly
+    /// under `<hp:p>` (outside any `<hp:run>`). The reader drops it; the flag
+    /// only records that something was dropped. Deserialization only.
+    #[serde(
+        rename = "$value",
+        default,
+        skip_serializing,
+        deserialize_with = "stray_paragraph_content"
+    )]
+    pub has_stray_content: bool,
+}
+
+fn stray_paragraph_content<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    // quick-xml hands over only what no named field took, and no
+    // whitespace-only text.
+    Ok(!Vec::<serde::de::IgnoredAny>::deserialize(d)?.is_empty())
 }
 
 // ── Run ───────────────────────────────────────────────────────────

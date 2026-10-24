@@ -1169,6 +1169,7 @@ fn build_paragraph(
         merged: 0,
         runs,
         linesegarray,
+        has_stray_content: false,
     })
 }
 
