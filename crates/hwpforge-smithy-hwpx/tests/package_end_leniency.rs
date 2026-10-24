@@ -113,10 +113,10 @@ fn w1_last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
     assert_eq!(decoded.document.sections()[0].paragraphs.len(), 1);
     // Only UnicodePath's missing version/CRC/path is malformed; framing stays intact.
     input[a.len() + extra_at..a.len() + extra_at + 4].copy_from_slice(&[0x75, 0x70, 0, 0]);
+    // zip 9.0 still opens A's directory here, so this case shows the decoder's
+    // own last-raw-directory rule; zip 9.1 already fails on B by itself.
     for comment_len in [0, b_len] {
         input[a_end + 20..a_end + 22].copy_from_slice(&comment_len.to_le_bytes());
-        let fallback = zip::ZipArchive::new(Cursor::new(&input)).unwrap();
-        assert_eq!(fallback.central_directory_start(), u64::from(u32_at(&a, a_end + 16)));
         assert!(HwpxDecoder::decode(&input).is_err(), "A comment length = {comment_len}");
     }
 }
