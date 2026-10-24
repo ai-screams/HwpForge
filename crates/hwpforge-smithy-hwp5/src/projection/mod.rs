@@ -4,6 +4,7 @@
 //! (parsed records, style tables) into HwpForge Core's `Document<Draft>`
 //! structure, bridging the format-specific layer to the format-agnostic core.
 
+mod field_spans;
 mod group;
 mod image_size;
 
@@ -12,7 +13,9 @@ mod shapes;
 mod standalone;
 mod text;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+
+use field_spans::{plan_field_spans, ParagraphFieldSpans, PlannedMarker};
 
 #[cfg(test)]
 thread_local! {
@@ -22,7 +25,7 @@ thread_local! {
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLine, ColumnSettings};
-use hwpforge_core::control::{FieldBoundary, FieldParameter, FieldStart, RefTarget};
+use hwpforge_core::control::{FieldBoundary, RefTarget};
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{Image, ImageCrop, ImageFormat, ImageStore};
 use hwpforge_core::layout::WireTokenKind;
@@ -113,14 +116,8 @@ struct ParagraphProjectionQueues<'a> {
     /// `FieldBegin %unk MEMO` inline segments via `start_active_field`;
     /// any leftovers are drained at end-of-paragraph as a safety net.
     memo_controls: VecDeque<Hwp5MemoControl>,
-    /// Pending ClickHere (`%clk`) press-fields in document order
-    /// (Wave 12l). Consumed by `FieldBegin %clk` inline segments via
-    /// `start_active_field`. Like `memo_controls`, leftovers do not
-    /// emit visible runs — they only carry metadata.
-    clickhere_controls: VecDeque<crate::schema::section::Hwp5ClickHereControl>,
     /// Pending SUMMERY (`%smr`) auto-fields in document order (Wave 12n).
     /// Consumed by `FieldBegin %smr` inline segments via `start_active_field`.
-    /// Same lifecycle as `clickhere_controls`.
     summary_fields: VecDeque<crate::schema::section::Hwp5SummaryControl>,
     /// Pending `%dte` date/time format-code fields in document order
     /// (Wave 12n). Consumed by `FieldBegin %dte` inline segments.
@@ -175,6 +172,7 @@ enum ActiveField {
     /// help_text, name, display_text }` Run emitted at `FieldEnd`. The
     /// actual span is collected at closure; only an empty body uses the hint.
     /// Mixed character shapes use FieldBoundary with ordinary body runs instead.
+    /// Matched cross-paragraph clicks bypass this accumulator via `field_spans`.
     ClickHere {
         start_utf16: u32,
         command: String,
@@ -376,6 +374,8 @@ fn project_to_core_internal(
         // All hosts use project_control_run, including section-scoped controls.
         // Nested headers/footers inherit the owning top-level paragraph anchor.
         let mut masters = section_result.master_pages.as_slice();
+        let field_spans =
+            plan_field_spans(&section_result.paragraphs, &mut projection_images.field_seq);
         for (index, hwp_para) in section_result.paragraphs.iter().enumerate() {
             let count = masters.partition_point(|master| master.body_paragraph_index == index);
             let (host_masters, remaining) = masters.split_at(count);
@@ -386,6 +386,7 @@ fn project_to_core_internal(
                 &mut projection_images,
                 ImageProjectionContext::Flow,
                 host_masters,
+                &field_spans[index],
             );
             section.add_paragraph(projected.paragraph);
         }
@@ -1361,21 +1362,16 @@ fn image_placement_from_wire(
     placement
 }
 
-fn project_paragraph_with_images(
-    hwp_para: &Hwp5Paragraph,
-    projection_images: &mut ProjectionImageState<'_>,
-    image_context: ImageProjectionContext,
-) -> ProjectedParagraph {
-    project_paragraph_with_masters(hwp_para, projection_images, image_context, &[])
-}
-
 fn project_paragraph_with_masters(
     hwp_para: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
     masters: &[Hwp5MasterPage],
+    field_spans: &ParagraphFieldSpans,
 ) -> ProjectedParagraph {
-    let mut projected = if !paragraph_needs_structural_projection(hwp_para) {
+    let mut projected = if !field_spans.needs_structural_projection()
+        && !paragraph_needs_structural_projection(hwp_para)
+    {
         ProjectedParagraph {
             paragraph: project_paragraph_with_images_flat(
                 hwp_para,
@@ -1390,6 +1386,7 @@ fn project_paragraph_with_masters(
             projection_images,
             image_context,
             masters,
+            field_spans,
         )
     };
 
@@ -2057,21 +2054,22 @@ fn project_paragraph_with_images_structural(
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
     masters: &[Hwp5MasterPage],
+    field_spans: &ParagraphFieldSpans,
 ) -> ProjectedParagraph {
     let mut queues = build_paragraph_projection_queues(hwp_para, projection_images, masters);
     let mut runs: Vec<Run> = Vec::new();
     let mut visible_utf16: u32 = 0;
     let mut active_field: Option<ActiveField> = None;
     // Core's folded fields cannot contain arbitrary controls. Keep the outer
-    // field active while balancing nested markers; preserve inner memo bodies
+    // field active using planned marker pairs; preserve inner memo bodies
     // and objects separately, with an unconditional semantic-loss diagnostic.
-    let mut nested_fields: Vec<ActiveField> = Vec::new();
+    let mut nested_fields: BTreeMap<usize, ActiveField> = BTreeMap::new();
     let mut field_extras: Vec<Run> = Vec::new();
     let mut field_text = FieldTextIndex::new(hwp_para);
     let mut ledger = ParaLedger::new(&hwp_para.silent_wires);
     let mut gso = gso_kinds(hwp_para);
 
-    for segment in &hwp_para.text_segments {
+    for (segment_index, segment) in hwp_para.text_segments.iter().enumerate() {
         match segment {
             crate::schema::section::TextSegment::Text(text) => {
                 ledger.observe_text(text.encode_utf16().count() as u32);
@@ -2178,26 +2176,54 @@ fn project_paragraph_with_images_structural(
                 let _ = consume_marker_header(&mut queues.marker_headers, ctrl_id);
             }
             crate::schema::section::TextSegment::FieldBegin { extra } => {
+                let marker = &field_spans.markers[&segment_index];
+                if let PlannedMarker::Boundary(boundary) = marker {
+                    ledger.observe_section_ctrl(WireTokenKind::FieldBegin);
+                    runs.push(Run::control(
+                        Control::FieldBoundary { boundary: boundary.clone() },
+                        shape_starting_at(hwp_para, visible_utf16),
+                    ));
+                    continue;
+                }
+                let PlannedMarker::Begin { click, nested } = marker else {
+                    unreachable!("field begin must have a planned start");
+                };
+                let field = start_field_from_marker(
+                    extra,
+                    click.clone(),
+                    &mut queues,
+                    visible_utf16,
+                    projection_images,
+                );
                 ledger.begin_field();
-                let field =
-                    start_field_from_marker(extra, &mut queues, visible_utf16, projection_images);
-                if active_field.is_some() {
+                if *nested {
                     ledger.fail("nested field begin");
                     projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                         subject: "field.nested",
                         reason: "nested field semantics flattened; preserving outer field, visible text and all memo bodies".into(),
                     });
-                    nested_fields.push(field);
+                    nested_fields.insert(segment_index, field);
                 } else {
                     active_field = Some(field);
                 }
             }
             crate::schema::section::TextSegment::FieldEnd => {
-                if let Some(field) = nested_fields.pop() {
+                let marker = &field_spans.markers[&segment_index];
+                if let PlannedMarker::Boundary(boundary) = marker {
+                    ledger.observe_section_ctrl(WireTokenKind::FieldEnd);
+                    runs.push(Run::control(
+                        Control::FieldBoundary { boundary: boundary.clone() },
+                        shape_starting_at(hwp_para, visible_utf16),
+                    ));
+                    continue;
+                }
+                if let PlannedMarker::NestedEnd { begin_segment } = marker {
+                    let field = nested_fields.remove(begin_segment).expect("planned nested start");
                     preserve_nested_memo(field, hwp_para, projection_images, &mut field_extras);
                     continue;
                 }
-                if let Some(field) = active_field.take() {
+                if matches!(marker, PlannedMarker::Finish) {
+                    let field = active_field.take().expect("planned folded start");
                     let outcome = finish_active_field(
                         field,
                         &mut field_text,
@@ -2218,7 +2244,7 @@ fn project_paragraph_with_images_structural(
         }
     }
 
-    for field in nested_fields {
+    for field in nested_fields.into_values() {
         preserve_nested_memo(field, hwp_para, projection_images, &mut field_extras);
     }
     if let Some(field) = active_field.take() {
@@ -2239,6 +2265,10 @@ fn project_paragraph_with_images_structural(
     }
 
     runs.append(&mut field_extras);
+
+    for _ in 0..field_spans.unpaired_clicks {
+        warn_unpaired_field(projection_images, "clickhere");
+    }
 
     drain_unconsumed_paragraph_queues(
         queues,
@@ -2498,11 +2528,13 @@ fn project_visible_text_segment(
 /// — extracted from `project_paragraph_with_images_structural`).
 ///
 /// The marker's `extra[0..4]` ctrl_id picks which per-family queue
-/// supplies the typed payload (memo / clickhere / summary / datecode /
+/// supplies the typed payload (memo / summary / datecode /
 /// pathfield / crossref); families pop only their own queue so
-/// unrelated controls stay queued for later markers.
+/// unrelated controls stay queued for later markers. ClickHere metadata is
+/// already assigned by the flow plan and is passed directly.
 fn start_field_from_marker(
     extra: &[u8; 14],
+    clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
     queues: &mut ParagraphProjectionQueues<'_>,
     visible_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
@@ -2510,8 +2542,6 @@ fn start_field_from_marker(
     let ctrl_id = ctrl_id_from_inline_extra(extra);
     let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
     let memo = if ctrl_id == CTRL_ID_MEMO_INLINE { queues.memo_controls.pop_front() } else { None };
-    let clickhere =
-        if ctrl_id == CTRL_ID_CLICK_HERE { queues.clickhere_controls.pop_front() } else { None };
     let summary =
         if ctrl_id == CTRL_ID_FIELD_SUMMERY { queues.summary_fields.pop_front() } else { None };
     let datecode =
@@ -2589,7 +2619,6 @@ fn drain_unconsumed_paragraph_queues(
 
     // Typed fields without an inline anchor must never disappear silently.
     for (kind, count) in [
-        ("clickhere", queues.clickhere_controls.len()),
         ("summary", queues.summary_fields.len()),
         ("datecode", queues.datecode_fields.len()),
         ("path", queues.pathfield_controls.len()),
@@ -2754,7 +2783,6 @@ fn build_paragraph_projection_queues<'a>(
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
     let mut memo_controls = VecDeque::new();
-    let mut clickhere_controls = VecDeque::new();
     let mut summary_fields = VecDeque::new();
     let mut datecode_fields = VecDeque::new();
     let mut pathfield_controls = VecDeque::new();
@@ -2773,12 +2801,8 @@ fn build_paragraph_projection_queues<'a>(
             memo_controls.push_back(memo.clone());
             continue;
         }
-        // ClickHere press-fields (Wave 12l) — same dedicated-queue
-        // pattern as memos. Hint/help/name live in the parsed control;
-        // the inline `FieldBegin %clk` marker pulls the next entry off
-        // this queue in `start_active_field`.
-        if let Hwp5Control::ClickHere(clickhere) = control {
-            clickhere_controls.push_back(clickhere.clone());
+        // Click metadata and unanchored counts belong to the flow plan.
+        if matches!(control, Hwp5Control::ClickHere(_)) {
             continue;
         }
         // SUMMERY auto-fields (Wave 12n) — same pattern. The Command
@@ -2841,7 +2865,6 @@ fn build_paragraph_projection_queues<'a>(
         marker_headers,
         object_controls,
         memo_controls,
-        clickhere_controls,
         summary_fields,
         datecode_fields,
         pathfield_controls,
@@ -3107,30 +3130,12 @@ fn finish_active_field(
             // the body into a string (which discards its character shapes).
             if body_runs.windows(2).any(|pair| pair[0].char_shape_id != pair[1].char_shape_id) {
                 projection_images.field_seq += 1;
-                let mut start = FieldStart::default();
-                // Pairing key only: the HWPX document scope relocates this id
-                // if it collides with a preserved object (including later hosts).
-                start.id = projection_images.field_seq.to_string();
-                start.kind = "CLICK_HERE".into();
-                start.name = name.unwrap_or_default();
-                start.editable = "1".into();
-                start.dirty = "0".into();
-                start.z_order = "-1".into();
-                start.field_id = CTRL_ID_CLICK_HERE.to_string();
-                start.parameter_name = Some(String::new());
-                start.parameters = vec![
-                    FieldParameter::Integer { name: "Prop".into(), value: "9".into() },
-                    FieldParameter::String {
-                        name: "Command".into(),
-                        value: command,
-                        xml_space: "preserve".into(),
-                    },
-                    FieldParameter::String {
-                        name: "Direction".into(),
-                        value: hint_text.unwrap_or_default(),
-                        xml_space: String::new(),
-                    },
-                ];
+                let start = field_spans::clickhere_start(
+                    projection_images.field_seq.to_string(),
+                    command,
+                    hint_text,
+                    name,
+                );
                 let end = FieldBoundary::End {
                     begin_id: start.id.clone(),
                     field_id: start.field_id.clone(),
@@ -3496,10 +3501,13 @@ fn project_nested_paragraphs(
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
 ) -> Vec<Paragraph> {
+    let field_spans = plan_field_spans(paragraphs, &mut projection_images.field_seq);
     paragraphs
         .iter()
-        .map(|nested| {
-            project_paragraph_with_images(nested, projection_images, image_context).paragraph
+        .zip(&field_spans)
+        .map(|(nested, spans)| {
+            project_paragraph_with_masters(nested, projection_images, image_context, &[], spans)
+                .paragraph
         })
         .collect()
 }
@@ -4805,18 +4813,11 @@ fn project_table_caption(
         });
         return None;
     }
-    let paragraphs = source
-        .paragraphs
-        .iter()
-        .map(|paragraph| {
-            project_paragraph_with_images(
-                paragraph,
-                projection_images,
-                ImageProjectionContext::Flow,
-            )
-            .paragraph
-        })
-        .collect();
+    let paragraphs = project_nested_paragraphs(
+        &source.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
     let unit = |v: i64| HwpUnit::new(i32::try_from(v).unwrap_or(i32::MAX)).ok();
     let encoder_width = core_table.width.map(HwpUnit::as_i32).unwrap_or_else(|| {
         core_table.rows.first().map_or(0, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
@@ -5024,17 +5025,7 @@ fn project_table_cell_with_images(
     let paragraphs = if cell.paragraphs.is_empty() {
         vec![empty_paragraph()]
     } else {
-        cell.paragraphs
-            .iter()
-            .map(|paragraph| {
-                project_paragraph_with_images(
-                    paragraph,
-                    projection_images,
-                    ImageProjectionContext::Flow,
-                )
-                .paragraph
-            })
-            .collect()
+        project_nested_paragraphs(&cell.paragraphs, projection_images, ImageProjectionContext::Flow)
     };
 
     let mut core_cell =
@@ -5477,6 +5468,7 @@ mod tests {
                     &mut state,
                     ImageProjectionContext::Flow,
                     &[],
+                    &plan_field_spans(std::slice::from_ref(&para), &mut 0)[0],
                 );
                 assert_eq!(FIELD_TEXT_VISITS.with(|n| n.get()), expected);
                 eprintln!("N={n} filled={filled} segment+character visits={}", index.visits);

@@ -2725,3 +2725,269 @@ fn partial_look_preserves_lines_and_reports_each_loss_in_every_host() {
         }
     }
 }
+
+
+/// 이것을 실패시키는 것: 문단 끝 강제 닫기 / flow 계획 누락(본문·중첩·셀·캡션)
+/// / 끝 문단을 flat 경로로 보내기 / fill 허용 / HWPX 끝 경계 누락.
+/// 실제 변이 M01–M05·M11·M12·M16이 이 시험에서 실패한다.
+#[test]
+fn fspan_clickhere_crosses_paragraphs_in_each_flow() {
+    use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
+    let mut first = para_text_data("바깥앞");
+    first.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+    first.extend(para_text_data("가상시작😀"));
+    let mut last = para_text_data("가상끝");
+    last.extend(r4_marker(4, 0));
+    last.extend(para_text_data("바깥뒤"));
+    let control = make_record(TagId::CtrlHeader, 1, &r1_clickhere());
+    let mut payload = r4_para(&first, &control, true);
+    payload.extend(r4_para(&para_text_data("중간본문"), &[], true));
+    payload.extend(r4_para(&last, &[], true));
+    for path in r2_paths() {
+        let wire = r2_in_path(&payload, &path);
+        let parsed = parse_body_text(&wire, &version()).unwrap();
+        let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+        for doc in [doc.clone(), hwpforge_smithy_hwpx::HwpxDecoder::decode(&r3_encode(doc, &hwpforge_core::ImageStore::new()).bytes).unwrap().document] {
+            let inv = FieldInventory::from_sections(doc.sections());
+            let field = inv.fields().iter().find(|f| f.kind() == "CLICK_HERE").unwrap();
+            let body: String = field.body().iter().filter_map(|r| r.content().as_text()).collect();
+            assert_eq!(body, "가상시작😀중간본문가상끝", "{path:x?}");
+            assert_eq!(field.editability(), FieldEditability::UnsupportedRange, "{path:x?}");
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: 내부 끝에서 외부 범위를 닫기 / 필드 ID 재사용 /
+/// 한 문단 필드까지 경계 표현으로 바꾸기 / 미종료 fallback 누락 / 고아 끝 panic.
+/// 실제 변이 M06–M09·M13이 이 시험에서 실패한다.
+#[test]
+fn fspan_pairing_keeps_siblings_nested_markers_and_unclosed_fallback() {
+    use hwpforge_core::field_inventory::FieldInventory;
+    let marker = |code| r4_marker(code, CTRL_ID_CLICK_HERE);
+    let control = make_record(TagId::CtrlHeader, 1, &r1_clickhere());
+    let mut first = marker(4); // unmatched end must not consume a later start
+    first.extend(marker(3));
+    first.extend(para_text_data("외부시작"));
+    first.extend(marker(3));
+    first.extend(para_text_data("내부값"));
+    first.extend(marker(4));
+    let mut middle = para_text_data("외부끝");
+    middle.extend(marker(4));
+    middle.extend(marker(3));
+    middle.extend(para_text_data("짧은값"));
+    middle.extend(marker(4));
+    middle.extend(para_text_data("범위밖"));
+    middle.extend(marker(3));
+    middle.extend(para_text_data("다음시작"));
+    let mut last = para_text_data("다음끝");
+    last.extend(marker(4));
+    last.extend(marker(3));
+    last.extend(para_text_data("미종료값"));
+    let mut wire = r4_para(&first, &control.repeat(2), false);
+    wire.extend(r4_para(&middle, &control.repeat(2), false));
+    wire.extend(r4_para(&last, &control, false));
+    wire.extend(r1_paragraph("미종료뒤문단"));
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    let fields = FieldInventory::from_sections(doc.sections());
+    assert_eq!(fields.fields().iter().map(|f| f.current()).collect::<Vec<_>>(),
+        ["외부시작내부값외부끝", "내부값", "짧은값", "다음시작다음끝", "미종료값"]);
+    // A same-paragraph inner field and the existing unclosed fallback stay folded.
+    assert_eq!(fields.fields().iter().filter(|f| f.id().is_none()).count(), 3);
+    let bytes = r3_encode(doc, &hwpforge_core::ImageStore::new()).bytes;
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).unwrap();
+    let fields = FieldInventory::from_sections(decoded.document.sections());
+    assert_eq!(fields.fields().iter().map(|f| f.current()).collect::<Vec<_>>(),
+        ["외부시작내부값외부끝", "내부값", "짧은값", "다음시작다음끝", "미종료값"]);
+}
+
+
+/// 이것을 실패시키는 것: M10·M15 — 접힌 외부 필드 안의 경계만 승격하거나 다른 종류를 누름틀로 오인.
+#[test]
+fn fspan_folded_outer_keeps_nested_cross_paragraph_fallback() {
+    use crate::ctrl_ids::CTRL_ID_HYPERLINK;
+    let mut first = r4_marker(3, CTRL_ID_HYPERLINK);
+    first.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+    first.extend(para_text_data("가상앞"));
+    let mut last = para_text_data("가상뒤");
+    last.extend(r4_marker(4, 0));
+    last.extend(r4_marker(4, 0));
+    let mut controls = r4_command(CTRL_ID_HYPERLINK, "https\\://example.org/");
+    controls.extend(make_record(TagId::CtrlHeader, 1, &r1_clickhere()));
+    let mut wire = r4_para(&first, &controls, false);
+    wire.extend(r4_para(&last, &[], false));
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    let mut boundaries = 0;
+    doc.for_each_paragraph(|p| {
+        boundaries += p.runs.iter().filter(|r| matches!(r.content.as_control(),
+            Some(hwpforge_core::Control::FieldBoundary { .. }))).count();
+    });
+    assert_eq!(boundaries, 0);
+}
+
+/// 이것을 실패시키는 것: M14 — 빈 시작 문단에 접힌 필드처럼 안내문을 본문으로 합성.
+#[test]
+fn fspan_empty_start_does_not_invent_hint_text() {
+    use hwpforge_core::field_inventory::FieldInventory;
+    let control = make_record(TagId::CtrlHeader, 1, &r1_clickhere_with_direction("가상 빈칸 안내"));
+    let mut wire = r4_para(&r4_marker(3, CTRL_ID_CLICK_HERE), &control, false);
+    let mut last = para_text_data("가상 입력값");
+    last.extend(r4_marker(4, 0));
+    wire.extend(r4_para(&last, &[], false));
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    for doc in [doc.clone(), hwpforge_smithy_hwpx::HwpxDecoder::decode(&r3_encode(doc, &hwpforge_core::ImageStore::new()).bytes).unwrap().document] {
+        let inventory = FieldInventory::from_sections(doc.sections());
+        assert_eq!(inventory.fields()[0].current(), "가상 입력값");
+    }
+}
+
+/// 이것을 실패시키는 것: R01 부모가 경계여도 중첩 여러 문단 누름틀을 승격에서 제외,
+/// R15 FIFO 짝짓기, R17 ID 중복, R18 끝 경계 방출 누락, R19 끝 문단 flat 처리.
+#[test]
+fn fspan_nested_cross_paragraph_clicks_keep_both_ranges() {
+    use hwpforge_core::field_inventory::FieldInventory;
+    let mut first = r4_marker(3, CTRL_ID_CLICK_HERE);
+    first.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+    first.extend(para_text_data("가"));
+    let mut last = para_text_data("나");
+    last.extend(r4_marker(4, 0));
+    last.extend(para_text_data("다"));
+    last.extend(r4_marker(4, 0));
+    let control = make_record(TagId::CtrlHeader, 1, &r1_clickhere());
+    let mut wire = r4_para(&first, &control.repeat(2), false);
+    wire.extend(r4_para(&last, &[], false));
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    for doc in [doc.clone(), hwpforge_smithy_hwpx::HwpxDecoder::decode(&r3_encode(doc, &hwpforge_core::ImageStore::new()).bytes).unwrap().document] {
+        let inventory = FieldInventory::from_sections(doc.sections());
+        assert_eq!(inventory.fields().iter().map(|f| f.current()).collect::<Vec<_>>(), ["가나다", "가나"]);
+        assert_eq!(inventory.fields()[1].end().as_deref(), Some("paragraphs[1].runs[1]"));
+        assert!(inventory.diagnostics().is_empty());
+    }
+    assert!(!warnings.iter().any(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.unclosed" | "field.nested", .. })));
+}
+
+/// 이것을 실패시키는 것: R02 한 문단까지 승격, R03 부모 표현 무시,
+/// R04 부모 기록 누락, R05 안쪽 끝으로 바깥 닫기, R06 ClickHere 메타데이터 역순 대응,
+/// R07 비누름틀 marker도 ClickHere 메타데이터 소비, R08 중첩 손실 경고 누락,
+/// R16 접힌 필드에 계획된 메타데이터 전달 누락, R20 경계 부모를 접힌 부모로 오인.
+#[test]
+fn fspan_nested_representation_matrix() {
+    use hwpforge_core::field_inventory::FieldInventory;
+    use crate::ctrl_ids::CTRL_ID_HYPERLINK;
+    // (outer kind, inner crosses paragraphs, outer crosses paragraphs)
+    for (outer, inner_crosses, outer_crosses) in [
+        (CTRL_ID_CLICK_HERE, true, true),
+        (CTRL_ID_CLICK_HERE, false, true),
+        (CTRL_ID_CLICK_HERE, false, false),
+        (CTRL_ID_HYPERLINK, true, true),
+        (CTRL_ID_FIELD_PATH, true, true),
+    ] {
+        let click = |hint| make_record(TagId::CtrlHeader, 1, &r1_clickhere_with_direction(hint));
+        let mut controls = match outer {
+            CTRL_ID_CLICK_HERE => click("바깥 안내"),
+            CTRL_ID_HYPERLINK => r4_command(outer, "https\\://example.org/"),
+            _ => r2_field_payloads().into_iter().find(|(_, id, _)| *id == outer).unwrap().2,
+        };
+        controls.extend(click("안쪽 안내"));
+        let mut first = r4_marker(3, outer);
+        first.extend(para_text_data("앞"));
+        first.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+        first.extend(para_text_data("가"));
+        let mut last = Vec::new();
+        if inner_crosses {
+            last.extend(para_text_data("나"));
+            last.extend(r4_marker(4, 0));
+            last.extend(para_text_data("뒤"));
+            last.extend(r4_marker(4, 0));
+        } else {
+            first.extend(r4_marker(4, 0));
+            let tail = if outer_crosses { &mut last } else { &mut first };
+            tail.extend(para_text_data("뒤"));
+            tail.extend(r4_marker(4, 0));
+        }
+        let mut wire = r4_para(&first, &controls, false);
+        if outer_crosses { wire.extend(r4_para(&last, &[], false)); }
+        let parsed = parse_body_text(&wire, &version()).unwrap();
+        let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+        let promoted = outer == CTRL_ID_CLICK_HERE && outer_crosses;
+        assert_eq!(warnings.iter().filter(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.nested", .. })).count(), usize::from(!promoted));
+        assert_eq!(warnings.iter().filter(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.unclosed", .. })).count(), usize::from(outer != CTRL_ID_CLICK_HERE));
+        for (roundtrip, doc) in [doc.clone(), hwpforge_smithy_hwpx::HwpxDecoder::decode(&r3_encode(doc, &hwpforge_core::ImageStore::new()).bytes).unwrap().document].into_iter().enumerate() {
+            let inv = FieldInventory::from_sections(doc.sections());
+            assert!(inv.diagnostics().is_empty(), "{outer:x}");
+            let expected: &[&str] = if promoted {
+                if inner_crosses { &["앞가나뒤", "가나"] } else { &["앞가뒤", "가"] }
+            } else if outer_crosses { &["앞가"] } else { &["앞가뒤"] };
+            assert_eq!(inv.fields().iter().map(|f| f.current()).collect::<Vec<_>>(), expected, "{outer:x}/{inner_crosses}/{outer_crosses}/{roundtrip}");
+            if outer == CTRL_ID_CLICK_HERE {
+                assert_eq!(inv.fields()[0].hint().as_deref(), Some("바깥 안내"));
+                if promoted { assert_eq!(inv.fields()[1].hint().as_deref(), Some("안쪽 안내")); }
+            }
+            if roundtrip == 0 {
+                assert_eq!(inv.fields().iter().filter(|f| f.id().is_some()).count(), if promoted { 1 + usize::from(inner_crosses) } else { 0 });
+            }
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: R09 미종료 경고 누락, R10 미소비 메타데이터 경고 누락,
+/// R11 고아 끝에서 뒤의 시작을 잘못 짝짓기, R12 메타데이터 없는 시작을 승격.
+#[test]
+fn fspan_unmatched_markers_and_metadata_keep_fallbacks() {
+    use hwpforge_core::field_inventory::FieldInventory;
+    let click = make_record(TagId::CtrlHeader, 1, &r1_clickhere());
+    let mut first = r4_marker(4, 0);
+    first.extend(para_text_data("앞"));
+    first.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+    first.extend(para_text_data("미종료"));
+    let wire = r4_para(&first, &click.repeat(2), true);
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    assert_eq!(FieldInventory::from_sections(doc.sections()).fields()[0].current(), "미종료");
+    assert_eq!(warnings.iter().filter(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.unclosed", .. })).count(), 1);
+    assert_eq!(warnings.iter().filter(|w| matches!(w, Hwp5Warning::DroppedControl { control: "clickhere", .. })).count(), 1);
+    assert!(warnings.iter().any(|w| matches!(w, Hwp5Warning::LayoutCacheDropped { .. })));
+
+    let mut first = r4_marker(3, CTRL_ID_CLICK_HERE);
+    first.extend(para_text_data("무메타"));
+    let mut last = para_text_data("후속");
+    last.extend(r4_marker(4, 0));
+    let mut wire = r4_para(&first, &[], false);
+    wire.extend(r4_para(&last, &[], false));
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    assert!(FieldInventory::from_sections(doc.sections()).fields().is_empty());
+    assert!(warnings.iter().any(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.clickhere", .. })));
+}
+
+/// 이것을 실패시키는 것: R13 이전 문단의 접힌 부모를 현재 문단의 accumulator로 취급,
+/// R14 이전 문단에서 이미 닫은 fallback을 실제 끝에서 다시 종료.
+#[test]
+fn fspan_folded_parent_from_previous_paragraph_has_no_local_accumulator() {
+    use crate::ctrl_ids::CTRL_ID_HYPERLINK;
+    use hwpforge_core::field_inventory::FieldInventory;
+    let mut first = r4_marker(3, CTRL_ID_HYPERLINK);
+    first.extend(para_text_data("앞"));
+    let mut wire = r4_para(&first, &r4_command(CTRL_ID_HYPERLINK, "https\\://example.org/"), false);
+    let mut middle = r4_marker(3, CTRL_ID_CLICK_HERE);
+    middle.extend(para_text_data("가"));
+    let click = make_record(TagId::CtrlHeader, 1, &r1_clickhere());
+    wire.extend(r4_para(&middle, &click, false));
+    let mut last = para_text_data("나");
+    last.extend(r4_marker(4, 0));
+    last.extend(para_text_data("뒤"));
+    last.extend(r4_marker(4, 0));
+    wire.extend(r4_para(&last, &[], false));
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    assert_eq!(warnings.iter().filter(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.unclosed", .. })).count(), 2);
+    assert!(!warnings.iter().any(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.nested", .. })));
+    for doc in [doc.clone(), hwpforge_smithy_hwpx::HwpxDecoder::decode(&r3_encode(doc, &hwpforge_core::ImageStore::new()).bytes).unwrap().document] {
+        let inv = FieldInventory::from_sections(doc.sections());
+        assert_eq!(inv.fields().iter().map(|f| f.current()).collect::<Vec<_>>(), ["앞", "가"]);
+        assert!(inv.diagnostics().is_empty());
+    }
+}
