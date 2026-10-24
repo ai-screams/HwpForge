@@ -7,12 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.17.0...hwpforge-core-v0.17.1) - 2026-10-24
 
+### Added
+
+- `Section::check_nesting_depth()` 로 직접 만든 `Section` 의 중첩 깊이(상한 32)를 미리 검사한다 (#267)
+
 ### Fixed
 
-- *(core)* refuse documents nested too deeply before walking them ([#267](https://github.com/ai-screams/HwpForge/pull/267))
-
-- *(hwpx)* keep pictures whose image asset was lost as empty frames ([#266](https://github.com/ai-screams/HwpForge/pull/266))
-
+- `Document::validate` 가 문서를 재귀로 걷기 전에 중첩 깊이를 반복문으로 재고, 32단계를 넘으면 기존 `CoreError::InvalidStructure` 로 거부한다. 거부한 문서도 재귀 없이 해제한다. 전에는 공개 API 로 수천 단계 이상 중첩한 값(묶음 안 묶음, 메모 안 메모 등)을 검증할 때 스택이 넘쳐 프로세스가 오류 없이 죽었다. 세는 규칙은 Markdown 인코더가 쓰던 것과 같아 그림·도형 캡션을 두 단계로 센다. 그래서 전에 HWPX 디코더를 통과하던 경계의 문서가 거부될 수 있다. 측정한 HWPX 3,828개의 최대 깊이는 7이다 (#267)
+- 묶음 안 그림의 빈 이미지 경로를 본문 그림과 같은 규칙으로 허용한다. 자산을 잃은 그림을 빈 틀로 보존하기 위한 것이고, 크기 검사는 그대로다 (#266)
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.11...hwpforge-core-v0.17.0) - 2026-10-23
 
