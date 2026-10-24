@@ -1005,6 +1005,18 @@ fn convert_paragraph_from(
         );
     }
 
+    // Text or elements directly under `<hp:p>` (outside any `<hp:run>`) are not
+    // in the OWPML schema and the reader does not read them: reported, not
+    // guessed at, so the paragraph is not silently taken for an empty one.
+    // 이것을 실패시키는 것: 이 보고 삭제
+    // (`a_paragraph_with_content_outside_a_run_is_reported_lost`).
+    if hx.has_stray_content {
+        ctx.content_lost(
+            "paragraph_content",
+            "text or elements directly under a paragraph, outside any run, are not read",
+        );
+    }
+
     // Normalize empty paragraphs: HWPX files from 한글 can have empty paragraphs
     // (blank lines). Core's validate() requires at least 1 run per paragraph.
     // The placeholder keeps the first authored run's charPrIDRef — visually
