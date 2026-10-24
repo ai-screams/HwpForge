@@ -123,6 +123,10 @@ pub(crate) fn section3_shapes_and_graphics() -> Section {
                     (Color::from_rgb(255, 200, 200), 0),
                     (Color::from_rgb(200, 200, 255), 100),
                 ],
+                center_x: None,
+                center_y: None,
+                step: None,
+                step_center: None,
             }),
             ..ShapeStyle::default()
         });

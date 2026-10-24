@@ -49,7 +49,8 @@ use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex, VerticalAlign,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
@@ -152,12 +153,12 @@ fn chart_para(
 fn line_separator() -> Paragraph {
     ctrl_para(
         Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(42520, 0),
             width: HwpUnit::from_mm(150.0).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0x99, 0x99, 0x99)),
@@ -308,11 +309,11 @@ fn build_section_0() -> Section {
     paras.push(empty());
 
     let mut sec = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.header = Some(HeaderFooter::all_pages(vec![mixed_para(
+    sec.headers.push(HeaderFooter::all_pages(vec![mixed_para(
         &[("HWPX 포맷 분석 보고서", CS_BOLD), ("  |  HwpForge 기술 문서 v1.0", CS_ITALIC)],
         PS_LEFT,
     )]));
-    sec.footer = Some(HeaderFooter::all_pages(vec![text_para(
+    sec.footers.push(HeaderFooter::all_pages(vec![text_para(
         "Copyright \u{00A9} 2026 HwpForge Project. Apache-2.0 / MIT",
         CS_ITALIC,
         PS_CENTER,
@@ -396,6 +397,8 @@ fn build_section_1() -> Section {
     paras.push(text_para("Dual Serde Rename 패턴:", CS_BOLD, PS_LEFT));
     paras.push(ctrl_para(
         Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
+            text_margin: None,
             paragraphs: vec![
                 text_para(r#"#[serde(rename(serialize = "hh:refList","#, CS_NORMAL, PS_LEFT),
                 text_para(r#"                deserialize = "refList"))]"#, CS_NORMAL, PS_LEFT),
@@ -403,8 +406,7 @@ fn build_section_1() -> Section {
             ],
             width: HwpUnit::from_mm(120.0).unwrap(),
             height: HwpUnit::from_mm(20.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0xCC, 0xCC, 0xCC)),
@@ -413,6 +415,7 @@ fn build_section_1() -> Section {
                 line_style: None,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
         CS_NORMAL,
         PS_CENTER,
@@ -561,13 +564,13 @@ fn build_section_2() -> Section {
     let eh = HwpUnit::from_mm(20.0).unwrap().as_i32();
     paras.push(ctrl_para(
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(ew / 2, eh / 2),
             axis1: ShapePoint::new(ew, eh / 2),
             axis2: ShapePoint::new(ew / 2, eh),
             width: HwpUnit::new(ew).unwrap(),
             height: HwpUnit::new(eh).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![text_para("BGR!", CS_BOLD, PS_CENTER)],
             caption: Some(make_caption("[그림 2] BGR 색상 주의 영역", CaptionSide::Right)),
             style: Some(ShapeStyle {
@@ -577,6 +580,7 @@ fn build_section_2() -> Section {
                 line_style: None,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
         CS_NORMAL,
         PS_LEFT,
@@ -598,6 +602,7 @@ fn build_section_2() -> Section {
     let th = HwpUnit::from_mm(22.0).unwrap().as_i32();
     paras.push(ctrl_para(
         Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(tw / 2, 0),
                 ShapePoint::new(tw, th),
@@ -606,8 +611,7 @@ fn build_section_2() -> Section {
             ],
             width: HwpUnit::new(tw).unwrap(),
             height: HwpUnit::new(th).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![text_para("주의!", CS_BOLD, PS_CENTER)],
             caption: Some(make_caption("[그림 3] 경고 삼각형 (첫 점 반복)", CaptionSide::Bottom)),
             style: Some(ShapeStyle {
@@ -617,6 +621,7 @@ fn build_section_2() -> Section {
                 line_style: None,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
         CS_NORMAL,
         PS_LEFT,
@@ -831,8 +836,8 @@ fn main() {
             "    S{}: {} paras, h={}, f={}, pn={}, col={}",
             i + 1,
             sec.paragraphs.len(),
-            sec.header.is_some(),
-            sec.footer.is_some(),
+            !sec.headers.is_empty(),
+            !sec.footers.is_empty(),
             sec.page_number.is_some(),
             sec.column_settings.is_some(),
         );
@@ -873,9 +878,14 @@ fn main() {
             .paragraphs
             .iter()
             .flat_map(|p| &p.runs)
-            .filter(|r| matches!(&r.content, RunContent::Control(c) if matches!(**c,
-                Control::Line { .. } | Control::Ellipse { .. } | Control::Polygon { .. } | Control::TextBox { .. }
-            )))
+            .filter(|r| {
+                matches!(&r.content, RunContent::Control(c) if matches!(**c,
+                    Control::Line { .. }
+                        | Control::Ellipse { .. }
+                        | Control::Polygon { .. }
+                        | Control::TextBox { .. }
+                ))
+            })
             .count();
         println!(
             "    S{}: paras={}, tables={}, charts={}, shapes={}",
