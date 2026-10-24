@@ -56,10 +56,27 @@ pub(crate) const XML_RECURSION_LIMIT: usize = 7 * section::MAX_NESTING_DEPTH;
 /// cannot move it silently. The largest count seen in real documents is 15.
 pub(crate) const XML_MAX_NAMESPACE_BINDINGS: usize = 128;
 
+/// Maximum events buffered while replaying interleaved serde lists.
+///
+/// On 2026-10-24, a SHA-256-deduplicated full corpus scan measured a maximum
+/// of 90 events across 3,671 HWPX documents and 7,717 header/section/master-page
+/// parts (3,999 paths, 3,757 unique files; 86 non-HWPX/invalid inputs excluded).
+/// Binary search found each part's minimum accepted positive limit using the
+/// production DTOs and whitespace preprocessing with quick-xml 0.42.0.
+/// 65,536 is over 728x that maximum; empty elements consume two events.
+///
+/// quick-xml 0.42.0 buffers `DeEvent`, which is 40 bytes on this 64-bit target:
+/// the capped write queue holds at most 65,536 * 40 = 2,621,440 bytes (2.5 MiB)
+/// of live event slots. Tags borrow the input with `from_str`; owned/merged
+/// text, replay-queue capacity and allocator overhead are additional. This is
+/// an event-count limit, not a total-memory or input-byte limit.
+pub(crate) const XML_EVENT_BUFFER_LIMIT: std::num::NonZeroUsize =
+    std::num::NonZeroUsize::new(65_536).unwrap();
+
 /// Deserializes one HWPX XML part with this crate's explicit limits.
 ///
-/// Every serde decode in this crate goes through here so the recursion and
-/// namespace limits are applied uniformly; `quick_xml::de::from_str` is
+/// Every serde decode in this crate goes through here so the recursion,
+/// namespace and event-buffer limits apply uniformly; `quick_xml::de::from_str` is
 /// rejected by the workspace `.clippy.toml` (`disallowed-methods`).
 pub(crate) fn xml_from_str<'de, T: serde::Deserialize<'de>>(
     xml: &'de str,
@@ -68,6 +85,7 @@ pub(crate) fn xml_from_str<'de, T: serde::Deserialize<'de>>(
     let mut de = quick_xml::de::Deserializer::from_str(xml);
     de.recursion_limit(XML_RECURSION_LIMIT);
     de.resolver_mut().set_max_namespace_bindings(XML_MAX_NAMESPACE_BINDINGS);
+    de.event_buffer_size(Some(XML_EVENT_BUFFER_LIMIT));
     T::deserialize(&mut de)
 }
 
@@ -77,10 +95,16 @@ pub(crate) fn xml_from_str<'de, T: serde::Deserialize<'de>>(
 /// quick-xml's own text for the namespace limit tells the reader to call
 /// `NamespaceResolver::set_max_namespace_bindings`, which no caller of the
 /// CLI, MCP server or Python binding can do; it is replaced by a sentence
-/// that states the limit. Every other error keeps quick-xml's text.
+/// that states the limit. The replay-buffer limit likewise states HwpForge's
+/// refusal policy, without exposing deserializer configuration advice.
+/// Every other error keeps quick-xml's text.
 pub(crate) fn xml_error_detail(error: &quick_xml::DeError) -> String {
     use quick_xml::name::NamespaceError;
     match error {
+        quick_xml::DeError::TooManyEvents(limit) => format!(
+            "more than {limit} buffered XML events; HwpForge does not read \
+             documents that require more"
+        ),
         quick_xml::DeError::InvalidXml(quick_xml::Error::Namespace(
             NamespaceError::TooManyBindings(limit),
         )) => format!(
