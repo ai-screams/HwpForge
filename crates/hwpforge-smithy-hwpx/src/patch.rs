@@ -376,12 +376,27 @@ impl HwpxPatcher {
             };
 
             if preserved_slot.has_inline_markup {
-                return Err(HwpxError::InvalidStructure {
-                    detail: format!(
-                        "preserving patch does not support editing text-slot '{}' with inline HWPX markup yet",
-                        preserved_slot.path
-                    ),
-                });
+                // Use the decoder's element and range; never rediscover slot identity.
+                let element = decoded.source_maps[section_idx]
+                    .text_elements
+                    .get(&text_locator_start(&preserved_slot.locator))
+                    .ok_or_else(|| HwpxError::InvalidStructure {
+                        detail: "missing decoder text element".into(),
+                    })?;
+                let inner = element.inner().ok_or_else(|| HwpxError::InvalidStructure {
+                    detail: "missing decoder inline text content".into(),
+                })?;
+                if let Err(reason) = crate::inline_text::validate_recreatable_inline_markup(
+                    element.qualified_name(),
+                    &base_section_xml[inner],
+                ) {
+                    return Err(HwpxError::InvalidStructure {
+                        detail: format!(
+                            "preserving patch does not support editing text-slot '{}' with inline HWPX markup ({reason})",
+                            preserved_slot.path
+                        ),
+                    });
+                }
             }
 
             edits.push((&preserved_slot.locator, new_text.as_str()));
