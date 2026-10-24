@@ -5,7 +5,7 @@ use serde::Serialize;
 use hwpforge::ops;
 
 use crate::compat::{self, Tool};
-use crate::output::{write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
+use crate::output::{write_output_file, ToolErrorInfo, ToolWarningInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful JSON → HWPX creation.
 #[derive(Debug, Serialize)]
@@ -18,9 +18,9 @@ pub struct FromJsonData {
     pub sections: usize,
     /// Total paragraphs.
     pub paragraphs: usize,
-    /// 인코드 경고 (각주 번호 머리 생략 등 — 무음 폐기 금지).
+    /// 인코드 경고 (각주 번호 머리 생략 등 — 무음 폐기 금지). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Create an HWPX document from a JSON structure (ExportedDocument schema).
@@ -53,8 +53,7 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
     write_output_file(output_path, &outcome.bytes)?;
 
     let size_bytes = outcome.bytes.len() as u64;
-    let warnings: Vec<String> =
-        outcome.warnings.iter().map(|w| compat::warning(w).message).collect();
+    let warnings: Vec<ToolWarningInfo> = outcome.warnings.iter().map(compat::warning).collect();
 
     Ok(FromJsonData {
         output_path: output_path.to_string(),
@@ -144,7 +143,8 @@ mod tests {
         let data = run_from_json(&json_str, out_path.to_str().unwrap()).unwrap();
 
         assert!(
-            data.warnings.iter().any(|w| w.contains("layout cache dropped at section[0]")),
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"
+                && w.message.contains("layout cache dropped at section[0]")),
             "{:?}",
             data.warnings
         );

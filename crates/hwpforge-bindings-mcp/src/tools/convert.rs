@@ -6,7 +6,9 @@ use hwpforge::ops::{convert_md as ops_convert_md, ConvertMdOptions, OpsError};
 use hwpforge_smithy_hwpx::presets::builtin_presets;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_string, write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
+use crate::output::{
+    read_file_string, write_output_file, ToolErrorInfo, ToolWarningInfo, MAX_INLINE_SIZE,
+};
 
 /// Output data from a successful conversion.
 #[derive(Debug, Serialize)]
@@ -19,9 +21,9 @@ pub struct ConvertData {
     pub sections: usize,
     /// Total number of paragraphs across all sections.
     pub paragraphs: usize,
-    /// 이미지 임베드에서 제외된 참조들 (W6 §12b — typed 경고의 표시 문자열).
+    /// 이미지 임베드에서 제외된 참조와 인코드 경고 (W6 §12b). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Execute Markdown → HWPX conversion.
@@ -92,9 +94,8 @@ pub fn run_convert(
         ops_convert_md(&md_content, base_dir, &ConvertMdOptions::default().with_preset(preset))
             .map_err(|e| compat::tool_error(Tool::ConvertMd, e))?;
 
-    // 6. 이미지 임베드 제외 + 인코드 경고 (W6 §12b — typed 경고의 표시
-    //    문자열). 무음 폐기 금지.
-    let warnings: Vec<String> = out.warnings.iter().map(|w| compat::warning(w).message).collect();
+    // 6. 이미지 임베드 제외 + 인코드 경고 (W6 §12b). 무음 폐기 금지.
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
     // 7. Write output file
     write_output_file(output_path, &out.bytes)?;

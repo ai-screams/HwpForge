@@ -413,7 +413,11 @@ impl HwpForgeServer {
                     summary.push_str(&format!(
                         " — {} warning(s): {}",
                         data.warnings.len(),
-                        data.warnings.join(" · "),
+                        data.warnings
+                            .iter()
+                            .map(|w| w.message.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · "),
                     ));
                 }
                 let output = ToolOutput::new(
@@ -1378,3 +1382,7 @@ mod request_schema_tests {
 #[cfg(test)]
 #[path = "param_tests.rs"]
 pub(crate) mod param_tests;
+
+#[cfg(test)]
+#[path = "warning_tests.rs"]
+mod warning_tests;
