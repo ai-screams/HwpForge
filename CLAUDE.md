@@ -17,6 +17,8 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 ## 로딩 맵 (필요할 때 읽는다 — 해당 작업 전 필독)
 
+> `.claude/` 아래 문서는 유지관리자의 로컬 자료라 git 에 없다(공개 clone 에는 없음). 사용자용 agent 스킬은 `skills/` 에 있다.
+
 | 상황 (트리거)                          | 읽을 파일                                                                                                              |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts)                                                     |

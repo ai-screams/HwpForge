@@ -474,15 +474,9 @@ $RECYCLE.BIN/
 .sisyphus/
 .scoop-version
 
-# Claude Code / AI agent config (user-specific, not shared)
-# Use .claude/* (not .claude/) so negation patterns below can work.
-# Git skips excluded directories entirely — wildcard keeps the dir traversable.
-.claude/*
-# Share skills (agentskills.io standard — project-level AI instructions)
-!.claude/skills/
-# Share rules (auto-loaded project process rules — e.g. epic workflow)
-!.claude/rules/
-!.claude/guides/
+# Claude Code / AI agent config (local only, never shared). The public
+# agent skills for HwpForge users live in skills/.
+.claude/
 
 # npm package bin/ directories (override global [Bb]in rule)
 !npm/packages/*/bin/
