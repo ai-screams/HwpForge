@@ -262,14 +262,14 @@ pub(crate) fn section1_document_structure() -> Section {
     let mut section = Section::with_paragraphs(paras, PageSettings::a4());
 
     // 머리글: 모든 페이지
-    section.header = Some(HeaderFooter::all_pages(vec![p(
+    section.headers.push(HeaderFooter::all_pages(vec![p(
         "HWPX 문서 구조 완전 가이드 — HwpForge",
         CS_SMALL,
         PS_CENTER,
     )]));
 
     // 바닥글: 모든 페이지
-    section.footer = Some(HeaderFooter::all_pages(vec![p(
+    section.footers.push(HeaderFooter::all_pages(vec![p(
         "Copyright 2026 HwpForge Project. All rights reserved.",
         CS_SMALL,
         PS_CENTER,

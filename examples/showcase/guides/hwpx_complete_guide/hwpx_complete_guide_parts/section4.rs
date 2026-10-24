@@ -281,8 +281,7 @@ pub(crate) fn section4_charts_equations_advanced() -> Section {
     ]);
 
     // 시작 번호 리셋
-    section.begin_num =
-        Some(BeginNum { page: 1, footnote: 1, endnote: 1, pic: 1, tbl: 1, equation: 1 });
+    section.begin_num = Some(BeginNum::default());
 
     // 마스터페이지 (워터마크)
     section.master_pages = Some(vec![MasterPage::new(
