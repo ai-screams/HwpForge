@@ -30,4 +30,5 @@ unicase = "2"
 [dev-dependencies]
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0" }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
 zip = { workspace = true }

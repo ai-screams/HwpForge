@@ -104,6 +104,7 @@ impl FootnoteCollector {
                     texts: vec![note.raw],
                     at: vec![note.at],
                 }),
+                body: false,
             })
             .collect()
     }
@@ -181,8 +182,8 @@ fn is_ordered_marker(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Where a piece of content is being drawn. Every recursion passes it on;
-/// the places that change it are a note body (`note_depth + 1`) and a memo
-/// body (`in_comment`). Markdown or HTML is not part of it: each has its own
+/// the places that change it are a note body (`note_depth + 1`), a memo
+/// body (`in_comment`) and the guarantee (`guarded`). Markdown or HTML is not part of it: each has its own
 /// renderer and output type ([`Md`], [`Html`]).
 /// Text boxes, shapes and groups pass it on unchanged.
 #[derive(Debug, Clone, Copy, Default)]
@@ -198,6 +199,29 @@ struct Ctx {
     /// group or a picture is not one (groups are spread by an iterator), so
     /// this differs from the semantic depth checked by Core validation.
     depth: usize,
+    /// Document text drawn here must make no block structure: a top-level
+    /// Body paragraph that is not a continuation, and the table of a
+    /// top-level one-table paragraph that is not one. Its text goes through
+    /// [`Md::guarded_text`] and a table it draws ends its block
+    /// ([`Md::ending_block`]). Set in [`encode_paragraph_styled`] only; a
+    /// memo, a note body and a one-table or one-picture paragraph's caption
+    /// turn it off; everything else passes it on. Outside it, output is as
+    /// before.
+    guarded: bool,
+}
+
+/// Document text in Markdown as the context needs it: [`Md::guarded_text`]
+/// where text is guarded, [`Md::text`] elsewhere. Every place the styled
+/// view writes document text that can start a line goes through it (link
+/// labels and picture alt text cannot: they follow `[` and hold no line
+/// ending).
+/// 이것을 실패시키는 것: `guarded` 무시(`guarded_text_reaches_every_carrier`).
+fn text(raw: &str, ctx: Ctx) -> Md {
+    if ctx.guarded {
+        Md::guarded_text(raw)
+    } else {
+        Md::text(raw)
+    }
 }
 
 impl Ctx {
@@ -386,7 +410,11 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
-            blocks.push(Block { markdown: SECTION_MARKER_COMMENT.to_string(), source: None });
+            blocks.push(Block {
+                markdown: SECTION_MARKER_COMMENT.to_string(),
+                source: None,
+                body: false,
+            });
         }
 
         // A code block's lines and their paragraphs.
@@ -398,6 +426,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 blocks.push(Block {
                     markdown: Md::code_block(&lines.join("\n")).into_string(),
                     source: source(lines, at),
+                    body: false,
                 });
                 code.clear();
             }
@@ -409,7 +438,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             // Page break
             if paragraph.page_break {
                 flush_code(&mut code, &mut blocks);
-                blocks.push(Block { markdown: "---".to_string(), source: None });
+                blocks.push(Block { markdown: "---".to_string(), source: None, body: false });
                 continuation = None;
             }
 
@@ -432,26 +461,20 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
             let continuation_level = continuation
                 .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
-            let markdown = encode_paragraph_styled(paragraph, styles, &mut st);
+            let (markdown, body) =
+                encode_paragraph_styled(paragraph, styles, &mut st, continuation_level.is_some());
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph, 0);
-                match (continuation_level, blocks.last_mut()) {
-                    (Some(level), Some(last)) => {
-                        last.markdown.push_str("\n\n");
-                        last.markdown.push_str(&format_list_continuation(&markdown, level));
-                        if let Some(src) = &mut last.source {
-                            src.texts.push(text);
-                            src.at.push(st.at);
-                        }
-                    }
-                    (level, _) => {
-                        let markdown = match level {
-                            Some(level) => format_list_continuation(&markdown, level),
-                            None => markdown,
-                        };
-                        blocks.push(Block { markdown, source: source(vec![text], vec![st.at]) });
-                    }
-                }
+                let text = super::guard::deep_text(paragraph, 0, true);
+                // A continuation is its own block (`join` writes the same
+                // blank line before it as appending did), so it can fall
+                // back alone and a Body block's check never sees it.
+                // 이것을 실패시키는 것: 직전 블록에 붙이기
+                // (`continuation_is_its_own_block`).
+                let markdown = match continuation_level {
+                    Some(level) => format_list_continuation(&markdown, level),
+                    None => markdown,
+                };
+                blocks.push(Block { markdown, source: source(vec![text], vec![st.at]), body });
             }
 
             if continuation_level.is_none() {
@@ -468,62 +491,79 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
     blocks.extend(notes.render_definitions());
 
     // The finished Markdown, parsed again, may hold only what styled writes.
-    let allowed =
-        super::guard::Allowed { tags: super::guard::STYLED_TAGS, destinations: &st.destinations };
+    let allowed = super::guard::Allowed {
+        tags: super::guard::STYLED_TAGS,
+        destinations: &st.destinations,
+        decoder_structure: true,
+    };
     let markdown = super::guard::checked(blocks, &allowed, &mut st.warnings);
 
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }
 
-/// Encodes a single top-level paragraph into styled markdown.
+/// Encodes a single top-level paragraph into styled markdown, and whether
+/// it was drawn as a Body block: not a `continuation`, drawn by the body
+/// branch (not as a heading, a list item, or a one-table or one-picture
+/// paragraph). The answer comes from the branch that drew it, and is the
+/// paragraph's `Ctx::guarded`.
+/// 이것을 실패시키는 것: 단일 표·그림을 Body 로(`out_of_scope_is_base_output`) ·
+/// continuation 을 Body 로(`continuation_is_its_own_block`).
 fn encode_paragraph_styled(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
     st: &mut State,
-) -> String {
+    continuation: bool,
+) -> (String, bool) {
     let ctx = Ctx::default();
     // Handle single-run block elements (table, image) as standalone blocks.
     // A paragraph whose one run is a group is not one of them, even when the
     // group holds a single picture (WS: the group is drawn as its children).
+    // The caption is not guarded (`Ctx::guarded`); a table that is not a
+    // continuation is.
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                let mut md = table_to_styled_markdown(table, styles, false, st, ctx);
+                let table_ctx = Ctx { guarded: !continuation, ..ctx };
+                let mut md = table_to_styled_markdown(table, styles, false, st, table_ctx);
                 md.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
-                return md.into_string();
+                return (md.into_string(), false);
             }
             RunContent::Image(image) => {
                 let mut md = emit_picture(image, styles, st, ctx);
                 md.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
-                return md.into_string();
+                return (md.into_string(), false);
             }
             _ => {}
         }
     }
 
-    let text = paragraph_text_styled(paragraph, styles, st, ctx).into_string();
-
     // Shared outline/list classification (hwpforge-core). Classification is
-    // text-blind; the empty-text guards below are rendering concerns (an
-    // empty heading/list item renders as nothing).
-    match classify_paragraph(paragraph, styles) {
+    // text-blind, so it decides the context before drawing; the empty-text
+    // guards below are rendering concerns (an empty heading/list item
+    // renders as nothing).
+    let kind = classify_paragraph(paragraph, styles);
+    let body = !continuation && matches!(kind, ParaKind::Body);
+    let text =
+        paragraph_text_styled(paragraph, styles, st, Ctx { guarded: body, ..ctx }).into_string();
+    let markdown = match kind {
         ParaKind::Heading { level, .. } => {
             // Headings must be single-line: collapse lineBreak-originated newlines.
             let heading_text = text.trim().replace('\n', " ");
             if heading_text.is_empty() {
-                return String::new();
+                return (String::new(), false);
             }
             format!("{} {}", "#".repeat(level as usize), heading_text)
         }
         ParaKind::ListItem { kind, level, checked, .. } => {
             let trimmed = text.trim();
             if trimmed.is_empty() {
-                return String::new();
+                return (String::new(), false);
             }
             format_list_item(trimmed, kind, level, checked)
         }
         ParaKind::Body => text.trim_start().to_string(),
-    }
+    };
+    (markdown, body)
 }
 
 fn list_context_for_paragraph(
@@ -572,7 +612,7 @@ fn paragraph_text_styled(
     for (part, cs) in super::spread_groups(&paragraph.runs) {
         // Anything but text first flushes the text group.
         if !matches!(part, Part::Text(_)) && !current_text.is_empty() {
-            output.push(current_format.wrap(&current_text));
+            output.push(current_format.wrap(&current_text, ctx));
             current_text.clear();
             current_format = InlineFormat::default();
         }
@@ -590,7 +630,7 @@ fn paragraph_text_styled(
                 let fmt = InlineFormat::from_style(cs, styles);
                 if fmt != current_format {
                     if !current_text.is_empty() {
-                        output.push(current_format.wrap(&current_text));
+                        output.push(current_format.wrap(&current_text, ctx));
                         current_text.clear();
                     }
                     current_format = fmt;
@@ -608,7 +648,13 @@ fn paragraph_text_styled(
                 if !output.is_empty() {
                     output.push_syntax("\n");
                 }
-                output.push(table_to_styled_markdown(table, styles, false, st, ctx));
+                // A guarded table ends its block: text after it starts a new
+                // one instead of joining the table (an HTML block runs to a
+                // blank line, GFM rows take the next line).
+                // 이것을 실패시키는 것: 표시 삭제 · 범위 밖에도 표시
+                // (`body_check_and_table_end_close_the_rest`, `out_of_scope_is_base_output`).
+                let table_md = table_to_styled_markdown(table, styles, false, st, ctx);
+                output.push(if ctx.guarded { table_md.ending_block() } else { table_md });
                 output.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
             }
             Part::Control(control) => output.push(control_md(control, styles, st, ctx)),
@@ -617,7 +663,7 @@ fn paragraph_text_styled(
 
     // Flush remaining text.
     if !current_text.is_empty() {
-        output.push(current_format.wrap(&current_text));
+        output.push(current_format.wrap(&current_text, ctx));
     }
 
     output
@@ -634,7 +680,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             if super::link_url_allowed(url) {
                 Md::link(Md::text(text), url, &mut st.destinations)
             } else {
-                Md::text(text)
+                self::text(text, ctx)
             }
         }
         // A note at depth 0 outside a memo is a document definition; a note
@@ -666,50 +712,55 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
                         section: st.at.0,
                         paragraph: st.at.1,
                     });
-                    math_free_text(&script.split_whitespace().collect::<Vec<_>>().join(" "))
+                    math_free_text(&script.split_whitespace().collect::<Vec<_>>().join(" "), ctx)
                 }
             },
             // Too deep to convert: ordinary text (whitespace already
             // collapsed, `$` escaped as above). Not reported as
             // `EquationAsText`, which is for the safety fallback only.
-            EqnRender::RawFallback(raw) => math_free_text(&raw),
+            EqnRender::RawFallback(raw) => math_free_text(&raw, ctx),
         },
         Control::Chart { .. } => Md::syntax("<!-- chart -->"),
         Control::Dutmal { main_text, sub_text, .. } => {
-            let mut md = Md::text(main_text);
+            let mut md = text(main_text, ctx);
             md.push_syntax("(");
-            md.push(Md::text(sub_text));
+            md.push(text(sub_text, ctx));
             md.push_syntax(")");
             md
         }
-        Control::Compose { compose_text, .. } => Md::text(compose_text),
+        Control::Compose { compose_text, .. } => text(compose_text, ctx),
         // Wave 12m Phase 2 Step 4: the visible text (display_text) if any,
         // else the target's display form in brackets (Name → "bookmark1",
         // SystemId → "#5"). Markdown has no anchor link here: text only.
-        Control::CrossRef { target, display_text, .. } => {
-            // The brackets are text too: as syntax they made a link with a
-            // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
-            // 쓰기(`markup_safety` 의 빈 상호 참조).
-            if display_text.is_empty() {
-                Md::text(&format!("[{}]", target.as_display()))
-            } else {
-                Md::text(display_text)
-            }
-        }
-        // The filled value if any, else the hint — the HWPX encoder's hint
-        // fallback order (Epic 1).
-        Control::Field { hint_text, display_text, .. } => {
-            Md::text(field_text(hint_text, display_text))
+        // The brackets are text too: as syntax they made a link with a
+        // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
+        // 쓰기(`markup_safety` 의 빈 상호 참조).
+        // A field: the filled value if any, else the hint — the HWPX
+        // encoder's hint fallback order (Epic 1).
+        Control::CrossRef { .. } | Control::Field { .. } => {
+            text(&super::styled_display(control).unwrap_or_default(), ctx)
         }
         Control::FieldBoundary {
             boundary: hwpforge_core::control::FieldBoundary::Start(start),
         } => {
             start.annotation.as_ref().map_or_else(Md::new, |content| memo(content, styles, st, ctx))
         }
+        // A memo still standing after `expand_memos` (it sits in another
+        // memo's anchor). Where text is guarded, its anchor is drawn as a
+        // paragraph one container deeper, so its text goes through the
+        // rules as `guard::deep_text` reads it; elsewhere the anchor's text
+        // runs, as before (G.3 (라)).
+        // 이것을 실패시키는 것: 앵커 가드 우회(`memo_anchor_follows_the_renderer`) ·
+        // 범위 밖 앵커를 문단 렌더러로(`memo_anchor_out_of_scope_is_base_output`).
         Control::Memo { content, anchor_runs, .. } => {
-            let mut md = Md::text(
-                &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
-            );
+            let mut md = if ctx.guarded {
+                let Some(inner) = ctx.enter() else { return Md::syntax(st.too_deep("memo")) };
+                paragraph_text_styled(&super::memo_anchor(anchor_runs), styles, st, inner)
+            } else {
+                Md::text(
+                    &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
+                )
+            };
             md.push(memo(content, styles, st, ctx));
             md
         }
@@ -717,8 +768,12 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         // Markdown (review r1: a `*` prefix and suffix turned "3" into
         // emphasis). 이것을 실패시키는 것: 텍스트 escape 삭제
         // (`caption_number_prefix_is_escaped`).
-        Control::AutoNumber { num, format, .. } => Md::text(&super::auto_number_text(*num, format)),
-        Control::Unknown { tag, .. } => Md::code_span(&format!("[{tag}]")),
+        Control::AutoNumber { num, format, .. } => {
+            text(&super::auto_number_text(*num, format), ctx)
+        }
+        Control::Unknown { .. } => {
+            Md::code_span(&super::styled_display(control).unwrap_or_default())
+        }
         // Invisible or textless: bookmarks, index marks, number restarts and
         // hiding, lines, arcs, curves, connectors.
         _ => Md::new(),
@@ -768,15 +823,8 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             Html::text(&format!("{main_text}({sub_text})"))
         }
         Control::Compose { compose_text, .. } => Html::text(compose_text),
-        Control::CrossRef { target, display_text, .. } => {
-            if display_text.is_empty() {
-                Html::text(&format!("[{}]", target.as_display()))
-            } else {
-                Html::text(display_text)
-            }
-        }
-        Control::Field { hint_text, display_text, .. } => {
-            Html::text(field_text(hint_text, display_text))
+        Control::CrossRef { .. } | Control::Field { .. } => {
+            Html::text(&super::styled_display(control).unwrap_or_default())
         }
         // The memo comment shown as cell text, as before.
         Control::FieldBoundary {
@@ -785,6 +833,8 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             .annotation
             .as_ref()
             .map_or_else(Html::new, |content| Html::text(memo(content, styles, st, ctx).as_str())),
+        // HTML text makes no block, so the anchor's text runs as before.
+        // 이것을 실패시키는 것: 문단 렌더러로(`memo_anchor_out_of_scope_is_base_output`).
         Control::Memo { content, anchor_runs, .. } => {
             let mut html = Html::text(
                 &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
@@ -795,7 +845,9 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
         Control::AutoNumber { num, format, .. } => {
             Html::text(&super::auto_number_text(*num, format))
         }
-        Control::Unknown { tag, .. } => Html::text(&format!("`[{tag}]`")),
+        Control::Unknown { .. } => {
+            Html::text(&format!("`{}`", super::styled_display(control).unwrap_or_default()))
+        }
         _ => Html::new(),
     }
 }
@@ -812,7 +864,7 @@ fn note_definition(
     let raw = match ctx.enter() {
         Some(inner) => paragraphs
             .iter()
-            .map(|p| super::guard::deep_text(p, inner.depth))
+            .map(|p| super::guard::deep_text(p, inner.depth, true))
             .collect::<Vec<_>>()
             .join(" "),
         None => TOO_DEEP.to_string(),
@@ -824,25 +876,16 @@ fn note_definition(
     }
 }
 
-/// A field's visible text: its filled value, else its hint, else `____`.
-fn field_text<'a>(hint_text: &'a Option<String>, display_text: &'a str) -> &'a str {
-    if display_text.is_empty() {
-        hint_text.as_deref().unwrap_or("____")
-    } else {
-        display_text
-    }
-}
-
 /// Equation script as Markdown text with `$` escaped too, so it opens no
 /// math. 이것을 실패시키는 것: `$` escape 삭제
 /// (`markdown_equation_writes_no_html_or_link`).
-fn math_free_text(raw: &str) -> Md {
+fn math_free_text(raw: &str, ctx: Ctx) -> Md {
     let mut md = Md::new();
     for (i, piece) in raw.split('$').enumerate() {
         if i > 0 {
             md.push_syntax("\\$");
         }
-        md.push(Md::text(piece));
+        md.push(text(piece, ctx));
     }
     md
 }
@@ -852,7 +895,7 @@ fn math_free_text(raw: &str) -> Md {
 /// carried (Wave 12e-Memo): HWPX wire never surfaced them.
 fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
     let Some(inner) = ctx.enter() else { return Md::syntax(st.too_deep("memo")) };
-    let inner = Ctx { in_comment: true, ..inner };
+    let inner = Ctx { in_comment: true, guarded: false, ..inner };
     let body: Vec<Md> =
         content.iter().map(|p| paragraph_text_styled(p, styles, st, inner)).collect();
     let body = Md::join(body, " ");
@@ -871,7 +914,7 @@ fn extract_note_body(
     ctx: Ctx,
 ) -> Vec<Md> {
     let Some(inner) = ctx.enter() else { return vec![Md::syntax(st.too_deep("note"))] };
-    let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
+    let inner = Ctx { note_depth: ctx.note_depth + 1, guarded: false, ..inner };
     paragraphs
         .iter()
         .map(|p| paragraph_text_styled(p, styles, st, inner).layout(|s| s.trim().to_string()))
@@ -888,7 +931,7 @@ fn extract_note_body_html(
     ctx: Ctx,
 ) -> Vec<Html> {
     let Some(inner) = ctx.enter() else { return vec![Html::syntax(st.too_deep("note"))] };
-    let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
+    let inner = Ctx { note_depth: ctx.note_depth + 1, guarded: false, ..inner };
     paragraphs
         .iter()
         .map(|p| extract_paragraph_text_html(p, styles, st, inner).trimmed())
@@ -956,7 +999,8 @@ impl InlineFormat {
     ///   rules when adjacent to other text), or formatting has no markdown
     ///   equivalent → HTML tags.
     /// - Otherwise → markdown markers (`**`, `*`, `~~`).
-    fn wrap(&self, text: &str) -> Md {
+    fn wrap(&self, text: &str, ctx: Ctx) -> Md {
+        let md = |raw: &str| self::text(raw, ctx);
         if text.is_empty() {
             return Md::new();
         }
@@ -965,7 +1009,7 @@ impl InlineFormat {
         let has_any = has_basic || self.underline || self.superscript || self.subscript;
 
         if !has_any {
-            return Md::text(text);
+            return md(text);
         }
 
         // Move leading/trailing whitespace outside formatting markers.
@@ -983,6 +1027,7 @@ impl InlineFormat {
         let has_boundary_punct = trimmed.chars().next().is_some_and(|c| c.is_ascii_punctuation())
             || trimmed.chars().next_back().is_some_and(|c| c.is_ascii_punctuation());
 
+        // Whitespace alone: no rule can fire on it.
         let mut out = Md::text(leading);
         if needs_html_only || (has_basic && (has_marker_conflicts || has_boundary_punct)) {
             // HTML tags around Markdown text: a renderer still reads Markdown
@@ -1003,7 +1048,7 @@ impl InlineFormat {
             for tag in &tags {
                 out.push(Md::tag(tag, false));
             }
-            out.push(Md::text(trimmed));
+            out.push(md(trimmed));
             for tag in tags.iter().rev() {
                 out.push(Md::tag(tag, true));
             }
@@ -1019,7 +1064,7 @@ impl InlineFormat {
                 out.push_syntax("~~");
             }
             out.push_syntax(marker);
-            out.push(Md::text(trimmed));
+            out.push(md(trimmed));
             out.push_syntax(marker);
             if self.strikeout {
                 out.push_syntax("~~");
@@ -1574,7 +1619,7 @@ mod tests {
         let fmt = InlineFormat { bold: true, ..Default::default() };
         // Markdown is still read inside inline HTML: the text is escaped.
         assert_eq!(
-            fmt.wrap("**산·학·연 협력** 가점"),
+            fmt.wrap("**산·학·연 협력** 가점", Ctx::default()),
             "<strong>\\*\\*산·학·연 협력\\*\\* 가점</strong>"
         );
     }
@@ -1582,7 +1627,7 @@ mod tests {
     #[test]
     fn inline_format_no_conflict_uses_markdown() {
         let fmt = InlineFormat { bold: true, ..Default::default() };
-        assert_eq!(fmt.wrap("기관명칭 기입 요망"), "**기관명칭 기입 요망**");
+        assert_eq!(fmt.wrap("기관명칭 기입 요망", Ctx::default()), "**기관명칭 기입 요망**");
     }
 
     // -----------------------------------------------------------------------
@@ -2311,7 +2356,7 @@ mod tests {
     #[test]
     fn inline_format_wrap_empty() {
         let fmt = InlineFormat { bold: true, ..Default::default() };
-        assert_eq!(fmt.wrap(""), "");
+        assert_eq!(fmt.wrap("", Ctx::default()), "");
     }
 
     #[test]
@@ -2451,25 +2496,25 @@ mod tests {
     #[test]
     fn inline_format_underline_wraps_as_html_u() {
         let fmt = InlineFormat { underline: true, ..Default::default() };
-        assert_eq!(fmt.wrap("underlined"), "<u>underlined</u>");
+        assert_eq!(fmt.wrap("underlined", Ctx::default()), "<u>underlined</u>");
     }
 
     #[test]
     fn inline_format_superscript_wraps_as_html_sup() {
         let fmt = InlineFormat { superscript: true, ..Default::default() };
-        assert_eq!(fmt.wrap("sup text"), "<sup>sup text</sup>");
+        assert_eq!(fmt.wrap("sup text", Ctx::default()), "<sup>sup text</sup>");
     }
 
     #[test]
     fn inline_format_subscript_wraps_as_html_sub() {
         let fmt = InlineFormat { subscript: true, ..Default::default() };
-        assert_eq!(fmt.wrap("sub text"), "<sub>sub text</sub>");
+        assert_eq!(fmt.wrap("sub text", Ctx::default()), "<sub>sub text</sub>");
     }
 
     #[test]
     fn inline_format_bold_and_underline_combines_markdown_and_html() {
         let fmt = InlineFormat { bold: true, underline: true, ..Default::default() };
-        let result = fmt.wrap("text");
+        let result = fmt.wrap("text", Ctx::default());
         assert!(result.contains("<u>"), "expected <u> in: {result}");
     }
 
@@ -3702,6 +3747,7 @@ mod tests {
                     let allowed = super::super::guard::Allowed {
                         tags: super::super::guard::STYLED_TAGS,
                         destinations: &st.destinations,
+                        decoder_structure: true,
                     };
                     let md = super::super::guard::checked(blocks, &allowed, &mut st.warnings);
                     assert!(md.ends_with(&super::super::guard::plain_text(expected)), "{md}");
