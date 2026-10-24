@@ -29,7 +29,7 @@ use hwpforge_core::table::{Table, TableCell};
 
 use super::detect::{paragraph_guard, GuardReason};
 use crate::cell_edit::normalize_label;
-use crate::table_inventory::{render_path, tables_in_document, TableEntry};
+use crate::table_inventory::{render_path, PathSeg, TableEntry};
 
 /// Direction from a label cell to the class-B target it annotates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -222,7 +222,7 @@ pub struct CellPlan {
 /// whose grid cannot be built are reported in
 /// [`skipped_tables`](CellPlan::skipped_tables).
 pub fn plan_cells(document: &Document<Draft>) -> CellPlan {
-    let entries = tables_in_document(document);
+    let entries = planning_tables(document);
     let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections());
 
     // Pass 1: per-table grids + the document-wide normalized-label tally.
@@ -286,6 +286,107 @@ pub fn plan_cells(document: &Document<Draft>) -> CellPlan {
     CellPlan { candidates, skipped_tables }
 }
 
+// The error-free public planner cannot use the depth-gated recursive inventory.
+// Enumerate Core flows, then restore the inventory's body-only DFS order.
+// Keep table_inventory itself unchanged for the guarded editing/address paths.
+fn planning_tables(document: &Document<Draft>) -> Vec<TableEntry<'_>> {
+    let mut entries = Vec::new();
+    hwpforge_core::field_inventory::FieldInventory::visit_flows(
+        document.sections(),
+        |section, paragraphs, prefix| {
+            if !prefix.starts_with("paragraphs")
+                || [".group.", ".memo.", ".annotation."].iter().any(|part| prefix.contains(part))
+            {
+                return;
+            }
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    if let RunContent::Table(table) = &run.content {
+                        let Some(path) = planning_path(&format!("{prefix}[{pi}].runs[{ri}].table"))
+                        else {
+                            // Unknown flows are outside the legacy inventory policy: skip
+                            // the table rather than panic in this error-free public API.
+                            continue;
+                        };
+                        entries.push(TableEntry { ordinal: 0, section, path, table });
+                    }
+                }
+            }
+        },
+    );
+    entries.sort_by(|a, b| {
+        a.section.cmp(&b.section).then_with(|| {
+            for (a, b) in a.path.iter().zip(&b.path) {
+                let order = match (a, b) {
+                    (PathSeg::Index(a), PathSeg::Index(b)) => a.cmp(b),
+                    (PathSeg::Field(a), PathSeg::Field(b)) => {
+                        let rank = |s: &str| match s {
+                            "paragraphs" => 0,
+                            "caption" => 1,
+                            "rows" => 2,
+                            _ => 3,
+                        };
+                        rank(a).cmp(&rank(b)).then_with(|| a.cmp(b))
+                    }
+                    (PathSeg::Index(_), PathSeg::Field(_)) => std::cmp::Ordering::Less,
+                    (PathSeg::Field(_), PathSeg::Index(_)) => std::cmp::Ordering::Greater,
+                };
+                if !order.is_eq() {
+                    return order;
+                }
+            }
+            a.path.len().cmp(&b.path.len())
+        })
+    });
+    for (ordinal, entry) in entries.iter_mut().enumerate() {
+        entry.ordinal = ordinal;
+    }
+    entries
+}
+
+fn planning_path(path: &str) -> Option<Vec<PathSeg>> {
+    let mut out = Vec::new();
+    for part in path.split('.') {
+        let (name, index) =
+            part.split_once('[').map_or((part, None), |(name, index)| (name, Some(index)));
+        let name = match name {
+            "table" => {
+                out.push(PathSeg::Field("content"));
+                "Table"
+            }
+            "image" => {
+                out.push(PathSeg::Field("content"));
+                "Image"
+            }
+            "control" => {
+                out.push(PathSeg::Field("content"));
+                "Control"
+            }
+            "textbox" => "TextBox",
+            "ellipse" => "Ellipse",
+            "polygon" => "Polygon",
+            "footnote" => "Footnote",
+            "endnote" => "Endnote",
+            "rect" => "Rect",
+            "line" => "Line",
+            "arc" => "Arc",
+            "curve" => "Curve",
+            "connect_line" => "ConnectLine",
+            "paragraphs" => "paragraphs",
+            "runs" => "runs",
+            "caption" => "caption",
+            "rows" => "rows",
+            "cells" => "cells",
+            _ => return None,
+        };
+        out.push(PathSeg::Field(name));
+        if let Some(index) = index {
+            out.push(PathSeg::Index(index.strip_suffix(']')?.parse().ok()?));
+        }
+    }
+    Some(out)
+}
+
 /// Field interpretation stays in Core; this only translates table addresses.
 pub(crate) fn table_in_field(
     entry: &TableEntry<'_>,
@@ -335,6 +436,106 @@ mod tests {
 
     fn anchor_at(grid: &TableGrid, row: u32, col: u32) -> GridCell {
         *grid.resolve(GridCoord::new(row, col)).expect("anchor")
+    }
+
+    // 이것을 실패시키는 것: planning_path 각 갈래 삭제, planner 정렬 제거/역순, 본문·캡션 순서 또는 제외 정책 변경.
+    #[test]
+    fn planning_inventory_matches_guarded_inventory() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::control::{FieldBoundary, FieldStart, GroupChild, ShapePoint};
+        use hwpforge_core::section::{HeaderFooter, MasterPage};
+        use hwpforge_core::{Control, ObjectFrame, PageSettings, Section};
+        use hwpforge_foundation::ApplyPageType;
+        let para = |r| Paragraph::with_runs(vec![r], ParaShapeIndex::new(0));
+        let leaf = || {
+            Run::table(table(vec![vec![text_cell("label"), text_cell("")]]), CharShapeIndex::new(0))
+        };
+        let cap = || Caption::new(vec![para(leaf())], CaptionSide::Bottom);
+        let mut outer = table(vec![vec![TableCell::new(vec![para(leaf())], HwpUnit::ZERO)]]);
+        outer.caption = Some(cap());
+        let mut controls = vec![
+            Control::text_box(vec![para(leaf())], HwpUnit::ZERO, HwpUnit::ZERO),
+            Control::ellipse_with_text(HwpUnit::ZERO, HwpUnit::ZERO, vec![para(leaf())]),
+            Control::footnote(vec![para(leaf())]),
+            Control::endnote(vec![para(leaf())]),
+            Control::memo_with_anchor(vec![para(leaf())], vec![leaf(), leaf()]),
+            Control::Group {
+                children: vec![GroupChild::Shape(Control::text_box(
+                    vec![para(leaf())],
+                    HwpUnit::ZERO,
+                    HwpUnit::ZERO,
+                ))],
+                width: HwpUnit::ZERO,
+                height: HwpUnit::ZERO,
+                frame: ObjectFrame::new(),
+                placement: None,
+                inst_id: None,
+            },
+        ];
+        let a = ShapePoint::new(0, 0);
+        let b = ShapePoint::new(100, 100);
+        let mut polygon = Control::polygon(vec![a, b, ShapePoint::new(0, 100)]).unwrap();
+        if let Control::Polygon { paragraphs, .. } = &mut polygon {
+            *paragraphs = vec![para(leaf())];
+        }
+        let mut annotation = FieldStart::default();
+        annotation.annotation = Some(vec![para(leaf())]);
+        controls.extend([
+            polygon,
+            Control::rect(HwpUnit::new(100).unwrap(), HwpUnit::new(100).unwrap()).unwrap(),
+            Control::line(a, b).unwrap(),
+            Control::arc(hwpforge_foundation::ArcType::default(), HwpUnit::ZERO, HwpUnit::ZERO),
+            Control::curve(vec![a, b]).unwrap(),
+            Control::connect_line(a, b).unwrap(),
+            Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(annotation)) },
+        ]);
+        for c in &mut controls {
+            match c {
+                Control::TextBox { caption, .. }
+                | Control::Ellipse { caption, .. }
+                | Control::Polygon { caption, .. }
+                | Control::Rect { caption, .. }
+                | Control::Line { caption, .. }
+                | Control::Arc { caption, .. }
+                | Control::Curve { caption, .. }
+                | Control::ConnectLine { caption, .. } => *caption = Some(cap()),
+                _ => {}
+            }
+        }
+        let mut root = para(Run::table(outer, CharShapeIndex::new(0)));
+        root.runs.extend(controls.into_iter().map(|c| Run::control(c, CharShapeIndex::new(0))));
+        root.runs.push(leaf());
+        let mut image = hwpforge_core::Image::new(
+            "caption.png",
+            HwpUnit::ZERO,
+            HwpUnit::ZERO,
+            hwpforge_core::image::ImageFormat::Png,
+        );
+        image.caption = Some(cap());
+        root.runs.push(Run::image(image, CharShapeIndex::new(0)));
+        let mut section = Section::with_paragraphs(vec![root, para(leaf())], PageSettings::a4());
+        section.headers.push(HeaderFooter::new(vec![para(leaf())], ApplyPageType::Both));
+        let mut doc = Document::new();
+        section.footers.push(HeaderFooter::new(vec![para(leaf())], ApplyPageType::Both));
+        section.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![para(leaf())])]);
+        doc.add_section(section);
+        doc.add_section(Section::with_paragraphs(vec![para(leaf())], PageSettings::a4()));
+        let expected = crate::table_inventory::tables_in_document(&doc);
+        let actual = planning_tables(&doc);
+        assert!(actual.len() == expected.len() && actual.len() == 20);
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert!(std::ptr::eq(actual.table, expected.table));
+            assert_eq!(actual.path, expected.path);
+            assert!(actual.ordinal == expected.ordinal && actual.section == expected.section);
+        }
+    }
+
+    // 이것을 실패시키는 것: 알 수 없는 flow 또는 손상된 index에서 panic 복원.
+    #[test]
+    fn unknown_planning_paths_are_skipped() {
+        assert!(planning_path("paragraphs[0].future.paragraphs[0].table").is_none());
+        assert!(planning_path("paragraphs[no-index].table").is_none());
+        assert!(planning_path("paragraphs[0.table").is_none());
     }
 
     // ── stampable empty ─────────────────────────────────────────

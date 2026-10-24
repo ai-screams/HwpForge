@@ -710,47 +710,39 @@ impl Section {
 
     /// [`Self::for_each_paragraph_mut`] 의 내부 재귀 본체.
     pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
-        for p in &mut self.paragraphs {
-            p.walk_paragraphs_mut(f);
-        }
-        for hf in self.headers.iter_mut().chain(self.footers.iter_mut()) {
-            for p in &mut hf.paragraphs {
-                p.walk_paragraphs_mut(f);
-            }
-        }
-        if let Some(master_pages) = &mut self.master_pages {
-            for mp in master_pages {
-                for p in &mut mp.paragraphs {
-                    p.walk_paragraphs_mut(f);
-                }
-            }
-        }
+        let roots = self
+            .paragraphs
+            .iter_mut()
+            .chain(
+                self.headers
+                    .iter_mut()
+                    .chain(self.footers.iter_mut())
+                    .flat_map(|hf| hf.paragraphs.iter_mut()),
+            )
+            .chain(self.master_pages.iter_mut().flatten().flat_map(|mp| mp.paragraphs.iter_mut()));
+        crate::walk::paragraph_roots_mut(roots.map(crate::walk::NodeMut::Paragraph), f);
     }
 
     /// Visits every table in this section — body,
     /// headers, footers and master pages, nested containers and run picture
     /// captions included (see [`Paragraph::for_each_table`]).
     pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
-        for p in self.all_top_paragraphs() {
-            p.walk_tables(&mut f);
-        }
+        crate::walk::tables(self.all_top_paragraphs().flat_map(|p| p.runs.iter()), &mut f);
     }
 
     /// [`Self::for_each_table`] 의 가변판 — 방문 대상·순서 동일.
     pub fn for_each_table_mut<F: FnMut(&mut crate::table::Table)>(&mut self, mut f: F) {
-        for p in &mut self.paragraphs {
-            p.walk_tables_mut(&mut f);
-        }
-        for hf in self.headers.iter_mut().chain(self.footers.iter_mut()) {
-            for p in &mut hf.paragraphs {
-                p.walk_tables_mut(&mut f);
-            }
-        }
-        for mp in self.master_pages.iter_mut().flatten() {
-            for p in &mut mp.paragraphs {
-                p.walk_tables_mut(&mut f);
-            }
-        }
+        let paragraphs = self
+            .paragraphs
+            .iter_mut()
+            .chain(
+                self.headers
+                    .iter_mut()
+                    .chain(self.footers.iter_mut())
+                    .flat_map(|hf| hf.paragraphs.iter_mut()),
+            )
+            .chain(self.master_pages.iter_mut().flatten().flat_map(|mp| mp.paragraphs.iter_mut()));
+        crate::walk::tables_mut(paragraphs.flat_map(|p| p.runs.iter_mut()), &mut f);
     }
 
     /// Body, header, footer and master-page paragraphs, in that order.
@@ -774,21 +766,10 @@ impl Section {
     /// [`Self::walk_paragraphs_mut`] 와 순서·재귀 대상이 같아야 한다
     /// (본문 → 머리말 → 꼬리말 → 바탕쪽).
     pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
-        for p in &self.paragraphs {
-            p.walk_paragraphs(f);
-        }
-        for hf in self.headers.iter().chain(self.footers.iter()) {
-            for p in &hf.paragraphs {
-                p.walk_paragraphs(f);
-            }
-        }
-        if let Some(master_pages) = &self.master_pages {
-            for mp in master_pages {
-                for p in &mp.paragraphs {
-                    p.walk_paragraphs(f);
-                }
-            }
-        }
+        crate::walk::paragraph_roots(
+            self.all_top_paragraphs().map(crate::walk::Node::Paragraph),
+            f,
+        );
     }
 
     /// Creates an empty section with the given page settings.

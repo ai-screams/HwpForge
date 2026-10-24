@@ -163,7 +163,7 @@ impl<'a> FieldInventory<'a> {
     pub fn fields(&self) -> &[FieldEntry<'a>] {
         &self.fields
     }
-    /// Invalid boundary pairs.
+    /// Invalid boundary pairs or input exceeding the Core nesting budget.
     pub fn diagnostics(&self) -> &[ValidationError] {
         &self.diagnostics
     }
@@ -177,6 +177,8 @@ impl<'a> FieldInventory<'a> {
         self.fields.iter().filter(|f| seen.insert(f.runs.as_ptr())).map(|f| f.runs.len()).sum()
     }
     /// Build an inventory without copying text or subtrees.
+    /// Over-budget input is reported through [`Self::diagnostics`]. Fields and
+    /// read-only protection remain complete; editing still rejects diagnostics.
     pub fn from_sections(sections: &'a [Section]) -> Self {
         Self::from_sections_at(sections, 0)
     }
@@ -184,6 +186,20 @@ impl<'a> FieldInventory<'a> {
     /// Section editors must use this rather than renumber source evidence to zero.
     pub fn from_sections_at(sections: &'a [Section], first_section: usize) -> Self {
         let mut inventory = Self::default();
+        // 이것을 실패시키는 것: 깊이 관문 삭제 (field_inventory_depth_diagnostics).
+        for (si, section) in sections.iter().enumerate() {
+            if let Err(error) = section.check_nesting_depth() {
+                inventory.invalid(
+                    si + first_section,
+                    "paragraphs",
+                    &error
+                        .to_string()
+                        .replace("section=0", &format!("section={}", si + first_section)),
+                );
+            }
+        }
+        // Read-only consumers still need complete fields/protection at excessive depth.
+        // Flow traversal is iterative; mutating operations reject diagnostics separately.
         for (si, section) in sections.iter().enumerate() {
             walk_section(section, &mut |paragraphs, path| {
                 inventory.flow(si + first_section, paragraphs, path)
@@ -646,7 +662,12 @@ impl<'a> FieldInventory<'a> {
     /// Clear editable scalar values for structural comparison after preflight.
     /// Protected fields remain intact, including computed display values.
     pub fn clear_editable_values(sections: &mut [Section], first_section: usize) {
-        let paths: HashSet<_> = FieldInventory::from_sections_at(sections, first_section)
+        let inventory = FieldInventory::from_sections_at(sections, first_section);
+        // Clearing over-budget drafts is now a no-op; previously it cleared editable values.
+        if !inventory.diagnostics().is_empty() {
+            return;
+        }
+        let paths: HashSet<_> = inventory
             .fields()
             .iter()
             .filter(|f| f.editability() == FieldEditability::Editable)
@@ -744,163 +765,170 @@ impl<'a> FieldInventory<'a> {
         self.run_flow(section, runs, flow);
     }
     fn run_flow(&mut self, section: usize, runs: Vec<(usize, String, &'a crate::Run)>, flow: &str) {
-        let shared: Arc<[FieldBodyLocation<'a>]> =
-            runs.iter().map(|(_, path, r)| body(section, path, &r.content)).collect();
-        for (rank, (_, path, _)) in runs.iter().enumerate() {
-            self.positions.insert(CorePath::new(section, path), (flow.into(), rank));
-        }
-        let first_field = self.fields.len();
-        let first_diagnostic = self.diagnostics.len();
-        let mut active: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
-        let mut seen = HashSet::new();
-        for (i, (_, path, run)) in runs.iter().enumerate() {
-            let Some(control) = run.content.as_control() else {
-                continue;
-            };
-            let mut entry = FieldEntry {
-                section,
-                kind: String::new(),
-                name: None,
-                id: None,
-                flow: flow.into(),
-                start: path.clone(),
-                end: None,
-                runs: Arc::clone(&shared),
-                range: i..i,
-                begin: i,
-                finish: i,
-                hint: None,
-                editability: FieldEditability::Protected,
-            };
-            match control {
-                Control::FieldBoundary { boundary: FieldBoundary::Start(start) } => {
-                    entry.kind = start.kind.clone();
-                    entry.name = (!start.name.is_empty()).then(|| start.name.clone());
-                    entry.id = Some(start.id.clone());
-                    entry.hint = start.parameters.iter().find_map(|p| match p {
-                        FieldParameter::String { name, value, .. } if name == "Direction" => {
-                            Some(value.clone())
+        let mut stack = vec![(runs, flow.to_owned())];
+        while let Some((runs, flow_name)) = stack.pop() {
+            let flow = flow_name.as_str();
+            let shared: Arc<[FieldBodyLocation<'a>]> =
+                runs.iter().map(|(_, path, r)| body(section, path, &r.content)).collect();
+            for (rank, (_, path, _)) in runs.iter().enumerate() {
+                self.positions.insert(CorePath::new(section, path), (flow.into(), rank));
+            }
+            let first_field = self.fields.len();
+            let first_diagnostic = self.diagnostics.len();
+            let mut active: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+            let mut seen = HashSet::new();
+            for (i, (_, path, run)) in runs.iter().enumerate() {
+                let Some(control) = run.content.as_control() else {
+                    continue;
+                };
+                let mut entry = FieldEntry {
+                    section,
+                    kind: String::new(),
+                    name: None,
+                    id: None,
+                    flow: flow.into(),
+                    start: path.clone(),
+                    end: None,
+                    runs: Arc::clone(&shared),
+                    range: i..i,
+                    begin: i,
+                    finish: i,
+                    hint: None,
+                    editability: FieldEditability::Protected,
+                };
+                match control {
+                    Control::FieldBoundary { boundary: FieldBoundary::Start(start) } => {
+                        entry.kind = start.kind.clone();
+                        entry.name = (!start.name.is_empty()).then(|| start.name.clone());
+                        entry.id = Some(start.id.clone());
+                        entry.hint = start.parameters.iter().find_map(|p| match p {
+                            FieldParameter::String { name, value, .. } if name == "Direction" => {
+                                Some(value.clone())
+                            }
+                            _ => None,
+                        });
+                        if !seen.insert(start.id.as_str()) || start.id.is_empty() {
+                            self.invalid(section, path, "duplicate or empty field start ID");
                         }
-                        _ => None,
-                    });
-                    if !seen.insert(start.id.as_str()) || start.id.is_empty() {
-                        self.invalid(section, path, "duplicate or empty field start ID");
+                        active.insert(&start.id, (self.fields.len(), i));
+                        self.fields.push(entry);
                     }
-                    active.insert(&start.id, (self.fields.len(), i));
-                    self.fields.push(entry);
-                }
-                Control::FieldBoundary { boundary: FieldBoundary::End { begin_id, .. } } => {
-                    if let Some((field, begin)) = active.remove(begin_id.as_str()) {
-                        if matches!(runs[begin].2.content.as_control(), Some(Control::FieldBoundary { boundary: FieldBoundary::Start(s) }) if s.unclosed)
-                        {
+                    Control::FieldBoundary { boundary: FieldBoundary::End { begin_id, .. } } => {
+                        if let Some((field, begin)) = active.remove(begin_id.as_str()) {
+                            if matches!(runs[begin].2.content.as_control(), Some(Control::FieldBoundary { boundary: FieldBoundary::Start(s) }) if s.unclosed)
+                            {
+                                self.invalid(
+                                    section,
+                                    &runs[begin].1,
+                                    "unclosed field start has an end",
+                                );
+                            }
+                            let entry = &mut self.fields[field];
+                            entry.end = Some(path.clone());
+                            entry.range = begin + 1..i;
+                            entry.begin = begin;
+                            entry.finish = i;
+                            if entry.kind == "CLICK_HERE" {
+                                entry.editability = if runs[begin].0 == runs[i].0
+                                    && entry.range.len() == 1
+                                    && matches!(runs[begin + 1].2.content, RunContent::Text(_))
+                                {
+                                    FieldEditability::Editable
+                                } else {
+                                    FieldEditability::UnsupportedRange
+                                };
+                            }
+                        } else {
                             self.invalid(
                                 section,
-                                &runs[begin].1,
-                                "unclosed field start has an end",
+                                path,
+                                "field end has no preceding start in this flow",
                             );
                         }
-                        let entry = &mut self.fields[field];
-                        entry.end = Some(path.clone());
-                        entry.range = begin + 1..i;
-                        entry.begin = begin;
-                        entry.finish = i;
-                        if entry.kind == "CLICK_HERE" {
-                            entry.editability = if runs[begin].0 == runs[i].0
-                                && entry.range.len() == 1
-                                && matches!(runs[begin + 1].2.content, RunContent::Text(_))
-                            {
-                                FieldEditability::Editable
-                            } else {
-                                FieldEditability::UnsupportedRange
-                            };
+                    }
+                    Control::Field { field_type, name, hint_text, .. } => {
+                        entry.kind = if *field_type == FieldType::ClickHere {
+                            "CLICK_HERE"
+                        } else {
+                            "SUMMERY"
                         }
-                    } else {
-                        self.invalid(
-                            section,
-                            path,
-                            "field end has no preceding start in this flow",
-                        );
+                        .into();
+                        entry.name = name.clone();
+                        entry.hint = hint_text.clone();
+                        entry.range = i..i + 1;
+                        if *field_type == FieldType::ClickHere {
+                            entry.editability = FieldEditability::Editable;
+                        }
+                        self.fields.push(entry);
                     }
-                }
-                Control::Field { field_type, name, hint_text, .. } => {
-                    entry.kind =
-                        if *field_type == FieldType::ClickHere { "CLICK_HERE" } else { "SUMMERY" }
-                            .into();
-                    entry.name = name.clone();
-                    entry.hint = hint_text.clone();
-                    entry.range = i..i + 1;
-                    if *field_type == FieldType::ClickHere {
-                        entry.editability = FieldEditability::Editable;
+                    Control::Hyperlink { .. }
+                    | Control::CrossRef { .. }
+                    | Control::UnknownSummary { .. }
+                    | Control::PathField { .. }
+                    | Control::DateCodeField { .. }
+                    | Control::Memo { .. } => {
+                        entry.kind = match control {
+                            Control::Hyperlink { .. } => "HYPERLINK",
+                            Control::CrossRef { .. } => "CROSSREF",
+                            Control::UnknownSummary { .. } => "SUMMERY",
+                            Control::DateCodeField { .. } => "DATE",
+                            Control::Memo { .. } => "MEMO",
+                            _ => "PATH",
+                        }
+                        .into();
+                        entry.range = i..i + 1;
+                        self.fields.push(entry);
                     }
-                    self.fields.push(entry);
-                }
-                Control::Hyperlink { .. }
-                | Control::CrossRef { .. }
-                | Control::UnknownSummary { .. }
-                | Control::PathField { .. }
-                | Control::DateCodeField { .. }
-                | Control::Memo { .. } => {
-                    entry.kind = match control {
-                        Control::Hyperlink { .. } => "HYPERLINK",
-                        Control::CrossRef { .. } => "CROSSREF",
-                        Control::UnknownSummary { .. } => "SUMMERY",
-                        Control::DateCodeField { .. } => "DATE",
-                        Control::Memo { .. } => "MEMO",
-                        _ => "PATH",
+                    Control::Bookmark { name, .. } => {
+                        entry.kind = "BOOKMARK".into();
+                        entry.name = Some(name.clone());
+                        self.fields.push(entry);
                     }
-                    .into();
-                    entry.range = i..i + 1;
-                    self.fields.push(entry);
-                }
-                Control::Bookmark { name, .. } => {
-                    entry.kind = "BOOKMARK".into();
-                    entry.name = Some(name.clone());
-                    self.fields.push(entry);
-                }
-                Control::InlinePageNumber { .. } | Control::AutoNumber { .. } => {
-                    entry.kind = if matches!(control, Control::InlinePageNumber { .. }) {
-                        "PAGE_NUM"
-                    } else {
-                        "AUTO_NUMBER"
+                    Control::InlinePageNumber { .. } | Control::AutoNumber { .. } => {
+                        entry.kind = if matches!(control, Control::InlinePageNumber { .. }) {
+                            "PAGE_NUM"
+                        } else {
+                            "AUTO_NUMBER"
+                        }
+                        .into();
+                        self.fields.push(entry);
                     }
-                    .into();
-                    self.fields.push(entry);
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-        for (id, (field, begin)) in active {
-            self.fields[field].range = begin + 1..runs.len();
-            self.fields[field].begin = begin;
-            self.fields[field].finish = runs.len();
-            let reason = format!("field start {id:?} has no end in this flow");
-            if matches!(runs[begin].2.content.as_control(), Some(Control::FieldBoundary { boundary: FieldBoundary::Start(s) }) if s.unclosed && s.recovery.0.as_ref().is_some_and(|o| o.path().section() == section && o.path().relative() == runs[begin].1 && o.id() == s.id))
-            {
-                self.fields[field].editability = FieldEditability::Unclosed;
-                self.warnings.push(ValidationError::InvalidFieldBoundary {
-                    section_index: section,
-                    path: runs[begin].1.clone(),
-                    reason,
-                });
-            } else {
-                self.invalid(section, &runs[begin].1, &reason);
+            for (id, (field, begin)) in active {
+                self.fields[field].range = begin + 1..runs.len();
+                self.fields[field].begin = begin;
+                self.fields[field].finish = runs.len();
+                let reason = format!("field start {id:?} has no end in this flow");
+                if matches!(runs[begin].2.content.as_control(), Some(Control::FieldBoundary { boundary: FieldBoundary::Start(s) }) if s.unclosed && s.recovery.0.as_ref().is_some_and(|o| o.path().section() == section && o.path().relative() == runs[begin].1 && o.id() == s.id))
+                {
+                    self.fields[field].editability = FieldEditability::Unclosed;
+                    self.warnings.push(ValidationError::InvalidFieldBoundary {
+                        section_index: section,
+                        path: runs[begin].1.clone(),
+                        reason,
+                    });
+                } else {
+                    self.invalid(section, &runs[begin].1, &reason);
+                }
             }
-        }
-        if self.diagnostics.len() != first_diagnostic {
-            for field in &mut self.fields[first_field..] {
-                field.editability = FieldEditability::InvalidBoundary;
+            if self.diagnostics.len() != first_diagnostic {
+                for field in &mut self.fields[first_field..] {
+                    field.editability = FieldEditability::InvalidBoundary;
+                }
             }
-        }
-        // Anchors are an independent run flow; no temporary Paragraph or subtree copy.
-        for (_, path, run) in runs {
-            if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
-                let prefix = format!("{path}.control.memo.anchor");
-                let anchor = anchor_runs
-                    .iter()
-                    .enumerate()
-                    .map(|(ri, r)| (0, format!("{prefix}[0].runs[{ri}]"), r))
-                    .collect();
-                self.run_flow(section, anchor, &prefix);
+            // Anchors are an independent run flow; no temporary Paragraph or subtree copy.
+            for (_, path, run) in runs.into_iter().rev() {
+                if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
+                    let prefix = format!("{path}.control.memo.anchor");
+                    let anchor = anchor_runs
+                        .iter()
+                        .enumerate()
+                        .map(|(ri, r)| (0, format!("{prefix}[0].runs[{ri}]"), r))
+                        .collect();
+                    stack.push((anchor, prefix));
+                }
             }
         }
     }
@@ -922,21 +950,29 @@ fn body<'a>(section: usize, path: &str, content: &'a RunContent) -> FieldBodyLoc
 }
 
 fn visible_value(content: &RunContent) -> String {
-    if let Some(control) = content.as_control() {
-        match control {
-            Control::Field { display_text, .. }
-            | Control::CrossRef { display_text, .. }
-            | Control::UnknownSummary { display_text, .. }
-            | Control::PathField { display_text, .. }
-            | Control::DateCodeField { display_text, .. } => return display_text.clone(),
-            Control::Hyperlink { text, .. } => return text.clone(),
-            Control::Memo { anchor_runs, .. } => {
-                return anchor_runs.iter().map(|r| visible_value(&r.content)).collect();
+    let mut out = String::new();
+    let mut stack = vec![content];
+    while let Some(content) = stack.pop() {
+        match content.as_control() {
+            Some(
+                Control::Field { display_text, .. }
+                | Control::CrossRef { display_text, .. }
+                | Control::UnknownSummary { display_text, .. }
+                | Control::PathField { display_text, .. }
+                | Control::DateCodeField { display_text, .. },
+            ) => out.push_str(display_text),
+            Some(Control::Hyperlink { text, .. }) => out.push_str(text),
+            Some(Control::Memo { anchor_runs, .. }) => {
+                stack.extend(anchor_runs.iter().rev().map(|r| &r.content))
             }
-            _ => {}
+            _ => {
+                if let Some(text) = content.plain_text() {
+                    out.push_str(&text);
+                }
+            }
         }
     }
-    content.plain_text().map(|s| s.into_owned()).unwrap_or_default()
+    out
 }
 
 fn walk_section<'a>(section: &'a Section, f: &mut impl FnMut(&'a [Paragraph], &str)) {
@@ -952,50 +988,70 @@ fn walk_section<'a>(section: &'a Section, f: &mut impl FnMut(&'a [Paragraph], &s
         walk_paragraphs(&mp.paragraphs, &format!("master_pages[{i}].paragraphs"), f);
     }
 }
+enum Flow<'a> {
+    Paragraphs(&'a [Paragraph]),
+    Control(&'a Control),
+}
 fn walk_paragraphs<'a>(
     paragraphs: &'a [Paragraph],
     prefix: &str,
     f: &mut impl FnMut(&'a [Paragraph], &str),
 ) {
-    f(paragraphs, prefix);
+    let mut stack = vec![(Flow::Paragraphs(paragraphs), prefix.to_owned())];
+    let mut pending = Vec::new();
+    while let Some((node, path)) = stack.pop() {
+        match node {
+            Flow::Paragraphs(ps) => {
+                f(ps, &path);
+                queue_paragraphs(ps, &path, &mut pending);
+            }
+            Flow::Control(c) => queue_control(c, &path, &mut pending),
+        }
+        stack.extend(pending.drain(..).rev());
+    }
+}
+fn queue_paragraphs<'a>(
+    paragraphs: &'a [Paragraph],
+    prefix: &str,
+    pending: &mut Vec<(Flow<'a>, String)>,
+) {
     for (pi, p) in paragraphs.iter().enumerate() {
         for (ri, r) in p.runs.iter().enumerate() {
             let path = format!("{prefix}[{pi}].runs[{ri}]");
             match &r.content {
                 RunContent::Table(t) => {
                     if let Some(c) = &t.caption {
-                        walk_paragraphs(
-                            &c.paragraphs,
-                            &format!("{path}.table.caption.paragraphs"),
-                            f,
-                        );
+                        pending.push((
+                            Flow::Paragraphs(&c.paragraphs),
+                            format!("{path}.table.caption.paragraphs"),
+                        ));
                     }
                     for (row, tr) in t.rows.iter().enumerate() {
                         for (cell, tc) in tr.cells.iter().enumerate() {
-                            walk_paragraphs(
-                                &tc.paragraphs,
-                                &format!("{path}.table.rows[{row}].cells[{cell}].paragraphs"),
-                                f,
-                            );
+                            pending.push((
+                                Flow::Paragraphs(&tc.paragraphs),
+                                format!("{path}.table.rows[{row}].cells[{cell}].paragraphs"),
+                            ));
                         }
                     }
                 }
                 RunContent::Image(image) => {
                     if let Some(c) = &image.caption {
-                        walk_paragraphs(
-                            &c.paragraphs,
-                            &format!("{path}.image.caption.paragraphs"),
-                            f,
-                        );
+                        pending.push((
+                            Flow::Paragraphs(&c.paragraphs),
+                            format!("{path}.image.caption.paragraphs"),
+                        ));
                     }
                 }
-                RunContent::Control(c) => walk_control(c, &format!("{path}.control"), f),
+                RunContent::Control(c) => {
+                    pending.push((Flow::Control(c), format!("{path}.control")))
+                }
                 _ => {}
             }
         }
     }
 }
-fn walk_control<'a>(c: &'a Control, path: &str, f: &mut impl FnMut(&'a [Paragraph], &str)) {
+fn queue_control<'a>(c: &'a Control, path: &str, pending: &mut Vec<(Flow<'a>, String)>) {
     let (tag, paragraphs, caption) = match c {
         Control::TextBox { paragraphs, caption, .. } => {
             ("textbox", Some(paragraphs), caption.as_ref())
@@ -1021,15 +1077,14 @@ fn walk_control<'a>(c: &'a Control, path: &str, f: &mut impl FnMut(&'a [Paragrap
             for (i, child) in children.iter().enumerate() {
                 match child {
                     GroupChild::Shape(s) => {
-                        walk_control(s, &format!("{path}.group.children[{i}]"), f)
+                        pending.push((Flow::Control(s), format!("{path}.group.children[{i}]")))
                     }
                     GroupChild::Picture(p) => {
                         if let Some(c) = &p.caption {
-                            walk_paragraphs(
-                                &c.paragraphs,
-                                &format!("{path}.group.children[{i}].caption.paragraphs"),
-                                f,
-                            );
+                            pending.push((
+                                Flow::Paragraphs(&c.paragraphs),
+                                format!("{path}.group.children[{i}].caption.paragraphs"),
+                            ));
                         }
                     }
                 }
@@ -1039,10 +1094,13 @@ fn walk_control<'a>(c: &'a Control, path: &str, f: &mut impl FnMut(&'a [Paragrap
         _ => return,
     };
     if let Some(paragraphs) = paragraphs {
-        walk_paragraphs(paragraphs, &format!("{path}.{tag}.paragraphs"), f);
+        pending.push((Flow::Paragraphs(paragraphs), format!("{path}.{tag}.paragraphs")));
     }
     if let Some(caption) = caption {
-        walk_paragraphs(&caption.paragraphs, &format!("{path}.{tag}.caption.paragraphs"), f);
+        pending.push((
+            Flow::Paragraphs(&caption.paragraphs),
+            format!("{path}.{tag}.caption.paragraphs"),
+        ));
     }
 }
 
@@ -1059,50 +1117,70 @@ pub(crate) fn walk_section_mut(section: &mut Section, f: &mut impl FnMut(&mut [P
         walk_paragraphs_mut(&mut mp.paragraphs, &format!("master_pages[{i}].paragraphs"), f);
     }
 }
+enum FlowMut<'a> {
+    Paragraphs(&'a mut [Paragraph]),
+    Control(&'a mut Control),
+}
 fn walk_paragraphs_mut(
     paragraphs: &mut [Paragraph],
     prefix: &str,
     f: &mut impl FnMut(&mut [Paragraph], &str),
 ) {
-    f(paragraphs, prefix);
+    let mut stack = vec![(FlowMut::Paragraphs(paragraphs), prefix.to_owned())];
+    let mut pending = Vec::new();
+    while let Some((node, path)) = stack.pop() {
+        match node {
+            FlowMut::Paragraphs(ps) => {
+                f(ps, &path);
+                queue_paragraphs_mut(ps, &path, &mut pending);
+            }
+            FlowMut::Control(c) => queue_control_mut(c, &path, &mut pending),
+        }
+        stack.extend(pending.drain(..).rev());
+    }
+}
+fn queue_paragraphs_mut<'a>(
+    paragraphs: &'a mut [Paragraph],
+    prefix: &str,
+    pending: &mut Vec<(FlowMut<'a>, String)>,
+) {
     for (pi, p) in paragraphs.iter_mut().enumerate() {
         for (ri, r) in p.runs.iter_mut().enumerate() {
             let path = format!("{prefix}[{pi}].runs[{ri}]");
             match &mut r.content {
                 RunContent::Table(t) => {
                     if let Some(c) = &mut t.caption {
-                        walk_paragraphs_mut(
-                            &mut c.paragraphs,
-                            &format!("{path}.table.caption.paragraphs"),
-                            f,
-                        );
+                        pending.push((
+                            FlowMut::Paragraphs(&mut c.paragraphs),
+                            format!("{path}.table.caption.paragraphs"),
+                        ));
                     }
                     for (row, tr) in t.rows.iter_mut().enumerate() {
                         for (cell, tc) in tr.cells.iter_mut().enumerate() {
-                            walk_paragraphs_mut(
-                                &mut tc.paragraphs,
-                                &format!("{path}.table.rows[{row}].cells[{cell}].paragraphs"),
-                                f,
-                            );
+                            pending.push((
+                                FlowMut::Paragraphs(&mut tc.paragraphs),
+                                format!("{path}.table.rows[{row}].cells[{cell}].paragraphs"),
+                            ));
                         }
                     }
                 }
                 RunContent::Image(image) => {
                     if let Some(c) = &mut image.caption {
-                        walk_paragraphs_mut(
-                            &mut c.paragraphs,
-                            &format!("{path}.image.caption.paragraphs"),
-                            f,
-                        );
+                        pending.push((
+                            FlowMut::Paragraphs(&mut c.paragraphs),
+                            format!("{path}.image.caption.paragraphs"),
+                        ));
                     }
                 }
-                RunContent::Control(c) => walk_control_mut(c, &format!("{path}.control"), f),
+                RunContent::Control(c) => {
+                    pending.push((FlowMut::Control(c), format!("{path}.control")))
+                }
                 _ => {}
             }
         }
     }
 }
-fn walk_control_mut(c: &mut Control, path: &str, f: &mut impl FnMut(&mut [Paragraph], &str)) {
+fn queue_control_mut<'a>(c: &'a mut Control, path: &str, pending: &mut Vec<(FlowMut<'a>, String)>) {
     let (tag, paragraphs, caption) = match c {
         Control::TextBox { paragraphs, caption, .. } => {
             ("textbox", Some(paragraphs), caption.as_mut())
@@ -1128,15 +1206,14 @@ fn walk_control_mut(c: &mut Control, path: &str, f: &mut impl FnMut(&mut [Paragr
             for (i, child) in children.iter_mut().enumerate() {
                 match child {
                     GroupChild::Shape(s) => {
-                        walk_control_mut(s, &format!("{path}.group.children[{i}]"), f)
+                        pending.push((FlowMut::Control(s), format!("{path}.group.children[{i}]")))
                     }
                     GroupChild::Picture(p) => {
                         if let Some(c) = &mut p.caption {
-                            walk_paragraphs_mut(
-                                &mut c.paragraphs,
-                                &format!("{path}.group.children[{i}].caption.paragraphs"),
-                                f,
-                            );
+                            pending.push((
+                                FlowMut::Paragraphs(&mut c.paragraphs),
+                                format!("{path}.group.children[{i}].caption.paragraphs"),
+                            ));
                         }
                     }
                 }
@@ -1146,14 +1223,13 @@ fn walk_control_mut(c: &mut Control, path: &str, f: &mut impl FnMut(&mut [Paragr
         _ => return,
     };
     if let Some(paragraphs) = paragraphs {
-        walk_paragraphs_mut(paragraphs, &format!("{path}.{tag}.paragraphs"), f);
+        pending.push((FlowMut::Paragraphs(paragraphs), format!("{path}.{tag}.paragraphs")));
     }
     if let Some(caption) = caption {
-        walk_paragraphs_mut(
-            &mut caption.paragraphs,
-            &format!("{path}.{tag}.caption.paragraphs"),
-            f,
-        );
+        pending.push((
+            FlowMut::Paragraphs(&mut caption.paragraphs),
+            format!("{path}.{tag}.caption.paragraphs"),
+        ));
     }
 }
 
@@ -1173,4 +1249,38 @@ fn natural_path(path: &str) -> String {
         result.push_str(part);
     }
     result
+}
+
+#[cfg(test)]
+mod walker_tests {
+    use super::*;
+    use crate::Run;
+    use hwpforge_foundation::CharShapeIndex;
+
+    // 이것을 실패시키는 것: visible_value의 Memo 재귀 복원 또는 anchor 역순.
+    #[test]
+    fn deep_visible_memo_value() {
+        crate::depth::tests::small_stack_child(
+            "field_inventory::walker_tests::deep_visible_memo_value",
+            "HWPFORGE_W3_VISIBLE",
+            512 * 1024,
+            || {
+                let mut r = Run::text("last", CharShapeIndex::new(0));
+                for _ in 0..100_000 {
+                    r = Run::control(
+                        Control::memo_with_anchor(vec![], vec![r]),
+                        CharShapeIndex::new(0),
+                    );
+                }
+                let r = Run::control(
+                    Control::memo_with_anchor(
+                        vec![],
+                        vec![Run::text("first", CharShapeIndex::new(0)), r],
+                    ),
+                    CharShapeIndex::new(0),
+                );
+                assert!(visible_value(&r.content) == "firstlast");
+            },
+        );
+    }
 }

@@ -564,44 +564,49 @@ pub(crate) fn collect_stamp_text_slots(
     collect_text_slots(section, section_idx, false)
 }
 
+fn text_runs(
+    runs: &[Run],
+    prefix: &str,
+    section: usize,
+    inventory: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    patchable_only: bool,
+    slots: &mut Vec<SemanticTextSlot>,
+) {
+    let mut stack: Vec<_> = runs
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(ri, run)| (run, format!("{prefix}.runs[{ri}]")))
+        .collect();
+    while let Some((run, path)) = stack.pop() {
+        if let Some(text) = run.content.plain_text() {
+            let path = format!("{path}.text");
+            if !patchable_only || !inventory.protects(section, &path) {
+                slots.push(SemanticTextSlot {
+                    path,
+                    text: text.into_owned(),
+                    inline: matches!(run.content, RunContent::InlineText(_)),
+                });
+            }
+        }
+        if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
+            stack.extend(
+                anchor_runs
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(ri, run)| (run, format!("{path}.control.memo.anchor[0].runs[{ri}]"))),
+            );
+        }
+    }
+}
+
 fn collect_text_slots(
     section: &Section,
     section_idx: usize,
     patchable_only: bool,
 ) -> Vec<SemanticTextSlot> {
     use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
-    fn text_runs(
-        runs: &[Run],
-        prefix: &str,
-        section: usize,
-        inventory: &FieldInventory<'_>,
-        patchable_only: bool,
-        slots: &mut Vec<SemanticTextSlot>,
-    ) {
-        for (ri, run) in runs.iter().enumerate() {
-            let path = format!("{prefix}.runs[{ri}]");
-            if let Some(text) = run.content.plain_text() {
-                let path = format!("{path}.text");
-                if !patchable_only || !inventory.protects(section, &path) {
-                    slots.push(SemanticTextSlot {
-                        path,
-                        text: text.into_owned(),
-                        inline: matches!(run.content, RunContent::InlineText(_)),
-                    });
-                }
-            }
-            if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
-                text_runs(
-                    anchor_runs,
-                    &format!("{path}.control.memo.anchor[0]"),
-                    section,
-                    inventory,
-                    patchable_only,
-                    slots,
-                );
-            }
-        }
-    }
     let sections = std::slice::from_ref(section);
     let inventory = FieldInventory::from_sections_at(sections, section_idx);
     let mut slots = Vec::new();
@@ -856,6 +861,36 @@ fn redact_control(control: &mut Control) {
 
 #[cfg(test)]
 mod tests {
+    mod small_stack {
+        include!("../tests/support/small_stack.rs");
+    }
+    // 이것을 실패시키는 것: text_runs의 Memo anchor 재귀 복원 또는 leaf 누락.
+    // Field policy is tested separately at depth 33; this test isolates slot traversal.
+    #[test]
+    fn deep_anchor_slots_small_stack() {
+        small_stack::small_stack_child("patch::tests::deep_anchor_slots_small_stack", || {
+            let mut run = Run::text("@ ", hwpforge_foundation::CharShapeIndex::new(0));
+            for _ in 0..10_000 {
+                run = Run::control(
+                    Control::memo_with_anchor(vec![], vec![run]),
+                    hwpforge_foundation::CharShapeIndex::new(0),
+                );
+            }
+            let mut slots = Vec::new();
+            text_runs(
+                &[run],
+                "paragraphs[0]",
+                0,
+                &hwpforge_core::field_inventory::FieldInventory::default(),
+                false,
+                &mut slots,
+            );
+            assert_eq!(slots.len(), 1);
+            assert_eq!(slots[0].text, "@ ");
+            assert_eq!(slots[0].path.matches(".control.memo.anchor[0]").count(), 10_000);
+        });
+    }
+
     use super::*;
     use crate::decoder::section::parse_section;
     use std::collections::HashMap;

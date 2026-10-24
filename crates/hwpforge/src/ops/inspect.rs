@@ -512,6 +512,35 @@ mod tests {
         assert_eq!((counts.tables, counts.images, counts.charts), (0, 0, 0));
     }
 
+    // 이것을 실패시키는 것: 깊이 초과 inventory 조기 반환으로 field_names 누락.
+    #[test]
+    fn field_names_at_depth_33() {
+        let mut paragraph = Paragraph::with_runs(
+            vec![Run::control(click_here(Some("deep-name")), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        for _ in 0..33 {
+            paragraph = Paragraph::with_runs(
+                vec![Run::control(
+                    Control::text_box(
+                        vec![paragraph],
+                        hwpforge_foundation::HwpUnit::ZERO,
+                        hwpforge_foundation::HwpUnit::ZERO,
+                    ),
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            );
+        }
+        assert_eq!(
+            field_names(&[hwpforge_core::Section::with_paragraphs(
+                vec![paragraph],
+                hwpforge_core::PageSettings::a4()
+            )]),
+            ["deep-name"]
+        );
+    }
+
     #[test]
     fn a_paragraph_without_runs_still_counts_as_one() {
         let mut counts = Counts::default();

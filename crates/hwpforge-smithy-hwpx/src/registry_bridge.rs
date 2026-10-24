@@ -63,10 +63,29 @@ impl HwpxRegistryBridge {
     /// HWPX/HWP5 decode round-trip style ids verbatim, Markdown headings target
     /// the built-in Hancom style ids, and registry/template rendering does not
     /// assign registry-local custom style indices to `Paragraph.style_id`.
+    ///
+    /// # Errors
+    ///
+    /// Nesting depth above 32 returns [`crate::HwpxError::Core`] containing
+    /// `CoreError::InvalidStructure` with `nesting_depth` context. Retrying
+    /// gives the same rejection; reduce nesting before retrying.
     pub fn rebind_draft_document(
         &self,
         mut document: Document<Draft>,
     ) -> HwpxResult<Document<Draft>> {
+        // 이것을 실패시키는 것: rebind_draft_document의 깊이 관문 삭제.
+        for (si, section) in document.sections().iter().enumerate() {
+            section.check_nesting_depth().map_err(|error| match error {
+                hwpforge_core::CoreError::InvalidStructure { context, reason } => {
+                    hwpforge_core::CoreError::InvalidStructure {
+                        context,
+                        reason: reason.replace("section=0", &format!("section={si}")),
+                    }
+                }
+                other => other,
+            })?;
+        }
+
         self.rebind_sections(document.sections_mut())?;
         Ok(document)
     }

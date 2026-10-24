@@ -240,7 +240,7 @@ pub(crate) fn check(sections: &[Section]) -> CoreResult<()> {
         Err(CoreError::InvalidStructure {
             context: "nesting_depth".into(),
             reason: format!(
-                "maximum {} exceeds limit {}; section={}, root={}, paragraph={} (zero-based)",
+                "nesting depth {} exceeds {}; section={}, root={}, paragraph={} (zero-based)",
                 max.depth, LIMIT, max.section, max.root, max.paragraph
             ),
         })
@@ -443,4 +443,4 @@ fn dismantle(sections: &mut [Section]) -> usize {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
