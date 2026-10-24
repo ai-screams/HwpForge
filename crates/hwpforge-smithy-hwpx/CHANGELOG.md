@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 공개 decode는 구역 조립 직후 본문·머리말·꼬리말·바탕쪽의 Core 깊이를 검사하고 32 초과를 `HwpxError::Core`(E4008, `nesting_depth`)로 거절한다. 파서가 통과하던 묶음·글상자 및 그림 캡션 경로도 포함하며, 이런 입력의 stamp-plan도 이제 실패한다. 다른 Core 구조 검증은 수행하지 않는다.
 - 표·subList·묶음 파서 가드(E4006)는 열려던 층을 1부터 세고 실제 part 경로를 메시지에 포함한다. 파서 가드(E4006)·XML(E4003) 입력의 연산 오류 코드는 그대로다.
+- 본문 run, 글 칸(`<hp:t>`), 컨트롤(`<hp:ctrl>`), `<hp:subList>` 안에서 읽지 못해 조용히 버리던 내용을 `CONTENT_LOST` 경고로 알린다. 종류는 OLE 개체 `ole`, 모르는 요소 `unknown_element`, 차트가 아닌 `switch`, 되살리지 못한 차트 `chart`(차트 XML 이 없는 본문 차트 포함), run 바로 아래 글 `run_text`, 글 칸 안 모르는 요소 `inline_element`, 컨트롤 안 모르는 내용 `ctrl_content`, subList 안 문단 아닌 내용 `sublist_content` 다. 본문 최상위뿐 아니라 머리말·꼬리말·표 칸·각주·미주·글상자에서도 알린다. 미지 내용 때문에 각주·미주 번호 머리 인식에서 빠진 경우(이때 번호 뒤 간격 글이 남는다)를 제외하면 읽은 문서 내용은 같다.
+- 이 경고가 있는 문서는 내용을 다시 쓰는 편집(`restyle`·`set-cell`·`stamp`)이 문서 전체를 거부한다. 원문을 보존하는 `fill`·`patch` 와 `insert-para`·`delete-para` 는 전과 같다. 측정한 HWPX 372개 중 새 경고가 생긴 문서는 5개(`ole` 4개, `unknown_element` 1개)이고, 그중 새로 거부되는 문서는 1개다.
+- 각주·미주 첫 문단의 번호 머리 run 에 위 내용이 섞이면 번호 머리로 보고 떼어 내지 않고, 경고와 함께 일반 run 으로 읽는다. 형광펜·제목 표지만 섞인 번호 머리는 전처럼 떼어 낸다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24
 

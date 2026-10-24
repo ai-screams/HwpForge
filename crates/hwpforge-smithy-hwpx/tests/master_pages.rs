@@ -406,7 +406,7 @@ fn an_unknown_master_page_type_is_content_lost_and_set_cell_refuses_it() {
 }
 
 // 이것을 실패시키는 것: 바탕쪽 문맥 플래그를 무시하기(차트·OLE·미지 요소가
-// 경고 없이 사라짐), 또는 같은 보고를 본문에도 켜기.
+// 경고 없이 사라짐), 또는 본문 보고 갈래를 지우기.
 #[test]
 fn master_page_chart_ole_and_unknown_elements_are_content_lost() {
     let chart = r#"<hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/ooxmlchart"><hp:chart chartIDRef="Chart/chart1.xml"/></hp:case></hp:switch>"#;
@@ -424,12 +424,19 @@ fn master_page_chart_ole_and_unknown_elements_are_content_lost() {
     };
     assert_eq!(kinds, [at("chart"), at("ole"), at("unknown_element")]);
 
-    // 본문의 같은 요소는 이번 범위 밖 — 경고 없음을 고정한다.
+    // 본문의 같은 요소도 같은 kind 로 보고한다(018 D).
     let base = package("x", 1);
     let section = part(&base, "Contents/section0.xml");
     let section = section.replacen("<hp:tbl", "<hp:ole id=\"1\"/><hp:foo/><hp:tbl", 1);
     let body_doc = decode(&with_part(&base, "Contents/section0.xml", &section));
-    assert!(content_lost(&body_doc).is_empty(), "{:?}", body_doc.warnings);
+    let body_at = |kind: &str| {
+        (
+            "Contents/section0.xml".to_string(),
+            "section[0].para[0].run[0]".to_string(),
+            kind.to_string(),
+        )
+    };
+    assert_eq!(content_lost(&body_doc), [body_at("ole"), body_at("unknown_element")]);
 }
 
 // 이것을 실패시키는 것: 바탕쪽 경고의 part 를 구역 part 로 고정하기, 또는

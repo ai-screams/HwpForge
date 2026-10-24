@@ -2484,6 +2484,7 @@ fn build_sublist(
         has_text_ref: 0,
         has_num_ref: 0,
         paragraphs: hx_paragraphs,
+        has_stray_content: false,
     })
 }
 
