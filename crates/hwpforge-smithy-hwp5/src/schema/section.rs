@@ -1084,6 +1084,13 @@ impl Hwp5ShapeComponentLine {
     }
 }
 
+/// Upper bound on the point count accepted for one polygon or curve record.
+///
+/// This is a resource policy, not a format limit: one shape's point array is about
+/// 8 MiB at this count and the curve conversion arrays about 28 MiB. Real documents
+/// measured at most 33 points.
+const MAX_SHAPE_POINTS: usize = 1_048_576;
+
 /// Minimal `ShapeComponentPolygon` payload needed to emit a visible polygon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapeComponentPolygon {
@@ -1119,6 +1126,14 @@ impl Hwp5ShapeComponentPolygon {
                     "ShapeComponentPolygon point count does not fit usize: {point_count_u32}"
                 ),
             })?;
+        if point_count > MAX_SHAPE_POINTS {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentPolygon point count exceeds limit {MAX_SHAPE_POINTS}: {point_count_u32}"
+                ),
+            });
+        }
         let required_size = Self::MIN_SIZE
             .checked_add(point_count.checked_mul(Self::POINT_SIZE).ok_or_else(|| {
                 Hwp5Error::RecordParse {
@@ -1305,6 +1320,14 @@ impl Hwp5ShapeComponentCurve {
                     "ShapeComponentCurve point count does not fit usize: {point_count_u32}"
                 ),
             })?;
+        if point_count > MAX_SHAPE_POINTS {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentCurve point count exceeds limit {MAX_SHAPE_POINTS}: {point_count_u32}"
+                ),
+            });
+        }
         let points_size =
             point_count.checked_mul(Self::POINT_SIZE).ok_or_else(|| Hwp5Error::RecordParse {
                 offset: 0,
@@ -3724,6 +3747,37 @@ mod tests {
 
         assert!(matches!(
             Hwp5ShapeComponentCurve::parse(&data).unwrap_err(),
+            Hwp5Error::RecordParse { .. }
+        ));
+    }
+
+    /// Payload of `count` zeroed points, sized exactly for the declared count.
+    fn shape_points_payload(count: u32) -> Vec<u8> {
+        let mut data = count.to_le_bytes().to_vec();
+        data.resize(4 + count as usize * 8, 0);
+        data
+    }
+
+    #[test]
+    fn shape_component_polygon_point_cap_boundary() {
+        // 이것을 실패시키는 것: 상한 검사를 지우면 MAX+1 이 Ok 가 되고, `>` 를 `>=` 로 바꾸면 MAX 가 Err 가 된다.
+        let max = MAX_SHAPE_POINTS as u32;
+        let ok = Hwp5ShapeComponentPolygon::parse(&shape_points_payload(max)).unwrap();
+        assert_eq!(ok.points.len(), MAX_SHAPE_POINTS);
+        assert!(matches!(
+            Hwp5ShapeComponentPolygon::parse(&shape_points_payload(max + 1)).unwrap_err(),
+            Hwp5Error::RecordParse { .. }
+        ));
+    }
+
+    #[test]
+    fn shape_component_curve_point_cap_boundary() {
+        // 이것을 실패시키는 것: 상한 검사를 지우면 MAX+1 이 Ok 가 되고, `>` 를 `>=` 로 바꾸면 MAX 가 Err 가 된다.
+        let max = MAX_SHAPE_POINTS as u32;
+        let ok = Hwp5ShapeComponentCurve::parse(&shape_points_payload(max)).unwrap();
+        assert_eq!(ok.points.len(), MAX_SHAPE_POINTS);
+        assert!(matches!(
+            Hwp5ShapeComponentCurve::parse(&shape_points_payload(max + 1)).unwrap_err(),
             Hwp5Error::RecordParse { .. }
         ));
     }
