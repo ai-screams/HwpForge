@@ -143,3 +143,7 @@ MIT OR Apache-2.0
 ### 0.18 canonical errors
 
 Tool errors use `OpsCode` strings directly: `DECODE_FAILED`, `ENCODE_FAILED`, `VALIDATION_FAILED`, and precise domain codes. Input I/O uses `FILE_NOT_FOUND`, `FILE_READ_FAILED` and `INPUT_TOO_LARGE`; output I/O uses `FILE_WRITE_FAILED`, while rejected output paths use `INVALID_OUTPUT_PATH`. Error messages/hints and protocol-level errors keep their own contracts. The committed `tests/data/codes-0.18.txt` links every baseline row to the shared error manifest.
+
+### 0.18 warnings
+
+Every tool but `hwpforge_templates` reports non-fatal warnings in `data.warnings` as `{code, message, hint?}` objects, in the order the operation produced them; the key is omitted when there are none. `hint` is omitted when absent. Migrating from 0.17: read `message` where you read the string; `hwpforge_insert_para`/`hwpforge_delete_para` no longer prefix the code (for example `"LAYOUT_CACHE_DROPPED: "`) to decode and encode messages, so read it from `code` (see the `[Unreleased] — 0.18` entry in [CHANGELOG.md](CHANGELOG.md)).

@@ -5,7 +5,7 @@ use serde::Serialize;
 use hwpforge::ops::{self, OpsWarning};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Output of a structural edit.
 #[derive(Debug, Serialize)]
@@ -17,23 +17,7 @@ pub struct StructuralData {
     pub change: String,
     /// Non-blocking advisories (e.g. index-mark removal). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
-}
-
-/// Renders one warning into this file's `Vec<String>` shape: a
-/// [`OpsWarning::Structural`] advisory keeps its own `Display` (unchanged,
-/// pre-migration behaviour); every other kind — chiefly `Decode`, for
-/// example `LAYOUT_CACHE_DROPPED` — renders as `"{code}: {message}"` via
-/// [`OpsWarning::info`]. Matches the CLI's `structural.rs::render_warning`
-/// (`1ac435b`) so the two frontends never disagree about the string.
-fn render_warning(warning: &OpsWarning) -> String {
-    match warning {
-        OpsWarning::Structural(sw) => sw.to_string(),
-        other => {
-            let info = other.info();
-            format!("{}: {}", info.code, info.message)
-        }
-    }
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Keeps the advisory scan's own warnings (`INDEX_MARK_REMOVED`, …) and,
@@ -46,19 +30,20 @@ fn render_warning(warning: &OpsWarning) -> String {
 /// (see that module's doc comment), and this filter does not reorder, so the
 /// array comes out decode-first — the same order the CLI's `structural.rs`
 /// renders (`out.warnings.iter().map(render_warning)`, no reordering there
-/// either). Every existing `Structural` string stays byte-identical:
-/// [`render_warning`] still calls `sw.to_string()` for that variant.
+/// either). Each entry is a `{code, message, hint?}` object from
+/// [`compat::warning`], the same shape every other tool reports; a
+/// `Structural` advisory's `message` is its `Display` text.
 ///
 /// Encode warnings pass too: `insert_para` reports a text it cleaned of
 /// characters XML cannot carry as `XML_FORBIDDEN_CHARS_REMOVED`, after the
 /// decode warnings.
-fn structural_advisories(warnings: &[OpsWarning]) -> Vec<String> {
+fn structural_advisories(warnings: &[OpsWarning]) -> Vec<ToolWarningInfo> {
     warnings
         .iter()
         .filter(|w| {
             matches!(w, OpsWarning::Structural(_) | OpsWarning::Decode(_) | OpsWarning::Encode(_))
         })
-        .map(render_warning)
+        .map(compat::warning)
         .collect()
 }
 
@@ -210,8 +195,7 @@ mod tests {
         let json = serde_json::to_value(&data).unwrap();
         let warnings = json["warnings"].as_array().expect("warnings is an array");
         assert_eq!(warnings.len(), 1, "{json}");
-        let first = warnings[0].as_str().expect("warning entries are strings");
-        assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
+        assert_eq!(warnings[0]["code"], "LAYOUT_CACHE_DROPPED", "{json}");
     }
 
     /// A text holding a character XML cannot carry is inserted without it,
@@ -227,12 +211,8 @@ mod tests {
                 .unwrap();
 
         assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
-        assert!(
-            data.warnings[0].starts_with("XML_FORBIDDEN_CHARS_REMOVED: "),
-            "{:?}",
-            data.warnings
-        );
-        assert!(data.warnings[0].contains("new paragraph 2"), "{:?}", data.warnings);
+        assert_eq!(data.warnings[0].code, "XML_FORBIDDEN_CHARS_REMOVED", "{:?}", data.warnings);
+        assert!(data.warnings[0].message.contains("new paragraph 2"), "{:?}", data.warnings);
     }
 
     /// The documented merge order — what the decode reported, then what the
@@ -250,10 +230,9 @@ mod tests {
         let json = serde_json::to_value(&data).unwrap();
         let warnings = json["warnings"].as_array().expect("warnings is an array");
         assert_eq!(warnings.len(), 2, "{json}");
-        let first = warnings[0].as_str().expect("warning entries are strings");
-        let second = warnings[1].as_str().expect("warning entries are strings");
-        assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
-        assert!(second.contains("index-mark"), "{json}");
+        assert_eq!(warnings[0]["code"], "LAYOUT_CACHE_DROPPED", "{json}");
+        assert_eq!(warnings[1]["code"], "INDEX_MARK_REMOVED", "{json}");
+        assert!(warnings[1]["message"].as_str().unwrap().contains("index-mark"), "{json}");
     }
 
     #[test]

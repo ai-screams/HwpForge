@@ -4,7 +4,7 @@ use rmcp::ServiceExt;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-async fn call(name: &str, arguments: Value) -> Result<CallToolResult, McpError> {
+pub(crate) async fn call(name: &str, arguments: Value) -> Result<CallToolResult, McpError> {
     let (client, server_io) = tokio::io::duplex(1 << 20);
     let (sr, sw) = tokio::io::split(server_io);
     let service = tokio::spawn(async move {

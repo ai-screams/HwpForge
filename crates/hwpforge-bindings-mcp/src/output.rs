@@ -421,6 +421,25 @@ mod tests {
         assert_eq!(content, "한글 텍스트");
     }
 
+    // 이것을 실패시키는 것: `From<WarningInfo>` 의 Some 갈래에서 hint 를 버리는 것,
+    // `hint` 를 늘 직렬화에서 생략하는 것(`skip_serializing`), None 일 때 키를 남기는 것.
+    #[test]
+    fn warning_info_conversion_keeps_hint_only_when_present() {
+        use hwpforge_foundation::diagnostics::WarningInfo;
+
+        let rows = [
+            (WarningInfo::new("TEST", "message"), r#"{"code":"TEST","message":"message"}"#),
+            (
+                WarningInfo::new("TEST", "message").with_hint("조치 안내"),
+                r#"{"code":"TEST","message":"message","hint":"조치 안내"}"#,
+            ),
+        ];
+        for (info, expected) in rows {
+            let warning = ToolWarningInfo::from(info);
+            assert_eq!(serde_json::to_string(&warning).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn write_output_file_creates_dirs() {
         let dir = tempfile::tempdir().unwrap();

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Breaking: output canonical `OpsCode` strings without aliases; preserve tool-specific hints. Read targets use `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`. File errors use canonical I/O codes and path refusals use `INVALID_OUTPUT_PATH`. The new baseline links each row to the shared error manifest.
 - Serialization failures `SERIALIZE_ERROR` and `STAMP_MANIFEST_SERIALIZE` now use `JSON_SERIALIZE_FAILED`; set-cell/stamp semantic loss uses `ENCODE_SEMANTIC_LOSS`. Structural range failures preserve `SECTION_OUT_OF_RANGE`/`PARAGRAPH_OUT_OF_RANGE` and uncarried input uses `INPUT_ENTRIES_NOT_CARRIED`.
 - Breaking: invalid arguments to all 19 tools now return structured `INVALID_PARAMS` errors with the failing field path in the message. Missing fields report their containing object (`$` at the root); tool input schemas and protocol errors are unchanged.
+- Breaking: `convert`, `from_json`, `restyle`, `insert_para` and `delete_para` now report `warnings` as `{code, message, hint?}` objects, like the other tools; every tool but `templates` still omits the key when there are none. Read `message` where you read the string; `insert_para`/`delete_para` no longer prefix the code to decode and encode messages, so read `code` instead.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.0...hwpforge-bindings-mcp-v0.17.1) - 2026-10-24
 
