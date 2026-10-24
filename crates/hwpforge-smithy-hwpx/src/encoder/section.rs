@@ -905,7 +905,6 @@ fn build_section(
             page_settings,
             section.text_direction,
             idx,
-            0,
             hyperlink_entries,
             options,
             leading,
@@ -944,7 +943,6 @@ fn build_section(
 ///
 /// When `inject_sec_pr` is true (first paragraph of the section), page
 /// settings are embedded in the first run's `<hp:secPr>`.
-/// `depth` is passed through without comparisons; removing it is follow-up work.
 /// Core validation enforces the semantic nesting limit before encoding.
 #[allow(clippy::too_many_arguments)]
 fn build_paragraph(
@@ -953,7 +951,6 @@ fn build_paragraph(
     page_settings: Option<&PageSettings>,
     text_direction: TextDirection,
     para_idx: usize,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     injected: Vec<hwpforge_core::layout::WireTokenKind>,
@@ -965,7 +962,6 @@ fn build_paragraph(
         inject_sec_pr,
         page_settings,
         text_direction,
-        depth,
         hyperlink_entries,
         options,
         &mut ledger,
@@ -1199,7 +1195,6 @@ fn build_runs(
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
     text_direction: TextDirection,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     ledger: &mut EncoderLedger,
@@ -1307,17 +1302,17 @@ fn build_runs(
             }
             RunContent::Table(t) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Table);
-                tables.push(build_table(t, depth, hyperlink_entries, options, sink)?);
+                tables.push(build_table(t, hyperlink_entries, options, sink)?);
             }
             RunContent::Image(img) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Picture);
-                pictures.push(build_picture(img, false, depth, hyperlink_entries, options, sink)?);
+                pictures.push(build_picture(img, false, hyperlink_entries, options, sink)?);
             }
             RunContent::Control(ctrl) => {
                 match ctrl.as_ref() {
                     Control::Footnote { .. } | Control::Endnote { .. } => {
                         if let Some(hx_ctrl) =
-                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
+                            encode_control_to_ctrl(ctrl, hyperlink_entries, options, sink)?
                         {
                             ledger.token(if matches!(ctrl.as_ref(), Control::Footnote { .. }) {
                                 hwpforge_core::layout::WireTokenKind::Footnote
@@ -1334,7 +1329,6 @@ fn build_runs(
                         rects.push(encode_textbox_to_rect(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1345,7 +1339,6 @@ fn build_runs(
                         rects.push(encode_rect_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1356,7 +1349,6 @@ fn build_runs(
                         lines.push(encode_line_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1367,7 +1359,6 @@ fn build_runs(
                         ellipses.push(encode_ellipse_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1378,7 +1369,6 @@ fn build_runs(
                         polygons.push(encode_polygon_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1386,8 +1376,7 @@ fn build_runs(
                     }
                     Control::Arc { .. } => {
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
-                        let hx =
-                            encode_arc_to_hx(ctrl, false, depth, hyperlink_entries, options, sink)?;
+                        let hx = encode_arc_to_hx(ctrl, false, hyperlink_entries, options, sink)?;
                         if hx.axis_endpoints {
                             let from = super::shapes::serialize_with_root(&hx, "hp:ellipse")?;
                             let to = super::shapes::serialize_arc(&hx)?;
@@ -1400,7 +1389,6 @@ fn build_runs(
                         curves.push(encode_curve_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1411,7 +1399,6 @@ fn build_runs(
                         connect_lines.push(encode_connect_line_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1555,7 +1542,7 @@ fn build_runs(
                     | Control::PageHiding { .. }
                     | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
                         if let Some(hx_ctrl) =
-                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
+                            encode_control_to_ctrl(ctrl, hyperlink_entries, options, sink)?
                         {
                             ledger.token(match ctrl.as_ref() {
                                 Control::NewNumber { .. } => {
@@ -1628,7 +1615,6 @@ fn build_runs(
                                 .map(|paragraphs| {
                                     encode_memo_sublist(
                                         paragraphs,
-                                        depth,
                                         hyperlink_entries,
                                         options,
                                         sink,
@@ -1882,7 +1868,7 @@ fn build_runs(
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml =
-                            encode_memo_sublist(content, depth, hyperlink_entries, options, sink)?;
+                            encode_memo_sublist(content, hyperlink_entries, options, sink)?;
                         let anchor_xml = build_memo_anchor_xml(anchor_runs, sink)?;
                         let real_xml = build_memo_run_xml(
                             &sublist_xml,
@@ -1907,7 +1893,6 @@ fn build_runs(
                         // (mirroring hyperlink/memo/chart).
                         let container_xml = super::shapes::encode_group_to_xml(
                             ctrl,
-                            depth,
                             0,
                             hyperlink_entries,
                             options,
@@ -2084,7 +2069,6 @@ fn build_runs(
 /// Returns `None` for non-ctrl controls (TextBox, Unknown).
 fn encode_control_to_ctrl(
     ctrl: &Control,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -2102,7 +2086,7 @@ fn encode_control_to_ctrl(
                 })?;
             sink.enter(crate::decoder::PathSeg::Footnote);
             let sub_list_result =
-                encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+                encode_paragraphs_to_sublist(paragraphs, hyperlink_entries, options, sink);
             let result = sub_list_result.map(|mut sub_list| {
                 report_note_head(
                     inject_note_autonum_head(&mut sub_list, "FOOTNOTE", num),
@@ -2134,7 +2118,7 @@ fn encode_control_to_ctrl(
                 })?;
             sink.enter(crate::decoder::PathSeg::Endnote);
             let sub_list_result =
-                encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+                encode_paragraphs_to_sublist(paragraphs, hyperlink_entries, options, sink);
             let result = sub_list_result.map(|mut sub_list| {
                 report_note_head(
                     inject_note_autonum_head(&mut sub_list, "ENDNOTE", num),
@@ -2417,12 +2401,11 @@ impl NoteNumbering {
 /// (vertical alignment `TOP`).
 pub(crate) fn encode_paragraphs_to_sublist(
     paragraphs: &[Paragraph],
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
-    build_sublist(paragraphs, depth, "TOP", hyperlink_entries, options, sink)
+    build_sublist(paragraphs, "TOP", hyperlink_entries, options, sink)
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with an explicit vertical
@@ -2430,18 +2413,16 @@ pub(crate) fn encode_paragraphs_to_sublist(
 /// encoders that carry a Core `VerticalAlign` field.
 pub(crate) fn encode_paragraphs_to_sublist_with_align(
     paragraphs: &[Paragraph],
-    depth: usize,
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
-    build_sublist(paragraphs, depth, vert_align, hyperlink_entries, options, sink)
+    build_sublist(paragraphs, vert_align, hyperlink_entries, options, sink)
 }
 
 fn build_sublist(
     paragraphs: &[Paragraph],
-    depth: usize,
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -2459,7 +2440,6 @@ fn build_sublist(
                 None,
                 TextDirection::Horizontal,
                 idx,
-                depth + 1,
                 hyperlink_entries,
                 options,
                 Vec::new(), // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
@@ -2509,7 +2489,6 @@ fn memo_default_datetime(unix_secs: Option<u64>) -> String {
 pub(crate) fn build_hx_caption(
     caption: &Caption,
     parent_width: i32,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -2526,7 +2505,7 @@ pub(crate) fn build_hx_caption(
     let gap = caption.gap.as_i32();
     sink.enter(crate::decoder::PathSeg::Caption);
     let sub_list_result =
-        encode_paragraphs_to_sublist(&caption.paragraphs, depth, hyperlink_entries, options, sink);
+        encode_paragraphs_to_sublist(&caption.paragraphs, hyperlink_entries, options, sink);
     sink.leave();
     let sub_list = sub_list_result?;
 
@@ -3189,7 +3168,6 @@ mod tests {
         let table = Table::new(vec![TableRow::new(vec![cell])]);
         let err = build_table(
             &table,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3214,7 +3192,6 @@ mod tests {
         let hx = build_picture(
             &img,
             false,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3248,7 +3225,7 @@ mod tests {
             img.hyperlink = Some(url.to_string());
             let mut sink = DocumentEncodeContext::new(0);
             let hx =
-                build_picture(&img, false, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
+                build_picture(&img, false, &mut Vec::new(), EncodeOptions::default(), &mut sink)
                     .unwrap();
             assert_eq!(hx.href, href, "{url}");
             assert_eq!(content_lost(&sink.warnings).len(), usize::from(lost), "{url}");
@@ -3279,7 +3256,6 @@ mod tests {
         let hx = build_picture(
             &img,
             false,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3308,7 +3284,6 @@ mod tests {
         let hx = build_picture(
             &img,
             false,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3851,14 +3826,8 @@ mod tests {
     /// Core 문단 하나를 담은 `HxSubList` (주입 단위 테스트용).
     fn test_sublist(para: Paragraph) -> crate::schema::section::HxSubList {
         let mut sink = DocumentEncodeContext::new(0);
-        encode_paragraphs_to_sublist(
-            &[para],
-            0,
-            &mut Vec::new(),
-            EncodeOptions::default(),
-            &mut sink,
-        )
-        .unwrap()
+        encode_paragraphs_to_sublist(&[para], &mut Vec::new(), EncodeOptions::default(), &mut sink)
+            .unwrap()
     }
 
     /// XML 에서 FOOTNOTE autoNum 의 `num` 시퀀스를 문서 순서로 추출한다.

@@ -4624,7 +4624,6 @@ mod tests {
         let hx = crate::encoder::shapes::encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -4748,7 +4747,6 @@ mod tests {
         let encoded = crate::encoder::shapes::encode_rect_to_hx(
             &control,
             false,
-            0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -4805,7 +4803,6 @@ mod tests {
         let encoded = crate::encoder::shapes::encode_textbox_to_rect(
             &control,
             false,
-            0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -5800,7 +5797,6 @@ mod group_tests {
 
         let xml = crate::encoder::shapes::encode_group_to_xml(
             &g,
-            0,
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
@@ -7140,7 +7136,6 @@ mod group_tests {
         let xml = crate::encoder::shapes::encode_group_to_xml(
             &g,
             0,
-            0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -7685,7 +7680,6 @@ mod group_tests {
     fn group_out(g: &Control) -> String {
         crate::encoder::shapes::encode_group_to_xml(
             g,
-            0,
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
@@ -8694,7 +8688,6 @@ mod frame_tests {
         let err = crate::encoder::section::build_picture(
             &picture,
             false,
-            0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),

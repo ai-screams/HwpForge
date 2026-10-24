@@ -4,7 +4,6 @@ use super::*;
 ///
 pub(super) fn build_table(
     table: &Table,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -54,7 +53,6 @@ pub(super) fn build_table(
                 &cell_addrs[row_idx],
                 table_border_fill_id,
                 table.in_margin,
-                depth,
                 hyperlink_entries,
                 options,
                 sink,
@@ -80,7 +78,7 @@ pub(super) fn build_table(
     let caption = table
         .caption
         .as_ref()
-        .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
+        .map(|c| build_hx_caption(c, table_width, hyperlink_entries, options, sink))
         .transpose()?;
     // 이것을 실패시키는 것: 이 이동 삭제(캡션 수식과 셀 각주의 id 충돌 경고가
     // "footnote, equation" 으로, `shared_core_id_is_kept_and_reported`).
@@ -186,7 +184,6 @@ fn build_table_row(
     col_addrs: &[u32],
     table_border_fill_id: u32,
     table_in_margin: Option<TableMargin>,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -210,7 +207,6 @@ fn build_table_row(
                     table_border_fill_id,
                     table_in_margin,
                 },
-                depth,
                 hyperlink_entries,
                 options,
                 sink,
@@ -225,7 +221,6 @@ fn build_table_row(
 
 /// Builds `HxTableCell` from a Core `TableCell`.
 ///
-/// Cell paragraphs are built recursively with the passed-through `depth` argument.
 /// Core validation enforces the semantic nesting limit before encoding.
 /// `col_idx` and `row_idx` are used to populate `<hp:cellAddr>`.
 #[derive(Clone, Copy)]
@@ -241,7 +236,6 @@ struct TableCellBuildContext {
 fn build_table_cell(
     cell: &TableCell,
     ctx: TableCellBuildContext,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -257,7 +251,6 @@ fn build_table_cell(
         sub_list: Some({
             let mut sub_list = build_sublist(
                 &cell.paragraphs,
-                depth,
                 encode_table_vertical_align(
                     cell.vertical_align.unwrap_or(TableVerticalAlign::Center),
                 ),
@@ -329,7 +322,6 @@ mod tests {
             .with_in_margin(margin(510, 511, 141, 142));
         let hx = build_table(
             &table,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -351,7 +343,6 @@ mod tests {
         // None(우리 API 저작) = 기존 고정값 그대로 — 바이트 불변 계약.
         let hx = build_table(
             &one_cell_table(),
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -372,7 +363,6 @@ mod tests {
             .with_layout_cache(TableLayoutCache::new(Some(HwpUnit::new(2831).unwrap()), true));
         let hx = build_table(
             &table,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -387,7 +377,6 @@ mod tests {
         table.rows[0].cells[0] = table.rows[0].cells[0].clone().with_margin(margin(10, 20, 30, 40));
         let hx = build_table(
             &table,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
