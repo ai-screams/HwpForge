@@ -561,9 +561,54 @@ fn encode_paragraph_styled(
             }
             format_list_item(trimmed, kind, level, checked)
         }
+        // A continuation is out of the guarantee: as before (G.3 (라)).
+        // 이것을 실패시키는 것: continuation 에도 줄 끝내기
+        // (`continuation_line_start_comment_is_base_output`).
+        ParaKind::Body if body => comment_ends_line(text.trim_start()),
         ParaKind::Body => text.trim_start().to_string(),
     };
     (markdown, body)
+}
+
+/// A Body block with each comment the encoder wrote at a line start (a
+/// memo or chart placeholder, `<!-- … -->`) ending its line: the text after
+/// it starts the next line — a new paragraph, the comment's HTML block
+/// ending there — its leading whitespace dropped as at a
+/// paragraph's start. A comment at a line start opens an HTML block that
+/// would take the rest of the line in as raw HTML. Document text cannot
+/// start a line with `<!--` (`<` is written `&lt;`), and a memo's body has
+/// its `--` broken up, so the first `-->` after it is the encoder's.
+/// 이것을 실패시키는 것: 줄 끝내기 삭제 · 뒤 글의 앞 공백 남기기
+/// (`body_check_and_table_end_close_the_rest`, `line_start_memo_keeps_comment_and_text`).
+fn comment_ends_line(block: &str) -> String {
+    let mut out = String::with_capacity(block.len() + 8);
+    let mut rest = block;
+    // Each step consumes what it looks at, so the walk is linear even for
+    // many comments on one line.
+    // 이것을 실패시키는 것: 꼬리를 줄 끝까지 다시 훑기(`line_start_comments_are_linear`).
+    while !rest.is_empty() {
+        let close = if rest.trim_start_matches([' ', '\t']).starts_with("<!--") {
+            rest.find("-->")
+        } else {
+            None
+        };
+        if let Some(end) = close {
+            let after = &rest[end + 3..];
+            let tail = after.trim_start_matches(|c: char| c != '\n' && c.is_whitespace());
+            out.push_str(&rest[..end + 3]);
+            if tail.is_empty() || tail.starts_with('\n') {
+                out.push_str(&after[..after.len() - tail.len()]);
+            } else {
+                out.push('\n');
+            }
+            rest = tail;
+        } else {
+            let line_end = rest.find('\n').map_or(rest.len(), |i| i + 1);
+            out.push_str(&rest[..line_end]);
+            rest = &rest[line_end..];
+        }
+    }
+    out
 }
 
 fn list_context_for_paragraph(

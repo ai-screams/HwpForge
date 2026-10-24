@@ -379,14 +379,13 @@ pub(crate) fn checked(
 /// structure its text must not make: a list (its items and task markers
 /// are inside one), heading, code block, block quote, note definition,
 /// definition list (its titles and definitions are inside one) or
-/// thematic break — or text after a comment that opens an HTML block
-/// (`<!-- chart -->x`: the block takes `x` in as raw HTML). The decoder's
-/// options read no metadata block. Paragraphs, tables, other HTML blocks
-/// and inline events are allowed.
-/// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제 · 주석 꼬리 검사 삭제
+/// thematic break. The decoder's options read no metadata block.
+/// Paragraphs, tables, HTML blocks and inline events are allowed: a
+/// comment the encoder writes at a line start ends its line
+/// (`styled::comment_ends_line`), so no text is taken into one.
+/// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제
 /// (`body_structure_finds_what_body_text_must_not_make`).
 fn body_structure(markdown: &str) -> bool {
-    let mut html: Option<String> = None;
     for event in Parser::new_ext(markdown, super::md_options()) {
         match event {
             Event::Start(
@@ -398,23 +397,6 @@ fn body_structure(markdown: &str) -> bool {
                 | Tag::DefinitionList,
             )
             | Event::Rule => return true,
-            Event::Start(Tag::HtmlBlock) => html = Some(String::new()),
-            Event::Html(h) => {
-                if let Some(block) = &mut html {
-                    block.push_str(&h);
-                }
-            }
-            Event::End(pulldown_cmark::TagEnd::HtmlBlock) => {
-                let block = html.take().unwrap_or_default();
-                if let Some(comment) = block.trim_start().strip_prefix("<!--") {
-                    let tail = comment.find("-->").map_or("", |end| &comment[end + 3..]);
-                    // The block ends with the line holding `-->`: the tail is
-                    // that line's rest.
-                    if !tail.trim().is_empty() {
-                        return true;
-                    }
-                }
-            }
             _ => {}
         }
     }
@@ -427,21 +409,11 @@ mod tests {
 
     /// Each structure Body text must not make is found; a paragraph, a
     /// table, an HTML block, a whole comment and inline markup are not.
-    /// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제 · 주석 꼬리 검사 삭제.
+    /// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제.
     #[test]
     fn body_structure_finds_what_body_text_must_not_make() {
-        for found in [
-            "- x",
-            "# h",
-            "```\nx\n```",
-            "a\n\n    b",
-            "> q",
-            "[^1]: x",
-            "a\n: b",
-            "***",
-            "<!-- chart -->x",
-            "a\n\n<!-- memo: m -->- x",
-        ] {
+        for found in ["- x", "# h", "```\nx\n```", "a\n\n    b", "> q", "[^1]: x", "a\n: b", "***"]
+        {
             assert!(body_structure(found), "{found:?}");
         }
         for allowed in [
