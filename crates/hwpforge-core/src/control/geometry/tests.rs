@@ -687,11 +687,13 @@ fn standalone_keeps_points_placement_and_non_geometry_style() {
     let map = ShapeTransform::from_matrix([0., -3., 3000., 2., 0., -3000.]);
     fold_standalone(&mut c, &FoldInput::new(map, (100., 50.), (0., 0.))).unwrap();
     assert_eq!(defining_points(&c), points);
-    let Control::Polygon { width, height, placement, style, frame, .. } = c else { panic!() };
+    let Control::Polygon { width, height, ref placement, ref style, frame, .. } = c else {
+        panic!()
+    };
     assert_eq!((width.as_i32(), height.as_i32()), (200, 150));
-    assert_eq!(placement, Some(ObjectPlacement::legacy_inline_defaults()));
+    assert_eq!(*placement, Some(ObjectPlacement::legacy_inline_defaults()));
     assert_eq!(style.as_ref().unwrap().line_width, Some(33));
-    assert_eq!(style.unwrap().rotation, Some(90.));
+    assert_eq!(style.as_ref().unwrap().rotation, Some(90.));
     assert_eq!(frame.original_size.unwrap().width.as_i32(), 100);
 }
 
@@ -978,9 +980,9 @@ fn image_fill_failed_preservation_folds_only_the_child() {
     assert_eq!(node.original_size(), (49, 100));
     assert!(loss.unwrap().detail().contains("49.000000"));
     drop_original_sizes(&mut group);
-    let Control::Group { children, .. } = group else { panic!() };
+    let Control::Group { ref children, .. } = group else { panic!() };
     drop_original_size(&mut brush);
-    assert_eq!(children, vec![super::super::GroupChild::Shape(brush)]);
+    assert_eq!(children.as_slice(), &[super::super::GroupChild::Shape(brush)]);
 }
 
 /// 이것을 실패시키는 것: 보존 경로에서 원래 크기 범위/0축/전단 진단 생략.

@@ -4658,7 +4658,8 @@ mod tests {
         };
         let want = Some([850, 700, 566, 400]);
         assert_eq!(margin(&control(&paras[0]).unwrap()), want, "body");
-        let hwpforge_core::control::Control::Group { children, .. } = control(&paras[1]).unwrap()
+        let hwpforge_core::control::Control::Group { ref children, .. } =
+            control(&paras[1]).unwrap()
         else {
             panic!()
         };

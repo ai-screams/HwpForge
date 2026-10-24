@@ -425,12 +425,10 @@ impl Document<Draft> {
     /// assert!(doc.validate().is_err());
     /// ```
     pub fn validate(mut self) -> CoreResult<Document<Validated>> {
-        // 이것을 실패시키는 것: 정규화 뒤로 이동하거나 실패 해체 삭제
+        // 실패 시 해제는 Paragraph·Control 의 Drop 이 반복형으로 한다.
+        // 검사는 정규화보다 먼저. 이것을 실패시키는 것: 정규화 뒤로 이동
         // (consuming_deep_validation_small_stack, 2 MiB / 100,000).
-        if let Err(error) = crate::depth::check(&self.sections) {
-            crate::depth::dismantle(&mut self.sections);
-            return Err(error);
-        }
+        crate::depth::check(&self.sections)?;
         // Cell meaning is canonical. Normalize even tables in nested containers
         // and bands; the shared walk includes picture captions and memo anchors.
         // 이것을 실패시키는 것: 정규화 삭제 · 본문 표만 순회

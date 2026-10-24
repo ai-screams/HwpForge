@@ -679,11 +679,11 @@ fn fold_closed_memos(runs: &mut Vec<Run>, origins: &mut Vec<super::source_map::R
         let mut removed: Vec<_> = runs.drain(i..=end).collect();
         let first = removed.remove(0);
         removed.pop();
-        let RunContent::Control(c) = first.content else { unreachable!() };
-        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } = *c else {
+        let RunContent::Control(mut c) = first.content else { unreachable!() };
+        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } = c.as_mut() else {
             unreachable!()
         };
-        let content = start.annotation.unwrap_or_default();
+        let content = start.annotation.take().unwrap_or_default();
         runs.insert(i, Run::control(Control::Memo { content, anchor_runs: removed, metadata }, cs));
         let mut mapped: Vec<_> = origins.drain(i..=end).collect();
         let mut first = mapped.remove(0);

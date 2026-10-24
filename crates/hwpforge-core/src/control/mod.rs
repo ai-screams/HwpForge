@@ -889,6 +889,14 @@ pub enum Control {
     },
 }
 
+/// Because this type implements `Drop`, its non-`Copy` fields cannot be moved out.
+/// Use references or [`std::mem::take`] instead.
+impl Drop for Control {
+    fn drop(&mut self) {
+        crate::depth::drop_control(self);
+    }
+}
+
 impl Control {
     /// The object's [`ObjectFrame`]; `None` for a control that has none (only
     /// the drawing shapes, groups and TextArt carry one).
@@ -2868,7 +2876,7 @@ mod tests {
         assert!(ctrl.is_equation());
         match ctrl {
             Control::Equation {
-                script,
+                ref script,
                 width,
                 height,
                 base_line,
@@ -2900,7 +2908,7 @@ mod tests {
         let ctrl = Control::text_box(vec![simple_paragraph()], width, height);
         assert!(ctrl.is_text_box());
         match ctrl {
-            Control::TextBox { paragraphs, placement, caption, style, .. } => {
+            Control::TextBox { ref paragraphs, ref placement, ref caption, ref style, .. } => {
                 assert_eq!(paragraphs.len(), 1);
                 assert!(placement.is_none());
                 assert!(caption.is_none());
@@ -2915,7 +2923,7 @@ mod tests {
         let ctrl = Control::footnote(vec![simple_paragraph()]);
         assert!(ctrl.is_footnote());
         match ctrl {
-            Control::Footnote { inst_id, paragraphs } => {
+            Control::Footnote { inst_id, ref paragraphs } => {
                 assert!(inst_id.is_none());
                 assert_eq!(paragraphs.len(), 1);
             }
@@ -2928,7 +2936,7 @@ mod tests {
         let ctrl = Control::endnote(vec![simple_paragraph()]);
         assert!(ctrl.is_endnote());
         match ctrl {
-            Control::Endnote { inst_id, paragraphs } => {
+            Control::Endnote { inst_id, ref paragraphs } => {
                 assert!(inst_id.is_none());
                 assert_eq!(paragraphs.len(), 1);
             }
@@ -2974,7 +2982,14 @@ mod tests {
         let ctrl = Control::rect(width, height).unwrap();
         assert!(ctrl.is_rect());
         match ctrl {
-            Control::Rect { frame: _, width: w, height: h, placement, caption, style } => {
+            Control::Rect {
+                frame: _,
+                width: w,
+                height: h,
+                ref placement,
+                ref caption,
+                ref style,
+            } => {
                 assert_eq!(w, width);
                 assert_eq!(h, height);
                 assert!(placement.is_none());
@@ -3067,7 +3082,16 @@ mod tests {
         let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(5000, 0)).unwrap();
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line { frame: _, start, end, width, height, placement, caption, style } => {
+            Control::Line {
+                frame: _,
+                start,
+                end,
+                width,
+                height,
+                ref placement,
+                ref caption,
+                ref style,
+            } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end, ShapePoint::new(5000, 0));
                 assert_eq!(width, HwpUnit::new(5000).unwrap());
@@ -3117,7 +3141,16 @@ mod tests {
         let ctrl = Control::horizontal_line(width);
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line { frame: _, start, end, width: w, height, placement, caption, style } => {
+            Control::Line {
+                frame: _,
+                start,
+                end,
+                width: w,
+                height,
+                ref placement,
+                ref caption,
+                ref style,
+            } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end.y, 0);
                 assert_eq!(end.x, width.as_i32());
@@ -3136,7 +3169,7 @@ mod tests {
         let ctrl = Control::hyperlink("Visit Rust", "https://rust-lang.org");
         assert!(ctrl.is_hyperlink());
         match ctrl {
-            Control::Hyperlink { text, url } => {
+            Control::Hyperlink { ref text, ref url } => {
                 assert_eq!(text, "Visit Rust");
                 assert_eq!(url, "https://rust-lang.org");
             }
@@ -3150,7 +3183,7 @@ mod tests {
         let ctrl = Control::footnote_with_id(42, vec![para]);
         assert!(ctrl.is_footnote());
         match ctrl {
-            Control::Footnote { inst_id, paragraphs } => {
+            Control::Footnote { inst_id, ref paragraphs } => {
                 assert_eq!(inst_id, Some(ObjectId::new(42)));
                 assert_eq!(paragraphs.len(), 1);
             }
@@ -3164,7 +3197,7 @@ mod tests {
         let ctrl = Control::endnote_with_id(7, vec![para]);
         assert!(ctrl.is_endnote());
         match ctrl {
-            Control::Endnote { inst_id, paragraphs } => {
+            Control::Endnote { inst_id, ref paragraphs } => {
                 assert_eq!(inst_id, Some(ObjectId::new(7)));
                 assert_eq!(paragraphs.len(), 1);
             }
@@ -3201,10 +3234,10 @@ mod tests {
                 axis2,
                 width: w,
                 height: h,
-                placement,
-                paragraphs,
-                caption,
-                style,
+                ref placement,
+                ref paragraphs,
+                ref caption,
+                ref style,
                 ..
             } => {
                 let wv = w.as_i32();
@@ -3281,7 +3314,7 @@ mod tests {
         let ctrl = Control::dutmal("본문", "주석");
         assert!(ctrl.is_dutmal());
         match ctrl {
-            Control::Dutmal { main_text, sub_text, position, sz_ratio, align, .. } => {
+            Control::Dutmal { ref main_text, ref sub_text, position, sz_ratio, align, .. } => {
                 assert_eq!(main_text, "본문");
                 assert_eq!(sub_text, "주석");
                 assert_eq!(position, DutmalPosition::Top);
@@ -3340,12 +3373,18 @@ mod tests {
         let ctrl = Control::compose("가");
         assert!(ctrl.is_compose());
         match ctrl {
-            Control::Compose { compose_text, circle_type, char_sz, compose_type, char_pr_ids } => {
+            Control::Compose {
+                ref compose_text,
+                ref circle_type,
+                char_sz,
+                ref compose_type,
+                ref char_pr_ids,
+            } => {
                 assert_eq!(compose_text, "가");
                 assert_eq!(circle_type, "SHAPE_REVERSAL_TIRANGLE");
                 assert_eq!(char_sz, -3);
                 assert_eq!(compose_type, "SPREAD");
-                assert_eq!(char_pr_ids, vec![u32::MAX; 10]);
+                assert_eq!(char_pr_ids.as_slice(), &[u32::MAX; 10]);
             }
             _ => panic!("expected Compose"),
         }
@@ -3386,7 +3425,7 @@ mod tests {
         // "SHAPE_REVERSAL_TIRANGLE" is an official spec typo — must be preserved exactly
         let ctrl = Control::compose("X");
         match ctrl {
-            Control::Compose { circle_type, .. } => {
+            Control::Compose { ref circle_type, .. } => {
                 assert_eq!(circle_type, "SHAPE_REVERSAL_TIRANGLE");
                 assert!(!circle_type.contains("TRIANGLE")); // confirm the typo
             }

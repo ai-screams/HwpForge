@@ -93,6 +93,14 @@ pub struct Paragraph {
     pub end_char_shape: Option<CharShapeIndex>,
 }
 
+/// Because this type implements `Drop`, its non-`Copy` fields cannot be moved out.
+/// Use references or [`std::mem::take`] instead.
+impl Drop for Paragraph {
+    fn drop(&mut self) {
+        crate::depth::drop_paragraph(self);
+    }
+}
+
 impl Paragraph {
     /// Creates an empty paragraph with the given shape reference.
     ///
