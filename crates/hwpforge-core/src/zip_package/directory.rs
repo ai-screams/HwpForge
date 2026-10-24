@@ -69,13 +69,8 @@ struct ReferenceEnd {
 impl Directory {
     pub(super) fn open<R: Read + Seek + Clone>(&self, mut reader: R) -> CoreResult<ZipArchive<R>> {
         let file_len = reader.seek(SeekFrom::End(0)).map_err(|e| zip_error(e.to_string()))?;
-        let mut reader = MetadataReader {
-            reader,
-            end: file_len,
-            footer: None,
-            work: self.work.clone(),
-            record_probe: false,
-        };
+        let mut reader =
+            MetadataReader { reader, end: file_len, footer: None, work: self.work.clone() };
         reader
             .seek(SeekFrom::Start((self.eocd + 20) as u64))
             .map_err(|e| zip_error(e.to_string()))?;
@@ -245,11 +240,9 @@ struct MetadataReader<R> {
     end: u64,
     footer: Option<u64>,
     work: Rc<RefCell<MetadataWork>>,
-    record_probe: bool,
 }
 impl<R: Read + Seek> Read for MetadataReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.record_probe = false;
         self.work.borrow_mut().charge(0, 0)?;
         let position = self.reader.stream_position()?;
         let available = self.end.saturating_sub(position).min(buf.len() as u64) as usize;
@@ -264,14 +257,9 @@ impl<R: Read + Seek> Read for MetadataReader<R> {
         }
         Ok(n)
     }
+    // Kept instead of the std default so that a short read keeps its internal
+    // "unexpected end of file" text and does not retry on Interrupted.
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
-        // zip 9.0.4 read_central_header asks stream_position immediately
-        // before FixedSizeBlock::parse (46 bytes), but seeks to Start for
-        // variable fields. Do not charge a 46-byte filename as a record.
-        let record_probe = self.record_probe;
-        if record_probe && buf.len() == 46 {
-            self.work.borrow_mut().charge(0, 1)?;
-        }
         let mut rest = &mut *buf;
         while !rest.is_empty() {
             let n = self.read(rest)?;
@@ -280,12 +268,21 @@ impl<R: Read + Seek> Read for MetadataReader<R> {
             }
             rest = &mut rest[n..];
         }
+        // A record is a complete 46-byte block that is a central header, by
+        // content, not by the call pattern: zip 9.0.5 and 9.1.0 both read each
+        // fixed header with one read_exact of exactly this size. This bounds
+        // directories zip reaches through its own fallback, which our name
+        // scan never saw. A 46-byte name, extra or comment that begins with
+        // the signature also counts; that only makes the limit stricter.
+        // 이것을 실패시키는 것: 이 과금 삭제 — zip 9.0.5가 주석 속 ZIP64 디렉터리를 상한 없이 끝까지 읽음.
+        if buf.len() == 46 && buf.starts_with(b"PK\x01\x02") {
+            self.work.borrow_mut().charge(0, 1)?;
+        }
         Ok(())
     }
 }
 impl<R: Seek> Seek for MetadataReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.record_probe = matches!(pos, SeekFrom::Current(0));
         match pos {
             SeekFrom::End(offset) => {
                 let at = self
@@ -336,7 +333,6 @@ pub(super) fn preflight_with_work(
             end: (p + 22) as u64,
             footer: Some(p as u64),
             work: work.metadata.clone(),
-            record_probe: false,
         };
         let config = Config { archive_offset: ArchiveOffset::Known(directory.base as u64) };
         let probe = ZipArchive::with_config(config, reader);
@@ -834,7 +830,6 @@ mod tests {
             end: 8,
             footer: None,
             work: work.clone(),
-            record_probe: false,
         };
         reader.read_exact(&mut [0; 4]).unwrap();
         let mut clone = reader.clone();
@@ -846,41 +841,43 @@ mod tests {
             end: 3,
             footer: Some(0),
             work: Rc::new(RefCell::new(MetadataWork::default())),
-            record_probe: false,
         };
         assert_eq!(reader.seek(SeekFrom::End(-1)).unwrap(), 2);
         assert!(reader.seek(SeekFrom::End(-4)).is_err());
         assert!(reader.read_exact(&mut [0; 2]).is_err());
-        // A 46-byte variable field, even one beginning PK0102, is not a record.
-        for (len, probe, expected) in [(46, false, 0), (47, true, 0), (46, true, 1)] {
+        // A record is a complete 46-byte central header by content, whatever
+        // call pattern precedes it (zip 9.0 queries the position, 9.1 does not).
+        // 이것을 실패시키는 것: 서명 대조 삭제(모든 46바이트 읽기 과금) / 길이 조건을 >= 46으로 / 위치 질의에 기대기.
+        for (len, magic, probe, expected) in [
+            (46, b"PK\x01\x02", false, 1),
+            (46, b"PK\x01\x02", true, 1),
+            (46, b"PK\x05\x06", true, 0),
+            (47, b"PK\x01\x02", true, 0),
+        ] {
             let mut bytes = vec![0; len];
-            bytes[..4].copy_from_slice(b"PK\x01\x02");
+            bytes[..4].copy_from_slice(magic);
             let work = Rc::new(RefCell::new(MetadataWork::default()));
             let mut reader = MetadataReader {
                 reader: Cursor::new(bytes),
                 end: len as u64,
                 footer: None,
                 work: work.clone(),
-                record_probe: false,
             };
             if probe {
                 reader.stream_position().unwrap();
             }
             reader.read_exact(&mut vec![0; len]).unwrap();
-            assert_eq!(work.borrow().records, expected);
+            assert_eq!(work.borrow().records, expected, "{len} {magic:?} {probe}");
+            assert_eq!(work.borrow().read, len);
         }
-        // A failed fixed-header read still visits a record and spends its bytes.
+        // A short fixed-header read spends its bytes but no record.
+        // 이것을 실패시키는 것: 읽기 전에(내용 확인 없이) 레코드를 과금하기.
         let work = Rc::new(RefCell::new(MetadataWork::default()));
-        let mut reader = MetadataReader {
-            reader: Cursor::new(b"PK"),
-            end: 2,
-            footer: None,
-            work: work.clone(),
-            record_probe: false,
-        };
+        let mut reader =
+            MetadataReader { reader: Cursor::new(b"PK"), end: 2, footer: None, work: work.clone() };
         reader.stream_position().unwrap();
         assert!(reader.read_exact(&mut [0; 46]).is_err());
-        assert_eq!(work.borrow().records, 1);
+        assert_eq!(work.borrow().records, 0);
         assert_eq!(work.borrow().read, 2);
     }
 
@@ -901,22 +898,15 @@ mod tests {
             bytes.extend(vec![b'x'; 100]);
             let mut work = Work::default();
             let directory = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
-            // Our own name scan charges exactly one record per entry; checked
-            // directly so the zip version cannot hide a wrong charge.
-            // 이것을 실패시키는 것: 이름 스캔의 레코드 과금 삭제·두 배로.
-            let cd_start = u32_at(&bytes, end + 16).unwrap() as usize;
-            let mut scan = Work::default();
-            directory_names(&bytes, cd_start, end, directory.count as u64, LIMIT, &mut scan)
-                .unwrap();
-            assert_eq!(scan.metadata.borrow().records, directory.count);
-            // zip may add at most one probe per entry and pass, depending on
-            // how it walks the directory (9.0 does, 9.1 does not).
-            let records = work.metadata.borrow().records;
-            assert!((directory.count..=directory.count * 2).contains(&records), "{records}");
+            // One record per header for our name scan and one for each zip
+            // pass that reads the header block (probe, then open): the same on
+            // zip 9.0.5 and 9.1.0 because both read each block once per pass.
+            // 이것을 실패시키는 것: 이름 스캔 과금 삭제·두 배로 / 46바이트 내용 기준 과금 삭제.
+            assert_eq!(work.metadata.borrow().records, 2 * directory.count);
             let before = work.metadata.borrow().read;
             directory.open(Cursor::new(&bytes)).unwrap();
             let budget = work.metadata.borrow();
-            assert!(budget.records - records <= directory.count, "{}", budget.records);
+            assert_eq!(budget.records, 3 * directory.count);
             assert!(budget.read > before);
             assert!(budget.read <= 8 * (bytes.len() + EOCD_WINDOW));
             eprintln!(
@@ -985,12 +975,243 @@ mod tests {
             "{result:?} {work:?}"
         );
         assert!(work.metadata.borrow().read > 8 * (bytes.len() + EOCD_WINDOW));
+        // The read budget trips long before the record limit (20 records on
+        // zip 9.0.5, which falls back inside one probe; 36 on 9.1.0).
         eprintln!(
             "W1_EXHAUST read={} candidates={} records={}",
             work.metadata.borrow().read,
             work.candidates,
             work.metadata.borrow().records
         );
+    }
+
+    // `chains` candidates whose directories each pass our framing scan with
+    // `rounds * (block + 1)` records, then fail in zip on an invalid extra.
+    // Directories interleave: every round each chain writes `block` headers
+    // and one jumper whose comment skips the other chains' bytes, so all end
+    // records still fit in the tail window.
+    fn interleaved_directories(chains: usize, rounds: usize, block: usize) -> Vec<u8> {
+        let original = synthetic();
+        let original_end = original.len() - 22;
+        let cd = u32_at(&original, original_end + 16).unwrap() as usize;
+        let mut template = original[cd..cd + 46].to_vec();
+        template[28..34].fill(0);
+        template[28..30].copy_from_slice(&2u16.to_le_bytes());
+        let mut bytes = Vec::new();
+        let mut starts = vec![0; chains];
+        let mut pending: Vec<Option<(usize, usize)>> = vec![None; chains];
+        let close = |bytes: &mut Vec<u8>, jumper: Option<(usize, usize)>| {
+            if let Some((field, from)) = jumper {
+                let skip = u16::try_from(bytes.len() - from).unwrap();
+                bytes[field..field + 2].copy_from_slice(&skip.to_le_bytes());
+            }
+        };
+        for round in 0..rounds {
+            for chain in 0..chains {
+                close(&mut bytes, pending[chain]);
+                if round == 0 {
+                    starts[chain] = bytes.len();
+                }
+                for i in 0..=block {
+                    let at = bytes.len();
+                    bytes.extend(&template);
+                    bytes.extend(((round * (block + 1) + i) as u16).to_le_bytes());
+                    if i == block {
+                        bytes[at + 30..at + 32].copy_from_slice(&4u16.to_le_bytes());
+                        bytes.extend([0x75, 0x70, 0, 0]);
+                        pending[chain] = Some((at + 32, bytes.len()));
+                    }
+                }
+            }
+        }
+        let count = u16::try_from(rounds * (block + 1)).unwrap();
+        for chain in 0..chains {
+            close(&mut bytes, pending[chain]);
+            let size = bytes.len() - starts[chain];
+            bytes.extend(b"PK\x05\x06");
+            bytes.extend([0; 4]);
+            bytes.extend(count.to_le_bytes());
+            bytes.extend(count.to_le_bytes());
+            bytes.extend((size as u32).to_le_bytes());
+            bytes.extend((starts[chain] as u32).to_le_bytes());
+            bytes.extend([0; 2]);
+        }
+        bytes
+    }
+
+    /// 이것을 실패시키는 것: 레코드 상한 비교(`records > record_limit`) 삭제 — 모든 후보 실패 뒤 framing 오류로 바뀜.
+    /// 이것을 실패시키는 것: 기본 상한을 4 * MAX_ENTRIES 아닌 값으로(예: 45,000) / `>`를 `>=`로.
+    // Five candidates of 9,860 records each (2.4 MB): the record limit trips
+    // while the read budget, which grows with the input (19.5 MB here), is not
+    // spent. Each candidate alone stays under the per-candidate entry limit, so
+    // only the cumulative record limit bounds this work in absolute terms. zip
+    // adds its own header reads (9.0.5 all of a chain, 9.1.0 up to the bad
+    // extra), so the candidate that trips differs by version.
+    #[test]
+    fn w1_record_limit_binds_before_read_budget() {
+        let bytes = interleaved_directories(5, 29, 339);
+        let mut work = Work::default();
+        let result = preflight_with_work(&bytes, LIMIT, &mut work);
+        assert!(
+            matches!(&result, Err(CoreError::InvalidStructure { context, reason })
+            if context == "ZIP package" && reason == "ZIP metadata work budget exceeded"),
+            "{result:?}"
+        );
+        let metadata = work.metadata.borrow();
+        assert_eq!(metadata.record_limit, 4 * super::super::MAX_ENTRIES);
+        assert_eq!(metadata.records, 40_001);
+        // The record limit is reached before the read budget.
+        assert!(metadata.read <= metadata.read_limit, "{} {}", metadata.read, metadata.read_limit);
+        eprintln!(
+            "W1_RECORDS len={} read={} read_limit={} records={}",
+            bytes.len(),
+            metadata.read,
+            metadata.read_limit,
+            metadata.records
+        );
+    }
+
+    // `n` valid headers, then one outer header that our scan accepts (one
+    // record) but zip rejects (invalid extra). Its comment hides a ZIP64 end
+    // record, locator and inner end record that describe the `n` headers, so
+    // zip 9.0.5 falls back to a directory our name scan never visited.
+    fn zip64_fallback_behind_bad_extra(n: usize) -> Vec<u8> {
+        let original = synthetic();
+        let original_end = original.len() - 22;
+        let cd = u32_at(&original, original_end + 16).unwrap() as usize;
+        let mut template = original[cd..cd + 46].to_vec();
+        template[28..34].fill(0);
+        let mut bytes = Vec::new();
+        for i in 0..n {
+            let at = bytes.len();
+            bytes.extend(&template);
+            bytes[at + 28..at + 30].copy_from_slice(&8u16.to_le_bytes());
+            bytes.extend((i as u64).to_le_bytes());
+        }
+        let size = bytes.len() as u64;
+        let outer = bytes.len();
+        bytes.extend(&template);
+        bytes[outer + 28..outer + 34].copy_from_slice(&[1, 0, 4, 0, 98, 0]);
+        bytes.extend(b"o");
+        bytes.extend([0x75, 0x70, 0, 0]);
+        let zip64 = bytes.len() as u64;
+        bytes.extend(b"PK\x06\x06");
+        bytes.extend(44u64.to_le_bytes());
+        bytes.extend([45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for value in [n as u64, n as u64, size, 0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(b"PK\x06\x07");
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(zip64.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(b"PK\x05\x06");
+        bytes.extend([0; 4]);
+        bytes.extend([0xff; 12]);
+        bytes.extend([0; 2]);
+        let directory = bytes.len() - outer;
+        assert_eq!(directory, 149);
+        bytes.extend(b"PK\x05\x06");
+        bytes.extend([0; 4]);
+        bytes.extend([1, 0, 1, 0]);
+        bytes.extend((directory as u32).to_le_bytes());
+        bytes.extend((outer as u32).to_le_bytes());
+        bytes.extend([0; 2]);
+        bytes
+    }
+
+    /// 이것을 실패시키는 것: 46바이트 내용 기준 레코드 과금 삭제 — zip 9.0.5가 내부 ZIP64 디렉터리의 헤더를 전부 읽음.
+    /// 이것을 실패시키는 것(9.0.5): 레코드 상한 비교 삭제 / 기본 상한 완화 / `>`를 `>=`로.
+    /// (zip 9.1.0은 EOCD에 붙은 디렉터리 실패 뒤 fallback하지 않으므로 위 변이들을 9.0.5에서만 잡는다.)
+    // 45,000 inner headers: just above the 40,000 record limit so that zip
+    // cannot finish them, and still a short test (2.4 MB).
+    #[test]
+    fn w1_zip_fallback_directory_is_record_bounded() {
+        let n = 45_000;
+        let bytes = zip64_fallback_behind_bad_extra(n);
+        let mut work = Work::default();
+        let result = preflight_with_work(&bytes, LIMIT, &mut work);
+        assert!(result.is_err());
+        let metadata = work.metadata.borrow();
+        eprintln!(
+            "W1_FALLBACK len={} read={} read_limit={} records={} result={result:?}",
+            bytes.len(),
+            metadata.read,
+            metadata.read_limit,
+            metadata.records
+        );
+        // zip 9.0.5 stops at the record limit; 9.1.0 never falls back and the
+        // inner ZIP64 candidate is refused by our own framing.
+        if matches!(&result, Err(CoreError::InvalidStructure { reason, .. })
+            if reason == "ZIP metadata work budget exceeded")
+        {
+            assert_eq!(metadata.records, 40_001);
+        }
+        assert!(metadata.records <= 40_001);
+        // Neither version reads every inner fixed header.
+        assert!(metadata.read < 46 * n, "{}", metadata.read);
+        assert!(metadata.read <= metadata.read_limit);
+        assert!(open(&bytes).is_err());
+    }
+
+    // `n` empty entries with distinct ASCII names, each with a 46-byte comment
+    // `PK\x01\x02` + 42 `x`, and an exact directory and end record.
+    fn signature_comments(n: usize) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..n {
+            writer.start_file(format!("e{i}"), zip::write::SimpleFileOptions::default()).unwrap();
+        }
+        let plain = writer.finish().unwrap().into_inner();
+        let end = plain.len() - 22;
+        let cd = u32_at(&plain, end + 16).unwrap() as usize;
+        let comment = [b"PK\x01\x02".as_slice(), &[b'x'; 42]].concat();
+        let mut bytes = plain[..cd].to_vec();
+        let mut p = cd;
+        while p < end {
+            let len = 46
+                + usize::from(u16_at(&plain, p + 28).unwrap())
+                + usize::from(u16_at(&plain, p + 30).unwrap());
+            let at = bytes.len();
+            bytes.extend(&plain[p..p + len]);
+            bytes[at + 32..at + 34].copy_from_slice(&46u16.to_le_bytes());
+            bytes.extend(&comment);
+            p += len + usize::from(u16_at(&plain, p + 32).unwrap());
+        }
+        let size = (bytes.len() - cd) as u32;
+        let footer = bytes.len();
+        bytes.extend(&plain[end..]);
+        bytes[footer + 12..footer + 16].copy_from_slice(&size.to_le_bytes());
+        bytes
+    }
+
+    /// 이것을 실패시키는 것: 46바이트 내용 판별 삭제 — 레코드가 40,001에 닿지 않아 복구 경로가 열림.
+    // A 46-byte variable field that begins with the central header signature
+    // counts as a record, which makes the limit stricter. This rejection is
+    // intended; normal HWPX packages do not have this shape. Each entry costs
+    // our scan 1 and each zip pass (probe, open) 2 (header and comment): 5N =
+    // 40,005 for N = 8,001, so the recovery path stops at 40,001 on both zip
+    // versions. Without the trailing byte the legacy path opens the same file.
+    #[test]
+    fn w1_signature_comments_tighten_the_record_limit() {
+        let n = 8_001;
+        let exact = signature_comments(n);
+        assert_eq!(open(&exact).unwrap().entries().len(), n);
+        let bytes = [exact.as_slice(), b"x"].concat();
+        // The public opener returns the legacy error once recovery also fails.
+        let legacy = legacy::preflight(&bytes, LIMIT).unwrap_err();
+        let public = open(&bytes).unwrap_err();
+        assert!(matches!(&public, CoreError::InvalidStructure { context, reason }
+            if context == "ZIP" && reason == "invalid ZIP central directory framing"));
+        assert_eq!(public.to_string(), legacy.to_string());
+        // Measured on zip 9.0.5 and 9.1.0 alike: 3N after the probe, then the
+        // final open trips the limit.
+        let mut work = Work::default();
+        let directory = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
+        assert_eq!(work.metadata.borrow().records, 3 * n);
+        let opened = directory.open(Cursor::new(&bytes));
+        assert!(matches!(&opened, Err(CoreError::InvalidStructure { context, reason })
+            if context == "ZIP package" && reason == "ZIP metadata work budget exceeded"));
+        assert_eq!(work.metadata.borrow().records, 40_001);
     }
 
     /// 이것을 실패시키는 것: extra 파싱 전에 선택 완료 / 프로브 fallback을 현재 후보 성공으로 취급 / 정책 오류를 건너뛰기.
