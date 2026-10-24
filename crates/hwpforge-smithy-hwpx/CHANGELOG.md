@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- 줄바꿈·묶음 빈칸·고정폭 빈칸이 든 글 칸을 `patch`·`fill`로 고칠 수 있다. 한컴에서 Tab 키로 넣은 탭은 너비 정보가 있어 계속 거부한다.
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24
 
 ### Changed

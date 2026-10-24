@@ -3341,7 +3341,8 @@ fn patch_rejects_editing_plain_paragraph_tab_slot() {
         patched.to_str().unwrap(),
     ]);
     assert_ne!(code, 0);
-    assert!(stderr.contains("inline HWPX markup"));
+    // 이것을 실패시키는 것: 속성 tab 허용 또는 거부 진단에서 요소 이름 제거.
+    assert!(stderr.contains("hp:tab"), "{stderr}");
 }
 
 #[test]

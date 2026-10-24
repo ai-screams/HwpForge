@@ -308,9 +308,9 @@ fn memo_anchor_and_body_use_body_breaks() {
     assert_eq!(anchor_runs[0].content.as_text(), Some("다\n라"));
 }
 
-// 이것을 실패시키는 것: patch의 메타데이터 비교 삭제 또는 inline markup 편집 거부 삭제.
+// 이것을 실패시키는 것: patch의 메타데이터 비교 삭제 또는 inline markup 허용 취소.
 #[test]
-fn old_exports_require_reexport_and_a_rewritten_slot_rejects_a_second_edit() {
+fn old_exports_require_reexport_and_a_rewritten_slot_accepts_a_second_edit() {
     let base = splice(&encode(vec![text_para("keep"), text_para("edit me")]), "keep", "가&#13;나");
     let mut old = HwpxPatcher::export_section_for_edit(&base, 0, false).unwrap().exported;
     old.preservation.as_mut().unwrap().text_slots[0].original_text = "가\r나".into();
@@ -321,24 +321,21 @@ fn old_exports_require_reexport_and_a_rewritten_slot_rejects_a_second_edit() {
     assert!(section_xml(&patched).contains("다<hp:lineBreak/>라"));
     let mut next = HwpxPatcher::export_section_for_edit(&patched, 0, false).unwrap().exported;
     next.section.paragraphs[1].runs[0].content = RunContent::Text("바".into());
-    let err =
-        HwpxPatcher::patch_exported_section_with_codec_diagnostics(&patched, 0, &next).unwrap_err();
-    assert!(err.to_string().contains("inline HWPX markup"), "{err}");
+    let out =
+        HwpxPatcher::patch_exported_section_with_codec_diagnostics(&patched, 0, &next).unwrap();
+    assert_eq!(texts(&out.value.bytes), ["가\n나", "바"]);
 }
 
 // 이것을 실패시키는 것: mixed_text 또는 folded_field의 CRLF 캐시 거부 삭제.
-#[test]
-fn crlf_contraction_drops_cached_coordinates_with_a_diagnostic() {
+fn assert_crlf_cache_rejected(text: &str) {
     use hwpforge_core::layout::{LayoutCache, LineSeg};
     use hwpforge_smithy_hwpx::{EncodeOptions, EncodeWarning};
     let cs = CharShapeIndex::new(0);
     for content in [
-        RunContent::Text("가\r\n나".into()),
-        RunContent::InlineText(InlineText {
-            segments: vec![InlineSegment::Plain("가\r\n나".into())],
-        }),
+        RunContent::Text(text.into()),
+        RunContent::InlineText(InlineText { segments: vec![InlineSegment::Plain(text.into())] }),
         RunContent::Control(Box::new(Control::Hyperlink {
-            text: "가\r\n나".into(),
+            text: text.into(),
             url: "https://example.com".into(),
         })),
         RunContent::Control(Box::new(Control::Field {
@@ -346,11 +343,11 @@ fn crlf_contraction_drops_cached_coordinates_with_a_diagnostic() {
             hint_text: None,
             help_text: None,
             name: Some("f".into()),
-            display_text: "가\r\n나".into(),
+            display_text: text.into(),
         })),
         RunContent::Control(Box::new(Control::memo_with_anchor(
             vec![text_para("메모")],
-            vec![Run::text("가\r\n나", cs)],
+            vec![Run::text(text, cs)],
         ))),
     ] {
         let mut p = run_para(Run { content, char_shape_id: cs });
@@ -369,6 +366,12 @@ fn crlf_contraction_drops_cached_coordinates_with_a_diagnostic() {
         assert!(!section_xml(&outcome.bytes).contains("<hp:linesegarray"));
         assert!(outcome.warnings.iter().any(|w| matches!(w, EncodeWarning::LayoutCacheDropped { reason, .. } if reason.contains("CRLF"))), "{:?}", outcome.warnings);
     }
+}
+
+// 이것을 실패시키는 것: mixed_text 또는 folded_field의 CRLF 캐시 거부 삭제.
+#[test]
+fn crlf_contraction_drops_cached_coordinates_with_a_diagnostic() {
+    assert_crlf_cache_rejected("가\r\n나");
 }
 
 fn cached_base() -> Vec<u8> {
@@ -567,4 +570,208 @@ fn split_memo_anchor_cr_lf_keeps_admissible_cache() {
     let xml = section_xml(&out.bytes);
     assert!(xml.contains("<hp:linesegarray"));
     assert_eq!(xml.matches("<hp:lineBreak/>").count(), 2);
+}
+
+// 이것을 실패시키는 것: inline 허용 취소 또는 stale_caches 제거.
+#[test]
+fn f2_repeated_inline_fill_drops_only_the_flow_tail_cache() {
+    use hwpforge_core::layout::{LayoutCache, LineSeg};
+    use hwpforge_smithy_hwpx::{EncodeOptions, HwpxFiller};
+    let field = Control::Field {
+        field_type: FieldType::ClickHere,
+        hint_text: None,
+        help_text: None,
+        name: Some("f".into()),
+        display_text: "a\nb\u{A0}c\u{1F}d\te".into(),
+    };
+    let mut ps = vec![
+        text_para("before"),
+        run_para(Run::control(field, CharShapeIndex::new(0))),
+        text_para("after"),
+    ];
+    for p in &mut ps {
+        p.layout_cache = Some(LayoutCache::new(vec![LineSeg::default()]));
+    }
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(ps, PageSettings::default()));
+    let base = HwpxEncoder::encode_with_options(
+        &doc.validate().unwrap(),
+        &hwpforge_smithy_hwpx::style_store_for_preset("default").unwrap(),
+        &ImageStore::new(),
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    assert_eq!(section_xml(&base).matches("<hp:linesegarray").count(), 3);
+    let first = HwpxFiller::fill(
+        &base,
+        &std::collections::BTreeMap::from([("f".into(), "first\nvalue".into())]),
+    )
+    .unwrap();
+    let exported = HwpxPatcher::export_section_for_edit(&first.bytes, 0, false).unwrap();
+    assert!(exported.exported.preservation.is_some());
+    let second = HwpxFiller::fill(
+        &first.bytes,
+        &std::collections::BTreeMap::from([("f".into(), "second\nvalue".into())]),
+    )
+    .unwrap();
+    assert_eq!(texts(&second.bytes), ["before", "second\nvalue", "after"]);
+    for bytes in [&first.bytes, &second.bytes] {
+        let decoded = HwpxDecoder::decode(bytes).unwrap();
+        let ps = &decoded.document.sections()[0].paragraphs;
+        assert!(ps[0].layout_cache.is_some());
+        assert!(ps[1].layout_cache.is_none());
+        assert!(ps[2].layout_cache.is_none());
+    }
+}
+
+// 이것을 실패시키는 것: no-op 비교를 제거하고 모든 슬롯을 다시 쓰기.
+#[test]
+fn f3_inline_noop_keeps_original_bytes_and_caches() {
+    for inner in [
+        "a<hp:lineBreak/>b<hp:nbSpace/>c<hp:fwSpace/>d<hp:tab/>",
+        "a<hp:tab width=\"2056\" leader=\"0\" type=\"1\"/>b",
+        "a<!--comment-->b",
+    ] {
+        let base = splice(&cached_base(), "가나다라", inner);
+        let export = HwpxPatcher::export_section_for_edit(&base, 0, false).unwrap().exported;
+        let out =
+            HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &export).unwrap();
+        assert_eq!(out.value.bytes, base);
+        assert!(section_xml(&out.value.bytes).contains("<hp:linesegarray"));
+    }
+}
+
+// 이것을 실패시키는 것: 공유 접기의 건너뛰기 삭제 또는 건너뛴 문자 선삭제,
+// (정리 후 접는 편집 경로와 달라짐), U+001F 건너뛰기.
+#[test]
+fn f4_encoder_body_field_and_memo_keep_text_and_removal_counts() {
+    use hwpforge_smithy_hwpx::{EncodeOptions, EncodeWarning};
+    let cs = CharShapeIndex::new(0);
+    for (input, want, count) in [
+        ("a\r\x01\nb", "a\nb", 1),
+        ("a\r\x01\x02\nb", "a\nb", 2),
+        ("a\r\x01b", "a\nb", 1),
+        ("a\r\u{1F}\nb", "a\n\u{1F}\nb", 0),
+    ] {
+        for run in [
+            Run::text(input, cs),
+            Run::control(
+                Control::Field {
+                    field_type: FieldType::ClickHere,
+                    hint_text: None,
+                    help_text: None,
+                    name: Some("f".into()),
+                    display_text: input.into(),
+                },
+                cs,
+            ),
+            Run::control(
+                Control::Hyperlink { text: input.into(), url: "https://example.com".into() },
+                cs,
+            ),
+            Run::control(
+                Control::memo_with_anchor(vec![text_para("memo")], vec![Run::text(input, cs)]),
+                cs,
+            ),
+        ] {
+            let mut doc = Document::new();
+            doc.add_section(Section::with_paragraphs(vec![run_para(run)], PageSettings::default()));
+            let out = HwpxEncoder::encode_with_diagnostics(
+                &doc.validate().unwrap(),
+                &hwpforge_smithy_hwpx::style_store_for_preset("default").unwrap(),
+                &ImageStore::new(),
+                EncodeOptions::default(),
+            )
+            .unwrap();
+            let decoded = HwpxDecoder::decode(&out.bytes).unwrap();
+            let r = &decoded.document.sections()[0].paragraphs[0].runs[0];
+            let actual = match &r.content {
+                RunContent::Text(t) => t.clone(),
+                RunContent::Control(c) => match c.as_ref() {
+                    Control::Hyperlink { text, .. } => text.clone(),
+                    Control::Field { display_text, .. } => display_text.clone(),
+                    Control::Memo { anchor_runs, .. } => {
+                        anchor_runs.iter().map(|r| r.content.as_text().unwrap()).collect()
+                    }
+                    c => panic!("{c:?}"),
+                },
+                r => panic!("{r:?}"),
+            };
+            assert_eq!(actual, want);
+            let removed: usize = out
+                .warnings
+                .iter()
+                .filter_map(|w| match w {
+                    EncodeWarning::XmlForbiddenCharsRemoved { count, .. } => Some(count),
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(removed, count);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 길이 판정을 인접 CRLF 검색으로 분리,
+// mixed_text 또는 folded_field의 캐시 거부 삭제.
+#[test]
+fn f5_interrupted_crlf_drops_cached_coordinates_with_a_diagnostic() {
+    assert_crlf_cache_rejected("가\r\x01\n나");
+}
+
+// 이것을 실패시키는 것: patch gate 허용 취소, 원본 t 접두사 대신 hp 고정,
+// 속성·접두사·Start 거부 삭제, 거부 메시지의 요소 이름 삭제.
+// 이번 진단 단언을 실패시키는 것: 원인 대신 첫 허용 요소를 보고하거나 원인을 생략하기.
+#[test]
+fn f1_patch_uses_original_prefix_and_refuses_lossy_children() {
+    let base = encode(vec![text_para("keep"), text_para("TOKEN")]);
+    for (element, expected) in [
+        (
+            "<hp:t>a<hp:lineBreak/>   b<hp:nbSpace/><hp:fwSpace/><hp:tab/></hp:t>",
+            "<hp:t>z<hp:lineBreak/>w</hp:t>",
+        ),
+        (
+            "<x:t xmlns:x=\"http://www.hancom.co.kr/hwpml/2011/paragraph\">a<x:lineBreak/>b</x:t>",
+            "z<x:lineBreak/>w</x:t>",
+        ),
+        (
+            "<t xmlns=\"http://www.hancom.co.kr/hwpml/2011/paragraph\">a<lineBreak/>b</t>",
+            "z<lineBreak/>w</t>",
+        ),
+    ] {
+        let source = splice(&base, "<hp:t>TOKEN</hp:t>", element);
+        let out = patch_para1(&source, "z\nw");
+        assert_eq!(texts(&out), ["keep", "z\nw"]);
+        assert!(section_xml(&out).contains(expected));
+    }
+    for (inner, reason) in [
+        ("a<hp:tab width=\"2056\" leader=\"0\" type=\"1\"/>b", "attribute on <hp:tab>"),
+        ("a<hp:tab width=\"0\" leader=\"0\" type=\"0\"/>b", "attribute on <hp:tab>"),
+        ("a<hp:lineBreak customMode=\"0\"/>b", "attribute on <hp:lineBreak>"),
+        ("a<hp:lineBreak></hp:lineBreak>b", "start tag <hp:lineBreak>"),
+        ("a<hp:lineBreak/><!--keep-->b", "comment"),
+    ] {
+        let source = splice(&base, "TOKEN", inner);
+        let mut exported =
+            HwpxPatcher::export_section_for_edit(&source, 0, false).unwrap().exported;
+        // InlineText carries attributed tabs; preserve its shape when changing its visible text.
+        match &mut exported.section.paragraphs[1].runs[0].content {
+            RunContent::Text(t) => t.push('X'),
+            RunContent::InlineText(it) => it.segments.push(InlineSegment::Plain("X".into())),
+            other => panic!("{other:?}"),
+        }
+        let err = HwpxPatcher::patch_exported_section_with_codec_diagnostics(&source, 0, &exported)
+            .unwrap_err();
+        let hwpforge_smithy_hwpx::SectionWorkflowError::PreservingPatch(
+            hwpforge_smithy_hwpx::HwpxError::InvalidStructure { detail },
+        ) = err
+        else {
+            panic!("{err}");
+        };
+        assert_eq!(
+            detail,
+            format!(
+                "preserving patch does not support editing text-slot 'paragraphs[1].runs[0].text' with inline HWPX markup ({reason})"
+            )
+        );
+    }
 }
