@@ -51,6 +51,35 @@ pub(crate) fn textart_text_from_wire(text: &str) -> String {
     textart_text_to_wire(text).replace(TEXTART_LINE_BREAK, "\r\n")
 }
 
+/// Body `<hp:t>` line breaks, excluding attributes, scripts and TextArt.
+/// Encoding folds CRLF only within the supplied text fragment. Decoding
+/// replaces CR one-for-one: the original wire map still counts both units
+/// of a referenced CRLF. Never normalize the XML before building that map.
+pub(crate) fn body_text_line_breaks(text: &str, fold_crlf: bool) -> Cow<'_, str> {
+    if !text.contains('\r') {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if fold_crlf {
+                chars.next_if_eq(&'\n');
+            }
+            out.push('\n');
+        } else {
+            out.push(ch);
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Whether encoding this body fragment changes its UTF-16 coordinate length.
+/// Keep cache admission tied to the same rule that writes the body.
+pub(crate) fn body_text_line_breaks_change_utf16_len(text: &str) -> bool {
+    body_text_line_breaks(text, true).encode_utf16().count() != text.encode_utf16().count()
+}
+
 /// Cleans a font name before it is written (`hh:font@face`,
 /// `hp:equation@font`): control characters are removed and ASCII spaces
 /// are trimmed from the ends; spaces inside the name are kept

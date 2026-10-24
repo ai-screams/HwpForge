@@ -135,7 +135,8 @@ impl HwpxPatcher {
     /// Only slots whose text differs from the base are looked at. A slot
     /// handed back unchanged is kept byte for byte even when the base itself
     /// holds such characters, and a slot whose text equals the base once the
-    /// characters are removed is kept too (with the warning).
+    /// characters are removed is kept too (with the warning). Changed candidates
+    /// also use the shared body line-break encoding rule before comparison.
     ///
     /// # Errors
     ///
@@ -347,8 +348,8 @@ impl HwpxPatcher {
         // Decide every slot before splicing any: the caller's text is first
         // compared as given, so a slot handed back unchanged is never looked
         // at (the base may itself hold characters XML cannot carry); only a
-        // real change candidate is cleaned, and the cleaned text is compared
-        // again so a value that only differed by those characters is kept.
+        // real change candidate is cleaned and normalized to HWPX body line
+        // breaks before comparing again, so an equivalent value is kept.
         let mut encode_warnings = Vec::new();
         let mut new_texts: Vec<Option<String>> = Vec::with_capacity(replacement_slots.len());
         for (replacement_slot, preserved_slot) in
@@ -364,6 +365,7 @@ impl HwpxPatcher {
                 &preserved_slot.path,
                 &mut encode_warnings,
             );
+            let text = crate::wire_xml::body_text_line_breaks(&text, true).into_owned();
             new_texts.push((text != preserved_slot.original_text).then_some(text));
         }
 

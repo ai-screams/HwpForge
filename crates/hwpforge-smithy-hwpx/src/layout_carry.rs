@@ -668,6 +668,33 @@ mod tests {
         );
     }
 
+    // 이것을 실패시키는 것: mixed_text의 CRLF 캐시 거부 또는 carry의 drop 보고 삭제.
+    #[test]
+    fn crlf_cache_drop_survives_layout_carry() {
+        use hwpforge_core::layout::{LayoutCache, LineSeg};
+        use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("가😀\r\n나", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![LineSeg::default()]));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![para], PageSettings::default()));
+        let doc = doc.validate().unwrap();
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::image::ImageStore::new();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let (bytes, reported) = carry_line_segs(&source.bytes, &output, &output, &source).unwrap();
+        let xml =
+            RawPackage::read(&bytes).unwrap().read_text_entry("Contents/section0.xml").unwrap();
+        assert!(!xml.contains("<hp:linesegarray"));
+        assert!(
+            matches!(reported.as_slice(), [crate::EncodeWarning::LayoutCacheDropped { reason, .. }] if reason.contains("CRLF"))
+        );
+    }
+
     /// Branch review A2: the cache source must hold the output's tokens
     /// exactly — otherwise its coordinates count other tokens.
     #[test]

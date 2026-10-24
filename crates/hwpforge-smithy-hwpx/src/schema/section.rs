@@ -942,6 +942,7 @@ impl HxText {
     }
 
     /// Returns the combined text content, with `\n` for line breaks.
+    /// Character-reference CR is replaced one-for-one, preserving wire coordinates.
     ///
     /// Inline markup elements that Core carries through `RunContent::Text`
     /// are projected onto sentinel code-points so the round-trip through
@@ -952,7 +953,8 @@ impl HxText {
     /// - `<hp:nbSpace/>` → `U+00A0`
     /// - `<hp:fwSpace/>` → `U+001F` (mirrors the HWP5 wire control byte)
     pub fn text(&self) -> String {
-        self.parts
+        let text: String = self
+            .parts
             .iter()
             .map(|p| match p {
                 HxTextPart::Text(s) => s.as_str(),
@@ -964,7 +966,11 @@ impl HxText {
                 HxTextPart::TitleMark { .. } => "",
                 HxTextPart::Other => "",
             })
-            .collect()
+            .collect();
+        match crate::wire_xml::body_text_line_breaks(&text, false) {
+            std::borrow::Cow::Borrowed(_) => text,
+            std::borrow::Cow::Owned(text) => text,
+        }
     }
 
     /// Returns a `RunContent` that preserves inline tab attributes
@@ -1006,7 +1012,9 @@ impl HxText {
         let segments = self.parts.iter().filter_map(|p| match p {
             HxTextPart::Text(s) if s.as_str().is_empty() => None,
             HxTextPart::TitleMark { .. } => None,
-            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.as_str().to_string())),
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(
+                crate::wire_xml::body_text_line_breaks(s.as_str(), false).into_owned(),
+            )),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
                     width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),

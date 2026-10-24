@@ -452,12 +452,20 @@ impl EncoderLedger {
     /// 독립 리뷰 Low 상환: 본문 tab 은 wire 8유닛이다 (디코더 in_field
     /// Tab=(8,0) 과 대칭) — utf16 1:1 로 세면 필드가 tab 당 7유닛
     /// 좁아져 이후 lineseg 가 무음 표류한다.
-    fn folded_field(&mut self, body: &str) {
+    fn folded_field(&mut self, bodies: impl IntoIterator<Item = impl AsRef<str>>) {
         use hwpforge_core::layout::WireTokenKind;
         self.flush_injected();
         let mut body_wire: u32 = 0;
-        for u in body.encode_utf16() {
-            body_wire += if u == u16::from(b'\t') { 8 } else { 1 };
+        // Memo anchors are emitted per run. Never join their boundaries when
+        // checking whether the shared body rule changes coordinate lengths.
+        for body in bodies {
+            let body = body.as_ref();
+            if crate::wire_xml::body_text_line_breaks_change_utf16_len(body) {
+                self.mark_cache_inadmissible("body CRLF contraction changes wire coordinates");
+            }
+            for u in body.encode_utf16() {
+                body_wire += if u == u16::from(b'\t') { 8 } else { 1 };
+            }
         }
         // S22: the kinds are begin, body, end; the coordinate map keeps the
         // whole field as one contraction (a line cannot start inside it).
@@ -483,6 +491,11 @@ impl EncoderLedger {
 
     /// 혼합 텍스트(탭/줄바꿈 sentinel 포함)의 문자 단위 재생.
     fn mixed_text(&mut self, s: &str) {
+        // Two source UTF-16 units become one wire unit. Reuse the
+        // existing fail-closed cache path instead of inventing inverse positions.
+        if crate::wire_xml::body_text_line_breaks_change_utf16_len(s) {
+            self.mark_cache_inadmissible("body CRLF contraction changes wire coordinates");
+        }
         for u in s.encode_utf16().collect::<Vec<u16>>() {
             if u == u16::from(b'\t') {
                 self.span(8, 1);
@@ -1483,7 +1496,7 @@ fn build_runs(
                                 ),
                             });
                         };
-                        ledger.folded_field(text);
+                        ledger.folded_field([text]);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPHL", field_id);
                         let real_xml =
@@ -1657,11 +1670,11 @@ fn build_runs(
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
                         // 본문 = 미채움이면 힌트 (E1/gotcha #30 계약과 동일).
-                        ledger.folded_field(if display_text.is_empty() {
+                        ledger.folded_field([if display_text.is_empty() {
                             hint
                         } else {
                             display_text
-                        });
+                        }]);
                         let real_xml = build_field_run_xml(
                             field_type,
                             hint,
@@ -1690,7 +1703,7 @@ fn build_runs(
                     // arm further below which emits Hancom-native
                     // `type="PATH"` with `Format=` param and a distinct fieldid.
                     Control::UnknownSummary { token, display_text } => {
-                        ledger.folded_field(display_text);
+                        ledger.folded_field([display_text]);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         // Wave 12p task #124: unknown token — assume Hancom
@@ -1712,7 +1725,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::DateCodeField { is_time_mode, display_text, .. } => {
-                        ledger.folded_field(display_text);
+                        ledger.folded_field([display_text]);
                         // LOSSY: %dte → SUMMERY mapping; raw_trailer is discarded.
                         // Round-trip through HWPX comes back as `Field(ModifiedTime)`
                         // or `Field(CreatedTime)` — proven by
@@ -1742,7 +1755,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::PathField { command, display_text } => {
-                        ledger.folded_field(display_text);
+                        ledger.folded_field([display_text]);
                         // Wave 12n Step 6 — LOSSLESS emit. The prior SUMMERY
                         // surrogate (mapped %pat → type="SUMMERY") triggered the
                         // Hancom "low security level — content recovered"
@@ -1834,7 +1847,7 @@ fn build_runs(
                         } else {
                             display_text.as_str()
                         };
-                        ledger.folded_field(visible_text);
+                        ledger.folded_field([visible_text]);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
@@ -1863,9 +1876,9 @@ fn build_runs(
                             );
                             ledger.mark_cache_inadmissible("memo anchor drops non-text runs");
                         }
-                        let anchor_text: String =
-                            anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect();
-                        ledger.folded_field(&anchor_text);
+                        ledger.folded_field(
+                            anchor_runs.iter().filter_map(|r| r.content.plain_text()),
+                        );
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml =

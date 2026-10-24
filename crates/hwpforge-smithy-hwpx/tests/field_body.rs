@@ -1503,7 +1503,9 @@ fn preserving_patch_keeps_space_only_runs() {
 /// 패치 때 CR 참조 재작성 또는 무관한 ZIP 엔트리 변경.
 #[test]
 fn preserving_patch_keeps_cr_only_runs() {
-    whitespace_only_preservation("&#13;", "\r");
+    // 이것을 실패시키는 것: HxText::text의 CR 1:1 정규화 제거.
+    // Core는 LF지만 미편집 슬롯의 원본 CR 참조 바이트는 그대로다.
+    whitespace_only_preservation("&#13;", "\n");
 }
 
 /// 이것을 실패시키는 것: claim의 A 패키지로 B 검증, 또는 복원 시 기존 A claim 유지.

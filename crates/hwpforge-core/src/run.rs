@@ -109,6 +109,9 @@ impl Run {
 
     /// Creates a text run.
     ///
+    /// Use `\n` for body line breaks. HWPX writes and reads CR as a line break;
+    /// encoding folds CRLF within one text fragment. This constructor keeps the input.
+    ///
     /// This is the most common constructor. Most runs in a typical
     /// document are text.
     ///
@@ -213,7 +216,8 @@ impl std::fmt::Display for Run {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum RunContent {
-    /// Plain text.
+    /// Plain text. Use `\n` for line breaks; HWPX writes and reads CR as
+    /// a line break, folding CRLF only when encoding one text fragment.
     Text(String),
     /// Rich inline text that needs per-segment attributes (e.g. an
     /// inline `<hp:tab width="..." leader="..." type="..."/>`). Used
