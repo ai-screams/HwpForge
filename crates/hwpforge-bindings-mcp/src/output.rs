@@ -11,8 +11,10 @@ use serde::Serialize;
 /// crate, the CLI and the Python bindings all read the one constant instead
 /// of three copies of the same literal.
 pub use hwpforge::ops::fs::MAX_FILE_SIZE;
-/// Maximum inline content size: 50 MB.
-pub const MAX_INLINE_SIZE: usize = 50 * 1024 * 1024;
+/// Maximum inline content size: 24 MiB. It stays below the stdin line limit
+/// in `main.rs` so an oversized inline request gets this tool's error rather
+/// than being dropped by the transport.
+pub const MAX_INLINE_SIZE: usize = 24 * 1024 * 1024;
 
 /// Inline response ceiling shared by `hwpforge_to_json`, `hwpforge_outline`
 /// and `hwpforge_diff` (1 MB) — a different budget from [`MAX_INLINE_SIZE`]

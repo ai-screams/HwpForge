@@ -16,9 +16,21 @@ use rmcp::{RoleServer, ServiceExt};
 use server::HwpForgeServer;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-/// Longest accepted stdin line (16 MiB, rmcp's default), stated here so an rmcp default change cannot silently lift the memory bound.
-/// A longer line is dropped with an error log and the connection stays open.
-const MAX_LINE: usize = 16 * 1024 * 1024;
+/// Longest accepted stdin line (32 MiB). The largest `from_json` request
+/// measured over the stratified HWPX sample was 14.7 MiB once the document
+/// JSON is escaped into the request string, so this keeps twice that room
+/// while bounding what one line can hold. This is a line length limit, not a
+/// cap on buffer allocation or process memory (the read buffer may grow past
+/// it before the line is rejected). A longer line is dropped with an error log
+/// and the connection stays open.
+const MAX_LINE: usize = 32 * 1024 * 1024;
+
+// Keep the two limits in the measured relation: an inline payload at the tool
+// limit, escaped with the growth measured on real documents (at most 1.12x),
+// fits one line. This checks the constants only; input that escapes heavier
+// (for example text made mostly of newlines) can still exceed the line limit
+// and be dropped by the transport. 이것을 실패시키는 것: MAX_INLINE_SIZE 를 MAX_LINE 에 가깝게 올리는 것(컴파일 실패).
+const _: () = assert!(output::MAX_INLINE_SIZE / 8 * 9 < MAX_LINE);
 
 fn bounded_transport<R, W>(read: R, write: W, max_line: usize) -> AsyncRwTransport<RoleServer, R, W>
 where
