@@ -778,9 +778,11 @@ mod tests {
         assert!(info.hint.is_none());
     }
 
-    #[test]
+    #[tokio::test]
     // 이것을 실패시키는 것: 코드 출력·힌트 변경, 미소비 기준선 또는 정책 행 추가.
-    fn w1_manifest_canonical_adapter() {
+    // WM-A: params case를 어댑터로 주입하거나 어느 도구든 CheckedParams 관문을 우회.
+    // 이것을 실패시키는 것: params.*의 fixture 모드를 injected로 변경.
+    async fn w1_manifest_canonical_adapter() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
                 .unwrap();
@@ -824,10 +826,16 @@ mod tests {
             ));
             let code = OpsCode::lookup(expected).unwrap();
             covered.push((command, code));
-            let got = tool_error(
-                command,
-                OpsError::Rejected { code, reason: "injected adapter boundary".into() },
-            );
+            let got = match case["id"].as_str().unwrap().strip_prefix("params.") {
+                Some(_) => {
+                    assert_eq!(surface["mode"], "fixture", "{}", case["id"]);
+                    crate::server::param_tests::assert_invalid_case(case).await
+                }
+                None => tool_error(
+                    command,
+                    OpsError::Rejected { code, reason: "injected adapter boundary".into() },
+                ),
+            };
             assert_eq!(got.code, expected, "{}", case["id"]);
             let baseline_row = include_str!("../tests/data/codes-0.18.txt")
                 .lines()

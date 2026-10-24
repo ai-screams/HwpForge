@@ -1,0 +1,429 @@
+{
+  "hwpforge_convert": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "markdown",
+      "output_path"
+    ],
+    "properties": {
+      "markdown": {
+        "description": "Markdown file path or inline content.",
+        "type": "string"
+      },
+      "is_file": {
+        "description": "Whether `markdown` is a file path (true) or inline content (false). Default: true.",
+        "type": "boolean",
+        "default": true
+      },
+      "output_path": {
+        "description": "Output HWPX file path. Must end with `.hwpx`.",
+        "type": "string"
+      },
+      "preset": {
+        "description": "Style preset name. Default: \"default\".",
+        "type": "string",
+        "default": "default"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_delete_para": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path",
+      "section",
+      "indices",
+      "output_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to edit.",
+        "type": "string"
+      },
+      "section": {
+        "description": "Section index.",
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      },
+      "indices": {
+        "description": "Top-level paragraph indices to delete (all-or-nothing).",
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "output_path": {
+        "description": "Output HWPX file path.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_diff": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "base_path",
+      "revised_path"
+    ],
+    "properties": {
+      "base_path": {
+        "description": "Path to the base HWPX file.",
+        "type": "string"
+      },
+      "revised_path": {
+        "description": "Path to the revised HWPX file.",
+        "type": "string"
+      },
+      "output_path": {
+        "description": "Optional path for the full pretty-printed JSON report. Required when\nthe report exceeds the 1 MB inline ceiling.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_fields": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to inspect.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_fill": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path",
+      "values",
+      "output_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to fill.",
+        "type": "string"
+      },
+      "values": {
+        "description": "Field name → value map. All values are validated before anything is\nwritten (all-or-nothing). Use hwpforge_fields to discover names.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "output_path": {
+        "description": "Output HWPX file path. Must end with `.hwpx`.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_from_json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "structure",
+      "output_path"
+    ],
+    "properties": {
+      "structure": {
+        "description": "JSON string matching the ExportedDocument schema.\nUse hwpforge_to_json output as a reference for the structure.",
+        "type": "string"
+      },
+      "output_path": {
+        "description": "Output HWPX file path. Must end with `.hwpx`.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_insert_para": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path",
+      "section",
+      "anchor",
+      "output_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to edit.",
+        "type": "string"
+      },
+      "section": {
+        "description": "Section index.",
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      },
+      "anchor": {
+        "description": "Anchor paragraph index (the new paragraph inherits its shape).",
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      },
+      "before": {
+        "description": "Insert before the anchor instead of after.",
+        "type": "boolean",
+        "default": false
+      },
+      "text": {
+        "description": "Plain text of the new paragraph (single line). Provide exactly one of\n`text` or `texts`.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "texts": {
+        "description": "Plain texts of a contiguous block of new paragraphs (one single-line\nentry per paragraph, inserted in order in one verified edit). Provide\nexactly one of `text` or `texts`.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        },
+        "default": null
+      },
+      "output_path": {
+        "description": "Output HWPX file path.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_inspect": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to inspect.",
+        "type": "string"
+      },
+      "styles": {
+        "description": "Reserved for future use. When true, will include style details. Currently ignored.",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_outline": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to map.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_patch": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "base_path",
+      "section",
+      "section_json_path",
+      "output_path"
+    ],
+    "properties": {
+      "base_path": {
+        "description": "Path to the base HWPX file.",
+        "type": "string"
+      },
+      "section": {
+        "description": "Section index to replace (0-based).",
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      },
+      "section_json_path": {
+        "description": "Path to the JSON file containing the replacement section.",
+        "type": "string"
+      },
+      "output_path": {
+        "description": "Output HWPX file path.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_read": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to read.",
+        "type": "string"
+      },
+      "section": {
+        "description": "Section index to read paragraphs from (exactly one of\nsection/table/field).",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint",
+        "minimum": 0,
+        "default": null
+      },
+      "paras": {
+        "description": "Inclusive paragraph range \"A..B\" or a single \"N\" (requires section).",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "table": {
+        "description": "Table ordinal to read as a grid text matrix.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint",
+        "minimum": 0,
+        "default": null
+      },
+      "field": {
+        "description": "Field name to read.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_restyle": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path",
+      "preset",
+      "output_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the source HWPX file.",
+        "type": "string"
+      },
+      "preset": {
+        "description": "Style preset name to apply. Use hwpforge_templates to see available presets.",
+        "type": "string"
+      },
+      "output_path": {
+        "description": "Output HWPX file path. Must end with `.hwpx`.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_stamp_plan": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to inspect for placeholder candidates.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_templates": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "name": {
+        "description": "Filter by preset name. Omit to list all presets.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_to_json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to export.",
+        "type": "string"
+      },
+      "section": {
+        "description": "Extract only a specific section (0-based index). Omit for full document.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint",
+        "minimum": 0,
+        "default": null
+      },
+      "output_path": {
+        "description": "Output JSON file path. If omitted, returns JSON inline.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_to_md": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to convert.",
+        "type": "string"
+      },
+      "output_dir": {
+        "description": "Output directory for the generated Markdown and image files.\nDefaults to the same directory as the input file.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "type": "object"
+  },
+  "hwpforge_validate": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "file_path"
+    ],
+    "properties": {
+      "file_path": {
+        "description": "Path to the HWPX file to validate.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+}
