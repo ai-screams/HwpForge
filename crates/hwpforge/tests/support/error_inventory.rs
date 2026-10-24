@@ -1,4 +1,5 @@
-//! Audit helper: parses the upstream error/warning enums that `ops` wraps.
+//! Audit helper: parses the upstream error/warning enums that `ops` wraps,
+//! and collects the error-contract generation sites ([`collect_sites`]).
 //!
 //! This is a **manifest-scoped audit**, not global discovery. The manifest
 //! below names every file and enum the audit covers; anything outside it is
@@ -14,6 +15,7 @@
 
 #![allow(dead_code)] // each test binary uses a different part of this module.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -333,11 +335,20 @@ fn audited_crates() -> Vec<&'static str> {
 #[must_use]
 pub fn module_tree(lib: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    visit_module_file(lib, &mut files);
+    visit_module_file(lib, &mut files, false);
     files
 }
 
-fn visit_module_file(file: &Path, files: &mut Vec<PathBuf>) {
+/// [`module_tree`] without the out-of-line modules declared under
+/// `#[cfg(test)]` — the production source the generation-site audit scans.
+#[must_use]
+pub fn production_module_tree(lib: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    visit_module_file(lib, &mut files, true);
+    files
+}
+
+fn visit_module_file(file: &Path, files: &mut Vec<PathBuf>, skip_test: bool) {
     let source =
         std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
     let ast = syn::parse_file(&source)
@@ -353,7 +364,7 @@ fn visit_module_file(file: &Path, files: &mut Vec<PathBuf>) {
     // directory of the file that carries it, whatever kind of file it is.
     let child_dir = if is_root { dir.to_path_buf() } else { dir.join(stem) };
 
-    collect_out_of_line_mods(&ast.items, &child_dir, dir, files);
+    collect_out_of_line_mods(&ast.items, &child_dir, dir, files, skip_test);
 }
 
 fn collect_out_of_line_mods(
@@ -361,9 +372,13 @@ fn collect_out_of_line_mods(
     child_dir: &Path,
     path_base: &Path,
     files: &mut Vec<PathBuf>,
+    skip_test: bool,
 ) {
     for item in items {
         let Item::Mod(item_mod) = item else { continue };
+        if skip_test && is_test_only(&item_mod.attrs) {
+            continue;
+        }
         match &item_mod.content {
             // Inline module: its items live in the same file, but it may
             // itself declare out-of-line children under `<dir>/<name>/`;
@@ -371,7 +386,7 @@ fn collect_out_of_line_mods(
             // that nested directory too.
             Some((_, inner)) => {
                 let nested = child_dir.join(item_mod.ident.to_string());
-                collect_out_of_line_mods(inner, &nested, &nested, files);
+                collect_out_of_line_mods(inner, &nested, &nested, files, skip_test);
             }
             None => {
                 let name = item_mod.ident.to_string();
@@ -390,7 +405,7 @@ fn collect_out_of_line_mods(
                         candidates
                     );
                 };
-                visit_module_file(found, files);
+                visit_module_file(found, files, skip_test);
             }
         }
     }
@@ -551,5 +566,355 @@ impl<'ast> Visit<'ast> for Sweep<'_> {
             self.unlisted.push(name);
         }
         syn::visit::visit_item_enum(self, item);
+    }
+}
+
+// ── generation sites (error contract 0.18, `error_contract_018.json`) ──
+
+/// Crates whose production module trees the generation-site audit scans,
+/// each from its `src/lib.rs`. The whole tree is scanned, not only the files
+/// the manifest names, so a site in a new file cannot hide.
+pub const SITE_AUDIT_CRATES: &[&str] = &["hwpforge-smithy-hwpx", "hwpforge", "hwpforge-convert"];
+
+/// One generation site: `(file, enclosing fn, stage or variant, ordinal)`.
+///
+/// `kind` is `"stage"` (a `CodecStage::<X>` literal, `name` = `X`) or
+/// `"variant"` (an audited error constructor, `name` = `Enum::Variant`).
+/// The ordinal counts the same `(kind, name)` within one fn, in source
+/// order, from 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SiteKey {
+    /// Path relative to the workspace root.
+    pub file: String,
+    /// `fn`, `Type::fn` or `Type as Trait::fn`, prefixed by inline modules
+    /// and enclosing named fns.
+    pub function: String,
+    /// `"stage"` or `"variant"`.
+    pub kind: String,
+    /// Stage name or `Enum::Variant`.
+    pub name: String,
+    /// Ordinal within the fn.
+    pub occurrence: u32,
+}
+
+/// The production files scanned and the sites found in them.
+pub struct SiteScan {
+    /// Every scanned file, relative to the workspace root, with the number
+    /// of named fns visited in it (a scan that visits nothing proves nothing).
+    pub files: Vec<(String, usize)>,
+    /// Every site, sorted.
+    pub sites: Vec<SiteKey>,
+}
+
+/// Scans every production file of [`SITE_AUDIT_CRATES`].
+///
+/// `audited_variants` is the manifest's closed `Enum::Variant` list.
+///
+/// # Panics
+///
+/// When a file cannot be read or parsed, or [`sites_in_source`] reports a
+/// problem (duplicate key, audited path inside a macro or outside a fn).
+#[must_use]
+pub fn collect_sites(audited_variants: &[String]) -> SiteScan {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    let mut sites = Vec::new();
+    let mut problems = Vec::new();
+    for krate in SITE_AUDIT_CRATES {
+        let lib = root.join("crates").join(krate).join("src/lib.rs");
+        for file in production_module_tree(&lib) {
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+            match sites_in_source(&rel, &source, audited_variants) {
+                Ok((found, fns)) => {
+                    sites.extend(found);
+                    files.push((rel, fns));
+                }
+                Err(mut found) => problems.append(&mut found),
+            }
+        }
+    }
+    assert!(problems.is_empty(), "generation-site scan failed: {problems:#?}");
+    sites.sort();
+    SiteScan { files, sites }
+}
+
+/// The generation sites of one source file, and how many named fns the
+/// scan visited.
+///
+/// # Errors
+///
+/// Every problem found: a key produced twice (two fn bodies with the same
+/// name both producing it), an audited path inside a macro body (syn does
+/// not parse macro tokens, so such a site would go unseen), or an audited
+/// path outside any fn.
+///
+/// # Panics
+///
+/// When `source` does not parse or an audited entry is not `Enum::Variant`.
+pub fn sites_in_source(
+    file: &str,
+    source: &str,
+    audited_variants: &[String],
+) -> Result<(Vec<SiteKey>, usize), Vec<String>> {
+    let ast = syn::parse_file(source).unwrap_or_else(|e| panic!("{file} does not parse: {e}"));
+    let audited: Vec<(String, String)> = audited_variants
+        .iter()
+        .map(|entry| {
+            let (enum_name, variant) = entry
+                .split_once("::")
+                .unwrap_or_else(|| panic!("audited variant `{entry}` is not `Enum::Variant`"));
+            (enum_name.to_owned(), variant.to_owned())
+        })
+        .collect();
+    let mut visitor = SiteVisitor {
+        file,
+        audited: &audited,
+        scope: Vec::new(),
+        self_enum: None,
+        fn_name: None,
+        fns: 0,
+        counters: BTreeMap::new(),
+        sites: Vec::new(),
+        problems: Vec::new(),
+    };
+    visitor.visit_file(&ast);
+    let mut seen = std::collections::BTreeSet::new();
+    for site in &visitor.sites {
+        if !seen.insert(site.clone()) {
+            visitor.problems.push(format!("duplicate generation-site key {site:?}"));
+        }
+    }
+    if visitor.problems.is_empty() {
+        Ok((visitor.sites, visitor.fns))
+    } else {
+        Err(visitor.problems)
+    }
+}
+
+/// `#[test]`, or `#[cfg(test)]` exactly: code the audit leaves out.
+fn is_test_only(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("test")
+            || (attr.path().is_ident("cfg")
+                && matches!(&attr.meta, syn::Meta::List(list) if list.tokens.to_string() == "test"))
+    })
+}
+
+/// Token text without whitespace, so the key does not depend on layout.
+fn compact(tokens: impl quote::ToTokens) -> String {
+    tokens.to_token_stream().to_string().split_whitespace().collect()
+}
+
+struct SiteVisitor<'a> {
+    file: &'a str,
+    audited: &'a [(String, String)],
+    /// Inline modules, then impl/trait prefix, then enclosing named fns.
+    scope: Vec<String>,
+    /// The impl's self type name (resolves `Self::V`).
+    self_enum: Option<String>,
+    /// The enclosing named fn's key, `None` outside any fn.
+    fn_name: Option<String>,
+    /// Named fns visited.
+    fns: usize,
+    counters: BTreeMap<(String, String), u32>,
+    sites: Vec<SiteKey>,
+    problems: Vec<String>,
+}
+
+impl SiteVisitor<'_> {
+    /// `(kind, name)` when `path` is a stage literal or an audited variant.
+    fn classify(&self, path: &syn::Path) -> Option<(String, String)> {
+        let idents: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let [.., owner, last] = idents.as_slice() else { return None };
+        self.classify_pair(owner, last)
+    }
+
+    fn classify_pair(&self, owner: &str, last: &str) -> Option<(String, String)> {
+        // `Self` resolves first, for stages and variants alike.
+        let owner = if owner == "Self" { self.self_enum.as_deref()? } else { owner };
+        if owner == "CodecStage" {
+            return Some(("stage".to_owned(), last.to_owned()));
+        }
+        self.audited
+            .iter()
+            .any(|(e, v)| e == owner && v == last)
+            .then(|| ("variant".to_owned(), format!("{owner}::{last}")))
+    }
+
+    /// Whether a comparison operand is only an audited path, under any
+    /// parentheses and `&` — the one rule for "compared, not constructed".
+    /// Anything else (a call holding a stage, …) is visited as usual.
+    fn is_compared_path(&self, operand: &syn::Expr) -> bool {
+        match operand {
+            syn::Expr::Paren(inner) => self.is_compared_path(&inner.expr),
+            syn::Expr::Reference(inner) => self.is_compared_path(&inner.expr),
+            syn::Expr::Path(path) => self.classify(&path.path).is_some(),
+            _ => false,
+        }
+    }
+
+    fn record(&mut self, (kind, name): (String, String)) {
+        let Some(function) = self.fn_name.clone() else {
+            self.problems.push(format!("{}: {kind} {name} outside any fn", self.file));
+            return;
+        };
+        let counter = self.counters.entry((kind.clone(), name.clone())).or_insert(0);
+        *counter += 1;
+        self.sites.push(SiteKey {
+            file: self.file.to_owned(),
+            function,
+            kind,
+            name,
+            occurrence: *counter,
+        });
+    }
+
+    /// Visits a named fn body with a fresh ordinal counter.
+    fn in_fn(&mut self, name: String, body: impl FnOnce(&mut Self)) {
+        self.fns += 1;
+        self.scope.push(name);
+        let key = self.scope.join("::");
+        let outer_name = self.fn_name.replace(key);
+        let outer_counters = std::mem::take(&mut self.counters);
+        body(self);
+        self.counters = outer_counters;
+        self.fn_name = outer_name;
+        self.scope.pop();
+    }
+
+    /// Ident/punct tokens of a macro body, groups flattened.
+    fn flat_tokens(cursor: syn::buffer::Cursor<'_>, out: &mut Vec<String>) {
+        let mut cursor = cursor;
+        while !cursor.eof() {
+            if let Some((ident, next)) = cursor.ident() {
+                out.push(ident.to_string());
+                cursor = next;
+            } else if let Some((punct, next)) = cursor.punct() {
+                out.push(punct.as_char().to_string());
+                cursor = next;
+            } else if let Some((inside, _, _, next)) = cursor.any_group() {
+                Self::flat_tokens(inside, out);
+                cursor = next;
+            } else {
+                // A literal or a lifetime: never part of an audited path.
+                cursor = cursor.token_tree().expect("not at eof").1;
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SiteVisitor<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.scope.push(item.ident.to_string());
+        syn::visit::visit_item_mod(self, item);
+        self.scope.pop();
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.in_fn(item.sig.ident.to_string(), |v| syn::visit::visit_item_fn(v, item));
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        let self_ty = compact(&item.self_ty);
+        let prefix = match &item.trait_ {
+            Some((trait_path, _)) => format!("{self_ty} as {}", compact(trait_path)),
+            None => self_ty,
+        };
+        let self_enum = match &*item.self_ty {
+            syn::Type::Path(ty) => ty.path.segments.last().map(|s| s.ident.to_string()),
+            _ => None,
+        };
+        let outer_enum = std::mem::replace(&mut self.self_enum, self_enum);
+        self.scope.push(prefix);
+        syn::visit::visit_item_impl(self, item);
+        self.scope.pop();
+        self.self_enum = outer_enum;
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if is_test_only(&item.attrs) {
+            return;
+        }
+        self.in_fn(item.sig.ident.to_string(), |v| syn::visit::visit_impl_item_fn(v, item));
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        match expr {
+            // A constructor call counts once; only its arguments are visited.
+            syn::Expr::Call(call) => {
+                if let syn::Expr::Path(callee) = &*call.func {
+                    if let Some(site) = self.classify(&callee.path) {
+                        self.record(site);
+                        for arg in &call.args {
+                            self.visit_expr(arg);
+                        }
+                        return;
+                    }
+                }
+            }
+            // The struct path is visited as a `Path`, not an `Expr`, so the
+            // default recursion below cannot count it again.
+            syn::Expr::Struct(lit) => {
+                if let Some(site) = self.classify(&lit.path) {
+                    self.record(site);
+                }
+            }
+            // A unit variant, a stage literal, or a variant used as a fn value.
+            syn::Expr::Path(path) => {
+                if let Some(site) = self.classify(&path.path) {
+                    self.record(site);
+                    return;
+                }
+            }
+            // `stage == CodecStage::Decode` compares; it constructs nothing.
+            syn::Expr::Binary(binary)
+                if matches!(
+                    binary.op,
+                    syn::BinOp::Eq(_)
+                        | syn::BinOp::Ne(_)
+                        | syn::BinOp::Lt(_)
+                        | syn::BinOp::Le(_)
+                        | syn::BinOp::Gt(_)
+                        | syn::BinOp::Ge(_)
+                ) =>
+            {
+                for side in [&*binary.left, &*binary.right] {
+                    if !self.is_compared_path(side) {
+                        self.visit_expr(side);
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        syn::visit::visit_expr(self, expr);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+        let mut tokens = Vec::new();
+        Self::flat_tokens(buffer.begin(), &mut tokens);
+        let hit = tokens.windows(4).find_map(|w| {
+            (w[1] == ":" && w[2] == ":").then(|| self.classify_pair(&w[0], &w[3])).flatten()
+        });
+        if let Some((kind, name)) = hit {
+            self.problems.push(format!(
+                "{}: {kind} {name} inside `{}!` in {:?} — syn cannot see it; move it out of the macro",
+                self.file,
+                compact(&mac.path),
+                self.fn_name
+            ));
+        }
     }
 }

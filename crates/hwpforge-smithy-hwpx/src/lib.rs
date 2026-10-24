@@ -104,7 +104,7 @@ pub use diff::{
 pub use encoder::{
     partition_semantic_loss, EncodeOptions, EncodeOutcome, EncodeWarning, HwpxEncoder,
 };
-pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
+pub use error::{CodecFailure, CodecStage, HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
     ExportedDocument, ExportedSection, ExportedStyles, PreservedTextSlot, SectionPreservation,
     TextLocator, FORMAT_VERSION, SECTION_PRESERVATION_VERSION,

@@ -87,6 +87,23 @@ ops_codes! {
     AssetPlanMismatch => "ASSET_PLAN_MISMATCH",
     /// Two provisioned assets claim the same identity with different bytes.
     AssetIdentityConflict => "ASSET_IDENTITY_CONFLICT",
+    /// A tool's request fields could not be deserialised (wrong type, missing or malformed field).
+    InvalidParams => "INVALID_PARAMS",
+    // ── file I/O and output ────────────────────────────────────────
+    /// The input path does not exist.
+    FileNotFound => "FILE_NOT_FOUND",
+    /// The input (file, metadata or stdin) could not be read for another reason.
+    FileReadFailed => "FILE_READ_FAILED",
+    /// An output file or directory could not be written.
+    FileWriteFailed => "FILE_WRITE_FAILED",
+    /// The output path was refused by the output-path policy.
+    InvalidOutputPath => "INVALID_OUTPUT_PATH",
+    /// A path does not carry the file extension the operation requires.
+    InvalidExtension => "INVALID_EXTENSION",
+    /// An inline result exceeds the accepted output size; write it to a file instead.
+    OutputTooLarge => "OUTPUT_TOO_LARGE",
+    /// The manifest path collides with the output path.
+    ManifestPathConflict => "MANIFEST_PATH_CONFLICT",
     // ── codec ──────────────────────────────────────────────────────
     /// HWPX package or XML could not be decoded.
     DecodeFailed => "DECODE_FAILED",
@@ -234,6 +251,8 @@ ops_codes! {
     EmptySection => "EMPTY_SECTION",
     /// The section-properties paragraph cannot be edited.
     SectionPropertiesParagraph => "SECTION_PROPERTIES_PARAGRAPH",
+    /// An edit would change the value or the range of a protected field.
+    ProtectedFieldRange => "PROTECTED_FIELD_RANGE",
     /// Span count changed unexpectedly.
     SpanCountMismatch => "SPAN_COUNT_MISMATCH",
     /// Structural edit output failed self-verification.
