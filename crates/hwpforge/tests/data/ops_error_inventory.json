@@ -171,6 +171,64 @@
           "shape": "tuple",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "Codec",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Patch",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Invariant",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+      "name": "PatchError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Codec",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Rejected",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SectionOutOfRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ProtectedFieldRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Invariant",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

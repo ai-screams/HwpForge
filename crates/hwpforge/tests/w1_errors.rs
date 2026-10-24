@@ -1,8 +1,119 @@
 #![cfg(feature = "ops-hwpx")]
+use hwpforge::hwpx::{
+    CodecFailure, CodecStage, FillError, HwpxDecoder, HwpxError, HwpxErrorCode, HwpxPatcher,
+    PatchError, SectionWorkflowError,
+};
+use hwpforge::ops::exchange::PatchOptions;
 use hwpforge::ops::{self, OpsError, ReadOptions};
+
+fn failure(stage: CodecStage) -> CodecFailure {
+    CodecFailure { stage, code: HwpxErrorCode::Zip, detail: "injected".into() }
+}
+
+/// A patch error as the patch operation reports it.
+fn patch_err(error: PatchError) -> OpsError {
+    OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(error))
+}
+
+/// Every `rust` surface of the W2 cases (patch, fill, section workflow).
+fn w2_rust_cases() -> Vec<(&'static str, OpsError)> {
+    let inner = include_bytes!("data/patch-inner-decode.hwpx");
+    let section = include_str!("data/patch-inner-decode.section.json");
+    let no_metadata = include_str!("data/patch-no-metadata.section.json");
+    let corrupt = include_bytes!("data/corrupt-input.hwpx");
+    let fixture = include_bytes!("../../hwpforge-smithy-hwpx/tests/fixtures/SimpleTable.hwpx");
+    let decoded = HwpxDecoder::decode(fixture).unwrap();
+    let rejected = || PatchError::Rejected(HwpxError::InvalidStructure { detail: "x".into() });
+    vec![
+        // Entry checks pass (package, section, metadata); the base XML is broken.
+        (
+            "patch.input_decode",
+            ops::exchange::patch(inner, &PatchOptions::default().with_patch(section)).unwrap_err(),
+        ),
+        // Missing metadata and broken XML at once: the metadata check runs first.
+        (
+            "patch.missing_metadata_first",
+            ops::exchange::patch(inner, &PatchOptions::default().with_patch(no_metadata))
+                .unwrap_err(),
+        ),
+        (
+            "patch.section_out_of_range",
+            patch_err(
+                HwpxPatcher::export_section_preservation(
+                    fixture,
+                    5,
+                    &decoded.document.sections()[0],
+                )
+                .unwrap_err(),
+            ),
+        ),
+        ("patch.validation", patch_err(PatchError::Codec(failure(CodecStage::Validation)))),
+        ("patch.encode", patch_err(PatchError::Codec(failure(CodecStage::Encode)))),
+        ("patch.codec.admission", patch_err(PatchError::Codec(failure(CodecStage::Admission)))),
+        (
+            "patch.codec.verification",
+            patch_err(PatchError::Codec(failure(CodecStage::Verification))),
+        ),
+        (
+            "patch.protected_field",
+            patch_err(PatchError::ProtectedFieldRange { detail: "range".into() }),
+        ),
+        ("patch.invariant", patch_err(PatchError::Invariant { detail: "source map".into() })),
+        (
+            "fill.input_decode",
+            ops::edit::fill(corrupt, &[("a".into(), "b".into())], &Default::default()).unwrap_err(),
+        ),
+        ("fill.invariant", OpsError::Fill(FillError::Invariant { detail: "section".into() })),
+        ("fill.codec.admission", OpsError::Fill(FillError::Codec(failure(CodecStage::Admission)))),
+        (
+            "fill.codec.validation",
+            OpsError::Fill(FillError::Codec(failure(CodecStage::Validation))),
+        ),
+        ("fill.codec.encode", OpsError::Fill(FillError::Codec(failure(CodecStage::Encode)))),
+        (
+            "fill.codec.verification",
+            OpsError::Fill(FillError::Codec(failure(CodecStage::Verification))),
+        ),
+        (
+            "fill.workflow",
+            OpsError::Fill(FillError::Workflow(HwpxError::InvalidStructure {
+                detail: "field boundary".into(),
+            })),
+        ),
+        ("fill.patch.rejected", OpsError::Fill(FillError::Patch(rejected()))),
+        (
+            "fill.patch.validation",
+            OpsError::Fill(FillError::Patch(PatchError::Codec(failure(CodecStage::Validation)))),
+        ),
+        (
+            "fill.patch.encode",
+            OpsError::Fill(FillError::Patch(PatchError::Codec(failure(CodecStage::Encode)))),
+        ),
+        (
+            "fill.patch.protected_field",
+            OpsError::Fill(FillError::Patch(PatchError::ProtectedFieldRange {
+                detail: "range".into(),
+            })),
+        ),
+        (
+            "fill.patch.section_out_of_range",
+            OpsError::Fill(FillError::Patch(PatchError::SectionOutOfRange {
+                requested: 1,
+                sections: 1,
+            })),
+        ),
+        (
+            "fill.patch.invariant",
+            OpsError::Fill(FillError::Patch(PatchError::Invariant { detail: "x".into() })),
+        ),
+    ]
+}
 
 #[test]
 // 이것을 실패시키는 것: OpsError::Io(NotFound)를 FileReadFailed로 변경, 기타 OpsError::Io를 FileNotFound로 변경, read 구역 범위를 InvalidInput으로 변경, read 표 부재를 InvalidInput으로 변경, read 필드 부재를 InvalidInput으로 변경, manifest에 미소비 Rust surface 추가.
+// 이것을 실패시키는 것(W2): stage→코드 매핑 한 갈래 교체, PreservingPatch 위임을 PATCH_FAILED 로 고정,
+// FillError::Patch 위임을 FILL_FAILED 로 고정, patch 원본 decode 를 Rejected 로 감싸기,
+// metadata 검사를 원본 decode 뒤로 옮기기, 구역 범위 검사를 Rejected 로, fill 입력 decode 를 Workflow 로.
 fn w1_read_and_io_causes_are_canonical() {
     // 이것을 실패시키는 것: read 매핑을 InvalidInput으로 치환하거나 NotFound/기타 I/O 매핑을 뒤바꿈.
     let manifest: serde_json::Value =
@@ -21,7 +132,10 @@ fn w1_read_and_io_causes_are_canonical() {
         ),
         ("io.missing", OpsError::Io(std::io::Error::from(std::io::ErrorKind::NotFound))),
         ("io.read", OpsError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied))),
-    ] {
+    ]
+    .into_iter()
+    .chain(w2_rust_cases())
+    {
         consumed.insert(id);
         let case = manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
         assert_eq!(error.code().as_str(), case["expected_code"].as_str().unwrap(), "{id}");

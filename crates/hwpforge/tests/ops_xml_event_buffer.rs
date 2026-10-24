@@ -160,15 +160,16 @@ fn patch_event_buffer_boundary_passes() {
 }
 
 // 이것을 실패시키는 것: event_buffer_size 호출 삭제, 한도 131072 로 올리기,
-// 또는 xml_error_detail 의 TooManyEvents 전용 문구 삭제.
+// 또는 xml_error_detail 의 TooManyEvents 전용 문구 삭제. patch 원본 decode 를 Rejected 로 감싸기,
+// PreservingPatch 위임을 PATCH_FAILED 로 고정해도 실패한다.
 #[test]
-fn patch_event_buffer_overflow_keeps_patch_failed() {
+fn patch_event_buffer_overflow_is_a_decode_failure() {
     let base = base();
     let options = patch_options(&base);
     let bytes = interleave(&base, false, LIMIT + 1);
     // Options come from a clean base so export cannot reject the attack before
     // patch is called. Decode must reject before the stale-preservation check.
-    assert_rejected(patch(&bytes, &options).unwrap_err(), "section0.xml", "PATCH_FAILED");
+    assert_rejected(patch(&bytes, &options).unwrap_err(), "section0.xml", "DECODE_FAILED");
 }
 
 // 이것을 실패시키는 것: XML_EVENT_BUFFER_LIMIT 를 4096 으로 되돌리기.

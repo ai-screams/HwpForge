@@ -254,3 +254,9 @@ to-md	INPUT_TOO_LARGE	io.to-md.fifo_over_limit	"@dynamic"
 convert-hwp5	INPUT_TOO_LARGE	io.convert-hwp5.input_size_preflight	"@dynamic"
 convert-hwp5	INPUT_TOO_LARGE	io.convert-hwp5.fifo_over_limit	"@dynamic"
 convert-hwp5	FILE_WRITE_FAILED	io.convert-hwp5.output_metadata	"@dynamic"
+# W2 patch·fill: inner decode and fill decode are shared fixtures; fill now delegates patch causes (exit 2 as the former FILL_FAILED).
+patch	DECODE_FAILED	patch.input_decode	null
+patch	PATCH_FAILED	patch.missing_metadata_first	"Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow."
+fill	DECODE_FAILED	fill.input_decode	"Check that the file is a valid HWPX document"
+fill	PATCH_FAILED	fill.patch.rejected	null
+fill	SECTION_OUT_OF_RANGE	fill.patch.section_out_of_range	null

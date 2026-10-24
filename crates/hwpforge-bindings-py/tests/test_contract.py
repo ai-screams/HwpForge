@@ -590,11 +590,8 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
 
     from hwpforge import Document, HwpForgeFileNotFoundError, HwpForgeIOError
 
-    manifest = json.loads(
-        (
-            Path(__file__).resolve().parents[2] / "hwpforge/tests/data/error_contract_018.json"
-        ).read_text()
-    )
+    data = Path(__file__).resolve().parents[2] / "hwpforge/tests/data"
+    manifest = json.loads((data / "error_contract_018.json").read_text())
     calls = {
         "decode.input": partial(
             Document(
@@ -610,6 +607,19 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
         "read.section": partial(Document(table_bytes).read, section=999),
         "read.table": partial(Document(table_bytes).read, table=999),
         "read.field": partial(Document(table_bytes).read, field="missing"),
+        "patch.input_decode": partial(
+            Document((data / "patch-inner-decode.hwpx").read_bytes()).patch,
+            section=0,
+            patch=(data / "patch-inner-decode.section.json").read_text(encoding="utf-8"),
+        ),
+        "patch.missing_metadata_first": partial(
+            Document((data / "patch-inner-decode.hwpx").read_bytes()).patch,
+            section=0,
+            patch=(data / "patch-no-metadata.section.json").read_text(encoding="utf-8"),
+        ),
+        "fill.input_decode": partial(
+            Document((data / "corrupt-input.hwpx").read_bytes()).fill, {"a": "b"}
+        ),
     }
     for case in manifest["cases"]:
         if "python" not in case["surfaces"]:

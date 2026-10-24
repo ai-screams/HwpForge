@@ -155,7 +155,12 @@ pub struct FillMeta {
 /// - [`OpsError::Fill`] for every library rejection: an unknown name
 ///   (`FIELD_NOT_FOUND`), an empty value (`EMPTY_FIELD_VALUE`), a duplicated
 ///   field name in the *document* (`FIELD_NAME_AMBIGUOUS`), or a field with
-///   no patchable body (`FIELD_NOT_FILLABLE`).
+///   no patchable body (`FIELD_NOT_FILLABLE`); an undecodable input
+///   (`DECODE_FAILED`); a field list whose own diagnostics make names
+///   untrustworthy (`FILL_FAILED`); a preserving-patch failure, classified
+///   as the patch classifies it (`PATCH_FAILED`, `PROTECTED_FIELD_RANGE`,
+///   `VALIDATION_FAILED`, `ENCODE_FAILED`, …); or a broken internal
+///   invariant (`INTERNAL_INVARIANT`).
 ///
 /// # Examples
 ///

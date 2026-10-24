@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `to_json` 은 파서는 통과하지만 Core 중첩 깊이 32단계를 넘는 HWPX 입력에서 `GRID_ADDR_PROJECTION_FAILED` 대신 읽기 단계의 `DECODE_FAILED` 를 반환한다.
 - `stamp-plan` 은 이전에 성공하던 같은 깊이 초과 입력을 읽기 단계에서 `STAMP_CODEC_FAILED` 로 거부한다.
-- `fill`·`stamp`·`insert-para`·`delete-para`·`set-cell`·`patch` 는 같은 깊이 초과 입력에서 이제 decode 단계에서 실패한다. 오류 코드는 그대로이고, 메시지는 `Core error:` 를 포함한 깊이 초과 진단으로 바뀐다.
+- `fill`·`stamp`·`insert-para`·`delete-para`·`set-cell`·`patch` 는 같은 깊이 초과 입력에서 이제 decode 단계에서 실패하고, 메시지는 `Core error:` 를 포함한 깊이 초과 진단으로 바뀐다. `stamp`·`insert-para`·`delete-para`·`set-cell` 의 오류 코드는 그대로이고, `fill`·`patch` 는 아래 단계 분류에 따라 `DECODE_FAILED` 를 반환한다.
 - CLI·MCP는 공통 `OpsCode::as_str()`를 출력합니다. `DECODE_ERROR`, `UNKNOWN_PRESET`, `INDEX_OUT_OF_RANGE` 등의 창구별 별명은 제거했습니다. 정밀한 기존 도메인 코드와 의미 손실 코드도 그대로 전달합니다.
 - read의 구역·표·필드 부재는 `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`로 통합했습니다. 관련 read variant 3개와 소비자가 없어진 `SectionWorkflowFailed`, `SetCellFailed`, `StampFailed`, `StructuralEditFailed` 및 옛 lookup을 삭제했습니다(breaking).
 - 입력 부재/기타 읽기/크기 상한/출력 I/O는 `FILE_NOT_FOUND`/`FILE_READ_FAILED`/`INPUT_TOO_LARGE`/`FILE_WRITE_FAILED`입니다. MCP 출력 경로 정책 거부는 `INVALID_OUTPUT_PATH`입니다.
@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP 직렬화 실패 `SERIALIZE_ERROR`·`STAMP_MANIFEST_SERIALIZE`는 `JSON_SERIALIZE_FAILED`로 통합합니다.
 - CLI 구조 편집의 `UNCARRIED_ZIP_ENTRIES`는 `INPUT_ENTRIES_NOT_CARRIED`, `STRUCTURAL_EDIT_FAILED`는 구체 도메인 코드 또는 `UPSTREAM_UNMAPPED`로 전달합니다.
 - set-cell·stamp의 의미 손실은 `SET_CELL_CODEC_FAILED`·`STAMP_CODEC_FAILED` 대신 `ENCODE_SEMANTIC_LOSS`입니다.
+- `patch`·`fill` 의 오류를 실패 단계와 원인으로 나눈다. 입구 검사를 통과한 뒤 원본을 읽거나 decode 하지 못하면 `PATCH_FAILED`·`FILL_FAILED` 대신 `DECODE_FAILED` 다. 편집한 문서의 검증 실패는 `VALIDATION_FAILED`, 출력 작성 실패는 `ENCODE_FAILED`, 보호 필드의 값·범위 변경은 `PROTECTED_FIELD_RANGE`, 내부 source map·위치 불변식 파손은 `INTERNAL_INVARIANT` 다. `PATCH_FAILED` 는 보존 patch 가 받지 않는 변경과 metadata 부재·불일치에만, `FILL_FAILED` 는 필드 목록 진단에만 남는다.
+- `fill` 은 내부 patch 의 원인을 그대로 전달하므로 `PATCH_FAILED` 도 낼 수 있다(예: 다시 만들 수 없는 인라인 표지가 든 칸). 검사 순서는 그대로라 metadata 가 없고 XML 도 손상된 patch 는 계속 `PATCH_FAILED` 다. CLI 종료 값은 두 명령 모두 바뀐 코드에서도 이전 `PATCH_FAILED`·`FILL_FAILED` 와 같은 2 다(patch 의 구역 범위 거부 `SECTION_OUT_OF_RANGE` 1 은 그대로).
 
 설계 §14의 종료 값 변경 안내에 대응하는 W1 변경은 다음과 같습니다. 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않습니다. 기존 승인 네 건(admission·출력 검증 등의 단계 분리)은 W3 소유이며 이 W1 목록에서 구현 완료로 간주하지 않습니다.
 

@@ -9,8 +9,8 @@ use hwpforge_core::{
 };
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{
-    apply_set_cells, CellEditError, ExportedDocument, ExportedSection, HwpxDecoder, HwpxEncoder,
-    HwpxError, HwpxPatcher,
+    apply_set_cells, CellEditError, CodecFailure, CodecStage, ExportedDocument, ExportedSection,
+    HwpxDecoder, HwpxEncoder, HwpxError, HwpxErrorCode, HwpxPatcher, PatchError,
 };
 use hwpforge_smithy_md::MdEncoder;
 
@@ -71,6 +71,19 @@ fn depth_error<T>(result: Result<T, HwpxError>) {
         matches!(result, Err(HwpxError::InvalidStructure { detail }) if detail.contains("nesting_depth"))
     );
 }
+/// A patch entry's depth refusal is a validation-stage codec failure whose
+/// leaf is Core (the replacement is in memory, not decoded bytes).
+/// 이것을 실패시키는 것: patch·export 입구 깊이 검사의 stage 를 Decode 로 바꾸기.
+fn patch_depth_error<T>(result: Result<T, PatchError>) {
+    assert!(matches!(
+        result,
+        Err(PatchError::Codec(CodecFailure {
+            stage: CodecStage::Validation,
+            code: HwpxErrorCode::Core,
+            detail,
+        })) if detail.contains("nesting_depth")
+    ));
+}
 struct NoStyles;
 impl StyleLookup for NoStyles {}
 fn child(name: &str, stack: usize, f: fn()) {
@@ -119,7 +132,7 @@ fn preservation_export_rejects_unvalidated_section() {
         let d = doc(group(100_000));
         let result = HwpxPatcher::export_section_preservation(b"invalid", 0, &d.sections()[0]);
         assert!(d.validate().is_err());
-        depth_error(result);
+        patch_depth_error(result);
     });
 }
 
@@ -135,7 +148,7 @@ fn preserving_patch_rejects_unvalidated_section() {
             None,
         );
         assert!(d.validate().is_err());
-        depth_error(result);
+        patch_depth_error(result);
     });
 }
 

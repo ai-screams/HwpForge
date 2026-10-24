@@ -6924,6 +6924,36 @@ fn decode_input_shared_fixture() {
     assert_eq!(exit, case["surfaces"]["cli"]["exit"].as_i64().unwrap() as i32);
 }
 
+#[test]
+// 이것을 실패시키는 것: patch 원본 decode 를 Rejected 로 감싸기(PATCH_FAILED), metadata 검사를
+// 원본 decode 뒤로 옮기기(DECODE_FAILED), fill 입력 decode 를 Workflow 로 되돌리기(FILL_FAILED).
+fn w2_patch_and_fill_shared_fixtures() {
+    let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
+    let out = test_tmp().join("out.hwpx");
+    let base = data.join("patch-inner-decode.hwpx");
+    for (id, json) in [
+        ("patch.input_decode", "patch-inner-decode.section.json"),
+        ("patch.missing_metadata_first", "patch-no-metadata.section.json"),
+    ] {
+        let section = data.join(json);
+        let (err, _, exit) = run_json(&[
+            "patch",
+            base.to_str().unwrap(),
+            section.to_str().unwrap(),
+            "--section",
+            "0",
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        assert_cli_manifest_case(id, &err, exit);
+    }
+    let corrupt = data.join("corrupt-input.hwpx");
+    let (err, _, exit) =
+        run_json(&["fill", corrupt.to_str().unwrap(), "--set", "a=b", "-o", out.to_str().unwrap()]);
+    assert_cli_manifest_case("fill.input_decode", &err, exit);
+    assert!(!out.exists(), "a refused edit writes no output");
+}
+
 fn assert_cli_manifest_case(id: &str, error: &serde_json::Value, exit: i32) {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))

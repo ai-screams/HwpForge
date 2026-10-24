@@ -34,9 +34,9 @@ use hwpforge::foundation::FoundationError;
 use hwpforge::hwpx::grid_addr::GridAddrError;
 use hwpforge::hwpx::stamp::{CellStampError, StampError, StampMapError, StamperError};
 use hwpforge::hwpx::{
-    CellEditError, DecodeWarning, EncodeWarning, FillError, HwpxError, ParagraphPath, PathSeg,
-    ReadError, SectionWorkflowError, SectionWorkflowWarning, StructuralEditError,
-    StructuralWarning,
+    CellEditError, CodecFailure, CodecStage, DecodeWarning, EncodeWarning, FillError, HwpxError,
+    HwpxErrorCode, ParagraphPath, PatchError, PathSeg, ReadError, SectionWorkflowError,
+    SectionWorkflowWarning, StructuralEditError, StructuralWarning,
 };
 use hwpforge::md::assets::{AssetOutcome, RunLocator};
 use hwpforge::md::embed::ImageEmbedSkipReason;
@@ -101,6 +101,19 @@ const ERROR_MAPPING: Table = &[
             ("DuplicateFieldName", "FIELD_NAME_AMBIGUOUS"),
             ("UnfillableField", "FIELD_NOT_FILLABLE"),
             ("Workflow", "FILL_FAILED"),
+            ("Codec", "DECODE_FAILED"),
+            ("Patch", "PATCH_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
+        ],
+    ),
+    (
+        "PatchError",
+        &[
+            ("Codec", "DECODE_FAILED"),
+            ("Rejected", "PATCH_FAILED"),
+            ("SectionOutOfRange", "SECTION_OUT_OF_RANGE"),
+            ("ProtectedFieldRange", "PROTECTED_FIELD_RANGE"),
+            ("Invariant", "INTERNAL_INVARIANT"),
         ],
     ),
     (
@@ -406,6 +419,23 @@ fn fill_errors() -> Vec<(&'static str, FillError)> {
         ("DuplicateFieldName", FillError::DuplicateFieldName { name: "x".into(), count: 2 }),
         ("UnfillableField", FillError::UnfillableField { name: "x".into(), section: 0 }),
         ("Workflow", FillError::Workflow(HwpxError::Zip("z".into()))),
+        ("Codec", FillError::Codec(codec_failure(CodecStage::Decode))),
+        ("Patch", FillError::Patch(PatchError::Rejected(HwpxError::Zip("z".into())))),
+        ("Invariant", FillError::Invariant { detail: "inventory changed".into() }),
+    ]
+}
+
+fn codec_failure(stage: CodecStage) -> CodecFailure {
+    CodecFailure { stage, code: HwpxErrorCode::Zip, detail: "z".into() }
+}
+
+fn patch_errors() -> Vec<(&'static str, PatchError)> {
+    vec![
+        ("Codec", PatchError::Codec(codec_failure(CodecStage::Decode))),
+        ("Rejected", PatchError::Rejected(HwpxError::Zip("z".into()))),
+        ("SectionOutOfRange", PatchError::SectionOutOfRange { requested: 2, sections: 1 }),
+        ("ProtectedFieldRange", PatchError::ProtectedFieldRange { detail: "range".into() }),
+        ("Invariant", PatchError::Invariant { detail: "source map".into() }),
     ]
 }
 
@@ -522,7 +552,10 @@ fn section_workflow_errors() -> Vec<(&'static str, SectionWorkflowError)> {
             "SectionIndexMismatch",
             SectionWorkflowError::SectionIndexMismatch { requested: 0, actual: 1 },
         ),
-        ("PreservingPatch", SectionWorkflowError::PreservingPatch(HwpxError::Zip("z".into()))),
+        (
+            "PreservingPatch",
+            SectionWorkflowError::PreservingPatch(PatchError::Rejected(HwpxError::Zip("z".into()))),
+        ),
     ]
 }
 
@@ -690,6 +723,13 @@ fn wrapped_errors() -> BTreeMap<&'static str, Vec<(&'static str, OpsError)>> {
     all.insert(
         "SectionWorkflowError",
         section_workflow_errors().into_iter().map(|(n, e)| (n, e.into())).collect(),
+    );
+    all.insert(
+        "PatchError",
+        patch_errors()
+            .into_iter()
+            .map(|(n, e)| (n, OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(e))))
+            .collect(),
     );
     all.insert("StamperError", stamper_errors().into_iter().map(|(n, e)| (n, e.into())).collect());
     all.insert(
@@ -1019,7 +1059,8 @@ fn every_wrapped_payload_type_has_a_manifest_record() {
     // stage; `GridAddrWarning` is a struct.
     let not_enums: BTreeSet<&str> = ["Error", "GridAddrWarning"].into_iter().collect();
     // Reached through another wrapped enum rather than as a direct payload.
-    let nested: BTreeSet<&str> = ["StampError", "CellStampError"].into_iter().collect();
+    let nested: BTreeSet<&str> =
+        ["StampError", "CellStampError", "PatchError"].into_iter().collect();
 
     let derived = error_inventory::wrapped_payloads_of_ops();
     let derived: BTreeSet<&str> =

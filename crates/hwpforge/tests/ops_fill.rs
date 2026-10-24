@@ -211,11 +211,12 @@ fn a_name_that_appears_twice_in_the_document_is_ambiguous() {
 }
 
 #[test]
-fn a_non_document_input_is_a_fill_workflow_failure() {
+fn a_non_document_input_is_a_decode_failure() {
+    // 이것을 실패시키는 것: fill 입력 decode 를 `FillError::Workflow` 로 되돌리기(FILL_FAILED).
     let err = fill(b"not a zip at all", &pairs(&[("a", "b")]), &FillOptions::default())
         .expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::FillFailed, "{err}");
+    assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
 }
 
 #[test]

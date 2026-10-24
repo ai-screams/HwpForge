@@ -111,7 +111,7 @@ pub use exchange::{
     TextLocator, FORMAT_VERSION, SECTION_PRESERVATION_VERSION,
 };
 pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
-pub use patch::HwpxPatcher;
+pub use patch::{HwpxPatcher, PatchError};
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
 pub use read::{
     CellView, DocumentOutline, EmbeddedContent, HwpxReader, OutlineBookmark, OutlineHeading,

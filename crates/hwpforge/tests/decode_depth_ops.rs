@@ -95,7 +95,9 @@ fn set_cell_overflow_stops_at_decode() {
     });
 }
 
-// 이것을 실패시키는 것: 공개 decode Core 관문 삭제 (코드는 같아도 Core decode 오류가 사라짐).
+// 이것을 실패시키는 것: 공개 decode Core 관문 삭제 (코드는 같아도 Core decode 오류가 사라짐),
+// patch 원본 decode 를 Rejected 로 감싸기, PreservingPatch 위임을 PATCH_FAILED 로 고정,
+// PatchError::Codec 의 Display 를 원래 메시지 대신 고정 문구로.
 #[test]
 fn patch_overflow_stops_at_decode() {
     on_big_stack(|| {
@@ -108,7 +110,7 @@ fn patch_overflow_stops_at_decode() {
                 &ops::exchange::PatchOptions::default()
                     .with_patch(serde_json::to_string(&exported.section).unwrap()),
             ),
-            "PATCH_FAILED",
+            "DECODE_FAILED",
         );
         assert!(err.to_string().contains("Core error:"), "{err}");
     });
@@ -123,14 +125,14 @@ fn to_json_overflow_is_decode_failure() {
     });
 }
 
-// 이것을 실패시키는 것: decode Core 관문 삭제 → 필드 inventory 진단(E4006).
+// 이것을 실패시키는 것: decode Core 관문 삭제 → 필드 inventory 진단(E4006, FILL_FAILED).
 #[test]
-fn fill_overflow_keeps_code_but_moves_before_inventory() {
+fn fill_overflow_is_a_decode_failure_before_inventory() {
     on_big_stack(|| {
         let bytes = package(section_with(&groups(32)), Place::Body);
         let err = code(
             ops::edit::fill(&bytes, &[("field".into(), "value".into())], &Default::default()),
-            "FILL_FAILED",
+            "DECODE_FAILED",
         );
         assert!(err.to_string().contains("Core error:"), "{err}");
     });
