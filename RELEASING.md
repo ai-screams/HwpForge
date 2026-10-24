@@ -134,7 +134,7 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 
 - [ ] **버전/태그를 손대지 않는다.** Release PR 머지만 한다.
 - [ ] **CHANGELOG의 한글(CJK) 표.** 편집 후 dprint pre-commit이 거부하면
-      `dprint fmt CHANGELOG.md` 수동 실행 → 재-stage (`.claude/guides/tooling.md`).
+      `dprint fmt CHANGELOG.md` 수동 실행 → 재-stage.
 - [ ] **breaking은 반드시 `type!:` 로 표기.** 안 하면 0.x에서 patch로 잘못 bump.
 - [ ] **로컬에서 태그 기반 검증 시 `git fetch --tags` 먼저.** 로컬 클론에 최신 태그가
       없으면 잘못된 baseline으로 거짓 통과한다 (PR #78에서 겪은 함정).
@@ -217,7 +217,7 @@ release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌
 - 같은 run 의 게시 잡 재실행이 6개 전부 `already exists, skipping` 으로 통과.
 - 이미 게시된 태그를 **새로 dispatch** 하면 재빌드된 바이트가 달라 `--check-url` 이 거부한다(exit 2) — `Local file and index file do not match for hwpforge-…-macosx_10_12_x86_64.whl`. 고장이 아니라 **안전 속성**이다: 이미 올라간 파일을 덮어쓰지 않는다. 멱등성은 오직 이 검사에서 온다(PyPI 는 파일명 재사용을 영구히 거부한다).
 
-**프로덕션 첫 업로드**: `0.16.5` 에서 PyPI `hwpforge` 에 wheel 5 + sdist 가 올라갔다 (`.claude/guides/status.md`).
+**프로덕션 첫 업로드**: `0.16.5` 에서 PyPI `hwpforge` 에 wheel 5 + sdist 가 올라갔다.
 
 **아직 실측하지 않은 것**: 토큰으로 진짜 3/6 부분 게시 상태를 만든 뒤의 복구. 절차는 — 아티팩트를 내려받아 `uv publish --trusted-publishing never --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ <파일 3개>` 로 셋만 올리고(토큰 사용), 그다음 **Actions → 그 run → "Re-run failed jobs"** 로 `Publish › TestPyPI` 만 다시 돌려 로그에 **skip 3 · upload 3** 이 찍히는지 본다. 아티팩트 보관은 14일이므로 그 안에 해야 한다. 새로 dispatch 해서는 안 된다(위 `--check-url` 거부).
 

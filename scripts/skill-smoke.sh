@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Skill smoke test — verifies that every command/workflow documented in
-# .claude/skills/hwpforge/ actually works against the current CLI.
+# skills/hwpforge/ actually works against the current CLI.
 #
 # This is the "make ci" for the skill: it catches documentation drift (a flag
 # that changed, a workflow that no longer behaves as written) automatically.
