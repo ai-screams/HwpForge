@@ -158,12 +158,13 @@ fn tab_lf_cr_are_not_removed_and_not_reported() {
     // 이것을 실패시키는 것: `is_xml_forbidden_char` 범위에 CR 을 넣는 것 (`'\u{D}'..='\u{1F}'`).
     // TAB·LF 는 본문에서 `<hp:tab/>`·`<hp:lineBreak/>` 가 되고 속성에서는 공백이
     // 되므로(#208) 조립된 part 에 글자 그대로 남지 않는다 — 그 둘의 범위 변이는
-    // `wire_xml` 단위 테스트가 잡는다.
+    // `wire_xml` 단위 테스트가 잡는다. CR 은 TAB·LF 와 섞이면 수동 인라인 경로를 타며
+    // 그 경로도 직렬화 경로처럼 `&#13;` 로 쓴다(글자 그대로 쓰면 파서가 LF 로 되읽는다, #207).
     let (parts, warnings) = encode("함초롬돋움", "A\tB\nC\rD", "a\tb\nc\rd");
 
     assert!(removals(&warnings).is_empty(), "{warnings:?}");
     let section = part(&parts, "Contents/section0.xml");
-    assert!(section.contains("<hp:t>a<hp:tab/>b<hp:lineBreak/>c\rd</hp:t>"), "{section}");
+    assert!(section.contains("<hp:t>a<hp:tab/>b<hp:lineBreak/>c&#13;d</hp:t>"), "{section}");
     assert!(part(&parts, "Contents/header.xml").contains(r#"engName="A B C D""#));
 }
 
