@@ -1341,7 +1341,7 @@ mod tests {
         top.ctrl_properties = 0x040a_2210;
         let (control, lost) = project(&top);
         assert!(lost.is_empty(), "{lost:?}");
-        let Control::Group { placement: Some(p), .. } = control.unwrap() else { panic!() };
+        let Control::Group { placement: Some(ref p), .. } = control.unwrap() else { panic!() };
         assert_eq!(p.text_wrap, ObjectTextWrap::Square);
         assert_eq!(p.vert_rel_to, ObjectRelativeTo::Para);
         assert_eq!(p.horz_rel_to, ObjectRelativeTo::Column);
@@ -1353,13 +1353,13 @@ mod tests {
         top.geometry.x = 0;
         top.geometry.y = 0;
         let (control, _) = project(&top);
-        let Control::Group { placement: Some(p), .. } = control.unwrap() else { panic!() };
+        let Control::Group { placement: Some(ref p), .. } = control.unwrap() else { panic!() };
         assert!(!p.treat_as_char);
         top.ctrl_properties |= 1;
         top.geometry.x = -408;
         let (control, _) = project(&top);
-        let Control::Group { placement, .. } = control.unwrap() else { panic!() };
-        assert!(placement.is_none_or(|p| p.treat_as_char));
+        let Control::Group { ref placement, .. } = control.unwrap() else { panic!() };
+        assert!(placement.as_ref().is_none_or(|p| p.treat_as_char));
     }
 
     /// HWP5 places every shape of a group, nested groups included, in the
@@ -1605,7 +1605,7 @@ mod tests {
         );
         let (g, lost) = project(&mixed);
         assert!(lost.is_empty(), "{lost:?}");
-        let Some(Control::Group { children, .. }) = g else { panic!() };
+        let Some(Control::Group { ref children, .. }) = g else { panic!() };
         assert!(matches!(children[0], GroupChild::Picture(_)), "{children:?}");
         assert!(matches!(children[1], GroupChild::Shape(Control::Rect { .. })), "{children:?}");
 
@@ -1619,7 +1619,7 @@ mod tests {
         );
         let (g, lost) = project(&only);
         assert!(lost.is_empty(), "{lost:?}");
-        let Some(Control::Group { children, .. }) = g else { panic!() };
+        let Some(Control::Group { ref children, .. }) = g else { panic!() };
         assert_eq!(children.len(), 2);
 
         let mut state =
@@ -2127,7 +2127,7 @@ mod tests {
         super::super::ASSET_COPIES.with(|n| n.set(0));
         let (g, lost) = project(&top);
         assert!(lost.is_empty(), "{lost:?}");
-        let Some(Control::Group { children, .. }) = g else { panic!("group") };
+        let Some(Control::Group { ref children, .. }) = g else { panic!("group") };
         assert_eq!(children.len(), 20);
         assert_eq!(super::super::ASSET_COPIES.with(std::cell::Cell::get), 1);
         assert_eq!(super::super::image_size::PARSES.with(std::cell::Cell::get), 1);
@@ -2249,7 +2249,7 @@ mod tests {
         let linked = picture_group(|i| i.link = Some(Ok("http://a.kr;1;0;0;".to_string())));
         let (g, lost) = project(&linked);
         assert!(lost.is_empty(), "{lost:?}");
-        let Some(Control::Group { children, .. }) = g else { panic!() };
+        let Some(Control::Group { ref children, .. }) = g else { panic!() };
         let GroupChild::Picture(image) = &children[0] else { panic!() };
         assert_eq!(image.hyperlink.as_deref(), Some("http://a.kr"));
 
@@ -2288,7 +2288,7 @@ mod tests {
         let top = group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![pic]);
         let (g, lost) = project(&top);
         assert_eq!(lost, ["group_nested_object", "group_child_control", "group_child_text"]);
-        let Some(Control::Group { children, .. }) = g else { panic!() };
+        let Some(Control::Group { ref children, .. }) = g else { panic!() };
         assert!(matches!(children[0], GroupChild::Picture(_)));
     }
     /// 이것을 실패시키는 것: HWP5 독립/묶음에서 실제 손실의 분류·위치 누락.

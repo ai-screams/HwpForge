@@ -2089,9 +2089,9 @@ fn has_turning_content(control: &Control) -> bool {
 /// else {
 ///     unreachable!()
 /// };
-/// let Control::Rect { width, placement, .. } = *control else { unreachable!() };
+/// let Control::Rect { width, placement, .. } = control.as_ref() else { unreachable!() };
 /// assert_eq!(width.as_i32(), 150);
-/// assert_eq!(placement.unwrap().horz_offset.as_i32(), 200);
+/// assert_eq!(placement.as_ref().unwrap().horz_offset.as_i32(), 200);
 /// ```
 pub fn fold_group_child(control: Control, input: &FoldInput) -> FoldOutcome {
     fold_child(control, input, false)

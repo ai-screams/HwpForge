@@ -109,6 +109,7 @@ pub mod table;
 
 mod depth;
 mod validate;
+mod walk;
 
 // ---------------------------------------------------------------------------
 // Re-exports for convenience

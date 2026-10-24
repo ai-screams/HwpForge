@@ -240,7 +240,7 @@ pub(crate) fn check(sections: &[Section]) -> CoreResult<()> {
         Err(CoreError::InvalidStructure {
             context: "nesting_depth".into(),
             reason: format!(
-                "maximum {} exceeds limit {}; section={}, root={}, paragraph={} (zero-based)",
+                "nesting depth {} exceeds {}; section={}, root={}, paragraph={} (zero-based)",
                 max.depth, LIMIT, max.section, max.root, max.paragraph
             ),
         })
@@ -249,129 +249,198 @@ pub(crate) fn check(sections: &[Section]) -> CoreResult<()> {
     }
 }
 
-// No Drop impl: preserve moves out of public Paragraph/Control fields.
 // Empty each owning edge before its parent is automatically dropped.
-pub(crate) fn dismantle(sections: &mut [Section]) -> usize {
-    let mut nodes = 0;
-    enum Owned {
-        Paragraphs(Vec<Paragraph>),
-        Runs(Vec<Run>),
-        Control(Box<Control>),
-        Image(Box<Image>),
-        Table(Box<Table>),
-    }
-    let mut stack = Vec::new();
-    for s in sections {
-        stack.push(Owned::Paragraphs(std::mem::take(&mut s.paragraphs)));
-        for h in s.headers.iter_mut().chain(&mut s.footers) {
-            stack.push(Owned::Paragraphs(std::mem::take(&mut h.paragraphs)));
+// All consuming ownership edges live in Work below. Both Drop implementations
+// and the test-only dismantle entry use these same shallow detach helpers.
+enum Owned {
+    Paragraphs(Vec<Paragraph>),
+    Runs(Vec<Run>),
+    GroupChildren(Vec<GroupChild>),
+}
+
+#[derive(Default)]
+struct Work {
+    stack: Vec<Owned>,
+    #[cfg(test)]
+    nodes: usize,
+}
+
+impl Work {
+    #[inline(always)]
+    fn count(&mut self) {
+        #[cfg(test)]
+        {
+            self.nodes = self.nodes.saturating_add(1);
         }
-        for m in s.master_pages.iter_mut().flatten() {
-            stack.push(Owned::Paragraphs(std::mem::take(&mut m.paragraphs)));
+    }
+
+    fn paragraphs(&mut self, paragraphs: Vec<Paragraph>) {
+        if !paragraphs.is_empty() {
+            self.stack.push(Owned::Paragraphs(paragraphs));
         }
     }
-    while let Some(node) = stack.pop() {
-        nodes += match &node {
-            Owned::Paragraphs(p) => p.len(),
-            Owned::Runs(r) => r.len(),
-            _ => 1,
-        };
-        match node {
-            Owned::Paragraphs(ps) => {
-                for mut p in ps {
-                    stack.push(Owned::Runs(std::mem::take(&mut p.runs)));
+
+    fn runs(&mut self, runs: Vec<Run>) {
+        if !runs.is_empty() {
+            self.stack.push(Owned::Runs(runs));
+        }
+    }
+
+    fn take_paragraph_children(&mut self, paragraph: &mut Paragraph) {
+        self.count();
+        // Text-only roots never allocate a work stack or scan their runs twice.
+        for run in std::mem::take(&mut paragraph.runs) {
+            self.take_run_children(run);
+        }
+    }
+
+    fn take_run_children(&mut self, run: Run) {
+        self.count();
+        match run.content {
+            RunContent::Table(mut table) => self.take_table_children(&mut table),
+            RunContent::Image(mut image) => self.take_image_children(&mut image),
+            RunContent::Control(mut control) => self.take_control_children(&mut control),
+            RunContent::Text(_) | RunContent::InlineText(_) => {}
+        }
+    }
+
+    fn take_table_children(&mut self, table: &mut Table) {
+        self.count();
+        for row in &mut table.rows {
+            for cell in &mut row.cells {
+                self.paragraphs(std::mem::take(&mut cell.paragraphs));
+            }
+        }
+        if let Some(caption) = table.caption.take() {
+            self.paragraphs(caption.paragraphs);
+        }
+    }
+
+    fn take_image_children(&mut self, image: &mut Image) {
+        self.count();
+        if let Some(caption) = image.caption.take() {
+            self.paragraphs(caption.paragraphs);
+        }
+    }
+
+    fn take_control_children(&mut self, control: &mut Control) {
+        self.count();
+        match control {
+            Control::TextBox { paragraphs, caption, .. }
+            | Control::Ellipse { paragraphs, caption, .. }
+            | Control::Polygon { paragraphs, caption, .. } => {
+                self.paragraphs(std::mem::take(paragraphs));
+                if let Some(c) = caption.take() {
+                    self.paragraphs(c.paragraphs);
                 }
             }
-            Owned::Runs(rs) => {
-                for r in rs {
-                    match r.content {
-                        RunContent::Table(t) => stack.push(Owned::Table(t)),
-                        RunContent::Image(i) => stack.push(Owned::Image(Box::new(i))),
-                        RunContent::Control(c) => stack.push(Owned::Control(c)),
-                        RunContent::Text(_) | RunContent::InlineText(_) => {}
+            Control::Line { caption, .. }
+            | Control::Rect { caption, .. }
+            | Control::Arc { caption, .. }
+            | Control::Curve { caption, .. }
+            | Control::ConnectLine { caption, .. } => {
+                if let Some(c) = caption.take() {
+                    self.paragraphs(c.paragraphs);
+                }
+            }
+            Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+                self.paragraphs(std::mem::take(paragraphs))
+            }
+            Control::Group { children, .. } => {
+                let children = std::mem::take(children);
+                if !children.is_empty() {
+                    self.stack.push(Owned::GroupChildren(children));
+                }
+            }
+            Control::Memo { content, anchor_runs, .. } => {
+                self.paragraphs(std::mem::take(content));
+                self.runs(std::mem::take(anchor_runs));
+            }
+            Control::FieldBoundary { boundary } => {
+                if let FieldBoundary::Start(s) = boundary {
+                    if let Some(ps) = s.annotation.take() {
+                        self.paragraphs(ps);
                     }
                 }
             }
-            Owned::Table(mut t) => {
-                for r in &mut t.rows {
-                    for c in &mut r.cells {
-                        stack.push(Owned::Paragraphs(std::mem::take(&mut c.paragraphs)));
+            Control::Hyperlink { .. }
+            | Control::EmbeddedChart { .. }
+            | Control::Equation { .. }
+            | Control::Chart { .. }
+            | Control::Dutmal { .. }
+            | Control::Compose { .. }
+            | Control::TextArt { .. }
+            | Control::Bookmark { .. }
+            | Control::CrossRef { .. }
+            | Control::Field { .. }
+            | Control::IndexMark { .. }
+            | Control::UnknownSummary { .. }
+            | Control::DateCodeField { .. }
+            | Control::PathField { .. }
+            | Control::PageNumber { .. }
+            | Control::InlinePageNumber { .. }
+            | Control::AutoNumber { .. }
+            | Control::NewNumber { .. }
+            | Control::PageHiding { .. }
+            | Control::Unknown { .. } => {}
+        }
+    }
+
+    fn drain(&mut self) {
+        while let Some(node) = self.stack.pop() {
+            match node {
+                Owned::Paragraphs(paragraphs) => {
+                    for mut paragraph in paragraphs {
+                        self.take_paragraph_children(&mut paragraph);
                     }
                 }
-                if let Some(c) = t.caption.take() {
-                    stack.push(Owned::Paragraphs(c.paragraphs));
-                }
-            }
-            Owned::Image(mut i) => {
-                if let Some(c) = i.caption.take() {
-                    stack.push(Owned::Paragraphs(c.paragraphs));
-                }
-            }
-            Owned::Control(mut c) => match c.as_mut() {
-                Control::TextBox { paragraphs, caption, .. }
-                | Control::Ellipse { paragraphs, caption, .. }
-                | Control::Polygon { paragraphs, caption, .. } => {
-                    stack.push(Owned::Paragraphs(std::mem::take(paragraphs)));
-                    if let Some(c) = caption.take() {
-                        stack.push(Owned::Paragraphs(c.paragraphs));
+                Owned::Runs(runs) => {
+                    for run in runs {
+                        self.take_run_children(run);
                     }
                 }
-                Control::Line { caption, .. }
-                | Control::Rect { caption, .. }
-                | Control::Arc { caption, .. }
-                | Control::Curve { caption, .. }
-                | Control::ConnectLine { caption, .. } => {
-                    if let Some(c) = caption.take() {
-                        stack.push(Owned::Paragraphs(c.paragraphs));
-                    }
-                }
-                Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
-                    stack.push(Owned::Paragraphs(std::mem::take(paragraphs)))
-                }
-                Control::Group { children, .. } => {
-                    for child in std::mem::take(children) {
+                Owned::GroupChildren(children) => {
+                    for child in children {
                         match child {
-                            GroupChild::Picture(i) => stack.push(Owned::Image(Box::new(i))),
-                            GroupChild::Shape(c) => stack.push(Owned::Control(Box::new(c))),
+                            GroupChild::Shape(mut control) => {
+                                self.take_control_children(&mut control)
+                            }
+                            GroupChild::Picture(mut image) => self.take_image_children(&mut image),
                         }
                     }
                 }
-                Control::Memo { content, anchor_runs, .. } => {
-                    stack.push(Owned::Paragraphs(std::mem::take(content)));
-                    stack.push(Owned::Runs(std::mem::take(anchor_runs)));
-                }
-                Control::FieldBoundary { boundary } => {
-                    if let FieldBoundary::Start(s) = boundary {
-                        if let Some(ps) = s.annotation.take() {
-                            stack.push(Owned::Paragraphs(ps));
-                        }
-                    }
-                }
-                Control::Hyperlink { .. }
-                | Control::EmbeddedChart { .. }
-                | Control::Equation { .. }
-                | Control::Chart { .. }
-                | Control::Dutmal { .. }
-                | Control::Compose { .. }
-                | Control::TextArt { .. }
-                | Control::Bookmark { .. }
-                | Control::CrossRef { .. }
-                | Control::Field { .. }
-                | Control::IndexMark { .. }
-                | Control::UnknownSummary { .. }
-                | Control::DateCodeField { .. }
-                | Control::PathField { .. }
-                | Control::PageNumber { .. }
-                | Control::InlinePageNumber { .. }
-                | Control::AutoNumber { .. }
-                | Control::NewNumber { .. }
-                | Control::PageHiding { .. }
-                | Control::Unknown { .. } => {}
-            },
+            }
         }
     }
-    nodes
+}
+
+pub(crate) fn drop_paragraph(paragraph: &mut Paragraph) {
+    let mut work = Work::default();
+    work.take_paragraph_children(paragraph);
+    work.drain();
+}
+
+pub(crate) fn drop_control(control: &mut Control) {
+    let mut work = Work::default();
+    work.take_control_children(control);
+    work.drain();
 }
 
 #[cfg(test)]
-mod tests;
+fn dismantle(sections: &mut [Section]) -> usize {
+    let mut work = Work::default();
+    for section in sections {
+        work.paragraphs(std::mem::take(&mut section.paragraphs));
+        for band in section.headers.iter_mut().chain(&mut section.footers) {
+            work.paragraphs(std::mem::take(&mut band.paragraphs));
+        }
+        for master in section.master_pages.iter_mut().flatten() {
+            work.paragraphs(std::mem::take(&mut master.paragraphs));
+        }
+    }
+    work.drain();
+    work.nodes
+}
+
+#[cfg(test)]
+pub(crate) mod tests;

@@ -41,6 +41,8 @@ pub struct GridAddrWarning {
 #[non_exhaustive]
 pub enum GridAddrError {
     /// The JSON tree does not match the typed document's serde shape.
+    /// Nesting depth above 32 also uses this variant (diagnostic in `path`).
+    /// Retrying gives the same rejection.
     ShapeMismatch {
         /// Diagnostic path of the first navigation failure.
         path: String,
@@ -99,10 +101,15 @@ impl std::error::Error for GridAddrError {}
 ///
 /// [`GridAddrError::ShapeMismatch`] when the JSON tree does not correspond to
 /// `document` — the export and the value must come from the same source.
+/// Nesting depth above 32 also returns [`GridAddrError::ShapeMismatch`].
+/// Retrying gives the same rejection; reduce nesting before retrying.
 pub fn annotate_document_addresses(
     root: &mut Value,
     document: &Document<Draft>,
 ) -> Result<Vec<GridAddrWarning>, GridAddrError> {
+    // 이것을 실패시키는 것: annotate_document_addresses의 깊이 관문 삭제.
+    depth_gate(document.sections(), 0)?;
+
     let mut warnings = Vec::new();
     for entry in tables_in_document(document) {
         let prefix = vec![
@@ -122,11 +129,16 @@ pub fn annotate_document_addresses(
 ///
 /// [`GridAddrError::ShapeMismatch`] when the JSON tree does not correspond to
 /// `section`.
+/// Nesting depth above 32 also returns [`GridAddrError::ShapeMismatch`].
+/// Retrying gives the same rejection; reduce nesting before retrying.
 pub fn annotate_section_addresses(
     root: &mut Value,
     section: &Section,
     section_idx: usize,
 ) -> Result<Vec<GridAddrWarning>, GridAddrError> {
+    // 이것을 실패시키는 것: annotate_section_addresses의 깊이 관문 삭제.
+    depth_gate(std::slice::from_ref(section), section_idx)?;
+
     let mut warnings = Vec::new();
     for entry in tables_in_section(section, section_idx) {
         let prefix = vec![PathSeg::Field("section")];
@@ -141,10 +153,15 @@ pub fn annotate_section_addresses(
 ///
 /// See [`GridAddrError`] — shape mismatches, malformed addresses, addresses
 /// on unaddressable tables, and anchor mismatches are all rejected.
+/// Nesting depth above 32 also returns [`GridAddrError::ShapeMismatch`].
+/// Retrying gives the same rejection; reduce nesting before retrying.
 pub fn verify_document_addresses(
     root: &Value,
     document: &Document<Draft>,
 ) -> Result<(), GridAddrError> {
+    // 이것을 실패시키는 것: verify_document_addresses의 깊이 관문 삭제.
+    depth_gate(document.sections(), 0)?;
+
     for entry in tables_in_document(document) {
         let prefix = vec![
             PathSeg::Field("document"),
@@ -161,14 +178,31 @@ pub fn verify_document_addresses(
 /// # Errors
 ///
 /// See [`GridAddrError`].
+/// Nesting depth above 32 also returns [`GridAddrError::ShapeMismatch`].
+/// Retrying gives the same rejection; reduce nesting before retrying.
 pub fn verify_section_addresses(
     root: &Value,
     section: &Section,
     section_idx: usize,
 ) -> Result<(), GridAddrError> {
+    // 이것을 실패시키는 것: verify_section_addresses의 깊이 관문 삭제.
+    depth_gate(std::slice::from_ref(section), section_idx)?;
+
     for entry in tables_in_section(section, section_idx) {
         let prefix = vec![PathSeg::Field("section")];
         verify_table(root, &prefix, &entry)?;
+    }
+    Ok(())
+}
+
+// Preserve the caller's document indices even for a section-only export/import.
+fn depth_gate(sections: &[Section], first_section: usize) -> Result<(), GridAddrError> {
+    for (si, section) in sections.iter().enumerate() {
+        section.check_nesting_depth().map_err(|error| GridAddrError::ShapeMismatch {
+            path: error
+                .to_string()
+                .replace("section=0", &format!("section={}", first_section + si)),
+        })?;
     }
     Ok(())
 }

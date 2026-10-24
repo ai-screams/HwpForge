@@ -80,6 +80,9 @@ pub enum CellStampError {
         table: usize,
     },
     /// The table's logical grid cannot be built.
+    /// Nesting depth above 32 also uses this variant, with a document-level
+    /// ordinal-zero sentinel and a depth diagnostic in `detail`. Planning again
+    /// gives the same rejection.
     TableGridInvalid {
         /// Table ordinal.
         table: usize,
@@ -434,10 +437,21 @@ pub(crate) fn commit_cells(
 /// # Errors
 ///
 /// Any [`CellStampError`] leaves the document untouched.
+/// Nesting depth above 32 is rejected as [`CellStampError::TableGridInvalid`],
+/// with ordinal zero and the depth diagnostic in `detail`; planning again gives the same rejection.
+/// In that case ordinal zero is a document-level sentinel, not a faulty table.
 pub fn apply_cells(
     document: &mut Document<Draft>,
     specs: &[CellStampSpec],
 ) -> Result<CellStampOutcome, CellStampError> {
+    // 이것을 실패시키는 것: apply_cells의 깊이 관문 삭제.
+    for (si, section) in document.sections().iter().enumerate() {
+        section.check_nesting_depth().map_err(|error| CellStampError::TableGridInvalid {
+            table: 0,
+            detail: error.to_string().replace("section=0", &format!("section={si}")),
+        })?;
+    }
+
     let plan = preflight_cells(document, specs, &HashSet::new())?;
     Ok(commit_cells(document, plan))
 }

@@ -5256,7 +5256,7 @@ mod tests {
             display_text: "SoeBuri".to_string(),
         });
         match decoded {
-            Control::Field { display_text, .. } => {
+            Control::Field { ref display_text, .. } => {
                 assert_eq!(display_text, "SoeBuri", "display_text lost on round-trip");
             }
             other => panic!("expected Control::Field, got {other:?}"),
@@ -5494,8 +5494,8 @@ mod tests {
                 display_text: String::new(),
             });
             match decoded {
-                Control::PathField { command, .. } => {
-                    assert_eq!(command, cmd, "PathField command must round-trip lossless");
+                Control::PathField { ref command, .. } => {
+                    assert_eq!(*command, cmd, "PathField command must round-trip lossless");
                 }
                 other => {
                     panic!("expected Control::PathField({cmd:?}), got {other:?}");
@@ -5516,7 +5516,7 @@ mod tests {
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::PathField { command, .. } => match command {
+            Control::PathField { ref command, .. } => match command {
                 PathFieldCommand::Unknown(s) => assert_eq!(s, "$X"),
                 other => panic!("expected PathFieldCommand::Unknown(\"$X\"), got {other:?}"),
             },
@@ -5531,7 +5531,7 @@ mod tests {
             Control::UnknownSummary { token: "$company".to_string(), display_text: String::new() };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::UnknownSummary { token, .. } => {
+            Control::UnknownSummary { ref token, .. } => {
                 assert_eq!(token, "$company", "unknown $token must round-trip verbatim");
             }
             other => panic!("expected UnknownSummary($company), got {other:?}"),

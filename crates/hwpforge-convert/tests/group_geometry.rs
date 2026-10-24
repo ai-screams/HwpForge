@@ -667,13 +667,15 @@ fn f3_picture_groups_keep_their_pictures() {
                 assert!(lost[0].1.starts_with(reason), "{name}: {lost:?}");
             }
         }
-        let Control::Group { children, .. } = first_group(&doc.document) else { unreachable!() };
+        let Control::Group { ref children, .. } = first_group(&doc.document) else {
+            unreachable!()
+        };
         let count = children.iter().filter(|c| matches!(c, GroupChild::Picture(_))).count();
         assert_eq!(count, pictures, "{name}");
     }
-    let crops = |group: Control| match group {
+    let crops = |group: Control| match &group {
         Control::Group { children, .. } => children
-            .into_iter()
+            .iter()
             .filter_map(|c| match c {
                 GroupChild::Picture(img) => Some((img.crop, img.image_extent)),
                 _ => None,

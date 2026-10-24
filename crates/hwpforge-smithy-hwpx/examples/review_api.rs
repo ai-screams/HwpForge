@@ -236,21 +236,21 @@ fn build_section_1() -> Section {
             line_style: Some(style),  // LineStyle enum (was String)
             ..Default::default()
         };
-        let line_ctrl: Control =
+        let mut line_ctrl: Control =
             Control::line(ShapePoint::new(0, 0), ShapePoint::new(35000, 0)).expect("valid line");
         // Apply style
-        let styled_line: Control = match line_ctrl {
+        let styled_line: Control = match &mut line_ctrl {
             Control::Line { start, end, width, height, placement, caption, .. } => Control::Line {
                 frame: hwpforge_core::ObjectFrame::new(),
-                start,
-                end,
-                width,
-                height,
-                placement,
-                caption,
+                start: *start,
+                end: *end,
+                width: *width,
+                height: *height,
+                placement: placement.take(),
+                caption: caption.take(),
                 style: Some(shape_style),
             },
-            other => other,
+            _ => line_ctrl,
         };
         paras.push(ctrl_para(styled_line, CS_NORMAL, PS_LEFT));
     }

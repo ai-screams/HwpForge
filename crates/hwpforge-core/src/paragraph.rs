@@ -93,6 +93,14 @@ pub struct Paragraph {
     pub end_char_shape: Option<CharShapeIndex>,
 }
 
+/// Because this type implements `Drop`, its non-`Copy` fields cannot be moved out.
+/// Use references or [`std::mem::take`] instead.
+impl Drop for Paragraph {
+    fn drop(&mut self) {
+        crate::depth::drop_paragraph(self);
+    }
+}
+
 impl Paragraph {
     /// Creates an empty paragraph with the given shape reference.
     ///
@@ -165,10 +173,7 @@ impl Paragraph {
 
     /// [`Self::for_each_paragraph_mut`] 의 내부 재귀 본체 (dyn 으로 단형화 제한).
     pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
-        f(self);
-        for run in &mut self.runs {
-            run.walk_paragraphs_mut(f);
-        }
+        crate::walk::paragraphs_mut(crate::walk::NodeMut::Paragraph(self), f);
     }
 
     /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서와 재귀
@@ -182,10 +187,7 @@ impl Paragraph {
     /// [`Self::walk_paragraphs_mut`] 와 같이 **자신을 먼저** 방문한 뒤 run
     /// 내용물로 재귀한다 (pre-order).
     pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
-        f(self);
-        for run in &self.runs {
-            run.walk_paragraphs(f);
-        }
+        crate::walk::paragraphs(crate::walk::Node::Paragraph(self), f);
     }
 
     /// Visits every table in this paragraph: the tables in its runs and in
@@ -226,15 +228,11 @@ impl Paragraph {
     }
 
     pub(crate) fn walk_tables(&self, f: &mut dyn FnMut(&crate::table::Table)) {
-        for run in &self.runs {
-            run.walk_tables(f);
-        }
+        crate::walk::tables(self.runs.iter(), f);
     }
 
     pub(crate) fn walk_tables_mut(&mut self, f: &mut dyn FnMut(&mut crate::table::Table)) {
-        for run in &mut self.runs {
-            run.walk_tables_mut(f);
-        }
+        crate::walk::tables_mut(self.runs.iter_mut(), f);
     }
 
     /// Visits every picture in this paragraph and the paragraphs nested in
@@ -278,11 +276,17 @@ impl Paragraph {
     /// ```
     pub fn for_each_image<F: FnMut(&Image)>(&self, mut f: F) {
         fn group(children: &[GroupChild], f: &mut dyn FnMut(&Image)) {
-            for child in children {
-                match child {
-                    GroupChild::Picture(image) => f(image),
-                    GroupChild::Shape(Control::Group { children, .. }) => group(children, f),
-                    GroupChild::Shape(_) => {}
+            let mut stack = vec![children.iter()];
+            while let Some(children) = stack.last_mut() {
+                match children.next() {
+                    Some(GroupChild::Picture(image)) => f(image),
+                    Some(GroupChild::Shape(Control::Group { children, .. })) => {
+                        stack.push(children.iter())
+                    }
+                    Some(GroupChild::Shape(_)) => {}
+                    None => {
+                        stack.pop();
+                    }
                 }
             }
         }
@@ -323,11 +327,17 @@ impl Paragraph {
     /// ```
     pub fn for_each_image_mut<F: FnMut(&mut Image)>(&mut self, mut f: F) {
         fn group(children: &mut [GroupChild], f: &mut dyn FnMut(&mut Image)) {
-            for child in children {
-                match child {
-                    GroupChild::Picture(image) => f(image),
-                    GroupChild::Shape(Control::Group { children, .. }) => group(children, f),
-                    GroupChild::Shape(_) => {}
+            let mut stack = vec![children.iter_mut()];
+            while let Some(children) = stack.last_mut() {
+                match children.next() {
+                    Some(GroupChild::Picture(image)) => f(image),
+                    Some(GroupChild::Shape(Control::Group { children, .. })) => {
+                        stack.push(children.iter_mut())
+                    }
+                    Some(GroupChild::Shape(_)) => {}
+                    None => {
+                        stack.pop();
+                    }
                 }
             }
         }
