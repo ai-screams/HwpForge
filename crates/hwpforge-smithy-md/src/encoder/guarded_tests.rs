@@ -299,6 +299,24 @@ mod cases {
                     Some(vec![body(vec![nested_bold()])]),
                 )])]),
             ),
+            (
+                "g11_cont_memo_list",
+                doc(vec![
+                    p(BULLET, vec![t("a")]),
+                    p(CONT0, vec![memo(vec![body(vec![t("m")])]), t("- x")]),
+                ]),
+            ),
+            (
+                "g11_cont_chart_number",
+                doc(vec![p(BULLET, vec![t("a")]), p(CONT0, vec![chart(), t("1. x")])]),
+            ),
+            (
+                "g11_cont1_memo_list",
+                doc(vec![
+                    p(BULLET1, vec![t("a")]),
+                    p(CONT1, vec![memo(vec![body(vec![t("m")])]), t("- x")]),
+                ]),
+            ),
             ("g10_html_cell", doc(vec![body(vec![table(merged(body(vec![nested_bold()])))])])),
         ]
     }
@@ -346,6 +364,11 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g10_memo_body", "z<!-- memo: - x -->", "z"),
     ("g10_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |"),
     ("g10_image_caption", "![p](images/p.png)\n\n- x", "![p](BinData/p.png)"),
+    // g11: written by fa04fabf (G merged); continuations are drawn as at
+    // 496371cf there.
+    ("g11_cont_memo_list", "- a\n\n  <!-- memo: m -->- x", "a\n\n- x"),
+    ("g11_cont_chart_number", "- a\n\n  <!-- chart -->1. x", "a\n\n1. x"),
+    ("g11_cont1_memo_list", "  - a\n\n    <!-- memo: m -->- x", "a\n\n- x"),
     ("g10_html_cell", "<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">- x</td>\n</tr>\n</tbody>\n</table>", "|  |\n| --- |"),
 ];
 
@@ -710,8 +733,15 @@ fn body_check_and_table_end_close_the_rest() {
         ),
         (vec![gfm(), t("z | y")], 0, "| c |\n| --- |\n\nz | y".into()),
         (vec![text_box(vec![body(vec![gfm()])]), t("z")], 0, "| c |\n| --- |\n\nz".into()),
-        (vec![memo(vec![body(vec![t("m")])]), t("x")], 1, "mx".into()),
-        (vec![chart(), t("- x")], 1, "\\- x".into()),
+        (vec![memo(vec![body(vec![t("m")])]), t("x")], 0, "<!-- memo: m -->\nx".into()),
+        (vec![chart(), t("- x")], 0, "<!-- chart -->\n\\- x".into()),
+        (vec![chart(), t("   x")], 0, "<!-- chart -->\nx".into()),
+        (vec![t("a\n"), chart(), t("- x")], 0, "a\n<!-- chart -->\n\\- x".into()),
+        (
+            vec![chart(), memo(vec![body(vec![t("m")])]), t("x")],
+            0,
+            "<!-- chart -->\n<!-- memo: m -->\nx".into(),
+        ),
     ];
     for (runs, warnings, want) in cases {
         for (doc, boxed) in [
@@ -929,6 +959,57 @@ fn memo_anchor_out_of_scope_is_base_output() {
     ] {
         assert_eq!(styled(&case(name)), (base(name).0.to_string(), 0), "{name}");
     }
+}
+
+/// A memo at a paragraph's start (as Hancom saves it, `sample-memo-basic`):
+/// its comment stays, the text after it reads as written, and the memo's
+/// body does not mix into the text. Also with the memo body over two
+/// lines.
+/// 이것을 실패시키는 것: 줄머리 주석의 줄 끝내기 삭제 · 뒤 글의 앞 공백 남기기.
+#[test]
+fn line_start_memo_keeps_comment_and_text() {
+    use hwpforge_core::control::Control;
+    for (memo_body, comment) in [
+        ("쇠부리야 여기가 메모야", "<!-- memo: 쇠부리야 여기가 메모야 -->"),
+        ("첫 줄\n둘째 줄", "<!-- memo: 첫 줄\n둘째 줄 -->"),
+    ] {
+        let memo = ctrl(Control::memo_with_anchor(
+            vec![body(vec![t(memo_body)])],
+            vec![t("메모 대상 문장")],
+        ));
+        let (out, fallbacks) = styled(&doc(vec![body(vec![memo, t(" 입니다.")])]));
+        assert_eq!(fallbacks, 0, "{out}");
+        assert_eq!(out, format!("{comment}\n메모 대상 문장 입니다."));
+        assert_eq!(out.matches("<!-- memo:").count(), 1);
+        assert!(visible(&out).ends_with("메모 대상 문장 입니다."), "{out}");
+        assert!(forbidden(&out).is_empty(), "{out}");
+    }
+}
+
+/// A memo or chart comment at a continuation's start, then text that looks
+/// like a list item: a continuation is out of the guarantee, so its bytes
+/// are the base's (no line ended after the comment).
+/// 이것을 실패시키는 것: 줄 끝내기 조건을 `ParaKind::Body` 만으로.
+#[test]
+fn continuation_line_start_comment_is_base_output() {
+    for name in ["g11_cont_memo_list", "g11_cont_chart_number", "g11_cont1_memo_list"] {
+        assert_eq!(styled(&case(name)), (base(name).0.to_string(), 0), "{name}");
+    }
+}
+
+/// Many comments on one line, then text: each comment ends its line, and
+/// the walk does not scan the rest of the line again for each one.
+/// 이것을 실패시키는 것: 꼬리를 줄 끝까지 다시 훑기.
+#[test]
+fn line_start_comments_are_linear() {
+    let mut runs: Vec<hwpforge_core::Run> = (0..100_000).map(|_| chart()).collect();
+    runs.push(t("x"));
+    let doc = doc(vec![body(runs)]);
+    let started = std::time::Instant::now();
+    let (out, fallbacks) = styled(&doc);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(fallbacks, 0);
+    assert_eq!(out, format!("{}x", "<!-- chart -->\n".repeat(100_000)));
 }
 
 /// Line starts are found in one pass: a long run of line endings costs
