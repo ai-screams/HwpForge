@@ -52,9 +52,9 @@ pub enum MdWarning {
         reason: crate::embed::ImageEmbedSkipReason,
     },
     /// HWPX→MD (readable views): a container nested deeper than the view
-    /// draws was left out and a notice written in its place — styled past
-    /// 32 nested containers (`(중첩 깊이 초과로 생략)`), lossy past 8 tables
-    /// nested in cells (`(중첩 표 생략)`).
+    /// draws was left out and a notice written in its place — lossy past 8
+    /// tables nested in cells (`(중첩 표 생략)`). The styled depth warning is
+    /// retained for compatibility, but Core validation now prevents reaching it.
     ContainerTooDeep {
         /// What was left out: `"table"`, `"caption"`, `"shape text"`,
         /// `"note"` or `"memo"`.
@@ -270,133 +270,6 @@ pub(crate) fn spread_groups(
         }
     }
     Spread { runs: runs.iter(), groups: Vec::new() }
-}
-
-/// Whether some container sits deeper than
-/// [`MAX_NESTING_DEPTH`](crate::lossless_grammar::MAX_NESTING_DEPTH)
-/// containers, counted as the lossless decoder counts its elements: a table, a
-/// picture (and its caption one more), a group, a shape, a note or a memo
-/// each adds one. An explicit stack — no recursion — so it is safe on any
-/// tree.
-pub(crate) fn nests_too_deep(document: &Document<Validated>) -> bool {
-    use crate::lossless_grammar as g;
-    use hwpforge_core::control::GroupChild;
-    use hwpforge_core::image::Image;
-    use hwpforge_core::{Control, Paragraph, RunContent};
-    enum Item<'a> {
-        Paras(&'a [Paragraph]),
-        Runs(&'a [hwpforge_core::Run]),
-        Image(&'a Image),
-        Control(&'a Control),
-    }
-    let mut stack: Vec<(Item<'_>, usize)> = Vec::new();
-    for section in document.sections() {
-        stack.push((Item::Paras(&section.paragraphs), 0));
-        for hf in section.headers.iter().chain(section.footers.iter()) {
-            stack.push((Item::Paras(&hf.paragraphs), 0));
-        }
-        for mp in section.master_pages.iter().flatten() {
-            stack.push((Item::Paras(&mp.paragraphs), 0));
-        }
-    }
-    while let Some((item, depth)) = stack.pop() {
-        if depth > g::MAX_NESTING_DEPTH {
-            return true;
-        }
-        match item {
-            Item::Paras(ps) => {
-                for p in ps {
-                    stack.push((Item::Runs(&p.runs), depth));
-                }
-            }
-            Item::Runs(runs) => {
-                for run in runs {
-                    match &run.content {
-                        RunContent::Image(image) => stack.push((Item::Image(image), depth + 1)),
-                        RunContent::Table(t) => {
-                            // A table counts itself, cells or not (the
-                            // decoder counts the `<table>` element).
-                            // 이것을 실패시키는 것: 이 검사를 지우기
-                            // (`encoder_limits_nesting_depth` 의 빈 표).
-                            if depth + 1 > g::MAX_NESTING_DEPTH {
-                                return true;
-                            }
-                            for cell in t.rows.iter().flat_map(|r| &r.cells) {
-                                stack.push((Item::Paras(&cell.paragraphs), depth + 1));
-                            }
-                            if let Some(c) = &t.caption {
-                                stack.push((Item::Paras(&c.paragraphs), depth + 1));
-                            }
-                        }
-                        RunContent::Control(c) => stack.push((Item::Control(c), depth)),
-                        _ => {}
-                    }
-                }
-            }
-            Item::Image(image) => {
-                if let Some(c) = &image.caption {
-                    stack.push((Item::Paras(&c.paragraphs), depth + 1));
-                }
-            }
-            Item::Control(c) => match c {
-                Control::Group { children, .. } => {
-                    for child in children {
-                        match child {
-                            GroupChild::Picture(image) => {
-                                stack.push((Item::Image(image), depth + 2))
-                            }
-                            GroupChild::Shape(shape) => {
-                                stack.push((Item::Control(shape), depth + 1))
-                            }
-                            _ => {}
-                        }
-                    }
-                    if depth + 1 > g::MAX_NESTING_DEPTH {
-                        return true;
-                    }
-                }
-                Control::TextBox { paragraphs, caption, .. }
-                | Control::Ellipse { paragraphs, caption, .. }
-                | Control::Polygon { paragraphs, caption, .. } => {
-                    stack.push((Item::Paras(paragraphs), depth + 1));
-                    if let Some(cap) = caption {
-                        stack.push((Item::Paras(&cap.paragraphs), depth + 2));
-                    }
-                }
-                Control::Line { caption, .. }
-                | Control::Rect { caption, .. }
-                | Control::Arc { caption, .. }
-                | Control::Curve { caption, .. }
-                | Control::ConnectLine { caption, .. } => {
-                    if depth + 1 > g::MAX_NESTING_DEPTH {
-                        return true;
-                    }
-                    if let Some(cap) = caption {
-                        stack.push((Item::Paras(&cap.paragraphs), depth + 2));
-                    }
-                }
-                Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
-                    stack.push((Item::Paras(paragraphs), depth + 1))
-                }
-                Control::FieldBoundary {
-                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
-                } => {
-                    if depth + 1 > g::MAX_NESTING_DEPTH {
-                        return true;
-                    }
-                    if let Some(content) = &start.annotation {
-                        stack.push((Item::Paras(content), depth + 1));
-                    }
-                }
-                Control::Memo { content, anchor_runs, .. } => {
-                    stack.push((Item::Paras(content), depth + 1));
-                    stack.push((Item::Runs(anchor_runs), depth + 1));
-                }
-                _ => {}
-            },
-        }
-    }
-    false
 }
 
 #[cfg(test)]

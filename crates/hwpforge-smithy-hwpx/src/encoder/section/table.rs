@@ -2,10 +2,6 @@ use super::*;
 
 /// Builds `HxTable` from a Core `Table`.
 ///
-/// # Errors
-///
-/// Returns [`HwpxError::InvalidStructure`] if nesting depth exceeds
-/// [`MAX_NESTING_DEPTH`].
 pub(super) fn build_table(
     table: &Table,
     depth: usize,
@@ -13,11 +9,6 @@ pub(super) fn build_table(
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTable> {
-    if depth >= MAX_NESTING_DEPTH {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
-        });
-    }
     // Diagnostic slot before the cells (document order, review W2 r1 LOW).
     let id_slot = super::super::object_ids::reserve();
 
@@ -234,7 +225,8 @@ fn build_table_row(
 
 /// Builds `HxTableCell` from a Core `TableCell`.
 ///
-/// Cell paragraphs are built recursively at `depth + 1` to track nesting.
+/// Cell paragraphs are built recursively with the passed-through `depth` argument.
+/// Core validation enforces the semantic nesting limit before encoding.
 /// `col_idx` and `row_idx` are used to populate `<hp:cellAddr>`.
 #[derive(Clone, Copy)]
 struct TableCellBuildContext {

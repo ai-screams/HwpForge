@@ -1,42 +1,30 @@
 //! Pre-serialization control traversal, in emitted order. Never traverses XML
 //! fragments: every host is still Core here, including late-injected headers.
+//! Core validation bounds document depth before this traversal.
 use super::*;
 use hwpforge_core::control::GroupChild;
 
-fn caption(
-    c: &Option<Caption>,
-    depth: usize,
-    f: &mut impl FnMut(&Control) -> HwpxResult<()>,
-) -> HwpxResult<()> {
+fn caption(c: &Option<Caption>, f: &mut impl FnMut(&Control) -> HwpxResult<()>) -> HwpxResult<()> {
     if let Some(c) = c {
-        paragraphs(&c.paragraphs, depth + 1, f)?;
+        paragraphs(&c.paragraphs, f)?;
     }
     Ok(())
 }
 
-fn paragraphs(
-    ps: &[Paragraph],
-    depth: usize,
-    f: &mut impl FnMut(&Control) -> HwpxResult<()>,
-) -> HwpxResult<()> {
-    if depth > MAX_NESTING_DEPTH {
-        return Err(HwpxError::InvalidStructure {
-            detail: "control traversal nesting limit exceeded".into(),
-        });
-    }
+fn paragraphs(ps: &[Paragraph], f: &mut impl FnMut(&Control) -> HwpxResult<()>) -> HwpxResult<()> {
     for p in ps {
         for r in &p.runs {
             match &r.content {
-                RunContent::Control(c) => control(c, depth, f)?,
+                RunContent::Control(c) => control(c, f)?,
                 RunContent::Table(t) => {
-                    caption(&t.caption, depth, f)?;
+                    caption(&t.caption, f)?;
                     for row in &t.rows {
                         for cell in &row.cells {
-                            paragraphs(&cell.paragraphs, depth + 1, f)?;
+                            paragraphs(&cell.paragraphs, f)?;
                         }
                     }
                 }
-                RunContent::Image(i) => caption(&i.caption, depth, f)?,
+                RunContent::Image(i) => caption(&i.caption, f)?,
                 RunContent::Text(_) | RunContent::InlineText(_) => {}
                 _ => {
                     return Err(HwpxError::InvalidStructure {
@@ -49,42 +37,33 @@ fn paragraphs(
     Ok(())
 }
 
-fn control(
-    c: &Control,
-    depth: usize,
-    f: &mut impl FnMut(&Control) -> HwpxResult<()>,
-) -> HwpxResult<()> {
-    if depth > MAX_NESTING_DEPTH {
-        return Err(HwpxError::InvalidStructure {
-            detail: "control traversal nesting limit exceeded".into(),
-        });
-    }
+fn control(c: &Control, f: &mut impl FnMut(&Control) -> HwpxResult<()>) -> HwpxResult<()> {
     f(c)?;
     match c {
         Control::TextBox { paragraphs: ps, caption: cap, .. } => {
-            paragraphs(ps, depth + 1, f)?;
-            caption(cap, depth, f)?;
+            paragraphs(ps, f)?;
+            caption(cap, f)?;
         }
         Control::Ellipse { paragraphs: ps, caption: cap, .. }
         | Control::Polygon { paragraphs: ps, caption: cap, .. } => {
             // Shape schema emits caption before drawText.
-            caption(cap, depth, f)?;
-            paragraphs(ps, depth + 1, f)?;
+            caption(cap, f)?;
+            paragraphs(ps, f)?;
         }
         Control::Footnote { paragraphs: ps, .. } | Control::Endnote { paragraphs: ps, .. } => {
-            paragraphs(ps, depth + 1, f)?
+            paragraphs(ps, f)?
         }
         Control::Line { caption: cap, .. }
         | Control::Rect { caption: cap, .. }
         | Control::Arc { caption: cap, .. }
         | Control::Curve { caption: cap, .. }
-        | Control::ConnectLine { caption: cap, .. } => caption(cap, depth, f)?,
+        | Control::ConnectLine { caption: cap, .. } => caption(cap, f)?,
         Control::Group { children, .. } => {
             for child in children {
                 match child {
-                    GroupChild::Picture(i) => caption(&i.caption, depth + 1, f)?,
+                    GroupChild::Picture(i) => caption(&i.caption, f)?,
                     GroupChild::Shape(c) if super::super::shapes::group_child_is_encodable(c) => {
-                        control(c, depth + 1, f)?
+                        control(c, f)?
                     }
                     // Encoder reports unsupported group children; they do not
                     // consume numbers of controls that actually get emitted.
@@ -98,11 +77,11 @@ fn control(
             }
         }
         // Non-text memo anchors are explicitly reported by the encoder.
-        Control::Memo { content, .. } => paragraphs(content, depth + 1, f)?,
+        Control::Memo { content, .. } => paragraphs(content, f)?,
         Control::FieldBoundary { boundary } => {
             if let hwpforge_core::control::FieldBoundary::Start(start) = boundary {
                 if let Some(annotation) = &start.annotation {
-                    paragraphs(annotation, depth + 1, f)?;
+                    paragraphs(annotation, f)?;
                 }
             }
         }
@@ -172,12 +151,12 @@ pub(super) fn plan_section_notes(
     }
     for (i, p) in section.paragraphs.iter().enumerate() {
         for h in &anchored[i] {
-            paragraphs(&h.paragraphs, 0, &mut visit)?;
+            paragraphs(&h.paragraphs, &mut visit)?;
         }
-        paragraphs(std::slice::from_ref(p), 0, &mut visit)?;
+        paragraphs(std::slice::from_ref(p), &mut visit)?;
     }
     for m in section.master_pages.iter().flatten() {
-        paragraphs(&m.paragraphs, 0, &mut visit)?;
+        paragraphs(&m.paragraphs, &mut visit)?;
     }
     Ok(())
 }
@@ -190,12 +169,12 @@ pub(crate) fn rebind_group_notes(
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<()> {
     let mut ids = Vec::new();
-    control(original, 0, &mut |c| {
+    control(original, &mut |c| {
         ids.push(sink.note_numbers.get(&(std::ptr::from_ref(c) as usize)).copied());
         Ok(())
     })?;
     let mut ids = ids.into_iter();
-    control(clone, 0, &mut |c| {
+    control(clone, &mut |c| {
         if let Some(Some(num)) = ids.next() {
             sink.note_numbers.insert(std::ptr::from_ref(c) as usize, num);
         }

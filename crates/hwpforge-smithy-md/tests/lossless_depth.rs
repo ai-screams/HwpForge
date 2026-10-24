@@ -24,7 +24,10 @@ fn para(runs: Vec<Run>) -> Paragraph {
 fn encode(run: Run) -> Result<String, MdError> {
     let mut d = Document::new();
     d.add_section(Section::with_paragraphs(vec![para(vec![run])], PageSettings::a4()));
-    MdEncoder::encode_lossless(&d.validate().unwrap())
+    let d = d
+        .validate()
+        .map_err(|error| MdError::UnsupportedStructure { detail: error.to_string() })?;
+    MdEncoder::encode_lossless(&d)
 }
 
 /// `n` groups, one inside the other, around a picture.
@@ -83,14 +86,14 @@ fn boxes_around(n: usize, mut run: Run) -> Run {
     run
 }
 
-/// Encoder: depth 32 is written and read back; 33 is refused — for nested
+/// Depth 32 is validated, encoded and read back; validation refuses 33 — for nested
 /// groups (the group plus its picture are the containers), for the
 /// picture → caption → table path and for text boxes in text boxes.
 ///
-/// 이것을 실패시키는 것: 인코더의 깊이 검사 삭제 · 한도 비교 하나 어긋남(31·33) ·
+/// 이것을 실패시키는 것: Core validate의 깊이 검사 삭제 · 한도 비교 하나 어긋남(31·33) ·
 /// 빈 묶음·선·표의 자기 깊이 검사 각각 삭제.
 #[test]
-fn encoder_limits_nesting_depth() {
+fn validation_limits_encoder_input_depth() {
     // groups(n) is n groups and one picture: n + 1 containers.
     let ok = Run::control(groups(LIMIT - 1), CharShapeIndex::new(0));
     let md = encode(ok.clone()).unwrap();

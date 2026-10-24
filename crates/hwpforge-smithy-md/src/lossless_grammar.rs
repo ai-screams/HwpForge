@@ -465,10 +465,11 @@ pub(crate) const CELL_HEADER: &str = "data-header";
 pub(crate) const ROW_HEADER: &str = "data-is-header";
 
 /// How many containers (tables, groups, pictures, captions, shapes, notes)
-/// may enclose one another. The same limit the HWPX reader and writer put
-/// on nested structure; real documents stay far below it (corpus maximum
-/// 7). Both directions refuse deeper input before building it, so no
-/// recursive walk or drop meets an unbounded tree.
+/// may enclose one another while parsing. The writer accepts validated Core
+/// documents, whose semantic nesting depth is checked by Core validation
+/// before any recursive encoding walk. This parser budget bounds input
+/// nesting before building the Core tree.
+// Keep this parser budget equal to Core's private semantic depth limit (32).
 pub(crate) const MAX_NESTING_DEPTH: usize = 32;
 
 /// The elements that count toward [`MAX_NESTING_DEPTH`].

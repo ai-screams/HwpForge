@@ -10,16 +10,7 @@ use crate::frontmatter::{from_metadata, render_frontmatter};
 use crate::lossless_grammar as g;
 
 pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String> {
-    // Every walk below recurses, so the depth is checked first, without
-    // recursion. 이것을 실패시키는 것: 이 검사를 지우기(`nesting_depth_is_limited`).
-    if super::nests_too_deep(document) {
-        return Err(MdError::UnsupportedStructure {
-            detail: format!(
-                "structure nests deeper than {} containers (lossless limit)",
-                g::MAX_NESTING_DEPTH
-            ),
-        });
-    }
+    // Validated documents already satisfy Core's depth limit of 32.
     // §19.16 J (review r1): the grammar has no place for a caption number,
     // and captions are written as plain text (tables) or not at all
     // (pictures) — so a number anywhere, captions included, is refused

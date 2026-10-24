@@ -161,8 +161,12 @@ fn field_depth_is_symmetric() {
         let mut s = start("a");
         s.annotation = Some(inner);
         let paragraphs = vec![para(vec![marker(FieldBoundary::Start(Box::new(s))), end("a")])];
-        let d = doc(paragraphs.clone()).validate().unwrap();
-        let encoded = MdEncoder::encode_lossless(&d);
+        let encoded = doc(paragraphs.clone())
+            .validate()
+            .map_err(|error| hwpforge_smithy_md::MdError::UnsupportedStructure {
+                detail: error.to_string(),
+            })
+            .and_then(|d| MdEncoder::encode_lossless(&d));
         assert_eq!(encoded.is_ok(), depth <= 32, "{depth}");
         if let Ok(md) = encoded {
             assert!(MdDecoder::decode_lossless(&md).is_ok());
@@ -213,8 +217,7 @@ fn boundary_without_annotation_still_counts_toward_depth() {
         s.annotation = Some(inner);
         inner = vec![para(vec![marker(FieldBoundary::Start(Box::new(s))), end("outer")])];
     }
-    let d = doc(inner).validate().unwrap();
-    assert!(MdEncoder::encode_lossless(&d).is_err());
+    assert!(doc(inner).validate().is_err());
 }
 
 #[test]

@@ -1233,6 +1233,7 @@ impl HwpxEncoder {
     ) -> HwpxResult<EncodeOutcome> {
         let decoded = base.decoded();
         let base = base.bytes();
+        // 공개 입구 관문을 공유: provenance 검증이 재귀 순회 전에 Core 깊이를 검사한다.
         crate::HwpxDecoder::verify_source_provenance(document.sections(), decoded)?;
         if crate::layout_edit::unchanged(decoded, document, style_store, image_store)? {
             // 이것을 실패시키는 것: Core만 비교하고 스타일/이미지/메타데이터를
@@ -1317,10 +1318,11 @@ impl HwpxEncoder {
     /// 3. Collect image binaries from `ImageStore`
     /// 4. Package into ZIP with metadata files + BinData/
     ///
+    /// Core validation enforces the semantic nesting limit before encoding.
+    ///
     /// # Errors
     ///
     /// - [`HwpxError::XmlSerialize`] if quick-xml serialization fails
-    /// - [`HwpxError::InvalidStructure`] if table nesting exceeds limits
     /// - [`HwpxError::Zip`] if ZIP archive creation fails
     ///
     /// # Warnings are discarded

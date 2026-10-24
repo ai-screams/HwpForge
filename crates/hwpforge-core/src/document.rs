@@ -78,6 +78,7 @@ pub struct Draft;
 /// - Every section has at least 1 paragraph
 /// - Every paragraph has at least 1 run
 /// - All table/control structural invariants hold
+/// - Semantic nesting depth is at most 32 (see [`Section::check_nesting_depth`])
 ///
 /// The only way to obtain a `Document<Validated>` is through
 /// [`Document<Draft>::validate()`].
@@ -382,7 +383,9 @@ impl Document<Draft> {
     /// Validates the document structure and transitions to `Validated`.
     ///
     /// Consumes `self` (move semantics). On success, returns a
-    /// `Document<Validated>`. On failure, returns a `CoreError`.
+    /// `Document<Validated>` with semantic nesting depth at most 32.
+    /// Every section receives the same check as [`Section::check_nesting_depth`].
+    /// On failure, returns a `CoreError`.
     ///
     /// Normalizes table header-row convenience flags from effective cell
     /// markers, preserving their meaning (including non-leading title cells).
@@ -422,6 +425,12 @@ impl Document<Draft> {
     /// assert!(doc.validate().is_err());
     /// ```
     pub fn validate(mut self) -> CoreResult<Document<Validated>> {
+        // 이것을 실패시키는 것: 정규화 뒤로 이동하거나 실패 해체 삭제
+        // (consuming_deep_validation_small_stack, 2 MiB / 100,000).
+        if let Err(error) = crate::depth::check(&self.sections) {
+            crate::depth::dismantle(&mut self.sections);
+            return Err(error);
+        }
         // Cell meaning is canonical. Normalize even tables in nested containers
         // and bands; the shared walk includes picture captions and memo anchors.
         // 이것을 실패시키는 것: 정규화 삭제 · 본문 표만 순회
