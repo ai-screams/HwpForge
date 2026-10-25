@@ -9,7 +9,9 @@ its result is matched against `_hwpforge.pyi`.
 from __future__ import annotations
 
 import base64
+import io
 import json
+import zipfile
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -23,7 +25,7 @@ from _ffi_names import (
     SHAPES,
     TEXT_AND_REPORT,
 )
-from conftest import FONT_UNRESOLVED, INVALID_CACHE, all_paragraphs
+from conftest import FONT_UNRESOLVED, INVALID_CACHE, REPO, all_paragraphs
 
 from hwpforge import HwpForgeError, _hwpforge
 
@@ -220,6 +222,20 @@ def test_the_assets_list_is_tagged_by_kind() -> None:
     assert set(dropped) == {"kind", "occurrence", "reason"}
     assert set(dropped["occurrence"]) == {"paragraph", "run"}
     assert dropped["reason"] == "no_base_dir"
+
+
+def test_an_empty_image_target_is_reported_and_left_out() -> None:
+    """`![x]()` (shared fixture) gives one `IMAGE_EMBED_SKIPPED` and no picture."""
+    markdown = (REPO / "tests" / "fixtures" / "markdown" / "empty-image-target.md").read_text(
+        encoding="utf-8"
+    )
+
+    data, report = _hwpforge.convert_md(markdown)
+
+    assert [w["code"] for w in report["warnings"]] == ["IMAGE_EMBED_SKIPPED"]
+    assert report["assets"] == []
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        assert b"<hp:pic " not in package.read("Contents/section0.xml")
 
 
 def test_an_embedded_asset_names_its_key_and_format(tmp_path) -> None:

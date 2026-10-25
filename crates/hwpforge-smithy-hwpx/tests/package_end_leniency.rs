@@ -56,7 +56,8 @@ fn w1_generated_hwpx_tails_and_payload_have_no_loss() {
     }
 }
 
-/// 이것을 실패시키는 것: 다른 물리 CD 거부 삭제·꼬리로 한정 / 실패 CD 증거 삭제·앞 후보로 덮어쓰기.
+/// 이것을 실패시키는 것: 다른 물리 CD 거부 삭제·꼬리로 한정 / 실패 CD 증거 삭제·앞 후보로 덮어쓰기 /
+/// `directory.rs` 의 `reference.eocd != self.eocd` 거부 삭제(zip 이 여는 B 건너뛴 입력).
 #[test]
 fn w1_last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
     let encode = |paragraphs| {
@@ -111,10 +112,22 @@ fn w1_last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
     }
     let decoded = HwpxDecoder::decode(&input).unwrap();
     assert_eq!(decoded.document.sections()[0].paragraphs.len(), 1);
-    // Only UnicodePath's missing version/CRC/path is malformed; framing stays intact.
+    // B's EOCD claims one comment byte past EOF, so zip passes over it and
+    // opens A's directory without complaint, B left as a tail. Only the
+    // decoder's own rule (the last raw end record must be the selected one)
+    // refuses the input. (With A's comment covering B the 0.17.0 path accepts
+    // A, as before.)
+    let b_eocd = input.len() - 22;
+    let mut skipped = input.clone();
+    skipped[b_eocd + 20..b_eocd + 22].copy_from_slice(&1u16.to_le_bytes());
+    skipped[a_end + 20..a_end + 22].copy_from_slice(&0u16.to_le_bytes());
+    let archive = zip::ZipArchive::new(Cursor::new(&skipped)).unwrap();
+    assert_eq!(archive.central_directory_start(), u64::from(u32_at(&a, a_end + 16)), "zip opens A");
+    assert!(HwpxDecoder::decode(&skipped).is_err());
+    // Only UnicodePath's missing version/CRC/path is malformed; framing stays
+    // intact. zip refuses B's directory here by itself, so this case does not
+    // depend on the decoder's rule; it pins that the input stays refused.
     input[a.len() + extra_at..a.len() + extra_at + 4].copy_from_slice(&[0x75, 0x70, 0, 0]);
-    // zip 9.0 still opens A's directory here, so this case shows the decoder's
-    // own last-raw-directory rule; zip 9.1 already fails on B by itself.
     for comment_len in [0, b_len] {
         input[a_end + 20..a_end + 22].copy_from_slice(&comment_len.to_le_bytes());
         assert!(HwpxDecoder::decode(&input).is_err(), "A comment length = {comment_len}");

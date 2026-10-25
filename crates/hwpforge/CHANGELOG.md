@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | to-md·convert-hwp5의 크기 한도를 넘는 FIFO 입력 | `DECODE_FAILED`·`HWP5_DECODE_FAILED` / 2 | `INPUT_TOO_LARGE` / **1** |
 | convert-hwp5의 쓰기 성공 직후 stat 실패 | `FILE_WRITE_FAILED` / 1 | `FILE_WRITE_FAILED` / **2** |
 
+### Fixed
+
+- `convert`(CLI·MCP·Python `convert_md`)가 Markdown 의 대상이 빈 이미지(`![x]()`)를 0.17.0 처럼 `IMAGE_EMBED_SKIPPED` 경고와 함께 뺀다. 0.17.1 에서는 경고 없이 50×30mm 빈 그림 틀로 남았다. 한컴이 자산을 잃은 채 저장한 그림 틀(#266)은 그대로 남는다.
+- HWPX 구역(`<hs:sec>`) 바로 아래에 놓여 읽지 못하는 글·요소·`<hp:t>` 를 `CONTENT_LOST (section_content)` 경고로 알리고, `restyle`·`set-cell`·`stamp` 는 그런 문서를 거부한다. 전에는 경고 없이 그 글을 뺐다. 자세한 것은 `hwpforge-smithy-hwpx` 항목을 본다.
+- HWP 묶음 안 그림의 테두리 손실 경고가 손실을 판정한 선 종류를 함께 적는다(`border: line type 2, thickness 0`). 전에는 두께만 적어, 두께 0 인 테두리가 왜 손실인지 보이지 않았다(#256 후속).
+
+### 업그레이드 주의
+
+- **HWP 변환의 깊이 초과**: HWP5 디코더는 컨테이너마다 깊이를 1씩 세어 32에서 멈추지만 Core 는 캡션·묶음 안 도형을 한 겹에 2 이상으로 센다. 그래서 디코더 상한 안의 HWP 문서도 Core 깊이 32단계를 넘으면 `convert-hwp5`·`to-pdf` 와 Python `convert_hwp5` 가 `VALIDATION_FAILED` 로 실패할 수 있다. 0.17.1 의 깊이 한도(#267)가 HWP 변환에도 걸린다는 뜻이다. 실제 HWP 문서에서 이렇게 실패하는 경우는 측정하지 않았다.
+- **스킬 위치 (#270, 0.17.1)**: 저장소의 에이전트 스킬이 `.claude/skills/` 에서 `skills/` 로 옮겨졌다. 0.17.1 CHANGELOG 에 빠졌던 항목이다.
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/v0.17.0...v0.17.1) - 2026-10-24
 
 0.17.0 뒤에 나온 결함 수정과 입력 한도를 모은 패치 릴리스다. 공개 Rust API 는 바뀌지 않고, `Section::check_nesting_depth()` 하나가 더해진다. 새로 거부하는 입력과 출력이 바뀌는 경우는 아래 "업그레이드 주의" 에 모았다.

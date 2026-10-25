@@ -450,6 +450,36 @@ fn ctrl_and_sublist_content_is_reported_lost() {
     assert_eq!(kinds(&bytes), ["sublist_content"]);
 }
 
+/// What sits directly under `<hs:sec>` besides `<hp:p>` — text, an unknown
+/// element, a `<hp:t>` — is reported once at the section, and the paragraphs
+/// around it are still read. Indentation between paragraphs stays silent
+/// (`indentation_and_every_known_ctrl_child_stay_silent`).
+/// 이것을 실패시키는 것: 구역 디코드의 `section_content` 보고 삭제.
+#[test]
+fn section_content_is_reported_lost() {
+    let source = base(false);
+    let xml = part(&source, SECTION);
+    let body = xml.find(">BODY<").unwrap();
+    let para_start = xml[..body].rfind("<hp:p ").unwrap();
+    for (label, stray) in
+        [("text", "구역글"), ("element", "<hp:imaginary/>"), ("t", "<hp:t>구역글</hp:t>")]
+    {
+        let edited = format!("{}{stray}\n  {}", &xml[..para_start], &xml[para_start..]);
+        let bytes = with_part(&source, SECTION, Some(&edited));
+        assert_eq!(
+            lost(&bytes),
+            [("section[0]".to_string(), "section_content".to_string())],
+            "{label}"
+        );
+        let doc = decode(&bytes).document;
+        let texts: Vec<String> =
+            doc.sections()[0].paragraphs.iter().map(Paragraph::text_content).collect();
+        assert!(texts.iter().any(|t| t == "BODY"), "{label}: {texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("구역글")), "{label}: {texts:?}");
+        assert_rewriters_refuse(&bytes, "section_content", label);
+    }
+}
+
 // ── D-5: what is not reported ─────────────────────────────────────
 
 /// `xml` indented the way a pretty-printer would: line breaks and spaces

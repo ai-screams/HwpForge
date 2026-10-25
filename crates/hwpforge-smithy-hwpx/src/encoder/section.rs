@@ -936,7 +936,7 @@ fn build_section(
     }
 
     sink.finish_bookmark_scope();
-    Ok(HxSection { paragraphs })
+    Ok(HxSection { paragraphs, has_stray_content: false })
 }
 
 /// Builds an `HxParagraph` from a Core `Paragraph`.

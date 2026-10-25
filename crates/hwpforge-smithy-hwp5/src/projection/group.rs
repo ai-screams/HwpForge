@@ -607,7 +607,14 @@ fn picture_losses(image: &Hwp5ImageControl) -> Vec<String> {
         ));
     }
     if p.border.line_type() != 0 {
-        out.push(format!("border: thickness {}", p.border.thickness));
+        // The line type decides the loss, so the message names it.
+        // 이것을 실패시키는 것: 메시지에서 선 종류 빼기
+        // (`group_picture_border_loss_names_the_line_type`).
+        out.push(format!(
+            "border: line type {}, thickness {}",
+            p.border.line_type(),
+            p.border.thickness
+        ));
     }
     out
 }
@@ -2199,6 +2206,17 @@ mod tests {
             super::super::project_shape_line(&line, &mut style, &mut Vec::new(), "test");
             assert_eq!(style.line_style != Some(LineStyle::None), expected);
         }
+    }
+
+    /// The border loss names the line type that decided it, not only the
+    /// width (a zero-width dot border is still a loss).
+    #[test]
+    fn group_picture_border_loss_names_the_line_type() {
+        let mut pic = picture();
+        let Hwp5Control::Image(image) = &mut pic else { unreachable!() };
+        image.picture.border.thickness = 0;
+        image.picture.border.properties = 2;
+        assert_eq!(picture_losses(image), ["border: line type 2, thickness 0"]);
     }
 
     /// The Hancom HWPX twin has no lineShape for its one picture.

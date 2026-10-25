@@ -197,6 +197,17 @@ pub(crate) fn parse_section_with_references(
     }
     ctx.source = source;
     ctx.image_pixels = image_pixels.clone();
+    // Once per section, at the section's own path (the sub-list rule,
+    // [`note_sublist_content`]). serde hands over no whitespace-only text,
+    // so indentation between paragraphs is not reported.
+    // 이것을 실패시키는 것: 이 보고 삭제
+    // (`section_content_is_reported_lost`).
+    if section.has_stray_content {
+        ctx.content_lost(
+            "section_content",
+            "text or an element other than a paragraph directly inside <hs:sec> is not read",
+        );
+    }
 
     let mut column_settings = None;
     let mut visibility = None;
