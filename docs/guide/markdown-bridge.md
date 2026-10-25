@@ -40,12 +40,12 @@ date: 2026-03-06
 시장 분석에 따르면 성장 가능성이 높습니다.
 "#;
 
-let MdDocument { document, style_registry } = MdDecoder::decode_with_default(markdown).unwrap();
+let MdDocument { document, style_registry, .. } = MdDecoder::decode_with_default(markdown).unwrap();
 
 println!("섹션 수: {}", document.sections().len());
 ```
 
-`MdDocument`에는 `document: Document<Draft>`와 `style_registry: StyleRegistry`가 포함됩니다.
+`MdDocument`에는 `document: Document<Draft>`, `style_registry: StyleRegistry`, `warnings: Vec<MdWarning>`이 포함됩니다. `warnings`에는 대상이 빈 이미지(`![x]()`)처럼 문서에 넣지 않은 것이 남습니다. 필드가 늘 수 있으므로 구조 분해에는 `..`을 붙입니다.
 
 ## YAML Frontmatter
 

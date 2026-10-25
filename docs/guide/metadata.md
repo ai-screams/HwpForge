@@ -81,7 +81,7 @@ metadata:
 내용이 여기에 들어갑니다.
 "#;
 
-let MdDocument { document, style_registry } = MdDecoder::decode_with_default(markdown).unwrap();
+let MdDocument { document, style_registry, .. } = MdDecoder::decode_with_default(markdown).unwrap();
 
 let meta = document.metadata();
 assert_eq!(meta.title.as_deref(), Some("분기 보고서"));

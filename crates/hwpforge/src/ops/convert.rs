@@ -131,12 +131,10 @@ pub struct MdDecoded {
     pub style_registry: StyleRegistry,
     /// What each image run needs, in document order.
     pub plan: Vec<AssetPlanEntry>,
-    /// Diagnostics raised while decoding.
-    ///
-    /// The Markdown decoder reports problems as errors rather than
-    /// warnings today, so this is empty; it is the channel a future
-    /// decoder warning would arrive on, and it keeps the field set the same
-    /// as every other operation output.
+    /// Diagnostics raised while decoding: an image with an empty target
+    /// (`![x]()`) is left out of `document` and reported here as the same
+    /// `IMAGE_EMBED_SKIPPED` warning an unreadable image gives. Everything
+    /// else the decoder rejects is an error.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -242,7 +240,9 @@ pub fn decode_md(markdown: &str, opts: &ConvertMdOptions) -> Result<MdDecoded, O
         document: decoded.document,
         style_registry: decoded.style_registry,
         plan,
-        warnings: Vec::new(),
+        // What the decoder left out (an empty image target) comes first, in
+        // the same `Md` form as the asset stage's exclusions.
+        warnings: decoded.warnings.into_iter().map(OpsWarning::Md).collect(),
     })
 }
 

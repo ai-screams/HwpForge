@@ -34,6 +34,17 @@ pub struct HxSection {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub paragraphs: Vec<HxParagraph>,
+    /// Whether text or an element other than `<hp:p>` sits directly inside
+    /// `<hs:sec>`. The reader drops it; the flag only records that something
+    /// was dropped (the `HxSubList::has_stray_content` pattern).
+    /// Deserialization only.
+    #[serde(
+        rename = "$value",
+        default,
+        skip_serializing,
+        deserialize_with = "stray_paragraph_content"
+    )]
+    pub has_stray_content: bool,
 }
 
 fn default_table_page_break() -> String {

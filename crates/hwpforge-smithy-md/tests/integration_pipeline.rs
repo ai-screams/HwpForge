@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the full MD → Core → HWPX pipeline.
 //!
 //! Tests the complete flow:
-//! 1. MdDecoder::decode(markdown, &template) → MdDocument { document, style_registry }
+//! 1. MdDecoder::decode(markdown, &template) → MdDocument { document, style_registry, .. }
 //! 2. document.validate() → Document<Validated>
 //! 3. HwpxRegistryBridge::from_registry(&style_registry) → rebind Draft → store-local ids
 //! 4. HwpxEncoder::encode(&validated, bridge.style_store()) → Vec<u8> (HWPX ZIP bytes)

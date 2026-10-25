@@ -546,6 +546,28 @@ fn convert_remote_image_only_paragraph_still_succeeds() {
     assert!(out.exists());
 }
 
+/// `![x]()` (shared fixture) is reported and left out, as in 0.17.0.
+/// 이것을 실패시키는 것: 디코더의 빈 대상 경고 삭제(빈 틀이 경고 없이 남는다).
+#[test]
+fn convert_reports_and_drops_an_empty_image_target() {
+    let tmp = test_tmp();
+    let md = fixture("markdown/empty-image-target.md");
+    let out = tmp.join("e.hwpx");
+    let (_, stderr, code) = run(&["convert", md.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(
+        stderr.matches(r#"image "" not embedded (file unreadable) — image dropped"#).count(),
+        1,
+        "stderr: {stderr}"
+    );
+    let bytes = std::fs::read(&out).expect("read out");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("Contents/section0.xml").unwrap(), &mut xml)
+        .unwrap();
+    assert!(!xml.contains("<hp:pic "), "no empty frame may remain");
+}
+
 #[test]
 fn convert_json_mode() {
     let tmp = test_tmp();

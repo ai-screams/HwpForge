@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - (breaking) preserve-first patch 의 오류 타입 `PatchError` 를 새로 둔다. variant 는 `Codec(CodecFailure)`·`Rejected(HwpxError)`·`SectionOutOfRange`·`ProtectedFieldRange`·`Invariant` 이고 `#[non_exhaustive]` 다. `patch_section_preserving`·`patch_section_preserving_with_diagnostics`·`patch_section_preserving_with_codec_diagnostics`·`export_section_preservation` 의 오류 반환형이 `HwpxError` 에서 `PatchError` 로 바뀌고, `SectionWorkflowError::PreservingPatch` 는 `PatchError` 를 담는다. `Codec` 은 실패 단계(`CodecStage`)와 원래 오류의 코드·메시지만 담고 원래 오류의 source chain 은 담지 않는다.
 - (breaking) `FillError` 에 `Codec(CodecFailure)`·`Patch(PatchError)`·`Invariant { detail }` 을 더하고 `From<HwpxError> for FillError` 를 지운다. 입력 decode 실패는 `Codec`, 섹션 patch 실패는 `Patch`, 필드 목록 진단은 계속 `Workflow` 다. `FillError` 는 계속 exhaustive 다.
 - patch 의 깊이 거부·보호 필드 거부 메시지에서 앞에 붙던 `Invalid HWPX structure:` 가 빠지고, 내부 불변식 실패 메시지는 `internal invariant violated:` 로 시작한다. 그 밖의 거부·decode 메시지는 그대로다.
+- 구역(`<hs:sec>`) 바로 아래의 글·모르는 요소·`<hp:t>` 처럼 문단이 아닌 내용도 `CONTENT_LOST` 경고(종류 `section_content`, 위치는 그 구역)로 알리고, 위 편집기들은 그런 문서를 거부한다. 문단 사이의 들여쓰기 공백은 알리지 않는다. 측정한 HWPX 372개 중 이 경고가 새로 생긴 문서는 없다.
 - 각주·미주 첫 문단의 번호 머리 run 에 위 내용이 섞이면 번호 머리로 보고 떼어 내지 않고, 경고와 함께 일반 run 으로 읽는다. 형광펜·제목 표지만 섞인 번호 머리는 전처럼 떼어 낸다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24

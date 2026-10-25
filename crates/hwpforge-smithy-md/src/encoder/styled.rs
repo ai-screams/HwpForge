@@ -32,8 +32,7 @@ pub struct MdOutput {
     pub markdown: String,
     /// Extracted images: relative path → binary data.
     pub images: HashMap<String, Vec<u8>>,
-    /// What the rendering left out or wrote differently — a container
-    /// nested too deep ([`super::MdWarning::ContainerTooDeep`]), an equation
+    /// What the rendering left out or wrote differently — an equation
     /// written as its script text ([`super::MdWarning::EquationAsText`]);
     /// empty for most documents.
     pub warnings: Vec<super::MdWarning>,
@@ -226,7 +225,9 @@ fn text(raw: &str, ctx: Ctx) -> Md {
 
 impl Ctx {
     /// The context one container deeper, or `None` past the limit.
-    /// Validated inputs cannot exceed this defensive rendering budget.
+    /// Validated inputs cannot exceed this defensive rendering budget: Core
+    /// validation admits 32 levels and counts each container drawn here as at
+    /// least one. So the callers write [`TOO_DEEP`] there without a warning.
     fn enter(self) -> Option<Self> {
         super::guard::enter_depth(self.depth).map(|depth| Self { depth, ..self })
     }
@@ -253,19 +254,6 @@ impl State {
             warnings: Vec::new(),
             at: (0, 0),
         }
-    }
-
-    /// The notice written for a `container` past the depth limit, recorded
-    /// as a warning at the current place.
-    /// Retained for the public warning contract; validated inputs stay within the limit.
-    fn too_deep(&mut self, container: &'static str) -> &'static str {
-        self.warnings.push(super::MdWarning::ContainerTooDeep {
-            container,
-            limit: crate::lossless_grammar::MAX_NESTING_DEPTH,
-            section: self.at.0,
-            paragraph: self.at.1,
-        });
-        TOO_DEEP
     }
 }
 
@@ -799,7 +787,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         // 범위 밖 앵커를 문단 렌더러로(`memo_anchor_out_of_scope_is_base_output`).
         Control::Memo { content, anchor_runs, .. } => {
             let mut md = if ctx.guarded {
-                let Some(inner) = ctx.enter() else { return Md::syntax(st.too_deep("memo")) };
+                let Some(inner) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
                 paragraph_text_styled(&super::memo_anchor(anchor_runs), styles, st, inner)
             } else {
                 Md::text(
@@ -939,7 +927,7 @@ fn math_free_text(raw: &str, ctx: Ctx) -> Md {
 /// broken up so it cannot close the comment. Author/date are no longer
 /// carried (Wave 12e-Memo): HWPX wire never surfaced them.
 fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
-    let Some(inner) = ctx.enter() else { return Md::syntax(st.too_deep("memo")) };
+    let Some(inner) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let inner = Ctx { in_comment: true, guarded: false, ..inner };
     let body: Vec<Md> =
         content.iter().map(|p| paragraph_text_styled(p, styles, st, inner)).collect();
@@ -958,7 +946,7 @@ fn extract_note_body(
     st: &mut State,
     ctx: Ctx,
 ) -> Vec<Md> {
-    let Some(inner) = ctx.enter() else { return vec![Md::syntax(st.too_deep("note"))] };
+    let Some(inner) = ctx.enter() else { return vec![Md::syntax(TOO_DEEP)] };
     let inner = Ctx { note_depth: ctx.note_depth + 1, guarded: false, ..inner };
     paragraphs
         .iter()
@@ -975,7 +963,7 @@ fn extract_note_body_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Vec<Html> {
-    let Some(inner) = ctx.enter() else { return vec![Html::syntax(st.too_deep("note"))] };
+    let Some(inner) = ctx.enter() else { return vec![Html::syntax(TOO_DEEP)] };
     let inner = Ctx { note_depth: ctx.note_depth + 1, guarded: false, ..inner };
     paragraphs
         .iter()
@@ -987,7 +975,7 @@ fn extract_note_body_html(
 /// A text box's or shape's text in Markdown: each paragraph drawn, joined
 /// by a space and trimmed.
 fn shape_text(paragraphs: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
-    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("shape text")) };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let parts: Vec<Md> =
         paragraphs.iter().map(|p| paragraph_text_styled(p, styles, st, ctx)).collect();
     Md::join(parts, " ").layout(|s| s.trim().to_string())
@@ -1001,7 +989,7 @@ fn shape_text_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Html {
-    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("shape text")) };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(TOO_DEEP) };
     let parts: Vec<Html> =
         paragraphs.iter().map(|p| extract_paragraph_text_html(p, styles, st, ctx)).collect();
     Html::join(parts, " ").trimmed()
@@ -1193,7 +1181,7 @@ fn table_to_styled_markdown(
 /// so they leave no picture asset and no note definition behind.
 /// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
 fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
-    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("table")) };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let width = table.rows.first().map_or(0, |r| r.cells.len()).max(1);
     let mut rows: Vec<Vec<Cell>> = Vec::new();
     for (ri, row) in table.rows.iter().enumerate() {
@@ -1216,7 +1204,7 @@ fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ct
 
 /// Renders a table as HTML `<table>` with colspan/rowspan attributes.
 fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Html {
-    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("table")) };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(TOO_DEEP) };
     let mut lines = vec![Html::syntax("<table>"), Html::syntax("<tbody>")];
     for row in &table.rows {
         lines.push(Html::syntax("<tr>"));
@@ -1329,7 +1317,7 @@ fn styled_caption(
     ctx: Ctx,
 ) -> Md {
     let Some(caption) = caption else { return Md::new() };
-    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("caption")) };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let mut out = Md::new();
     for p in &caption.paragraphs {
         let t = paragraph_text_styled(p, styles, st, ctx);
@@ -1353,7 +1341,7 @@ fn html_caption(
     ctx: Ctx,
 ) -> Html {
     let Some(caption) = caption else { return Html::new() };
-    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("caption")) };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(TOO_DEEP) };
     let mut out = Html::new();
     for p in &caption.paragraphs {
         let t = extract_paragraph_text_html(p, styles, st, ctx);
