@@ -33,7 +33,7 @@
 //! carry for that section — the result is the current (reflowed) behavior,
 //! never a stale cache attached to changed content.
 
-use crate::error::{HwpxError, HwpxResult};
+use crate::error::{CodecFailure, CodecStage, HwpxError, HwpxResult};
 use crate::patch::RawPackage;
 
 /// One `<hp:p>` occurrence in a section XML, in open order.
@@ -300,12 +300,16 @@ pub(crate) fn carry_line_segs(
     baseline: &[u8],
     output: &[u8],
     source: &CacheSource,
-) -> HwpxResult<(Vec<u8>, Vec<crate::EncodeWarning>)> {
+) -> Result<(Vec<u8>, Vec<crate::EncodeWarning>), CodecFailure> {
     let mut reported = Vec::new();
-    let orig_pkg = RawPackage::read(original)?;
-    let base_pkg = RawPackage::read(baseline)?;
-    let src_pkg = RawPackage::read(&source.bytes)?;
-    let mut out_pkg = RawPackage::read(output)?;
+    let orig_pkg =
+        RawPackage::read(original).map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
+    let base_pkg =
+        RawPackage::read(baseline).map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
+    let src_pkg = RawPackage::read(&source.bytes)
+        .map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
+    let mut out_pkg =
+        RawPackage::read(output).map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
 
     let section_paths: Vec<String> = out_pkg
         .entry_paths()
@@ -320,7 +324,7 @@ pub(crate) fn carry_line_segs(
         for package in [&orig_pkg, &base_pkg, &out_pkg, &src_pkg] {
             match package.read_entry(&path) {
                 Ok(_) | Err(HwpxError::MissingFile { .. }) => {}
-                Err(error) => return Err(error),
+                Err(error) => return Err(CodecFailure::hwpx(CodecStage::Verification, &error)),
             }
         }
         let (Ok(orig_xml), Ok(base_xml), Ok(out_xml), Ok(src_xml)) = (
@@ -348,7 +352,11 @@ pub(crate) fn carry_line_segs(
         }
     }
 
-    let bytes = if changed { out_pkg.write()? } else { output.to_vec() };
+    let bytes = if changed {
+        out_pkg.write().map_err(|e| CodecFailure::hwpx(CodecStage::Encode, &e))?
+    } else {
+        output.to_vec()
+    };
     Ok((bytes, reported))
 }
 
@@ -446,6 +454,21 @@ pub(crate) fn carry_prepared(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn w3_carry_read_failure_keeps_verification_payload() {
+        // 이것을 실패시키는 것: L1 carry의 원본 package 읽기 stage를 Decode로 변경.
+        let source = CacheSource { bytes: vec![], dropped: vec![], warnings: vec![] };
+        let original = RawPackage::read(b"bad").err().unwrap();
+        let error = carry_line_segs(b"bad", b"bad", b"bad", &source).unwrap_err();
+        assert_eq!(
+            error,
+            CodecFailure {
+                stage: CodecStage::Verification,
+                code: original.code(),
+                detail: original.to_string()
+            }
+        );
+    }
 
     const LSA: &str = r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="0"/></hp:linesegarray>"#;
 
@@ -665,6 +688,33 @@ mod tests {
         assert!(
             paths[0].starts_with("section[0]") && paths[1].starts_with("section[1]"),
             "{paths:?}"
+        );
+    }
+
+    // 이것을 실패시키는 것: mixed_text의 CRLF 캐시 거부 또는 carry의 drop 보고 삭제.
+    #[test]
+    fn crlf_cache_drop_survives_layout_carry() {
+        use hwpforge_core::layout::{LayoutCache, LineSeg};
+        use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("가😀\r\n나", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![LineSeg::default()]));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![para], PageSettings::default()));
+        let doc = doc.validate().unwrap();
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::image::ImageStore::new();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let (bytes, reported) = carry_line_segs(&source.bytes, &output, &output, &source).unwrap();
+        let xml =
+            RawPackage::read(&bytes).unwrap().read_text_entry("Contents/section0.xml").unwrap();
+        assert!(!xml.contains("<hp:linesegarray"));
+        assert!(
+            matches!(reported.as_slice(), [crate::EncodeWarning::LayoutCacheDropped { reason, .. }] if reason.contains("CRLF"))
         );
     }
 

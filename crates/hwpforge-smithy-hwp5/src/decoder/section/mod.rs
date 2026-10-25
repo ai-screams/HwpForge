@@ -83,7 +83,7 @@ pub(super) const SHAPE_TEXT_MAX_DEPTH: u16 = GSO_GROUP_MAX_DEPTH;
 
 /// Global container path limit, shared by tables, notes, shapes, groups and
 /// group child text. The original table limit remains the overall ceiling.
-const MAX_CONTROL_NESTING: usize = 32;
+const MAX_CONTROL_NESTING: usize = hwpforge_core::MAX_NESTING_DEPTH;
 
 /// One path budget inherited across *all* container kinds, including group
 /// children. No nested parser creates a fresh budget. Family caps remain for
@@ -4658,7 +4658,8 @@ mod tests {
         };
         let want = Some([850, 700, 566, 400]);
         assert_eq!(margin(&control(&paras[0]).unwrap()), want, "body");
-        let hwpforge_core::control::Control::Group { children, .. } = control(&paras[1]).unwrap()
+        let hwpforge_core::control::Control::Group { ref children, .. } =
+            control(&paras[1]).unwrap()
         else {
             panic!()
         };

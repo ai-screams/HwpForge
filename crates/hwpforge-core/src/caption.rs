@@ -114,20 +114,6 @@ impl Caption {
     /// assert!(cap.width.is_none());
     /// assert_eq!(cap.paragraphs.len(), 1);
     /// ```
-    /// 캡션 문단 전부를 재귀 방문한다 (문단 안 중첩 포함).
-    pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
-        for p in &mut self.paragraphs {
-            p.walk_paragraphs_mut(f);
-        }
-    }
-
-    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 방문 순서 동일.
-    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
-        for p in &self.paragraphs {
-            p.walk_paragraphs(f);
-        }
-    }
-
     /// Creates a caption with the given paragraphs and side.
     pub fn new(paragraphs: Vec<Paragraph>, side: CaptionSide) -> Self {
         Self {
@@ -138,6 +124,18 @@ impl Caption {
             full_size: false,
             last_width: None,
         }
+    }
+
+    /// 캡션 문단 전부를 재귀 방문한다 (문단 안 중첩 포함).
+    #[cfg(test)]
+    pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
+        crate::walk::paragraphs_mut(crate::walk::NodeMut::Paragraphs(&mut self.paragraphs), f);
+    }
+
+    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 방문 순서 동일.
+    #[cfg(test)]
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
+        crate::walk::paragraphs(crate::walk::Node::Paragraphs(&self.paragraphs), f);
     }
 
     /// Sets an explicit caption width.

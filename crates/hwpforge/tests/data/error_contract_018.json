@@ -1,0 +1,5418 @@
+{
+  "audited_variants": [
+    "FillError::Invariant",
+    "PatchError::Invariant",
+    "PatchError::ProtectedFieldRange",
+    "CellEditError::Invariant",
+    "CellEditError::NestingTooDeep",
+    "StructuralEditError::Invariant",
+    "StructuralEditError::ProtectedFieldRange",
+    "StamperError::Invariant"
+  ],
+  "cases": [
+    {
+      "id": "read.section",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "read.section"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "read.section"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "read.table",
+      "expected_code": "TABLE_NOT_FOUND",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "read.table"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "read.table"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "read.field",
+      "expected_code": "FIELD_NOT_FOUND",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "read.field"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "read.field"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "io.missing",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "io.missing"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "io.missing"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "io.read",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "io.read"
+        },
+        "python": {
+          "mode": "injected",
+          "operation": "io.read"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.decode_failed",
+      "inventory": [
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "Decode"
+        }
+      ],
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "NotRoundTripSafe"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "SemanticLoss"
+        }
+      ]
+    },
+    {
+      "id": "adapter.stamp.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "NotRoundTripSafe"
+        }
+      ]
+    },
+    {
+      "id": "adapter.stamp.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "SemanticLoss"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.input_not_roundtrip_safe",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "NotRoundTripSafe"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.self_verify_failed",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "DeltaMismatch"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.internal_invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.protected_field_range",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.hwp5_decode_failed",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.hwp5_decode_failed",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "hwp5.decode_core",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "convert.convert_hwp5"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "convert-hwp5",
+          "exit": 2
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "hwp5.decode_core"
+        }
+      }
+    },
+    {
+      "id": "hwp5.to_pdf.decode_core",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "convert.to_pdf"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "to-pdf",
+          "exit": 2
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "hwp5.to_pdf.decode_core"
+        }
+      }
+    },
+    {
+      "id": "hwp5.validate",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "convert.convert_hwp5"
+        }
+      }
+    },
+    {
+      "id": "hwp5.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "convert.convert_hwp5"
+        }
+      }
+    },
+    {
+      "id": "hwp5.layout_patch",
+      "expected_code": "HWP5_CONVERT_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "convert.convert_hwp5"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.preset_not_found",
+      "expected_code": "PRESET_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.md_decode_failed",
+      "expected_code": "MD_DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.style_store_failed",
+      "expected_code": "STYLE_STORE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.style_rebind_failed",
+      "expected_code": "STYLE_REBIND_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.json_parse_failed",
+      "expected_code": "JSON_PARSE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.duplicate_target",
+      "expected_code": "DUPLICATE_TARGET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "DuplicateTarget"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.reference_stranded",
+      "expected_code": "REFERENCE_STRANDED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "ReferenceStranded"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.hard_break_loss",
+      "expected_code": "HARD_BREAK_LOSS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "HardBreakLoss"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.empty_section",
+      "expected_code": "EMPTY_SECTION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "EmptySection"
+        }
+      ]
+    },
+    {
+      "id": "adapter.insert-para.multi_paragraph_text",
+      "expected_code": "MULTI_PARAGRAPH_TEXT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "MultiParagraphText"
+        }
+      ]
+    },
+    {
+      "id": "adapter.insert-para.insert_before_section_properties",
+      "expected_code": "INSERT_BEFORE_SECTION_PROPERTIES",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "InsertBeforeSectionProperties"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "SectionOutOfRange"
+        }
+      ]
+    },
+    {
+      "id": "adapter.insert-para.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.paragraph_out_of_range",
+      "expected_code": "PARAGRAPH_OUT_OF_RANGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "ParagraphOutOfRange"
+        }
+      ]
+    },
+    {
+      "id": "adapter.insert-para.paragraph_out_of_range",
+      "expected_code": "PARAGRAPH_OUT_OF_RANGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "UncarriedZipEntries"
+        }
+      ]
+    },
+    {
+      "id": "adapter.insert-para.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.section_properties_paragraph",
+      "expected_code": "SECTION_PROPERTIES_PARAGRAPH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "SectionPropertiesParagraph"
+        }
+      ]
+    },
+    {
+      "id": "adapter.delete-para.span_count_mismatch",
+      "expected_code": "SPAN_COUNT_MISMATCH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "SpanCountMismatch"
+        }
+      ]
+    },
+    {
+      "id": "adapter.insert-para.span_count_mismatch",
+      "expected_code": "SPAN_COUNT_MISMATCH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "decode.input",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "read",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "read"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "decode.input"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.empty_field_value",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "EmptyValue"
+        }
+      ],
+      "expected_code": "EMPTY_FIELD_VALUE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.field_name_ambiguous",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "DuplicateFieldName"
+        }
+      ],
+      "expected_code": "FIELD_NAME_AMBIGUOUS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.field_not_fillable",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "UnfillableField"
+        }
+      ],
+      "expected_code": "FIELD_NOT_FILLABLE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.fill_failed",
+      "expected_code": "FILL_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.table_grid_invalid",
+      "expected_code": "TABLE_GRID_INVALID",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TableGridInvalid"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.cell_not_found",
+      "expected_code": "CELL_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "CellNotFound"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.cell_label_ambiguous",
+      "expected_code": "CELL_LABEL_AMBIGUOUS",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "LabelAmbiguous"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.cell_has_non_text_content",
+      "expected_code": "CELL_HAS_NON_TEXT_CONTENT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "NonTextContent"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.cell_target_duplicate",
+      "expected_code": "CELL_TARGET_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TargetDuplicate"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.cell_target_conflict",
+      "expected_code": "CELL_TARGET_CONFLICT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TargetConflict"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "UncarriedZipEntries"
+        }
+      ]
+    },
+    {
+      "id": "adapter.set-cell.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.input_entries_not_carried",
+      "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "UncarriedZipEntries"
+        }
+      ]
+    },
+    {
+      "id": "adapter.stamp.stamp_manifest_invariant",
+      "expected_code": "STAMP_MANIFEST_INVARIANT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "ManifestInvariant"
+        }
+      ]
+    },
+    {
+      "id": "adapter.stamp.stamp_source_hash_mismatch",
+      "expected_code": "STAMP_SOURCE_HASH_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "SourceHashMismatch"
+        }
+      ]
+    },
+    {
+      "id": "stamp.delta_mismatch",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "DeltaMismatch"
+        }
+      ]
+    },
+    {
+      "id": "adapter.stamp.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "stamp.cell_target_duplicate",
+      "expected_code": "CELL_TARGET_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellStampError",
+          "variant": "DuplicateTarget"
+        }
+      ]
+    },
+    {
+      "id": "adapter.stamp.stamp_name_empty",
+      "expected_code": "STAMP_NAME_EMPTY",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Stamp"
+        },
+        {
+          "enum": "StamperError",
+          "variant": "CellStamp"
+        }
+      ]
+    },
+    {
+      "id": "adapter.patch.json_parse_failed",
+      "expected_code": "JSON_PARSE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.patch_failed",
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.table_not_found",
+      "expected_code": "TABLE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TableNotFound"
+        }
+      ]
+    },
+    {
+      "id": "adapter.restyle.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.decode_failed",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwp5_decode_failed",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.field_not_found",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "UnknownField"
+        }
+      ],
+      "expected_code": "FIELD_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.analysis_failed",
+      "expected_code": "ANALYSIS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.section_index_mismatch",
+      "inventory": [
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "SectionIndexMismatch"
+        }
+      ],
+      "expected_code": "SECTION_INDEX_MISMATCH",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.section_out_of_range",
+      "inventory": [
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "SectionOutOfRange"
+        }
+      ],
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.schema.unknown_schema_type",
+      "expected_code": "UNKNOWN_SCHEMA_TYPE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "schema",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.invalid_stamp_map",
+      "expected_code": "INVALID_STAMP_MAP",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.manifest_path_conflict",
+      "expected_code": "MANIFEST_PATH_CONFLICT",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_candidate_uncovered",
+      "expected_code": "STAMP_CANDIDATE_UNCOVERED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_cell_not_anchor",
+      "expected_code": "STAMP_CELL_NOT_ANCHOR",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_name_collision",
+      "expected_code": "STAMP_NAME_COLLISION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.stamp_name_duplicate",
+      "expected_code": "STAMP_NAME_DUPLICATE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.upstream_unmapped",
+      "expected_code": "UPSTREAM_UNMAPPED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "inspect",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.delete-para.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "delete-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.insert-para.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "insert-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.invalid_set",
+      "expected_code": "INVALID_SET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.duplicate_set",
+      "expected_code": "DUPLICATE_SET",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwp5_census_failed",
+      "expected_code": "HWP5_CENSUS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwp5_semantic_failed",
+      "expected_code": "HWP5_SEMANTIC_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.hwpx_analysis_failed",
+      "expected_code": "HWPX_ANALYSIS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.hwpx_census_failed",
+      "expected_code": "HWPX_CENSUS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "io.write",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "python": {
+          "mode": "injected",
+          "operation": "io.write"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.encode_semantic_loss",
+      "expected_code": "ENCODE_SEMANTIC_LOSS",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.inspect.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.audit-hwp5.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "audit-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "diff",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fields.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fields",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "from-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "outline",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "patch",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.read.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "read",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp-plan.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "stamp-plan",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-json",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-md",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.validate.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "validate",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.convert.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.from-json.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.fill.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.patch.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.file_not_found",
+      "expected_code": "FILE_NOT_FOUND",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.file_read_failed",
+      "expected_code": "FILE_READ_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.input_too_large",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.file_write_failed",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.restyle.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.set-cell.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.invalid_extension",
+      "expected_code": "INVALID_EXTENSION",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.missing_source_sha256",
+      "expected_code": "MISSING_SOURCE_SHA256",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.stamp.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "adapter.outline.output_too_large",
+      "expected_code": "OUTPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.output_too_large",
+      "expected_code": "OUTPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.diff.json_serialize_failed",
+      "expected_code": "JSON_SERIALIZE_FAILED",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.output_too_large",
+      "expected_code": "OUTPUT_TOO_LARGE",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-json.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.invalid_input",
+      "expected_code": "INVALID_INPUT",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.to-md.invalid_output_path",
+      "expected_code": "INVALID_OUTPUT_PATH",
+      "surfaces": {
+        "mcp": {
+          "mode": "injected",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "adapter.census-hwp5.hwp5_census_failed",
+      "expected_code": "HWP5_CENSUS_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "census-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "io.to-md.input_size_preflight",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "to-md",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.to-md.fifo_over_limit",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "to-md",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.convert-hwp5.input_size_preflight",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "convert-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.convert-hwp5.fifo_over_limit",
+      "expected_code": "INPUT_TOO_LARGE",
+      "surfaces": {
+        "cli": {
+          "mode": "fixture",
+          "operation": "convert-hwp5",
+          "exit": 1
+        }
+      }
+    },
+    {
+      "id": "io.convert-hwp5.output_metadata",
+      "expected_code": "FILE_WRITE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "params.convert",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "convert"
+        }
+      }
+    },
+    {
+      "id": "params.inspect",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "inspect"
+        }
+      }
+    },
+    {
+      "id": "params.to-json",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "to-json"
+        }
+      }
+    },
+    {
+      "id": "params.from-json",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "from-json"
+        }
+      }
+    },
+    {
+      "id": "params.patch",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "params.outline",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "outline"
+        }
+      }
+    },
+    {
+      "id": "params.diff",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "diff"
+        }
+      }
+    },
+    {
+      "id": "params.delete-para",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "delete-para"
+        }
+      }
+    },
+    {
+      "id": "params.insert-para",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "insert-para"
+        }
+      }
+    },
+    {
+      "id": "params.read",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "params.fields",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "fields"
+        }
+      }
+    },
+    {
+      "id": "params.fill",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "params.stamp-plan",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp-plan"
+        }
+      }
+    },
+    {
+      "id": "params.stamp",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        }
+      }
+    },
+    {
+      "id": "params.set-cell",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        }
+      }
+    },
+    {
+      "id": "params.validate",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "validate"
+        }
+      }
+    },
+    {
+      "id": "params.restyle",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "restyle"
+        }
+      }
+    },
+    {
+      "id": "params.templates",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "templates"
+        }
+      }
+    },
+    {
+      "id": "params.to-md",
+      "expected_code": "INVALID_PARAMS",
+      "surfaces": {
+        "mcp": {
+          "mode": "fixture",
+          "operation": "to-md"
+        }
+      }
+    },
+    {
+      "id": "patch.input_decode",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "원본 패키지 읽기(RawPackage::read)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Decode",
+          "occurrence": 2,
+          "anchor": "원본 구역 XML 읽기"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "원본 패키지 읽기(RawPackage::read)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2,
+          "anchor": "입구 metadata 검사 뒤 원본 decode"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 구역 XML 읽기"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "section_path",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "구역 수를 확인한 뒤의 구역 경로 해석"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Decode"
+        },
+        {
+          "enum": "SectionWorkflowError",
+          "variant": "PreservingPatch"
+        }
+      ],
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "patch.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "patch"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "patch.input_decode"
+        }
+      }
+    },
+    {
+      "id": "patch.missing_metadata_first",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Rejected"
+        }
+      ],
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "patch.missing_metadata_first"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "patch",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "patch"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "patch.missing_metadata_first"
+        }
+      }
+    },
+    {
+      "id": "patch.validation",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "stage": "Validation",
+          "occurrence": 1,
+          "anchor": "내보낼 구역의 깊이 검사"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1,
+          "anchor": "replacement 깊이 검사"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 2,
+          "anchor": "출력 가능한 measure 검증"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 3,
+          "anchor": "source 의미 검사(verify_document_source)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 4,
+          "anchor": "편집 문서 validate"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.validation"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.encode",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1,
+          "anchor": "출력용 header reference 구성"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 2,
+          "anchor": "정규화가 필요한 header 의 재인코드"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 3,
+          "anchor": "출력 ZIP 작성"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.encode"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.codec.admission",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.codec.admission"
+        }
+      }
+    },
+    {
+      "id": "patch.codec.verification",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.codec.verification"
+        }
+      }
+    },
+    {
+      "id": "patch.protected_field",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::ProtectedFieldRange",
+          "occurrence": 1,
+          "anchor": "보호 필드 값·범위 변경"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "ProtectedFieldRange"
+        }
+      ],
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.protected_field"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.invariant",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::export_section_preservation",
+          "variant": "PatchError::Invariant",
+          "occurrence": 1,
+          "anchor": "decoder source map 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 1,
+          "anchor": "decoder source map 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 2,
+          "anchor": "검증된 slot 의 text element 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 3,
+          "anchor": "검증된 slot 의 inline 내용 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 4,
+          "anchor": "text slot 이 어느 문단에도 없음"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 5,
+          "anchor": "검증된 locator 교체 실패"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "variant": "PatchError::Invariant",
+          "occurrence": 6,
+          "anchor": "splice 범위 겹침"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "preservation_from_map",
+          "variant": "PatchError::Invariant",
+          "occurrence": 1,
+          "anchor": "원본 source-map slot 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "preservation_from_map",
+          "variant": "PatchError::Invariant",
+          "occurrence": 2,
+          "anchor": "원본 source-map 값 불일치"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "Invariant"
+        }
+      ],
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "patch.invariant"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "patch"
+        }
+      }
+    },
+    {
+      "id": "patch.section_out_of_range",
+      "inventory": [
+        {
+          "enum": "PatchError",
+          "variant": "SectionOutOfRange"
+        }
+      ],
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "patch.section_out_of_range"
+        }
+      }
+    },
+    {
+      "id": "fill.input_decode",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1,
+          "anchor": "입력 decode"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2,
+          "anchor": "원본 패키지 읽기(RawPackage::read)"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "fill.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "fill"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "fill.input_decode"
+        }
+      }
+    },
+    {
+      "id": "fill.invariant",
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "variant": "FillError::Invariant",
+          "occurrence": 1,
+          "anchor": "확인된 필드 구역의 패키지 경로 부재"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "variant": "FillError::Invariant",
+          "occurrence": 2,
+          "anchor": "preflight 뒤 필드 목록 변화"
+        }
+      ],
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Invariant"
+        }
+      ],
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.invariant"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.admission",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.admission"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.validation",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.validation"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.encode",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.encode"
+        }
+      }
+    },
+    {
+      "id": "fill.codec.verification",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.codec.verification"
+        }
+      }
+    },
+    {
+      "id": "fill.workflow",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Workflow"
+        }
+      ],
+      "expected_code": "FILL_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.workflow"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.rejected",
+      "inventory": [
+        {
+          "enum": "FillError",
+          "variant": "Patch"
+        }
+      ],
+      "expected_code": "PATCH_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.rejected"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.validation"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.encode"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.protected_field",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.protected_field"
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.section_out_of_range",
+      "expected_code": "SECTION_OUT_OF_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.section_out_of_range"
+        },
+        "cli": {
+          "mode": "injected",
+          "operation": "fill",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "injected",
+          "operation": "fill"
+        }
+      }
+    },
+    {
+      "id": "fill.patch.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "fill.patch.invariant"
+        }
+      }
+    },
+    {
+      "id": "cell.codec.decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.decode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.admission"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Admission",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.validation"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.encode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Encode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.verification",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.verification"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 3
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 4
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 5
+        }
+      ]
+    },
+    {
+      "id": "cell.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.invariant"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Invariant"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "map_admission_error",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "map_admission_error",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.decode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "admit",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.admission"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "admit",
+          "stage": "Admission",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.validation"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.encode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "normalize_header_for_edit",
+          "stage": "Encode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.verification",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.verification"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "self_verify",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "encoded_paragraph_spans",
+          "stage": "Verification",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.invariant"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Invariant"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "map_admission",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "map_admission",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 3
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "encoded_paragraph_spans",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "splice_paragraphs",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.decode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::plan_bytes",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::plan_bytes_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "check_zip_carry",
+          "stage": "Decode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.admission"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Admission",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Admission",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Admission",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Admission",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.validation"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Validation",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.encode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_fail_closed",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Encode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.verification",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.verification"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 3
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "verify_and_reverse_cells",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "check_zip_carry",
+          "stage": "Verification",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.invariant"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Invariant"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "variant": "StamperError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "variant": "StamperError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "variant": "StamperError::Invariant",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "structural.protected_field",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.protected_field"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "ProtectedFieldRange"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "variant": "StructuralEditError::ProtectedFieldRange",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::ProtectedFieldRange",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "remove_targets",
+          "variant": "StructuralEditError::ProtectedFieldRange",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.draft_depth",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.draft_depth"
+        },
+        "cli": {
+          "mode": "unreachable",
+          "operation": "set-cell",
+          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+        },
+        "mcp": {
+          "mode": "unreachable",
+          "operation": "set-cell",
+          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+        },
+        "python": {
+          "mode": "unreachable",
+          "operation": "set_cell",
+          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "NestingTooDeep"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "apply_set_cells",
+          "variant": "CellEditError::NestingTooDeep",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "cell.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.input_decode"
+        }
+      }
+    },
+    {
+      "id": "cell.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "cell.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.admission"
+        }
+      }
+    },
+    {
+      "id": "structural.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "insert-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "insert-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural.input_decode"
+        }
+      }
+    },
+    {
+      "id": "structural.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "insert-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural.admission"
+        }
+      }
+    },
+    {
+      "id": "structural_delete.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural_delete.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "delete-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "delete-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural_delete.input_decode"
+        }
+      }
+    },
+    {
+      "id": "structural_delete.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural_delete.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "delete-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural_delete.admission"
+        }
+      }
+    },
+    {
+      "id": "stamp.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "stamp.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp.input_decode"
+        }
+      }
+    },
+    {
+      "id": "stamp.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "stamp.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp.admission"
+        }
+      }
+    },
+    {
+      "id": "stamp_plan.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "stamp_plan.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp-plan",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp-plan"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp_plan.input_decode"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-table-42",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-table-42"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-table-33",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-table-33"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-group-32",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-group-32"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-xml-broken",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-xml-broken"
+        }
+      }
+    },
+    {
+      "id": "stamp.v2_admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.stamp_v2_admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp.v2_admission"
+        }
+      }
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 //! Core -> Markdown encoders.
 
 mod guard;
+#[cfg(test)]
+mod guarded_tests;
 mod list_format;
 mod lossless;
 mod lossy;
@@ -51,13 +53,12 @@ pub enum MdWarning {
         /// Why the reference was excluded.
         reason: crate::embed::ImageEmbedSkipReason,
     },
-    /// HWPX→MD (readable views): a container nested deeper than the view
-    /// draws was left out and a notice written in its place — lossy past 8
-    /// tables nested in cells (`(중첩 표 생략)`). The styled depth warning is
-    /// retained for compatibility, but Core validation now prevents reaching it.
+    /// HWPX→MD (lossy view): a container nested deeper than the view draws
+    /// was left out and a notice written in its place — past 8 tables nested
+    /// in cells (`(중첩 표 생략)`). The styled view never reports it: Core
+    /// validation keeps a validated document within the depth it draws.
     ContainerTooDeep {
-        /// What was left out: `"table"`, `"caption"`, `"shape text"`,
-        /// `"note"` or `"memo"`.
+        /// What was left out: `"table"`.
         container: &'static str,
         /// The nesting limit that was reached.
         limit: usize,
@@ -180,6 +181,57 @@ pub(crate) fn auto_number_text(
     out.push_str(&num.to_string());
     out.extend(format.suffix);
     out
+}
+
+/// The parser options the Markdown decoder reads with. The styled view's
+/// final check parses with the same ones, so what it lets through is what
+/// the decoder reads (`guard`).
+pub(crate) fn md_options() -> pulldown_cmark::Options {
+    use pulldown_cmark::Options;
+    Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_GFM
+}
+
+/// The text the styled view shows for a control whose text is not its own
+/// document text: a cross reference without display text shows its target
+/// in brackets, a field its value, else its hint, else `____`, an unknown
+/// control `[tag]`. The styled renderers and the styled plain-text fallback
+/// (`guard::fallback_markdown`) both use it, so a fallback keeps what the view
+/// showed.
+/// 이것을 실패시키는 것: 갈래 하나씩 삭제(`fallback_text_shows_what_styled_shows`).
+pub(crate) fn styled_display(
+    control: &hwpforge_core::Control,
+) -> Option<std::borrow::Cow<'_, str>> {
+    use hwpforge_core::Control;
+    match control {
+        Control::CrossRef { target, display_text, .. } => Some(if display_text.is_empty() {
+            format!("[{}]", target.as_display()).into()
+        } else {
+            display_text.as_str().into()
+        }),
+        Control::Field { hint_text, display_text, .. } => Some(if display_text.is_empty() {
+            hint_text.as_deref().unwrap_or("____").into()
+        } else {
+            display_text.as_str().into()
+        }),
+        Control::Unknown { tag, .. } => Some(format!("[{tag}]").into()),
+        _ => None,
+    }
+}
+
+/// A memo's anchor runs as a paragraph: styled draws a memo control still
+/// standing after `expand_memos` (one in another memo's anchor) this way,
+/// one container deeper, and its plain-text fallback reads it the same way
+/// (`guard::fallback_markdown`).
+pub(crate) fn memo_anchor(anchor_runs: &[hwpforge_core::Run]) -> hwpforge_core::Paragraph {
+    hwpforge_core::Paragraph::with_runs(
+        anchor_runs.to_vec(),
+        hwpforge_foundation::ParaShapeIndex::new(0),
+    )
 }
 
 /// Whether a link may be written as a link by the readable views. The same

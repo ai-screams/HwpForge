@@ -96,26 +96,26 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 
 ### `Document` methods
 
-| Method                                                            | Returns                            | Characteristic failures                                                                            |
-| ----------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `inspect(*, styles=False)`                                        | `InspectReport`                    | `DECODE_FAILED`                                                                                    |
-| `outline()`                                                       | `OutlineReport`                    | `DECODE_FAILED`                                                                                    |
-| `fields()`                                                        | `FieldsReport`                     | `DECODE_FAILED`                                                                                    |
-| `validate()`                                                      | `ValidateReport`                   | `DECODE_FAILED` (an invalid document reports, not raises)                                          |
-| `read(*, section, paras, table, field)`                           | `ReadReport`                       | `READ_TARGET_REQUIRED`, `READ_PARAS_INVALID`, `READ_PARA_RANGE_INVALID`, `READ_TABLE_OUT_OF_RANGE` |
-| `diff(revised)`                                                   | `DiffReport`                       | `DECODE_FAILED`                                                                                    |
-| `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                                    |
-| `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                                    |
-| `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                             |
-| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"`: see the note below)                                            |
-| `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                                |
-| `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                                       |
-| `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                   |
-| `patch(*, section, patch)`                                        | `DocumentResult[PatchReport]`      | `JSON_PARSE_FAILED`, `PATCH_FAILED`                                                                |
-| `insert_para(*, section, anchor, text, before=False)`             | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                              |
-| `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                              |
-| `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                                |
-| `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                         |
+| Method                                                            | Returns                            | Characteristic failures                                                                    |
+| ----------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| `inspect(*, styles=False)`                                        | `InspectReport`                    | `DECODE_FAILED`                                                                            |
+| `outline()`                                                       | `OutlineReport`                    | `DECODE_FAILED`                                                                            |
+| `fields()`                                                        | `FieldsReport`                     | `DECODE_FAILED`                                                                            |
+| `validate()`                                                      | `ValidateReport`                   | `DECODE_FAILED` (an invalid document reports, not raises)                                  |
+| `read(*, section, paras, table, field)`                           | `ReadReport`                       | `READ_TARGET_REQUIRED`, `READ_PARAS_INVALID`, `READ_PARA_RANGE_INVALID`, `TABLE_NOT_FOUND` |
+| `diff(revised)`                                                   | `DiffReport`                       | `DECODE_FAILED`                                                                            |
+| `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                            |
+| `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                            |
+| `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                     |
+| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"`: see the note below)                                    |
+| `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                        |
+| `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                               |
+| `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                           |
+| `patch(*, section, patch)`                                        | `DocumentResult[PatchReport]`      | `JSON_PARSE_FAILED`, `PATCH_FAILED`, `PROTECTED_FIELD_RANGE`                               |
+| `insert_para(*, section, anchor, text, before=False)`             | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                      |
+| `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                      |
+| `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                        |
+| `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                 |
 
 `to_md(mode="lossless")` keeps what the preservation scope lists, raises `ENCODE_FAILED` for
 an object the scope lists as refused, and may leave out anything else (paragraph styles,
@@ -152,3 +152,9 @@ present and worth reading before saving the result.
 ## License
 
 MIT OR Apache-2.0.
+
+### 0.18 error migration
+
+Operation codes now use the canonical `OpsCode` vocabulary across Python, CLI and MCP. Read target failures use `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND` and `FIELD_NOT_FOUND`.
+
+File I/O raises `HwpForgeIOError` (`HwpForgeError` and `OSError`), or `HwpForgeFileNotFoundError` for an absent input (also `FileNotFoundError`). Codes are `FILE_READ_FAILED`, `FILE_WRITE_FAILED`, and `FILE_NOT_FOUND`; the size cap remains `INPUT_TOO_LARGE`. OS fields and copy/pickle reconstruction are preserved. Exact type checks and `except PermissionError` need updating. `Document.save` to a missing parent directory now raises `HwpForgeIOError` (`FILE_WRITE_FAILED`), not `FileNotFoundError`. Change `except FileNotFoundError` around `save` to `except HwpForgeIOError` or `except OSError`. Install matching native and Python package versions.

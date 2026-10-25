@@ -24,8 +24,8 @@ use std::collections::BTreeMap;
 use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
 use hwpforge_core::section::Section;
 
-use crate::error::{HwpxError, HwpxResult};
-use crate::{HwpxDecoder, HwpxPatcher};
+use crate::error::{CodecFailure, CodecStage, HwpxError, HwpxResult};
+use crate::{HwpxDecoder, HwpxPatcher, PatchError};
 
 /// 문서 안의 누름틀 한 개에 대한 발견가능성 정보 (`fields` CLI/MCP 표면).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -95,8 +95,20 @@ pub enum FillError {
         /// 필드가 속한 섹션.
         section: usize,
     },
-    /// 디코드/패치 하위 오류.
+    /// fill 고유 workflow 거부: 문서의 필드 목록 자체가 진단을 낸 경우
+    /// (필드 경계가 깨져 이름 해석을 신뢰할 수 없다).
     Workflow(HwpxError),
+    /// 입력 패키지를 읽거나 디코드하지 못했다. 단계는 [`CodecStage::Decode`].
+    Codec(CodecFailure),
+    /// 섹션 보존 메타데이터 export 또는 preserve-first 패치가 실패했다.
+    /// [`PatchError`] 가 원인(코덱 단계·거부·보호 필드·불변식)을 보존한다.
+    Patch(PatchError),
+    /// preflight 로 확인한 사실이 적용 중에 성립하지 않았다(확인된 필드의
+    /// 섹션 경로 부재, 적용 중 필드 목록 변화). 입력이 아니라 결함이다.
+    Invariant {
+        /// 성립하지 않은 사실.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for FillError {
@@ -118,17 +130,16 @@ impl std::fmt::Display for FillError {
                 )
             }
             Self::Workflow(error) => write!(f, "fill workflow error: {error}"),
+            Self::Codec(failure) => write!(f, "fill workflow error: {}", failure.detail),
+            Self::Patch(error) => write!(f, "fill workflow error: {error}"),
+            Self::Invariant { detail } => {
+                write!(f, "fill workflow error: internal invariant violated: {detail}")
+            }
         }
     }
 }
 
 impl std::error::Error for FillError {}
-
-impl From<HwpxError> for FillError {
-    fn from(error: HwpxError) -> Self {
-        Self::Workflow(error)
-    }
-}
 
 /// 이름 기반 누름틀 채우기 상위 API.
 #[derive(Debug, Clone, Copy)]
@@ -232,7 +243,8 @@ impl HwpxFiller {
     /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
     /// 하나(`location` = `field 'NAME'`)를 싣는다. 지운 뒤의 값이 쓰기·"값이
     /// 바뀌었나" 비교·`filled` 보고에 모두 쓰이므로, 지운 뒤 현재 값과 같으면
-    /// 그 필드는 채우지 않은 것으로 남는다(경고만, 바이트 그대로). 지운 뒤
+    /// 그 필드는 채우지 않은 것으로 남는다(경고만, 바이트 그대로). 본문 CR/CRLF도
+    /// 공용 인코드 규칙으로 정규화한 뒤 비교한다. 지운 뒤
     /// 비면 [`FillError::EmptyValue`]. 현재 값과 원문 그대로 같은 요청은
     /// 정리하지 않는다 — 원본이 이미 그런 문자를 담고 있어도 경고 없는 no-op 이다.
     ///
@@ -268,13 +280,16 @@ impl HwpxFiller {
             }
         }
 
-        let mut decoded = HwpxDecoder::decode(base)?;
+        let mut decoded = HwpxDecoder::decode(base)
+            .map_err(|error| FillError::Codec(CodecFailure::hwpx(CodecStage::Decode, &error)))?;
         let decode_warnings = decoded.warnings.clone();
 
         let original_sections: Vec<Section> = decoded.document.sections().to_vec();
         let inventory = FieldInventory::from_sections(&original_sections);
         if let Some(error) = inventory.diagnostics().first() {
-            return Err(HwpxError::InvalidStructure { detail: error.to_string() }.into());
+            return Err(FillError::Workflow(HwpxError::InvalidStructure {
+                detail: error.to_string(),
+            }));
         }
         let fields: Vec<_> =
             inventory.fields().iter().filter(|f| f.kind() == "CLICK_HERE").collect();
@@ -315,7 +330,8 @@ impl HwpxFiller {
             }
         }
         let mut encode_warnings = Vec::new();
-        let package = crate::patch::RawPackage::read(base)?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|error| FillError::Codec(CodecFailure::hwpx(CodecStage::Decode, &error)))?;
         let mut filled = Vec::new();
         let mut touched = std::collections::BTreeSet::new();
         let mut pending = Vec::new();
@@ -330,12 +346,17 @@ impl HwpxFiller {
             if value == &previous {
                 continue;
             }
+            // The field came from decoding these bytes, so its section exists.
+            let section_path = package
+                .section_path(field.section())
+                .map_err(|error| FillError::Invariant { detail: error.to_string() })?;
             let value = crate::wire_xml::sanitize_edit_text(
                 value,
-                &package.section_path(field.section())?,
+                &section_path,
                 &format!("field '{name}'"),
                 &mut encode_warnings,
             );
+            let value = crate::wire_xml::body_text_line_breaks(&value, true).into_owned();
             if value == previous {
                 continue;
             }
@@ -346,10 +367,9 @@ impl HwpxFiller {
 
         let edits: Vec<_> = pending.iter().map(|(f, value)| (*f, value.as_str())).collect();
         if !FieldInventory::replace_values(decoded.document.sections_mut(), &edits) {
-            return Err(HwpxError::InvalidStructure {
+            return Err(FillError::Invariant {
                 detail: "field inventory changed during fill preflight".into(),
-            }
-            .into());
+            });
         }
         let mut bytes = base.to_vec();
         for section_idx in touched {
@@ -360,14 +380,16 @@ impl HwpxFiller {
                 &bytes,
                 section_idx,
                 &original_sections[section_idx],
-            )?;
+            )
+            .map_err(FillError::Patch)?;
             bytes = HwpxPatcher::patch_section_preserving(
                 &bytes,
                 section_idx,
                 &decoded.document.sections()[section_idx],
                 None,
                 Some(&preservation),
-            )?;
+            )
+            .map_err(FillError::Patch)?;
         }
 
         // The patcher invalidates caches from the actual changed text locators.

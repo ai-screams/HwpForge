@@ -92,6 +92,8 @@ pub struct StampOutcome {
 pub enum StampError {
     /// Spec does not match any live candidate (path/span drift or the
     /// document changed since planning).
+    /// Nesting depth above 32 also uses this variant (diagnostic in `path`).
+    /// Planning again gives the same rejection.
     UnknownSpec {
         /// Spec's section index.
         section: usize,
@@ -183,10 +185,21 @@ impl std::error::Error for StampError {}
 /// # Errors
 ///
 /// See [`StampError`] — every variant is a preflight rejection.
+/// Nesting depth above 32 is rejected as [`StampError::UnknownSpec`], with the
+/// depth diagnostic in `path` and an empty span; planning again gives the same rejection.
 pub fn apply(
     document: &mut Document<Draft>,
     specs: &[StampSpec],
 ) -> Result<StampOutcome, StampError> {
+    // 이것을 실패시키는 것: apply의 깊이 관문 삭제.
+    for (section, value) in document.sections().iter().enumerate() {
+        value.check_nesting_depth().map_err(|error| StampError::UnknownSpec {
+            section,
+            path: error.to_string().replace("section=0", &format!("section={section}")),
+            span: 0..0,
+        })?;
+    }
+
     let candidates = plan(&*document);
 
     // ── preflight ───────────────────────────────────────────────────

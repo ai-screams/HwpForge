@@ -16,6 +16,51 @@ use crate::tools::{
 };
 use crate::{prompts, resources};
 
+/// Keep field errors inside the tool-result boundary instead of letting rmcp
+/// turn a failed `Parameters<T>` extraction into unstructured text.
+struct CheckedParams<T>(Result<T, ToolErrorInfo>);
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for CheckedParams<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Buffer the full value so any deserializer is consumed before we retain a request error.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let request = serde_path_to_error::deserialize(value).map_err(|error| {
+            let path = if error.path().iter().next().is_none() {
+                "$".to_owned()
+            } else {
+                // Display leaves dots in map keys unescaped: `values.a.b` can be ambiguous.
+                error.path().to_string()
+            };
+            ToolErrorInfo::new(
+                hwpforge_foundation::diagnostics::OpsCode::InvalidParams,
+                format!("{path}: {}", error.inner()),
+                "Check the tool arguments against its input schema.",
+            )
+        });
+        Ok(Self(request))
+    }
+}
+
+// A wrapper must share the request's identity and reference policy as well as
+// its schema, or `$defs` can silently acquire a second, incompatible type.
+impl<T: JsonSchema> JsonSchema for CheckedParams<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        T::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        T::schema_id()
+    }
+
+    fn inline_schema() -> bool {
+        T::inline_schema()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        T::json_schema(generator)
+    }
+}
+
 // ── MCP Request Types ────────────────────────────────────────────────────────
 
 /// Request parameters for `hwpforge_convert`.
@@ -340,8 +385,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_convert(
         &self,
-        Parameters(req): Parameters<ConvertRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<ConvertRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             convert::run_convert(&req.markdown, req.is_file, &req.output_path, &req.preset)
         })
@@ -364,7 +413,11 @@ impl HwpForgeServer {
                     summary.push_str(&format!(
                         " — {} warning(s): {}",
                         data.warnings.len(),
-                        data.warnings.join(" · "),
+                        data.warnings
+                            .iter()
+                            .map(|w| w.message.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · "),
                     ));
                 }
                 let output = ToolOutput::new(
@@ -389,8 +442,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_inspect(
         &self,
-        Parameters(req): Parameters<InspectRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<InspectRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result =
             tokio::task::spawn_blocking(move || inspect::run_inspect(&req.file_path, req.styles))
                 .await
@@ -428,8 +485,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_to_json(
         &self,
-        Parameters(req): Parameters<ToJsonRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<ToJsonRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             to_json::run_to_json(&req.file_path, req.section, req.output_path.as_deref())
         })
@@ -472,8 +533,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_from_json(
         &self,
-        Parameters(req): Parameters<FromJsonRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<FromJsonRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             from_json::run_from_json(&req.structure, &req.output_path)
         })
@@ -508,8 +573,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_patch(
         &self,
-        Parameters(req): Parameters<PatchRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<PatchRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             patch::run_patch(&req.base_path, req.section, &req.section_json_path, &req.output_path)
         })
@@ -539,8 +608,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_outline(
         &self,
-        Parameters(req): Parameters<OutlineRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<OutlineRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || outline::run_outline(&req.file_path))
             .await
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
@@ -575,8 +648,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_diff(
         &self,
-        Parameters(req): Parameters<DiffRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<DiffRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             diff::run_diff(&req.base_path, &req.revised_path, req.output_path.as_deref())
         })
@@ -607,8 +684,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_delete_para(
         &self,
-        Parameters(req): Parameters<DeleteParaRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<DeleteParaRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             structural::run_delete_para(&req.file_path, req.section, &req.indices, &req.output_path)
         })
@@ -635,8 +716,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_insert_para(
         &self,
-        Parameters(req): Parameters<InsertParaRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<InsertParaRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             structural::run_insert_para(
                 &req.file_path,
@@ -671,8 +756,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_read(
         &self,
-        Parameters(req): Parameters<ReadRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<ReadRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             read::run_read(
                 &req.file_path,
@@ -710,8 +799,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_fields(
         &self,
-        Parameters(req): Parameters<FieldsRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<FieldsRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || fields::run_fields(&req.file_path))
             .await
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
@@ -737,8 +830,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_fill(
         &self,
-        Parameters(req): Parameters<FillRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<FillRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             fill::run_fill(&req.file_path, &req.values, &req.output_path)
         })
@@ -770,8 +867,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_stamp_plan(
         &self,
-        Parameters(req): Parameters<StampPlanRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<StampPlanRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || stamp::run_stamp_plan(&req.file_path))
             .await
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
@@ -804,8 +905,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_stamp(
         &self,
-        Parameters(req): Parameters<StampRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<StampRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             stamp::run_stamp(
                 &req.file_path,
@@ -850,8 +955,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_set_cell(
         &self,
-        Parameters(req): Parameters<SetCellRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<SetCellRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             set_cell::run_set_cell(&req.file_path, &req.specs, &req.output_path)
         })
@@ -894,8 +1003,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_validate(
         &self,
-        Parameters(req): Parameters<ValidateRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<ValidateRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || validate::run_validate(&req.file_path))
             .await
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
@@ -933,8 +1046,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_restyle(
         &self,
-        Parameters(req): Parameters<RestyleRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<RestyleRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             restyle::run_restyle(&req.file_path, &req.preset, &req.output_path)
         })
@@ -968,8 +1085,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_templates(
         &self,
-        Parameters(req): Parameters<TemplatesRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<TemplatesRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result =
             tokio::task::spawn_blocking(move || templates::run_templates(req.name.as_deref()))
                 .await
@@ -1000,8 +1121,12 @@ impl HwpForgeServer {
     )]
     async fn hwpforge_to_md(
         &self,
-        Parameters(req): Parameters<ToMdRequest>,
+        Parameters(CheckedParams(req)): Parameters<CheckedParams<ToMdRequest>>,
     ) -> Result<CallToolResult, McpError> {
+        let req = match req {
+            Ok(req) => req,
+            Err(error) => return Ok(tool_error_response(error)),
+        };
         let result = tokio::task::spawn_blocking(move || {
             to_md::run_to_md(&req.file_path, req.output_dir.as_deref())
         })
@@ -1253,3 +1378,11 @@ mod request_schema_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "param_tests.rs"]
+pub(crate) mod param_tests;
+
+#[cfg(test)]
+#[path = "warning_tests.rs"]
+mod warning_tests;

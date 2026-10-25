@@ -105,7 +105,7 @@ let doc_from_hwpx: Document<Draft> = hwpx_result.document;
 
 // === 2. Markdown → Core DOM ===
 let markdown = "# 제목\n\n본문 내용입니다.";
-let MdDocument { document: doc_from_md, style_registry } =
+let MdDocument { document: doc_from_md, style_registry, .. } =
     MdDecoder::decode_with_default(markdown).unwrap();
 
 // === 3. 포맷 독립 처리 (어느 소스에서 왔든 동일) ===

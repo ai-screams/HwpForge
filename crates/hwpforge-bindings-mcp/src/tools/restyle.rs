@@ -6,7 +6,7 @@ use hwpforge::ops::{restyle as ops_restyle, OpsError, RestyleOptions};
 use hwpforge_smithy_hwpx::presets::builtin_presets;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful restyle operation.
 #[derive(Debug, Serialize)]
@@ -19,9 +19,9 @@ pub struct RestyleData {
     pub size_bytes: u64,
     /// Number of sections.
     pub sections: usize,
-    /// 인코드 경고 (각주 번호 머리 생략 등 — 무음 폐기 금지).
+    /// 디코드·인코드 경고 (무음 폐기 금지). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Apply a style preset to an existing HWPX document.
@@ -33,7 +33,7 @@ pub fn run_restyle(
     // 1. Validate output extension (MCP-local — stays outside `ops`).
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
@@ -60,7 +60,7 @@ pub fn run_restyle(
 
     // 비-의미 경고(줄 조판 캐시 드롭 등)는 지금까지처럼 결과에 실어 보낸다.
     // (의미 손상 경고는 `ops::restyle` 이 이미 fail-closed 로 거부했다.)
-    let warnings: Vec<String> = out.warnings.iter().map(|w| compat::warning(w).message).collect();
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
     // 5. Write output.
     write_output_file(output_path, &out.bytes)?;
@@ -187,10 +187,7 @@ mod tests {
     /// still admissible — the same fixture the ops-layer and `structural.rs`
     /// decode-warning tests use, so the surfaces cannot disagree about what
     /// "a document that warns" means.
-    ///
-    /// `RestyleData::warnings` is `Vec<String>` (unlike `stamp`/`set_cell`'s
-    /// `Vec<ToolWarningInfo>`), so there is no `code` key here — asserting
-    /// on the message text instead.
+    // 이것을 실패시키는 것: `RestyleData::warnings` 를 `Vec<String>`(message 만)으로 되돌리는 것.
     #[test]
     fn restyle_surfaces_the_decode_warning_from_a_stale_layout_cache() {
         let src = concat!(
@@ -205,8 +202,8 @@ mod tests {
         let value = serde_json::to_value(&data).unwrap();
         let warnings = value["warnings"].as_array().expect("warnings array");
         assert_eq!(warnings.len(), 1, "{value}");
-        let message = warnings[0].as_str().expect("warnings entries are strings");
-        assert!(!message.is_empty());
+        assert_eq!(warnings[0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+        let message = warnings[0]["message"].as_str().expect("warning message is a string");
         assert!(message.contains("layout cache dropped"), "{message}");
     }
 

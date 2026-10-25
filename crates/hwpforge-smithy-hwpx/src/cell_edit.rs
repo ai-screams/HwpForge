@@ -42,6 +42,7 @@ use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::encoder::{EncodeWarning, HwpxEncoder};
+use crate::error::{CodecFailure, CodecStage};
 use crate::stamp::{
     admission_compare, check_zip_carry, encode_hwpx, reject_input_content_loss, StamperError,
 };
@@ -169,7 +170,19 @@ pub enum CellEditError {
         inner_table: usize,
     },
     /// Decode/encode/validate failure.
-    Codec(String),
+    Codec(CodecFailure),
+    /// An internal source-map or provenance contract was violated.
+    Invariant {
+        /// Diagnostic detail from the violated contract.
+        detail: String,
+    },
+    /// A Draft section exceeds the nesting limit before any edit.
+    NestingTooDeep {
+        /// Actual document section index.
+        section: usize,
+        /// Core depth diagnostic with its section index corrected.
+        reason: String,
+    },
     /// The input is not no-op round-trip safe (admission gate).
     NotRoundTripSafe {
         /// Which decoded component differs.
@@ -228,7 +241,9 @@ impl core::fmt::Display for CellEditError {
                 f,
                 "editing a cell of table #{outer_table} would destroy nested table #{inner_table} targeted by another edit"
             ),
-            Self::Codec(detail) => write!(f, "codec failure: {detail}"),
+            Self::NestingTooDeep { reason, .. } => write!(f, "nesting depth exceeds the limit: {reason}"),
+            Self::Invariant { detail } => write!(f, "internal invariant violated: {detail}"),
+            Self::Codec(detail) => write!(f, "codec failure: {}", detail.detail),
             Self::NotRoundTripSafe { component, diff_path } => write!(
                 f,
                 "input is not no-op round-trip safe ({component} differs at {diff_path})"
@@ -274,14 +289,24 @@ struct ResolvedEdit {
 ///
 /// # Errors
 ///
-/// See [`CellEditError`] — any preflight rejection leaves the document
-/// untouched.
+/// Returns [`CellEditError::NestingTooDeep`] if any section exceeds the
+/// nesting limit, before applying any edits. See [`CellEditError`] for other
+/// preflight rejections; all leave the document untouched.
 pub fn apply_set_cells(
     document: &mut Document<Draft>,
     specs: &[CellSpec],
 ) -> Result<SetCellOutcome, CellEditError> {
-    for section in document.sections() {
-        section.check_nesting_depth().map_err(|error| CellEditError::Codec(error.to_string()))?;
+    for (si, section) in document.sections().iter().enumerate() {
+        section.check_nesting_depth().map_err(|error| {
+            let reason = match error {
+                hwpforge_core::CoreError::InvalidStructure { reason, .. } => {
+                    reason.replace("section=0", &format!("section={si}"))
+                }
+                // Defensive: check_nesting_depth currently returns no other variant.
+                other => other.to_string(),
+            };
+            CellEditError::NestingTooDeep { section: si, reason }
+        })?;
     }
     // ── preflight: resolve every spec before touching anything ──────
     let entries = tables_in_document(document);
@@ -619,9 +644,12 @@ impl HwpxCellEditor {
         base: &[u8],
         specs: &[CellSpec],
     ) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
-        let d0 = HwpxDecoder::decode(base).map_err(|e| CellEditError::Codec(e.to_string()))?;
-        let e0 = encode_hwpx(&d0).map_err(map_admission_error)?;
-        let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
+        let d0 = HwpxDecoder::decode(base)
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission)
+            .map_err(map_admission_error)?;
+        let d1 = HwpxDecoder::decode(&e0)
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
         admission_compare(&d0, &d1).map_err(map_admission_error)?;
         check_zip_carry(base, &e0).map_err(map_admission_error)?;
         // After the older checks, so an input they already refused keeps
@@ -629,7 +657,8 @@ impl HwpxCellEditor {
         reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
 
         for spec in specs {
-            d0.require_source_table(spec.table).map_err(|e| CellEditError::Codec(e.to_string()))?;
+            d0.require_source_table(spec.table)
+                .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?;
         }
         let HwpxDocument {
             source_maps: _,
@@ -654,14 +683,14 @@ impl HwpxCellEditor {
             .unzip();
         let outcome = apply_set_cells(&mut document, &specs)?;
         let package = crate::patch::RawPackage::read(base)
-            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
         for (cell, count) in outcome.cells.iter().zip(removed) {
             if count > 0 {
                 encode_warnings.push(EncodeWarning::XmlForbiddenCharsRemoved {
                     part: package
                         .section_path(table_sections[cell.table])
-                        .map_err(|e| CellEditError::Codec(e.to_string()))?,
+                        .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?,
                     location: format!(
                         "table {} cell ({}, {})",
                         cell.table, cell.anchor.row, cell.anchor.col
@@ -670,15 +699,16 @@ impl HwpxCellEditor {
                 });
             }
         }
-        let validated =
-            document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
+        let validated = document
+            .validate()
+            .map_err(|e| CellEditError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
         let encode_outcome = HwpxEncoder::encode_with_diagnostics(
             &validated,
             &style_store,
             &image_store,
             crate::EncodeOptions::default(),
         )
-        .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         // 의미 손상 fail-closed (7차 평결 High) — 편집기가 알고 있는 의미
         // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다. 손상
         // 집합의 정의는 `EncodeWarning::is_semantic_loss` 하나뿐이다 —
@@ -695,9 +725,9 @@ impl HwpxCellEditor {
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
-            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
-            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+            .map_err(CellEditError::Codec)?;
         encode_warnings.extend(dropped);
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },
@@ -715,16 +745,14 @@ fn map_admission_error(error: StamperError) -> CellEditError {
         StamperError::UncarriedZipEntries { entries } => {
             CellEditError::UncarriedZipEntries { entries }
         }
-        // 오늘의 admission encode (`encode_hwpx`) 는 permissive 한
-        // `HwpxEncoder::encode` 를 쓰므로 이 갈래는 실제로 발생하지 않는다.
-        // 그래도 명시한다 — 아래 `other` catch-all 이 typed 경고를 다시
-        // `Codec(String)` 으로 뭉개는 것이 바로 R1 F4 가 지적한 결함이라,
-        // admission 경로가 나중에 fail-closed 로 바뀌어도 타입이 살아남아야
-        // 한다.
+        // Admission currently uses permissive encode. Preserve typed semantic
+        // warnings if that helper later becomes fail-closed.
         StamperError::SemanticLoss { warnings, others } => {
             CellEditError::SemanticLoss { warnings, others }
         }
-        other => CellEditError::Codec(other.to_string()),
+        StamperError::Codec(failure) => CellEditError::Codec(failure),
+        StamperError::Invariant { detail } => CellEditError::Invariant { detail },
+        other => CellEditError::Invariant { detail: other.to_string() },
     }
 }
 
@@ -736,6 +764,51 @@ mod tests {
     use hwpforge_core::section::Section;
     use hwpforge_core::table::{TableCell, TableRow};
     use hwpforge_foundation::HwpUnit;
+
+    #[test]
+    fn w3_mapper_preserves_typed_failures() {
+        // 이것을 실패시키는 것: P1/P1i typed Codec·Invariant detail 삭제, P4 예상 밖 helper 오류 detail 삭제.
+        for stage in [
+            CodecStage::Decode,
+            CodecStage::Admission,
+            CodecStage::Validation,
+            CodecStage::Encode,
+            CodecStage::Verification,
+        ] {
+            let failure = CodecFailure {
+                stage,
+                code: crate::HwpxErrorCode::XmlParse,
+                detail: "original detail".into(),
+            };
+            assert_eq!(
+                map_admission_error(StamperError::Codec(failure.clone())),
+                CellEditError::Codec(failure)
+            );
+        }
+        assert_eq!(
+            map_admission_error(StamperError::Invariant { detail: "source".into() }),
+            CellEditError::Invariant { detail: "source".into() }
+        );
+        assert_eq!(
+            map_admission_error(StamperError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: "$.a".into()
+            }),
+            CellEditError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: "$.a".into()
+            }
+        );
+        assert_eq!(
+            map_admission_error(StamperError::UncarriedZipEntries {
+                entries: vec!["extra".into()]
+            }),
+            CellEditError::UncarriedZipEntries { entries: vec!["extra".into()] }
+        );
+        assert!(
+            matches!(map_admission_error(StamperError::ManifestInvariant { detail: "unexpected helper variant".into() }), CellEditError::Invariant { detail } if detail.contains("unexpected helper variant"))
+        );
+    }
 
     fn text_para(text: &str) -> Paragraph {
         Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(3))], ParaShapeIndex::new(2))

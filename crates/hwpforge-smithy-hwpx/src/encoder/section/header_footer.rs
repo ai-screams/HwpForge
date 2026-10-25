@@ -93,7 +93,6 @@ pub(super) fn build_masterpage_entries(
         let mut replacements: Vec<(String, String)> = Vec::new();
         let mut sub_list = crate::encoder::section::encode_paragraphs_to_sublist_with_align(
             &mp.paragraphs,
-            0,
             vert_align,
             &mut replacements,
             options,
@@ -281,7 +280,6 @@ pub(super) fn build_header_xml(
     };
     let mut sub_list = crate::encoder::section::encode_paragraphs_to_sublist_with_align(
         &hf.paragraphs,
-        0,
         vert_align,
         hyperlink_entries,
         options,

@@ -137,14 +137,12 @@ pub(super) fn build_memo_anchor_xml(
 /// rename lives on parent struct fields). We must fix the root tag manually.
 pub(super) fn encode_memo_sublist(
     paragraphs: &[Paragraph],
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     sink.enter(crate::decoder::PathSeg::Memo);
-    let sublist_result =
-        encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+    let sublist_result = encode_paragraphs_to_sublist(paragraphs, hyperlink_entries, options, sink);
     sink.leave();
     let sublist = sublist_result?;
     #[allow(clippy::disallowed_methods)] // normalized on the next line

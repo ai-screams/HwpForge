@@ -51,6 +51,41 @@ pub(crate) fn textart_text_from_wire(text: &str) -> String {
     textart_text_to_wire(text).replace(TEXTART_LINE_BREAK, "\r\n")
 }
 
+/// Body `<hp:t>` line breaks, excluding attributes, scripts and TextArt.
+/// Encoding folds CRLF only within the supplied text fragment. Decoding
+/// replaces CR one-for-one: the original wire map still counts both units
+/// of a referenced CRLF. Never normalize the XML before building that map.
+/// Folding skips removable characters after CR but leaves them in the output.
+/// The `fold_crlf=true` result must pass through a sanitizer or `strip_xml_forbidden_chars`.
+pub(crate) fn body_text_line_breaks(text: &str, fold_crlf: bool) -> Cow<'_, str> {
+    if !text.contains('\r') {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if fold_crlf {
+                // Keep skipped characters for the later sanitizer to count.
+                while let Some(skipped) = chars.next_if(|c| is_edit_unrepresentable_char(*c)) {
+                    out.push(skipped);
+                }
+                chars.next_if_eq(&'\n');
+            }
+            out.push('\n');
+        } else {
+            out.push(ch);
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Whether encoding this body fragment changes its UTF-16 coordinate length.
+/// Keep cache admission tied to the same rule that writes the body.
+pub(crate) fn body_text_line_breaks_change_utf16_len(text: &str) -> bool {
+    body_text_line_breaks(text, true).encode_utf16().count() != text.encode_utf16().count()
+}
+
 /// Cleans a font name before it is written (`hh:font@face`,
 /// `hp:equation@font`): control characters are removed and ASCII spaces
 /// are trimmed from the ends; spaces inside the name are kept
@@ -1341,5 +1376,29 @@ mod sentinel_invariant_tests {
             prop_assert_eq!(text.text(), expected.as_str());
             prop_assert_eq!(decoded.to_run_content().plain_text().unwrap().into_owned(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod inline_fold_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: 금지 문자 건너뛰기 삭제, 건너뛴 문자 삭제,
+    // fold=false에서도 접기, U+001F까지 건너뛰기, 캐시 길이 판정을 인접 CRLF로 분리.
+    #[test]
+    fn f4_f5_fold_preserves_removal_counts_and_decode_coordinates() {
+        for (input, clean, count) in [
+            ("a\r\x01\nb", "a\nb", 1),
+            ("a\r\x01\x02\nb", "a\nb", 2),
+            ("a\r\x01b", "a\nb", 1),
+            ("a\r\u{1F}\nb", "a\n\u{1F}\nb", 0),
+        ] {
+            let result = body_text_line_breaks(input, true);
+            assert_eq!(clean_edit_text(&result), (clean.into(), count));
+        }
+        assert_eq!(body_text_line_breaks("\r\n", false), "\n\n");
+        assert_eq!(body_text_line_breaks("\r\x01\n", false), "\n\x01\n");
+        assert!(body_text_line_breaks_change_utf16_len("\r\x01\n"));
+        assert!(!body_text_line_breaks_change_utf16_len("\r\x01b"));
     }
 }

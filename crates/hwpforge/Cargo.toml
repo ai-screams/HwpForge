@@ -31,11 +31,11 @@ schemars = ["dep:schemars", "hwpforge-smithy-hwpx?/schemars"]
 full = ["hwpx", "md", "ops"]
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0" }
-hwpforge-core = { path = "../hwpforge-core", version = "0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", optional = true }
-hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0", optional = true }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.17.1" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.17.1" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.17.1" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.17.1", optional = true }
+hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.17.1", optional = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_bytes = { workspace = true, optional = true }
@@ -47,7 +47,7 @@ thiserror = { workspace = true, optional = true }
 # release must validate against the schema this one publishes.
 boon = "0.6.1"
 # Per-variant decode warning samples for the mapping tests (test-only feature).
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", features = ["__test-support"] }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.17.1", features = ["__test-support"] }
 # 오류·경고 인벤토리 테스트 전용 — 정규식·중괄호 세기 파서 대신 실제 Rust
 # 파서로 상류 enum 을 읽는다 (`tests/support/error_inventory.rs`).
 quote = "1"

@@ -184,6 +184,55 @@ impl HwpxError {
 /// Convenience alias used throughout this crate.
 pub type HwpxResult<T> = Result<T, HwpxError>;
 
+/// The boundary at which an editor's codec work failed.
+///
+/// The set is closed on purpose (no `#[non_exhaustive]`): the operation
+/// layer classifies a [`CodecFailure`] by its stage alone, so a match over
+/// the five stages must stay exhaustive, and adding a stage is a breaking
+/// change to that classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecStage {
+    /// Decoding the input package, XML or Core projection.
+    Decode,
+    /// The no-op round trip (validate, encode, re-decode) that decides
+    /// whether a regenerating editor accepts the input.
+    Admission,
+    /// Explicit validation of the document being edited.
+    Validation,
+    /// Encoding the output package.
+    Encode,
+    /// Reading back, re-decoding or comparing the produced output.
+    Verification,
+}
+
+/// A codec failure as an editor error carries it: the stage that failed,
+/// the original error's code and its message.
+///
+/// The original error is reduced to these values so the editor error types
+/// keep `Clone` and `Eq`; the source chain is not kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodecFailure {
+    /// Which boundary failed.
+    pub stage: CodecStage,
+    /// The original error's code (diagnostic detail, not a classifier).
+    pub code: HwpxErrorCode,
+    /// The original error's message (diagnostic detail, not a classifier).
+    pub detail: String,
+}
+
+impl CodecFailure {
+    /// Reduces an HWPX codec error to the values a failure carries.
+    pub(crate) fn hwpx(stage: CodecStage, error: &HwpxError) -> Self {
+        Self { stage, code: error.code(), detail: error.to_string() }
+    }
+
+    /// Reduces a Core error met directly (not through [`HwpxError::Core`]);
+    /// its code is recorded as [`HwpxErrorCode::Core`].
+    pub(crate) fn core(stage: CodecStage, error: &hwpforge_core::CoreError) -> Self {
+        Self { stage, code: HwpxErrorCode::Core, detail: error.to_string() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

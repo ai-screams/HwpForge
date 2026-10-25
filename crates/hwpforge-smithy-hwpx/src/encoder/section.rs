@@ -452,12 +452,20 @@ impl EncoderLedger {
     /// 독립 리뷰 Low 상환: 본문 tab 은 wire 8유닛이다 (디코더 in_field
     /// Tab=(8,0) 과 대칭) — utf16 1:1 로 세면 필드가 tab 당 7유닛
     /// 좁아져 이후 lineseg 가 무음 표류한다.
-    fn folded_field(&mut self, body: &str) {
+    fn folded_field(&mut self, bodies: impl IntoIterator<Item = impl AsRef<str>>) {
         use hwpforge_core::layout::WireTokenKind;
         self.flush_injected();
         let mut body_wire: u32 = 0;
-        for u in body.encode_utf16() {
-            body_wire += if u == u16::from(b'\t') { 8 } else { 1 };
+        // Memo anchors are emitted per run. Never join their boundaries when
+        // checking whether the shared body rule changes coordinate lengths.
+        for body in bodies {
+            let body = body.as_ref();
+            if crate::wire_xml::body_text_line_breaks_change_utf16_len(body) {
+                self.mark_cache_inadmissible("body CRLF contraction changes wire coordinates");
+            }
+            for u in body.encode_utf16() {
+                body_wire += if u == u16::from(b'\t') { 8 } else { 1 };
+            }
         }
         // S22: the kinds are begin, body, end; the coordinate map keeps the
         // whole field as one contraction (a line cannot start inside it).
@@ -483,6 +491,11 @@ impl EncoderLedger {
 
     /// 혼합 텍스트(탭/줄바꿈 sentinel 포함)의 문자 단위 재생.
     fn mixed_text(&mut self, s: &str) {
+        // Two source UTF-16 units become one wire unit. Reuse the
+        // existing fail-closed cache path instead of inventing inverse positions.
+        if crate::wire_xml::body_text_line_breaks_change_utf16_len(s) {
+            self.mark_cache_inadmissible("body CRLF contraction changes wire coordinates");
+        }
         for u in s.encode_utf16().collect::<Vec<u16>>() {
             if u == u16::from(b'\t') {
                 self.span(8, 1);
@@ -892,7 +905,6 @@ fn build_section(
             page_settings,
             section.text_direction,
             idx,
-            0,
             hyperlink_entries,
             options,
             leading,
@@ -924,14 +936,13 @@ fn build_section(
     }
 
     sink.finish_bookmark_scope();
-    Ok(HxSection { paragraphs })
+    Ok(HxSection { paragraphs, has_stray_content: false })
 }
 
 /// Builds an `HxParagraph` from a Core `Paragraph`.
 ///
 /// When `inject_sec_pr` is true (first paragraph of the section), page
 /// settings are embedded in the first run's `<hp:secPr>`.
-/// `depth` is passed through without comparisons; removing it is follow-up work.
 /// Core validation enforces the semantic nesting limit before encoding.
 #[allow(clippy::too_many_arguments)]
 fn build_paragraph(
@@ -940,7 +951,6 @@ fn build_paragraph(
     page_settings: Option<&PageSettings>,
     text_direction: TextDirection,
     para_idx: usize,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     injected: Vec<hwpforge_core::layout::WireTokenKind>,
@@ -952,7 +962,6 @@ fn build_paragraph(
         inject_sec_pr,
         page_settings,
         text_direction,
-        depth,
         hyperlink_entries,
         options,
         &mut ledger,
@@ -1186,7 +1195,6 @@ fn build_runs(
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
     text_direction: TextDirection,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     ledger: &mut EncoderLedger,
@@ -1294,17 +1302,17 @@ fn build_runs(
             }
             RunContent::Table(t) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Table);
-                tables.push(build_table(t, depth, hyperlink_entries, options, sink)?);
+                tables.push(build_table(t, hyperlink_entries, options, sink)?);
             }
             RunContent::Image(img) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Picture);
-                pictures.push(build_picture(img, false, depth, hyperlink_entries, options, sink)?);
+                pictures.push(build_picture(img, false, hyperlink_entries, options, sink)?);
             }
             RunContent::Control(ctrl) => {
                 match ctrl.as_ref() {
                     Control::Footnote { .. } | Control::Endnote { .. } => {
                         if let Some(hx_ctrl) =
-                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
+                            encode_control_to_ctrl(ctrl, hyperlink_entries, options, sink)?
                         {
                             ledger.token(if matches!(ctrl.as_ref(), Control::Footnote { .. }) {
                                 hwpforge_core::layout::WireTokenKind::Footnote
@@ -1321,7 +1329,6 @@ fn build_runs(
                         rects.push(encode_textbox_to_rect(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1332,7 +1339,6 @@ fn build_runs(
                         rects.push(encode_rect_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1343,7 +1349,6 @@ fn build_runs(
                         lines.push(encode_line_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1354,7 +1359,6 @@ fn build_runs(
                         ellipses.push(encode_ellipse_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1365,7 +1369,6 @@ fn build_runs(
                         polygons.push(encode_polygon_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1373,8 +1376,7 @@ fn build_runs(
                     }
                     Control::Arc { .. } => {
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
-                        let hx =
-                            encode_arc_to_hx(ctrl, false, depth, hyperlink_entries, options, sink)?;
+                        let hx = encode_arc_to_hx(ctrl, false, hyperlink_entries, options, sink)?;
                         if hx.axis_endpoints {
                             let from = super::shapes::serialize_with_root(&hx, "hp:ellipse")?;
                             let to = super::shapes::serialize_arc(&hx)?;
@@ -1387,7 +1389,6 @@ fn build_runs(
                         curves.push(encode_curve_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1398,7 +1399,6 @@ fn build_runs(
                         connect_lines.push(encode_connect_line_to_hx(
                             ctrl,
                             false,
-                            depth,
                             hyperlink_entries,
                             options,
                             sink,
@@ -1483,7 +1483,7 @@ fn build_runs(
                                 ),
                             });
                         };
-                        ledger.folded_field(text);
+                        ledger.folded_field([text]);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPHL", field_id);
                         let real_xml =
@@ -1542,7 +1542,7 @@ fn build_runs(
                     | Control::PageHiding { .. }
                     | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
                         if let Some(hx_ctrl) =
-                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
+                            encode_control_to_ctrl(ctrl, hyperlink_entries, options, sink)?
                         {
                             ledger.token(match ctrl.as_ref() {
                                 Control::NewNumber { .. } => {
@@ -1615,7 +1615,6 @@ fn build_runs(
                                 .map(|paragraphs| {
                                     encode_memo_sublist(
                                         paragraphs,
-                                        depth,
                                         hyperlink_entries,
                                         options,
                                         sink,
@@ -1657,11 +1656,11 @@ fn build_runs(
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
                         // 본문 = 미채움이면 힌트 (E1/gotcha #30 계약과 동일).
-                        ledger.folded_field(if display_text.is_empty() {
+                        ledger.folded_field([if display_text.is_empty() {
                             hint
                         } else {
                             display_text
-                        });
+                        }]);
                         let real_xml = build_field_run_xml(
                             field_type,
                             hint,
@@ -1690,7 +1689,7 @@ fn build_runs(
                     // arm further below which emits Hancom-native
                     // `type="PATH"` with `Format=` param and a distinct fieldid.
                     Control::UnknownSummary { token, display_text } => {
-                        ledger.folded_field(display_text);
+                        ledger.folded_field([display_text]);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         // Wave 12p task #124: unknown token — assume Hancom
@@ -1712,7 +1711,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::DateCodeField { is_time_mode, display_text, .. } => {
-                        ledger.folded_field(display_text);
+                        ledger.folded_field([display_text]);
                         // LOSSY: %dte → SUMMERY mapping; raw_trailer is discarded.
                         // Round-trip through HWPX comes back as `Field(ModifiedTime)`
                         // or `Field(CreatedTime)` — proven by
@@ -1742,7 +1741,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::PathField { command, display_text } => {
-                        ledger.folded_field(display_text);
+                        ledger.folded_field([display_text]);
                         // Wave 12n Step 6 — LOSSLESS emit. The prior SUMMERY
                         // surrogate (mapped %pat → type="SUMMERY") triggered the
                         // Hancom "low security level — content recovered"
@@ -1834,7 +1833,7 @@ fn build_runs(
                         } else {
                             display_text.as_str()
                         };
-                        ledger.folded_field(visible_text);
+                        ledger.folded_field([visible_text]);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
@@ -1863,13 +1862,13 @@ fn build_runs(
                             );
                             ledger.mark_cache_inadmissible("memo anchor drops non-text runs");
                         }
-                        let anchor_text: String =
-                            anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect();
-                        ledger.folded_field(&anchor_text);
+                        ledger.folded_field(
+                            anchor_runs.iter().filter_map(|r| r.content.plain_text()),
+                        );
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml =
-                            encode_memo_sublist(content, depth, hyperlink_entries, options, sink)?;
+                            encode_memo_sublist(content, hyperlink_entries, options, sink)?;
                         let anchor_xml = build_memo_anchor_xml(anchor_runs, sink)?;
                         let real_xml = build_memo_run_xml(
                             &sublist_xml,
@@ -1894,7 +1893,6 @@ fn build_runs(
                         // (mirroring hyperlink/memo/chart).
                         let container_xml = super::shapes::encode_group_to_xml(
                             ctrl,
-                            depth,
                             0,
                             hyperlink_entries,
                             options,
@@ -2071,7 +2069,6 @@ fn build_runs(
 /// Returns `None` for non-ctrl controls (TextBox, Unknown).
 fn encode_control_to_ctrl(
     ctrl: &Control,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -2089,7 +2086,7 @@ fn encode_control_to_ctrl(
                 })?;
             sink.enter(crate::decoder::PathSeg::Footnote);
             let sub_list_result =
-                encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+                encode_paragraphs_to_sublist(paragraphs, hyperlink_entries, options, sink);
             let result = sub_list_result.map(|mut sub_list| {
                 report_note_head(
                     inject_note_autonum_head(&mut sub_list, "FOOTNOTE", num),
@@ -2121,7 +2118,7 @@ fn encode_control_to_ctrl(
                 })?;
             sink.enter(crate::decoder::PathSeg::Endnote);
             let sub_list_result =
-                encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+                encode_paragraphs_to_sublist(paragraphs, hyperlink_entries, options, sink);
             let result = sub_list_result.map(|mut sub_list| {
                 report_note_head(
                     inject_note_autonum_head(&mut sub_list, "ENDNOTE", num),
@@ -2404,12 +2401,11 @@ impl NoteNumbering {
 /// (vertical alignment `TOP`).
 pub(crate) fn encode_paragraphs_to_sublist(
     paragraphs: &[Paragraph],
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
-    build_sublist(paragraphs, depth, "TOP", hyperlink_entries, options, sink)
+    build_sublist(paragraphs, "TOP", hyperlink_entries, options, sink)
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with an explicit vertical
@@ -2417,18 +2413,16 @@ pub(crate) fn encode_paragraphs_to_sublist(
 /// encoders that carry a Core `VerticalAlign` field.
 pub(crate) fn encode_paragraphs_to_sublist_with_align(
     paragraphs: &[Paragraph],
-    depth: usize,
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
-    build_sublist(paragraphs, depth, vert_align, hyperlink_entries, options, sink)
+    build_sublist(paragraphs, vert_align, hyperlink_entries, options, sink)
 }
 
 fn build_sublist(
     paragraphs: &[Paragraph],
-    depth: usize,
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -2446,7 +2440,6 @@ fn build_sublist(
                 None,
                 TextDirection::Horizontal,
                 idx,
-                depth + 1,
                 hyperlink_entries,
                 options,
                 Vec::new(), // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
@@ -2471,6 +2464,7 @@ fn build_sublist(
         has_text_ref: 0,
         has_num_ref: 0,
         paragraphs: hx_paragraphs,
+        has_stray_content: false,
     })
 }
 
@@ -2496,7 +2490,6 @@ fn memo_default_datetime(unix_secs: Option<u64>) -> String {
 pub(crate) fn build_hx_caption(
     caption: &Caption,
     parent_width: i32,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -2513,7 +2506,7 @@ pub(crate) fn build_hx_caption(
     let gap = caption.gap.as_i32();
     sink.enter(crate::decoder::PathSeg::Caption);
     let sub_list_result =
-        encode_paragraphs_to_sublist(&caption.paragraphs, depth, hyperlink_entries, options, sink);
+        encode_paragraphs_to_sublist(&caption.paragraphs, hyperlink_entries, options, sink);
     sink.leave();
     let sub_list = sub_list_result?;
 
@@ -3176,7 +3169,6 @@ mod tests {
         let table = Table::new(vec![TableRow::new(vec![cell])]);
         let err = build_table(
             &table,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3201,7 +3193,6 @@ mod tests {
         let hx = build_picture(
             &img,
             false,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3235,7 +3226,7 @@ mod tests {
             img.hyperlink = Some(url.to_string());
             let mut sink = DocumentEncodeContext::new(0);
             let hx =
-                build_picture(&img, false, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
+                build_picture(&img, false, &mut Vec::new(), EncodeOptions::default(), &mut sink)
                     .unwrap();
             assert_eq!(hx.href, href, "{url}");
             assert_eq!(content_lost(&sink.warnings).len(), usize::from(lost), "{url}");
@@ -3266,7 +3257,6 @@ mod tests {
         let hx = build_picture(
             &img,
             false,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3295,7 +3285,6 @@ mod tests {
         let hx = build_picture(
             &img,
             false,
-            0,
             &mut Vec::new(),
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3838,14 +3827,8 @@ mod tests {
     /// Core 문단 하나를 담은 `HxSubList` (주입 단위 테스트용).
     fn test_sublist(para: Paragraph) -> crate::schema::section::HxSubList {
         let mut sink = DocumentEncodeContext::new(0);
-        encode_paragraphs_to_sublist(
-            &[para],
-            0,
-            &mut Vec::new(),
-            EncodeOptions::default(),
-            &mut sink,
-        )
-        .unwrap()
+        encode_paragraphs_to_sublist(&[para], &mut Vec::new(), EncodeOptions::default(), &mut sink)
+            .unwrap()
     }
 
     /// XML 에서 FOOTNOTE autoNum 의 `num` 시퀀스를 문서 순서로 추출한다.
@@ -5256,7 +5239,7 @@ mod tests {
             display_text: "SoeBuri".to_string(),
         });
         match decoded {
-            Control::Field { display_text, .. } => {
+            Control::Field { ref display_text, .. } => {
                 assert_eq!(display_text, "SoeBuri", "display_text lost on round-trip");
             }
             other => panic!("expected Control::Field, got {other:?}"),
@@ -5494,8 +5477,8 @@ mod tests {
                 display_text: String::new(),
             });
             match decoded {
-                Control::PathField { command, .. } => {
-                    assert_eq!(command, cmd, "PathField command must round-trip lossless");
+                Control::PathField { ref command, .. } => {
+                    assert_eq!(*command, cmd, "PathField command must round-trip lossless");
                 }
                 other => {
                     panic!("expected Control::PathField({cmd:?}), got {other:?}");
@@ -5516,7 +5499,7 @@ mod tests {
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::PathField { command, .. } => match command {
+            Control::PathField { ref command, .. } => match command {
                 PathFieldCommand::Unknown(s) => assert_eq!(s, "$X"),
                 other => panic!("expected PathFieldCommand::Unknown(\"$X\"), got {other:?}"),
             },
@@ -5531,7 +5514,7 @@ mod tests {
             Control::UnknownSummary { token: "$company".to_string(), display_text: String::new() };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::UnknownSummary { token, .. } => {
+            Control::UnknownSummary { ref token, .. } => {
                 assert_eq!(token, "$company", "unknown $token must round-trip verbatim");
             }
             other => panic!("expected UnknownSummary($company), got {other:?}"),

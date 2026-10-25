@@ -34,9 +34,9 @@ use hwpforge::foundation::FoundationError;
 use hwpforge::hwpx::grid_addr::GridAddrError;
 use hwpforge::hwpx::stamp::{CellStampError, StampError, StampMapError, StamperError};
 use hwpforge::hwpx::{
-    CellEditError, DecodeWarning, EncodeWarning, FillError, HwpxError, ParagraphPath, PathSeg,
-    ReadError, SectionWorkflowError, SectionWorkflowWarning, StructuralEditError,
-    StructuralWarning,
+    CellEditError, CodecFailure, CodecStage, DecodeWarning, EncodeWarning, FillError, HwpxError,
+    HwpxErrorCode, ParagraphPath, PatchError, PathSeg, ReadError, SectionWorkflowError,
+    SectionWorkflowWarning, StructuralEditError, StructuralWarning,
 };
 use hwpforge::md::assets::{AssetOutcome, RunLocator};
 use hwpforge::md::embed::ImageEmbedSkipReason;
@@ -101,6 +101,19 @@ const ERROR_MAPPING: Table = &[
             ("DuplicateFieldName", "FIELD_NAME_AMBIGUOUS"),
             ("UnfillableField", "FIELD_NOT_FILLABLE"),
             ("Workflow", "FILL_FAILED"),
+            ("Codec", "DECODE_FAILED"),
+            ("Patch", "PATCH_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
+        ],
+    ),
+    (
+        "PatchError",
+        &[
+            ("Codec", "DECODE_FAILED"),
+            ("Rejected", "PATCH_FAILED"),
+            ("SectionOutOfRange", "SECTION_OUT_OF_RANGE"),
+            ("ProtectedFieldRange", "PROTECTED_FIELD_RANGE"),
+            ("Invariant", "INTERNAL_INVARIANT"),
         ],
     ),
     (
@@ -113,7 +126,9 @@ const ERROR_MAPPING: Table = &[
             ("NonTextContent", "CELL_HAS_NON_TEXT_CONTENT"),
             ("TargetDuplicate", "CELL_TARGET_DUPLICATE"),
             ("TargetConflict", "CELL_TARGET_CONFLICT"),
-            ("Codec", "SET_CELL_CODEC_FAILED"),
+            ("Codec", "ENCODE_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
+            ("NestingTooDeep", "VALIDATION_FAILED"),
             ("NotRoundTripSafe", "INPUT_NOT_ROUNDTRIP_SAFE"),
             ("UncarriedZipEntries", "INPUT_ENTRIES_NOT_CARRIED"),
             ("SemanticLoss", "ENCODE_SEMANTIC_LOSS"),
@@ -123,17 +138,19 @@ const ERROR_MAPPING: Table = &[
         "ReadError",
         &[
             ("Codec", "DECODE_FAILED"),
-            ("SectionOutOfRange", "READ_SECTION_OUT_OF_RANGE"),
+            ("SectionOutOfRange", "SECTION_OUT_OF_RANGE"),
             ("ParaRangeInvalid", "READ_PARA_RANGE_INVALID"),
-            ("TableOutOfRange", "READ_TABLE_OUT_OF_RANGE"),
+            ("TableOutOfRange", "TABLE_NOT_FOUND"),
             ("TableUnaddressable", "TABLE_GRID_INVALID"),
-            ("FieldNotFound", "READ_FIELD_NOT_FOUND"),
+            ("FieldNotFound", "FIELD_NOT_FOUND"),
         ],
     ),
     (
         "StructuralEditError",
         &[
-            ("Codec", "STRUCTURAL_CODEC"),
+            ("Codec", "ENCODE_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
+            ("ProtectedFieldRange", "PROTECTED_FIELD_RANGE"),
             ("NotRoundTripSafe", "INPUT_NOT_ROUNDTRIP_SAFE"),
             ("UncarriedZipEntries", "INPUT_ENTRIES_NOT_CARRIED"),
             ("SectionOutOfRange", "SECTION_OUT_OF_RANGE"),
@@ -170,14 +187,15 @@ const ERROR_MAPPING: Table = &[
     (
         "StamperError",
         &[
-            ("Codec", "STAMP_CODEC_FAILED"),
+            ("Codec", "ENCODE_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
             ("NotRoundTripSafe", "INPUT_NOT_ROUNDTRIP_SAFE"),
             ("UncarriedZipEntries", "INPUT_ENTRIES_NOT_CARRIED"),
             ("Stamp", "STAMP_NAME_EMPTY"),
             ("ManifestInvariant", "STAMP_MANIFEST_INVARIANT"),
             ("SourceHashMismatch", "STAMP_SOURCE_HASH_MISMATCH"),
             ("CellStamp", "STAMP_NAME_EMPTY"),
-            ("DeltaMismatch", "STAMP_DELTA_MISMATCH"),
+            ("DeltaMismatch", "SELF_VERIFY_FAILED"),
             ("SemanticLoss", "ENCODE_SEMANTIC_LOSS"),
         ],
     ),
@@ -202,7 +220,7 @@ const ERROR_MAPPING: Table = &[
             ("TargetNotStampable", "STAMP_CELL_NOT_EMPTY"),
             ("LabelDrift", "STAMP_LABEL_DRIFT"),
             ("UnknownCandidate", "STAMP_CELL_NOT_CANDIDATE"),
-            ("DuplicateTarget", "STAMP_CELL_TARGET_DUPLICATE"),
+            ("DuplicateTarget", "CELL_TARGET_DUPLICATE"),
             ("EmptyName", "STAMP_NAME_EMPTY"),
             ("BlankHint", "STAMP_HINT_BLANK"),
             ("DuplicateName", "STAMP_NAME_DUPLICATE"),
@@ -406,6 +424,23 @@ fn fill_errors() -> Vec<(&'static str, FillError)> {
         ("DuplicateFieldName", FillError::DuplicateFieldName { name: "x".into(), count: 2 }),
         ("UnfillableField", FillError::UnfillableField { name: "x".into(), section: 0 }),
         ("Workflow", FillError::Workflow(HwpxError::Zip("z".into()))),
+        ("Codec", FillError::Codec(codec_failure(CodecStage::Decode))),
+        ("Patch", FillError::Patch(PatchError::Rejected(HwpxError::Zip("z".into())))),
+        ("Invariant", FillError::Invariant { detail: "inventory changed".into() }),
+    ]
+}
+
+fn codec_failure(stage: CodecStage) -> CodecFailure {
+    CodecFailure { stage, code: HwpxErrorCode::Zip, detail: "z".into() }
+}
+
+fn patch_errors() -> Vec<(&'static str, PatchError)> {
+    vec![
+        ("Codec", PatchError::Codec(codec_failure(CodecStage::Decode))),
+        ("Rejected", PatchError::Rejected(HwpxError::Zip("z".into()))),
+        ("SectionOutOfRange", PatchError::SectionOutOfRange { requested: 2, sections: 1 }),
+        ("ProtectedFieldRange", PatchError::ProtectedFieldRange { detail: "range".into() }),
+        ("Invariant", PatchError::Invariant { detail: "source map".into() }),
     ]
 }
 
@@ -425,7 +460,16 @@ fn cell_edit_errors() -> Vec<(&'static str, CellEditError)> {
         ("NonTextContent", CellEditError::NonTextContent { table: 0, anchor: at }),
         ("TargetDuplicate", CellEditError::TargetDuplicate { table: 0, anchor: at }),
         ("TargetConflict", CellEditError::TargetConflict { outer_table: 0, inner_table: 1 }),
-        ("Codec", CellEditError::Codec("encode".into())),
+        (
+            "Codec",
+            CellEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "encode".into(),
+            }),
+        ),
+        ("Invariant", CellEditError::Invariant { detail: "source map".into() }),
+        ("NestingTooDeep", CellEditError::NestingTooDeep { section: 1, reason: "depth".into() }),
         (
             "NotRoundTripSafe",
             CellEditError::NotRoundTripSafe { component: "core".into(), diff_path: "/a".into() },
@@ -454,7 +498,23 @@ fn read_errors() -> Vec<(&'static str, ReadError)> {
 
 fn structural_errors() -> Vec<(&'static str, StructuralEditError)> {
     vec![
-        ("Codec", StructuralEditError::Codec("encode".into())),
+        (
+            "Codec",
+            StructuralEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "encode".into(),
+            }),
+        ),
+        ("Invariant", StructuralEditError::Invariant { detail: "source map".into() }),
+        (
+            "ProtectedFieldRange",
+            StructuralEditError::ProtectedFieldRange {
+                section: 0,
+                index: 1,
+                detail: "field".into(),
+            },
+        ),
         (
             "NotRoundTripSafe",
             StructuralEditError::NotRoundTripSafe {
@@ -522,13 +582,24 @@ fn section_workflow_errors() -> Vec<(&'static str, SectionWorkflowError)> {
             "SectionIndexMismatch",
             SectionWorkflowError::SectionIndexMismatch { requested: 0, actual: 1 },
         ),
-        ("PreservingPatch", SectionWorkflowError::PreservingPatch(HwpxError::Zip("z".into()))),
+        (
+            "PreservingPatch",
+            SectionWorkflowError::PreservingPatch(PatchError::Rejected(HwpxError::Zip("z".into()))),
+        ),
     ]
 }
 
 fn stamper_errors() -> Vec<(&'static str, StamperError)> {
     vec![
-        ("Codec", StamperError::Codec("encode".into())),
+        (
+            "Codec",
+            StamperError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "encode".into(),
+            }),
+        ),
+        ("Invariant", StamperError::Invariant { detail: "source map".into() }),
         (
             "NotRoundTripSafe",
             StamperError::NotRoundTripSafe { component: "core".into(), diff_path: "/a".into() },
@@ -690,6 +761,13 @@ fn wrapped_errors() -> BTreeMap<&'static str, Vec<(&'static str, OpsError)>> {
     all.insert(
         "SectionWorkflowError",
         section_workflow_errors().into_iter().map(|(n, e)| (n, e.into())).collect(),
+    );
+    all.insert(
+        "PatchError",
+        patch_errors()
+            .into_iter()
+            .map(|(n, e)| (n, OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(e))))
+            .collect(),
     );
     all.insert("StamperError", stamper_errors().into_iter().map(|(n, e)| (n, e.into())).collect());
     all.insert(
@@ -1019,7 +1097,8 @@ fn every_wrapped_payload_type_has_a_manifest_record() {
     // stage; `GridAddrWarning` is a struct.
     let not_enums: BTreeSet<&str> = ["Error", "GridAddrWarning"].into_iter().collect();
     // Reached through another wrapped enum rather than as a direct payload.
-    let nested: BTreeSet<&str> = ["StampError", "CellStampError"].into_iter().collect();
+    let nested: BTreeSet<&str> =
+        ["StampError", "CellStampError", "PatchError"].into_iter().collect();
 
     let derived = error_inventory::wrapped_payloads_of_ops();
     let derived: BTreeSet<&str> =
@@ -1090,7 +1169,9 @@ fn every_wrapped_variant_has_a_mapping() {
 }
 
 #[test]
+// 이것을 실패시키는 것: read 구역 범위를 InvalidInput으로 변경; 기존 inventory 시험으로 검출.
 fn constructed_errors_produce_the_mapped_code() {
+    // 이것을 실패시키는 것: O4–O6 보호 필드·stamp delta·셀 중복 매핑을 InvalidInput으로 변경.
     let samples = wrapped_errors();
 
     for (enum_name, table) in ERROR_MAPPING {
@@ -1336,4 +1417,51 @@ fn one_code_never_offers_two_different_hints() {
         assert_eq!(hints.len(), 1, "{code} offers {} different hints: {hints:?}", hints.len());
     }
     assert!(hints_per_code.len() > 20, "the samples should cover most of the code table");
+}
+
+#[test]
+fn public_ops_codes_have_contract_coverage() {
+    // 이것을 실패시키는 것: Exchange(LegacyJsonTabs)를 JsonParseFailed로 분류.
+    // The manifest owns cause expectations; compact adapter baselines retain unchanged rows.
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("data/error_contract_018.json")).unwrap();
+    let mut covered: BTreeSet<String> = manifest["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case["expected_code"].as_str().unwrap().to_owned())
+        .collect();
+    for baseline in [
+        include_str!("../../hwpforge-bindings-cli/tests/data/codes-0.18.txt"),
+        include_str!("../../hwpforge-bindings-mcp/tests/data/codes-0.18.txt"),
+    ] {
+        covered.extend(
+            baseline
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .map(|line| line.split('\t').nth(1).unwrap().to_owned()),
+        );
+    }
+    // Asset contracts are exercised by the upstream inventory rather than frontend cases.
+    covered.extend(
+        wrapped_errors().into_values().flatten().map(|(_, error)| error.code().as_str().to_owned()),
+    );
+    covered.extend(
+        hwpx_errors()
+            .into_iter()
+            .map(|(_, error)| OpsError::Exchange(error).code().as_str().to_owned()),
+    );
+    // This published OpsCode has no error producer; its wire string remains a live warning.
+    let grid = OpsWarning::GridAddr(hwpforge::hwpx::grid_addr::GridAddrWarning {
+        section: 0,
+        table_ordinal: 0,
+        reason: "ragged table".into(),
+    });
+    covered.insert(grid.info().code);
+    let missing: Vec<_> = OpsCode::ALL
+        .iter()
+        .map(|code| code.as_str())
+        .filter(|code| !covered.contains(*code))
+        .collect();
+    assert!(missing.is_empty(), "public codes without contract coverage: {missing:?}");
 }

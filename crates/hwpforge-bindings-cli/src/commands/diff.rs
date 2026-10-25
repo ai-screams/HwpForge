@@ -1,4 +1,6 @@
 //! Two-document diff (E5): verify what an edit actually changed.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -10,10 +12,10 @@ use crate::error::{check_file_size, read_input, CliError};
 
 /// Run the diff command.
 pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mode: bool) {
-    check_file_size(base, json_mode);
-    check_file_size(revised, json_mode);
-    let base_bytes = read_input(base, json_mode);
-    let revised_bytes = read_input(revised, json_mode);
+    check_file_size(base, json_mode, Command::Diff);
+    check_file_size(revised, json_mode, Command::Diff);
+    let base_bytes = read_input(base, json_mode, Command::Diff);
+    let revised_bytes = read_input(revised, json_mode, Command::Diff);
 
     // Decoder warnings from both inputs (`DiffOutput::warnings`) were not
     // surfaced pre-W5 (the pre-migration CLI never captured them either). W5
@@ -29,8 +31,11 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     if let Some(path) = output {
         let report = serde_json::to_string_pretty(&diff).unwrap();
         if let Err(e) = std::fs::write(path, report) {
-            CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", path.display()))
-                .exit(json_mode, 1);
+            CliError::new(
+                CliCode::Ops(OpsCode::FileWriteFailed),
+                format!("Cannot write '{}': {e}", path.display()),
+            )
+            .exit(json_mode, Command::Diff);
         }
     }
 

@@ -2551,9 +2551,10 @@ fn decode_group_children(
     if depth >= crate::decoder::section::MAX_NESTING_DEPTH {
         return Err(crate::HwpxError::InvalidStructure {
             detail: format!(
-                "group nesting depth {} exceeds limit of {}",
-                depth,
+                "group nesting depth {} exceeds limit of {} in {}",
+                depth + 1,
                 crate::decoder::section::MAX_NESTING_DEPTH,
+                ctx.part,
             ),
         });
     }
@@ -4142,12 +4143,12 @@ mod tests {
         ellipse.pos = Some(make_pos(100, 200));
         let cs = CharShapeIndex::new(0);
         let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
-        if let Control::Arc { width, height, placement, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::Arc { width, height, ref placement, .. } =
+            *run.content.as_control().unwrap()
         {
             assert_eq!(width.as_i32(), 5000);
             assert_eq!(height.as_i32(), 3000);
-            let placement = placement.expect("anchored pos carries placement");
+            let placement = placement.as_ref().expect("anchored pos carries placement");
             assert_eq!(placement.horz_offset.as_i32(), 100);
             assert_eq!(placement.vert_offset.as_i32(), 200);
         } else {
@@ -4162,8 +4163,8 @@ mod tests {
             Some(HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 });
         let cs = CharShapeIndex::new(0);
         let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
-        if let Control::Arc { style, .. } = run.content.as_control().unwrap().clone() {
-            let s = style.unwrap();
+        if let Control::Arc { ref style, .. } = *run.content.as_control().unwrap() {
+            let s = style.as_ref().unwrap();
             let rot = s.rotation.unwrap();
             assert!((rot - 45.0f32).abs() < 0.01);
         } else {
@@ -4222,8 +4223,8 @@ mod tests {
         let curve = default_curve();
         let cs = CharShapeIndex::new(0);
         let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Curve { points, segment_types, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::Curve { ref points, ref segment_types, .. } =
+            *run.content.as_control().unwrap()
         {
             assert!(points.is_empty());
             assert!(segment_types.is_empty());
@@ -4241,8 +4242,8 @@ mod tests {
         ];
         let cs = CharShapeIndex::new(0);
         let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Curve { points, segment_types, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::Curve { ref points, ref segment_types, .. } =
+            *run.content.as_control().unwrap()
         {
             // 2 segments → 3 points: start of first, then end of each
             assert_eq!(points.len(), 3);
@@ -4265,7 +4266,7 @@ mod tests {
             vec![HxCurveSegment { seg_type: "LINE".to_string(), x1: 0, y1: 0, x2: 999, y2: 999 }];
         let cs = CharShapeIndex::new(0);
         let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Curve { points, .. } = run.content.as_control().unwrap().clone() {
+        if let Control::Curve { ref points, .. } = *run.content.as_control().unwrap() {
             assert_eq!(points.len(), 2);
             assert_eq!(points[0], ShapePoint::new(10, 20));
             assert_eq!(points[1], ShapePoint::new(30, 40));
@@ -4281,7 +4282,7 @@ mod tests {
             vec![HxCurveSegment { seg_type: "BOGUS".to_string(), x1: 0, y1: 0, x2: 100, y2: 100 }];
         let cs = CharShapeIndex::new(0);
         let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Curve { segment_types, .. } = run.content.as_control().unwrap().clone() {
+        if let Control::Curve { ref segment_types, .. } = *run.content.as_control().unwrap() {
             assert_eq!(segment_types[0], CurveSegmentType::Curve);
         } else {
             panic!("expected Control::Curve");
@@ -4296,12 +4297,12 @@ mod tests {
         let cs = CharShapeIndex::new(1);
         let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
-        if let Control::Curve { width, height, placement, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::Curve { width, height, ref placement, .. } =
+            *run.content.as_control().unwrap()
         {
             assert_eq!(width.as_i32(), 8000);
             assert_eq!(height.as_i32(), 4000);
-            let placement = placement.expect("anchored pos carries placement");
+            let placement = placement.as_ref().expect("anchored pos carries placement");
             assert_eq!(placement.horz_offset.as_i32(), 50);
             assert_eq!(placement.vert_offset.as_i32(), 75);
         } else {
@@ -4316,8 +4317,8 @@ mod tests {
         let cl = default_connect_line();
         let cs = CharShapeIndex::new(0);
         let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::ConnectLine { start, end, control_points, connect_type, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::ConnectLine { start, end, ref control_points, ref connect_type, .. } =
+            *run.content.as_control().unwrap()
         {
             assert_eq!(start, ShapePoint::new(0, 0));
             assert_eq!(end, ShapePoint::new(0, 0));
@@ -4366,8 +4367,7 @@ mod tests {
         });
         let cs = CharShapeIndex::new(0);
         let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::ConnectLine { control_points, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::ConnectLine { ref control_points, .. } = *run.content.as_control().unwrap()
         {
             assert_eq!(control_points.len(), 2);
             assert_eq!(control_points[0], ShapePoint::new(200, 300));
@@ -4388,8 +4388,7 @@ mod tests {
         });
         let cs = CharShapeIndex::new(0);
         let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::ConnectLine { control_points, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::ConnectLine { ref control_points, .. } = *run.content.as_control().unwrap()
         {
             assert!(control_points.is_empty());
         } else {
@@ -4403,8 +4402,7 @@ mod tests {
         cl.connect_type = "BENT".to_string();
         let cs = CharShapeIndex::new(0);
         let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::ConnectLine { connect_type, .. } = run.content.as_control().unwrap().clone()
-        {
+        if let Control::ConnectLine { ref connect_type, .. } = *run.content.as_control().unwrap() {
             assert_eq!(connect_type, "BENT");
         } else {
             panic!("expected Control::ConnectLine");
@@ -4419,12 +4417,12 @@ mod tests {
         let cs = CharShapeIndex::new(3);
         let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
-        if let Control::ConnectLine { width, height, placement, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::ConnectLine { width, height, ref placement, .. } =
+            *run.content.as_control().unwrap()
         {
             assert_eq!(width.as_i32(), 10000);
             assert_eq!(height.as_i32(), 5000);
-            let placement = placement.expect("anchored pos carries placement");
+            let placement = placement.as_ref().expect("anchored pos carries placement");
             assert_eq!(placement.horz_offset.as_i32(), 150);
             assert_eq!(placement.vert_offset.as_i32(), 250);
         } else {
@@ -4527,13 +4525,13 @@ mod tests {
         let run = decode_textbox(&rect, cs, 0, &mut DecodeCtx::new(0))
             .unwrap()
             .expect("pure rect must decode to a Run");
-        match run.content.as_control().unwrap().clone() {
-            Control::Rect { width, height, placement, .. } => {
+        match *run.content.as_control().unwrap() {
+            Control::Rect { width, height, ref placement, .. } => {
                 assert_eq!(width, hwpforge_foundation::HwpUnit::new(8000).unwrap());
                 assert_eq!(height, hwpforge_foundation::HwpUnit::new(4000).unwrap());
                 assert!(placement.is_none());
             }
-            other => panic!("expected Control::Rect, got {other:?}"),
+            ref other => panic!("expected Control::Rect, got {other:?}"),
         }
     }
 
@@ -4542,8 +4540,8 @@ mod tests {
         let ellipse = default_ellipse();
         let cs = CharShapeIndex::new(0);
         let run = decode_ellipse(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Ellipse { center, axis1, axis2, width, height, paragraphs, .. } =
-            run.content.as_control().unwrap().clone()
+        if let Control::Ellipse { center, axis1, axis2, width, height, ref paragraphs, .. } =
+            *run.content.as_control().unwrap()
         {
             assert_eq!(center, ShapePoint::new(0, 0));
             assert_eq!(axis1, ShapePoint::new(0, 0));
@@ -4626,7 +4624,6 @@ mod tests {
         let hx = crate::encoder::shapes::encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -4741,7 +4738,7 @@ mod tests {
             .clone();
         let placement = match &control {
             Control::Rect { placement, .. } => placement.clone().expect("floating placement"),
-            other => panic!("expected Control::Rect, got {other:?}"),
+            ref other => panic!("expected Control::Rect, got {other:?}"),
         };
         assert!(!placement.treat_as_char);
         assert_eq!(placement.horz_offset.as_i32(), 1_000);
@@ -4750,7 +4747,6 @@ mod tests {
         let encoded = crate::encoder::shapes::encode_rect_to_hx(
             &control,
             false,
-            0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -4807,7 +4803,6 @@ mod tests {
         let encoded = crate::encoder::shapes::encode_textbox_to_rect(
             &control,
             false,
-            0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -4825,8 +4820,8 @@ mod tests {
         let mut ctx = DecodeCtx::new(0);
         let run = decode_textart(&hx, CharShapeIndex::new(0), 0, &mut ctx).expect("decode");
         match run.content {
-            RunContent::Control(c) => match *c {
-                Control::TextArt { text, .. } => text,
+            RunContent::Control(mut c) => match c.as_mut() {
+                Control::TextArt { text, .. } => std::mem::take(text),
                 other => panic!("expected TextArt, got {other:?}"),
             },
             other => panic!("expected a control run, got {other:?}"),
@@ -5803,7 +5798,6 @@ mod group_tests {
         let xml = crate::encoder::shapes::encode_group_to_xml(
             &g,
             0,
-            0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -5877,12 +5871,12 @@ mod group_tests {
             .iter()
             .find(|c| matches!(c, Control::TextArt { .. }))
             .copied()
-            .expect("TextArt child")
-            .clone();
-        let Control::TextArt { width, height, placement: at, fill_color, .. } = art else {
+            .expect("TextArt child");
+        let Control::TextArt { width, height, placement: ref at, fill_color, .. } = *art else {
             unreachable!()
         };
-        let (x, y) = at.map_or((0, 0), |q| (q.horz_offset.as_i32(), q.vert_offset.as_i32()));
+        let (x, y) =
+            at.as_ref().map_or((0, 0), |q| (q.horz_offset.as_i32(), q.vert_offset.as_i32()));
         (
             doc.warnings,
             (width.as_i32(), height.as_i32()),
@@ -6176,11 +6170,12 @@ mod group_tests {
 
     /// A chart switch (or an element we do not know) inside a group child's
     /// text box, caption, or a nested group's text box is lost; nothing
-    /// recovers it later inside a group. Outside groups it stays as before.
+    /// recovers it later inside a group. Outside groups the same loss is
+    /// reported under its own kind (`switch`), not as a group loss.
     ///
     /// 이것을 실패시키는 것: `convert_run` 의 `Switch`·`Other` 갈래에서
-    /// `note_unsupported_in_group_child` 호출을 지우는 것, 또는 그 안의 깊이
-    /// 조건을 `true` 로 바꾸는 것 (묶음 밖 글상자에도 경고).
+    /// `note_unsupported_run_child` 호출을 지우는 것, 또는 그 안의 깊이
+    /// 조건을 `true` 로 바꾸는 것 (묶음 밖 글상자에도 묶음 경고).
     #[test]
     fn unsupported_run_inside_group_content_is_reported() {
         let in_box = text_box(SWITCH, 1);
@@ -6202,13 +6197,13 @@ mod group_tests {
         ));
         assert_eq!(lost_kinds(&w), ["group_nested_switch"]);
 
-        // A text box that is not in a group: no group warning. (This one is
-        // written without `<hp:sz>`, so its `orgSz` 1000 × 400 cannot be
-        // drawn at the 0 × 0 it decodes to — reported as `shape_drawn_extent`,
-        // S20.)
+        // A text box that is not in a group: no group warning, the switch is
+        // reported as `switch`. (This one is written without `<hp:sz>`, so its
+        // `orgSz` 1000 × 400 cannot be drawn at the 0 × 0 it decodes to —
+        // reported as `shape_drawn_extent`, S20.)
         let free = text_box(SWITCH, 0);
         let (_, w) = decode(&free);
-        assert_eq!(lost_kinds(&w), ["shape_drawn_extent"], "{w:?}");
+        assert_eq!(lost_kinds(&w), ["switch", "shape_drawn_extent"], "{w:?}");
     }
 
     /// 이것을 실패시키는 것: 묶음 그림 채우기를 지우거나 회전을 점에 굽기.
@@ -6483,7 +6478,8 @@ mod group_tests {
             style: None,
         };
         let mut doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
-        let Control::Group { placement, inst_id, .. } = first_group(&doc) else { unreachable!() };
+        let mut source = first_group(&doc);
+        let Control::Group { placement, inst_id, .. } = &mut source else { unreachable!() };
         let group = Control::Group {
             frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
@@ -6499,8 +6495,8 @@ mod group_tests {
             ],
             width: HwpUnit::new(2800).unwrap(),
             height: HwpUnit::new(3600).unwrap(),
-            placement,
-            inst_id,
+            placement: placement.take(),
+            inst_id: *inst_id,
         };
         replace_first_group(&mut doc, group);
         let bytes = encode(&doc);
@@ -7141,7 +7137,6 @@ mod group_tests {
         let xml = crate::encoder::shapes::encode_group_to_xml(
             &g,
             0,
-            0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),
@@ -7686,7 +7681,6 @@ mod group_tests {
     fn group_out(g: &Control) -> String {
         crate::encoder::shapes::encode_group_to_xml(
             g,
-            0,
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
@@ -8504,7 +8498,7 @@ mod frame_tests {
         crate::work::WORK.with(|w| w.set(0));
         let (content, _) = decode(&xml);
         let copied = crate::work::WORK.with(std::cell::Cell::get);
-        let Control::Ellipse { paragraphs, frame, .. } = control(content) else { panic!() };
+        let Control::Ellipse { ref paragraphs, frame, .. } = control(content) else { panic!() };
         assert_eq!(frame.original_size, Some(size(560, 560)), "the frame check ran");
         assert_eq!(paragraphs[0].runs[0].content.as_text().map(str::len), Some(100_000));
         assert_eq!(copied, 0);
@@ -8642,7 +8636,7 @@ mod frame_tests {
         let xml = shape("rect", (5_000_000, 1000), (1002, 1000), ("0.000200498", "1"), 1, text);
         let (content, lost) = decode(&xml);
         assert_eq!(lost, ["object_original_size"]);
-        let Control::TextBox { paragraphs, frame, .. } = control(content) else { panic!() };
+        let Control::TextBox { ref paragraphs, frame, .. } = control(content) else { panic!() };
         assert_eq!(frame.original_size, None);
         assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("안"));
     }
@@ -8695,7 +8689,6 @@ mod frame_tests {
         let err = crate::encoder::section::build_picture(
             &picture,
             false,
-            0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
             &mut crate::encoder::section::DocumentEncodeContext::new(0),

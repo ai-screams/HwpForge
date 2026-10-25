@@ -133,6 +133,36 @@ fn a_missing_image_is_dropped_and_reported_exactly_once() {
     HwpxDecoder::decode(&out.bytes).expect("a dropped image must not leave a dangling reference");
 }
 
+/// `![x]()` names no image: the decoder leaves it out and reports it as the
+/// same `IMAGE_EMBED_SKIPPED` an unreadable image gives, with or without a
+/// base directory (shared fixture `tests/fixtures/markdown/empty-image-target.md`).
+/// 이것을 실패시키는 것: `ops::decode_md` 가 디코더 경고를 버리기, 또는 디코더의
+/// 빈 대상 갈래 삭제.
+#[test]
+fn an_empty_image_target_is_dropped_and_reported() {
+    let markdown = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/markdown/empty-image-target.md"
+    ))
+    .unwrap();
+    let dir = scratch("convert_md_empty_target");
+    for base_dir in [Some(dir.as_path()), None] {
+        let out = convert_md(&markdown, base_dir, &ConvertMdOptions::default()).expect("convert");
+        assert_eq!(codes(&out.warnings), ["IMAGE_EMBED_SKIPPED"], "{base_dir:?}");
+        assert!(out.assets.is_empty(), "nothing is requested: {:?}", out.assets);
+        let decoded = HwpxDecoder::decode(&out.bytes).expect("the output must decode");
+        let mut pictures = 0;
+        decoded.document.for_each_paragraph(|para| {
+            pictures += para
+                .runs
+                .iter()
+                .filter(|run| matches!(run.content, hwpforge::core::RunContent::Image(_)))
+                .count();
+        });
+        assert_eq!(pictures, 0, "{base_dir:?}: no empty frame may remain");
+    }
+}
+
 #[test]
 fn an_inline_data_uri_embeds_without_any_base_dir() {
     use base64_shim::encode;

@@ -18,7 +18,7 @@ use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 
-use crate::error::{HwpxError, HwpxResult};
+use crate::error::{CodecFailure, CodecStage, HwpxError, HwpxResult};
 use crate::exchange::{SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION};
 use crate::inline_text::encode_inline_text_xml;
 pub(crate) use crate::raw_package::RawPackage;
@@ -32,6 +32,73 @@ use crate::{HwpxDecoder, HwpxStyleStore};
 #[derive(Debug, Clone, Copy)]
 pub struct HwpxPatcher;
 
+/// Why a preserving section patch, or the preservation-metadata export it
+/// relies on, failed.
+///
+/// The variant says which kind of failure it was, so a caller can tell a
+/// request the preserving path refuses ([`PatchError::Rejected`]) from a
+/// codec failure at a known stage ([`PatchError::Codec`]) or a broken
+/// internal invariant.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PatchError {
+    /// A codec step failed: decoding the base, validating the document or
+    /// encoding the output. The stage says which; the message is the
+    /// original error's.
+    #[error("{}", .0.detail)]
+    Codec(CodecFailure),
+    /// The preserving path refuses the request: the preservation metadata
+    /// is missing, stale or aimed at another section, or the replacement
+    /// makes a change a text-only splice cannot express.
+    #[error(transparent)]
+    Rejected(HwpxError),
+    /// The requested section does not exist in the base package.
+    #[error("section {requested} out of range (document has {sections} sections)")]
+    SectionOutOfRange {
+        /// Requested section index.
+        requested: usize,
+        /// Number of sections in the base.
+        sections: usize,
+    },
+    /// The replacement changes the value or the range of a field the patch
+    /// may not edit.
+    #[error("{detail}")]
+    ProtectedFieldRange {
+        /// What changed.
+        detail: String,
+    },
+    /// An invariant the earlier checks established did not hold (a decoder
+    /// source map or text locator was missing or inconsistent). This is a
+    /// defect, not a property of the input.
+    #[error("internal invariant violated: {detail}")]
+    Invariant {
+        /// What did not hold.
+        detail: String,
+    },
+}
+
+/// Wraps an HWPX error as a codec failure at `stage`; the stage literal stays
+/// at the call site.
+fn codec(stage: CodecStage) -> impl FnOnce(HwpxError) -> PatchError {
+    move |error| PatchError::Codec(CodecFailure::hwpx(stage, &error))
+}
+
+/// Wraps a Core error met directly as a codec failure at `stage`.
+fn core(stage: CodecStage) -> impl FnOnce(hwpforge_core::CoreError) -> PatchError {
+    move |error| PatchError::Codec(CodecFailure::core(stage, &error))
+}
+
+/// The package path of section `section_idx`, after checking the index
+/// against the package's section count (so the range failure is typed, not
+/// read out of a message).
+fn section_path(package: &RawPackage, section_idx: usize) -> Result<String, PatchError> {
+    let sections = package.order.sections.len();
+    if section_idx >= sections {
+        return Err(PatchError::SectionOutOfRange { requested: section_idx, sections });
+    }
+    package.section_path(section_idx).map_err(codec(CodecStage::Decode))
+}
+
 impl HwpxPatcher {
     /// Builds preservation metadata for a section export.
     ///
@@ -40,24 +107,32 @@ impl HwpxPatcher {
     ///
     /// # Errors
     ///
-    /// Every package entry is read and counted, including ones the decoder
-    /// ignores: an entry that decompresses past 50 MiB, or a package past
-    /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
+    /// - [`PatchError::Codec`] at [`CodecStage::Validation`] when `section`
+    ///   nests deeper than the Core limit, and at [`CodecStage::Decode`] when
+    ///   the base cannot be read or decoded. Every package entry is read and
+    ///   counted, including ones the decoder ignores: an entry that
+    ///   decompresses past 50 MiB, or a package past 500 MiB in total, is a
+    ///   decode failure.
+    /// - [`PatchError::SectionOutOfRange`] when the base has no such section.
+    /// - [`PatchError::Rejected`] when `section` holds text at a place the
+    ///   base has no text run for.
+    /// - [`PatchError::Invariant`] when the decoder's source map is missing
+    ///   or disagrees with `section`.
     pub fn export_section_preservation(
         base_bytes: &[u8],
         section_idx: usize,
         section: &Section,
-    ) -> HwpxResult<SectionPreservation> {
-        section
-            .check_nesting_depth()
-            .map_err(|error| HwpxError::InvalidStructure { detail: error.to_string() })?;
-        let raw_package = RawPackage::read(base_bytes)?;
-        let section_path = raw_package.section_path(section_idx)?;
-        let section_xml = raw_package.read_text_entry(&section_path)?;
-        let decoded = HwpxDecoder::decode(base_bytes)?;
-        let map = decoded.source_maps.get(section_idx).ok_or_else(|| {
-            HwpxError::InvalidStructure { detail: "missing decoder source map".into() }
-        })?;
+    ) -> Result<SectionPreservation, PatchError> {
+        section.check_nesting_depth().map_err(core(CodecStage::Validation))?;
+        let raw_package = RawPackage::read(base_bytes).map_err(codec(CodecStage::Decode))?;
+        let section_path = section_path(&raw_package, section_idx)?;
+        let section_xml =
+            raw_package.read_text_entry(&section_path).map_err(codec(CodecStage::Decode))?;
+        let decoded = HwpxDecoder::decode(base_bytes).map_err(codec(CodecStage::Decode))?;
+        let map = decoded
+            .source_maps
+            .get(section_idx)
+            .ok_or_else(|| PatchError::Invariant { detail: "missing decoder source map".into() })?;
         preservation_from_map(&section_xml, &section_path, section, map, section_idx)
     }
 
@@ -65,21 +140,18 @@ impl HwpxPatcher {
     ///
     /// The preserving path currently supports text-only edits. Any structural
     /// change (style changes, table geometry changes, control changes, etc.)
-    /// returns [`HwpxError::InvalidStructure`].
+    /// returns [`PatchError::Rejected`].
     ///
     /// # Errors
     ///
-    /// Every package entry is read and counted, including ones the decoder
-    /// ignores: an entry that decompresses past 50 MiB, or a package past
-    /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
-    /// Beyond that, see [`HwpxPatcher::patch_section_preserving_with_diagnostics`].
+    /// See [`HwpxPatcher::patch_section_preserving_with_codec_diagnostics`].
     pub fn patch_section_preserving(
         base_bytes: &[u8],
         section_idx: usize,
         replacement: &Section,
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
-    ) -> HwpxResult<Vec<u8>> {
+    ) -> Result<Vec<u8>, PatchError> {
         Self::patch_section_preserving_with_diagnostics(
             base_bytes,
             section_idx,
@@ -107,7 +179,7 @@ impl HwpxPatcher {
         replacement: &Section,
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
-    ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<u8>>> {
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, PatchError> {
         Self::patch_section_preserving_with_codec_diagnostics(
             base_bytes,
             section_idx,
@@ -135,18 +207,41 @@ impl HwpxPatcher {
     /// Only slots whose text differs from the base are looked at. A slot
     /// handed back unchanged is kept byte for byte even when the base itself
     /// holds such characters, and a slot whose text equals the base once the
-    /// characters are removed is kept too (with the warning).
+    /// characters are removed is kept too (with the warning). Changed candidates
+    /// also use the shared body line-break encoding rule before comparison.
     ///
     /// # Errors
     ///
-    /// [`HwpxError::InvalidStructure`] when the preservation metadata is
-    /// missing, stale or aimed at another section, or when the replacement
-    /// makes a change the preserving path cannot express; decode failures
-    /// surface as themselves.
+    /// The checks run in this order and the first failure is returned:
     ///
-    /// Every package entry is read and counted, including ones the decoder
-    /// ignores: an entry that decompresses past 50 MiB, or a package past
-    /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
+    /// 1. [`PatchError::Codec`] at [`CodecStage::Validation`] when the
+    ///    replacement nests deeper than the Core limit;
+    /// 2. [`PatchError::Rejected`] when the preservation metadata is missing;
+    /// 3. [`PatchError::Codec`] at [`CodecStage::Decode`] when the base
+    ///    package cannot be read. Every package entry is read and counted,
+    ///    including ones the decoder ignores: an entry that decompresses past
+    ///    50 MiB, or a package past 500 MiB in total, is a decode failure;
+    /// 4. [`PatchError::SectionOutOfRange`] when the base has no such section;
+    /// 5. [`PatchError::Rejected`] when the metadata is aimed at another
+    ///    section or is of an unsupported version;
+    /// 6. [`PatchError::Codec`] at [`CodecStage::Decode`] when the base cannot
+    ///    be decoded;
+    /// 7. [`PatchError::Codec`] at [`CodecStage::Validation`] when the base's
+    ///    style measures fail output validation;
+    /// 8. [`PatchError::Rejected`] for a style-store or master-page change;
+    /// 9. [`PatchError::ProtectedFieldRange`] when the value or range of a
+    ///    field the patch may not edit changes;
+    /// 10. [`PatchError::Rejected`] for any other structural change;
+    /// 11. [`PatchError::Codec`] at [`CodecStage::Validation`] when the
+    ///     patched document fails validation;
+    /// 12. [`PatchError::Rejected`] when the metadata is stale (hash, slots)
+    ///     or an edited slot holds inline markup the patch cannot recreate;
+    /// 13. [`PatchError::Codec`] at [`CodecStage::Encode`] when the output
+    ///     cannot be written.
+    ///
+    /// [`PatchError::Invariant`] can come from any step after 6, when a
+    /// decoder source map or text locator the earlier checks vouched for is
+    /// missing or inconsistent.
     ///
     /// # Examples
     ///
@@ -175,39 +270,40 @@ impl HwpxPatcher {
         replacement: &Section,
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
-    ) -> HwpxResult<crate::diagnostics::WithCodecWarnings<Vec<u8>>> {
+    ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, PatchError> {
         // 이것을 실패시키는 것: replacement.clone() 앞 관문 삭제.
-        replacement
-            .check_nesting_depth()
-            .map_err(|error| HwpxError::InvalidStructure { detail: error.to_string() })?;
-        let preservation = preservation.ok_or_else(|| HwpxError::InvalidStructure {
-            detail:
-                "missing preservation metadata; re-export the section with the current to-json command"
-                    .into(),
+        replacement.check_nesting_depth().map_err(core(CodecStage::Validation))?;
+        let preservation = preservation.ok_or_else(|| {
+            PatchError::Rejected(HwpxError::InvalidStructure {
+                detail:
+                    "missing preservation metadata; re-export the section with the current to-json command"
+                        .into(),
+            })
         })?;
 
-        let mut raw_package = RawPackage::read(base_bytes)?;
-        let expected_section_path = raw_package.section_path(section_idx)?;
+        let mut raw_package = RawPackage::read(base_bytes).map_err(codec(CodecStage::Decode))?;
+        let expected_section_path = section_path(&raw_package, section_idx)?;
         if preservation.section_path != expected_section_path {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail: format!(
                     "preservation metadata targets '{}' but patch requested '{}'",
                     preservation.section_path, expected_section_path
                 ),
-            });
+            }));
         }
 
         if preservation.preservation_version != SECTION_PRESERVATION_VERSION {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail: format!(
                     "preservation metadata version {} is unsupported; re-export the section with the current to-json command",
                     preservation.preservation_version
                 ),
-            });
+            }));
         }
 
-        let mut decoded = HwpxDecoder::decode(base_bytes)?;
-        crate::paragraph_measure::validate_measure_output(&decoded.style_store)?;
+        let mut decoded = HwpxDecoder::decode(base_bytes).map_err(codec(CodecStage::Decode))?;
+        crate::paragraph_measure::validate_measure_output(&decoded.style_store)
+            .map_err(codec(CodecStage::Validation))?;
         let normalize_measures = decoded.requires_header_normalization();
         let decode_warnings = decoded.warnings.clone();
         let mut replacement = replacement.clone();
@@ -219,35 +315,33 @@ impl HwpxPatcher {
             &mut authored,
             decoded.document.sections(),
         );
+        let sections = decoded.document.sections().len();
         replacement = authored
             .get(section_idx)
             .cloned()
-            .ok_or_else(|| HwpxError::InvalidStructure { detail: "section out of range".into() })?;
+            .ok_or(PatchError::SectionOutOfRange { requested: section_idx, sections })?;
         let replacement = &replacement;
-        let base_section =
-            decoded.document.sections().get(section_idx).cloned().ok_or_else(|| {
-                HwpxError::InvalidStructure {
-                    detail: format!(
-                        "section {section_idx} out of range (document has {} sections)",
-                        decoded.document.sections().len()
-                    ),
-                }
-            })?;
+        let base_section = decoded
+            .document
+            .sections()
+            .get(section_idx)
+            .cloned()
+            .ok_or(PatchError::SectionOutOfRange { requested: section_idx, sections })?;
 
         if let Some(patch_styles) = styles {
             if patch_styles != &decoded.style_store {
-                return Err(HwpxError::InvalidStructure {
+                return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                     detail: "preserving patch does not support style-store changes yet".into(),
-                });
+                }));
             }
         }
 
         if base_section.master_pages != replacement.master_pages {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail:
                     "preserving patch does not support master page edits yet; master pages live outside section XML"
                         .into(),
-            });
+            }));
         }
 
         // 이것을 실패시키는 것: 경계형 자동 필드 본문을 일반 텍스트로 지우기.
@@ -265,7 +359,7 @@ impl HwpxPatcher {
                     && a != b
             })
         {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::ProtectedFieldRange {
                 detail: "protected field value or range changed".into(),
             });
         }
@@ -274,46 +368,49 @@ impl HwpxPatcher {
         redact_section_texts(&mut base_redacted, section_idx);
         redact_section_texts(&mut replacement_redacted, section_idx);
         if base_redacted != replacement_redacted {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail:
                     "preserving patch currently supports text-only section edits; structural change detected"
                         .into(),
-            });
+            }));
         }
 
         // Validate the semantic result before touching raw bytes.
         let sections = decoded.document.sections_mut();
         sections[section_idx] = replacement.clone();
-        HwpxDecoder::verify_document_source(&decoded.document)?;
+        HwpxDecoder::verify_document_source(&decoded.document)
+            .map_err(codec(CodecStage::Validation))?;
         let validated: hwpforge_core::document::Document<Validated> =
-            decoded.document.validate()?;
+            decoded.document.validate().map_err(core(CodecStage::Validation))?;
 
-        let base_section_xml = raw_package.read_text_entry(&expected_section_path)?;
+        let base_section_xml = raw_package
+            .read_text_entry(&expected_section_path)
+            .map_err(codec(CodecStage::Decode))?;
         let base_hash = sha256_hex(base_section_xml.as_bytes());
         if preservation.section_sha256 != base_hash {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail: format!(
                     "preservation metadata hash mismatch for '{}': expected {} actual {}",
                     expected_section_path, preservation.section_sha256, base_hash
                 ),
-            });
+            }));
         }
 
         let rebuilt_preservation = preservation_from_map(
             &base_section_xml,
             &expected_section_path,
             &base_section,
-            decoded.source_maps.get(section_idx).ok_or_else(|| HwpxError::InvalidStructure {
+            decoded.source_maps.get(section_idx).ok_or_else(|| PatchError::Invariant {
                 detail: "missing decoder source map".into(),
             })?,
             section_idx,
         )?;
         if preservation != &rebuilt_preservation {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail:
                     "stale or tampered preservation metadata; re-export the section with the current to-json command"
                         .into(),
-            });
+            }));
         }
 
         let replacement_slots = collect_preserving_text_slots(
@@ -322,33 +419,33 @@ impl HwpxPatcher {
             &decoded.source_maps[section_idx],
         )?;
         if replacement_slots.len() != rebuilt_preservation.text_slots.len() {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                 detail: format!(
                     "replacement semantic text-slot count mismatch: expected {} actual {}",
                     rebuilt_preservation.text_slots.len(),
                     replacement_slots.len()
                 ),
-            });
+            }));
         }
 
         for (index, (replacement_slot, preserved_slot)) in
             replacement_slots.iter().zip(&rebuilt_preservation.text_slots).enumerate()
         {
             if replacement_slot.path != preserved_slot.path {
-                return Err(HwpxError::InvalidStructure {
+                return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                     detail: format!(
                         "replacement text-slot path mismatch at index {index}: expected '{}' actual '{}'",
                         preserved_slot.path, replacement_slot.path
                     ),
-                });
+                }));
             }
         }
 
         // Decide every slot before splicing any: the caller's text is first
         // compared as given, so a slot handed back unchanged is never looked
         // at (the base may itself hold characters XML cannot carry); only a
-        // real change candidate is cleaned, and the cleaned text is compared
-        // again so a value that only differed by those characters is kept.
+        // real change candidate is cleaned and normalized to HWPX body line
+        // breaks before comparing again, so an equivalent value is kept.
         let mut encode_warnings = Vec::new();
         let mut new_texts: Vec<Option<String>> = Vec::with_capacity(replacement_slots.len());
         for (replacement_slot, preserved_slot) in
@@ -364,6 +461,7 @@ impl HwpxPatcher {
                 &preserved_slot.path,
                 &mut encode_warnings,
             );
+            let text = crate::wire_xml::body_text_line_breaks(&text, true).into_owned();
             new_texts.push((text != preserved_slot.original_text).then_some(text));
         }
 
@@ -374,12 +472,27 @@ impl HwpxPatcher {
             };
 
             if preserved_slot.has_inline_markup {
-                return Err(HwpxError::InvalidStructure {
-                    detail: format!(
-                        "preserving patch does not support editing text-slot '{}' with inline HWPX markup yet",
-                        preserved_slot.path
-                    ),
-                });
+                // Use the decoder's element and range; never rediscover slot identity.
+                let element = decoded.source_maps[section_idx]
+                    .text_elements
+                    .get(&text_locator_start(&preserved_slot.locator))
+                    .ok_or_else(|| PatchError::Invariant {
+                        detail: "missing decoder text element".into(),
+                    })?;
+                let inner = element.inner().ok_or_else(|| PatchError::Invariant {
+                    detail: "missing decoder inline text content".into(),
+                })?;
+                if let Err(reason) = crate::inline_text::validate_recreatable_inline_markup(
+                    element.qualified_name(),
+                    &base_section_xml[inner],
+                ) {
+                    return Err(PatchError::Rejected(HwpxError::InvalidStructure {
+                        detail: format!(
+                            "preserving patch does not support editing text-slot '{}' with inline HWPX markup ({reason})",
+                            preserved_slot.path
+                        ),
+                    }));
+                }
             }
 
             edits.push((&preserved_slot.locator, new_text.as_str()));
@@ -398,27 +511,34 @@ impl HwpxPatcher {
             let mut changed = Vec::with_capacity(edits.len());
             for (locator, text) in &edits {
                 let at = text_locator_start(locator);
-                changed.push(flow.paragraph_at(at).ok_or_else(|| HwpxError::InvalidStructure {
+                changed.push(flow.paragraph_at(at).ok_or_else(|| PatchError::Invariant {
                     detail: format!(
                         "text slot at byte {at} of '{expected_section_path}' is outside every paragraph"
                     ),
                 })?);
-                replacements.push(text_locator_replacement(
-                    &base_section_xml,
-                    locator,
-                    text,
-                    &decoded.source_maps[section_idx].text_elements,
-                )?);
+                // The locator and its element came from the decoder and passed
+                // the source-map checks above, so a failure here is a defect.
+                replacements.push(
+                    text_locator_replacement(
+                        &base_section_xml,
+                        locator,
+                        text,
+                        &decoded.source_maps[section_idx].text_elements,
+                    )
+                    .map_err(|error| PatchError::Invariant { detail: error.to_string() })?,
+                );
             }
             replacements
                 .extend(flow.stale_caches(changed).into_iter().map(|range| (range, String::new())));
         }
-        let patched_section_xml = crate::cache_flow::splice(&base_section_xml, replacements)?;
+        let patched_section_xml = crate::cache_flow::splice(&base_section_xml, replacements)
+            .map_err(|error| PatchError::Invariant { detail: error.to_string() })?;
 
         // The text-only proof still applies, but an unnormalised header cannot
         // escape through raw ZIP copying. Reuse the ordinary output/cache planner.
         if normalize_measures
-            || crate::header_references::HeaderReferences::build(&decoded.style_store)?
+            || crate::header_references::HeaderReferences::build(&decoded.style_store)
+                .map_err(codec(CodecStage::Encode))?
                 .style_index(0)
                 .is_err()
         {
@@ -428,7 +548,8 @@ impl HwpxPatcher {
                 &decoded.style_store,
                 &decoded.image_store,
                 crate::EncodeOptions::default(),
-            )?;
+            )
+            .map_err(codec(CodecStage::Encode))?;
             encode_warnings.extend(outcome.warnings);
             return Ok(crate::diagnostics::WithCodecWarnings::new(
                 outcome.bytes,
@@ -447,7 +568,7 @@ impl HwpxPatcher {
 
         raw_package.replace_text_entry(&expected_section_path, patched_section_xml);
         Ok(crate::diagnostics::WithCodecWarnings::new(
-            raw_package.write()?,
+            raw_package.write().map_err(codec(CodecStage::Encode))?,
             decode_warnings,
             encode_warnings,
         ))
@@ -471,19 +592,18 @@ fn preservation_from_map(
     section: &Section,
     map: &crate::decoder::source_map::SourceMap,
     section_idx: usize,
-) -> HwpxResult<SectionPreservation> {
+) -> Result<SectionPreservation, PatchError> {
     let recorded: BTreeMap<_, _> = map.text_slots().iter().map(|s| (s.path.as_str(), s)).collect();
     let mut slots = Vec::new();
     for slot in collect_preserving_text_slots(section, section_idx, map)? {
-        let original =
-            recorded.get(slot.path.as_str()).ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!(
-                    "internal decoder source-map defect: no original slot for {}",
-                    slot.path
-                ),
-            })?;
+        let original = recorded.get(slot.path.as_str()).ok_or_else(|| PatchError::Invariant {
+            detail: format!(
+                "internal decoder source-map defect: no original slot for {}",
+                slot.path
+            ),
+        })?;
         if original.original_text != slot.text {
-            return Err(HwpxError::InvalidStructure {
+            return Err(PatchError::Invariant {
                 detail: format!(
                     "internal decoder source-map defect: original differs at {}",
                     slot.path
@@ -506,17 +626,17 @@ fn collect_preserving_text_slots(
     section: &Section,
     section_idx: usize,
     map: &crate::decoder::source_map::SourceMap,
-) -> HwpxResult<Vec<SemanticTextSlot>> {
+) -> Result<Vec<SemanticTextSlot>, PatchError> {
     let mut slots = Vec::new();
     for slot in collect_semantic_text_slots(section, section_idx) {
         if map.synthetic_empty_texts.contains(&slot.path) {
             if !slot.text.is_empty() {
-                return Err(HwpxError::InvalidStructure {
+                return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                     detail: format!(
                         "preserving patch cannot insert text at '{}': no original run; structural insertion is required",
                         slot.path
                     ),
-                });
+                }));
             }
         } else {
             slots.push(slot);
@@ -530,14 +650,15 @@ fn build_section_preservation(
     xml: &str,
     part: &str,
     section: &Section,
-) -> HwpxResult<SectionPreservation> {
+) -> Result<SectionPreservation, PatchError> {
     let parsed = crate::decoder::section::parse_section_with_images(
         xml,
         0,
         part,
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
-    )?;
+    )
+    .map_err(codec(CodecStage::Decode))?;
     let mut decoded =
         Section::with_paragraphs(parsed.paragraphs, hwpforge_core::PageSettings::a4());
     decoded.headers = parsed.headers;
@@ -564,44 +685,55 @@ pub(crate) fn collect_stamp_text_slots(
     collect_text_slots(section, section_idx, false)
 }
 
+fn text_runs(
+    runs: &[Run],
+    prefix: &str,
+    section: usize,
+    inventory: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    patchable_only: bool,
+    slots: &mut Vec<SemanticTextSlot>,
+) {
+    let mut path = prefix.to_owned();
+    let mut stack: Vec<_> =
+        runs.iter().enumerate().rev().map(|(ri, run)| (run, ri, path.len())).collect();
+    while let Some((run, ri, restore)) = stack.pop() {
+        // 비텍스트 run 경로 선별의 비용 효과는 레포 밖 비용 probe로만 확인했다.
+        // /private/tmp/codex-fpath/cost-mutations.json (CI 비용 시험 아님).
+        if !has_text_or_anchor(run) {
+            continue;
+        }
+        path.truncate(restore);
+        use std::fmt::Write;
+        write!(path, ".runs[{ri}]").expect("write to String");
+        if let Some(text) = run.content.plain_text() {
+            path.push_str(".text");
+            if !patchable_only || !inventory.protects(section, &path) {
+                slots.push(SemanticTextSlot {
+                    path: path.clone(),
+                    text: text.into_owned(),
+                    inline: matches!(run.content, RunContent::InlineText(_)),
+                });
+            }
+        }
+        if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
+            path.push_str(".control.memo.anchor[0]");
+            let restore = path.len();
+            stack.extend(anchor_runs.iter().enumerate().rev().map(|(ri, run)| (run, ri, restore)));
+        }
+    }
+}
+
+fn has_text_or_anchor(run: &Run) -> bool {
+    matches!(run.content, RunContent::Text(_) | RunContent::InlineText(_))
+        || matches!(run.content.as_control(), Some(Control::Memo { .. }))
+}
+
 fn collect_text_slots(
     section: &Section,
     section_idx: usize,
     patchable_only: bool,
 ) -> Vec<SemanticTextSlot> {
     use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
-    fn text_runs(
-        runs: &[Run],
-        prefix: &str,
-        section: usize,
-        inventory: &FieldInventory<'_>,
-        patchable_only: bool,
-        slots: &mut Vec<SemanticTextSlot>,
-    ) {
-        for (ri, run) in runs.iter().enumerate() {
-            let path = format!("{prefix}.runs[{ri}]");
-            if let Some(text) = run.content.plain_text() {
-                let path = format!("{path}.text");
-                if !patchable_only || !inventory.protects(section, &path) {
-                    slots.push(SemanticTextSlot {
-                        path,
-                        text: text.into_owned(),
-                        inline: matches!(run.content, RunContent::InlineText(_)),
-                    });
-                }
-            }
-            if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
-                text_runs(
-                    anchor_runs,
-                    &format!("{path}.control.memo.anchor[0]"),
-                    section,
-                    inventory,
-                    patchable_only,
-                    slots,
-                );
-            }
-        }
-    }
     let sections = std::slice::from_ref(section);
     let inventory = FieldInventory::from_sections_at(sections, section_idx);
     let mut slots = Vec::new();
@@ -611,6 +743,10 @@ fn collect_text_slots(
             return;
         }
         for (pi, paragraph) in paragraphs.iter().enumerate() {
+            // No full paragraph path for a container-only flow.
+            if !paragraph.runs.iter().any(has_text_or_anchor) {
+                continue;
+            }
             text_runs(
                 &paragraph.runs,
                 &format!("{prefix}[{pi}]"),
@@ -856,6 +992,36 @@ fn redact_control(control: &mut Control) {
 
 #[cfg(test)]
 mod tests {
+    mod small_stack {
+        include!("../tests/support/small_stack.rs");
+    }
+    // 이것을 실패시키는 것: text_runs의 Memo anchor 재귀 복원 또는 leaf 누락.
+    // Field policy is tested separately at depth 33; this test isolates slot traversal.
+    #[test]
+    fn deep_anchor_slots_small_stack() {
+        small_stack::small_stack_child("patch::tests::deep_anchor_slots_small_stack", || {
+            let mut run = Run::text("@ ", hwpforge_foundation::CharShapeIndex::new(0));
+            for _ in 0..10_000 {
+                run = Run::control(
+                    Control::memo_with_anchor(vec![], vec![run]),
+                    hwpforge_foundation::CharShapeIndex::new(0),
+                );
+            }
+            let mut slots = Vec::new();
+            text_runs(
+                &[run],
+                "paragraphs[0]",
+                0,
+                &hwpforge_core::field_inventory::FieldInventory::default(),
+                false,
+                &mut slots,
+            );
+            assert_eq!(slots.len(), 1);
+            assert_eq!(slots[0].text, "@ ");
+            assert_eq!(slots[0].path.matches(".control.memo.anchor[0]").count(), 10_000);
+        });
+    }
+
     use super::*;
     use crate::decoder::section::parse_section;
     use std::collections::HashMap;
@@ -873,9 +1039,12 @@ mod tests {
         let xml = "<q:sec xmlns:q='urn:&unknown;'/>";
         let section = Section::with_paragraphs(Vec::new(), hwpforge_core::PageSettings::a4());
         let error = build_section_preservation(xml, "Contents/section2.xml", &section).unwrap_err();
-        assert!(
-            matches!(error, HwpxError::XmlParse { file, .. } if file == "Contents/section2.xml")
-        );
+        assert!(matches!(
+            &error,
+            PatchError::Codec(CodecFailure { stage: CodecStage::Decode, code, detail })
+                if *code == crate::error::HwpxErrorCode::XmlParse
+                    && detail.contains("Contents/section2.xml")
+        ));
     }
 
     #[test]
@@ -1275,3 +1444,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/field_path_contract.rs"]
+mod field_path_contract;

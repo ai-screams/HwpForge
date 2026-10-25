@@ -39,14 +39,14 @@ pub fn run_fill(
 ) -> Result<FillData, ToolErrorInfo> {
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
-            "INVALID_EXTENSION",
+            hwpforge_foundation::diagnostics::OpsCode::InvalidExtension,
             format!("Output path must end with .hwpx: {output_path}"),
             "Use a .hwpx extension for the output file.",
         ));
     }
     if values.is_empty() {
         return Err(ToolErrorInfo::new(
-            "NO_VALUES",
+            hwpforge_foundation::diagnostics::OpsCode::NoValues,
             "values map is empty",
             "Pass at least one name→value pair. Use hwpforge_fields to discover names.",
         ));
@@ -83,6 +83,31 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string()
+    }
+
+    #[test]
+    // 이것을 실패시키는 것: fill 입력 decode 를 Workflow 로 되돌리기(FILL_FAILED), 또는 MCP
+    // (fill, DECODE_FAILED) 힌트 행 삭제.
+    fn fill_input_decode_shared_fixture() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../hwpforge/tests/data/error_contract_018.json"
+        ))
+        .unwrap();
+        let case = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "fill.input_decode")
+            .unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hwpforge/tests/data/corrupt-input.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx");
+        let values = std::collections::BTreeMap::from([("a".to_string(), "b".to_string())]);
+        let err = run_fill(path.to_str().unwrap(), &values, out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, case["expected_code"].as_str().unwrap());
+        assert_eq!(err.hint, "Check that the file is valid HWPX.");
+        assert!(!out.exists());
     }
 
     #[test]

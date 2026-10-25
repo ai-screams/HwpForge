@@ -22,6 +22,7 @@ use super::plan::{plan, StampCandidate};
 use super::request::{CellLabelClaim, CellStampAction, CellStampSpec, StampRequestV2};
 use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::encoder::HwpxEncoder;
+use crate::error::{CodecFailure, CodecStage};
 use crate::fill::{FieldInfo, HwpxFiller};
 use crate::patch::sha256_hex;
 use crate::table_inventory::for_each_table_mut;
@@ -64,7 +65,7 @@ fn encode_fail_closed(
         image_store,
         crate::EncodeOptions::default(),
     )
-    .map_err(|e| StamperError::Codec(e.to_string()))?;
+    .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
     // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
     // 호출자가 어떤 경고였는지 알 수 없었다). Display 문자열은 불변이라
     // 프론트엔드 출력은 그대로다.
@@ -134,7 +135,12 @@ pub struct StampMeta {
 #[non_exhaustive]
 pub enum StamperError {
     /// Decode/encode/validate failure while processing the input.
-    Codec(String),
+    Codec(CodecFailure),
+    /// An internal source-map or provenance contract was violated.
+    Invariant {
+        /// Diagnostic detail from the violated contract.
+        detail: String,
+    },
     /// The input is not round-trip-safe for this codec: a no-op
     /// decode→encode→decode changed Core semantics. `component` names the
     /// first differing store (`document` / `style_store` / `image_store`)
@@ -195,7 +201,8 @@ pub enum StamperError {
 impl std::fmt::Display for StamperError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Codec(msg) => write!(f, "codec failure: {msg}"),
+            Self::Invariant { detail } => write!(f, "internal invariant violated: {detail}"),
+            Self::Codec(msg) => write!(f, "codec failure: {}", msg.detail),
             Self::NotRoundTripSafe { component, diff_path } => write!(
                 f,
                 "input is not round-trip-safe: {component} differs at {diff_path} after a \
@@ -261,7 +268,8 @@ impl HwpxStamper {
     ///
     /// [`StamperError::Codec`] when the input fails to decode.
     pub fn plan_bytes(base: &[u8]) -> Result<Vec<StampCandidate>, StamperError> {
-        let decoded = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let decoded = HwpxDecoder::decode(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         Ok(plan(&decoded.document))
     }
 
@@ -292,7 +300,8 @@ impl HwpxStamper {
     pub fn plan_bytes_v2_with_diagnostics(
         base: &[u8],
     ) -> Result<crate::diagnostics::WithDecodeWarnings<StampPlanV2>, StamperError> {
-        let decoded = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let decoded = HwpxDecoder::decode(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let cells = plan_cells(&decoded.document);
         Ok(crate::diagnostics::WithDecodeWarnings::new(
             StampPlanV2 {
@@ -379,9 +388,11 @@ impl HwpxStamper {
         specs: &[StampSpec],
     ) -> Result<crate::diagnostics::WithCodecWarnings<StampResult>, StamperError> {
         // ── admission gate ──────────────────────────────────────────
-        let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
-        let e0 = encode_hwpx(&d0)?;
-        let d1 = HwpxDecoder::decode(&e0).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let d0 = HwpxDecoder::decode(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let e0 = encode_hwpx(&d0, EncodePurpose::Admission)?;
+        let d1 = HwpxDecoder::decode(&e0)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
         admission_compare(&d0, &d1)?;
         check_zip_carry(base, &e0)?;
         // After the older checks, so an input they already refused keeps
@@ -390,7 +401,7 @@ impl HwpxStamper {
 
         for spec in specs {
             d0.require_source_slot(spec.section, &spec.path)
-                .map_err(|e| StamperError::Codec(e.to_string()))?;
+                .map_err(|e| StamperError::Invariant { detail: e.to_string() })?;
         }
         // ── apply on the admitted decode ────────────────────────────
         let HwpxDocument {
@@ -402,25 +413,26 @@ impl HwpxStamper {
             warnings: decode_warnings,
         } = d0;
         let mut encode_warnings = Vec::new();
-        let package =
-            crate::patch::RawPackage::read(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let specs = clean_text_hints(&package, specs, &mut encode_warnings);
         let outcome = apply(&mut document, &specs)?;
-        let validated =
-            document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
+        let validated = document
+            .validate()
+            .map_err(|e| StamperError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
         let (bytes, others) = encode_fail_closed(&validated, &style_store, &image_store)?;
         encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
-            .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
-            .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
+            .map_err(StamperError::Codec)?;
         encode_warnings.extend(dropped);
 
         // ── manifest from the OUTPUT (re-decode is the source of truth) ─
         let fields = HwpxFiller::list_fields(&bytes)
-            .map_err(|e| StamperError::Codec(format!("output list_fields: {e}")))?;
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         let manifest = build_manifest(base, &bytes, &fields, &outcome)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             StampResult { bytes, manifest, outcome },
@@ -474,9 +486,11 @@ impl HwpxStamper {
         }
 
         // ── admission gate (identical to v1) ────────────────────────
-        let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
-        let e0 = encode_hwpx(&d0)?;
-        let d1 = HwpxDecoder::decode(&e0).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let d0 = HwpxDecoder::decode(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let e0 = encode_hwpx(&d0, EncodePurpose::Admission)?;
+        let d1 = HwpxDecoder::decode(&e0)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
         admission_compare(&d0, &d1)?;
         check_zip_carry(base, &e0)?;
         // After the older checks, so an input they already refused keeps
@@ -485,10 +499,11 @@ impl HwpxStamper {
 
         for spec in &request.text {
             d0.require_source_slot(spec.section, &spec.path)
-                .map_err(|e| StamperError::Codec(e.to_string()))?;
+                .map_err(|e| StamperError::Invariant { detail: e.to_string() })?;
         }
         for spec in &request.cells {
-            d0.require_source_table(spec.table).map_err(|e| StamperError::Codec(e.to_string()))?;
+            d0.require_source_table(spec.table)
+                .map_err(|e| StamperError::Invariant { detail: e.to_string() })?;
         }
         // ── unified preflight, then mutate ──────────────────────────
         let HwpxDocument {
@@ -500,8 +515,8 @@ impl HwpxStamper {
             warnings: decode_warnings,
         } = d0;
         let mut encode_warnings = Vec::new();
-        let package =
-            crate::patch::RawPackage::read(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let text_specs = clean_text_hints(&package, &request.text, &mut encode_warnings);
         let cell_specs =
             clean_cell_hints(&package, &document, &request.cells, &mut encode_warnings);
@@ -530,30 +545,31 @@ impl HwpxStamper {
         };
         let cell_outcome = commit_cells(&mut document, cell_plan);
 
-        let validated =
-            document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
+        let validated = document
+            .validate()
+            .map_err(|e| StamperError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
         let (bytes, others) = encode_fail_closed(&validated, &style_store, &image_store)?;
         encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
-            .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
-            .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
+            .map_err(StamperError::Codec)?;
         encode_warnings.extend(dropped);
 
         // ── post-encode verification on the re-decoded OUTPUT ───────
         let d2 = HwpxDecoder::decode(&bytes)
-            .map_err(|e| StamperError::Codec(format!("output decode: {e}")))?;
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         verify_and_reverse_cells(&d2, &text_only, &cell_outcome)?;
-        let e2 = encode_hwpx(&d2)?;
+        let e2 = encode_fixed_point(&d2)?;
         let d3 = HwpxDecoder::decode(&e2)
-            .map_err(|e| StamperError::Codec(format!("fixed-point decode: {e}")))?;
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         verify_fixed_point(&d2, &d3)?;
 
         // ── v2 manifest from the OUTPUT ─────────────────────────────
         let fields = HwpxFiller::list_fields(&bytes)
-            .map_err(|e| StamperError::Codec(format!("output list_fields: {e}")))?;
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         let manifest = build_manifest_v2(base, &bytes, &fields, &text_outcome, &cell_outcome)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             StampResultV2 {
@@ -695,13 +711,22 @@ fn verify_and_reverse_cells(
         image_store: d2.image_store.clone(),
     };
     // Reference: the text-only document after ONE encode→decode round trip.
-    let reference_bytes = encode_hwpx(text_only)?;
+    let reference_bytes = encode_reference(text_only)?;
     let reference = HwpxDecoder::decode(&reference_bytes)
-        .map_err(|e| StamperError::Codec(format!("reference decode: {e}")))?;
+        .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
     delta_compare(&reverted, &reference).map_err(|e| StamperError::DeltaMismatch {
         stage: "reverse_delta".to_string(),
         detail: e.to_string(),
     })
+}
+
+// Keep each production purpose at a directly testable boundary.
+fn encode_fixed_point(document: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
+    encode_hwpx(document, EncodePurpose::Verification)
+}
+
+fn encode_reference(document: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
+    encode_hwpx(document, EncodePurpose::Verification)
 }
 
 fn stamped_cell_failure(
@@ -812,14 +837,29 @@ pub enum StampOriginV2 {
     },
 }
 
-pub(crate) fn encode_hwpx(doc: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
+#[derive(Clone, Copy)]
+pub(crate) enum EncodePurpose {
+    Admission,
+    Output,
+    Verification,
+}
+
+pub(crate) fn encode_hwpx(
+    doc: &HwpxDocument,
+    purpose: EncodePurpose,
+) -> Result<Vec<u8>, StamperError> {
+    let (validation, encoding) = match purpose {
+        EncodePurpose::Admission => (CodecStage::Admission, CodecStage::Admission),
+        EncodePurpose::Output => (CodecStage::Validation, CodecStage::Encode),
+        EncodePurpose::Verification => (CodecStage::Verification, CodecStage::Verification),
+    };
     let validated = doc
         .document
         .clone()
         .validate()
-        .map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
+        .map_err(|e| StamperError::Codec(CodecFailure::core(validation, &e)))?;
     HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store)
-        .map_err(|e| StamperError::Codec(e.to_string()))
+        .map_err(|e| StamperError::Codec(CodecFailure::hwpx(encoding, &e)))
 }
 
 /// Refuses an input whose decode reported lost content
@@ -1253,8 +1293,10 @@ pub(crate) fn first_diff_path<T: Serialize>(a: &T, b: &T) -> String {
 /// Closed-world ZIP check: every input entry must exist in the re-encoded
 /// package, or stamping would silently drop it.
 pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), StamperError> {
-    let base_entries = zip_entry_names(base)?;
-    let out_entries = zip_entry_names(encoded)?;
+    let base_entries = zip_entry_names(base)
+        .map_err(|e| StamperError::Codec(CodecFailure::core(CodecStage::Decode, &e)))?;
+    let out_entries = zip_entry_names(encoded)
+        .map_err(|e| StamperError::Codec(CodecFailure::core(CodecStage::Verification, &e)))?;
     let missing: Vec<String> =
         base_entries.into_iter().filter(|name| !out_entries.contains(name)).collect();
     if missing.is_empty() {
@@ -1264,9 +1306,8 @@ pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), Stamper
     }
 }
 
-fn zip_entry_names(bytes: &[u8]) -> Result<Vec<String>, StamperError> {
-    let archive = hwpforge_core::zip_package::open_package(bytes, Default::default())
-        .map_err(|e| StamperError::Codec(format!("zip: {e}")))?;
+fn zip_entry_names(bytes: &[u8]) -> hwpforge_core::CoreResult<Vec<String>> {
+    let archive = hwpforge_core::zip_package::open_package(bytes, Default::default())?;
     // Only normal empty directory placeholders are packaging detail. Opaque
     // entries must be accounted for even when their payload is empty.
     Ok(archive
@@ -1398,26 +1439,121 @@ fn build_manifest_v2(
 
 #[cfg(test)]
 mod tests {
-    /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.
-    #[test]
-    fn zip9_fix3_stamp_rejects_parent_part() {
-        use std::io::Write;
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        zip.start_file("Contents/../unused.xml", zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(b"x").unwrap();
-        let bytes = zip.finish().unwrap().into_inner();
-        assert!(matches!(super::zip_entry_names(&bytes), Err(super::StamperError::Codec(detail))
-            if detail.contains("invalid package part name 'Contents/../unused.xml'")));
-    }
-
+    use super::*;
+    use crate::style_store::HwpxStyleStore;
     use hwpforge_core::image::ImageStore;
     use hwpforge_core::page::PageSettings;
     use hwpforge_core::run::Run;
     use hwpforge_core::{Document, Paragraph, Section};
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
-    use super::*;
-    use crate::style_store::HwpxStyleStore;
+    #[test]
+    fn fixed_point_encode_failure_is_verification() {
+        // 이것을 실패시키는 것: F1 fixed-point 호출 목적을 Admission으로 변경.
+        let mut doc = doc_with_text("x");
+        doc.document = Document::new();
+        assert!(matches!(
+            encode_fixed_point(&doc),
+            Err(StamperError::Codec(CodecFailure { stage: CodecStage::Verification, .. }))
+        ));
+    }
+
+    #[test]
+    fn reference_encode_failure_is_verification() {
+        // 이것을 실패시키는 것: F2 reference 호출 목적을 Admission으로 변경.
+        let mut doc = doc_with_text("x");
+        doc.document = Document::new();
+        assert!(matches!(
+            encode_reference(&doc),
+            Err(StamperError::Codec(CodecFailure { stage: CodecStage::Verification, .. }))
+        ));
+    }
+
+    #[test]
+    fn w3_encode_purpose_preserves_stage_leaf_and_detail() {
+        // 이것을 실패시키는 것: H1–H6 목적별 validate/encode stage 여섯 갈래를 각각 다른 stage로 변경.
+        for (purpose, validation, encoding) in [
+            (EncodePurpose::Admission, CodecStage::Admission, CodecStage::Admission),
+            (EncodePurpose::Output, CodecStage::Validation, CodecStage::Encode),
+            (EncodePurpose::Verification, CodecStage::Verification, CodecStage::Verification),
+        ] {
+            let mut doc = doc_with_text("x");
+            doc.document = Document::new();
+            let original = doc.document.clone().validate().unwrap_err();
+            let StamperError::Codec(failure) = encode_hwpx(&doc, purpose).unwrap_err() else {
+                panic!("codec")
+            };
+            assert_eq!(
+                failure,
+                CodecFailure {
+                    stage: validation,
+                    code: crate::HwpxErrorCode::Core,
+                    detail: original.to_string()
+                }
+            );
+
+            let mut doc = doc_with_text("x");
+            doc.style_store.char_shape_mut(CharShapeIndex::new(0)).unwrap().border_fill_id =
+                Some(999);
+            let original = HwpxEncoder::encode(
+                &doc.document.clone().validate().unwrap(),
+                &doc.style_store,
+                &doc.image_store,
+            )
+            .unwrap_err();
+            let StamperError::Codec(failure) = encode_hwpx(&doc, purpose).unwrap_err() else {
+                panic!("codec")
+            };
+            assert_eq!(
+                failure,
+                CodecFailure {
+                    stage: encoding,
+                    code: original.code(),
+                    detail: original.to_string()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn w3_zip_reads_keep_input_and_artifact_stages() {
+        // 이것을 실패시키는 것: Z1/Z2 원본 ZIP Decode 또는 산출물 ZIP Verification을 Admission으로 변경.
+        // 이것을 실패시키는 것: Z3 원래 Core 오류를 HwpxError로 한 번 더 감싸 detail에 접두 추가.
+        let good = encode_hwpx(&doc_with_text("x"), EncodePurpose::Output).unwrap();
+        for (base, output, stage) in [
+            (b"bad".as_slice(), good.as_slice(), CodecStage::Decode),
+            (good.as_slice(), b"bad".as_slice(), CodecStage::Verification),
+        ] {
+            let original =
+                hwpforge_core::zip_package::open_package(b"bad", Default::default()).err().unwrap();
+            let StamperError::Codec(failure) = check_zip_carry(base, output).unwrap_err() else {
+                panic!("codec")
+            };
+            assert_eq!(
+                failure,
+                CodecFailure {
+                    stage,
+                    code: crate::HwpxErrorCode::Core,
+                    detail: original.to_string()
+                }
+            );
+        }
+    }
+
+    /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_stamp_rejects_parent_part() {
+        // 이것을 실패시키는 것: T12 zip_entry_names가 이름 검사 전 빈 목록으로 조기 성공.
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("Contents/../unused.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"x").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        assert!(
+            matches!(super::zip_entry_names(&bytes), Err(hwpforge_core::CoreError::InvalidStructure { reason, .. })
+            if reason.contains("invalid package part name 'Contents/../unused.xml'"))
+        );
+    }
 
     fn doc_with_text(text: &str) -> HwpxDocument {
         let mut doc = Document::new();
@@ -1461,7 +1597,7 @@ mod tests {
     /// trip yet; only the document is under test here).
     fn no_op_round_trip(bytes: &[u8]) -> (HwpxDocument, HwpxDocument) {
         let d0 = HwpxDecoder::decode(bytes).unwrap();
-        let d1 = HwpxDecoder::decode(&encode_hwpx(&d0).unwrap()).unwrap();
+        let d1 = HwpxDecoder::decode(&encode_hwpx(&d0, EncodePurpose::Admission).unwrap()).unwrap();
         let d1 = HwpxDocument {
             source_maps: Vec::new(),
             source_basis: None,
@@ -1710,6 +1846,7 @@ mod tests {
     /// 이것을 실패시키는 것: 고정점 검증에 정확 비교(`delta_compare`)를 쓰는 것.
     #[test]
     fn fixed_point_tolerates_storage_drift() {
+        // 이것을 실패시키는 것: T15 fixed-point 검증을 허용 오차 없는 delta 비교로 변경.
         use hwpforge_core::control::ShapeStyle;
         let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
         let mut rect = Control::rect(unit(2_000_000), unit(10_000)).unwrap();
@@ -1728,8 +1865,10 @@ mod tests {
         doc.document.sections_mut()[0].paragraphs[0]
             .runs
             .push(Run::control(group, hwpforge_foundation::CharShapeIndex::new(0)));
-        let d2 = HwpxDecoder::decode(&encode_hwpx(&doc).unwrap()).unwrap();
-        let d3 = HwpxDecoder::decode(&encode_hwpx(&d2).unwrap()).unwrap();
+        let d2 =
+            HwpxDecoder::decode(&encode_hwpx(&doc, EncodePurpose::Verification).unwrap()).unwrap();
+        let d3 =
+            HwpxDecoder::decode(&encode_hwpx(&d2, EncodePurpose::Verification).unwrap()).unwrap();
         assert!(delta_compare(&d2, &d3).is_err(), "the oracle: not an exact fixed point");
         verify_fixed_point(&d2, &d3).unwrap();
     }

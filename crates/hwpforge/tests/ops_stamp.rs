@@ -237,10 +237,11 @@ fn a_semantic_loss_on_re_encode_produces_no_bytes() {
 
 #[test]
 fn a_non_document_input_is_a_stamp_codec_failure() {
+    // 이것을 실패시키는 것: T3 해당 입력 decode stage를 Encode로 변경.
     let err = stamp(b"not a zip at all", &StampMap::Legacy(Vec::new()), &StampOptions::default())
         .expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::StampCodecFailed, "{err}");
+    assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
 }
 
 #[test]

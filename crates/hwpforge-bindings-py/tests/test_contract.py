@@ -9,7 +9,9 @@ its result is matched against `_hwpforge.pyi`.
 from __future__ import annotations
 
 import base64
+import io
 import json
+import zipfile
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -23,7 +25,7 @@ from _ffi_names import (
     SHAPES,
     TEXT_AND_REPORT,
 )
-from conftest import FONT_UNRESOLVED, INVALID_CACHE, all_paragraphs
+from conftest import FONT_UNRESOLVED, INVALID_CACHE, REPO, all_paragraphs
 
 from hwpforge import HwpForgeError, _hwpforge
 
@@ -220,6 +222,20 @@ def test_the_assets_list_is_tagged_by_kind() -> None:
     assert set(dropped) == {"kind", "occurrence", "reason"}
     assert set(dropped["occurrence"]) == {"paragraph", "run"}
     assert dropped["reason"] == "no_base_dir"
+
+
+def test_an_empty_image_target_is_reported_and_left_out() -> None:
+    """`![x]()` (shared fixture) gives one `IMAGE_EMBED_SKIPPED` and no picture."""
+    markdown = (REPO / "tests" / "fixtures" / "markdown" / "empty-image-target.md").read_text(
+        encoding="utf-8"
+    )
+
+    data, report = _hwpforge.convert_md(markdown)
+
+    assert [w["code"] for w in report["warnings"]] == ["IMAGE_EMBED_SKIPPED"]
+    assert report["assets"] == []
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        assert b"<hp:pic " not in package.read("Contents/section0.xml")
 
 
 def test_an_embedded_asset_names_its_key_and_format(tmp_path) -> None:
@@ -578,3 +594,161 @@ def test_convert_md_rejects_an_unknown_preset() -> None:
         _hwpforge.convert_md("# 제목\n\n본문입니다.\n", preset="no-such-preset")
 
     assert caught.value.code == "PRESET_NOT_FOUND"
+
+
+def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
+    # 이것을 실패시키는 것: OSError 포장/복원 제거, DECODE_FAILED를 INVALID_INPUT으로 치환.
+    # 이것을 실패시키는 것(W4): convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기.
+    # 이것을 실패시키는 것(W3): PY1 set_cell의 실제 bytes를 손상 입력으로 교체.
+    # PY2 unreachable 건너뛰기 제거.
+    import copy
+    import errno
+    import pickle
+    from functools import partial
+    from pathlib import Path
+
+    from hwpforge import Document, HwpForgeFileNotFoundError, HwpForgeIOError, convert_hwp5
+
+    data = Path(__file__).resolve().parents[2] / "hwpforge/tests/data"
+    manifest = json.loads((data / "error_contract_018.json").read_text())
+    calls = {
+        "decode.input": partial(
+            Document(
+                (
+                    Path(__file__).resolve().parents[2] / "hwpforge/tests/data/corrupt-input.hwpx"
+                ).read_bytes()
+            ).read,
+            section=0,
+        ),
+        "io.missing": partial(Document.open, tmp_path / "missing.hwpx"),
+        "io.read": partial(Document.open, tmp_path / "unreadable.hwpx"),
+        "io.write": partial(Document(b"x").save, tmp_path / "unwritable.hwpx"),
+        "read.section": partial(Document(table_bytes).read, section=999),
+        "read.table": partial(Document(table_bytes).read, table=999),
+        "read.field": partial(Document(table_bytes).read, field="missing"),
+        "patch.input_decode": partial(
+            Document((data / "patch-inner-decode.hwpx").read_bytes()).patch,
+            section=0,
+            patch=(data / "patch-inner-decode.section.json").read_text(encoding="utf-8"),
+        ),
+        "patch.missing_metadata_first": partial(
+            Document((data / "patch-inner-decode.hwpx").read_bytes()).patch,
+            section=0,
+            patch=(data / "patch-no-metadata.section.json").read_text(encoding="utf-8"),
+        ),
+        "fill.input_decode": partial(
+            Document((data / "corrupt-input.hwpx").read_bytes()).fill, {"a": "b"}
+        ),
+        # W4: a decoder Core error (broken table borderFill reference) is a decode failure.
+        "hwp5.decode_core": partial(
+            convert_hwp5, (data / "hwp5-dangling-table-border-fill.hwp").read_bytes()
+        ),
+        # `to_pdf` detects the container by content, so HWP5 bytes take the HWP5 leg.
+        "hwp5.to_pdf.decode_core": Document(
+            (data / "hwp5-dangling-table-border-fill.hwp").read_bytes()
+        ).to_pdf,
+    }
+    for fixture, suffix in [
+        ("corrupt-input.hwpx", "input_decode"),
+        ("edit-empty-section.hwpx", "admission"),
+    ]:
+        doc = Document((data / fixture).read_bytes())
+        calls.update(
+            {
+                f"cell.{suffix}": partial(doc.set_cell, table=0, at="0,0", text="text"),
+                f"structural.{suffix}": partial(doc.insert_para, section=0, anchor=0, text="text"),
+                f"structural_delete.{suffix}": partial(doc.delete_para, section=0, indexes=[0]),
+                f"stamp.{suffix}": partial(doc.stamp, []),
+            }
+        )
+    # 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+    calls["stamp.v2_admission"] = partial(
+        Document((data / "edit-empty-section.hwpx").read_bytes()).stamp,
+        json.loads((data / "stamp-v2-admission.json").read_text()),
+    )
+    calls["stamp_plan.input_decode"] = Document(
+        (data / "corrupt-input.hwpx").read_bytes()
+    ).stamp_plan
+    for name in ["depth-table-42", "depth-table-33", "depth-group-32", "depth-xml-broken"]:
+        calls[f"cell.{name}"] = partial(
+            Document((data / f"{name}.hwpx").read_bytes()).set_cell, table=0, at="0,0", text="text"
+        )
+    # 이것을 실패시키는 것: read.section 소비 누락, 미검토 unreachable ID 또는 빈 이유.
+    expected_ids = {case["id"] for case in manifest["cases"] if "python" in case["surfaces"]}
+    consumed = set()
+    for case in manifest["cases"]:
+        if "python" not in case["surfaces"]:
+            continue
+        if case["surfaces"]["python"]["mode"] == "unreachable":
+            assert case["id"] == "cell.draft_depth"
+            assert case["surfaces"]["python"]["reason"]
+            consumed.add(case["id"])
+            continue
+        operation = case["surfaces"]["python"]["operation"]
+        source = OSError(errno.EACCES, "denied", "first", None, "second")
+        source.winerror = 5  # ty: ignore[unresolved-attribute]  # Synthetic Windows field.
+        with monkeypatch.context() as patch:
+            if operation in ("io.read", "io.write"):
+
+                def fail(*args, error=source, **kwargs):
+                    raise error
+
+                patch.setattr("builtins.open", fail)
+            with pytest.raises(HwpForgeError) as caught:
+                calls[operation]()
+        error = caught.value
+        assert error.code == case["expected_code"]
+        consumed.add(case["id"])
+        if operation.startswith("cell.depth-"):
+            # 이것을 실패시키는 것: F7 깊이 fixture의 decode 오류에 bug 힌트 추가.
+            assert "Report this as a bug." not in (error.hint or "")
+        if operation.startswith("io."):
+            assert isinstance(error, HwpForgeIOError)
+            assert isinstance(error, OSError)
+            if operation == "io.missing":
+                assert isinstance(error, HwpForgeFileNotFoundError)
+                assert isinstance(error, FileNotFoundError)
+                source = error.__cause__
+            assert error.__cause__ is source
+            assert isinstance(source, OSError)
+            for name in ("errno", "strerror", "filename", "filename2", "winerror"):
+                assert getattr(error, name, None) == getattr(source, name, None)
+            constructed = type(error)(
+                case["expected_code"], "detail", "hint", {"stage": "io"}, {"x": 1}, source
+            )
+            for original in [error, constructed]:
+                for restored in [
+                    copy.copy(original),
+                    copy.deepcopy(original),
+                    pickle.loads(pickle.dumps(original)),
+                ]:
+                    assert type(restored) is type(original)
+                    for name in (
+                        "code",
+                        "message",
+                        "hint",
+                        "cause",
+                        "details",
+                        "errno",
+                        "strerror",
+                        "filename",
+                        "filename2",
+                        "winerror",
+                    ):
+                        assert getattr(restored, name, None) == getattr(original, name, None)
+
+    assert consumed == expected_ids, f"unconsumed Python case IDs: {expected_ids - consumed}"
+
+
+def test_io_repr_preserves_subclass_and_os_fields():
+    # 이것을 실패시키는 것: repr 클래스 이름 고정 또는 OS 필드 분기 제거.
+    from hwpforge import HwpForgeFileNotFoundError, HwpForgeIOError
+
+    source = OSError(13, "denied", "first", None, "second")
+    source.winerror = 5  # ty: ignore[unresolved-attribute]
+    for cls in (HwpForgeIOError, HwpForgeFileNotFoundError):
+        error = cls("FILE_READ_FAILED", "failed", os_error=source)
+        rendered = repr(error)
+        assert rendered.startswith(f"{cls.__name__}(")
+        for name in ("errno", "strerror", "filename", "filename2", "winerror"):
+            assert f"{name}={getattr(source, name)!r}" in rendered

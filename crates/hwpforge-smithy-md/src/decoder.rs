@@ -12,9 +12,10 @@ use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, StyleIndex};
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use unicase::UniCase;
 
+use crate::encoder::MdWarning;
 use crate::error::{MdError, MdResult};
 use crate::frontmatter::{apply_to_metadata, extract_frontmatter};
 use crate::mapper::{image_format_from_path, resolve_mapping, MdMapping, MdStyleRef};
@@ -68,11 +69,17 @@ fn encode_pending_link_url(url: &str) -> String {
 /// let store = bridge.style_store();
 /// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct MdDocument {
     /// The decoded Core document.
     pub document: Document,
     /// The style registry resolved from the template.
     pub style_registry: StyleRegistry,
+    /// What the Markdown asked for that the document does not hold: an image
+    /// with an empty target (`![x]()`) names no file, so it is left out and
+    /// reported as [`MdWarning::ImageEmbedSkipped`] with an empty `src`, the
+    /// same warning an image that could not be read gives.
+    pub warnings: Vec<MdWarning>,
 }
 
 /// Markdown decoder.
@@ -96,6 +103,7 @@ impl MdDecoder {
         let mut state = DecoderState::new(&mapping, &mut style_registry);
         state.decode_markdown(extracted.content)?;
         let decoded = state.finish()?;
+        let warnings = decoded.warnings;
 
         let mut sections = split_sections(decoded.paragraphs, &decoded.section_breaks);
         if sections.is_empty() {
@@ -110,7 +118,7 @@ impl MdDecoder {
                 .add_section(Section::with_paragraphs(section_paragraphs, mapping.page_settings));
         }
 
-        Ok(MdDocument { document, style_registry })
+        Ok(MdDocument { document, style_registry, warnings })
     }
 
     /// Decodes lossless markdown output back into a Core draft document.
@@ -478,12 +486,14 @@ struct DecoderState<'a> {
     pending_link: Option<PendingLink>,
     pending_image: Option<PendingImage>,
     section_breaks: Vec<usize>,
+    warnings: Vec<MdWarning>,
 }
 
 #[derive(Debug)]
 struct DecodeOutput {
     paragraphs: Vec<Paragraph>,
     section_breaks: Vec<usize>,
+    warnings: Vec<MdWarning>,
 }
 
 impl<'a> DecoderState<'a> {
@@ -522,19 +532,12 @@ impl<'a> DecoderState<'a> {
             pending_link: None,
             pending_image: None,
             section_breaks: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
     fn decode_markdown(&mut self, content: &str) -> MdResult<()> {
-        let mut options = Options::empty();
-        options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_STRIKETHROUGH);
-        options.insert(Options::ENABLE_TASKLISTS);
-        options.insert(Options::ENABLE_FOOTNOTES);
-        options.insert(Options::ENABLE_DEFINITION_LIST);
-        options.insert(Options::ENABLE_GFM);
-
-        let parser = Parser::new_ext(content, options);
+        let parser = Parser::new_ext(content, crate::encoder::md_options());
         for event in parser {
             self.handle_event(event)?;
         }
@@ -553,7 +556,11 @@ impl<'a> DecoderState<'a> {
             self.paragraphs.push(ParagraphBuilder::new(self.mapping.body).build());
         }
         self.resolve_notes()?;
-        Ok(DecodeOutput { paragraphs: self.paragraphs, section_breaks: self.section_breaks })
+        Ok(DecodeOutput {
+            paragraphs: self.paragraphs,
+            section_breaks: self.section_breaks,
+            warnings: self.warnings,
+        })
     }
 
     /// A안 resolve — 빈 각주/미주 컨트롤을 참조 순서대로 정의 본문으로 채운다.
@@ -1011,6 +1018,20 @@ impl<'a> DecoderState<'a> {
 
     fn end_image_tag(&mut self) -> MdResult<()> {
         if let Some(image) = self.pending_image.take() {
+            // `![x]()` names no file: report it as an image that could not be
+            // read and leave it out. Only here is an empty path known to be
+            // Markdown's own; a Hancom assetless frame (`binaryItemIDRef=""`)
+            // reaches Core with the same empty path through the HWPX and
+            // lossless readers and is kept everywhere, the asset stage too.
+            // 이것을 실패시키는 것: 이 갈래 삭제(빈 틀이 경고 없이 남는다) 또는
+            // 경고만 남기고 그림 넣기(`empty_image_target_is_left_out_and_reported`).
+            if image.dest_url.is_empty() {
+                self.warnings.push(MdWarning::ImageEmbedSkipped {
+                    src: String::new(),
+                    reason: crate::embed::ImageEmbedSkipReason::Unreadable,
+                });
+                return Ok(());
+            }
             let format = image_format_from_path(&image.dest_url);
             let image = Image::new(
                 image.dest_url,
@@ -1893,6 +1914,42 @@ mod tests {
         assert_eq!(restored.width.as_i32(), 59_529);
         assert_eq!(restored.height.as_i32(), 84_190);
         assert_eq!(restored.margin_left.as_i32(), 5_671);
+    }
+
+    /// `![x]()` alone or inside text: no picture, one "could not be read"
+    /// warning, and the document still validates. A named target is kept
+    /// and warns nothing here.
+    /// 이것을 실패시키는 것: `end_image_tag` 의 빈 대상 갈래 삭제, 또는 경고를
+    /// 남기고 그림도 넣기.
+    #[test]
+    fn empty_image_target_is_left_out_and_reported() {
+        let pictures = |doc: &Document| {
+            let mut n = 0;
+            doc.for_each_paragraph(|p| {
+                n += p.runs.iter().filter(|r| matches!(r.content, RunContent::Image(_))).count();
+            });
+            n
+        };
+        for markdown in ["![로고]()\n\n본문\n", "앞 ![로고]() 뒤\n"] {
+            let decoded = MdDecoder::decode_with_default(markdown).unwrap();
+            assert_eq!(pictures(&decoded.document), 0, "{markdown:?}");
+            assert_eq!(
+                decoded.warnings,
+                [MdWarning::ImageEmbedSkipped {
+                    src: String::new(),
+                    reason: crate::embed::ImageEmbedSkipReason::Unreadable,
+                }],
+                "{markdown:?}"
+            );
+            assert_eq!(
+                decoded.warnings[0].to_string(),
+                "image \"\" not embedded (file unreadable) — image dropped"
+            );
+            decoded.document.validate().unwrap();
+        }
+        let named = MdDecoder::decode_with_default("![로고](a.png)\n").unwrap();
+        assert_eq!(pictures(&named.document), 1);
+        assert!(named.warnings.is_empty());
     }
 
     #[test]

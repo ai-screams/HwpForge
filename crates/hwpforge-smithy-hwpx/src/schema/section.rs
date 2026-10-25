@@ -34,6 +34,17 @@ pub struct HxSection {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub paragraphs: Vec<HxParagraph>,
+    /// Whether text or an element other than `<hp:p>` sits directly inside
+    /// `<hs:sec>`. The reader drops it; the flag only records that something
+    /// was dropped (the `HxSubList::has_stray_content` pattern).
+    /// Deserialization only.
+    #[serde(
+        rename = "$value",
+        default,
+        skip_serializing,
+        deserialize_with = "stray_paragraph_content"
+    )]
+    pub has_stray_content: bool,
 }
 
 fn default_table_page_break() -> String {
@@ -319,11 +330,14 @@ pub enum HxRunChildKind {
     TextArt,
     /// 미지 요소 (자리 보존용 — 종류별 Vec 에는 미수록).
     Other,
-    /// `<hp:ole>` — 디코더가 담지 않는 OLE 개체. 본문에서는 [`Self::Other`]
-    /// 와 똑같이 다루고, 바탕쪽에서만 손실 종류 이름(`ole`)이 다르다.
+    /// `<hp:ole>` — 디코더가 담지 않는 OLE 개체. 묶음 안에서는 [`Self::Other`]
+    /// 와 똑같이 보고하고(`group_nested_unknown`), 그 밖에서는 손실 종류
+    /// 이름 `ole` 로 보고한다.
     Ole,
     /// run 직속 stray `$text` — 스키마상 위치가 없어 내용은 드롭하지만
     /// **존재·위치는 기록**한다 (W1b: 캐시 fail-closed 신호, v4 R3#7).
+    /// 디코더는 이것을 `run_text` 손실로 보고한다(serde 가 XML 공백만 든
+    /// 조각은 넘기지 않는다).
     StrayText,
 }
 
@@ -942,6 +956,7 @@ impl HxText {
     }
 
     /// Returns the combined text content, with `\n` for line breaks.
+    /// Character-reference CR is replaced one-for-one, preserving wire coordinates.
     ///
     /// Inline markup elements that Core carries through `RunContent::Text`
     /// are projected onto sentinel code-points so the round-trip through
@@ -952,7 +967,8 @@ impl HxText {
     /// - `<hp:nbSpace/>` → `U+00A0`
     /// - `<hp:fwSpace/>` → `U+001F` (mirrors the HWP5 wire control byte)
     pub fn text(&self) -> String {
-        self.parts
+        let text: String = self
+            .parts
             .iter()
             .map(|p| match p {
                 HxTextPart::Text(s) => s.as_str(),
@@ -964,7 +980,17 @@ impl HxText {
                 HxTextPart::TitleMark { .. } => "",
                 HxTextPart::Other => "",
             })
-            .collect()
+            .collect();
+        match crate::wire_xml::body_text_line_breaks(&text, false) {
+            std::borrow::Cow::Borrowed(_) => text,
+            std::borrow::Cow::Owned(text) => text,
+        }
+    }
+
+    /// Whether an element the reader does not know sits inside `<hp:t>`
+    /// ([`HxTextPart::Other`]): it is dropped with any text it holds.
+    pub(crate) fn has_unknown_part(&self) -> bool {
+        self.parts.iter().any(|part| matches!(part, HxTextPart::Other))
     }
 
     /// Returns a `RunContent` that preserves inline tab attributes
@@ -1006,7 +1032,9 @@ impl HxText {
         let segments = self.parts.iter().filter_map(|p| match p {
             HxTextPart::Text(s) if s.as_str().is_empty() => None,
             HxTextPart::TitleMark { .. } => None,
-            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.as_str().to_string())),
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(
+                crate::wire_xml::body_text_line_breaks(s.as_str(), false).into_owned(),
+            )),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
                     width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),
@@ -1424,6 +1452,17 @@ pub struct HxCtrl {
         skip_serializing_if = "Option::is_none"
     )]
     pub page_hiding: Option<HxPageHiding>,
+    /// Whether text or an element the fields above do not name sits inside
+    /// `<hp:ctrl>`. The reader drops it; the flag only records that something
+    /// was dropped (the `HxParagraph::has_stray_content` pattern).
+    /// Deserialization only.
+    #[serde(
+        rename = "$value",
+        default,
+        skip_serializing,
+        deserialize_with = "stray_paragraph_content"
+    )]
+    pub has_stray_content: bool,
 }
 
 /// `<hp:pageHiding hideHeader="0" … hidePageNum="1"/>` — 감추기 (표 177).
@@ -2304,6 +2343,16 @@ pub struct HxSubList {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub paragraphs: Vec<HxParagraph>,
+    /// Whether text or an element other than `<hp:p>` sits inside
+    /// `<hp:subList>`. The reader drops it; the flag only records that
+    /// something was dropped. Deserialization only.
+    #[serde(
+        rename = "$value",
+        default,
+        skip_serializing,
+        deserialize_with = "stray_paragraph_content"
+    )]
+    pub has_stray_content: bool,
 }
 
 // ── Picture / Image ───────────────────────────────────────────────

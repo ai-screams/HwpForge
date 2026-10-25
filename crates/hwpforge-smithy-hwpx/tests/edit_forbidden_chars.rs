@@ -825,3 +825,51 @@ fn stamp_v2_removes_a_control_from_a_text_hint() {
     assert_eq!(field_hint(&diagnosed.value.bytes, "ok").as_deref(), Some("HI"));
     assert_eq!(diagnosed.encode_warnings, vec![removed("field 'ok' hint", 1)]);
 }
+
+// 이것을 실패시키는 것: skip_fwspace, patch_skip_sanitizer,
+// insert 제거 경고 누락, insert 제거 개수 부풀리기.
+#[test]
+fn f4_edit_surfaces_share_independent_fold_and_removal_expectations() {
+    for (input, want, wire, count) in [
+        ("a\r\x01\nb", "a\nb", "a<hp:lineBreak/>b", 1),
+        ("a\r\x01\x02\nb", "a\nb", "a<hp:lineBreak/>b", 2),
+        ("a\r\x01b", "a\nb", "a<hp:lineBreak/>b", 1),
+        ("a\r\u{1F}\nb", "a\n\u{1F}\nb", "a<hp:lineBreak/><hp:fwSpace/><hp:lineBreak/>b", 0),
+    ] {
+        let patch = patch_para2(&clean(), input);
+        let fill = fill(&clean(), "f1", input).unwrap();
+        let cell = set_cell(input);
+        let stamp = stamp_cell(input).unwrap();
+        assert_eq!(texts(&patch.value.bytes)[2], want);
+        assert_eq!(texts(&fill.value.bytes)[1], format!("[{want}]"));
+        assert_eq!(cell00(&cell.value.bytes), want);
+        for (bytes, warnings, location) in [
+            (&patch.value.bytes, &patch.encode_warnings, PARA2_SLOT),
+            (&fill.value.bytes, &fill.encode_warnings, F1),
+            (&cell.value.bytes, &cell.encode_warnings, CELL00),
+            (&stamp.value.bytes, &stamp.encode_warnings, "field 'f' hint"),
+        ] {
+            assert!(section_xml(bytes).contains(wire), "{location}: {input:?}");
+            let removed: usize = warnings
+                .iter()
+                .filter_map(|w| match w {
+                    EncodeWarning::XmlForbiddenCharsRemoved { location: at, count, .. }
+                        if at == location =>
+                    {
+                        Some(count)
+                    }
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(removed, count, "{location}: {input:?}");
+        }
+    }
+    // insert-para keeps its published CR/LF rejection; compare a CR-free input instead.
+    let input = "a\x01b";
+    let inserted = insert(input).unwrap();
+    let patched = patch_para2(&clean(), input);
+    assert_eq!(texts(&inserted.value)[3], "ab");
+    assert_eq!(texts(&patched.value.bytes)[2], "ab");
+    assert_eq!(inserted.encode_warnings, vec![removed(NEW_PARA, 1)]);
+    assert_eq!(patched.encode_warnings, vec![removed(PARA2_SLOT, 1)]);
+}

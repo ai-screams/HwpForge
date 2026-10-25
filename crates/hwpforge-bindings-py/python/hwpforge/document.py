@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from . import _hwpforge
-from .errors import HwpForgeError
+from .errors import HwpForgeError, HwpForgeFileNotFoundError, HwpForgeIOError
 from .results import BytesResult, DocumentResult, TextResult
 
 if TYPE_CHECKING:
@@ -113,16 +113,23 @@ class Document:
             asks for it.
 
         Raises:
-            OSError: If the file cannot be read.
+            HwpForgeIOError: If the file cannot be read (also an ``OSError``).
             HwpForgeError: If the file exceeds the shared size limit
                 (``INPUT_TOO_LARGE``).
         """
         max_size = _hwpforge.MAX_FILE_SIZE
-        with open(path, "rb") as handle:
-            data = handle.read(max_size + 1)
+        try:
+            with open(path, "rb") as handle:
+                data = handle.read(max_size + 1)
+        except FileNotFoundError as exc:
+            raise HwpForgeFileNotFoundError(
+                _hwpforge.FILE_NOT_FOUND, str(exc), os_error=exc
+            ) from exc
+        except OSError as exc:
+            raise HwpForgeIOError(_hwpforge.FILE_READ_FAILED, str(exc), os_error=exc) from exc
         if len(data) > max_size:
             raise HwpForgeError(
-                "INPUT_TOO_LARGE",
+                _hwpforge.INPUT_TOO_LARGE,
                 f"File '{os.fspath(path)}' exceeds {max_size // (1024 * 1024)} MB limit",
                 "Use a smaller file or split the document into sections.",
             )
@@ -163,10 +170,13 @@ class Document:
             path: The file to write. An existing file is replaced.
 
         Raises:
-            OSError: If the file cannot be written.
+            HwpForgeIOError: If the file cannot be written (also an ``OSError``).
         """
-        with open(path, "wb") as handle:
-            handle.write(self._data)
+        try:
+            with open(path, "wb") as handle:
+                handle.write(self._data)
+        except OSError as exc:
+            raise HwpForgeIOError(_hwpforge.FILE_WRITE_FAILED, str(exc), os_error=exc) from exc
 
     # ── value semantics ─────────────────────────────────────────
 
@@ -236,6 +246,9 @@ class Document:
 
         A document that fails validation reports ``ok: False`` rather than
         raising; only a document that cannot be decoded at all is an error.
+        A document whose nesting exceeds the depth limit (32) cannot be
+        decoded, so it raises ``HwpForgeError`` (code ``DECODE_FAILED``)
+        instead of returning ``ok: False``.
 
         Returns:
             Whether the document is valid, its section and paragraph counts,

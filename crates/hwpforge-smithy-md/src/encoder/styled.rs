@@ -32,8 +32,7 @@ pub struct MdOutput {
     pub markdown: String,
     /// Extracted images: relative path → binary data.
     pub images: HashMap<String, Vec<u8>>,
-    /// What the rendering left out or wrote differently — a container
-    /// nested too deep ([`super::MdWarning::ContainerTooDeep`]), an equation
+    /// What the rendering left out or wrote differently — an equation
     /// written as its script text ([`super::MdWarning::EquationAsText`]);
     /// empty for most documents.
     pub warnings: Vec<super::MdWarning>,
@@ -104,6 +103,7 @@ impl FootnoteCollector {
                     texts: vec![note.raw],
                     at: vec![note.at],
                 }),
+                body: false,
             })
             .collect()
     }
@@ -143,37 +143,51 @@ fn render_definition(label: &str, paragraphs: &[Md]) -> String {
 ///
 /// A body line beginning with `- ` / `* ` / `+ ` / `1. ` / `#` / `>` would
 /// re-parse as a structural block inside the definition, which this decoder
-/// rejects — the emitter must keep such text literal.
+/// rejects — the emitter must keep such text literal. A tab after a marker
+/// opens a list too: there the `\` goes before the punctuation (`1\.\t`,
+/// a `\` before a digit would be a character) and only 1–9 digits are a
+/// marker. With a space the output is the base's (`\1. `, notes are
+/// outside the guarantee: `markup_safety_base.txt`).
+/// 이것을 실패시키는 것: 탭 무시 · 탭 뒤 숫자 앞에 `\` · 10자리 숫자를 목록으로
+/// (`tab_after_a_marker_makes_no_block`).
 fn escape_footnote_paragraph(paragraph: &str) -> String {
     paragraph
         .split('\n')
         .map(|line| {
             let trimmed = line.trim_start();
-            let needs_escape = trimmed.starts_with("- ")
-                || trimmed.starts_with("* ")
-                || trimmed.starts_with("+ ")
+            let at = if matches!(trimmed.as_bytes(), [b'-' | b'*' | b'+', b' ' | b'\t', ..])
                 || trimmed.starts_with('#')
                 || trimmed.starts_with('>')
-                || is_ordered_marker(trimmed);
-            if needs_escape {
-                let indent_len = line.len() - trimmed.len();
-                format!("{}\\{}", &line[..indent_len], trimmed)
+            {
+                Some(0)
             } else {
-                line.to_string()
+                ordered_marker_escape(trimmed)
+            };
+            match at {
+                Some(at) => {
+                    let at = line.len() - trimmed.len() + at;
+                    format!("{}\\{}", &line[..at], &line[at..])
+                }
+                None => line.to_string(),
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// `1. ` / `23) ` 형태의 순서 목록 마커 판정.
-fn is_ordered_marker(s: &str) -> bool {
+/// Where the `\` goes in a line starting `1. ` / `23) ` (or ending there):
+/// before it, as the base wrote; with a tab after the marker, before the
+/// punctuation of a 1–9 digit marker.
+fn ordered_marker_escape(s: &str) -> Option<usize> {
     let digits = s.bytes().take_while(|b| b.is_ascii_digit()).count();
-    if digits == 0 {
-        return false;
+    if digits == 0 || !matches!(s.as_bytes().get(digits), Some(b'.' | b')')) {
+        return None;
     }
-    matches!(s.as_bytes().get(digits), Some(b'.') | Some(b')'))
-        && matches!(s.as_bytes().get(digits + 1), Some(b' ') | None)
+    match s.as_bytes().get(digits + 1) {
+        Some(b' ') | None => Some(0),
+        Some(b'\t') if digits <= 9 => Some(digits),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +195,8 @@ fn is_ordered_marker(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Where a piece of content is being drawn. Every recursion passes it on;
-/// the places that change it are a note body (`note_depth + 1`) and a memo
-/// body (`in_comment`). Markdown or HTML is not part of it: each has its own
+/// the places that change it are a note body (`note_depth + 1`), a memo
+/// body (`in_comment`) and the guarantee (`guarded`). Markdown or HTML is not part of it: each has its own
 /// renderer and output type ([`Md`], [`Html`]).
 /// Text boxes, shapes and groups pass it on unchanged.
 #[derive(Debug, Clone, Copy, Default)]
@@ -198,11 +212,40 @@ struct Ctx {
     /// group or a picture is not one (groups are spread by an iterator), so
     /// this differs from the semantic depth checked by Core validation.
     depth: usize,
+    /// Document text drawn here must make no block structure: a top-level
+    /// Body paragraph that is not a continuation, and the table of a
+    /// top-level one-table paragraph that is not one. Its text goes through
+    /// [`Md::guarded_text`] and a table it draws ends its block
+    /// ([`Md::ending_block`]). Set in [`encode_paragraph_styled`] only; a
+    /// memo, a note body and a one-table or one-picture paragraph's caption
+    /// turn it off; everything else passes it on. Outside it, output is as
+    /// before.
+    guarded: bool,
+    /// Drawing a GFM table cell: inline content, so the
+    /// emphasis check reads it in a cell ([`emphasis_kept`]) and a comment
+    /// opens no HTML block.
+    cell: bool,
+}
+
+/// Document text in Markdown as the context needs it: [`Md::guarded_text`]
+/// where text is guarded, [`Md::text`] elsewhere. Every place the styled
+/// view writes document text that can start a line goes through it (link
+/// labels and picture alt text cannot: they follow `[` and hold no line
+/// ending).
+/// 이것을 실패시키는 것: `guarded` 무시(`guarded_text_reaches_every_carrier`).
+fn text(raw: &str, ctx: Ctx) -> Md {
+    if ctx.guarded {
+        Md::guarded_text(raw)
+    } else {
+        Md::text(raw)
+    }
 }
 
 impl Ctx {
     /// The context one container deeper, or `None` past the limit.
-    /// Validated inputs cannot exceed this defensive rendering budget.
+    /// Validated inputs cannot exceed this defensive rendering budget: Core
+    /// validation admits 32 levels and counts each container drawn here as at
+    /// least one. So the callers write [`TOO_DEEP`] there without a warning.
     fn enter(self) -> Option<Self> {
         super::guard::enter_depth(self.depth).map(|depth| Self { depth, ..self })
     }
@@ -218,9 +261,33 @@ struct State {
     warnings: Vec<super::MdWarning>,
     /// The section and top-level paragraph being drawn.
     at: (usize, usize),
+    /// The paragraphs already reported as written as plain text
+    /// ([`super::guard::written_as_text`]).
+    warned: std::collections::HashSet<(usize, usize)>,
+    /// The reference registered for each note occurrence of the document
+    /// (its address, [`State::note_at`]), which a fallback keeps
+    /// ([`fallback`]).
+    note_marks: HashMap<usize, Md>,
+    /// A copy's note occurrences and the document's they stand for
+    /// ([`alias_copy`]).
+    note_alias: HashMap<usize, usize>,
+    /// The copies drawn ([`expanded`]), kept so their addresses stay theirs.
+    copies: Vec<std::rc::Rc<Paragraph>>,
 }
 
 impl State {
+    /// Keeps a copy drawn from until the document is drawn.
+    fn keep(&mut self, copy: Paragraph) -> std::rc::Rc<Paragraph> {
+        let copy = std::rc::Rc::new(copy);
+        self.copies.push(copy.clone());
+        copy
+    }
+
+    /// The note occurrence `at` stands for ([`alias_copy`]).
+    fn note_at(&self, at: usize) -> usize {
+        self.note_alias.get(&at).copied().unwrap_or(at)
+    }
+
     fn new() -> Self {
         Self {
             destinations: Default::default(),
@@ -228,20 +295,11 @@ impl State {
             assets: Assets::default(),
             warnings: Vec::new(),
             at: (0, 0),
+            warned: Default::default(),
+            note_marks: HashMap::new(),
+            note_alias: HashMap::new(),
+            copies: Vec::new(),
         }
-    }
-
-    /// The notice written for a `container` past the depth limit, recorded
-    /// as a warning at the current place.
-    /// Retained for the public warning contract; validated inputs stay within the limit.
-    fn too_deep(&mut self, container: &'static str) -> &'static str {
-        self.warnings.push(super::MdWarning::ContainerTooDeep {
-            container,
-            limit: crate::lossless_grammar::MAX_NESTING_DEPTH,
-            section: self.at.0,
-            paragraph: self.at.1,
-        });
-        TOO_DEEP
     }
 }
 
@@ -254,6 +312,31 @@ struct Assets {
     images: HashMap<String, Vec<u8>>,
     /// Keys used by links whose picture has no bytes: no file may take them.
     link_only: std::collections::HashSet<String>,
+    /// The key each registered source picture got: the same source always
+    /// gets the same one, and a fallback writes it ([`Kept`]).
+    drawn: HashMap<String, String>,
+    /// Per candidate key, its keys already found taken ([`Taken`]).
+    taken: HashMap<String, Taken>,
+}
+
+/// The first `len` keys of a candidate (`a.png`, `a-2.png` …), all taken —
+/// a taken key stays taken, with the same bytes — with where each content
+/// first sits among them and the first taken only by a link without bytes,
+/// so a picture never walks them again (one walk per key in all).
+/// 이것을 실패시키는 것: 매번 처음부터 걷기 · 같은 바이트·바이트 없는 키 조회 삭제
+/// (`colliding_pictures_take_linear_time`, `asset_keys_match_the_full_walk`).
+#[derive(Default)]
+struct Taken {
+    len: u32,
+    bytes: HashMap<u64, Vec<u32>>,
+    link_only: Option<u32>,
+}
+
+fn bytes_hash(data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    h.finish()
 }
 
 impl Assets {
@@ -274,19 +357,8 @@ impl Assets {
             return candidate;
         }
         let data = styles.image_data(path);
-        let mut key = candidate.clone();
-        let mut n = 1;
-        loop {
-            match (self.images.get(&key), data) {
-                (Some(existing), Some(d)) if existing.as_slice() == d => break,
-                (None, Some(_)) if !self.link_only.contains(&key) => break,
-                (None, None) => break,
-                _ => {
-                    n += 1;
-                    key = suffixed_key(&candidate, n);
-                }
-            }
-        }
+        let key = self.free_key(&candidate, data);
+        self.drawn.insert(path.to_string(), key.clone());
         match data {
             Some(d) => {
                 self.images.entry(key.clone()).or_insert_with(|| d.to_vec());
@@ -296,6 +368,45 @@ impl Assets {
             }
         }
         key
+    }
+
+    /// The first of `candidate`'s keys a picture with `data` may use: one
+    /// holding the same bytes, or a free one (not taken by a link without
+    /// bytes); without bytes, the first key no file holds. The keys already
+    /// found taken are looked up ([`Taken`]), the rest walked once.
+    fn free_key(&mut self, candidate: &str, data: Option<&[u8]>) -> String {
+        let at = |n: u32| if n == 1 { candidate.to_string() } else { suffixed_key(candidate, n) };
+        let taken = self.taken.entry(candidate.to_string()).or_default();
+        let hash = data.map(bytes_hash);
+        let reused = match (data, hash) {
+            (Some(d), Some(h)) => taken.bytes.get(&h).and_then(|ns| {
+                ns.iter().copied().find(|&n| self.images.get(&at(n)).is_some_and(|e| e == d))
+            }),
+            _ => taken.link_only,
+        };
+        if let Some(n) = reused {
+            return at(n);
+        }
+        let mut n = taken.len + 1;
+        loop {
+            let key = at(n);
+            match (self.images.get(&key), data) {
+                (Some(existing), Some(d)) if existing.as_slice() == d => return key,
+                (None, Some(_)) if !self.link_only.contains(&key) => return key,
+                (None, None) => return key,
+                (existing, _) => {
+                    // Taken, right after the keys already found taken.
+                    taken.len = n;
+                    match existing {
+                        Some(e) => taken.bytes.entry(bytes_hash(e)).or_default().push(n),
+                        None => {
+                            taken.link_only.get_or_insert(n);
+                        }
+                    }
+                    n += 1;
+                }
+            }
+        }
     }
 }
 
@@ -386,7 +497,11 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
-            blocks.push(Block { markdown: SECTION_MARKER_COMMENT.to_string(), source: None });
+            blocks.push(Block {
+                markdown: SECTION_MARKER_COMMENT.to_string(),
+                source: None,
+                body: false,
+            });
         }
 
         // A code block's lines and their paragraphs.
@@ -397,7 +512,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 let at = code.iter().map(|(_, at)| *at).collect();
                 blocks.push(Block {
                     markdown: Md::code_block(&lines.join("\n")).into_string(),
-                    source: source(lines, at),
+                    source: source(lines.iter().map(|l| super::guard::plain_text(l)).collect(), at),
+                    body: false,
                 });
                 code.clear();
             }
@@ -409,7 +525,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             // Page break
             if paragraph.page_break {
                 flush_code(&mut code, &mut blocks);
-                blocks.push(Block { markdown: "---".to_string(), source: None });
+                blocks.push(Block { markdown: "---".to_string(), source: None, body: false });
                 continuation = None;
             }
 
@@ -432,26 +548,21 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
             let continuation_level = continuation
                 .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
-            let markdown = encode_paragraph_styled(paragraph, styles, &mut st);
+            let (markdown, body) =
+                encode_paragraph_styled(paragraph, styles, &mut st, continuation_level.is_some());
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph, 0);
-                match (continuation_level, blocks.last_mut()) {
-                    (Some(level), Some(last)) => {
-                        last.markdown.push_str("\n\n");
-                        last.markdown.push_str(&format_list_continuation(&markdown, level));
-                        if let Some(src) = &mut last.source {
-                            src.texts.push(text);
-                            src.at.push(st.at);
-                        }
-                    }
-                    (level, _) => {
-                        let markdown = match level {
-                            Some(level) => format_list_continuation(&markdown, level),
-                            None => markdown,
-                        };
-                        blocks.push(Block { markdown, source: source(vec![text], vec![st.at]) });
-                    }
-                }
+                let text =
+                    fallback(std::slice::from_ref(paragraph), 0, &mut st).remove(0).into_string();
+                // A continuation is its own block (`join` writes the same
+                // blank line before it as appending did), so it can fall
+                // back alone and a Body block's check never sees it.
+                // 이것을 실패시키는 것: 직전 블록에 붙이기
+                // (`continuation_is_its_own_block`).
+                let markdown = match continuation_level {
+                    Some(level) => format_list_continuation(&markdown, level),
+                    None => markdown,
+                };
+                blocks.push(Block { markdown, source: source(vec![text], vec![st.at]), body });
             }
 
             if continuation_level.is_none() {
@@ -468,62 +579,134 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
     blocks.extend(notes.render_definitions());
 
     // The finished Markdown, parsed again, may hold only what styled writes.
-    let allowed =
-        super::guard::Allowed { tags: super::guard::STYLED_TAGS, destinations: &st.destinations };
+    let allowed = super::guard::Allowed {
+        tags: super::guard::STYLED_TAGS,
+        destinations: &st.destinations,
+        decoder_structure: true,
+    };
     let markdown = super::guard::checked(blocks, &allowed, &mut st.warnings);
 
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }
 
-/// Encodes a single top-level paragraph into styled markdown.
+/// Encodes a single top-level paragraph into styled markdown, and whether
+/// it was drawn as a Body block: not a `continuation`, drawn by the body
+/// branch (not as a heading, a list item, or a one-table or one-picture
+/// paragraph). The answer comes from the branch that drew it, and is the
+/// paragraph's `Ctx::guarded`.
+/// 이것을 실패시키는 것: 단일 표·그림을 Body 로(`out_of_scope_is_base_output`) ·
+/// continuation 을 Body 로(`continuation_is_its_own_block`).
 fn encode_paragraph_styled(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
     st: &mut State,
-) -> String {
+    continuation: bool,
+) -> (String, bool) {
     let ctx = Ctx::default();
     // Handle single-run block elements (table, image) as standalone blocks.
     // A paragraph whose one run is a group is not one of them, even when the
     // group holds a single picture (WS: the group is drawn as its children).
+    // The caption is not guarded (`Ctx::guarded`); a table that is not a
+    // continuation is.
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                let mut md = table_to_styled_markdown(table, styles, false, st, ctx);
+                let table_ctx = Ctx { guarded: !continuation, ..ctx };
+                let mut md = table_to_styled_markdown(table, styles, false, st, table_ctx);
                 md.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
-                return md.into_string();
+                return (md.into_string(), false);
             }
             RunContent::Image(image) => {
                 let mut md = emit_picture(image, styles, st, ctx);
                 md.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
-                return md.into_string();
+                return (md.into_string(), false);
             }
             _ => {}
         }
     }
 
-    let text = paragraph_text_styled(paragraph, styles, st, ctx).into_string();
-
     // Shared outline/list classification (hwpforge-core). Classification is
-    // text-blind; the empty-text guards below are rendering concerns (an
-    // empty heading/list item renders as nothing).
-    match classify_paragraph(paragraph, styles) {
+    // text-blind, so it decides the context before drawing; the empty-text
+    // guards below are rendering concerns (an empty heading/list item
+    // renders as nothing).
+    let kind = classify_paragraph(paragraph, styles);
+    let body = !continuation && matches!(kind, ParaKind::Body);
+    let text =
+        paragraph_text_styled(paragraph, styles, st, Ctx { guarded: body, ..ctx }).into_string();
+    let markdown = match kind {
         ParaKind::Heading { level, .. } => {
             // Headings must be single-line: collapse lineBreak-originated newlines.
             let heading_text = text.trim().replace('\n', " ");
             if heading_text.is_empty() {
-                return String::new();
+                return (String::new(), false);
             }
             format!("{} {}", "#".repeat(level as usize), heading_text)
         }
         ParaKind::ListItem { kind, level, checked, .. } => {
             let trimmed = text.trim();
             if trimmed.is_empty() {
-                return String::new();
+                return (String::new(), false);
             }
             format_list_item(trimmed, kind, level, checked)
         }
+        // A continuation is out of the guarantee: as before (G.3 (라)).
+        // 이것을 실패시키는 것: continuation 에도 줄 끝내기
+        // (`continuation_line_start_comment_is_base_output`).
+        ParaKind::Body if body => comment_ends_line(text.trim_start()).0,
         ParaKind::Body => text.trim_start().to_string(),
+    };
+    (markdown, body)
+}
+
+/// A Body block with each comment the encoder wrote at a line start (a
+/// memo or chart placeholder, `<!-- … -->`) ending its line: the text after
+/// it starts the next line — a new paragraph, the comment's HTML block
+/// ending there — its leading whitespace dropped as at a
+/// paragraph's start. A comment at a line start opens an HTML block that
+/// would take the rest of the line in as raw HTML. Document text cannot
+/// start a line with `<!--` (`<` is written `&lt;`), and a memo's body has
+/// its `--` broken up, so the first `-->` after it is the encoder's. It
+/// runs on the finished block, so it sees every byte (a table's blank line,
+/// a caption's last comment). With the block, where it changed bytes: each
+/// `(start, end, shift)` replaced `block[start..end]` and moved what
+/// follows by `shift` in all (the emphasis check reads the same text).
+/// 이것을 실패시키는 것: 줄 끝내기 삭제 · 뒤 글의 앞 공백 남기기
+/// (`body_check_and_table_end_close_the_rest`, `line_start_memo_keeps_comment_and_text`).
+fn comment_ends_line(block: &str) -> (String, Vec<(usize, usize, isize)>) {
+    let mut out = String::with_capacity(block.len() + 8);
+    let mut edits = Vec::new();
+    let mut shift = 0isize;
+    let mut rest = block;
+    // Each step consumes what it looks at, so the walk is linear even for
+    // many comments on one line.
+    // 이것을 실패시키는 것: 꼬리를 줄 끝까지 다시 훑기(`line_start_comments_are_linear`).
+    while !rest.is_empty() {
+        let at = block.len() - rest.len();
+        let close = if rest.trim_start_matches([' ', '\t']).starts_with("<!--") {
+            rest.find("-->")
+        } else {
+            None
+        };
+        if let Some(end) = close {
+            let after = &rest[end + 3..];
+            let tail = after.trim_start_matches(|c: char| c != '\n' && c.is_whitespace());
+            out.push_str(&rest[..end + 3]);
+            if tail.is_empty() || tail.starts_with('\n') {
+                out.push_str(&after[..after.len() - tail.len()]);
+            } else {
+                out.push('\n');
+                let (start, gone) = (at + end + 3, after.len() - tail.len());
+                shift += 1 - gone as isize;
+                edits.push((start, start + gone, shift));
+            }
+            rest = tail;
+        } else {
+            let line_end = rest.find('\n').map_or(rest.len(), |i| i + 1);
+            out.push_str(&rest[..line_end]);
+            rest = &rest[line_end..];
+        }
     }
+    (out, edits)
 }
 
 fn list_context_for_paragraph(
@@ -562,7 +745,22 @@ fn paragraph_text_styled(
     st: &mut State,
     ctx: Ctx,
 ) -> Md {
-    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
+    if ctx.guarded {
+        let mut line = Line::default();
+        guarded_runs(paragraph, styles, st, ctx, &mut line);
+        let (md, kept) = line.finish(ctx);
+        if kept {
+            return md;
+        }
+        // The markers could not be placed so every character keeps its
+        // emphasis: this Body paragraph as plain text. Cells finish and
+        // fall back locally in `table_to_gfm`; captions join the parent.
+        // 이것을 실패시키는 것: 블록 전체로 넓히기(`emphasis_fallback_stays_in_its_paragraph`).
+        super::guard::written_as_text(&mut st.warnings, &mut st.warned, st.at);
+        return fallback(std::slice::from_ref(paragraph), ctx.depth, st).remove(0);
+    }
+    let mut kept = None;
+    let paragraph = expanded(paragraph, st, &mut kept);
     let mut output = Md::new();
 
     // Group consecutive text runs by InlineFormat for proper wrapping.
@@ -572,7 +770,7 @@ fn paragraph_text_styled(
     for (part, cs) in super::spread_groups(&paragraph.runs) {
         // Anything but text first flushes the text group.
         if !matches!(part, Part::Text(_)) && !current_text.is_empty() {
-            output.push(current_format.wrap(&current_text));
+            output.push(current_format.wrap(&current_text, ctx));
             current_text.clear();
             current_format = InlineFormat::default();
         }
@@ -590,7 +788,7 @@ fn paragraph_text_styled(
                 let fmt = InlineFormat::from_style(cs, styles);
                 if fmt != current_format {
                     if !current_text.is_empty() {
-                        output.push(current_format.wrap(&current_text));
+                        output.push(current_format.wrap(&current_text, ctx));
                         current_text.clear();
                     }
                     current_format = fmt;
@@ -617,10 +815,710 @@ fn paragraph_text_styled(
 
     // Flush remaining text.
     if !current_text.is_empty() {
-        output.push(current_format.wrap(&current_text));
+        output.push(current_format.wrap(&current_text, ctx));
     }
 
     output
+}
+
+/// A guarded paragraph's runs collected into `line`, in drawing order:
+/// text by its format, everything else drawn as it is. A text box's or
+/// shape's text and a memo's anchor (a memo left in another memo's anchor)
+/// are drawn into the same line, one container deeper, so their emphasis
+/// is written together with the text around them ([`Line::finish`]).
+/// 이것을 실패시키는 것: 글상자 글을 따로 그리기(`adjacent_formatted_text_keeps_its_characters`) ·
+/// 메모 앵커를 따로 그리기(`memo_anchor_follows_the_renderer`).
+fn guarded_runs(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+    line: &mut Line,
+) {
+    let mut kept = None;
+    let paragraph = expanded(paragraph, st, &mut kept);
+    for (part, cs) in super::spread_groups(&paragraph.runs) {
+        match part {
+            Part::Text(content) => {
+                if let Some(cow) = content.plain_text() {
+                    line.text(&cow, InlineFormat::from_style(cs, styles));
+                }
+            }
+            Part::Image(image) => {
+                let mut picture = Line::default();
+                picture.raw(emit_picture(image, styles, st, ctx));
+                picture.joined(guarded_caption(image.caption.as_ref(), styles, st, ctx));
+                if !image.path.is_empty() && !line.is_empty() {
+                    line.raw(Md::syntax(" "));
+                }
+                line.joined(picture);
+            }
+            Part::Table(table) => {
+                if !line.is_empty() {
+                    line.raw(Md::syntax("\n"));
+                }
+                // A guarded table ends its block: text after it starts a new
+                // one instead of joining the table (an HTML block runs to a
+                // blank line, GFM rows take the next line).
+                // 이것을 실패시키는 것: 표시 삭제 · 범위 밖에도 표시
+                // (`body_check_and_table_end_close_the_rest`, `out_of_scope_is_base_output`).
+                line.raw(table_to_styled_markdown(table, styles, false, st, ctx).ending_block());
+                line.joined(guarded_caption(table.caption.as_ref(), styles, st, ctx));
+            }
+            Part::Control(
+                Control::TextBox { paragraphs, .. }
+                | Control::Ellipse { paragraphs, .. }
+                | Control::Polygon { paragraphs, .. },
+            ) => {
+                let Some(inner) = ctx.enter() else {
+                    line.raw(Md::syntax(TOO_DEEP));
+                    continue;
+                };
+                // Joined by a space and trimmed, as `shape_text` writes it.
+                let mut shape = Line::default();
+                for (i, p) in paragraphs.iter().enumerate() {
+                    if i > 0 {
+                        shape.raw(Md::syntax(" "));
+                    }
+                    guarded_runs(p, styles, st, inner, &mut shape);
+                }
+                shape.trim();
+                line.append(shape);
+            }
+            Part::Control(Control::Memo { content, anchor_runs, .. }) => {
+                let Some(inner) = ctx.enter() else {
+                    line.raw(Md::syntax(TOO_DEEP));
+                    continue;
+                };
+                let anchor = st.keep(super::memo_anchor(anchor_runs));
+                alias_copy(anchor_runs, &anchor.runs, st);
+                guarded_runs(&anchor, styles, st, inner, line);
+                line.raw(memo(content, styles, st, ctx));
+            }
+            // A control whose output is document text (a link's text, a
+            // compose, a field, a cross reference, a caption number, an
+            // equation's script, an unknown control's code): checked like
+            // plain text, so it cannot take on the emphasis around it.
+            // 이것을 실패시키는 것: 글 컨트롤을 검사에서 빼기(`plain_text_keeps_no_emphasis`).
+            // A link with no text draws `[](url)`: nothing to read as text.
+            // 이것을 실패시키는 것: 빈 라벨 링크에 글 읽기 요구(`text_controls_with_nothing_or_math`).
+            Part::Control(control @ Control::Hyperlink { text, .. }) if text.is_empty() => {
+                line.raw(control_md(control, styles, st, ctx))
+            }
+            // An equation: a math renderer reads `$…$`, so its own `*` is not
+            // the document's emphasis; emphasis from outside must not reach
+            // into it (`Item::Math`). Its script written as text instead
+            // (`math_free_text`) is escaped throughout, so it opens nothing.
+            // 이것을 실패시키는 것: 수식을 평문으로 검사(`text_controls_with_nothing_or_math`).
+            Part::Control(control @ Control::Equation { .. }) => {
+                line.math(control_md(control, styles, st, ctx))
+            }
+            Part::Control(
+                control @ (Control::Hyperlink { .. }
+                | Control::Compose { .. }
+                | Control::Dutmal { .. }
+                | Control::CrossRef { .. }
+                | Control::Field { .. }
+                | Control::AutoNumber { .. }
+                | Control::Unknown { .. }),
+            ) => line.plain(control_md(control, styles, st, ctx)),
+            Part::Control(control) => line.raw(control_md(control, styles, st, ctx)),
+        }
+    }
+}
+
+/// An emphasis written with Markdown markers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Strike,
+    Bold,
+    Italic,
+}
+
+impl Mark {
+    /// The marker, italic written with `italic` (`*` or `_`).
+    fn syntax(self, italic: &'static str) -> &'static str {
+        match self {
+            Self::Strike => "~~",
+            Self::Bold => "**",
+            Self::Italic => italic,
+        }
+    }
+}
+
+/// What a guarded paragraph draws, in order: text with its format, or
+/// markup drawn already.
+enum Item {
+    Text(String, InlineFormat),
+    Raw(Md),
+    /// Document text drawn already (a text control's output): written as
+    /// it is, checked to read with no emphasis.
+    Plain(Md),
+    /// An equation as `$…$`: written as it is; what is inside is not
+    /// checked, but no emphasis from outside may be open over it.
+    Math(Md),
+    /// Preserve an existing Md join boundary, but carry its emphasis into
+    /// the enclosing line's check instead of checking the child alone.
+    Joined(Line),
+}
+
+/// A guarded paragraph's text and markup, collected first and written at
+/// once, so its emphasis is written as markers over the whole line rather
+/// than piece by piece: pieces of the same emphasis are one span (nothing
+/// drawn between them, or a text box's text, does not end it), and a span
+/// common to neighbouring pieces stays open across them. Where the
+/// markers still have to close and open at the same place with the same
+/// character (`**a***b**` shapes), CommonMark may read them as one
+/// delimiter run: the line is parsed again, and if any marker reads as
+/// text or any text lost its emphasis, the paragraph is written as plain
+/// text with a warning instead.
+#[derive(Default)]
+struct Line {
+    items: Vec<Item>,
+}
+
+impl Line {
+    /// Text in `fmt`; next to text of the same format it is one piece.
+    fn text(&mut self, raw: &str, fmt: InlineFormat) {
+        if raw.is_empty() {
+            return;
+        }
+        if let Some(Item::Text(text, f)) = self.items.last_mut() {
+            if *f == fmt {
+                text.push_str(raw);
+                return;
+            }
+        }
+        self.items.push(Item::Text(raw.to_string(), fmt));
+    }
+
+    /// Markup drawn already; nothing drawn is left out, so it does not
+    /// split the text around it.
+    /// 이것을 실패시키는 것: 빈 조각 건너뛰기 삭제(`adjacent_formatted_text_keeps_its_characters`).
+    fn raw(&mut self, md: Md) {
+        if !md.is_empty() {
+            self.items.push(Item::Raw(md));
+        }
+    }
+
+    /// [`Line::raw`] for an equation ([`Item::Math`]).
+    fn math(&mut self, md: Md) {
+        if !md.is_empty() {
+            self.items.push(Item::Math(md));
+        }
+    }
+
+    /// [`Line::raw`] for a control's document text ([`Item::Plain`]).
+    fn plain(&mut self, md: Md) {
+        if !md.is_empty() {
+            self.items.push(Item::Plain(md));
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn is_blank(&self) -> bool {
+        self.items.iter().all(Item::is_blank)
+    }
+
+    fn joined(&mut self, line: Line) {
+        if !line.is_empty() {
+            self.items.push(Item::Joined(line));
+        }
+    }
+
+    /// The whitespace at both ends dropped: text trimmed, whitespace-only
+    /// markup left out.
+    fn trim(&mut self) {
+        let blank = Item::is_blank;
+        while self.items.last().is_some_and(blank) {
+            self.items.pop();
+        }
+        let lead = self.items.iter().take_while(|item| blank(item)).count();
+        self.items.drain(..lead);
+        if let Some(Item::Text(t, _)) = self.items.first_mut() {
+            *t = t.trim_start().to_string();
+        }
+        if let Some(Item::Text(t, _)) = self.items.last_mut() {
+            *t = t.trim_end().to_string();
+        }
+    }
+
+    /// `other`'s items after these, text next to text of its format joined.
+    fn append(&mut self, other: Line) {
+        for item in other.items {
+            match item {
+                Item::Text(t, fmt) => self.text(&t, fmt),
+                Item::Raw(md) => self.raw(md),
+                Item::Plain(md) => self.plain(md),
+                Item::Math(md) => self.math(md),
+                Item::Joined(line) => self.joined(line),
+            }
+        }
+    }
+
+    fn pieces(self, ctx: Ctx) -> Vec<Piece> {
+        // Text written with markers, or drawn as `wrap` draws it.
+        self.items
+            .into_iter()
+            .flat_map(|item| match item {
+                Item::Raw(md) => vec![Piece::Raw(md)],
+                Item::Plain(md) => vec![Piece::plain(md)],
+                Item::Math(md) => vec![Piece::Math(md)],
+                Item::Joined(line) => vec![Piece::Joined(line.pieces(ctx))],
+                Item::Text(raw, fmt) => match fmt.marks(&raw) {
+                    Some(marks) => marked(&raw, marks, ctx),
+                    // Text without markers (plain, or HTML tags) is checked
+                    // to read with no marker emphasis, so a neighbour's
+                    // markers cannot reach it (`**a。**b**z**`).
+                    // 이것을 실패시키는 것: 평문을 검사에서 빼기(`plain_text_keeps_no_emphasis`).
+                    None => vec![Piece::plain(fmt.wrap(&raw, ctx))],
+                },
+            })
+            .collect()
+    }
+
+    /// The line's Markdown, and whether its emphasis was kept. Only this
+    /// final composition is checked: a Body after G2, or a complete cell.
+    fn finish(self, ctx: Ctx) -> (Md, bool) {
+        let pieces = self.pieces(ctx);
+        // Spans common to neighbouring pieces stay open, those opened at one
+        // place ordered so the one lasting longer is outside, or else in a
+        // fixed order (strikeout, bold, italic — what `wrap` writes); or each
+        // piece closes its spans, as `wrap` writes them. The first that reads
+        // back right is kept; if none does, the paragraph is written as
+        // plain text (`paragraph_text_styled`).
+        // 이것을 실패시키는 것: 평문 대체 끄기(`three_emphasized_pieces_keep_their_emphasis`).
+        // Last, the first again with italic as `_`, which does not run
+        // together with a bold `**` (`**a_b_**_c_`).
+        // 이것을 실패시키는 것: 넷째 후보 삭제(`three_emphasized_pieces_keep_their_emphasis`).
+        let mut last = Md::new();
+        for (keep_open, by_length, italic) in
+            [(true, true, "*"), (true, false, "*"), (false, false, "*"), (true, true, "_")]
+        {
+            let w = emit(&pieces, keep_open, by_length, italic);
+            let kept = w.markers.is_empty()
+                || emphasis_kept(w.out.as_str(), &w.markers, &w.texts, &w.math, ctx.cell);
+            if kept {
+                return (w.out, true);
+            }
+            last = w.out;
+        }
+        (last, false)
+    }
+}
+
+impl Item {
+    fn is_blank(&self) -> bool {
+        match self {
+            Self::Text(t, _) => t.trim().is_empty(),
+            Self::Raw(md) | Self::Plain(md) | Self::Math(md) => md.as_str().trim().is_empty(),
+            Self::Joined(line) => line.is_blank(),
+        }
+    }
+}
+
+/// Text written with `marks`: one piece per paragraph of it — a span
+/// cannot go on across a blank line, so it is closed before one and opened
+/// again after it.
+/// 이것을 실패시키는 것: 빈 줄에서 나누지 않기(`markup_safety` 의 굵은 `a\n\nb`).
+fn marked(raw: &str, marks: Vec<Mark>, ctx: Ctx) -> Vec<Piece> {
+    let piece = |part: &str| Piece::Marked {
+        lead: part[..part.len() - part.trim_start().len()].to_string(),
+        core: text(part.trim(), ctx),
+        trail: part[part.trim_end().len()..].to_string(),
+        marks: marks.clone(),
+    };
+    let mut out = Vec::new();
+    let (mut start, mut i) = (0, 0);
+    while let Some(c) = raw[i..].chars().next() {
+        if !c.is_whitespace() {
+            i += c.len_utf8();
+            continue;
+        }
+        let run = raw[i..].len() - raw[i..].trim_start().len();
+        let blank = raw[i..i + run].matches(['\n', '\r']).count() >= 2;
+        if blank && !raw[start..i].trim().is_empty() && i + run < raw.len() {
+            out.push(piece(&raw[start..i]));
+            out.push(Piece::Raw(Md::text(&raw[i..i + run])));
+            start = i + run;
+        }
+        i += run;
+    }
+    out.push(piece(&raw[start..]));
+    out
+}
+
+/// A piece of a guarded line written with markers: its edge whitespace,
+/// its text, its emphasis; or markup drawn already.
+enum Piece {
+    Marked {
+        lead: String,
+        core: Md,
+        trail: String,
+        marks: Vec<Mark>,
+    },
+    Raw(Md),
+    /// Document text with no marker emphasis (whitespace alone is `Raw`:
+    /// it may read as no text at all).
+    Plain(Md),
+    /// An equation ([`Item::Math`]).
+    Math(Md),
+    Joined(Vec<Piece>),
+}
+
+impl Piece {
+    fn plain(md: Md) -> Self {
+        if md.as_str().trim().is_empty() {
+            Self::Raw(md)
+        } else {
+            Self::Plain(md)
+        }
+    }
+}
+
+/// Writes pieces and records their emphasis, including joined children.
+/// No child is parsed alone: `Line::finish` checks the completed unit.
+fn emit(pieces: &[Piece], keep_open: bool, by_length: bool, italic: &'static str) -> Writer {
+    let mut w = Writer::default();
+    for (i, piece) in pieces.iter().enumerate() {
+        match piece {
+            Piece::Joined(pieces) => {
+                w.close(0, italic);
+                w.flush_space();
+                w.place_joined(emit(pieces, keep_open, by_length, italic));
+            }
+            Piece::Raw(md) => {
+                w.close(0, italic);
+                w.flush_space();
+                w.place(md.clone());
+            }
+            Piece::Plain(md) => {
+                w.close(0, italic);
+                w.flush_space();
+                let range = w.place(md.clone());
+                w.texts.push((range, Vec::new()));
+            }
+            Piece::Math(md) => {
+                w.close(0, italic);
+                w.flush_space();
+                let range = w.place(md.clone());
+                w.math.push(range);
+            }
+            Piece::Marked { lead, core, trail, marks } => {
+                w.space.push_str(lead);
+                let keep = if keep_open {
+                    w.open.iter().position(|m| !marks.contains(m)).unwrap_or(w.open.len())
+                } else {
+                    0
+                };
+                w.close(keep, italic);
+                let mut opening: Vec<Mark> =
+                    marks.iter().copied().filter(|m| !w.open.contains(m)).collect();
+                if by_length {
+                    // How many pieces from here on an emphasis lasts.
+                    let lasts = |m: Mark| {
+                        pieces[i..]
+                            .iter()
+                            .take_while(
+                                |p| matches!(p, Piece::Marked { marks, .. } if marks.contains(&m)),
+                            )
+                            .count()
+                    };
+                    opening.sort_by_key(|&m| std::cmp::Reverse(lasts(m)));
+                }
+                w.flush_space();
+                for m in opening {
+                    let range = w.place(Md::syntax(m.syntax(italic)));
+                    w.markers.push(range);
+                    w.open.push(m);
+                }
+                let range = w.place(core.clone());
+                w.texts.push((range, marks.clone()));
+                w.space = trail.clone();
+            }
+        }
+    }
+    w.close(0, italic);
+    w.flush_space();
+    w
+}
+
+/// [`emit`]'s state: the markdown, the spans open (outside first),
+/// whitespace not yet written, and where markers and texts went.
+#[derive(Default)]
+struct Writer {
+    out: Md,
+    open: Vec<Mark>,
+    space: String,
+    markers: Vec<std::ops::Range<usize>>,
+    texts: Vec<(std::ops::Range<usize>, Vec<Mark>)>,
+    /// Where equations went ([`Piece::Math`]).
+    math: Vec<std::ops::Range<usize>>,
+}
+
+impl Writer {
+    /// Keep the old Md composition (including table-end trim and escapes),
+    /// moving every child's marker/text range to its actual parent offset.
+    /// 이것을 실패시키는 것: 자식 범위 버리기 · trim 보정 빼기
+    /// (`captions_are_checked_in_the_final_body`).
+    fn place_joined(&mut self, child: Writer) {
+        let len = child.out.as_str().len();
+        let at = self.place(child.out);
+        let trimmed = len - at.len();
+        let shift = |r: std::ops::Range<usize>| {
+            at.start + r.start.saturating_sub(trimmed)..at.start + r.end.saturating_sub(trimmed)
+        };
+        self.markers.extend(child.markers.into_iter().map(shift));
+        self.texts.extend(child.texts.into_iter().map(|(r, marks)| (shift(r), marks)));
+        self.math.extend(child.math.into_iter().map(shift));
+    }
+
+    /// Appends `md`, keeping the recorded places right when an escape goes
+    /// in before them ([`Md::push_placed`]); where it went.
+    fn place(&mut self, md: Md) -> std::ops::Range<usize> {
+        let (range, shifted) = self.out.push_placed(md);
+        // Both lists are in order: only the places after the escape move.
+        // 이것을 실패시키는 것: 모든 자리를 다시 훑기(`emphasis_writer_is_linear`).
+        if let Some(at) = shifted {
+            for r in self.markers.iter_mut().rev().take_while(|r| r.start >= at) {
+                *r = r.start + 1..r.end + 1;
+            }
+            for (r, _) in self.texts.iter_mut().rev().take_while(|(r, _)| r.start >= at) {
+                *r = r.start + 1..r.end + 1;
+            }
+            for r in self.math.iter_mut().rev().take_while(|r| r.start >= at) {
+                *r = r.start + 1..r.end + 1;
+            }
+        }
+        range
+    }
+
+    /// Closes the open spans down to `keep`.
+    fn close(&mut self, keep: usize, italic: &'static str) {
+        while self.open.len() > keep {
+            let m = self.open.pop().expect("open span");
+            let range = self.place(Md::syntax(m.syntax(italic)));
+            self.markers.push(range);
+        }
+    }
+
+    /// Writes the held whitespace (outside the markers around it).
+    fn flush_space(&mut self) {
+        let space = std::mem::take(&mut self.space);
+        self.place(Md::text(&space));
+    }
+}
+
+/// Whether `markdown`, parsed as the decoder parses, reads no marker as
+/// text and every text range with exactly its emphasis — each range read
+/// as text at least once: one hidden in raw HTML or code is not kept
+/// (fail closed). A cell's line is read in a one-cell table, as written
+/// there (`|` escaped, line endings as `<br>`); a block's after its leading
+/// whitespace. Both lists are in order, as the parser's text is.
+/// 이것을 실패시키는 것: 읽지 않은 글을 통과시키기 · 칸을 칸 밖에서 읽기
+/// (`hidden_emphasis_is_not_passed`).
+fn emphasis_kept(
+    markdown: &str,
+    markers: &[std::ops::Range<usize>],
+    texts: &[(std::ops::Range<usize>, Vec<Mark>)],
+    math: &[std::ops::Range<usize>],
+    cell: bool,
+) -> bool {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    // The text read, and where each byte of `markdown` went in it: a
+    // cell's line in a one-cell table, as written there; a block's line
+    // after its leading whitespace, with its comments ending their lines
+    // ([`comment_ends_line`]), as the block is written.
+    let (view, cell_map, edits, off) = if cell {
+        let mut view = String::from("| ");
+        let mut map = Vec::with_capacity(markdown.len() + 1);
+        for c in markdown.chars() {
+            for _ in 0..c.len_utf8() {
+                map.push(view.len());
+            }
+            match c {
+                '|' => view.push_str("\\|"),
+                '\n' => view.push_str("<br>"),
+                c => view.push(c),
+            }
+        }
+        map.push(view.len());
+        view.push_str(" |\n| --- |");
+        (view, map, Vec::new(), 0)
+    } else {
+        let off = markdown.len() - markdown.trim_start().len();
+        let (view, edits) = comment_ends_line(&markdown[off..]);
+        (view, Vec::new(), edits, off)
+    };
+    // Each sorted, disjoint range list is merged with the edits once.
+    // Two forward cursors cost O(Q + E), not a binary search per lookup;
+    // parser comparisons below read the adjusted ranges in constant time.
+    // 이것을 실패시키는 것: 누적 이동량 무시 · 두 목록의 커서 공유
+    // (`emphasis_offsets_follow_all_g2_edits`).
+    let adjust = || {
+        let mut k = 0;
+        let (cell_map, edits) = (&cell_map, &edits);
+        let mut place = move |x: usize| -> usize {
+            if cell {
+                return cell_map[x];
+            }
+            let x = x.saturating_sub(off);
+            while k < edits.len() && edits[k].1 <= x {
+                k += 1;
+            }
+            let before = if k == 0 { 0 } else { edits[k - 1].2 };
+            match edits.get(k) {
+                Some(&(start, _, _)) if start < x => (start as isize + before) as usize,
+                _ => (x as isize + before) as usize,
+            }
+        };
+        move |r: &std::ops::Range<usize>| place(r.start)..place(r.end)
+    };
+    let markers: Vec<_> = markers.iter().map(adjust()).collect();
+    let ranges: Vec<_> = texts.iter().map(|(r, _)| r).map(adjust()).collect();
+    let math: Vec<_> = math.iter().map(adjust()).collect();
+    let (mut strike, mut bold, mut italic) = (0usize, 0usize, 0usize);
+    let (mut m, mut t, mut q) = (0, 0, 0);
+    // Where each open emphasis started: one opened inside an equation is
+    // the equation's own; one opened before it reaches into it.
+    let mut opened: Vec<usize> = Vec::new();
+    let mut seen = vec![false; texts.len()];
+    for (event, range) in Parser::new_ext(&view, super::md_options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Strikethrough) => {
+                strike += 1;
+                opened.push(range.start);
+            }
+            Event::End(TagEnd::Strikethrough) => {
+                strike -= 1;
+                opened.pop();
+            }
+            Event::Start(Tag::Strong) => {
+                bold += 1;
+                opened.push(range.start);
+            }
+            Event::End(TagEnd::Strong) => {
+                bold -= 1;
+                opened.pop();
+            }
+            Event::Start(Tag::Emphasis) => {
+                italic += 1;
+                opened.push(range.start);
+            }
+            Event::End(TagEnd::Emphasis) => {
+                italic -= 1;
+                opened.pop();
+            }
+            // A code span is text too (an unknown control's `[tag]`).
+            Event::Text(_) | Event::Code(_) => {
+                while q < math.len() && math[q].end <= range.start {
+                    q += 1;
+                }
+                if math.get(q).is_some_and(|r| r.start < range.end)
+                    // Nested spans start in order: the outermost is the first.
+                    // 이것을 실패시키는 것: 열린 강조를 전부 훑기(`math_check_is_linear`).
+                    && opened.first().is_some_and(|&at| at < math[q].start)
+                {
+                    return false;
+                }
+                while m < markers.len() && markers[m].end <= range.start {
+                    m += 1;
+                }
+                if markers.get(m).is_some_and(|r| r.start < range.end) {
+                    return false;
+                }
+                while t < texts.len() && ranges[t].end <= range.start {
+                    t += 1;
+                }
+                let mut k = t;
+                while let Some((_, marks)) = texts.get(k).filter(|_| ranges[k].start < range.end) {
+                    if (strike > 0) != marks.contains(&Mark::Strike)
+                        || (bold > 0) != marks.contains(&Mark::Bold)
+                        || (italic > 0) != marks.contains(&Mark::Italic)
+                    {
+                        return false;
+                    }
+                    seen[k] = true;
+                    k += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    seen.iter().all(|&s| s)
+}
+
+/// `original`, or its memo-expanded copy (`expand_memos`) kept for the
+/// whole document ([`State::keep`]): the paragraph to draw.
+fn expanded<'a>(
+    original: &'a Paragraph,
+    st: &mut State,
+    kept: &'a mut Option<std::rc::Rc<Paragraph>>,
+) -> &'a Paragraph {
+    match hwpforge_core::field_view::expand_memos(original) {
+        std::borrow::Cow::Borrowed(_) => original,
+        std::borrow::Cow::Owned(copy) => {
+            let copy = kept.insert(st.keep(copy));
+            alias_copy(&original.runs, &copy.runs, st);
+            copy
+        }
+    }
+}
+
+/// A copy's note occurrences stand for the document's (`original`'s, or
+/// what those stand for), paired in the order the fallback walk meets them
+/// ([`super::guard::note_order`]: a memo's anchor in place, its body
+/// skipped, as `expand_memos` keeps it). The copy lives as long as the
+/// document is drawn ([`State::keep`]), so no address is taken twice.
+/// Unpaired (the orders differ), the copy's notes stand for themselves,
+/// which no fallback walk of the document meets: their text.
+/// 이것을 실패시키는 것: 별칭 삭제 · 별칭을 문서 주소로 풀지 않기
+/// (`fallback_keeps_notes_by_occurrence`).
+fn alias_copy(original: &[hwpforge_core::Run], copy: &[hwpforge_core::Run], st: &mut State) {
+    let from = super::guard::note_order(copy);
+    let to = super::guard::note_order(original);
+    if from.len() == to.len() {
+        for (c, o) in from.into_iter().zip(to) {
+            let o = st.note_at(o);
+            st.note_alias.insert(c, o);
+        }
+    }
+}
+
+/// The styled plain-text fallback of `paragraphs` drawn at `depth`
+/// ([`super::guard::fallback_markdown`]): it keeps the pictures the view
+/// registered, allowed links, and the references of the notes it
+/// registered.
+fn fallback(paragraphs: &[Paragraph], depth: usize, st: &mut State) -> Vec<Md> {
+    super::guard::fallback_markdown(paragraphs, depth, true, &mut Kept { st })
+}
+
+/// The styled view's [`super::guard::Keeper`]: pictures with the key the
+/// view gave their source (none is registered anew), allowed links, the
+/// reference registered for the very note.
+struct Kept<'a> {
+    st: &'a mut State,
+}
+
+impl super::guard::Keeper for Kept<'_> {
+    fn picture(&mut self, image: &hwpforge_core::image::Image) -> Option<Md> {
+        let key = self.st.assets.drawn.get(&image.path)?;
+        Some(Md::image(Md::text(image_stem(&image.path)), key, &mut self.st.destinations))
+    }
+
+    fn link(&mut self, text: &str, url: &str) -> Option<Md> {
+        super::link_url_allowed(url).then(|| {
+            let label = Md::plain_parts(&[super::guard::Fallback::Text(text.to_string())]);
+            Md::link(label, url, &mut self.st.destinations)
+        })
+    }
+
+    fn note(&mut self, note: &Control) -> Option<Md> {
+        self.st.note_marks.get(&self.st.note_at(note as *const Control as usize)).cloned()
+    }
 }
 
 /// Encodes a single control element into styled markdown.
@@ -634,7 +1532,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             if super::link_url_allowed(url) {
                 Md::link(Md::text(text), url, &mut st.destinations)
             } else {
-                Md::text(text)
+                self::text(text, ctx)
             }
         }
         // A note at depth 0 outside a memo is a document definition; a note
@@ -666,46 +1564,43 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
                         section: st.at.0,
                         paragraph: st.at.1,
                     });
-                    math_free_text(&script.split_whitespace().collect::<Vec<_>>().join(" "))
+                    math_free_text(&script.split_whitespace().collect::<Vec<_>>().join(" "), ctx)
                 }
             },
             // Too deep to convert: ordinary text (whitespace already
             // collapsed, `$` escaped as above). Not reported as
             // `EquationAsText`, which is for the safety fallback only.
-            EqnRender::RawFallback(raw) => math_free_text(&raw),
+            EqnRender::RawFallback(raw) => math_free_text(&raw, ctx),
         },
         Control::Chart { .. } => Md::syntax("<!-- chart -->"),
         Control::Dutmal { main_text, sub_text, .. } => {
-            let mut md = Md::text(main_text);
+            let mut md = text(main_text, ctx);
             md.push_syntax("(");
-            md.push(Md::text(sub_text));
+            md.push(text(sub_text, ctx));
             md.push_syntax(")");
             md
         }
-        Control::Compose { compose_text, .. } => Md::text(compose_text),
+        Control::Compose { compose_text, .. } => text(compose_text, ctx),
         // Wave 12m Phase 2 Step 4: the visible text (display_text) if any,
         // else the target's display form in brackets (Name → "bookmark1",
         // SystemId → "#5"). Markdown has no anchor link here: text only.
-        Control::CrossRef { target, display_text, .. } => {
-            // The brackets are text too: as syntax they made a link with a
-            // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
-            // 쓰기(`markup_safety` 의 빈 상호 참조).
-            if display_text.is_empty() {
-                Md::text(&format!("[{}]", target.as_display()))
-            } else {
-                Md::text(display_text)
-            }
-        }
-        // The filled value if any, else the hint — the HWPX encoder's hint
-        // fallback order (Epic 1).
-        Control::Field { hint_text, display_text, .. } => {
-            Md::text(field_text(hint_text, display_text))
+        // The brackets are text too: as syntax they made a link with a
+        // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
+        // 쓰기(`markup_safety` 의 빈 상호 참조).
+        // A field: the filled value if any, else the hint — the HWPX
+        // encoder's hint fallback order (Epic 1).
+        Control::CrossRef { .. } | Control::Field { .. } => {
+            text(&super::styled_display(control).unwrap_or_default(), ctx)
         }
         Control::FieldBoundary {
             boundary: hwpforge_core::control::FieldBoundary::Start(start),
         } => {
             start.annotation.as_ref().map_or_else(Md::new, |content| memo(content, styles, st, ctx))
         }
+        // A memo still standing after `expand_memos` (it sits in another
+        // memo's anchor): the anchor's text runs, as before (G.3 (라)).
+        // Where text is guarded, `guarded_runs` draws it instead.
+        // 이것을 실패시키는 것: 문단 렌더러로(`memo_anchor_out_of_scope_is_base_output`).
         Control::Memo { content, anchor_runs, .. } => {
             let mut md = Md::text(
                 &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
@@ -717,8 +1612,12 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         // Markdown (review r1: a `*` prefix and suffix turned "3" into
         // emphasis). 이것을 실패시키는 것: 텍스트 escape 삭제
         // (`caption_number_prefix_is_escaped`).
-        Control::AutoNumber { num, format, .. } => Md::text(&super::auto_number_text(*num, format)),
-        Control::Unknown { tag, .. } => Md::code_span(&format!("[{tag}]")),
+        Control::AutoNumber { num, format, .. } => {
+            text(&super::auto_number_text(*num, format), ctx)
+        }
+        Control::Unknown { .. } => {
+            Md::code_span(&super::styled_display(control).unwrap_or_default())
+        }
         // Invisible or textless: bookmarks, index marks, number restarts and
         // hiding, lines, arcs, curves, connectors.
         _ => Md::new(),
@@ -768,15 +1667,8 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             Html::text(&format!("{main_text}({sub_text})"))
         }
         Control::Compose { compose_text, .. } => Html::text(compose_text),
-        Control::CrossRef { target, display_text, .. } => {
-            if display_text.is_empty() {
-                Html::text(&format!("[{}]", target.as_display()))
-            } else {
-                Html::text(display_text)
-            }
-        }
-        Control::Field { hint_text, display_text, .. } => {
-            Html::text(field_text(hint_text, display_text))
+        Control::CrossRef { .. } | Control::Field { .. } => {
+            Html::text(&super::styled_display(control).unwrap_or_default())
         }
         // The memo comment shown as cell text, as before.
         Control::FieldBoundary {
@@ -785,6 +1677,8 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             .annotation
             .as_ref()
             .map_or_else(Html::new, |content| Html::text(memo(content, styles, st, ctx).as_str())),
+        // HTML text makes no block, so the anchor's text runs as before.
+        // 이것을 실패시키는 것: 문단 렌더러로(`memo_anchor_out_of_scope_is_base_output`).
         Control::Memo { content, anchor_runs, .. } => {
             let mut html = Html::text(
                 &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
@@ -795,7 +1689,9 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
         Control::AutoNumber { num, format, .. } => {
             Html::text(&super::auto_number_text(*num, format))
         }
-        Control::Unknown { tag, .. } => Html::text(&format!("`[{tag}]`")),
+        Control::Unknown { .. } => {
+            Html::text(&format!("`{}`", super::styled_display(control).unwrap_or_default()))
+        }
         _ => Html::new(),
     }
 }
@@ -810,39 +1706,35 @@ fn note_definition(
     ctx: Ctx,
 ) -> Md {
     let raw = match ctx.enter() {
-        Some(inner) => paragraphs
-            .iter()
-            .map(|p| super::guard::deep_text(p, inner.depth))
+        // Notes in a note body are written inline, not registered: none to
+        // keep as references.
+        Some(inner) => fallback(paragraphs, inner.depth, st)
+            .into_iter()
+            .map(Md::into_string)
             .collect::<Vec<_>>()
             .join(" "),
-        None => TOO_DEEP.to_string(),
+        None => super::guard::plain_text(TOO_DEEP),
     };
-    if matches!(control, Control::Footnote { .. }) {
+    let mark = if matches!(control, Control::Footnote { .. }) {
         st.notes.add_footnote(body, raw, st.at)
     } else {
         st.notes.add_endnote(body, raw, st.at)
-    }
-}
-
-/// A field's visible text: its filled value, else its hint, else `____`.
-fn field_text<'a>(hint_text: &'a Option<String>, display_text: &'a str) -> &'a str {
-    if display_text.is_empty() {
-        hint_text.as_deref().unwrap_or("____")
-    } else {
-        display_text
-    }
+    };
+    let at = st.note_at(control as *const Control as usize);
+    st.note_marks.insert(at, mark.clone());
+    mark
 }
 
 /// Equation script as Markdown text with `$` escaped too, so it opens no
 /// math. 이것을 실패시키는 것: `$` escape 삭제
 /// (`markdown_equation_writes_no_html_or_link`).
-fn math_free_text(raw: &str) -> Md {
+fn math_free_text(raw: &str, ctx: Ctx) -> Md {
     let mut md = Md::new();
     for (i, piece) in raw.split('$').enumerate() {
         if i > 0 {
             md.push_syntax("\\$");
         }
-        md.push(Md::text(piece));
+        md.push(text(piece, ctx));
     }
     md
 }
@@ -851,8 +1743,8 @@ fn math_free_text(raw: &str) -> Md {
 /// broken up so it cannot close the comment. Author/date are no longer
 /// carried (Wave 12e-Memo): HWPX wire never surfaced them.
 fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
-    let Some(inner) = ctx.enter() else { return Md::syntax(st.too_deep("memo")) };
-    let inner = Ctx { in_comment: true, ..inner };
+    let Some(inner) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
+    let inner = Ctx { in_comment: true, guarded: false, ..inner };
     let body: Vec<Md> =
         content.iter().map(|p| paragraph_text_styled(p, styles, st, inner)).collect();
     let body = Md::join(body, " ");
@@ -870,8 +1762,8 @@ fn extract_note_body(
     st: &mut State,
     ctx: Ctx,
 ) -> Vec<Md> {
-    let Some(inner) = ctx.enter() else { return vec![Md::syntax(st.too_deep("note"))] };
-    let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
+    let Some(inner) = ctx.enter() else { return vec![Md::syntax(TOO_DEEP)] };
+    let inner = Ctx { note_depth: ctx.note_depth + 1, guarded: false, ..inner };
     paragraphs
         .iter()
         .map(|p| paragraph_text_styled(p, styles, st, inner).layout(|s| s.trim().to_string()))
@@ -887,8 +1779,8 @@ fn extract_note_body_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Vec<Html> {
-    let Some(inner) = ctx.enter() else { return vec![Html::syntax(st.too_deep("note"))] };
-    let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
+    let Some(inner) = ctx.enter() else { return vec![Html::syntax(TOO_DEEP)] };
+    let inner = Ctx { note_depth: ctx.note_depth + 1, guarded: false, ..inner };
     paragraphs
         .iter()
         .map(|p| extract_paragraph_text_html(p, styles, st, inner).trimmed())
@@ -899,7 +1791,7 @@ fn extract_note_body_html(
 /// A text box's or shape's text in Markdown: each paragraph drawn, joined
 /// by a space and trimmed.
 fn shape_text(paragraphs: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
-    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("shape text")) };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let parts: Vec<Md> =
         paragraphs.iter().map(|p| paragraph_text_styled(p, styles, st, ctx)).collect();
     Md::join(parts, " ").layout(|s| s.trim().to_string())
@@ -913,7 +1805,7 @@ fn shape_text_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Html {
-    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("shape text")) };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(TOO_DEEP) };
     let parts: Vec<Html> =
         paragraphs.iter().map(|p| extract_paragraph_text_html(p, styles, st, ctx)).collect();
     Html::join(parts, " ").trimmed()
@@ -956,7 +1848,8 @@ impl InlineFormat {
     ///   rules when adjacent to other text), or formatting has no markdown
     ///   equivalent → HTML tags.
     /// - Otherwise → markdown markers (`**`, `*`, `~~`).
-    fn wrap(&self, text: &str) -> Md {
+    fn wrap(&self, text: &str, ctx: Ctx) -> Md {
+        let md = |raw: &str| self::text(raw, ctx);
         if text.is_empty() {
             return Md::new();
         }
@@ -965,7 +1858,7 @@ impl InlineFormat {
         let has_any = has_basic || self.underline || self.superscript || self.subscript;
 
         if !has_any {
-            return Md::text(text);
+            return md(text);
         }
 
         // Move leading/trailing whitespace outside formatting markers.
@@ -983,6 +1876,7 @@ impl InlineFormat {
         let has_boundary_punct = trimmed.chars().next().is_some_and(|c| c.is_ascii_punctuation())
             || trimmed.chars().next_back().is_some_and(|c| c.is_ascii_punctuation());
 
+        // Whitespace alone: no rule can fire on it.
         let mut out = Md::text(leading);
         if needs_html_only || (has_basic && (has_marker_conflicts || has_boundary_punct)) {
             // HTML tags around Markdown text: a renderer still reads Markdown
@@ -1003,7 +1897,7 @@ impl InlineFormat {
             for tag in &tags {
                 out.push(Md::tag(tag, false));
             }
-            out.push(Md::text(trimmed));
+            out.push(md(trimmed));
             for tag in tags.iter().rev() {
                 out.push(Md::tag(tag, true));
             }
@@ -1019,7 +1913,7 @@ impl InlineFormat {
                 out.push_syntax("~~");
             }
             out.push_syntax(marker);
-            out.push(Md::text(trimmed));
+            out.push(md(trimmed));
             out.push_syntax(marker);
             if self.strikeout {
                 out.push_syntax("~~");
@@ -1027,6 +1921,25 @@ impl InlineFormat {
         }
         out.push(Md::text(trailing));
         out
+    }
+
+    /// The markers [`InlineFormat::wrap`] would write `text` with, `None`
+    /// where it writes no markers (plain text, HTML tags, whitespace only).
+    fn marks(&self, text: &str) -> Option<Vec<Mark>> {
+        let trimmed = text.trim();
+        let has_basic = self.bold || self.italic || self.strikeout;
+        let html = self.underline
+            || self.superscript
+            || self.subscript
+            || trimmed.chars().any(|c| matches!(c, '*' | '_' | '~'))
+            || trimmed.chars().next().is_some_and(|c| c.is_ascii_punctuation())
+            || trimmed.chars().next_back().is_some_and(|c| c.is_ascii_punctuation());
+        if !has_basic || html || trimmed.is_empty() {
+            return None;
+        }
+        let marks =
+            [(self.strikeout, Mark::Strike), (self.bold, Mark::Bold), (self.italic, Mark::Italic)];
+        Some(marks.into_iter().filter_map(|(on, m)| on.then_some(m)).collect())
     }
 
     /// Wraps text with HTML inline formatting tags.
@@ -1103,12 +2016,37 @@ fn table_to_styled_markdown(
 /// so they leave no picture asset and no note definition behind.
 /// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
 fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
-    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("table")) };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let width = table.rows.first().map_or(0, |r| r.cells.len()).max(1);
     let mut rows: Vec<Vec<Cell>> = Vec::new();
     for (ri, row) in table.rows.iter().enumerate() {
         let mut cells = Vec::new();
         for cell in row.cells.iter().take(if ri == 0 { usize::MAX } else { width }) {
+            let ctx = Ctx { cell: true, ..ctx };
+            if ctx.guarded {
+                let mut line = Line::default();
+                for (i, p) in cell.paragraphs.iter().enumerate() {
+                    if i > 0 {
+                        line.raw(Md::syntax("\n"));
+                    }
+                    let mut part = Line::default();
+                    guarded_runs(p, styles, st, ctx, &mut part);
+                    line.joined(part);
+                }
+                let (md, kept) = line.finish(ctx);
+                let md = if kept {
+                    md
+                } else {
+                    // The final cell is the check and fallback unit. Other
+                    // cells, the table and its outer caption stay intact.
+                    // 이것을 실패시키는 것: 칸 실패를 부모 Body로 전파
+                    // (`joined_cell_emphasis_stays_local`).
+                    super::guard::written_as_text(&mut st.warnings, &mut st.warned, st.at);
+                    Md::join(fallback(&cell.paragraphs, ctx.depth, st), "\n")
+                };
+                cells.push(md.into_cell());
+                continue;
+            }
             let parts: Vec<Md> =
                 cell.paragraphs.iter().map(|p| paragraph_text_styled(p, styles, st, ctx)).collect();
             cells.push(Md::join(parts, "\n").into_cell());
@@ -1126,7 +2064,7 @@ fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ct
 
 /// Renders a table as HTML `<table>` with colspan/rowspan attributes.
 fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Html {
-    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("table")) };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(TOO_DEEP) };
     let mut lines = vec![Html::syntax("<table>"), Html::syntax("<tbody>")];
     for row in &table.rows {
         lines.push(Html::syntax("<tr>"));
@@ -1152,7 +2090,8 @@ fn extract_paragraph_text_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Html {
-    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
+    let mut kept = None;
+    let paragraph = expanded(paragraph, st, &mut kept);
     let mut output = Html::new();
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
@@ -1204,6 +2143,34 @@ fn extract_paragraph_text_html(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// A guarded caption retains its original paragraph/join boundaries but
+/// does not finish (or parse) a child line. All its ranges reach the final
+/// Body/cell check, including nested captions and shape/memo-anchor text.
+/// 이것을 실패시키는 것: 캡션을 독립 검사한 Raw로 붙이기
+/// (`captions_are_checked_in_the_final_body`).
+fn guarded_caption(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+) -> Line {
+    let mut line = Line::default();
+    let Some(caption) = caption else { return line };
+    let Some(ctx) = ctx.enter() else {
+        line.raw(Md::syntax(TOO_DEEP));
+        return line;
+    };
+    for p in &caption.paragraphs {
+        let mut part = Line::default();
+        guarded_runs(p, styles, st, ctx, &mut part);
+        if !part.is_blank() {
+            line.raw(Md::syntax("\n\n"));
+            line.joined(part);
+        }
+    }
+    line
+}
+
 /// Extracts the filename stem as alt text from an image path.
 /// The file stem of an image path (alt text before any escaping).
 fn image_stem(path: &str) -> &str {
@@ -1239,7 +2206,7 @@ fn styled_caption(
     ctx: Ctx,
 ) -> Md {
     let Some(caption) = caption else { return Md::new() };
-    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("caption")) };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let mut out = Md::new();
     for p in &caption.paragraphs {
         let t = paragraph_text_styled(p, styles, st, ctx);
@@ -1263,7 +2230,7 @@ fn html_caption(
     ctx: Ctx,
 ) -> Html {
     let Some(caption) = caption else { return Html::new() };
-    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("caption")) };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(TOO_DEEP) };
     let mut out = Html::new();
     for p in &caption.paragraphs {
         let t = extract_paragraph_text_html(p, styles, st, ctx);
@@ -1574,7 +2541,7 @@ mod tests {
         let fmt = InlineFormat { bold: true, ..Default::default() };
         // Markdown is still read inside inline HTML: the text is escaped.
         assert_eq!(
-            fmt.wrap("**산·학·연 협력** 가점"),
+            fmt.wrap("**산·학·연 협력** 가점", Ctx::default()),
             "<strong>\\*\\*산·학·연 협력\\*\\* 가점</strong>"
         );
     }
@@ -1582,7 +2549,7 @@ mod tests {
     #[test]
     fn inline_format_no_conflict_uses_markdown() {
         let fmt = InlineFormat { bold: true, ..Default::default() };
-        assert_eq!(fmt.wrap("기관명칭 기입 요망"), "**기관명칭 기입 요망**");
+        assert_eq!(fmt.wrap("기관명칭 기입 요망", Ctx::default()), "**기관명칭 기입 요망**");
     }
 
     // -----------------------------------------------------------------------
@@ -2311,7 +3278,7 @@ mod tests {
     #[test]
     fn inline_format_wrap_empty() {
         let fmt = InlineFormat { bold: true, ..Default::default() };
-        assert_eq!(fmt.wrap(""), "");
+        assert_eq!(fmt.wrap("", Ctx::default()), "");
     }
 
     #[test]
@@ -2451,25 +3418,25 @@ mod tests {
     #[test]
     fn inline_format_underline_wraps_as_html_u() {
         let fmt = InlineFormat { underline: true, ..Default::default() };
-        assert_eq!(fmt.wrap("underlined"), "<u>underlined</u>");
+        assert_eq!(fmt.wrap("underlined", Ctx::default()), "<u>underlined</u>");
     }
 
     #[test]
     fn inline_format_superscript_wraps_as_html_sup() {
         let fmt = InlineFormat { superscript: true, ..Default::default() };
-        assert_eq!(fmt.wrap("sup text"), "<sup>sup text</sup>");
+        assert_eq!(fmt.wrap("sup text", Ctx::default()), "<sup>sup text</sup>");
     }
 
     #[test]
     fn inline_format_subscript_wraps_as_html_sub() {
         let fmt = InlineFormat { subscript: true, ..Default::default() };
-        assert_eq!(fmt.wrap("sub text"), "<sub>sub text</sub>");
+        assert_eq!(fmt.wrap("sub text", Ctx::default()), "<sub>sub text</sub>");
     }
 
     #[test]
     fn inline_format_bold_and_underline_combines_markdown_and_html() {
         let fmt = InlineFormat { bold: true, underline: true, ..Default::default() };
-        let result = fmt.wrap("text");
+        let result = fmt.wrap("text", Ctx::default());
         assert!(result.contains("<u>"), "expected <u> in: {result}");
     }
 
@@ -3431,6 +4398,74 @@ mod tests {
     /// whichever comes first; a picture without bytes never shares a key with
     /// a file.
     ///
+    /// Keys found by looking up the keys already taken are the keys the
+    /// full walk from `a.png` finds, for every order of five of seven pictures
+    /// (two file names, one another's `-2`; equal bytes, other bytes, none), and
+    /// the assets end the same.
+    /// 이것을 실패시키는 것: 같은 바이트 재사용 조회 삭제 · 바이트 없는 키 재사용 조회 삭제 ·
+    /// 접두 기록에 넘친 키 넣기.
+    #[test]
+    fn asset_keys_match_the_full_walk() {
+        let pool: [(&str, Option<&[u8]>); 7] = [
+            ("A/a.png", Some(b"1")),
+            ("B/a.png", Some(b"2")),
+            ("C/a.png", None),
+            ("D/a.png", Some(b"1")),
+            ("E/a-2.png", Some(b"2")),
+            ("F/a-2.png", None),
+            ("G/a.png", None),
+        ];
+        let mut styles = MockStyles::new();
+        for (p, d) in pool {
+            if let Some(d) = d {
+                styles.image_data.insert(p.to_string(), d.to_vec());
+            }
+        }
+        // The walk before: every key from the candidate on.
+        let walk = |images: &mut HashMap<String, Vec<u8>>,
+                    link_only: &mut std::collections::HashSet<String>,
+                    path: &str| {
+            let candidate = image_rel_path(path, &styles);
+            let data = styles.image_data(path);
+            let mut key = candidate.clone();
+            let mut n = 1;
+            loop {
+                match (images.get(&key), data) {
+                    (Some(e), Some(d)) if e.as_slice() == d => break,
+                    (None, Some(_)) if !link_only.contains(&key) => break,
+                    (None, None) => break,
+                    _ => {
+                        n += 1;
+                        key = suffixed_key(&candidate, n);
+                    }
+                }
+            }
+            match data {
+                Some(d) => {
+                    images.entry(key.clone()).or_insert_with(|| d.to_vec());
+                }
+                None => {
+                    link_only.insert(key.clone());
+                }
+            }
+            key
+        };
+        let mut checked = 0;
+        for code in 0..7usize.pow(5) {
+            let order: Vec<&str> = (0..5).map(|k| pool[code / 7usize.pow(k) % 7].0).collect();
+            let mut assets = Assets::default();
+            let (mut images, mut link_only) = (HashMap::new(), std::collections::HashSet::new());
+            for path in &order {
+                let want = walk(&mut images, &mut link_only, path);
+                assert_eq!(assets.key(path, &styles, true), want, "{order:?}");
+            }
+            assert_eq!(assets.images, images, "{order:?}");
+            assert_eq!(assets.link_only, link_only, "{order:?}");
+            checked += 1;
+        }
+        assert_eq!(checked, 16807);
+    }
+
     /// 이것을 실패시키는 것: 충돌 시 덮어쓰기 · 접미사 규칙 바꾸기 · 바이트 없는 링크가
     /// 남의 파일 키를 쓰기 · 파일이 바이트 없는 링크의 키를 쓰기.
     #[test]
@@ -3500,6 +4535,69 @@ mod tests {
         );
         assert_eq!(out.markdown, "| h |\n| --- |\n| v |");
         assert!(out.images.is_empty());
+    }
+
+    /// An equation is not checked inside, but emphasis opened before it
+    /// must not be open over it.
+    /// 이것을 실패시키는 것: 바깥 강조 침범 검사 삭제.
+    #[test]
+    fn emphasis_reaching_into_math_fails() {
+        // Bold opened before the equation, still open over it.
+        let md = "**x$a*b$**";
+        let (markers, texts) = (vec![0..2, 8..10], vec![(2..3, vec![Mark::Bold])]);
+        let math = [std::ops::Range { start: 3, end: 8 }];
+        assert!(!emphasis_kept(md, &markers, &texts, &math, false));
+        // Closed before it: the equation's own `*` is not checked.
+        let md = "**x**$a*b*c$";
+        let (markers, texts) = (vec![0..2, 3..5], vec![(2..3, vec![Mark::Bold])]);
+        let math = [std::ops::Range { start: 5, end: 12 }];
+        assert!(emphasis_kept(md, &markers, &texts, &math, false));
+    }
+
+    /// The emphasis check fails closed: text the parser never reads as text
+    /// (here inside an HTML block) is not passed; a line-start comment ends
+    /// its line before the check reads (`comment_ends_line`); in a cell HTML
+    /// is inline and the text read.
+    /// 이것을 실패시키는 것: 읽지 않은 글을 통과시키기 · 칸을 칸 밖에서 읽기 ·
+    /// 검사에 줄 끝내기를 적용하지 않기.
+    #[test]
+    fn emphasis_check_fails_closed() {
+        // `a` is in an HTML block (the table runs to a blank line): never
+        // read as text.
+        let md = "<table>\n**a**";
+        let (markers, texts) = (vec![8..10, 11..13], vec![(10..11, vec![Mark::Bold])]);
+        assert!(!emphasis_kept(md, &markers, &texts, &[], false));
+        // A comment at a line start ends its line before the check reads it,
+        // as the block is written: `**a**` after it is read.
+        let md = "<!-- c -->**a**";
+        let (markers, texts) = (vec![10..12, 13..15], vec![(12..13, vec![Mark::Bold])]);
+        assert!(emphasis_kept(md, &markers, &texts, &[], false));
+        // In a cell HTML is inline.
+        let md = "<table>**a**";
+        let (markers, texts) = (vec![7..9, 10..12], vec![(9..10, vec![Mark::Bold])]);
+        assert!(emphasis_kept(md, &markers, &texts, &[], true));
+    }
+
+    /// Both ordered range lists track insertions and whitespace removals,
+    /// including multiple edits between ranges and UTF-8 after a trim.
+    /// 이것을 실패시키는 것: 누적 이동량 무시 · 목록 간 커서 공유 · 변경 하나만 건너뛰기.
+    #[test]
+    fn emphasis_offsets_follow_all_g2_edits() {
+        let mut md = String::from(" \u{3000}");
+        let (mut markers, mut texts) = (Vec::new(), Vec::new());
+        for i in 0..32 {
+            for _ in 0..1 + i % 3 {
+                md.push_str("<!-- c -->");
+                md.push_str(["", " ", "\t \u{3000}", "\n"][i % 4]);
+            }
+            let at = md.len();
+            md.push_str("**가**\n");
+            markers.extend([at..at + 2, at + 5..at + 7]);
+            texts.push((at + 2..at + 5, vec![Mark::Bold]));
+        }
+        assert!(emphasis_kept(&md, &markers, &texts, &[], false));
+        texts[17].1 = vec![Mark::Italic];
+        assert!(!emphasis_kept(&md, &markers, &texts, &[], false));
     }
 
     /// The two shapes of the earlier false positives: a group holding a text
@@ -3697,11 +4795,16 @@ mod tests {
                     let mut blocks = st.notes.render_definitions();
                     assert_eq!(blocks.len(), 1);
                     assert!(blocks[0].markdown.contains(expected));
-                    assert_eq!(blocks[0].source.as_ref().unwrap().texts, vec![expected]);
+                    // The fallback Markdown, its text escaped.
+                    assert_eq!(
+                        blocks[0].source.as_ref().unwrap().texts,
+                        vec![super::super::guard::plain_text(expected)]
+                    );
                     blocks[0].markdown = "<script>bad</script>".into();
                     let allowed = super::super::guard::Allowed {
                         tags: super::super::guard::STYLED_TAGS,
                         destinations: &st.destinations,
+                        decoder_structure: true,
                     };
                     let md = super::super::guard::checked(blocks, &allowed, &mut st.warnings);
                     assert!(md.ends_with(&super::super::guard::plain_text(expected)), "{md}");

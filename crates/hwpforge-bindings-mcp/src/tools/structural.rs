@@ -5,7 +5,7 @@ use serde::Serialize;
 use hwpforge::ops::{self, OpsWarning};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Output of a structural edit.
 #[derive(Debug, Serialize)]
@@ -17,23 +17,7 @@ pub struct StructuralData {
     pub change: String,
     /// Non-blocking advisories (e.g. index-mark removal). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
-}
-
-/// Renders one warning into this file's `Vec<String>` shape: a
-/// [`OpsWarning::Structural`] advisory keeps its own `Display` (unchanged,
-/// pre-migration behaviour); every other kind — chiefly `Decode`, for
-/// example `LAYOUT_CACHE_DROPPED` — renders as `"{code}: {message}"` via
-/// [`OpsWarning::info`]. Matches the CLI's `structural.rs::render_warning`
-/// (`1ac435b`) so the two frontends never disagree about the string.
-fn render_warning(warning: &OpsWarning) -> String {
-    match warning {
-        OpsWarning::Structural(sw) => sw.to_string(),
-        other => {
-            let info = other.info();
-            format!("{}: {}", info.code, info.message)
-        }
-    }
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Keeps the advisory scan's own warnings (`INDEX_MARK_REMOVED`, …) and,
@@ -46,19 +30,20 @@ fn render_warning(warning: &OpsWarning) -> String {
 /// (see that module's doc comment), and this filter does not reorder, so the
 /// array comes out decode-first — the same order the CLI's `structural.rs`
 /// renders (`out.warnings.iter().map(render_warning)`, no reordering there
-/// either). Every existing `Structural` string stays byte-identical:
-/// [`render_warning`] still calls `sw.to_string()` for that variant.
+/// either). Each entry is a `{code, message, hint?}` object from
+/// [`compat::warning`], the same shape every other tool reports; a
+/// `Structural` advisory's `message` is its `Display` text.
 ///
 /// Encode warnings pass too: `insert_para` reports a text it cleaned of
 /// characters XML cannot carry as `XML_FORBIDDEN_CHARS_REMOVED`, after the
 /// decode warnings.
-fn structural_advisories(warnings: &[OpsWarning]) -> Vec<String> {
+fn structural_advisories(warnings: &[OpsWarning]) -> Vec<ToolWarningInfo> {
     warnings
         .iter()
         .filter(|w| {
             matches!(w, OpsWarning::Structural(_) | OpsWarning::Decode(_) | OpsWarning::Encode(_))
         })
-        .map(render_warning)
+        .map(compat::warning)
         .collect()
 }
 
@@ -71,7 +56,7 @@ pub fn run_delete_para(
 ) -> Result<StructuralData, ToolErrorInfo> {
     if indices.is_empty() {
         return Err(ToolErrorInfo::new(
-            "DELETE_NO_TARGET",
+            hwpforge_foundation::diagnostics::OpsCode::DeleteNoTarget,
             "Pass at least one paragraph index",
             "indices must be a non-empty list of top-level paragraph indices.",
         ));
@@ -108,7 +93,7 @@ pub fn run_insert_para(
         (None, Some(ts)) if !ts.is_empty() => ts.to_vec(),
         _ => {
             return Err(ToolErrorInfo::new(
-                "INSERT_TEXT_REQUIRED",
+                hwpforge_foundation::diagnostics::OpsCode::InsertTextRequired,
                 "Provide exactly one of `text` or `texts` (non-empty)",
                 "Use `text` for a single paragraph or `texts` for a contiguous block.",
             ));
@@ -142,7 +127,7 @@ pub fn run_insert_para(
 fn write_bytes(bytes: &[u8], path: &str) -> Result<(), ToolErrorInfo> {
     std::fs::write(path, bytes).map_err(|e| {
         ToolErrorInfo::new(
-            "FILE_WRITE_FAILED",
+            hwpforge_foundation::diagnostics::OpsCode::FileWriteFailed,
             format!("Cannot write '{path}': {e}"),
             "Check the output path and permissions.",
         )
@@ -210,8 +195,7 @@ mod tests {
         let json = serde_json::to_value(&data).unwrap();
         let warnings = json["warnings"].as_array().expect("warnings is an array");
         assert_eq!(warnings.len(), 1, "{json}");
-        let first = warnings[0].as_str().expect("warning entries are strings");
-        assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
+        assert_eq!(warnings[0]["code"], "LAYOUT_CACHE_DROPPED", "{json}");
     }
 
     /// A text holding a character XML cannot carry is inserted without it,
@@ -227,12 +211,8 @@ mod tests {
                 .unwrap();
 
         assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
-        assert!(
-            data.warnings[0].starts_with("XML_FORBIDDEN_CHARS_REMOVED: "),
-            "{:?}",
-            data.warnings
-        );
-        assert!(data.warnings[0].contains("new paragraph 2"), "{:?}", data.warnings);
+        assert_eq!(data.warnings[0].code, "XML_FORBIDDEN_CHARS_REMOVED", "{:?}", data.warnings);
+        assert!(data.warnings[0].message.contains("new paragraph 2"), "{:?}", data.warnings);
     }
 
     /// The documented merge order — what the decode reported, then what the
@@ -250,10 +230,9 @@ mod tests {
         let json = serde_json::to_value(&data).unwrap();
         let warnings = json["warnings"].as_array().expect("warnings is an array");
         assert_eq!(warnings.len(), 2, "{json}");
-        let first = warnings[0].as_str().expect("warning entries are strings");
-        let second = warnings[1].as_str().expect("warning entries are strings");
-        assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
-        assert!(second.contains("index-mark"), "{json}");
+        assert_eq!(warnings[0]["code"], "LAYOUT_CACHE_DROPPED", "{json}");
+        assert_eq!(warnings[1]["code"], "INDEX_MARK_REMOVED", "{json}");
+        assert!(warnings[1]["message"].as_str().unwrap().contains("index-mark"), "{json}");
     }
 
     #[test]
@@ -313,7 +292,9 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn error_code_mapping_covers_common_rejections() {
+        // 이것을 실패시키는 것: T9 StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
         let dir = tempfile::tempdir().unwrap();
         let base = base_doc(&dir);
         let out = dir.path().join("out.hwpx");
@@ -321,9 +302,9 @@ mod tests {
         // out-of-range anchor / index.
         let err = run_insert_para(&base, 0, 99, false, Some("x"), None, out.to_str().unwrap())
             .unwrap_err();
-        assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
+        assert_eq!(err.code, "PARAGRAPH_OUT_OF_RANGE");
         let err = run_delete_para(&base, 9, &[0], out.to_str().unwrap()).unwrap_err();
-        assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
+        assert_eq!(err.code, "SECTION_OUT_OF_RANGE");
 
         // multiline text.
         let err = run_insert_para(&base, 0, 1, false, Some("a\nb"), None, out.to_str().unwrap())
@@ -339,7 +320,7 @@ mod tests {
         std::fs::write(&garbage, b"not a zip").unwrap();
         let err =
             run_delete_para(garbage.to_str().unwrap(), 0, &[0], out.to_str().unwrap()).unwrap_err();
-        assert_eq!(err.code, "STRUCTURAL_CODEC");
+        assert_eq!(err.code, "DECODE_FAILED");
     }
 
     fn fixture(rel: &str) -> String {

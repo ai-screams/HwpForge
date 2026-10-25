@@ -60,26 +60,27 @@ pub struct Run {
 
 impl Run {
     /// 이 run 안에 중첩된 모든 문단을 재귀 방문한다 (표 셀·캡션·컨트롤 포함).
+    #[cfg(test)]
     pub(crate) fn walk_paragraphs_mut(
         &mut self,
         f: &mut dyn FnMut(&mut crate::paragraph::Paragraph),
     ) {
         match &mut self.content {
-            RunContent::Table(table) => table.walk_paragraphs_mut(f),
-            RunContent::Control(control) => control.walk_paragraphs_mut(f),
+            RunContent::Table(t) => t.walk_paragraphs_mut(f),
+            RunContent::Control(c) => c.walk_paragraphs_mut(f),
             RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => {}
         }
     }
 
-    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 재귀 대상 동일.
+    /// `walk_paragraphs_mut` 의 불변 쌍둥이 — 재귀 대상 동일.
     ///
     /// [`RunContent::Image`] 안으로는 재귀하지 않는다 (이미지 캡션 문단은
     /// 방문 대상이 아니다) — 가변판과 같은 선택이므로 두 순회의 문단
     /// 번호가 일치한다.
     pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&crate::paragraph::Paragraph)) {
         match &self.content {
-            RunContent::Table(table) => table.walk_paragraphs(f),
-            RunContent::Control(control) => control.walk_paragraphs(f),
+            RunContent::Table(t) => t.walk_paragraphs(f),
+            RunContent::Control(c) => c.walk_paragraphs(f),
             RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => {}
         }
     }
@@ -92,67 +93,24 @@ impl Run {
     }
 
     pub(crate) fn walk_tables(&self, f: &mut dyn FnMut(&Table)) {
-        // `own` visits the tables a run holds outside any paragraph of its
-        // own: itself, its picture caption's tables (the paragraph walk
-        // does not enter run pictures' captions) and, for a memo, its anchor
-        // runs (review r3 M3 — not paragraphs either). Every paragraph the
-        // run nests is then walked and its runs looked at the same way.
-        // 이것을 실패시키는 것: 메모 앵커 갈래 삭제(`cell_zone_validation_reaches_nested_tables`
-        // 의 메모 앵커 표).
-        fn own(run: &Run, f: &mut dyn FnMut(&Table)) {
-            match &run.content {
-                RunContent::Table(t) => f(t),
-                RunContent::Image(img) => {
-                    for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
-                        cp.walk_tables(f);
-                    }
-                }
-                RunContent::Control(c) => {
-                    if let Control::Memo { anchor_runs, .. } = c.as_ref() {
-                        for anchor in anchor_runs {
-                            own(anchor, f);
-                        }
-                    }
-                }
-                RunContent::Text(_) | RunContent::InlineText(_) => {}
-            }
+        if matches!(self.content, RunContent::Text(_) | RunContent::InlineText(_)) {
+            return;
         }
-        own(self, f);
-        self.walk_paragraphs(&mut |q| {
-            for run in &q.runs {
-                own(run, f);
-            }
-        });
+        crate::walk::tables(std::iter::once(self), f);
     }
 
+    #[cfg(test)]
     pub(crate) fn walk_tables_mut(&mut self, f: &mut dyn FnMut(&mut Table)) {
-        fn own(run: &mut Run, f: &mut dyn FnMut(&mut Table)) {
-            match &mut run.content {
-                RunContent::Table(t) => f(t),
-                RunContent::Image(img) => {
-                    for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
-                        cp.walk_tables_mut(f);
-                    }
-                }
-                RunContent::Control(c) => {
-                    if let Control::Memo { anchor_runs, .. } = c.as_mut() {
-                        for anchor in anchor_runs {
-                            own(anchor, f);
-                        }
-                    }
-                }
-                RunContent::Text(_) | RunContent::InlineText(_) => {}
-            }
+        if matches!(self.content, RunContent::Text(_) | RunContent::InlineText(_)) {
+            return;
         }
-        own(self, f);
-        self.walk_paragraphs_mut(&mut |q| {
-            for run in &mut q.runs {
-                own(run, f);
-            }
-        });
+        crate::walk::tables_mut(std::iter::once(self), f);
     }
 
     /// Creates a text run.
+    ///
+    /// Use `\n` for body line breaks. HWPX writes and reads CR as a line break;
+    /// encoding folds CRLF within one text fragment. This constructor keeps the input.
     ///
     /// This is the most common constructor. Most runs in a typical
     /// document are text.
@@ -258,7 +216,8 @@ impl std::fmt::Display for Run {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum RunContent {
-    /// Plain text.
+    /// Plain text. Use `\n` for line breaks; HWPX writes and reads CR as
+    /// a line break, folding CRLF only when encoding one text fragment.
     Text(String),
     /// Rich inline text that needs per-segment attributes (e.g. an
     /// inline `<hp:tab width="..." leader="..." type="..."/>`). Used

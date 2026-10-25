@@ -54,6 +54,7 @@ pub mod cell_edit;
 mod color;
 pub mod decoder;
 pub mod default_styles;
+mod depth;
 pub mod diagnostics;
 mod diff;
 mod encoder;
@@ -104,13 +105,13 @@ pub use diff::{
 pub use encoder::{
     partition_semantic_loss, EncodeOptions, EncodeOutcome, EncodeWarning, HwpxEncoder,
 };
-pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
+pub use error::{CodecFailure, CodecStage, HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
     ExportedDocument, ExportedSection, ExportedStyles, PreservedTextSlot, SectionPreservation,
     TextLocator, FORMAT_VERSION, SECTION_PRESERVATION_VERSION,
 };
 pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
-pub use patch::HwpxPatcher;
+pub use patch::{HwpxPatcher, PatchError};
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
 pub use read::{
     CellView, DocumentOutline, EmbeddedContent, HwpxReader, OutlineBookmark, OutlineHeading,

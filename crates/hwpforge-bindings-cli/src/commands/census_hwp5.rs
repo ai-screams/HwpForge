@@ -1,4 +1,7 @@
 //! Build a raw fixture census for HWP5 documents and optional HWPX companions.
+use crate::compat::Command;
+use crate::error::{CliCode, CliOnly};
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::Path;
 
@@ -75,17 +78,20 @@ pub fn run(
     output: &Option<std::path::PathBuf>,
     json_mode: bool,
 ) {
-    check_file_size(input, json_mode);
+    check_file_size(input, json_mode, Command::CensusHwp5);
     if let Some(companion) = companion {
-        check_file_size(companion, json_mode);
+        check_file_size(companion, json_mode, Command::CensusHwp5);
     }
 
-    let input_bytes = read_input(input, json_mode);
+    let input_bytes = read_input(input, json_mode, Command::CensusHwp5);
 
     let hwp5 = census_hwp5(&input_bytes).unwrap_or_else(|err| {
-        CliError::new("HWP5_CENSUS_FAILED", format!("Cannot census '{}': {err}", input.display()))
-            .with_hint("Check that the file is a valid HWP5 document")
-            .exit(json_mode, 2)
+        CliError::new(
+            CliCode::Cli(CliOnly::Hwp5CensusFailed),
+            format!("Cannot census '{}': {err}", input.display()),
+        )
+        .with_hint("Check that the file is a valid HWP5 document")
+        .exit(json_mode, Command::CensusHwp5)
     });
 
     let companion = companion.as_ref().map(|path| census_hwpx_companion(path, json_mode));
@@ -103,10 +109,10 @@ pub fn run(
         let json = serde_json::to_string_pretty(&result).unwrap();
         std::fs::write(output, json).unwrap_or_else(|err| {
             CliError::new(
-                "FILE_WRITE_FAILED",
+                CliCode::Ops(OpsCode::FileWriteFailed),
                 format!("Cannot write census output '{}': {err}", output.display()),
             )
-            .exit(json_mode, 1)
+            .exit(json_mode, Command::CensusHwp5)
         });
     }
 
@@ -118,25 +124,25 @@ pub fn run(
 }
 
 fn census_hwpx_companion(path: &Path, json_mode: bool) -> HwpxCompanionCensus {
-    let bytes = read_input(path, json_mode);
+    let bytes = read_input(path, json_mode, Command::CensusHwp5);
 
     let mut pkg = PackageReader::new(&bytes).unwrap_or_else(|err| {
         CliError::new(
-            "HWPX_CENSUS_FAILED",
+            CliCode::Cli(CliOnly::HwpxCensusFailed),
             format!("Cannot census companion '{}': {err}", path.display()),
         )
         .with_hint("Check that the companion file is a valid HWPX document")
-        .exit(json_mode, 2)
+        .exit(json_mode, Command::CensusHwp5)
     });
 
     let package_entries = pkg
         .list_entries()
         .unwrap_or_else(|err| {
             CliError::new(
-                "HWPX_CENSUS_FAILED",
+                CliCode::Cli(CliOnly::HwpxCensusFailed),
                 format!("Cannot list HWPX entries '{}': {err}", path.display()),
             )
-            .exit(json_mode, 2)
+            .exit(json_mode, Command::CensusHwp5)
         })
         .into_iter()
         .map(hwpx_package_entry)
@@ -145,10 +151,10 @@ fn census_hwpx_companion(path: &Path, json_mode: bool) -> HwpxCompanionCensus {
     let section_count = pkg.section_count();
     let chart_xmls = pkg.read_chart_xmls().unwrap_or_else(|err| {
         CliError::new(
-            "HWPX_CENSUS_FAILED",
+            CliCode::Cli(CliOnly::HwpxCensusFailed),
             format!("Cannot read chart XMLs from '{}': {err}", path.display()),
         )
-        .exit(json_mode, 2)
+        .exit(json_mode, Command::CensusHwp5)
     });
     let mut chart_xml_paths: Vec<String> = chart_xmls.keys().cloned().collect();
     chart_xml_paths.sort();
@@ -166,14 +172,15 @@ fn census_hwpx_companion(path: &Path, json_mode: bool) -> HwpxCompanionCensus {
 
     let path_inventory = collect_section_path_inventory(&mut pkg).unwrap_or_else(|err| {
         CliError::new(
-            "HWPX_CENSUS_FAILED",
+            CliCode::Cli(CliOnly::HwpxCensusFailed),
             format!("Cannot inventory HWPX paths from '{}': {err}", path.display()),
         )
-        .exit(json_mode, 2)
+        .exit(json_mode, Command::CensusHwp5)
     });
 
     let master_path_inventory = collect_master_path_inventory(&mut pkg).unwrap_or_else(|err| {
-        CliError::new("HWPX_CENSUS_FAILED", err.to_string()).exit(json_mode, 2)
+        CliError::new(CliCode::Cli(CliOnly::HwpxCensusFailed), err.to_string())
+            .exit(json_mode, Command::CensusHwp5)
     });
     HwpxCompanionCensus {
         master_path_inventory,

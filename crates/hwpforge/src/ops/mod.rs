@@ -78,9 +78,9 @@ use hwpforge_smithy_hwpx::{
     grid_addr::{GridAddrError, GridAddrWarning},
     partition_semantic_loss,
     stamp::{CellStampError, StampError, StampMapError, StamperError},
-    CellEditError, DecodeWarning, EncodeOutcome, EncodeWarning, FillError, HwpxError,
-    HwpxErrorCode, ReadError, SectionWorkflowError, SectionWorkflowWarning, StructuralEditError,
-    StructuralWarning,
+    CellEditError, CodecFailure, CodecStage, DecodeWarning, EncodeOutcome, EncodeWarning,
+    FillError, HwpxError, HwpxErrorCode, PatchError, ReadError, SectionWorkflowError,
+    SectionWorkflowWarning, StructuralEditError, StructuralWarning,
 };
 
 #[cfg(feature = "ops-md")]
@@ -317,13 +317,11 @@ impl OpsError {
             Self::Rejected { code, .. } => *code,
             Self::NoFonts => OpsCode::NoFonts,
             Self::EncodeSemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
-            // No frontend consults this code today — each keeps its own
-            // legacy string for "the file could not be read" and only
-            // special-cases the wrapped `io::ErrorKind` (see the variant
-            // doc), never `OpsError::code()`. `UpstreamUnmapped` is still the
-            // honest answer: `std::io::Error` has no `OpsCode` of its own.
             #[cfg(feature = "ops-hwpx")]
-            Self::Io(_) => OpsCode::UpstreamUnmapped,
+            Self::Io(err) => match err.kind() {
+                std::io::ErrorKind::NotFound => OpsCode::FileNotFound,
+                _ => OpsCode::FileReadFailed,
+            },
         }
     }
 
@@ -333,21 +331,9 @@ impl OpsError {
     /// value (the list of available field names, for example) are not
     /// static, so they stay with the frontend that formats them.
     ///
-    /// [`Self::Io`] is excluded from the [`OpsCode::UpstreamUnmapped`] table
-    /// lookup on purpose: `code()` still reports `UpstreamUnmapped` for it
-    /// (an `std::io::Error` has no `OpsCode` of its own — see that variant's
-    /// doc), but that code's hint text ("an upstream error this version
-    /// doesn't know, upgrade or file an issue") is written for a genuinely
-    /// unclassified error, not a missing file or a permission failure. No
-    /// frontend calls this for `Io` today (each special-cases
-    /// `io::ErrorKind` before it would), so this only guards against a
-    /// future caller printing the wrong advice.
+    /// File errors use canonical I/O codes with no generic recovery hint.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
-        #[cfg(feature = "ops-hwpx")]
-        if matches!(self, Self::Io(_)) {
-            return None;
-        }
         hint_for(self.code())
     }
 
@@ -485,7 +471,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다"
         }
         OpsCode::InputNotRoundtripSafe => {
-            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"
+            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed) — 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
         }
         OpsCode::InputEntriesNotCarried => {
             "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 엔트리를 보존합니다)"
@@ -500,7 +486,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
         OpsCode::StampCandidateUncovered => {
             "모든 무가드 후보는 이름을 붙이거나 ignore 로 명시해야 합니다"
         }
-        OpsCode::StampDeltaMismatch | OpsCode::SelfVerifyFailed => {
+        OpsCode::SelfVerifyFailed => {
             "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"
         }
         OpsCode::EncodeSemanticLoss => {
@@ -615,6 +601,33 @@ fn fill_code(error: &FillError) -> OpsCode {
         FillError::DuplicateFieldName { .. } => OpsCode::FieldNameAmbiguous,
         FillError::UnfillableField { .. } => OpsCode::FieldNotFillable,
         FillError::Workflow(_) => OpsCode::FillFailed,
+        FillError::Codec(failure) => codec_code(failure),
+        FillError::Patch(inner) => patch_code(inner),
+        FillError::Invariant { .. } => OpsCode::InternalInvariant,
+    }
+}
+
+// The stage alone decides the code; the leaf code and the message are
+// diagnostic detail. No wildcard: `CodecStage` is a closed set, so a new
+// stage is a compile error here.
+fn codec_code(failure: &CodecFailure) -> OpsCode {
+    match failure.stage {
+        CodecStage::Decode => OpsCode::DecodeFailed,
+        CodecStage::Admission => OpsCode::InputNotRoundtripSafe,
+        CodecStage::Validation => OpsCode::ValidationFailed,
+        CodecStage::Encode => OpsCode::EncodeFailed,
+        CodecStage::Verification => OpsCode::SelfVerifyFailed,
+    }
+}
+
+fn patch_code(error: &PatchError) -> OpsCode {
+    match error {
+        PatchError::Codec(failure) => codec_code(failure),
+        PatchError::Rejected(_) => OpsCode::PatchFailed,
+        PatchError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
+        PatchError::ProtectedFieldRange { .. } => OpsCode::ProtectedFieldRange,
+        PatchError::Invariant { .. } => OpsCode::InternalInvariant,
+        _ => OpsCode::UpstreamUnmapped,
     }
 }
 
@@ -629,7 +642,9 @@ fn cell_edit_code(error: &CellEditError) -> OpsCode {
         CellEditError::TargetConflict { .. } => OpsCode::CellTargetConflict,
         CellEditError::NotRoundTripSafe { .. } => OpsCode::InputNotRoundtripSafe,
         CellEditError::UncarriedZipEntries { .. } => OpsCode::InputEntriesNotCarried,
-        CellEditError::Codec(_) => OpsCode::SetCellCodecFailed,
+        CellEditError::Codec(failure) => codec_code(failure),
+        CellEditError::Invariant { .. } => OpsCode::InternalInvariant,
+        CellEditError::NestingTooDeep { .. } => OpsCode::ValidationFailed,
         CellEditError::SemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
         _ => OpsCode::UpstreamUnmapped,
     }
@@ -639,17 +654,19 @@ fn cell_edit_code(error: &CellEditError) -> OpsCode {
 fn read_code(error: &ReadError) -> OpsCode {
     match error {
         ReadError::Codec(_) => OpsCode::DecodeFailed,
-        ReadError::SectionOutOfRange { .. } => OpsCode::ReadSectionOutOfRange,
+        ReadError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
         ReadError::ParaRangeInvalid { .. } => OpsCode::ReadParaRangeInvalid,
-        ReadError::TableOutOfRange { .. } => OpsCode::ReadTableOutOfRange,
+        ReadError::TableOutOfRange { .. } => OpsCode::TableNotFound,
         ReadError::TableUnaddressable { .. } => OpsCode::TableGridInvalid,
-        ReadError::FieldNotFound { .. } => OpsCode::ReadFieldNotFound,
+        ReadError::FieldNotFound { .. } => OpsCode::FieldNotFound,
     }
 }
 
 fn structural_code(error: &StructuralEditError) -> OpsCode {
     match error {
-        StructuralEditError::Codec(_) => OpsCode::StructuralCodec,
+        StructuralEditError::Codec(failure) => codec_code(failure),
+        StructuralEditError::Invariant { .. } => OpsCode::InternalInvariant,
+        StructuralEditError::ProtectedFieldRange { .. } => OpsCode::ProtectedFieldRange,
         StructuralEditError::NotRoundTripSafe { .. } => OpsCode::InputNotRoundtripSafe,
         StructuralEditError::UncarriedZipEntries { .. } => OpsCode::InputEntriesNotCarried,
         StructuralEditError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
@@ -686,21 +703,22 @@ fn section_workflow_code(error: &SectionWorkflowError) -> OpsCode {
         SectionWorkflowError::Decode { .. } => OpsCode::DecodeFailed,
         SectionWorkflowError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
         SectionWorkflowError::SectionIndexMismatch { .. } => OpsCode::SectionIndexMismatch,
-        SectionWorkflowError::PreservingPatch(_) => OpsCode::PatchFailed,
+        SectionWorkflowError::PreservingPatch(inner) => patch_code(inner),
         _ => OpsCode::UpstreamUnmapped,
     }
 }
 
 fn stamper_code(error: &StamperError) -> OpsCode {
     match error {
-        StamperError::Codec(_) => OpsCode::StampCodecFailed,
+        StamperError::Codec(failure) => codec_code(failure),
+        StamperError::Invariant { .. } => OpsCode::InternalInvariant,
         StamperError::NotRoundTripSafe { .. } => OpsCode::InputNotRoundtripSafe,
         StamperError::UncarriedZipEntries { .. } => OpsCode::InputEntriesNotCarried,
         StamperError::Stamp(inner) => stamp_code(inner),
         StamperError::ManifestInvariant { .. } => OpsCode::StampManifestInvariant,
         StamperError::SourceHashMismatch { .. } => OpsCode::StampSourceHashMismatch,
         StamperError::CellStamp(inner) => cell_stamp_code(inner),
-        StamperError::DeltaMismatch { .. } => OpsCode::StampDeltaMismatch,
+        StamperError::DeltaMismatch { .. } => OpsCode::SelfVerifyFailed,
         StamperError::SemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
         _ => OpsCode::UpstreamUnmapped,
     }
@@ -727,7 +745,7 @@ fn cell_stamp_code(error: &CellStampError) -> OpsCode {
         CellStampError::TargetNotStampable { .. } => OpsCode::StampCellNotEmpty,
         CellStampError::LabelDrift { .. } => OpsCode::StampLabelDrift,
         CellStampError::UnknownCandidate { .. } => OpsCode::StampCellNotCandidate,
-        CellStampError::DuplicateTarget { .. } => OpsCode::StampCellTargetDuplicate,
+        CellStampError::DuplicateTarget { .. } => OpsCode::CellTargetDuplicate,
         CellStampError::EmptyName => OpsCode::StampNameEmpty,
         CellStampError::BlankHint { .. } => OpsCode::StampHintBlank,
         CellStampError::DuplicateName { .. } => OpsCode::StampNameDuplicate,
@@ -1045,13 +1063,11 @@ mod tests {
 
     #[cfg(feature = "ops-hwpx")]
     #[test]
+    // 이것을 실패시키는 것: 기타 OpsError::Io를 FileNotFound로 변경.
     fn io_error_hint_does_not_borrow_upstream_unmapped_advice() {
-        // `Io`'s code() is UpstreamUnmapped (no OpsCode fits std::io::Error),
-        // but that code's hint text ("unknown upstream error, upgrade or
-        // file an issue") is wrong advice for a missing file or a
-        // permission error — `hint()` must not surface it here.
+        // File failures must not suggest upgrading or reporting an unknown upstream error.
         let error = OpsError::Io(std::io::Error::other("boom"));
-        assert_eq!(error.code(), OpsCode::UpstreamUnmapped);
+        assert_eq!(error.code(), OpsCode::FileReadFailed);
         assert!(error.hint().is_none());
     }
 

@@ -1,4 +1,6 @@
 //! Export HWPX to editable JSON.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -39,8 +41,11 @@ fn render_pretty(value: &serde_json::Value, json_mode: bool) -> String {
     match serde_json::to_string_pretty(value) {
         Ok(s) => s,
         Err(e) => {
-            CliError::new("JSON_SERIALIZE_FAILED", format!("Failed to serialize export: {e}"))
-                .exit(json_mode, 2);
+            CliError::new(
+                CliCode::Ops(OpsCode::JsonSerializeFailed),
+                format!("Failed to serialize export: {e}"),
+            )
+            .exit(json_mode, Command::ToJson);
         }
     }
 }
@@ -57,13 +62,13 @@ pub fn run(
     // `to-md` command), so a mistyped path fails before any work is done.
     if output.extension().and_then(|e| e.to_str()) != Some("json") {
         CliError::new(
-            "INVALID_EXTENSION",
+            CliCode::Ops(OpsCode::InvalidExtension),
             format!("Output path must end with .json: {}", output.display()),
         )
-        .exit(json_mode, 1);
+        .exit(json_mode, Command::ToJson);
     }
-    check_file_size(file, json_mode);
-    let bytes = read_input(file, json_mode);
+    check_file_size(file, json_mode, Command::ToJson);
+    let bytes = read_input(file, json_mode, Command::ToJson);
 
     let json_string = if let Some(idx) = section_idx {
         let opts = ExportSectionOptions::default().with_section(idx).with_styles(!no_styles);
@@ -88,8 +93,11 @@ pub fn run(
     };
 
     if let Err(e) = std::fs::write(output, &json_string) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::ToJson);
     }
 
     let result = serde_json::json!({

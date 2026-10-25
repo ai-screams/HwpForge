@@ -503,7 +503,6 @@ pub(crate) fn build_shape_common(
 pub(crate) fn encode_textbox_to_rect(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -542,7 +541,6 @@ pub(crate) fn encode_textbox_to_rect(
     sink.enter(PathSeg::TextBox);
     let sub_list_result = encode_paragraphs_to_sublist_with_align(
         paragraphs,
-        depth,
         &text_vertical_align.to_string(),
         hyperlink_entries,
         options,
@@ -592,7 +590,7 @@ pub(crate) fn encode_textbox_to_rect(
         out_margin: Some(object_out_margin(placement.as_ref())),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, width_hwp, hyperlink_entries, options, sink))
             .transpose()?,
 
         draw_text: Some(HxDrawText {
@@ -629,7 +627,6 @@ pub(crate) fn encode_textbox_to_rect(
 pub(crate) fn encode_rect_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -682,7 +679,7 @@ pub(crate) fn encode_rect_to_hx(
         out_margin: Some(object_out_margin(placement.as_ref())),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, width_hwp, hyperlink_entries, options, sink))
             .transpose()?,
         // Pure rect: no embedded text content.
         draw_text: None,
@@ -698,7 +695,6 @@ pub(crate) fn encode_rect_to_hx(
 pub(crate) fn encode_line_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -751,7 +747,7 @@ pub(crate) fn encode_line_to_hx(
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
             .transpose()?,
         // The points as the plan stores them: in the original box.
         // 이것을 실패시키는 것: Core 점을 그대로 쓰기(fallback 한 극단 비율 선이
@@ -765,7 +761,6 @@ pub(crate) fn encode_line_to_hx(
 pub(crate) fn encode_ellipse_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -822,7 +817,6 @@ pub(crate) fn encode_ellipse_to_hx(
         sink.enter(PathSeg::TextBox);
         let sub_list_result = encode_paragraphs_to_sublist_with_align(
             paragraphs,
-            depth,
             &text_vertical_align.to_string(),
             hyperlink_entries,
             options,
@@ -875,7 +869,7 @@ pub(crate) fn encode_ellipse_to_hx(
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
             .transpose()?,
         draw_text,
         center: Some(HxPoint { x: plan.points()[0].x, y: plan.points()[0].y }),
@@ -892,7 +886,6 @@ pub(crate) fn encode_ellipse_to_hx(
 pub(crate) fn encode_polygon_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -935,7 +928,6 @@ pub(crate) fn encode_polygon_to_hx(
         sink.enter(PathSeg::TextBox);
         let sub_list_result = encode_paragraphs_to_sublist_with_align(
             paragraphs,
-            depth,
             &text_vertical_align.to_string(),
             hyperlink_entries,
             options,
@@ -986,7 +978,7 @@ pub(crate) fn encode_polygon_to_hx(
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
             .transpose()?,
         draw_text,
         points,
@@ -999,7 +991,6 @@ pub(crate) fn encode_polygon_to_hx(
 pub(crate) fn encode_arc_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -1089,7 +1080,7 @@ pub(crate) fn encode_arc_to_hx(
         shape_comment: Some(HxShapeComment { text: "호입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
             .transpose()?,
         draw_text: None,
         center: Some(HxPoint { x: arc[0].x, y: arc[0].y }),
@@ -1121,7 +1112,6 @@ pub(crate) fn serialize_arc(hx: &HxEllipse) -> HwpxResult<String> {
 pub(crate) fn encode_curve_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -1198,7 +1188,7 @@ pub(crate) fn encode_curve_to_hx(
         shape_comment: Some(HxShapeComment { text: "곡선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
             .transpose()?,
         points: vec![], // KS X 6101: coordinates are in <hp:seg> elements, not <hc:pt>
         segments,
@@ -1209,7 +1199,6 @@ pub(crate) fn encode_curve_to_hx(
 pub(crate) fn encode_connect_line_to_hx(
     ctrl: &Control,
     as_group_child: bool,
-    depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
@@ -1306,7 +1295,7 @@ pub(crate) fn encode_connect_line_to_hx(
         shape_comment: Some(HxShapeComment { text: "연결선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
             .transpose()?,
     })
 }
@@ -1582,10 +1571,8 @@ fn group_child_kind(child: &GroupChild) -> &'static str {
 /// the outermost group's space, so a child's `transMatrix`/`<hp:offset>` is
 /// `parent_origin` + the child's own offset (for a top-level group the
 /// origin is `(0, 0)`).
-#[allow(clippy::too_many_arguments)]
 fn encode_group_child_xml(
     child: &GroupChild,
-    depth: usize,
     group_level: u32,
     parent_origin: (i32, i32),
     nodes: &mut std::slice::Iter<'_, GroupNodePlan>,
@@ -1599,7 +1586,6 @@ fn encode_group_child_xml(
             let node = nodes.next();
             return encode_group_picture_xml(
                 image,
-                depth,
                 group_level,
                 parent_origin,
                 hyperlink_entries,
@@ -1628,7 +1614,6 @@ fn encode_group_child_xml(
         let node = nodes.next();
         let raw = encode_group_at(
             child,
-            depth,
             group_level,
             (x, y),
             true,
@@ -1660,46 +1645,42 @@ fn encode_group_child_xml(
     };
     let raw = match child {
         Control::TextBox { .. } => {
-            let mut hx =
-                encode_textbox_to_rect(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_textbox_to_rect(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:rect")?
         }
         Control::Rect { .. } => {
-            let mut hx = encode_rect_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_rect_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:rect")?
         }
         Control::Line { .. } => {
-            let mut hx = encode_line_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_line_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:line")?
         }
         Control::Ellipse { .. } => {
-            let mut hx =
-                encode_ellipse_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_ellipse_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:ellipse")?
         }
         Control::Arc { .. } => {
-            let mut hx = encode_arc_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_arc_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_arc(&hx)?
         }
         Control::Polygon { .. } => {
-            let mut hx =
-                encode_polygon_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_polygon_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:polygon")?
         }
         Control::Curve { .. } => {
-            let mut hx = encode_curve_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_curve_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:curve")?
         }
         Control::ConnectLine { .. } => {
-            let mut hx =
-                encode_connect_line_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_connect_line_to_hx(child, true, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:connectLine")?
         }
@@ -1807,7 +1788,6 @@ fn with_node_chain(xml: String, node: Option<&GroupNodePlan>) -> String {
 /// `<hp:offset>` and the `transMatrix` translation like a shape child's.
 fn encode_group_picture_xml(
     image: &hwpforge_core::image::Image,
-    depth: usize,
     group_level: u32,
     parent_origin: (i32, i32),
     hyperlink_entries: &mut Vec<(String, String)>,
@@ -1819,8 +1799,7 @@ fn encode_group_picture_xml(
         .as_ref()
         .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
     let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
-    let mut hx =
-        super::section::build_picture(image, true, depth, hyperlink_entries, options, sink)?;
+    let mut hx = super::section::build_picture(image, true, hyperlink_entries, options, sink)?;
     (hx.sz, hx.pos, hx.out_margin) = (None, None, None);
     hx.numbering_type = "NONE".to_string();
     hx.text_wrap = "TOP_AND_BOTTOM".to_string();
@@ -1842,7 +1821,6 @@ fn encode_group_picture_xml(
 /// per-shape encoders already honor).
 pub(crate) fn encode_group_to_xml(
     ctrl: &Control,
-    depth: usize,
     group_level: u32,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -1870,7 +1848,6 @@ pub(crate) fn encode_group_to_xml(
     };
     encode_group_at(
         target,
-        depth,
         group_level,
         (0, 0),
         false,
@@ -1890,7 +1867,6 @@ pub(crate) fn encode_group_to_xml(
 #[allow(clippy::too_many_arguments)]
 fn encode_group_at(
     ctrl: &Control,
-    depth: usize,
     group_level: u32,
     origin: (i32, i32),
     as_child: bool,
@@ -1932,7 +1908,6 @@ fn encode_group_at(
         sink.enter(PathSeg::GroupChild(emitted_idx));
         let child_result = encode_group_child_xml(
             child,
-            depth,
             group_level + 1,
             origin,
             nodes,
@@ -2217,7 +2192,6 @@ mod tests {
         let xml = encode_group_to_xml(
             &group,
             0,
-            0,
             &mut entries,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -2408,7 +2382,6 @@ mod tests {
         let xml = encode_group_to_xml(
             &outer,
             0,
-            0,
             &mut entries,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -2547,7 +2520,7 @@ mod tests {
     fn encode_group(group: &Control) -> (String, DocumentEncodeContext) {
         let mut sink = DocumentEncodeContext::new(0);
         let xml =
-            encode_group_to_xml(group, 0, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
+            encode_group_to_xml(group, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
                 .unwrap();
         (xml, sink)
     }
@@ -3106,7 +3079,6 @@ mod tests {
         let result = encode_arc_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3138,7 +3110,6 @@ mod tests {
         let result = encode_arc_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3170,7 +3141,6 @@ mod tests {
         let result = encode_arc_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3214,7 +3184,6 @@ mod tests {
         let result = encode_arc_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3250,7 +3219,6 @@ mod tests {
         let result = encode_arc_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3282,7 +3250,6 @@ mod tests {
         let result = encode_arc_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3309,7 +3276,6 @@ mod tests {
         let result = encode_curve_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3339,7 +3305,6 @@ mod tests {
         let result = encode_curve_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3376,7 +3341,6 @@ mod tests {
         let result = encode_curve_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3407,7 +3371,6 @@ mod tests {
         let result = encode_curve_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3436,7 +3399,6 @@ mod tests {
         let result = encode_curve_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3461,7 +3423,6 @@ mod tests {
         let result = encode_curve_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3490,7 +3451,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3525,7 +3485,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3556,7 +3515,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3584,7 +3542,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3615,7 +3572,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3648,7 +3604,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3679,7 +3634,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3709,7 +3663,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3736,7 +3689,6 @@ mod tests {
         let result = encode_connect_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3763,7 +3715,6 @@ mod tests {
         let result = encode_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3788,7 +3739,6 @@ mod tests {
         let result = encode_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3813,7 +3763,6 @@ mod tests {
         let result = encode_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3841,7 +3790,6 @@ mod tests {
         let result = encode_line_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3877,7 +3825,6 @@ mod tests {
         let result = encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3905,7 +3852,6 @@ mod tests {
         let result = encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3933,7 +3879,6 @@ mod tests {
         let result = encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3969,7 +3914,6 @@ mod tests {
         let result = encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -3986,7 +3930,6 @@ mod tests {
         let result = encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4003,7 +3946,6 @@ mod tests {
         let result = encode_ellipse_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4038,7 +3980,6 @@ mod tests {
         let result = encode_polygon_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4073,7 +4014,6 @@ mod tests {
         let result = encode_polygon_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4104,7 +4044,6 @@ mod tests {
         let result = encode_polygon_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4126,7 +4065,6 @@ mod tests {
         let result = encode_rect_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4147,7 +4085,6 @@ mod tests {
         let rect = encode_rect_to_hx(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4178,7 +4115,6 @@ mod tests {
         let result = encode_textbox_to_rect(
             &ctrl,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4204,7 +4140,6 @@ mod tests {
         let hx = encode_rect_to_hx(
             &rect,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),
@@ -4230,7 +4165,6 @@ mod tests {
         let hx = encode_textbox_to_rect(
             &tb,
             false,
-            0,
             &mut hl,
             EncodeOptions::default(),
             &mut DocumentEncodeContext::new(0),

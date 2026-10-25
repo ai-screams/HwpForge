@@ -17,7 +17,7 @@
 //! Naming follows the CLI contract: `<AREA>_<NOUN>` and `_FAILED` for
 //! failures, in SCREAMING_SNAKE_CASE. Where the CLI historically used two
 //! spellings for one meaning, this table holds the canonical one and the
-//! frontends keep their legacy spelling through a compatibility table.
+//! frontends emit that canonical spelling unchanged.
 
 use std::fmt;
 
@@ -25,7 +25,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Declares [`OpsCode`] once: variant, wire string and doc line.
 ///
-/// Generates the enum, `as_str`, `ALL` and `from_str` from a single list so
+/// Generates the enum, `as_str`, `ALL` and `lookup` from a single list so
 /// the three can never drift apart.
 macro_rules! ops_codes {
     ($( $(#[$doc:meta])* $variant:ident => $wire:literal ),+ $(,)?) => {
@@ -33,7 +33,7 @@ macro_rules! ops_codes {
         ///
         /// The string form ([`OpsCode::as_str`]) is the public contract that
         /// CLI JSON errors, MCP tool errors and Python `HwpForgeError.code`
-        /// expose. Variants are additive; the enum is `#[non_exhaustive]`, so
+        /// expose. Removing or renaming a code is breaking; the enum is `#[non_exhaustive]`, so
         /// match on it with a wildcard arm outside this crate.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[non_exhaustive]
@@ -87,6 +87,23 @@ ops_codes! {
     AssetPlanMismatch => "ASSET_PLAN_MISMATCH",
     /// Two provisioned assets claim the same identity with different bytes.
     AssetIdentityConflict => "ASSET_IDENTITY_CONFLICT",
+    /// A tool's request fields could not be deserialised (wrong type, missing or malformed field).
+    InvalidParams => "INVALID_PARAMS",
+    // ── file I/O and output ────────────────────────────────────────
+    /// The input path does not exist.
+    FileNotFound => "FILE_NOT_FOUND",
+    /// The input (file, metadata or stdin) could not be read for another reason.
+    FileReadFailed => "FILE_READ_FAILED",
+    /// An output file or directory could not be written.
+    FileWriteFailed => "FILE_WRITE_FAILED",
+    /// The output path was refused by the output-path policy.
+    InvalidOutputPath => "INVALID_OUTPUT_PATH",
+    /// A path does not carry the file extension the operation requires.
+    InvalidExtension => "INVALID_EXTENSION",
+    /// An inline result exceeds the accepted output size; write it to a file instead.
+    OutputTooLarge => "OUTPUT_TOO_LARGE",
+    /// The manifest path collides with the output path.
+    ManifestPathConflict => "MANIFEST_PATH_CONFLICT",
     // ── codec ──────────────────────────────────────────────────────
     /// HWPX package or XML could not be decoded.
     DecodeFailed => "DECODE_FAILED",
@@ -130,8 +147,6 @@ ops_codes! {
     SectionIndexMismatch => "SECTION_INDEX_MISMATCH",
     /// Preserving patch could not be applied.
     PatchFailed => "PATCH_FAILED",
-    /// Section export/patch workflow failed for another reason.
-    SectionWorkflowFailed => "SECTION_WORKFLOW_FAILED",
     // ── read ───────────────────────────────────────────────────────
     /// `read` needs exactly one target (section, paragraphs, table or field).
     ReadTargetRequired => "READ_TARGET_REQUIRED",
@@ -139,14 +154,8 @@ ops_codes! {
     ReadParasInvalid => "READ_PARAS_INVALID",
     /// Paragraph range given without a section.
     ReadParasWithoutSection => "READ_PARAS_WITHOUT_SECTION",
-    /// `read` section index is outside the document.
-    ReadSectionOutOfRange => "READ_SECTION_OUT_OF_RANGE",
     /// `read` paragraph range is outside the section.
     ReadParaRangeInvalid => "READ_PARA_RANGE_INVALID",
-    /// `read` table ordinal is outside the document.
-    ReadTableOutOfRange => "READ_TABLE_OUT_OF_RANGE",
-    /// `read` field name does not exist.
-    ReadFieldNotFound => "READ_FIELD_NOT_FOUND",
     // ── table / cell ───────────────────────────────────────────────
     /// Table ordinal does not exist.
     TableNotFound => "TABLE_NOT_FOUND",
@@ -168,25 +177,15 @@ ops_codes! {
     InputNotRoundtripSafe => "INPUT_NOT_ROUNDTRIP_SAFE",
     /// ZIP entries of the input would be lost by re-encoding, so the edit was refused.
     InputEntriesNotCarried => "INPUT_ENTRIES_NOT_CARRIED",
-    /// Cell edit failed inside the codec.
-    SetCellCodecFailed => "SET_CELL_CODEC_FAILED",
-    /// Cell edit failed for another reason.
-    SetCellFailed => "SET_CELL_FAILED",
     /// Cell edit arguments are inconsistent (single target and spec list mixed, …).
     InvalidSetCellArgs => "INVALID_SET_CELL_ARGS",
     /// Cell edit spec list is malformed.
     InvalidSetCellMap => "INVALID_SET_CELL_MAP",
     // ── stamp ──────────────────────────────────────────────────────
-    /// Stamping failed for another reason.
-    StampFailed => "STAMP_FAILED",
-    /// Stamping failed inside the codec.
-    StampCodecFailed => "STAMP_CODEC_FAILED",
     /// Stamp manifest violated an invariant.
     StampManifestInvariant => "STAMP_MANIFEST_INVARIANT",
     /// Stamp request was made for a different source document (hash mismatch).
     StampSourceHashMismatch => "STAMP_SOURCE_HASH_MISMATCH",
-    /// Stamp output failed self-verification.
-    StampDeltaMismatch => "STAMP_DELTA_MISMATCH",
     /// Cell stamp target is not the anchor of its merged region.
     StampCellNotAnchor => "STAMP_CELL_NOT_ANCHOR",
     /// Cell stamp target is not an empty cell.
@@ -195,8 +194,6 @@ ops_codes! {
     StampLabelDrift => "STAMP_LABEL_DRIFT",
     /// Cell stamp target is not a plan candidate.
     StampCellNotCandidate => "STAMP_CELL_NOT_CANDIDATE",
-    /// The same cell was stamped twice.
-    StampCellTargetDuplicate => "STAMP_CELL_TARGET_DUPLICATE",
     /// Stamp field name is empty.
     StampNameEmpty => "STAMP_NAME_EMPTY",
     /// Cell stamp hint is blank.
@@ -218,10 +215,6 @@ ops_codes! {
     /// A v2 stamp request lacks `source_sha256`.
     MissingSourceSha256 => "MISSING_SOURCE_SHA256",
     // ── structural edit ────────────────────────────────────────────
-    /// Structural edit failed for another reason.
-    StructuralEditFailed => "STRUCTURAL_EDIT_FAILED",
-    /// Structural edit failed inside the codec.
-    StructuralCodec => "STRUCTURAL_CODEC",
     /// Paragraph index is outside the section.
     ParagraphOutOfRange => "PARAGRAPH_OUT_OF_RANGE",
     /// The same paragraph was targeted twice.
@@ -234,6 +227,8 @@ ops_codes! {
     EmptySection => "EMPTY_SECTION",
     /// The section-properties paragraph cannot be edited.
     SectionPropertiesParagraph => "SECTION_PROPERTIES_PARAGRAPH",
+    /// An edit would change the value or the range of a protected field.
+    ProtectedFieldRange => "PROTECTED_FIELD_RANGE",
     /// Span count changed unexpectedly.
     SpanCountMismatch => "SPAN_COUNT_MISMATCH",
     /// Structural edit output failed self-verification.

@@ -4,8 +4,7 @@
 //! and MCP bindings while leaving file I/O and presentation-layer rendering in
 //! the bindings themselves.
 
-use crate::error::HwpxError;
-use crate::{ExportedSection, HwpxDecoder, HwpxPatcher, PackageReader};
+use crate::{ExportedSection, HwpxDecoder, HwpxPatcher, PackageReader, PatchError};
 
 /// Result of a section-only export intended for later patching.
 #[derive(Debug)]
@@ -85,9 +84,11 @@ pub enum SectionWorkflowError {
         /// Section index found in the JSON payload.
         actual: usize,
     },
-    /// Preserve-first patch failed after orchestration-level validation.
+    /// Preserve-first patch failed after orchestration-level validation. The
+    /// [`PatchError`] says why (a codec stage, a refused request, a protected
+    /// field, a missing section or a broken invariant).
     #[error("Preserving patch failed: {0}")]
-    PreservingPatch(#[from] HwpxError),
+    PreservingPatch(#[from] PatchError),
 }
 
 impl HwpxPatcher {

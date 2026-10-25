@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (BREAKING)
+
+- `CellEditError`·`StamperError`·`StructuralEditError`의 `Codec(String)`을 `Codec(CodecFailure)`로 바꾼다. stage·leaf code·detail을 보존하고 기존 Clone/Eq를 유지한다. 세 enum에 `Invariant { detail }`, 구조 편집에 `ProtectedFieldRange { section, index, detail }`를 추가한다.
+- preserve-first patch 의 오류 타입 `PatchError` 를 새로 둔다. variant 는 `Codec(CodecFailure)`·`Rejected(HwpxError)`·`SectionOutOfRange`·`ProtectedFieldRange`·`Invariant` 이고 `#[non_exhaustive]` 다. `patch_section_preserving`·`patch_section_preserving_with_diagnostics`·`patch_section_preserving_with_codec_diagnostics`·`export_section_preservation` 의 오류 반환형이 `HwpxError` 에서 `PatchError` 로 바뀌고, `SectionWorkflowError::PreservingPatch` 는 `PatchError` 를 담는다. `Codec` 은 실패 단계(`CodecStage`)와 원래 오류의 코드·메시지만 담고 원래 오류의 source chain 은 담지 않는다.
+- `FillError` 에 `Codec(CodecFailure)`·`Patch(PatchError)`·`Invariant { detail }` 을 더하고 `From<HwpxError> for FillError` 를 지운다. 입력 decode 실패는 `Codec`, 섹션 patch 실패는 `Patch`, 필드 목록 진단은 계속 `Workflow` 다. `FillError` 는 계속 exhaustive 다.
+
+- 본문의 CR(`\r`)을 줄바꿈으로 다룬다. 한컴은 본문의 CR을 줄바꿈으로 보여 주지만 다시 저장하면 지워 앞뒤 글을 붙인다. 인코더는 CR을 `<hp:lineBreak/>`로 쓰고 한 글 조각 안의 CRLF는 줄바꿈 하나로 접으며, HWPX 디코더는 CR 참조를 LF 하나로 읽는다. 수식 스크립트·글맵시·속성값은 기존 규칙을 유지한다. CRLF를 접느라 줄 배치 위치가 어긋나는 문단은 줄 배치 캐시를 버리고 `LayoutCacheDropped` 경고로 알린다. `fill`과 보존 `patch`는 같은 접기를 거친 값으로 비교하므로 같은 CR 글을 두 번 써도 바뀌지 않는다. 이행: HWPX에서 읽은 본문이 `\r` 대신 `\n`을 돌려주므로 `\r`에 기대던 코드를 고치고, 0.17에서 내보낸 보존 metadata 중 CR이 든 칸이 있으면 다시 내보낸 뒤 patch한다.
+
+### Changed
+
+- stamp·cell 코덱 오류 메시지에서 `output decode:`, `fixed-point decode:`, `reference decode:`, `layout carry:`, `zip:` 같은 호출 문맥 접두를 제거한다. `CodecFailure.detail`은 원래 오류의 문자열을 한 번만 보존하며 실패 단계는 `stage`로 구분한다.
+
+- Draft 셀 편집 깊이 초과는 `NestingTooDeep { section: usize, reason }`로 반환하며 모든 구역을 편집 전에 검사한다. Display는 `nesting depth exceeds the limit: {reason}`다. 입력 바이트의 깊이 초과는 decode 단계다.
+- admission helper는 호출 목적에 따라 validate·encode 오류를 구분한다. layout carry는 최종 ZIP 작성만 Encode, 기존 나머지 오류는 Verification이며 기존 MissingFile·텍스트 읽기·정렬 실패의 무음 복구 정책을 유지한다.
+
+- 공개 decode는 구역 조립 직후 본문·머리말·꼬리말·바탕쪽의 Core 깊이를 검사하고 32 초과를 `HwpxError::Core`(E4008, `nesting_depth`)로 거절한다. 파서가 통과하던 묶음·글상자 및 그림 캡션 경로도 포함하며, 이런 입력의 stamp-plan도 이제 실패한다. 다른 Core 구조 검증은 수행하지 않는다.
+- 표·subList·묶음 파서 가드(E4006)는 열려던 층을 1부터 세고 실제 part 경로를 메시지에 포함한다. 파서 가드(E4006)·XML(E4003) leaf는 유지하며 편집기에서도 연산 코드는 `DECODE_FAILED`다.
+- 줄바꿈·묶음 빈칸·고정폭 빈칸이 든 글 칸을 `patch`·`fill`로 고칠 수 있다. 한컴에서 Tab 키로 넣은 탭은 너비 정보가 있어 계속 거부한다.
+- 본문 run, 글 칸(`<hp:t>`), 컨트롤(`<hp:ctrl>`), `<hp:subList>` 안에서 읽지 못해 조용히 버리던 내용을 `CONTENT_LOST` 경고로 알린다. 종류는 OLE 개체 `ole`, 모르는 요소 `unknown_element`, 차트가 아닌 `switch`, 되살리지 못한 차트 `chart`(차트 XML 이 없는 본문 차트 포함), run 바로 아래 글 `run_text`, 글 칸 안 모르는 요소 `inline_element`, 컨트롤 안 모르는 내용 `ctrl_content`, subList 안 문단 아닌 내용 `sublist_content` 다. 본문 최상위뿐 아니라 머리말·꼬리말·표 칸·각주·미주·글상자에서도 알린다. 미지 내용 때문에 각주·미주 번호 머리 인식에서 빠진 경우(이때 번호 뒤 간격 글이 남는다)를 제외하면 읽은 문서 내용은 같다.
+- 이 경고가 있는 문서는 내용을 다시 쓰는 편집(`restyle`·`set-cell`·`stamp`)이 문서 전체를 거부한다. 원문을 보존하는 `fill`·`patch` 와 `insert-para`·`delete-para` 는 전과 같다. 측정한 HWPX 372개 중 새 경고가 생긴 문서는 5개(`ole` 4개, `unknown_element` 1개)이고, 그중 새로 거부되는 문서는 1개다.
+- patch 의 깊이 거부·보호 필드 거부 메시지에서 앞에 붙던 `Invalid HWPX structure:` 가 빠지고, 내부 불변식 실패 메시지는 `internal invariant violated:` 로 시작한다. 그 밖의 거부·decode 메시지는 그대로다.
+- 구역(`<hs:sec>`) 바로 아래의 글·모르는 요소·`<hp:t>` 처럼 문단이 아닌 내용도 `CONTENT_LOST` 경고(종류 `section_content`, 위치는 그 구역)로 알리고, 위 편집기들은 그런 문서를 거부한다. 문단 사이의 들여쓰기 공백은 알리지 않는다. 측정한 HWPX 372개 중 이 경고가 새로 생긴 문서는 없다.
+- 각주·미주 첫 문단의 번호 머리 run 에 위 내용이 섞이면 번호 머리로 보고 떼어 내지 않고, 경고와 함께 일반 run 으로 읽는다. 형광펜·제목 표지만 섞인 번호 머리는 전처럼 떼어 낸다.
+
+- stamp `apply`·`apply_cells`, 격자 주소 함수 네 개, registry rebind는 중첩이 32단계를 넘는 문서를 순회하기 전에 기존 오류 variant로 거부한다. 오류를 반환할 수 없는 `stamp::plan`은 대신 반복 방식으로 순회한다.
+
+### Added
+
+- 편집기 오류가 싣는 `CodecStage`(`Decode`·`Admission`·`Validation`·`Encode`·`Verification`)와 `CodecFailure`(`stage`·`code`·`detail`)를 공개한다. `CodecStage`는 일부러 `#[non_exhaustive]`가 아니어서 단계를 더하면 breaking이다.
+
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24
 
 ### Changed

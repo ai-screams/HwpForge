@@ -98,7 +98,7 @@ print(fields[0]["current"])
 - `paras`는 `"시작..끝"`이고 **양끝 포함**입니다. 범위가 섹션을 넘으면 `READ_PARA_RANGE_INVALID`, 형식이 틀리면 `READ_PARAS_INVALID`.
 - 문단은 `kind`로 구분됩니다: `"body"`, `"heading"`(`level` 포함), `"list"`(`numbered`·`level`·`checked` 포함 — `checked`는 체크 목록이 아니면 `None`). 문단이 표·그림 등을 품으면 `contains` 키가 더해집니다.
 - 표는 `rows`·`cols`와 셀 목록입니다. 병합된 영역은 기준 셀 하나로만 나오므로 셀 수가 `rows × cols`보다 적을 수 있습니다.
-- 아무것도 안 주거나 둘 이상 주면 `READ_TARGET_REQUIRED`, 표 번호가 넘치면 `READ_TABLE_OUT_OF_RANGE`.
+- 아무것도 안 주거나 둘 이상 주면 `READ_TARGET_REQUIRED`, 표 번호가 넘치면 `TABLE_NOT_FOUND`.
 
 ## `validate()` — 두 종류의 실패
 

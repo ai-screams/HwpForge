@@ -38,7 +38,7 @@ use crate::schema::section::{
 /// Prevents stack overflow from maliciously crafted HWPX files with
 /// deeply nested table structures. 32 levels is far beyond any
 /// legitimate document.
-pub(crate) const MAX_NESTING_DEPTH: usize = 32;
+pub(crate) const MAX_NESTING_DEPTH: usize = hwpforge_core::MAX_NESTING_DEPTH;
 
 fn decode_table_page_break(value: &str) -> HwpxResult<TablePageBreak> {
     match value {
@@ -197,6 +197,17 @@ pub(crate) fn parse_section_with_references(
     }
     ctx.source = source;
     ctx.image_pixels = image_pixels.clone();
+    // Once per section, at the section's own path (the sub-list rule,
+    // [`note_sublist_content`]). serde hands over no whitespace-only text,
+    // so indentation between paragraphs is not reported.
+    // 이것을 실패시키는 것: 이 보고 삭제
+    // (`section_content_is_reported_lost`).
+    if section.has_stray_content {
+        ctx.content_lost(
+            "section_content",
+            "text or an element other than a paragraph directly inside <hs:sec> is not read",
+        );
+    }
 
     let mut column_settings = None;
     let mut visibility = None;
@@ -259,7 +270,7 @@ pub(crate) fn parse_section_with_references(
             lift_header_footers(&hx_para.runs, para_idx, &mut headers, &mut footers, &mut ctx)?;
 
             // Extract pagenum/column_settings from ctrl elements in runs
-            for hx_run in &hx_para.runs {
+            for (run_idx, hx_run) in hx_para.runs.iter().enumerate() {
                 for ctrl in &hx_run.ctrls {
                     if column_settings.is_none() {
                         if let Some(cs) = convert_ctrl_column_settings(ctrl) {
@@ -284,6 +295,17 @@ pub(crate) fn parse_section_with_references(
                         if let Some(hx_chart) = &case.chart {
                             if let Some(run) = decode_chart(hx_chart, char_shape_id, chart_xmls)? {
                                 para.runs.push(run);
+                            } else {
+                                // The run conversion left this chart to this
+                                // loop; without its chart XML nothing holds it.
+                                // 이것을 실패시키는 것: 경로 재설정 삭제(경로가
+                                // 구역만 남는다) 또는 이 보고 삭제
+                                // (`charts_are_reported_lost_where_the_section_does_not_recover_them`).
+                                ctx.enter(super::PathSeg::BodyParagraph(para_idx));
+                                ctx.enter(super::PathSeg::Run(run_idx));
+                                ctx.content_lost("chart", "chart whose chart XML is missing");
+                                ctx.leave();
+                                ctx.leave();
                             }
                         }
                     }
@@ -331,7 +353,7 @@ pub(crate) struct DecodeCtx {
     pub(crate) warnings: Vec<super::DecodeWarning>,
     path: Vec<super::PathSeg>,
     /// 지금 디코드하는 패키지 part 이름 — `ContentLost` 가 싣는다.
-    part: String,
+    pub(super) part: String,
     /// 묶음 자식 안으로 들어간 깊이 (0 = 묶음 밖).
     group_child_depth: usize,
     /// 들어간 묶음 자식마다 그때의 경로 길이 — 경로가 그 길이 그대로면
@@ -465,9 +487,11 @@ impl DecodeCtx {
     /// OLE, 미지 요소)를 만나면 손실 경고를 남긴다. 최상위 문단의 차트는
     /// 구역 디코드가 따로 되살리지만 묶음 안에는 그 경로가 없다.
     ///
-    /// 바탕쪽(묶음 밖)에서는 같은 요소를 `in_master_page` 종류 이름(`chart`·
-    /// `switch`·`ole`·`unknown_element`)으로 보고한다. 본문의 같은 drop 은
-    /// 아직 경고하지 않는다.
+    /// 묶음 밖에서는 같은 요소를 `in_master_page` 종류 이름(`chart`·
+    /// `switch`·`ole`·`unknown_element`)으로 보고한다 — 바탕쪽, 본문,
+    /// 머리말·꼬리말, 칸·각주 같은 중첩 문단 모두. 면제는 구역 본문 최상위
+    /// 문단 run 의 차트 하나뿐이다: 그 차트는 구역 디코드가 되살리고, 차트
+    /// XML 이 없어 못 되살리면 그쪽에서 보고한다.
     fn note_unsupported_run_child(&mut self, in_group: &str, in_master_page: &str) {
         if self.group_child_depth > 0 {
             self.content_lost(
@@ -478,6 +502,20 @@ impl DecodeCtx {
             self.content_lost(
                 in_master_page.to_string(),
                 "element inside a master page is not carried by Core",
+            );
+        } else if in_master_page != "chart"
+            || !matches!(
+                self.path.as_slice(),
+                [.., super::PathSeg::BodyParagraph(_), super::PathSeg::Run(_)]
+            )
+        {
+            // 이것을 실패시키는 것: 이 갈래 삭제(본문 `ole`·미지 요소가 무음),
+            // 또는 면제를 depth==0 으로 넓히기(머리말 차트가 무음)
+            // (`run_children_the_reader_drops_are_reported_lost`,
+            // `charts_are_reported_lost_where_the_section_does_not_recover_them`).
+            self.content_lost(
+                in_master_page.to_string(),
+                "element inside a run is not carried by Core",
             );
         }
     }
@@ -679,11 +717,11 @@ fn fold_closed_memos(runs: &mut Vec<Run>, origins: &mut Vec<super::source_map::R
         let mut removed: Vec<_> = runs.drain(i..=end).collect();
         let first = removed.remove(0);
         removed.pop();
-        let RunContent::Control(c) = first.content else { unreachable!() };
-        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } = *c else {
+        let RunContent::Control(mut c) = first.content else { unreachable!() };
+        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } = c.as_mut() else {
             unreachable!()
         };
-        let content = start.annotation.unwrap_or_default();
+        let content = start.annotation.take().unwrap_or_default();
         runs.insert(i, Run::control(Control::Memo { content, anchor_runs: removed, metadata }, cs));
         let mut mapped: Vec<_> = origins.drain(i..=end).collect();
         let mut first = mapped.remove(0);
@@ -1277,6 +1315,15 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
         match kind {
             HxRunChildKind::Text => {
                 let text = &hx.texts[idx];
+                // Before the field-body `continue`: a field body drops the
+                // element too. 이것을 실패시키는 것: 이 검사를 `continue` 뒤로
+                // 옮기기(`unknown_elements_inside_t_are_reported_in_and_out_of_fields`).
+                if text.has_unknown_part() {
+                    ctx.content_lost(
+                        "inline_element",
+                        "element inside <hp:t> the reader does not know is dropped with its text",
+                    );
+                }
                 if field_begin.is_some() {
                     // 마커 사이 텍스트 = 필드 본문 (문서 순서라 무모호).
                     field_body.push_str(&text.text());
@@ -1377,9 +1424,9 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             // secPr/titleMark 는 구역·문단 수준에서 소비, switch 는 차트
             // 전용 경로 소유, Other/StrayText 는 미지 요소 자리 — run
             // 방출 없음 (ledger 가 fail-closed 신호로 소비).
-            // Inside a group child nothing recovers these later (charts are
-            // picked up from top-level paragraphs only), so there they are
-            // reported as lost.
+            // Nothing recovers these later except a chart in a top-level
+            // body paragraph, so everything else is reported as lost
+            // ([`DecodeCtx::note_unsupported_run_child`]).
             HxRunChildKind::Switch | HxRunChildKind::Other | HxRunChildKind::Ole => {
                 let (in_group, in_master_page) = match kind {
                     HxRunChildKind::Switch => {
@@ -1395,7 +1442,15 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
                 };
                 ctx.note_unsupported_run_child(in_group, in_master_page);
             }
-            HxRunChildKind::SecPr | HxRunChildKind::TitleMark | HxRunChildKind::StrayText => {}
+            // serde never hands over XML-whitespace-only text here (only
+            // `<hp:t>` keeps its blanks), so whatever arrives is document
+            // text, NBSP and ideographic space included.
+            // 이것을 실패시키는 것: 이 보고 삭제, 또는 `trim()` 으로 공백 판정
+            // (`run_children_the_reader_drops_are_reported_lost` NBSP 사례).
+            HxRunChildKind::StrayText => {
+                ctx.content_lost("run_text", "text directly under <hp:run> is not read");
+            }
+            HxRunChildKind::SecPr | HxRunChildKind::TitleMark => {}
         }
         for run in &mut runs[emitted_before..] {
             let texts = match &run.content {
@@ -1479,6 +1534,14 @@ fn convert_ctrl_child<'a>(
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<()> {
     {
+        // 이것을 실패시키는 것: 이 보고 삭제
+        // (`ctrl_and_sublist_content_is_reported_lost`).
+        if ctrl.has_stray_content {
+            ctx.content_lost(
+                "ctrl_content",
+                "text or an element inside <hp:ctrl> the reader does not know is not read",
+            );
+        }
         // §19.7 F (review r1): a header/footer is carried only where
         // [`lift_header_footers`] reaches — a body paragraph, its table cells
         // and text boxes, Hancom applying it from the top-level paragraph.
@@ -1623,7 +1686,12 @@ fn convert_ctrl_child<'a>(
 fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Table> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
-            detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
+            detail: format!(
+                "table nesting depth {} exceeds limit of {} in {}",
+                depth + 1,
+                MAX_NESTING_DEPTH,
+                ctx.part
+            ),
         });
     }
 
@@ -1861,6 +1929,7 @@ fn convert_table_cell(
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<TableCell> {
     let paragraphs = if let Some(sub_list) = &hx.sub_list {
+        note_sublist_content(sub_list, ctx);
         let mut out = Vec::with_capacity(sub_list.paragraphs.len());
         for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
             ctx.enter(super::PathSeg::NestedParagraph(i));
@@ -2351,6 +2420,13 @@ fn is_injected_note_head_run(run: &HxRun) -> bool {
     if !run.texts.is_empty() || !hx_run_has_no_objects(run) || run.ctrls.len() != 1 {
         return false;
     }
+    // D.3-7: nothing the reader drops may sit beside the ctrl (`ole`, an
+    // unknown element, run text) — those runs are decoded and reported.
+    // 이것을 실패시키는 것: 이 비교 생략
+    // (`note_number_heads_with_unknown_content_are_kept_and_reported` h·i·j).
+    if !run_child_kinds_are(run, &[HxRunChildKind::Ctrl]) {
+        return false;
+    }
     let ctrl = &run.ctrls[0];
     let is_note_autonum = ctrl
         .auto_num
@@ -2362,11 +2438,28 @@ fn is_injected_note_head_run(run: &HxRun) -> bool {
 
 /// 정확히 한 칸 공백(`" "`)만 담은 spacer run 판정 (인코더 `note_spacer_run`
 /// 방출 형태와 정확 일치 — 그 외 ws-only run 은 내용으로 보존).
+///
+/// Known markers inside `<hp:t>` (`markpenBegin`·`markpenEnd`·`titleMark`)
+/// project to empty text and are dropped with the pair as before (U-D5);
+/// an unknown element or a sibling the reader drops keeps the pair.
+/// 이것을 실패시키는 것: `has_unknown_part` 생략(c), 종류 비교 생략(b·e),
+/// parts 정확 일치로 좁히기(f·g 가 떼어지지 않음)
+/// (`note_number_heads_with_unknown_content_are_kept_and_reported`).
 fn is_injected_note_spacer_run(run: &HxRun) -> bool {
     run.ctrls.is_empty()
         && hx_run_has_no_objects(run)
+        && run_child_kinds_are(run, &[HxRunChildKind::Text])
         && run.texts.len() == 1
+        && !run.texts[0].has_unknown_part()
         && run.texts[0].text() == " "
+}
+
+/// Whether the run's children, in document order, are exactly `kinds` — the
+/// sidecar for a parsed run, the by-kind order for a hand-built one.
+fn run_child_kinds_are(run: &HxRun, kinds: &[HxRunChildKind]) -> bool {
+    let order =
+        if run.child_order.is_empty() { legacy_child_order(run) } else { run.child_order.clone() };
+    order.iter().map(|&(kind, _)| kind).eq(kinds.iter().copied())
 }
 
 /// run 에 텍스트/ctrl 외 개체 payload 가 전혀 없는지 (head/spacer 공용 검사).
@@ -2776,11 +2869,14 @@ fn decode_sublist_paragraphs_skipping(
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
-                "sublist nesting depth {} exceeds limit of {}",
-                depth, MAX_NESTING_DEPTH
+                "sublist nesting depth {} exceeds limit of {} in {}",
+                depth + 1,
+                MAX_NESTING_DEPTH,
+                ctx.part
             ),
         });
     }
+    note_sublist_content(sub_list, ctx);
     let mut out = Vec::with_capacity(sub_list.paragraphs.len());
     for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
         ctx.enter(super::PathSeg::NestedParagraph(i));
@@ -2795,6 +2891,20 @@ fn decode_sublist_paragraphs_skipping(
         out.push(para);
     }
     Ok(out)
+}
+
+/// Reports text or an element other than `<hp:p>` inside a `<hp:subList>`,
+/// once per sub-list at the sub-list's own path. Every place that turns a
+/// sub-list into paragraphs calls it outside its paragraph loop.
+/// 이것을 실패시키는 것: 호출 지점 하나 삭제, 또는 반복문 안으로 옮기기(문단
+/// 0개면 무음, 여러 개면 중복) (`ctrl_and_sublist_content_is_reported_lost`).
+fn note_sublist_content(sub_list: &HxSubList, ctx: &mut DecodeCtx) {
+    if sub_list.has_stray_content {
+        ctx.content_lost(
+            "sublist_content",
+            "text or an element other than a paragraph inside <hp:subList> is not read",
+        );
+    }
 }
 
 /// Converts an `HxCaption` into a Core `Caption`.
@@ -3302,6 +3412,7 @@ fn convert_header_footer(
     let apply_page_type = parse_apply_page_type(&hx.apply_page_type, attribute, &mut ctx.warnings);
 
     let hf = if let Some(sub_list) = &hx.sub_list {
+        note_sublist_content(sub_list, ctx);
         let mut paragraphs = Vec::with_capacity(sub_list.paragraphs.len());
         for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
             ctx.enter(super::PathSeg::NestedParagraph(i));
@@ -5435,7 +5546,8 @@ mod tests {
     // ── Parse helper tests ──────────────────────────────────────
 
     // 이것을 실패시키는 것: 묶음 갈래 뒤의 `else if` 를 `if` 로 바꾸기(바탕쪽 안
-    // 묶음 자식의 같은 손실을 두 번 보고), 또는 바탕쪽 문맥을 본문에도 켜기.
+    // 묶음 자식의 같은 손실을 두 번 보고), 또는 본문 보고 갈래 삭제(D: 본문도
+    // 같은 kind 로 보고한다).
     #[test]
     fn a_dropped_run_child_is_reported_once_and_only_where_it_is_lost() {
         let mut master = DecodeCtx::for_master_page(0, 2);
@@ -5463,7 +5575,17 @@ mod tests {
 
         let mut body = DecodeCtx::new(0);
         body.note_unsupported_run_child("unknown", "ole");
-        assert!(body.warnings.is_empty(), "{:?}", body.warnings);
+        let body_kinds: Vec<_> = body
+            .warnings
+            .iter()
+            .map(|w| match w {
+                crate::decoder::DecodeWarning::ContentLost { part, kind, .. } => {
+                    (part.as_str(), kind.as_str())
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(body_kinds, [("Contents/section0.xml", "ole")]);
     }
 
     #[test]
@@ -6912,6 +7034,7 @@ mod tests {
             has_text_ref: 0,
             has_num_ref: 0,
             paragraphs: vec![HxParagraph::default()],
+            has_stray_content: false,
         };
         let err = decode_sublist_paragraphs(&sub_list, MAX_NESTING_DEPTH, &mut DecodeCtx::new(0))
             .unwrap_err();
@@ -7033,6 +7156,7 @@ mod tests {
                 has_text_ref: 0,
                 has_num_ref: 0,
                 paragraphs: vec![],
+                has_stray_content: false,
             },
         };
         let caption = convert_hx_caption(&hx, None, 0, &mut DecodeCtx::new(0)).unwrap();
@@ -7063,6 +7187,7 @@ mod tests {
                 has_text_ref: 0,
                 has_num_ref: 0,
                 paragraphs: vec![],
+                has_stray_content: false,
             },
         };
         let caption = convert_hx_caption(&hx, None, 0, &mut DecodeCtx::new(0)).unwrap();
@@ -7094,6 +7219,7 @@ mod tests {
                 has_text_ref: 0,
                 has_num_ref: 0,
                 paragraphs: vec![],
+                has_stray_content: false,
             },
         };
 
@@ -7259,12 +7385,13 @@ mod ws_preserve_tests {
     // 또는 CDATA 공백을 무시하거나 ledger 에서 표식을 글자로 세기.
     // Expected wire lengths come from the source fixture, never the parsed tree.
     #[test]
+    // 이것을 실패시키는 것: HxText::text의 CR 1:1 정규화 제거.
     fn mixed_spaces_keep_core_text_and_independent_wire_lengths() {
         for (body, text, wire_len) in [
             ("  <hp:fwSpace/>작계훈련", "  \u{1f}작계훈련", 7),
             ("□<hp:fwSpace/> ", "□\u{1f} ", 3),
             (" <hp:fwSpace/>  <hp:tab/>   <hp:lineBreak/> ", " \u{1f}  \t   \n ", 17),
-            ("&#32;<hp:nbSpace/>&#x20;<hp:fwSpace/>&#13;", " \u{a0} \u{1f}\r", 5),
+            ("&#32;<hp:nbSpace/>&#x20;<hp:fwSpace/>&#13;", " \u{a0} \u{1f}\n", 5),
             ("\n \t<hp:fwSpace/>\n \t", "\n \t\u{1f}\n \t", 7),
             ("<![CDATA[ ]]><hp:fwSpace/><![CDATA[ ]]>", " \u{1f} ", 3),
             (" <![CDATA[ ]]> <!--x--><?pi x?><hp:fwSpace/> <![CDATA[끝]]>", "   \u{1f} 끝", 6),
@@ -7325,15 +7452,16 @@ mod ws_preserve_tests {
     // CR now reaches the decoder as a character reference.
     // 이것을 실패시키는 것: 판정을 literal 공백만으로 되돌리는 것(`&#13;` run 이 사라짐).
     #[test]
+    // 이것을 실패시키는 것: HxText::text의 CR 1:1 정규화 제거.
     fn a_run_of_whitespace_character_references_survives() {
         for (wire, want) in [
-            ("&#13;", "\r"),
+            ("&#13;", "\n"),
             ("&#10;", "\n"),
             ("&#9;", "\t"),
             ("&#32;", " "),
-            ("&#xD;", "\r"),
-            ("&#x0d;", "\r"),
-            ("&#x20;&#13; ", " \r "),
+            ("&#xD;", "\n"),
+            ("&#x0d;", "\n"),
+            ("&#x20;&#13; ", " \n "),
         ] {
             let xml = format!(
                 r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t></run><run charPrIDRef="0"><t>{wire}</t></run><run charPrIDRef="0"><t>나</t></run></p></sec>"#

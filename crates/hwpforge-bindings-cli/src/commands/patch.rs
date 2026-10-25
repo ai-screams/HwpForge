@@ -1,4 +1,6 @@
 //! Patch a section in an existing HWPX file.
+use crate::error::CliCode;
+use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::path::PathBuf;
 
@@ -18,11 +20,11 @@ pub fn run(
     json_mode: bool,
 ) {
     // Read base HWPX
-    check_file_size(base, json_mode);
-    let base_bytes = read_input(base, json_mode);
+    check_file_size(base, json_mode, Command::Patch);
+    let base_bytes = read_input(base, json_mode, Command::Patch);
     // Read section JSON
-    check_file_size(section_json, json_mode);
-    let json_str = read_input_string(section_json, json_mode);
+    check_file_size(section_json, json_mode, Command::Patch);
+    let json_str = read_input_string(section_json, json_mode, Command::Patch);
 
     // `ops::exchange::patch` reproduces the whole legacy pipeline itself:
     // parse the patch JSON, deserialize it as an `ExportedSection`, verify
@@ -40,8 +42,11 @@ pub fn run(
     let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();
 
     if let Err(e) = std::fs::write(output, &outcome.bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            CliCode::Ops(OpsCode::FileWriteFailed),
+            format!("Cannot write '{}': {e}", output.display()),
+        )
+        .exit(json_mode, Command::Patch);
     }
 
     let mut result = serde_json::json!({

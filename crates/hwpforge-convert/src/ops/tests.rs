@@ -61,13 +61,15 @@ fn every_hwp5_error_code_is_classified() {
             }),
             OpsCode::Hwp5DecodeFailed,
         ),
-        // Produced at exactly one place: convert's own `validate()`.
+        // The decoder's own style and border-fill reference checks raise it
+        // (decoder `mod.rs`, `section/mod.rs`, crate `lib.rs`); the decode
+        // stage owns them, so it is an input decode failure (W4, D10).
         (
             Hwp5Error::Core(CoreError::InvalidStructure {
-                context: "document".into(),
-                reason: "no sections".into(),
+                context: "table borderFill".into(),
+                reason: "broken table borderFill reference ID 32752".into(),
             }),
-            OpsCode::Hwp5ConvertFailed,
+            OpsCode::Hwp5DecodeFailed,
         ),
     ];
 
@@ -89,10 +91,13 @@ fn every_hwp5_error_code_is_classified() {
 }
 
 #[test]
-fn every_post_decode_stage_reports_convert_failed() {
-    // The finding this fixes: an HWPX encode failure and a layout-patch
-    // failure used to arrive as `Hwp5Error::Cfb`/`MissingStream` and so
-    // claimed the *source file* could not be read.
+// 이것을 실패시키는 것(W4): `convert_code` 의 Validate·Encode 를 `Hwp5ConvertFailed` 로 되돌리기,
+// LayoutPatch 를 다른 코드로 바꾸기, `hint()` 의 Validate·Encode 갈래 삭제(힌트 소실).
+fn each_post_decode_stage_reports_its_own_code() {
+    // The stage decides the code (design D10): a direct Core validation of
+    // the decoded document is `VALIDATION_FAILED`, the HWPX output encode is
+    // `ENCODE_FAILED`, and only the layout-hint replay on the package this
+    // crate just generated keeps `HWP5_CONVERT_FAILED`.
     //
     // Why by construction and not from bytes: none of the three post-decode
     // stages is reachable from an input this suite can supply. `Validate`
@@ -102,19 +107,19 @@ fn every_post_decode_stage_reports_convert_failed() {
     // generated moments earlier*, so reaching it means the encoder and the
     // patcher disagree. The decode stage is the one with a byte-level test —
     // `tests/ops_convert_hwp5.rs` drives it with garbage, a ZIP and a
-    // truncated container.
+    // truncated container, and `tests/w4_errors.rs` with a broken reference.
     let cases: Vec<(ConvertError, OpsCode, &str)> = vec![
         (
             ConvertError::Validate(CoreError::InvalidStructure {
                 context: "document".into(),
                 reason: "no sections".into(),
             }),
-            OpsCode::Hwp5ConvertFailed,
+            OpsCode::ValidationFailed,
             "validate",
         ),
         (
             ConvertError::Encode(HwpxError::XmlSerialize { detail: "section0.xml".into() }),
-            OpsCode::Hwp5ConvertFailed,
+            OpsCode::EncodeFailed,
             "encode",
         ),
         (
@@ -137,20 +142,27 @@ fn every_post_decode_stage_reports_convert_failed() {
         assert_eq!(error.stage(), stage);
         let wrapped = ConvertOpsError::Convert(error);
         assert_eq!(wrapped.code(), expected, "{wrapped}");
-        assert_eq!(wrapped.code().as_str(), "HWP5_CONVERT_FAILED");
-        assert!(wrapped.hint().is_some(), "the caller is told what to check");
+        // The caller keeps the HWP5 recovery hint it was given before the
+        // stages got their own codes.
+        assert_eq!(
+            wrapped.hint(),
+            Some("Check that the source is a supported HWP5 document"),
+            "{wrapped}"
+        );
     }
 }
 
 #[test]
-fn a_decode_stage_core_error_still_reports_convert_failed() {
-    // The decode stage keeps the per-variant table rather than flattening to
-    // one code: a Core error that propagates out of the decoder means the
-    // container was read and the projection is what failed.
+// 이것을 실패시키는 것(W4): `hwp5_code` 의 `Core` 갈래를 `Hwp5ConvertFailed` 로 되돌리기.
+fn a_decode_stage_core_error_is_a_decode_failure() {
+    // A Core error raised inside the decoder (a broken style or border-fill
+    // reference) is part of reading the input, so the decode stage reports it
+    // like any other unreadable HWP5 (design D10, O03).
     let error = ConvertOpsError::Convert(ConvertError::Decode(Hwp5Error::Core(
         CoreError::InvalidStructure { context: "document".into(), reason: "no sections".into() },
     )));
-    assert_eq!(error.code(), OpsCode::Hwp5ConvertFailed);
+    assert_eq!(error.code(), OpsCode::Hwp5DecodeFailed);
+    assert_eq!(error.hint(), Some("Check that the file is a valid HWP5 document"));
 }
 
 #[test]

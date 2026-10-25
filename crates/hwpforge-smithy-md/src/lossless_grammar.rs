@@ -469,8 +469,8 @@ pub(crate) const ROW_HEADER: &str = "data-is-header";
 /// documents, whose semantic nesting depth is checked by Core validation
 /// before any recursive encoding walk. This parser budget bounds input
 /// nesting before building the Core tree.
-// Keep this parser budget equal to Core's private semantic depth limit (32).
-pub(crate) const MAX_NESTING_DEPTH: usize = 32;
+// Shares Core's public MAX_NESTING_DEPTH; the parser counts different containers.
+pub(crate) const MAX_NESTING_DEPTH: usize = hwpforge_core::MAX_NESTING_DEPTH;
 
 /// The elements that count toward [`MAX_NESTING_DEPTH`].
 pub(crate) const CONTAINER_TAGS: [&str; 15] = [

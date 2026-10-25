@@ -438,16 +438,18 @@ fn automatic_boundary_values_are_not_patch_slots() {
                 }
             }
             assert!(changed, "{kind} retains its displayed value");
+            // 이것을 실패시키는 것: 보호 필드 값 변경 거부를 `PatchError::Rejected` 로 되돌리기.
+            let error = HwpxPatcher::patch_section_preserving(
+                &bytes,
+                0,
+                &section,
+                None,
+                Some(&preservation),
+            )
+            .unwrap_err();
             assert!(
-                HwpxPatcher::patch_section_preserving(
-                    &bytes,
-                    0,
-                    &section,
-                    None,
-                    Some(&preservation)
-                )
-                .is_err(),
-                "{kind}"
+                matches!(error, hwpforge_smithy_hwpx::PatchError::ProtectedFieldRange { .. }),
+                "{kind}: {error}"
             );
         }
     }
@@ -1503,7 +1505,9 @@ fn preserving_patch_keeps_space_only_runs() {
 /// 패치 때 CR 참조 재작성 또는 무관한 ZIP 엔트리 변경.
 #[test]
 fn preserving_patch_keeps_cr_only_runs() {
-    whitespace_only_preservation("&#13;", "\r");
+    // 이것을 실패시키는 것: HxText::text의 CR 1:1 정규화 제거.
+    // Core는 LF지만 미편집 슬롯의 원본 CR 참조 바이트는 그대로다.
+    whitespace_only_preservation("&#13;", "\n");
 }
 
 /// 이것을 실패시키는 것: claim의 A 패키지로 B 검증, 또는 복원 시 기존 A claim 유지.
@@ -1976,6 +1980,82 @@ fn preserving_patch_keeps_runless_paragraphs() {
     }
 }
 
+/// The #260 contract in a later section: a runless empty paragraph in
+/// section 1 of a two-section package exports without a warning, an unedited
+/// patch returns the package byte for byte, and editing another paragraph
+/// drops the empty paragraph's line cache with the rest of its flow, while
+/// section 0 stays as it was.
+/// 이것을 실패시키는 것: patch 의 슬롯 투영에 `source_maps[section_idx]` 대신
+/// `source_maps[0]` 을 넘기기(구역 0 에는 가상 run 이 없어 슬롯 수가 어긋난다).
+#[test]
+fn preserving_patch_keeps_runless_paragraphs_in_a_later_section() {
+    use hwpforge_smithy_hwpx::HwpxPatcher;
+    let section = |text: &str| {
+        Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text(text, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        )
+    };
+    let mut doc = Document::new();
+    doc.add_section(section("구역0"));
+    doc.add_section(section("구역1"));
+    let styles = style_store_for_preset("default").unwrap();
+    let encoded =
+        HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::new()).unwrap();
+    let read = |bytes: &[u8], name: &str| {
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
+        xml
+    };
+    for empty in runless_paragraph_cases() {
+        let body = para(&run("<hp:t>편집 대상</hp:t>"), &[0])
+            + &empty
+            + &para(&run("<hp:t>뒤 문단</hp:t>"), &[0]);
+        let mut source = zip::ZipArchive::new(Cursor::new(encoded.clone())).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..source.len() {
+            let mut entry = source.by_index(i).unwrap();
+            let name = entry.name().expect("ZIP entry name").to_string();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            if name == "Contents/section1.xml" {
+                let xml = String::from_utf8(data).unwrap();
+                data = xml.replace("</hs:sec>", &format!("{body}</hs:sec>")).into_bytes();
+            }
+            let options =
+                zip::write::SimpleFileOptions::default().compression_method(entry.compression());
+            out.start_file(name, options).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        let bytes = out.finish().unwrap().into_inner();
+
+        let outcome = HwpxPatcher::export_section_for_edit(&bytes, 1, true).unwrap();
+        assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+        let mut exported = outcome.exported;
+        let noop = HwpxPatcher::patch_exported_section(&bytes, 1, &exported).unwrap();
+        assert_eq!(noop.bytes, bytes);
+        exported.section.for_each_paragraph_mut(|p| {
+            for r in &mut p.runs {
+                if r.content.as_text() == Some("편집 대상") {
+                    r.content = hwpforge_core::RunContent::Text("고친 문장".into());
+                }
+            }
+        });
+        let patched = HwpxPatcher::patch_exported_section(&bytes, 1, &exported).unwrap().bytes;
+        let uncached_empty = if empty == "<hp:p/>" { empty.clone() } else { para("", &[]) };
+        let expected = para(&run("<hp:t>고친 문장</hp:t>"), &[])
+            + &uncached_empty
+            + &para(&run("<hp:t>뒤 문단</hp:t>"), &[]);
+        let section1 = read(&bytes, "Contents/section1.xml");
+        assert_eq!(read(&patched, "Contents/section1.xml"), section1.replace(&body, &expected));
+        assert_eq!(read(&patched, "Contents/section0.xml"), read(&bytes, "Contents/section0.xml"));
+    }
+}
+
 fn assert_runless_container_contract(body: &str, path: &str) {
     use hwpforge_smithy_hwpx::{HwpxError, HwpxPatcher, SectionWorkflowError};
     let bytes = package(body);
@@ -1995,7 +2075,7 @@ fn assert_runless_container_contract(body: &str, path: &str) {
     assert_eq!(empty_count, 1, "the nested paragraph must contain only its placeholder");
     let error = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap_err();
     assert!(
-        matches!(error, SectionWorkflowError::PreservingPatch(HwpxError::InvalidStructure { ref detail })
+        matches!(error, SectionWorkflowError::PreservingPatch(hwpforge_smithy_hwpx::PatchError::Rejected(HwpxError::InvalidStructure { ref detail }))
             if detail.contains("no original run") && detail.contains(path)),
         "{error}"
     );
@@ -2053,7 +2133,7 @@ fn preserving_patch_rejects_runless_paragraph_text_insertion() {
             });
             let error = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap_err();
             assert!(
-                matches!(error, SectionWorkflowError::PreservingPatch(HwpxError::InvalidStructure { ref detail })
+                matches!(error, SectionWorkflowError::PreservingPatch(hwpforge_smithy_hwpx::PatchError::Rejected(HwpxError::InvalidStructure { ref detail }))
                 if detail.contains("no original run") && detail.contains(".runs[0].text")),
                 "{error}"
             );

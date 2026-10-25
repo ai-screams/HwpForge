@@ -115,7 +115,7 @@ pub use hwpforge_smithy_hwpx::stamp::CellStampSpec;
 /// version (`format!("{}.manifest.json", output.trim_end_matches(".hwpx"))`)
 /// strips *every* trailing `.hwpx` — `str::trim_end_matches` repeats the
 /// match — and collapsed the same input to `form.manifest.json`. Neither
-/// frontend's audited legacy contract (`tests/data/legacy_codes.txt`; codes
+/// frontend's audited legacy contract (`tests/data/codes-0.18.txt`; codes
 /// and hints, not path arithmetic) pins either behaviour, and no known caller
 /// passes a doubly-suffixed output path, so this migration keeps the CLI's
 /// `Path`-based rule for both rather than compat-mapping the divergence.
@@ -171,7 +171,7 @@ pub struct StampPlanMeta {
 ///
 /// # Errors
 ///
-/// [`OpsError::Stamper`] (code `STAMP_CODEC_FAILED`) when the bytes fail to
+/// [`OpsError::Stamper`] (code `DECODE_FAILED`) when the bytes fail to
 /// decode.
 ///
 /// # Examples
@@ -337,7 +337,7 @@ pub struct StampMeta {
 ///   drift (`STAMP_SOURCE_HASH_MISMATCH`, `STAMP_LABEL_DRIFT`,
 ///   `STAMP_SPEC_STALE`), coverage (`STAMP_CANDIDATE_UNCOVERED`), naming
 ///   (`STAMP_NAME_DUPLICATE`, `STAMP_NAME_COLLISION`, `STAMP_NAME_EMPTY`),
-///   the post-encode self-verification (`STAMP_DELTA_MISMATCH`) and the
+///   the post-encode self-verification (`SELF_VERIFY_FAILED`) and the
 ///   fail-closed `ENCODE_SEMANTIC_LOSS`.
 /// - `INVALID_STAMP_MAP` is **not** reachable from here: parsing happens in
 ///   the caller, so a malformed map fails before this function is entered.
