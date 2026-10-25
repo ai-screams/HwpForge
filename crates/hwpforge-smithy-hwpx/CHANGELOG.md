@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.1...hwpforge-smithy-hwpx-v0.18.0) - 2026-10-25
+
 ### Changed (BREAKING)
 
 - `CellEditError`·`StamperError`·`StructuralEditError`의 `Codec(String)`을 `Codec(CodecFailure)`로 바꾼다. stage·leaf code·detail을 보존하고 기존 Clone/Eq를 유지한다. 세 enum에 `Invariant { detail }`, 구조 편집에 `ProtectedFieldRange { section, index, detail }`를 추가한다.

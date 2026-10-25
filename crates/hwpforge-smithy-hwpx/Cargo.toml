@@ -21,9 +21,9 @@ schemars = ["dep:schemars"]
 __test-support = []
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.17.1" }
-hwpforge-core = { path = "../hwpforge-core", version = "0.17.1" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.17.1" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.18.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.18.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.18.0" }
 quick-xml = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true }
