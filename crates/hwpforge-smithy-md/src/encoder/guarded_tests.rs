@@ -1435,15 +1435,15 @@ fn joined_cell_emphasis_stays_local() {
 fn emphasis_writer_is_linear() {
     use hwpforge_core::control::Control;
     let mut paragraphs: Vec<hwpforge_core::Paragraph> =
-        (0..100_000).map(|_| body(vec![t("")])).collect();
+        (0..200_000).map(|_| body(vec![t("")])).collect();
     paragraphs.push(body(vec![styled_t("x", BOLD)]));
     let boxed = doc(vec![body(vec![text_box(paragraphs)])]);
     let started = std::time::Instant::now();
     let (out, fallbacks) = styled(&boxed);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!((out.as_str(), fallbacks), ("**x**", 0));
     let mut runs = Vec::new();
-    for _ in 0..100_000 {
+    for _ in 0..150_000 {
         runs.push(styled_t("a", BOLD));
         runs.push(t("!"));
         runs.push(ctrl(Control::hyperlink("b", "https://e.invalid/")));
@@ -1451,7 +1451,7 @@ fn emphasis_writer_is_linear() {
     let linked = doc(vec![body(runs)]);
     let started = std::time::Instant::now();
     let (out, fallbacks) = styled(&linked);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!(fallbacks, 0);
     assert!(out.starts_with("**a**\\![b](https://e.invalid/)**a**"), "{}", &out[..60]);
 }
@@ -1467,7 +1467,7 @@ fn backslash_links_are_linear() {
     let doc = doc(vec![body(runs)]);
     let started = std::time::Instant::now();
     let (out, fallbacks) = styled(&doc);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!(fallbacks, 0);
     assert_eq!(out, "\\\\".repeat(100_000));
 }
@@ -1528,25 +1528,40 @@ fn one_warning_per_paragraph() {
 }
 
 /// Many paragraphs written as plain text, each its own warning: whether a
-/// paragraph is reported is looked up, not searched for.
+/// paragraph is reported is looked up, not searched for. Each falls back at
+/// the Body check (`1` + `. x` makes a list), the cheapest way there, so the
+/// search a mutation adds stands out from the drawing.
 /// 이것을 실패시키는 것: 경고 목록을 처음부터 찾기.
 #[test]
 fn many_fallbacks_are_linear() {
-    let crossing = || {
-        body(vec![
-            styled_t("a", emphasis(true, false, false)),
-            styled_t("b", emphasis(true, true, false)),
-            styled_t("c", emphasis(false, true, false)),
-        ])
-    };
-    let doc = doc((0..N_FALLBACKS).map(|_| crossing()).collect());
+    let listed = || body(vec![t("1"), compose(". x")]);
+    let doc = doc((0..N_FALLBACKS).map(|_| listed()).collect());
     let started = std::time::Instant::now();
     let (_, fallbacks) = styled(&doc);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!(fallbacks, N_FALLBACKS);
 }
 
-const N_FALLBACKS: usize = 100_000;
+const N_FALLBACKS: usize = 250_000;
+
+/// The time bound of the linearity tests here (G3, G4), for a debug build on
+/// a CI runner: five times the slowest linear case and a third of the
+/// fastest quadratic one, both measured locally in a debug build
+/// (`cargo nextest run -p hwpforge-smithy-md --all-features`, three runs,
+/// tests in parallel; 2026-10-26). Slowest linear run / with the mutation
+/// in each test's comment:
+/// - `emphasis_writer_is_linear`: 200,000 empty paragraphs 0.047 s /
+///   12.6 s; 150,000 text, `!` and link 0.40 s / 11.9 s
+/// - `backslash_links_are_linear`: 100,000 links 0.055 s / 16.6 s
+/// - `many_fallbacks_are_linear`: 250,000 paragraphs 0.33 s / 14.0 s
+/// - `empty_pieces_after_text_are_linear`: 100,000 pieces 0.030 s / 16.0 s
+/// - `math_check_is_linear`: 300,000 marks 0.14 s / 10.6 s
+/// - `colliding_pictures_take_linear_time`: 8,192 pictures 0.047 s / 19.5 s
+///
+/// The slowest linear case times five is 2.0 s, the fastest quadratic one
+/// over three 3.5 s. CI once took six times the local time (a 2 s bound,
+/// 3.51 s for 0.57 s).
+const LINEAR_BOUND: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Backslashes of the document's text, then many controls that draw
 /// nothing: each is left out once, the text's tail is not scanned again.
@@ -1560,7 +1575,7 @@ fn empty_pieces_after_text_are_linear() {
     let doc = doc(vec![body(runs)]);
     let started = std::time::Instant::now();
     let (out, fallbacks) = styled(&doc);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!(fallbacks, 0);
     assert!(out.ends_with("**x**"), "{}", &out[out.len() - 20..]);
 }
@@ -1689,12 +1704,12 @@ fn text_controls_with_nothing_or_math() {
 #[test]
 fn math_check_is_linear() {
     use hwpforge_core::control::Control;
-    let n = 128_000;
+    let n = 300_000;
     let script = format!("{}a{}b{}", "*".repeat(n), "\\!".repeat(n), "*".repeat(n));
     let doc = doc(vec![body(vec![styled_t("x", BOLD), ctrl(Control::equation(&script))])]);
     let started = std::time::Instant::now();
     let (out, fallbacks) = styled(&doc);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!(fallbacks, 0);
     assert!(out.starts_with("**x**$"), "{}", &out[..20]);
 }
@@ -1914,12 +1929,11 @@ fn fallback_link_labels_keep_their_spaces() {
 }
 
 /// Pictures whose keys collide (`a.png`, `a-2.png` …) cost what their
-/// number does, drawn and in a fallback (each walked the keys before it:
-/// 4,096 pictures took seconds).
-/// 이것을 실패시키는 것: 키를 매번 처음부터 걷기 · 접두 기록 조건 삭제.
+/// number does, drawn and in a fallback (each walked the keys before it).
+/// 이것을 실패시키는 것: 키를 매번 처음부터 걷기.
 #[test]
 fn colliding_pictures_take_linear_time() {
-    let n = 4096;
+    let n = 8192;
     let mut runs = vec![
         styled_t("a", emphasis(true, false, false)),
         styled_t("b", emphasis(true, true, false)),
@@ -1929,7 +1943,7 @@ fn colliding_pictures_take_linear_time() {
     let doc = doc(vec![body(runs)]);
     let started = std::time::Instant::now();
     let out = encode_styled(&doc, &Styles);
-    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(started.elapsed() < LINEAR_BOUND, "{:?}", started.elapsed());
     assert_eq!(out.images.len(), n);
     assert!(
         out.markdown.ends_with(&format!("![a](images/a-{n}.png)")),
