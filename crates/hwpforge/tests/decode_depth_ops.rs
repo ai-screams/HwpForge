@@ -30,6 +30,7 @@ fn semantic_overflow_stops_at_decode_with_existing_operation_codes() {
 // 이것을 실패시키는 것: 공개 decode Core 관문 삭제 (코드는 같아도 Core decode 오류가 사라짐).
 #[test]
 fn stamp_overflow_stops_at_decode() {
+    // 이것을 실패시키는 것: T3 stamp 입력 decode stage를 Encode로 변경.
     on_big_stack(|| {
         let bytes = package(section_with(&groups(32)), Place::Body);
         let err = code(
@@ -38,7 +39,7 @@ fn stamp_overflow_stops_at_decode() {
                 &hwpforge_smithy_hwpx::stamp::StampMap::Legacy(vec![]),
                 &Default::default(),
             ),
-            "STAMP_CODEC_FAILED",
+            "DECODE_FAILED",
         );
         assert!(err.to_string().contains("Core error:"), "{err}");
     });
@@ -47,6 +48,7 @@ fn stamp_overflow_stops_at_decode() {
 // 이것을 실패시키는 것: 공개 decode Core 관문 삭제 (코드는 같아도 Core decode 오류가 사라짐).
 #[test]
 fn insert_overflow_stops_at_decode() {
+    // 이것을 실패시키는 것: T2 structural 입력 decode stage를 Encode로 변경.
     on_big_stack(|| {
         let bytes = package(section_with(&groups(32)), Place::Body);
         let err = code(
@@ -54,7 +56,7 @@ fn insert_overflow_stops_at_decode() {
                 &bytes,
                 &ops::edit::InsertParaOptions::default().with_text(vec!["text".into()]),
             ),
-            "STRUCTURAL_CODEC",
+            "DECODE_FAILED",
         );
         assert!(err.to_string().contains("Core error:"), "{err}");
     });
@@ -63,6 +65,7 @@ fn insert_overflow_stops_at_decode() {
 // 이것을 실패시키는 것: 공개 decode Core 관문 삭제 (코드는 같아도 Core decode 오류가 사라짐).
 #[test]
 fn delete_overflow_stops_at_decode() {
+    // 이것을 실패시키는 것: T2 structural 입력 decode stage를 Encode로 변경.
     on_big_stack(|| {
         let bytes = package(section_with(&groups(32)), Place::Body);
         let err = code(
@@ -70,7 +73,7 @@ fn delete_overflow_stops_at_decode() {
                 &bytes,
                 &ops::edit::DeleteParaOptions::default().with_indexes(vec![0]),
             ),
-            "STRUCTURAL_CODEC",
+            "DECODE_FAILED",
         );
         assert!(err.to_string().contains("Core error:"), "{err}");
     });
@@ -79,6 +82,7 @@ fn delete_overflow_stops_at_decode() {
 // 이것을 실패시키는 것: 공개 decode Core 관문 삭제 (코드는 같아도 Core decode 오류가 사라짐).
 #[test]
 fn set_cell_overflow_stops_at_decode() {
+    // 이것을 실패시키는 것: T1 셀 입력 decode stage를 Encode로 변경.
     on_big_stack(|| {
         let bytes = package(section_with(&groups(32)), Place::Body);
         let err = code(
@@ -89,7 +93,7 @@ fn set_cell_overflow_stops_at_decode() {
                     .with_at("0,0")
                     .with_text("text"),
             ),
-            "SET_CELL_CODEC_FAILED",
+            "DECODE_FAILED",
         );
         assert!(err.to_string().contains("Core error:"), "{err}");
     });
@@ -141,8 +145,9 @@ fn fill_overflow_is_a_decode_failure_before_inventory() {
 // 이것을 실패시키는 것: decode Core 관문 삭제 → stamp-plan 성공.
 #[test]
 fn stamp_plan_overflow_becomes_codec_failure() {
+    // 이것을 실패시키는 것: T4 stamp-plan 입력 decode stage를 Encode로 변경.
     on_big_stack(|| {
         let bytes = package(section_with(&groups(32)), Place::Body);
-        code(ops::stamp::stamp_plan(&bytes), "STAMP_CODEC_FAILED");
+        code(ops::stamp::stamp_plan(&bytes), "DECODE_FAILED");
     });
 }

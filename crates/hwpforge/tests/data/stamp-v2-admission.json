@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "source_sha256": "2d60a70076c0aaee72ea4cd5632fe47af909d347edf1d3d616bbaf5b245b5e3a",
+  "text": [],
+  "cells": [
+    {
+      "table": 0,
+      "at": {
+        "row": 0,
+        "col": 0
+      },
+      "action": {
+        "field": {
+          "name": "field",
+          "hint": "text"
+        }
+      }
+    }
+  ]
+}

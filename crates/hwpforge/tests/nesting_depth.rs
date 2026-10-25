@@ -154,12 +154,13 @@ fn preserving_patch_rejects_unvalidated_section() {
 
 #[test]
 fn cell_edits_reject_deep_draft() {
+    // 이것을 실패시키는 것: T6 Draft 깊이 variant를 Codec으로 되돌림.
     child("cell_edits_reject_deep_draft", 2 * 1024 * 1024, || {
         let mut d = doc(group(100_000));
         let result = apply_set_cells(&mut d, &[]);
         assert!(d.validate().is_err());
         assert!(
-            matches!(result, Err(CellEditError::Codec(detail)) if detail.contains("nesting_depth"))
+            matches!(result, Err(CellEditError::NestingTooDeep { section: 0, reason }) if reason.contains("depth"))
         );
     });
 }

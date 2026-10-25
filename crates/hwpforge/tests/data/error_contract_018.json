@@ -2,7 +2,12 @@
   "audited_variants": [
     "FillError::Invariant",
     "PatchError::Invariant",
-    "PatchError::ProtectedFieldRange"
+    "PatchError::ProtectedFieldRange",
+    "CellEditError::Invariant",
+    "CellEditError::NestingTooDeep",
+    "StructuralEditError::Invariant",
+    "StructuralEditError::ProtectedFieldRange",
+    "StamperError::Invariant"
   ],
   "cases": [
     {
@@ -286,7 +291,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "NotRoundTripSafe"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.validation_failed",
@@ -345,7 +356,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "SemanticLoss"
+        }
+      ]
     },
     {
       "id": "adapter.stamp.decode_failed",
@@ -371,7 +388,13 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "NotRoundTripSafe"
+        }
+      ]
     },
     {
       "id": "adapter.stamp.validation_failed",
@@ -430,7 +453,13 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "SemanticLoss"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.decode_failed",
@@ -456,7 +485,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "NotRoundTripSafe"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.validation_failed",
@@ -493,7 +528,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "DeltaMismatch"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.internal_invariant",
@@ -1103,7 +1144,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "DuplicateTarget"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.reference_stranded",
@@ -1118,7 +1165,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "ReferenceStranded"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.hard_break_loss",
@@ -1133,7 +1186,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "HardBreakLoss"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.empty_section",
@@ -1148,7 +1207,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "EmptySection"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.insert_text_required",
@@ -1178,7 +1243,13 @@
           "mode": "injected",
           "operation": "insert-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "MultiParagraphText"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.insert_before_section_properties",
@@ -1193,7 +1264,13 @@
           "mode": "injected",
           "operation": "insert-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "InsertBeforeSectionProperties"
+        }
+      ]
     },
     {
       "id": "adapter.delete-para.section_out_of_range",
@@ -1208,7 +1285,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "SectionOutOfRange"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.section_out_of_range",
@@ -1238,7 +1321,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "ParagraphOutOfRange"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.paragraph_out_of_range",
@@ -1268,7 +1357,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "UncarriedZipEntries"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.input_entries_not_carried",
@@ -1298,7 +1393,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "SectionPropertiesParagraph"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.section_properties_paragraph",
@@ -1328,7 +1429,13 @@
           "mode": "injected",
           "operation": "delete-para"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "SpanCountMismatch"
+        }
+      ]
     },
     {
       "id": "adapter.insert-para.span_count_mismatch",
@@ -1338,36 +1445,6 @@
           "mode": "injected",
           "operation": "insert-para",
           "exit": 1
-        },
-        "mcp": {
-          "mode": "injected",
-          "operation": "insert-para"
-        }
-      }
-    },
-    {
-      "id": "adapter.delete-para.structural_codec",
-      "expected_code": "STRUCTURAL_CODEC",
-      "surfaces": {
-        "cli": {
-          "mode": "injected",
-          "operation": "delete-para",
-          "exit": 2
-        },
-        "mcp": {
-          "mode": "injected",
-          "operation": "delete-para"
-        }
-      }
-    },
-    {
-      "id": "adapter.insert-para.structural_codec",
-      "expected_code": "STRUCTURAL_CODEC",
-      "surfaces": {
-        "cli": {
-          "mode": "injected",
-          "operation": "insert-para",
-          "exit": 2
         },
         "mcp": {
           "mode": "injected",
@@ -1646,7 +1723,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TableGridInvalid"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.cell_not_found",
@@ -1661,7 +1744,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "CellNotFound"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.cell_label_ambiguous",
@@ -1676,7 +1765,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "LabelAmbiguous"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.cell_has_non_text_content",
@@ -1691,7 +1786,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "NonTextContent"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.cell_target_duplicate",
@@ -1706,7 +1807,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TargetDuplicate"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.cell_target_conflict",
@@ -1721,7 +1828,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TargetConflict"
+        }
+      ]
     },
     {
       "id": "adapter.set-cell.input_entries_not_carried",
@@ -1736,22 +1849,13 @@
           "mode": "injected",
           "operation": "set-cell"
         }
-      }
-    },
-    {
-      "id": "adapter.set-cell.set_cell_codec_failed",
-      "expected_code": "SET_CELL_CODEC_FAILED",
-      "surfaces": {
-        "cli": {
-          "mode": "injected",
-          "operation": "set-cell",
-          "exit": 1
-        },
-        "mcp": {
-          "mode": "injected",
-          "operation": "set-cell"
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "UncarriedZipEntries"
         }
-      }
+      ]
     },
     {
       "id": "adapter.set-cell.upstream_unmapped",
@@ -1780,21 +1884,6 @@
       }
     },
     {
-      "id": "adapter.stamp-plan.stamp_codec_failed",
-      "expected_code": "STAMP_CODEC_FAILED",
-      "surfaces": {
-        "cli": {
-          "mode": "injected",
-          "operation": "stamp-plan",
-          "exit": 2
-        },
-        "mcp": {
-          "mode": "injected",
-          "operation": "stamp-plan"
-        }
-      }
-    },
-    {
       "id": "adapter.stamp.input_entries_not_carried",
       "expected_code": "INPUT_ENTRIES_NOT_CARRIED",
       "surfaces": {
@@ -1807,7 +1896,13 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "UncarriedZipEntries"
+        }
+      ]
     },
     {
       "id": "adapter.stamp.stamp_manifest_invariant",
@@ -1822,22 +1917,13 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
-    },
-    {
-      "id": "adapter.stamp.stamp_codec_failed",
-      "expected_code": "STAMP_CODEC_FAILED",
-      "surfaces": {
-        "cli": {
-          "mode": "injected",
-          "operation": "stamp",
-          "exit": 2
-        },
-        "mcp": {
-          "mode": "injected",
-          "operation": "stamp"
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "ManifestInvariant"
         }
-      }
+      ]
     },
     {
       "id": "adapter.stamp.stamp_source_hash_mismatch",
@@ -1852,11 +1938,17 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "SourceHashMismatch"
+        }
+      ]
     },
     {
-      "id": "adapter.stamp.stamp_delta_mismatch",
-      "expected_code": "STAMP_DELTA_MISMATCH",
+      "id": "stamp.delta_mismatch",
+      "expected_code": "SELF_VERIFY_FAILED",
       "surfaces": {
         "cli": {
           "mode": "injected",
@@ -1867,7 +1959,13 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "DeltaMismatch"
+        }
+      ]
     },
     {
       "id": "adapter.stamp.upstream_unmapped",
@@ -1960,8 +2058,8 @@
       }
     },
     {
-      "id": "adapter.stamp.stamp_cell_target_duplicate",
-      "expected_code": "STAMP_CELL_TARGET_DUPLICATE",
+      "id": "stamp.cell_target_duplicate",
+      "expected_code": "CELL_TARGET_DUPLICATE",
       "surfaces": {
         "cli": {
           "mode": "injected",
@@ -1972,7 +2070,13 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellStampError",
+          "variant": "DuplicateTarget"
+        }
+      ]
     },
     {
       "id": "adapter.stamp.stamp_name_empty",
@@ -1987,7 +2091,17 @@
           "mode": "injected",
           "operation": "stamp"
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Stamp"
+        },
+        {
+          "enum": "StamperError",
+          "variant": "CellStamp"
+        }
+      ]
     },
     {
       "id": "adapter.stamp.stamp_hint_blank",
@@ -2208,7 +2322,13 @@
           "operation": "set-cell",
           "exit": 1
         }
-      }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "TableNotFound"
+        }
+      ]
     },
     {
       "id": "adapter.restyle.preset_not_found",
@@ -4851,6 +4971,1150 @@
         "rust": {
           "mode": "injected",
           "operation": "fill.patch.invariant"
+        }
+      }
+    },
+    {
+      "id": "cell.codec.decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.decode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.admission"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Admission",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.validation"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.encode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Encode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.codec.verification",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.codec.verification"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 3
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 4
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 5
+        }
+      ]
+    },
+    {
+      "id": "cell.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "cell.invariant"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "Invariant"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "map_admission_error",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "map_admission_error",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.decode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "admit",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.admission"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "admit",
+          "stage": "Admission",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.validation"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.encode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "normalize_header_for_edit",
+          "stage": "Encode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.codec.verification",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.codec.verification"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "self_verify",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "encoded_paragraph_spans",
+          "stage": "Verification",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "structural.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.invariant"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "Invariant"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "map_admission",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "map_admission",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 3
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "encoded_paragraph_spans",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "splice_paragraphs",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.decode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Decode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::plan_bytes",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::plan_bytes_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "check_zip_carry",
+          "stage": "Decode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.admission"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Admission"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Admission",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Admission",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Admission",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Admission",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.validation",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.validation"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Validation"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Validation",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Validation",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.encode"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Encode"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_fail_closed",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Encode",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.codec.verification",
+      "expected_code": "SELF_VERIFY_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.codec.verification"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Codec",
+          "stage": "Verification"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Verification",
+          "occurrence": 3
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "verify_and_reverse_cells",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "encode_hwpx",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "check_zip_carry",
+          "stage": "Verification",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "stamp.invariant",
+      "expected_code": "INTERNAL_INVARIANT",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "stamp.invariant"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StamperError",
+          "variant": "Invariant"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "variant": "StamperError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "variant": "StamperError::Invariant",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "variant": "StamperError::Invariant",
+          "occurrence": 2
+        }
+      ]
+    },
+    {
+      "id": "structural.protected_field",
+      "expected_code": "PROTECTED_FIELD_RANGE",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "structural.protected_field"
+        }
+      },
+      "inventory": [
+        {
+          "enum": "StructuralEditError",
+          "variant": "ProtectedFieldRange"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "variant": "StructuralEditError::ProtectedFieldRange",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "variant": "StructuralEditError::ProtectedFieldRange",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "remove_targets",
+          "variant": "StructuralEditError::ProtectedFieldRange",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.draft_depth",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.draft_depth"
+        },
+        "cli": {
+          "mode": "unreachable",
+          "operation": "set-cell",
+          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+        },
+        "mcp": {
+          "mode": "unreachable",
+          "operation": "set-cell",
+          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+        },
+        "python": {
+          "mode": "unreachable",
+          "operation": "set_cell",
+          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+        }
+      },
+      "inventory": [
+        {
+          "enum": "CellEditError",
+          "variant": "NestingTooDeep"
+        }
+      ],
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "apply_set_cells",
+          "variant": "CellEditError::NestingTooDeep",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "id": "cell.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "cell.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.input_decode"
+        }
+      }
+    },
+    {
+      "id": "cell.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "cell.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.admission"
+        }
+      }
+    },
+    {
+      "id": "structural.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "insert-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "insert-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural.input_decode"
+        }
+      }
+    },
+    {
+      "id": "structural.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "insert-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "insert-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural.admission"
+        }
+      }
+    },
+    {
+      "id": "structural_delete.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural_delete.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "delete-para",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "delete-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural_delete.input_decode"
+        }
+      }
+    },
+    {
+      "id": "structural_delete.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "structural_delete.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "delete-para",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "delete-para"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "structural_delete.admission"
+        }
+      }
+    },
+    {
+      "id": "stamp.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "stamp.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp.input_decode"
+        }
+      }
+    },
+    {
+      "id": "stamp.admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "stamp.admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp.admission"
+        }
+      }
+    },
+    {
+      "id": "stamp_plan.input_decode",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "stamp_plan.input_decode"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp-plan",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp-plan"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp_plan.input_decode"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-table-42",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-table-42"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-table-33",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-table-33"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-group-32",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-group-32"
+        }
+      }
+    },
+    {
+      "id": "cell.depth-xml-broken",
+      "expected_code": "DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.byte_depth"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "set-cell",
+          "exit": 2
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "set-cell"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "cell.depth-xml-broken"
+        }
+      }
+    },
+    {
+      "id": "stamp.v2_admission",
+      "expected_code": "INPUT_NOT_ROUNDTRIP_SAFE",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "w3.stamp_v2_admission"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "stamp",
+          "exit": 1
+        },
+        "mcp": {
+          "mode": "fixture",
+          "operation": "stamp"
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "stamp.v2_admission"
         }
       }
     }

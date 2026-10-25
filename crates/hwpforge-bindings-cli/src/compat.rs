@@ -173,8 +173,6 @@ const TABLE: &[Row] = &[
     row!(InsertPara, SpanCountMismatch, 1),
     row!(DeletePara, SelfVerifyFailed, 1),
     row!(InsertPara, SelfVerifyFailed, 1),
-    row!(DeletePara, StructuralCodec, 2),
-    row!(InsertPara, StructuralCodec, 2),
     row!(DeletePara, UpstreamUnmapped, 1),
     row!(InsertPara, UpstreamUnmapped, 1),
 
@@ -208,19 +206,15 @@ const TABLE: &[Row] = &[
     row!(SetCell, CellTargetConflict, 1, ops),
     row!(SetCell, InputNotRoundtripSafe, 1, ops),
     row!(SetCell, InputEntriesNotCarried, 1, UNCARRIED_ENTRIES_HINT),
-    row!(SetCell, SetCellCodecFailed, 1),
     row!(SetCell, UpstreamUnmapped, 1),
 
     row!(StampPlan, DecodeFailed, 2, ops),
-    row!(StampPlan, StampCodecFailed, 2),
 
     row!(Stamp, DecodeFailed, 2, ops),
-    row!(Stamp, InputNotRoundtripSafe, 1, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다"),
+    row!(Stamp, InputNotRoundtripSafe, 1, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"),
     row!(Stamp, InputEntriesNotCarried, 1, UNCARRIED_ENTRIES_HINT),
     row!(Stamp, StampManifestInvariant, 2),
-    row!(Stamp, StampCodecFailed, 2),
     row!(Stamp, StampSourceHashMismatch, 1, "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요"),
-    row!(Stamp, StampDeltaMismatch, 2, ops),
 
     row!(Stamp, UpstreamUnmapped, 2),
     row!(Stamp, TableNotFound, 1),
@@ -228,7 +222,7 @@ const TABLE: &[Row] = &[
     row!(Stamp, StampCellNotEmpty, 1, ops),
     row!(Stamp, StampLabelDrift, 1, ops),
     row!(Stamp, StampCellNotCandidate, 1),
-    row!(Stamp, StampCellTargetDuplicate, 1),
+    row!(Stamp, CellTargetDuplicate, 1),
     row!(Stamp, StampNameEmpty, 1),
     row!(Stamp, StampHintBlank, 1, ops),
     row!(Stamp, StampSpecStale, 1, "문서가 변경됐거나 span 이 어긋났습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"),
@@ -289,7 +283,7 @@ const TABLE: &[Row] = &[
     row!(Stamp, InternalInvariant, 2),
     row!(Stamp, InvalidStampMap, 1),
     row!(Stamp, ManifestPathConflict, 1),
-    row!(Stamp, SelfVerifyFailed, 2),
+    row!(Stamp, SelfVerifyFailed, 2, ops),
     row!(Stamp, StampCandidateUncovered, 1),
     row!(Stamp, StampCellNotAnchor, 1),
     row!(Stamp, StampNameCollision, 1),
@@ -761,6 +755,8 @@ mod tests {
     #[test]
     // 이것을 실패시키는 것: 코드 출력·종료 정책·등록을 변경, 미소비 기준선 또는 정책 행을 추가.
     fn w1_manifest_canonical_adapter() {
+        // 이것을 실패시키는 것: F12 새 v2 baseline 행의 코드를 다른 값으로 변경.
+        // 이것을 실패시키는 것: B1 Draft-only unreachable 건너뛰기 삭제, B3 stamp SelfVerifyFailed의 ops hint 위임 삭제.
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
                 .unwrap();
@@ -773,6 +769,9 @@ mod tests {
         let mut covered = Vec::new();
         for case in manifest["cases"].as_array().unwrap() {
             let Some(surface) = case["surfaces"].get("cli") else { continue };
+            if surface["mode"] == "unreachable" {
+                continue;
+            }
             let command = match surface["operation"].as_str().unwrap() {
                 "audit-hwp5" => Command::AuditHwp5,
                 "census-hwp5" => Command::CensusHwp5,

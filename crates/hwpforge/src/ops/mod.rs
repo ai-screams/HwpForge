@@ -471,7 +471,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다"
         }
         OpsCode::InputNotRoundtripSafe => {
-            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"
+            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed) — 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
         }
         OpsCode::InputEntriesNotCarried => {
             "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 엔트리를 보존합니다)"
@@ -486,7 +486,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
         OpsCode::StampCandidateUncovered => {
             "모든 무가드 후보는 이름을 붙이거나 ignore 로 명시해야 합니다"
         }
-        OpsCode::StampDeltaMismatch | OpsCode::SelfVerifyFailed => {
+        OpsCode::SelfVerifyFailed => {
             "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"
         }
         OpsCode::EncodeSemanticLoss => {
@@ -642,7 +642,9 @@ fn cell_edit_code(error: &CellEditError) -> OpsCode {
         CellEditError::TargetConflict { .. } => OpsCode::CellTargetConflict,
         CellEditError::NotRoundTripSafe { .. } => OpsCode::InputNotRoundtripSafe,
         CellEditError::UncarriedZipEntries { .. } => OpsCode::InputEntriesNotCarried,
-        CellEditError::Codec(_) => OpsCode::SetCellCodecFailed,
+        CellEditError::Codec(failure) => codec_code(failure),
+        CellEditError::Invariant { .. } => OpsCode::InternalInvariant,
+        CellEditError::NestingTooDeep { .. } => OpsCode::ValidationFailed,
         CellEditError::SemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
         _ => OpsCode::UpstreamUnmapped,
     }
@@ -662,7 +664,9 @@ fn read_code(error: &ReadError) -> OpsCode {
 
 fn structural_code(error: &StructuralEditError) -> OpsCode {
     match error {
-        StructuralEditError::Codec(_) => OpsCode::StructuralCodec,
+        StructuralEditError::Codec(failure) => codec_code(failure),
+        StructuralEditError::Invariant { .. } => OpsCode::InternalInvariant,
+        StructuralEditError::ProtectedFieldRange { .. } => OpsCode::ProtectedFieldRange,
         StructuralEditError::NotRoundTripSafe { .. } => OpsCode::InputNotRoundtripSafe,
         StructuralEditError::UncarriedZipEntries { .. } => OpsCode::InputEntriesNotCarried,
         StructuralEditError::SectionOutOfRange { .. } => OpsCode::SectionOutOfRange,
@@ -706,14 +710,15 @@ fn section_workflow_code(error: &SectionWorkflowError) -> OpsCode {
 
 fn stamper_code(error: &StamperError) -> OpsCode {
     match error {
-        StamperError::Codec(_) => OpsCode::StampCodecFailed,
+        StamperError::Codec(failure) => codec_code(failure),
+        StamperError::Invariant { .. } => OpsCode::InternalInvariant,
         StamperError::NotRoundTripSafe { .. } => OpsCode::InputNotRoundtripSafe,
         StamperError::UncarriedZipEntries { .. } => OpsCode::InputEntriesNotCarried,
         StamperError::Stamp(inner) => stamp_code(inner),
         StamperError::ManifestInvariant { .. } => OpsCode::StampManifestInvariant,
         StamperError::SourceHashMismatch { .. } => OpsCode::StampSourceHashMismatch,
         StamperError::CellStamp(inner) => cell_stamp_code(inner),
-        StamperError::DeltaMismatch { .. } => OpsCode::StampDeltaMismatch,
+        StamperError::DeltaMismatch { .. } => OpsCode::SelfVerifyFailed,
         StamperError::SemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
         _ => OpsCode::UpstreamUnmapped,
     }
@@ -740,7 +745,7 @@ fn cell_stamp_code(error: &CellStampError) -> OpsCode {
         CellStampError::TargetNotStampable { .. } => OpsCode::StampCellNotEmpty,
         CellStampError::LabelDrift { .. } => OpsCode::StampLabelDrift,
         CellStampError::UnknownCandidate { .. } => OpsCode::StampCellNotCandidate,
-        CellStampError::DuplicateTarget { .. } => OpsCode::StampCellTargetDuplicate,
+        CellStampError::DuplicateTarget { .. } => OpsCode::CellTargetDuplicate,
         CellStampError::EmptyName => OpsCode::StampNameEmpty,
         CellStampError::BlankHint { .. } => OpsCode::StampHintBlank,
         CellStampError::DuplicateName { .. } => OpsCode::StampNameDuplicate,

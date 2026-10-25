@@ -38,7 +38,7 @@ pub use request::{
 // fail-closed contract.
 pub(crate) use stamper::{
     admission_compare, check_zip_carry, delta_compare, encode_hwpx, first_diff_path,
-    reject_input_content_loss,
+    reject_input_content_loss, EncodePurpose,
 };
 pub use stamper::{
     HwpxStamper, ManifestField, ManifestFieldV2, StampManifest, StampManifestV2, StampMeta,

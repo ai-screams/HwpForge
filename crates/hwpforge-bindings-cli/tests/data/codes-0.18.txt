@@ -50,7 +50,6 @@ delete-para	SECTION_OUT_OF_RANGE	adapter.delete-para.section_out_of_range	null
 delete-para	SECTION_PROPERTIES_PARAGRAPH	adapter.delete-para.section_properties_paragraph	null
 delete-para	SELF_VERIFY_FAILED	adapter.delete-para.self_verify_failed	null
 delete-para	SPAN_COUNT_MISMATCH	adapter.delete-para.span_count_mismatch	null
-delete-para	STRUCTURAL_CODEC	adapter.delete-para.structural_codec	null
 delete-para	UPSTREAM_UNMAPPED	adapter.delete-para.upstream_unmapped	null
 delete-para	VALIDATION_FAILED	adapter.delete-para.validation_failed	null
 diff	DECODE_FAILED	adapter.diff.decode_failed	null
@@ -108,7 +107,6 @@ insert-para	SECTION_OUT_OF_RANGE	adapter.insert-para.section_out_of_range	null
 insert-para	SECTION_PROPERTIES_PARAGRAPH	adapter.insert-para.section_properties_paragraph	null
 insert-para	SELF_VERIFY_FAILED	adapter.insert-para.self_verify_failed	null
 insert-para	SPAN_COUNT_MISMATCH	adapter.insert-para.span_count_mismatch	null
-insert-para	STRUCTURAL_CODEC	adapter.insert-para.structural_codec	null
 insert-para	UPSTREAM_UNMAPPED	adapter.insert-para.upstream_unmapped	null
 insert-para	VALIDATION_FAILED	adapter.insert-para.validation_failed	null
 inspect	ANALYSIS_FAILED	adapter.inspect.analysis_failed	null
@@ -162,13 +160,12 @@ set-cell	FILE_NOT_FOUND	adapter.set-cell.file_not_found	"@dynamic"
 set-cell	FILE_READ_FAILED	adapter.set-cell.file_read_failed	"@dynamic"
 set-cell	FILE_WRITE_FAILED	adapter.set-cell.file_write_failed	"@dynamic"
 set-cell	INPUT_ENTRIES_NOT_CARRIED	adapter.set-cell.input_entries_not_carried	"한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)"
-set-cell	INPUT_NOT_ROUNDTRIP_SAFE	adapter.set-cell.input_not_roundtrip_safe	"이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"
+set-cell	INPUT_NOT_ROUNDTRIP_SAFE	adapter.set-cell.input_not_roundtrip_safe	"이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed) — 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
 set-cell	INPUT_TOO_LARGE	adapter.set-cell.input_too_large	"@dynamic"
 set-cell	INTERNAL_INVARIANT	adapter.set-cell.internal_invariant	null
 set-cell	INVALID_SET_CELL_ARGS	adapter.set-cell.invalid_set_cell_args	null
 set-cell	INVALID_SET_CELL_MAP	adapter.set-cell.invalid_set_cell_map	null
 set-cell	SELF_VERIFY_FAILED	adapter.set-cell.self_verify_failed	null
-set-cell	SET_CELL_CODEC_FAILED	adapter.set-cell.set_cell_codec_failed	null
 set-cell	TABLE_GRID_INVALID	adapter.set-cell.table_grid_invalid	"이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다"
 set-cell	TABLE_NOT_FOUND	adapter.set-cell.table_not_found	null
 set-cell	UPSTREAM_UNMAPPED	adapter.set-cell.upstream_unmapped	null
@@ -180,19 +177,18 @@ stamp	FILE_NOT_FOUND	adapter.stamp.file_not_found	"@dynamic"
 stamp	FILE_READ_FAILED	adapter.stamp.file_read_failed	"@dynamic"
 stamp	FILE_WRITE_FAILED	adapter.stamp.file_write_failed	"@dynamic"
 stamp	INPUT_ENTRIES_NOT_CARRIED	adapter.stamp.input_entries_not_carried	"한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)"
-stamp	INPUT_NOT_ROUNDTRIP_SAFE	adapter.stamp.input_not_roundtrip_safe	"이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다"
+stamp	INPUT_NOT_ROUNDTRIP_SAFE	adapter.stamp.input_not_roundtrip_safe	"이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
 stamp	INPUT_TOO_LARGE	adapter.stamp.input_too_large	"@dynamic"
 stamp	INTERNAL_INVARIANT	adapter.stamp.internal_invariant	null
 stamp	INVALID_STAMP_MAP	adapter.stamp.invalid_stamp_map	null
 stamp	MANIFEST_PATH_CONFLICT	adapter.stamp.manifest_path_conflict	null
-stamp	SELF_VERIFY_FAILED	adapter.stamp.self_verify_failed	null
+stamp	SELF_VERIFY_FAILED	adapter.stamp.self_verify_failed	"산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"
 stamp	STAMP_CANDIDATE_UNCOVERED	adapter.stamp.stamp_candidate_uncovered	null
 stamp	STAMP_CELL_NOT_ANCHOR	adapter.stamp.stamp_cell_not_anchor	null
 stamp	STAMP_CELL_NOT_CANDIDATE	adapter.stamp.stamp_cell_not_candidate	null
 stamp	STAMP_CELL_NOT_EMPTY	adapter.stamp.stamp_cell_not_empty	"클래스-B 대상은 whitespace-only 빈 셀이어야 합니다"
-stamp	STAMP_CELL_TARGET_DUPLICATE	adapter.stamp.stamp_cell_target_duplicate	null
-stamp	STAMP_CODEC_FAILED	adapter.stamp.stamp_codec_failed	null
-stamp	STAMP_DELTA_MISMATCH	adapter.stamp.stamp_delta_mismatch	"산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"
+stamp	CELL_TARGET_DUPLICATE	stamp.cell_target_duplicate	null
+stamp	SELF_VERIFY_FAILED	stamp.delta_mismatch	"산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"
 stamp	STAMP_HINT_BLANK	adapter.stamp.stamp_hint_blank	"빈 셀엔 마커가 없어 hint 가 필수입니다 (plan 의 suggested_hint 참고)"
 stamp	STAMP_LABEL_DRIFT	adapter.stamp.stamp_label_drift	"문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"
 stamp	STAMP_MANIFEST_INVARIANT	adapter.stamp.stamp_manifest_invariant	null
@@ -211,7 +207,6 @@ stamp-plan	DECODE_FAILED	adapter.stamp-plan.decode_failed	"Check that the file i
 stamp-plan	FILE_NOT_FOUND	adapter.stamp-plan.file_not_found	"@dynamic"
 stamp-plan	FILE_READ_FAILED	adapter.stamp-plan.file_read_failed	"@dynamic"
 stamp-plan	INPUT_TOO_LARGE	adapter.stamp-plan.input_too_large	"@dynamic"
-stamp-plan	STAMP_CODEC_FAILED	adapter.stamp-plan.stamp_codec_failed	null
 templates	PRESET_NOT_FOUND	adapter.templates.preset_not_found	"Run 'hwpforge templates list' to see available presets"
 to-json	DECODE_FAILED	adapter.to-json.decode_failed	null
 to-json	FILE_NOT_FOUND	adapter.to-json.file_not_found	"@dynamic"
@@ -266,3 +261,18 @@ convert-hwp5	ENCODE_FAILED	adapter.convert-hwp5.encode_failed	"Check that the so
 to-pdf	ENCODE_FAILED	adapter.to-pdf.encode_failed	null
 convert-hwp5	HWP5_DECODE_FAILED	hwp5.decode_core	"Check that the source is a supported HWP5 document and the output path is writable"
 to-pdf	HWP5_DECODE_FAILED	hwp5.to_pdf.decode_core	null
+# W3: actual editor decode/admission fixtures; literal codes and approved exits in manifest.
+set-cell	DECODE_FAILED	cell.input_decode	"Check that the file is a valid HWPX document"
+set-cell	INPUT_NOT_ROUNDTRIP_SAFE	cell.admission	"이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed) — 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
+insert-para	DECODE_FAILED	structural.input_decode	"Check that the file is a valid HWPX document"
+insert-para	INPUT_NOT_ROUNDTRIP_SAFE	structural.admission	null
+delete-para	DECODE_FAILED	structural_delete.input_decode	"Check that the file is a valid HWPX document"
+delete-para	INPUT_NOT_ROUNDTRIP_SAFE	structural_delete.admission	null
+stamp	DECODE_FAILED	stamp.input_decode	"Check that the file is a valid HWPX document"
+stamp	INPUT_NOT_ROUNDTRIP_SAFE	stamp.admission	"이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
+stamp-plan	DECODE_FAILED	stamp_plan.input_decode	"Check that the file is a valid HWPX document"
+set-cell	DECODE_FAILED	cell.depth-table-42	"@ops"
+set-cell	DECODE_FAILED	cell.depth-table-33	"@ops"
+set-cell	DECODE_FAILED	cell.depth-group-32	"@ops"
+set-cell	DECODE_FAILED	cell.depth-xml-broken	"@ops"
+stamp	INPUT_NOT_ROUNDTRIP_SAFE	stamp.v2_admission	"이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"

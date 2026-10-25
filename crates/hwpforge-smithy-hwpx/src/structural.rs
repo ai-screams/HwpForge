@@ -21,6 +21,7 @@ use hwpforge_core::run::Run;
 use serde_json::Value;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
+use crate::error::{CodecFailure, CodecStage};
 use crate::patch::RawPackage;
 use crate::stamp::{admission_compare, check_zip_carry, delta_compare, encode_hwpx, StamperError};
 
@@ -70,7 +71,24 @@ pub struct Insertion {
 #[non_exhaustive]
 pub enum StructuralEditError {
     /// Decode / encode failure.
-    Codec(String),
+    Codec(CodecFailure),
+    /// An internal source-map or provenance contract was violated.
+    Invariant {
+        /// Diagnostic detail from the violated contract.
+        detail: String,
+    },
+    /// The edit crosses a protected field range.
+    ProtectedFieldRange {
+        /// Section containing the edit.
+        section: usize,
+        /// Paragraph index of the edit. For a rejected batch deletion, this
+        /// is the smallest requested index in the section, not necessarily
+        /// the paragraph crossing the protected range. Display uses `detail`
+        /// only; inspect `section` and `index` for the batch location.
+        index: usize,
+        /// Why the field range is protected.
+        detail: String,
+    },
     /// Input is not round-trip-safe (admission gate): editing it byte-for-byte
     /// cannot be verified.
     NotRoundTripSafe {
@@ -173,7 +191,9 @@ pub enum StructuralEditError {
 impl std::fmt::Display for StructuralEditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Codec(m) => write!(f, "codec: {m}"),
+            Self::ProtectedFieldRange { detail, .. } => write!(f, "{detail}"),
+            Self::Invariant { detail } => write!(f, "internal invariant violated: {detail}"),
+            Self::Codec(m) => write!(f, "codec: {}", m.detail),
             Self::NotRoundTripSafe { component, diff_path } => {
                 write!(f, "input not round-trip-safe ({component} at {diff_path})")
             }
@@ -231,7 +251,9 @@ fn map_admission(error: StamperError) -> StructuralEditError {
         StamperError::UncarriedZipEntries { entries } => {
             StructuralEditError::UncarriedZipEntries { entries }
         }
-        other => StructuralEditError::Codec(other.to_string()),
+        StamperError::Codec(failure) => StructuralEditError::Codec(failure),
+        StamperError::Invariant { detail } => StructuralEditError::Invariant { detail },
+        other => StructuralEditError::Invariant { detail: other.to_string() },
     }
 }
 
@@ -239,9 +261,11 @@ fn map_admission(error: StamperError) -> StructuralEditError {
 /// (decode→encode→decode is a no-op) so a byte-splice edit can be verified.
 /// Returns the decoded base on success.
 fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
-    let d0 = HwpxDecoder::decode(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-    let e0 = encode_hwpx(&d0).map_err(map_admission)?;
-    let d1 = HwpxDecoder::decode(&e0).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+    let d0 = HwpxDecoder::decode(base)
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission).map_err(map_admission)?;
+    let d1 = HwpxDecoder::decode(&e0)
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
     admission_compare(&d0, &d1).map_err(map_admission)?;
     check_zip_carry(base, &e0).map_err(map_admission)?;
     Ok(d0)
@@ -251,7 +275,9 @@ fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
 /// must equal the declared delta (Core-structure equality), else the edit is
 /// refused with no bytes.
 fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEditError> {
-    let d2 = HwpxDecoder::decode(bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+    let d2 = HwpxDecoder::decode(bytes).map_err(|e| {
+        StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e))
+    })?;
     delta_compare(&d2, expected).map_err(|e| match e {
         StamperError::NotRoundTripSafe { component, diff_path } => {
             StructuralEditError::DeltaMismatch {
@@ -354,9 +380,11 @@ impl HwpxStructuralEditor {
             }
             // 이것을 실패시키는 것: 문단 삭제에서 공통 구간 preflight 생략.
             if fields.protects_paragraph(t.section, "paragraphs", t.index) {
-                return Err(StructuralEditError::Codec(
-                    "protected field range: paragraph deletion".into(),
-                ));
+                return Err(StructuralEditError::ProtectedFieldRange {
+                    section: t.section,
+                    index: t.index,
+                    detail: "protected field range: paragraph deletion".into(),
+                });
             }
             if para.page_break || para.column_break {
                 return Err(StructuralEditError::HardBreakLoss {
@@ -377,14 +405,13 @@ impl HwpxStructuralEditor {
                 return Err(StructuralEditError::EmptySection { section: idx });
             }
         }
-        expected
-            .clone()
-            .validate()
-            .map_err(|e| StructuralEditError::Codec(format!("validate: {e}")))?;
+        expected.clone().validate().map_err(|e| {
+            StructuralEditError::Codec(CodecFailure::core(CodecStage::Validation, &e))
+        })?;
 
         // ── byte-splice each affected section's XML ──
-        let mut package =
-            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let mut package = RawPackage::read(base)
+            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let mut by_section: std::collections::BTreeMap<usize, Vec<usize>> =
             std::collections::BTreeMap::new();
         for t in targets {
@@ -393,10 +420,10 @@ impl HwpxStructuralEditor {
         for (section_idx, mut indices) in by_section {
             let path = package
                 .section_path(section_idx)
-                .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-            let xml = package
-                .read_text_entry(&path)
-                .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+                .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
+            let xml = package.read_text_entry(&path).map_err(|e| {
+                StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e))
+            })?;
             let map = &d0.source_maps[section_idx];
             let spans: Vec<_> = map.paragraphs.iter().map(|p| p.outer.clone()).collect();
             if spans.len() != sections[section_idx].paragraphs.len() {
@@ -423,7 +450,9 @@ impl HwpxStructuralEditor {
             package.replace_text_entry(&path, out);
         }
         normalize_header_for_edit(&mut package, &d0)?;
-        let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let bytes = package
+            .write()
+            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
 
         // ── reverse-delta self-verify: output ≡ declared delta ──
         let expected_doc = HwpxDocument {
@@ -619,17 +648,19 @@ impl HwpxStructuralEditor {
         if hwpforge_core::field_inventory::FieldInventory::from_sections(sections)
             .protects_insertion(anchor.section, "paragraphs", insert_index, None)
         {
-            return Err(StructuralEditError::Codec(
-                "protected field range: paragraph insertion".into(),
-            ));
+            return Err(StructuralEditError::ProtectedFieldRange {
+                section: anchor.section,
+                index: insert_index,
+                detail: "protected field range: paragraph insertion".into(),
+            });
         }
         // Each text is cleaned once here; the cleaned text is what is encoded,
         // spliced and expected by the self-verify below.
-        let mut package =
-            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let mut package = RawPackage::read(base)
+            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let path = package
             .section_path(anchor.section)
-            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+            .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
         let mut encode_warnings = Vec::new();
         let texts: Vec<String> = texts
             .iter()
@@ -665,9 +696,9 @@ impl HwpxStructuralEditor {
                 insert_index,
                 new_paras,
             ) {
-                return Err(StructuralEditError::Codec(
-                    "invalid paragraph insertion provenance".into(),
-                ));
+                return Err(StructuralEditError::Invariant {
+                    detail: "invalid paragraph insertion provenance".into(),
+                });
             }
             let section = &mut expected.sections_mut()[anchor.section];
             // A header/footer control sits in its anchor paragraph's bytes, so
@@ -683,30 +714,29 @@ impl HwpxStructuralEditor {
                 }
             }
         }
-        expected
-            .clone()
-            .validate()
-            .map_err(|e| StructuralEditError::Codec(format!("validate: {e}")))?;
+        expected.clone().validate().map_err(|e| {
+            StructuralEditError::Codec(CodecFailure::core(CodecStage::Validation, &e))
+        })?;
 
         // Encode the declared delta once; its section XML holds the new
         // paragraph in the exact form the codec round-trips.
-        let encoded = encode_hwpx(&HwpxDocument {
+        let encoded = encode_insert_fragment(&HwpxDocument {
             source_maps: Vec::new(),
             source_basis: None,
             warnings: Vec::new(),
             document: expected.clone(),
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
-        })
-        .map_err(map_admission)?;
-        let encoded_pkg =
-            RawPackage::read(&encoded).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        })?;
+        let encoded_pkg = RawPackage::read(&encoded).map_err(|e| {
+            StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e))
+        })?;
         let encoded_path = encoded_pkg
             .section_path(anchor.section)
-            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let encoded_xml = encoded_pkg
-            .read_text_entry(&encoded_path)
-            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+            .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
+        let encoded_xml = encoded_pkg.read_text_entry(&encoded_path).map_err(|e| {
+            StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e))
+        })?;
         let encoded_spans = encoded_paragraph_spans(&encoded_xml)?;
         // The encoded doc has `texts.len()` more paragraphs than the base;
         // guard the whole block range (`insert_index + N`, not `insert_index`
@@ -729,7 +759,7 @@ impl HwpxStructuralEditor {
         // ── splice the new paragraph's bytes into the ORIGINAL section XML ──
         let xml = package
             .read_text_entry(&path)
-            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let map = &d0.source_maps[anchor.section];
         let spans: Vec<_> = map.paragraphs.iter().map(|p| p.outer.clone()).collect();
         if spans.len() != section.paragraphs.len() {
@@ -757,7 +787,9 @@ impl HwpxStructuralEditor {
             splice_paragraphs(&xml, map, &[], Some((insert_index, texts.len(), &new_para_bytes)))?;
         package.replace_text_entry(&path, out);
         normalize_header_for_edit(&mut package, &d0)?;
-        let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let bytes = package
+            .write()
+            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
 
         // ── reverse-delta self-verify ──
         let expected_doc = HwpxDocument {
@@ -787,7 +819,7 @@ fn normalize_header_for_edit(
             sections.len() as u32,
             sections.first().and_then(|s| s.begin_num.as_ref()),
         )
-        .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         package.replace_text_entry("Contents/header.xml", header);
     }
     Ok(())
@@ -796,10 +828,14 @@ fn normalize_header_for_edit(
 /// New encoder output only. Original-document positions come exclusively from
 /// the decoder's SourceMap; never call this on a package's original XML.
 fn encoded_paragraph_spans(xml: &str) -> Result<Vec<std::ops::Range<usize>>, StructuralEditError> {
-    let (_, source) =
-        hwpforge_core::source_xml::XmlSource::read(xml).map_err(StructuralEditError::Codec)?;
+    let (_, source) = hwpforge_core::source_xml::XmlSource::read(xml).map_err(|detail| {
+        StructuralEditError::Codec(CodecFailure::hwpx(
+            CodecStage::Verification,
+            &crate::HwpxError::XmlParse { file: "encoded section fragment".into(), detail },
+        ))
+    })?;
     let root = source.elements().iter().find(|e| e.name() == "sec").ok_or_else(|| {
-        StructuralEditError::Codec("section root missing in encoded fragment".into())
+        StructuralEditError::Invariant { detail: "section root missing in encoded fragment".into() }
     })?;
     Ok(root
         .children()
@@ -841,7 +877,9 @@ fn splice_paragraphs(
         } else {
             map.paragraphs
                 .last()
-                .ok_or_else(|| StructuralEditError::Codec("no paragraph source".into()))?
+                .ok_or_else(|| StructuralEditError::Invariant {
+                    detail: "no paragraph source".into(),
+                })?
                 .outer
                 .end
         };
@@ -853,6 +891,10 @@ fn splice_paragraphs(
         out.replace_range(range, &replacement);
     }
     Ok(out)
+}
+
+fn encode_insert_fragment(document: &HwpxDocument) -> Result<Vec<u8>, StructuralEditError> {
+    encode_hwpx(document, crate::stamp::EncodePurpose::Output).map_err(map_admission)
 }
 
 /// Removes the targeted paragraphs from `document` (descending per section so
@@ -874,9 +916,11 @@ fn remove_targets(
             section_idx,
             &indices,
         ) {
-            return Err(StructuralEditError::Codec(
-                "protected field range: paragraph deletion".into(),
-            ));
+            return Err(StructuralEditError::ProtectedFieldRange {
+                section: section_idx,
+                index: indices[0],
+                detail: "protected field range: paragraph deletion".into(),
+            });
         }
     }
     Ok(())
@@ -1068,6 +1112,90 @@ mod tests {
     use hwpforge_core::control::{Control, RefTarget};
     use hwpforge_core::{ObjectId, Paragraph, Run, Table, TableCell, TableRow};
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, RefContentType, RefType};
+
+    #[test]
+    fn insert_fragment_encode_failure_is_validation() {
+        // 이것을 실패시키는 것: F3 삽입 fragment 호출 목적을 Admission으로 변경.
+        let doc = HwpxDecoder::decode(include_bytes!(
+            "../../hwpforge/tests/data/edit-empty-section.hwpx"
+        ))
+        .unwrap();
+        assert!(matches!(
+            encode_insert_fragment(&doc),
+            Err(StructuralEditError::Codec(CodecFailure { stage: CodecStage::Validation, .. }))
+        ));
+    }
+
+    #[test]
+    fn w3_generated_fragment_and_output_decode_are_verification() {
+        // 이것을 실패시키는 것: S1/S2 생성 fragment·출력 decode stage를 Decode로 변경.
+        let error = encoded_paragraph_spans("<hs:sec><hp:p>").unwrap_err();
+        assert!(matches!(
+            error,
+            StructuralEditError::Codec(CodecFailure {
+                stage: CodecStage::Verification,
+                code: crate::HwpxErrorCode::XmlParse,
+                ..
+            })
+        ));
+        assert!(matches!(
+            encoded_paragraph_spans("<other/>"),
+            Err(StructuralEditError::Invariant { .. })
+        ));
+        let doc = admit(&fixture("plain_paragraphs.hwpx")).unwrap();
+        let error = self_verify(b"bad", &doc).unwrap_err();
+        assert!(matches!(
+            error,
+            StructuralEditError::Codec(CodecFailure {
+                stage: CodecStage::Verification,
+                code: crate::HwpxErrorCode::Zip,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn w3_mapper_preserves_typed_failures() {
+        // 이것을 실패시키는 것: P2/P2i typed Codec·Invariant detail 삭제, P5 예상 밖 helper 오류 detail 삭제.
+        for stage in [
+            CodecStage::Decode,
+            CodecStage::Admission,
+            CodecStage::Validation,
+            CodecStage::Encode,
+            CodecStage::Verification,
+        ] {
+            let failure = CodecFailure {
+                stage,
+                code: crate::HwpxErrorCode::XmlParse,
+                detail: "original detail".into(),
+            };
+            assert_eq!(
+                map_admission(StamperError::Codec(failure.clone())),
+                StructuralEditError::Codec(failure)
+            );
+        }
+        assert_eq!(
+            map_admission(StamperError::Invariant { detail: "source".into() }),
+            StructuralEditError::Invariant { detail: "source".into() }
+        );
+        assert_eq!(
+            map_admission(StamperError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: "$.a".into()
+            }),
+            StructuralEditError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: "$.a".into()
+            }
+        );
+        assert_eq!(
+            map_admission(StamperError::UncarriedZipEntries { entries: vec!["extra".into()] }),
+            StructuralEditError::UncarriedZipEntries { entries: vec!["extra".into()] }
+        );
+        assert!(
+            matches!(map_admission(StamperError::ManifestInvariant { detail: "unexpected helper variant".into() }), StructuralEditError::Invariant { detail } if detail.contains("unexpected helper variant"))
+        );
+    }
 
     fn para() -> Paragraph {
         Paragraph::new(ParaShapeIndex::new(0))
@@ -1606,7 +1734,11 @@ mod tests {
 
     #[test]
     fn paragraph_spans_errors_without_a_section_root() {
-        assert!(matches!(encoded_paragraph_spans("<other/>"), Err(StructuralEditError::Codec(_))));
+        // 이것을 실패시키는 것: T11 확정 section root 부재를 Invariant 대신 Codec으로 반환.
+        assert!(matches!(
+            encoded_paragraph_spans("<other/>"),
+            Err(StructuralEditError::Invariant { .. })
+        ));
     }
 
     #[test]
@@ -1705,10 +1837,15 @@ mod tests {
 
     #[test]
     fn every_error_variant_renders_a_message() {
+        // 이것을 실패시키는 것: T13 StructuralEditError::Codec Display를 빈 문자열로 변경.
         // Exercises the Display impl for the whole closed rejection set — each
         // fail-closed reason must produce a human-readable diagnostic.
         let variants = [
-            StructuralEditError::Codec("x".into()),
+            StructuralEditError::Codec(crate::CodecFailure {
+                stage: crate::CodecStage::Encode,
+                code: crate::HwpxErrorCode::Zip,
+                detail: "x".into(),
+            }),
             StructuralEditError::NotRoundTripSafe {
                 component: "document".into(),
                 diff_path: "$".into(),
@@ -1841,6 +1978,7 @@ mod tests {
 
     #[test]
     fn scan_delete_warnings_flags_index_mark_paragraphs() {
+        // 이것을 실패시키는 것: T14 scan_delete_warnings가 빈 목록으로 조기 성공.
         // Build a package whose paragraph 2 carries an index mark, then scan
         // a mixed target set: only the index-mark paragraph warns; the plain
         // paragraph and the out-of-range target stay silent (best-effort).
@@ -1851,14 +1989,17 @@ mod tests {
             Control::IndexMark { primary: "색인어".to_string(), secondary: None },
             hwpforge_foundation::CharShapeIndex::new(0),
         ));
-        let bytes = encode_hwpx(&HwpxDocument {
-            source_maps: Vec::new(),
-            source_basis: None,
-            document,
-            style_store: d0.style_store.clone(),
-            image_store: d0.image_store.clone(),
-            warnings: Vec::new(),
-        })
+        let bytes = encode_hwpx(
+            &HwpxDocument {
+                source_maps: Vec::new(),
+                source_basis: None,
+                document,
+                style_store: d0.style_store.clone(),
+                image_store: d0.image_store.clone(),
+                warnings: Vec::new(),
+            },
+            crate::stamp::EncodePurpose::Output,
+        )
         .expect("encode");
 
         let warnings = scan_delete_warnings(&bytes, &[loc(0, 1), loc(0, 2), loc(0, 99)]);

@@ -129,13 +129,18 @@ fn a_paragraph_with_content_outside_a_run_is_reported_lost() {
             assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{label} {surface}: {err}");
             assert!(err.to_string().contains("paragraph_content"), "{label} {surface}: {err}");
         }
-        // Reading succeeds and says what it lost.
-        let md = hwpforge::ops::markdown::to_md(&bytes, &Default::default()).expect("to-md");
-        assert!(
-            md.warnings.iter().any(|w| format!("{w:?}").contains("paragraph_content")),
-            "{label}: {:?}",
-            md.warnings
-        );
+        // 이것을 실패시키는 것: F8 ops-md gate 제거 — ops-hwpx 전용 빌드에서
+        // 존재하지 않는 ops::markdown 참조로 컴파일 실패.
+        #[cfg(feature = "ops-md")]
+        {
+            // Reading succeeds and says what it lost.
+            let md = hwpforge::ops::markdown::to_md(&bytes, &Default::default()).expect("to-md");
+            assert!(
+                md.warnings.iter().any(|w| format!("{w:?}").contains("paragraph_content")),
+                "{label}: {:?}",
+                md.warnings
+            );
+        }
     }
 }
 

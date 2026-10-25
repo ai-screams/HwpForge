@@ -583,6 +583,8 @@ def test_convert_md_rejects_an_unknown_preset() -> None:
 def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
     # 이것을 실패시키는 것: OSError 포장/복원 제거, DECODE_FAILED를 INVALID_INPUT으로 치환.
     # 이것을 실패시키는 것(W4): convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기.
+    # 이것을 실패시키는 것(W3): PY1 set_cell의 실제 bytes를 손상 입력으로 교체.
+    # PY2 unreachable 건너뛰기 제거.
     import copy
     import errno
     import pickle
@@ -630,8 +632,35 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
             (data / "hwp5-dangling-table-border-fill.hwp").read_bytes()
         ).to_pdf,
     }
+    for fixture, suffix in [
+        ("corrupt-input.hwpx", "input_decode"),
+        ("edit-empty-section.hwpx", "admission"),
+    ]:
+        doc = Document((data / fixture).read_bytes())
+        calls.update(
+            {
+                f"cell.{suffix}": partial(doc.set_cell, table=0, at="0,0", text="text"),
+                f"structural.{suffix}": partial(doc.insert_para, section=0, anchor=0, text="text"),
+                f"structural_delete.{suffix}": partial(doc.delete_para, section=0, indexes=[0]),
+                f"stamp.{suffix}": partial(doc.stamp, []),
+            }
+        )
+    # 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+    calls["stamp.v2_admission"] = partial(
+        Document((data / "edit-empty-section.hwpx").read_bytes()).stamp,
+        json.loads((data / "stamp-v2-admission.json").read_text()),
+    )
+    calls["stamp_plan.input_decode"] = Document(
+        (data / "corrupt-input.hwpx").read_bytes()
+    ).stamp_plan
+    for name in ["depth-table-42", "depth-table-33", "depth-group-32", "depth-xml-broken"]:
+        calls[f"cell.{name}"] = partial(
+            Document((data / f"{name}.hwpx").read_bytes()).set_cell, table=0, at="0,0", text="text"
+        )
     for case in manifest["cases"]:
         if "python" not in case["surfaces"]:
+            continue
+        if case["surfaces"]["python"]["mode"] == "unreachable":
             continue
         operation = case["surfaces"]["python"]["operation"]
         source = OSError(errno.EACCES, "denied", "first", None, "second")
@@ -647,6 +676,9 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
                 calls[operation]()
         error = caught.value
         assert error.code == case["expected_code"]
+        if operation.startswith("cell.depth-"):
+            # 이것을 실패시키는 것: F7 깊이 fixture의 decode 오류에 bug 힌트 추가.
+            assert "Report this as a bug." not in (error.hint or "")
         if operation.startswith("io."):
             assert isinstance(error, HwpForgeIOError)
             assert isinstance(error, OSError)

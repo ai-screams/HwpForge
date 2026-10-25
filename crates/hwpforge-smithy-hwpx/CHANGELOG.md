@@ -9,8 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- stamp·cell 코덱 오류 메시지에서 `output decode:`, `fixed-point decode:`, `reference decode:`, `layout carry:`, `zip:` 같은 호출 문맥 접두를 제거한다. `CodecFailure.detail`은 원래 오류의 문자열을 한 번만 보존하며 실패 단계는 `stage`로 구분한다.
+
+- (breaking, W3) `CellEditError`·`StamperError`·`StructuralEditError`의 `Codec(String)`을 `Codec(CodecFailure)`로 바꾼다. stage·leaf code·detail을 보존하고 기존 Clone/Eq를 유지한다. 세 enum에 `Invariant { detail }`, 구조 편집에 `ProtectedFieldRange { section, index, detail }`를 추가한다.
+- Draft 셀 편집 깊이 초과는 `NestingTooDeep { section: usize, reason }`로 반환하며 모든 구역을 편집 전에 검사한다. Display는 `nesting depth exceeds the limit: {reason}`다. 입력 바이트의 깊이 초과는 decode 단계다.
+- admission helper는 호출 목적에 따라 validate·encode 오류를 구분한다. layout carry는 최종 ZIP 작성만 Encode, 기존 나머지 오류는 Verification이며 기존 MissingFile·텍스트 읽기·정렬 실패의 무음 복구 정책을 유지한다.
+
 - 공개 decode는 구역 조립 직후 본문·머리말·꼬리말·바탕쪽의 Core 깊이를 검사하고 32 초과를 `HwpxError::Core`(E4008, `nesting_depth`)로 거절한다. 파서가 통과하던 묶음·글상자 및 그림 캡션 경로도 포함하며, 이런 입력의 stamp-plan도 이제 실패한다. 다른 Core 구조 검증은 수행하지 않는다.
-- 표·subList·묶음 파서 가드(E4006)는 열려던 층을 1부터 세고 실제 part 경로를 메시지에 포함한다. 파서 가드(E4006)·XML(E4003) 입력의 연산 오류 코드는 그대로다.
+- 표·subList·묶음 파서 가드(E4006)는 열려던 층을 1부터 세고 실제 part 경로를 메시지에 포함한다. 파서 가드(E4006)·XML(E4003) leaf는 유지하며 편집기에서도 연산 코드는 `DECODE_FAILED`다.
 - 줄바꿈·묶음 빈칸·고정폭 빈칸이 든 글 칸을 `patch`·`fill`로 고칠 수 있다. 한컴에서 Tab 키로 넣은 탭은 너비 정보가 있어 계속 거부한다.
 - 본문 run, 글 칸(`<hp:t>`), 컨트롤(`<hp:ctrl>`), `<hp:subList>` 안에서 읽지 못해 조용히 버리던 내용을 `CONTENT_LOST` 경고로 알린다. 종류는 OLE 개체 `ole`, 모르는 요소 `unknown_element`, 차트가 아닌 `switch`, 되살리지 못한 차트 `chart`(차트 XML 이 없는 본문 차트 포함), run 바로 아래 글 `run_text`, 글 칸 안 모르는 요소 `inline_element`, 컨트롤 안 모르는 내용 `ctrl_content`, subList 안 문단 아닌 내용 `sublist_content` 다. 본문 최상위뿐 아니라 머리말·꼬리말·표 칸·각주·미주·글상자에서도 알린다. 미지 내용 때문에 각주·미주 번호 머리 인식에서 빠진 경우(이때 번호 뒤 간격 글이 남는다)를 제외하면 읽은 문서 내용은 같다.
 - 이 경고가 있는 문서는 내용을 다시 쓰는 편집(`restyle`·`set-cell`·`stamp`)이 문서 전체를 거부한다. 원문을 보존하는 `fill`·`patch` 와 `insert-para`·`delete-para` 는 전과 같다. 측정한 HWPX 372개 중 새 경고가 생긴 문서는 5개(`ole` 4개, `unknown_element` 1개)이고, 그중 새로 거부되는 문서는 1개다.

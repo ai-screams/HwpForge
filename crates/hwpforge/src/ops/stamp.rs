@@ -171,7 +171,7 @@ pub struct StampPlanMeta {
 ///
 /// # Errors
 ///
-/// [`OpsError::Stamper`] (code `STAMP_CODEC_FAILED`) when the bytes fail to
+/// [`OpsError::Stamper`] (code `DECODE_FAILED`) when the bytes fail to
 /// decode.
 ///
 /// # Examples
@@ -337,7 +337,7 @@ pub struct StampMeta {
 ///   drift (`STAMP_SOURCE_HASH_MISMATCH`, `STAMP_LABEL_DRIFT`,
 ///   `STAMP_SPEC_STALE`), coverage (`STAMP_CANDIDATE_UNCOVERED`), naming
 ///   (`STAMP_NAME_DUPLICATE`, `STAMP_NAME_COLLISION`, `STAMP_NAME_EMPTY`),
-///   the post-encode self-verification (`STAMP_DELTA_MISMATCH`) and the
+///   the post-encode self-verification (`SELF_VERIFY_FAILED`) and the
 ///   fail-closed `ENCODE_SEMANTIC_LOSS`.
 /// - `INVALID_STAMP_MAP` is **not** reachable from here: parsing happens in
 ///   the caller, so a malformed map fails before this function is entered.

@@ -126,7 +126,9 @@ const ERROR_MAPPING: Table = &[
             ("NonTextContent", "CELL_HAS_NON_TEXT_CONTENT"),
             ("TargetDuplicate", "CELL_TARGET_DUPLICATE"),
             ("TargetConflict", "CELL_TARGET_CONFLICT"),
-            ("Codec", "SET_CELL_CODEC_FAILED"),
+            ("Codec", "ENCODE_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
+            ("NestingTooDeep", "VALIDATION_FAILED"),
             ("NotRoundTripSafe", "INPUT_NOT_ROUNDTRIP_SAFE"),
             ("UncarriedZipEntries", "INPUT_ENTRIES_NOT_CARRIED"),
             ("SemanticLoss", "ENCODE_SEMANTIC_LOSS"),
@@ -146,7 +148,9 @@ const ERROR_MAPPING: Table = &[
     (
         "StructuralEditError",
         &[
-            ("Codec", "STRUCTURAL_CODEC"),
+            ("Codec", "ENCODE_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
+            ("ProtectedFieldRange", "PROTECTED_FIELD_RANGE"),
             ("NotRoundTripSafe", "INPUT_NOT_ROUNDTRIP_SAFE"),
             ("UncarriedZipEntries", "INPUT_ENTRIES_NOT_CARRIED"),
             ("SectionOutOfRange", "SECTION_OUT_OF_RANGE"),
@@ -183,14 +187,15 @@ const ERROR_MAPPING: Table = &[
     (
         "StamperError",
         &[
-            ("Codec", "STAMP_CODEC_FAILED"),
+            ("Codec", "ENCODE_FAILED"),
+            ("Invariant", "INTERNAL_INVARIANT"),
             ("NotRoundTripSafe", "INPUT_NOT_ROUNDTRIP_SAFE"),
             ("UncarriedZipEntries", "INPUT_ENTRIES_NOT_CARRIED"),
             ("Stamp", "STAMP_NAME_EMPTY"),
             ("ManifestInvariant", "STAMP_MANIFEST_INVARIANT"),
             ("SourceHashMismatch", "STAMP_SOURCE_HASH_MISMATCH"),
             ("CellStamp", "STAMP_NAME_EMPTY"),
-            ("DeltaMismatch", "STAMP_DELTA_MISMATCH"),
+            ("DeltaMismatch", "SELF_VERIFY_FAILED"),
             ("SemanticLoss", "ENCODE_SEMANTIC_LOSS"),
         ],
     ),
@@ -215,7 +220,7 @@ const ERROR_MAPPING: Table = &[
             ("TargetNotStampable", "STAMP_CELL_NOT_EMPTY"),
             ("LabelDrift", "STAMP_LABEL_DRIFT"),
             ("UnknownCandidate", "STAMP_CELL_NOT_CANDIDATE"),
-            ("DuplicateTarget", "STAMP_CELL_TARGET_DUPLICATE"),
+            ("DuplicateTarget", "CELL_TARGET_DUPLICATE"),
             ("EmptyName", "STAMP_NAME_EMPTY"),
             ("BlankHint", "STAMP_HINT_BLANK"),
             ("DuplicateName", "STAMP_NAME_DUPLICATE"),
@@ -455,7 +460,16 @@ fn cell_edit_errors() -> Vec<(&'static str, CellEditError)> {
         ("NonTextContent", CellEditError::NonTextContent { table: 0, anchor: at }),
         ("TargetDuplicate", CellEditError::TargetDuplicate { table: 0, anchor: at }),
         ("TargetConflict", CellEditError::TargetConflict { outer_table: 0, inner_table: 1 }),
-        ("Codec", CellEditError::Codec("encode".into())),
+        (
+            "Codec",
+            CellEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "encode".into(),
+            }),
+        ),
+        ("Invariant", CellEditError::Invariant { detail: "source map".into() }),
+        ("NestingTooDeep", CellEditError::NestingTooDeep { section: 1, reason: "depth".into() }),
         (
             "NotRoundTripSafe",
             CellEditError::NotRoundTripSafe { component: "core".into(), diff_path: "/a".into() },
@@ -484,7 +498,23 @@ fn read_errors() -> Vec<(&'static str, ReadError)> {
 
 fn structural_errors() -> Vec<(&'static str, StructuralEditError)> {
     vec![
-        ("Codec", StructuralEditError::Codec("encode".into())),
+        (
+            "Codec",
+            StructuralEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "encode".into(),
+            }),
+        ),
+        ("Invariant", StructuralEditError::Invariant { detail: "source map".into() }),
+        (
+            "ProtectedFieldRange",
+            StructuralEditError::ProtectedFieldRange {
+                section: 0,
+                index: 1,
+                detail: "field".into(),
+            },
+        ),
         (
             "NotRoundTripSafe",
             StructuralEditError::NotRoundTripSafe {
@@ -561,7 +591,15 @@ fn section_workflow_errors() -> Vec<(&'static str, SectionWorkflowError)> {
 
 fn stamper_errors() -> Vec<(&'static str, StamperError)> {
     vec![
-        ("Codec", StamperError::Codec("encode".into())),
+        (
+            "Codec",
+            StamperError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "encode".into(),
+            }),
+        ),
+        ("Invariant", StamperError::Invariant { detail: "source map".into() }),
         (
             "NotRoundTripSafe",
             StamperError::NotRoundTripSafe { component: "core".into(), diff_path: "/a".into() },
@@ -1133,6 +1171,7 @@ fn every_wrapped_variant_has_a_mapping() {
 #[test]
 // 이것을 실패시키는 것: read 구역 범위를 InvalidInput으로 변경; 기존 inventory 시험으로 검출.
 fn constructed_errors_produce_the_mapped_code() {
+    // 이것을 실패시키는 것: O4–O6 보호 필드·stamp delta·셀 중복 매핑을 InvalidInput으로 변경.
     let samples = wrapped_errors();
 
     for (enum_name, table) in ERROR_MAPPING {
