@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - set-cell·stamp의 의미 손실은 `SET_CELL_CODEC_FAILED`·`STAMP_CODEC_FAILED` 대신 `ENCODE_SEMANTIC_LOSS`입니다.
 - `patch`·`fill` 의 오류를 실패 단계와 원인으로 나눈다. 입구 검사를 통과한 뒤 원본을 읽거나 decode 하지 못하면 `PATCH_FAILED`·`FILL_FAILED` 대신 `DECODE_FAILED` 다. 편집한 문서의 검증 실패는 `VALIDATION_FAILED`, 출력 작성 실패는 `ENCODE_FAILED`, 보호 필드의 값·범위 변경은 `PROTECTED_FIELD_RANGE`, 내부 source map·위치 불변식 파손은 `INTERNAL_INVARIANT` 다. `PATCH_FAILED` 는 보존 patch 가 받지 않는 변경과 metadata 부재·불일치에만, `FILL_FAILED` 는 필드 목록 진단에만 남는다.
 - `fill` 은 내부 patch 의 원인을 그대로 전달하므로 `PATCH_FAILED` 도 낼 수 있다(예: 다시 만들 수 없는 인라인 표지가 든 칸). 검사 순서는 그대로라 metadata 가 없고 XML 도 손상된 patch 는 계속 `PATCH_FAILED` 다. CLI 종료 값은 두 명령 모두 바뀐 코드에서도 이전 `PATCH_FAILED`·`FILL_FAILED` 와 같은 2 다(patch 의 구역 범위 거부 `SECTION_OUT_OF_RANGE` 1 은 그대로).
+- `convert-hwp5`·`to-pdf`(CLI)와 Python `convert_hwp5`·`to_pdf` 의 HWP5 변환 실패도 단계별 코드를 낸다. 읽은 문서의 Core 검증 실패는 `VALIDATION_FAILED`, HWPX 출력 생성 실패는 `ENCODE_FAILED` 이고, 디코더가 스스로 거부한 스타일·테두리 참조(예: 정의가 없는 표 테두리 번호)는 `HWP5_CONVERT_FAILED` 대신 `HWP5_DECODE_FAILED` 다. `HWP5_CONVERT_FAILED` 는 생성한 패키지에 줄 배치 정보를 다시 입히는 단계에만 남는다. 두 CLI 명령의 종료 값은 바뀐 코드에서도 이전과 같은 2 이고, 힌트도 그대로다. Python `convert_hwp5`·`Document.to_pdf` 에서는 디코더가 거부한 참조의 힌트가 코드를 따라 `Check that the source is a supported HWP5 document` 에서 `Check that the file is a valid HWP5 document` 로 바뀐다(검증·출력 생성 실패의 힌트는 그대로).
 
 설계 §14의 종료 값 변경 안내에 대응하는 W1 변경은 다음과 같습니다. 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않습니다. 기존 승인 네 건(admission·출력 검증 등의 단계 분리)은 W3 소유이며 이 W1 목록에서 구현 완료로 간주하지 않습니다.
 

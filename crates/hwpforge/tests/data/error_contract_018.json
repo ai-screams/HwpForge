@@ -724,6 +724,107 @@
       }
     },
     {
+      "id": "adapter.convert-hwp5.validation_failed",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.convert-hwp5.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "convert-hwp5",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "adapter.to-pdf.encode_failed",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "cli": {
+          "mode": "injected",
+          "operation": "to-pdf",
+          "exit": 2
+        }
+      }
+    },
+    {
+      "id": "hwp5.decode_core",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "convert.convert_hwp5"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "convert-hwp5",
+          "exit": 2
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "hwp5.decode_core"
+        }
+      }
+    },
+    {
+      "id": "hwp5.to_pdf.decode_core",
+      "expected_code": "HWP5_DECODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "fixture",
+          "operation": "convert.to_pdf"
+        },
+        "cli": {
+          "mode": "fixture",
+          "operation": "to-pdf",
+          "exit": 2
+        },
+        "python": {
+          "mode": "fixture",
+          "operation": "hwp5.to_pdf.decode_core"
+        }
+      }
+    },
+    {
+      "id": "hwp5.validate",
+      "expected_code": "VALIDATION_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "convert.convert_hwp5"
+        }
+      }
+    },
+    {
+      "id": "hwp5.encode",
+      "expected_code": "ENCODE_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "convert.convert_hwp5"
+        }
+      }
+    },
+    {
+      "id": "hwp5.layout_patch",
+      "expected_code": "HWP5_CONVERT_FAILED",
+      "surfaces": {
+        "rust": {
+          "mode": "injected",
+          "operation": "convert.convert_hwp5"
+        }
+      }
+    },
+    {
       "id": "adapter.convert.preset_not_found",
       "expected_code": "PRESET_NOT_FOUND",
       "surfaces": {

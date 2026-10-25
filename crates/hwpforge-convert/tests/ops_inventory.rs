@@ -86,9 +86,9 @@ const AUDITED: &[Audited] = &[
             ("PasswordProtected", "HWP5_DECODE_FAILED"),
             ("Encoding", "HWP5_DECODE_FAILED"),
             ("Io", "HWP5_DECODE_FAILED"),
-            // The decode stage keeps the per-variant table: a Core error out
-            // of the decoder means the file was read and the projection failed.
-            ("Core", "HWP5_CONVERT_FAILED"),
+            // A Core error out of the decoder (a broken style or border-fill
+            // reference) is part of reading the input: decode stage (D10).
+            ("Core", "HWP5_DECODE_FAILED"),
             ("Foundation", "HWP5_DECODE_FAILED"),
         ],
     },

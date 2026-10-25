@@ -166,9 +166,9 @@ impl ConvertOpsError {
     ///
     /// | [`ConvertError`] stage | [`OpsCode`] | why |
     /// | -- | -- | -- |
-    /// | `Decode` | per [`Hwp5ErrorCode`], see below | the container, its records or a primitive built from them could not be read |
-    /// | `Validate` | `Hwp5ConvertFailed` | the bytes were read; the document they describe failed Core validation |
-    /// | `Encode` | `Hwp5ConvertFailed` | the HWPX encoder refused the decoded document |
+    /// | `Decode` | per [`Hwp5ErrorCode`], see below | the container, its records, a primitive built from them or the decoder's own reference checks failed |
+    /// | `Validate` | `ValidationFailed` | the bytes were read; the document they describe failed Core validation |
+    /// | `Encode` | `EncodeFailed` | the style-store mapping or the HWPX encoder refused the decoded document |
     /// | `LayoutPatch` | `Hwp5ConvertFailed` | the layout-hint replay failed on a package *this crate generated* |
     ///
     /// Within the decode stage, [`Hwp5Error`] is `#[non_exhaustive]`, so
@@ -179,12 +179,15 @@ impl ConvertOpsError {
     ///
     /// | [`Hwp5ErrorCode`] | [`OpsCode`] |
     /// | -- | -- |
-    /// | `NotHwp5`, `Cfb`, `MissingStream`, `RecordParse`, `UnsupportedVersion`, `PasswordProtected`, `Encoding`, `Io`, `Foundation` | `Hwp5DecodeFailed` |
-    /// | `Core` | `Hwp5ConvertFailed` — a Core error propagated out of the decoder is a conversion failure, not an unreadable file |
+    /// | `NotHwp5`, `Cfb`, `MissingStream`, `RecordParse`, `UnsupportedVersion`, `PasswordProtected`, `Encoding`, `Io`, `Foundation`, `Core` | `Hwp5DecodeFailed` |
     ///
-    /// This is the same split the CLI publishes: `convert-hwp5` reports
-    /// `HWP5_DECODE_FAILED` only for the inspect pass and
-    /// `HWP5_CONVERT_FAILED` for everything the conversion itself raises.
+    /// `Core` here is a Core error the decoder itself raised — a style or
+    /// border-fill reference that names no definition — so it is part of
+    /// reading the input, like the rest of the stage. A Core validation of the
+    /// finished document is the separate `Validate` stage.
+    ///
+    /// `HWP5_CONVERT_FAILED` is left for the layout-hint replay alone; it is
+    /// never an alias for a decode, validation or encode failure.
     ///
     /// # The rest
     ///
@@ -314,7 +317,14 @@ impl ConvertOpsError {
                  rewrites it; if the message names content the replay cannot draw, export the \
                  PDF from Hancom",
             ),
-            _ => hint_for(self.code()),
+            // The validate and encode stages report the shared codes, which
+            // have no HWP5 hint of their own; keep the one they had.
+            _ => match self {
+                Self::Convert(ConvertError::Validate(_) | ConvertError::Encode(_)) => {
+                    hint_for(OpsCode::Hwp5ConvertFailed)
+                }
+                _ => hint_for(self.code()),
+            },
         }
     }
 }
@@ -346,13 +356,12 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
 /// new stage is a compile error here rather than a silent `HWP5_DECODE_FAILED`.
 fn convert_code(error: &ConvertError) -> OpsCode {
     match error {
-        // The decode stage keeps the per-variant table: a Core error that
-        // propagates out of the decoder is a conversion failure, and flattening
-        // the whole stage to one code would lose that.
+        // The decode stage keeps the per-variant table so that a future
+        // upstream variant lands on `UpstreamUnmapped` instead of a neighbour.
         ConvertError::Decode(e) => hwp5_code(e),
-        ConvertError::Validate(_) | ConvertError::Encode(_) | ConvertError::LayoutPatch(_) => {
-            OpsCode::Hwp5ConvertFailed
-        }
+        ConvertError::Validate(_) => OpsCode::ValidationFailed,
+        ConvertError::Encode(_) => OpsCode::EncodeFailed,
+        ConvertError::LayoutPatch(_) => OpsCode::Hwp5ConvertFailed,
     }
 }
 
@@ -367,8 +376,8 @@ fn hwp5_code(error: &Hwp5Error) -> OpsCode {
         | Hwp5ErrorCode::PasswordProtected
         | Hwp5ErrorCode::Encoding
         | Hwp5ErrorCode::Io
-        | Hwp5ErrorCode::Foundation => OpsCode::Hwp5DecodeFailed,
-        Hwp5ErrorCode::Core => OpsCode::Hwp5ConvertFailed,
+        | Hwp5ErrorCode::Foundation
+        | Hwp5ErrorCode::Core => OpsCode::Hwp5DecodeFailed,
         _ => OpsCode::UpstreamUnmapped,
     }
 }
