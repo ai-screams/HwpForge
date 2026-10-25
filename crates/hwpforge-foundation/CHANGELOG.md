@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.17.1...hwpforge-foundation-v0.18.0) - 2026-10-25
+
+### Added
+
+- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
+
+
 ### Changed (BREAKING)
 
 - `SetCellCodecFailed`·`StampCodecFailed`·`StructuralCodec`·`StampDeltaMismatch`·`StampCellTargetDuplicate`와 옛 문자열 lookup을 삭제한다. 실패 단계에 맞는 코드, `InternalInvariant`·`SelfVerifyFailed`·`CellTargetDuplicate`를 사용한다.

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.17.1...hwpforge-blueprint-v0.18.0) - 2026-10-25
+
+### Added
+
+- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
+
+
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.16.11...hwpforge-blueprint-v0.17.0) - 2026-10-23
 
 ### Changed (BREAKING)

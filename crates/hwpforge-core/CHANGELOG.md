@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.17.1...hwpforge-core-v0.18.0) - 2026-10-25
+
+### Added
+
+- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
+
+
 ### Changed (BREAKING)
 
 - `Paragraph`와 `Control`이 `Drop`을 구현해, 100,000단계로 중첩된 Draft(메모·묶음·글상자·캡션·표 칸)를 스택 넘침 없이, 패닉 unwinding 중에도 해제한다. `validate`는 거절한 문서를 더 이상 직접 해체하지 않는다. 이행: `Paragraph`·`Control`에서 `Copy`가 아닌 필드를 밖으로 옮기는 코드(`let runs = paragraph.runs;`, `let Control::Group { children, .. } = control`, `*boxed_control` 매칭)는 E0509로 컴파일되지 않는다. 필드를 빌리거나 mutable 바인딩에서 `std::mem::take`·`Option::take`로 꺼낸다. `Run`·`Table`·`Image` 등은 전처럼 분해할 수 있고, clone·Debug·동등 비교·직렬화는 여전히 재귀다.

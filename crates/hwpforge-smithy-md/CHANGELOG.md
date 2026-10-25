@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.1...hwpforge-smithy-md-v0.18.0) - 2026-10-25
+
+### Added
+
+- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
+
+
 ### Changed (BREAKING)
 
 - `MdDocument` 가 `#[non_exhaustive]` 가 되고 `warnings: Vec<MdWarning>` 필드를 추가한다. 대상이 빈 이미지(`![x]()`)는 그림을 넣지 않고 이 필드에 `ImageEmbedSkipped`(`src` 빈 문자열, 이유 `Unreadable`)로 남긴다. 이행: `MdDocument { document, style_registry }` 로 구조 분해하던 코드는 `MdDocument { document, style_registry, .. }` 로 바꾸고, 경고가 필요하면 `warnings` 를 읽는다. 이 구조체는 디코더만 만든다.
