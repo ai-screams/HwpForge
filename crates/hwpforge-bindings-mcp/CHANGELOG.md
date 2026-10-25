@@ -5,17 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.18
+## [Unreleased]
 
-- `INPUT_NOT_ROUNDTRIP_SAFE` 힌트는 코덱 갭 수정 대기 안내 대신 원본을 보존하는 텍스트 `to-json(section) → patch`·누름틀 `fill` 경로를 안내한다. MCP stamp도 해당 도구 이름으로 같은 안내를 제공한다.
+### Changed (BREAKING)
 
-- W3: cell, stamp, and paragraph edits now preserve decode/admission/validation/encode/verification error codes. Protected field edits report `PROTECTED_FIELD_RANGE`; internal provenance failures report `INTERNAL_INVARIANT`. Byte depth errors report `DECODE_FAILED` without a bug-report hint. Stamp delta and duplicate-cell errors use `SELF_VERIFY_FAILED` and `CELL_TARGET_DUPLICATE`.
+- 공통 `OpsCode` 문자열을 별명 없이 출력하고 도구별 힌트는 유지한다. read의 구역·표·필드 부재는 `SECTION_OUT_OF_RANGE`·`TABLE_NOT_FOUND`·`FIELD_NOT_FOUND`다. 파일 오류는 공통 I/O 코드, 출력 경로 거부는 `INVALID_OUTPUT_PATH`다.
+- cell·stamp·문단 편집의 decode·admission·validation·encode·verification 단계를 구분한다. 보호 필드 침범은 `PROTECTED_FIELD_RANGE`, 내부 불변식 파손은 `INTERNAL_INVARIANT`다. 바이트 깊이 초과는 버그 보고 힌트 없는 `DECODE_FAILED`다. stamp의 delta 검증과 중복 셀 지정은 `SELF_VERIFY_FAILED`·`CELL_TARGET_DUPLICATE`다.
+- `SERIALIZE_ERROR`·`STAMP_MANIFEST_SERIALIZE`를 `JSON_SERIALIZE_FAILED`로 통합한다. set-cell·stamp의 의미 손실은 `ENCODE_SEMANTIC_LOSS`다. 구조 편집의 범위 실패는 `SECTION_OUT_OF_RANGE`·`PARAGRAPH_OUT_OF_RANGE`, ZIP 미보존은 `INPUT_ENTRIES_NOT_CARRIED`다.
+- 19개 도구의 필드 역직렬화 실패를 구조화된 `INVALID_PARAMS`로 반환하고 메시지에 필드 경로를 담는다. 빠진 필드는 소속 객체의 경로(루트는 `$`)를 알린다. 입력 스키마와 프로토콜 오류는 유지한다.
+- `hwpforge_patch`·`hwpforge_fill`은 실패 단계와 원인을 구분한다. 입력 decode는 `DECODE_FAILED`, 문서 검증은 `VALIDATION_FAILED`, 출력 생성은 `ENCODE_FAILED`, 보호 필드 침범은 `PROTECTED_FIELD_RANGE`, 내부 불변식 파손은 `INTERNAL_INVARIANT`다. `PATCH_FAILED`는 보존 patch가 거부하는 변경·metadata에 남고 fill은 이 원인을 그대로 전달한다. fill 입력 decode의 힌트는 `Check that the file is valid HWPX.`를 유지한다.
+- `convert`·`from_json`·`restyle`·`insert_para`·`delete_para`의 비어 있지 않은 `warnings`가 문자열 배열에서 `{code, message, hint?}` 객체 배열로 바뀐다. 문자열 대신 `message`를 읽는다. `insert_para`·`delete_para`의 decode·encode 메시지에서 코드 접두를 빼므로 `code`를 읽는다. 18개 도구의 빈 경고 생략과 `templates`의 경고 필드 부재는 유지한다.
 
-- Breaking: output canonical `OpsCode` strings without aliases; preserve tool-specific hints. Read targets use `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`. File errors use canonical I/O codes and path refusals use `INVALID_OUTPUT_PATH`. The new baseline links each row to the shared error manifest.
-- Serialization failures `SERIALIZE_ERROR` and `STAMP_MANIFEST_SERIALIZE` now use `JSON_SERIALIZE_FAILED`; set-cell/stamp semantic loss uses `ENCODE_SEMANTIC_LOSS`. Structural range failures preserve `SECTION_OUT_OF_RANGE`/`PARAGRAPH_OUT_OF_RANGE` and uncarried input uses `INPUT_ENTRIES_NOT_CARRIED`.
-- Breaking: invalid arguments to all 19 tools now return structured `INVALID_PARAMS` errors with the failing field path in the message. Missing fields report their containing object (`$` at the root); tool input schemas and protocol errors are unchanged.
-- `hwpforge_patch` and `hwpforge_fill` report the failing stage and cause instead of `PATCH_FAILED`/`FILL_FAILED`: a base that fails to decode is `DECODE_FAILED`, a failed validation `VALIDATION_FAILED`, a failed write `ENCODE_FAILED`, a changed protected field `PROTECTED_FIELD_RANGE` and a broken internal invariant `INTERNAL_INVARIANT`. `PATCH_FAILED` stays for changes and metadata the preserving patch refuses, and `hwpforge_fill` passes those through. A fill input that fails to decode keeps the hint "Check that the file is valid HWPX.".
-- Breaking: `convert`, `from_json`, `restyle`, `insert_para` and `delete_para` now report `warnings` as `{code, message, hint?}` objects, like the other tools; every tool but `templates` still omits the key when there are none. Read `message` where you read the string; `insert_para`/`delete_para` no longer prefix the code to decode and encode messages, so read `code` instead.
+### Changed
+
+- `INPUT_NOT_ROUNDTRIP_SAFE` 힌트는 코덱 갭 수정 대기 안내 대신 원본을 보존하는 `hwpforge_to_json(section)` → `hwpforge_patch`, 누름틀 `hwpforge_fill` 경로를 안내한다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.0...hwpforge-bindings-mcp-v0.17.1) - 2026-10-24
 

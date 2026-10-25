@@ -253,11 +253,11 @@ hwpforge validate [OPTIONS] <FILE>
 | 종료 코드 | 의미                                                                                         |
 | --------- | -------------------------------------------------------------------------------------------- |
 | 0         | 문서가 유효합니다                                                                            |
-| 1         | 파일을 읽을 수 없음(없거나 읽을 수 없는 파일)                                                |
-| 2         | 바이트가 디코드 가능한 HWPX 패키지가 아닙니다                                                |
+| 1         | 파일을 읽을 수 없음(없거나 읽을 수 없거나 크기 상한을 넘는 파일)                             |
+| 2         | 명령행 인자가 잘못됐거나 바이트가 디코드 가능한 HWPX 패키지가 아닙니다                       |
 | 3         | 디코드는 되지만 검증에 실패합니다(오류가 아니라 판정이며, `--json` 출력의 `errors`를 보세요) |
 
-인자를 잘못 준 경우(필수 인자 누락, 알 수 없는 옵션)는 clap이 종료 코드 2로 끝냅니다. 도움말은 이를 1로 적고 있으나 실측은 2입니다(`validate`, `validate --bogus x` 모두 2). 이 문단은 `validate`에 대한 것이며 다른 명령의 종료 코드는 여기서 다루지 않습니다.
+인자를 잘못 준 경우(필수 인자 누락, 알 수 없는 옵션)는 clap이 종료 코드 2로 끝냅니다. 아래 오류 계약은 다른 명령의 종료 정책도 함께 설명합니다.
 
 ## 편집
 
@@ -391,3 +391,73 @@ hwpforge schema [OPTIONS] [TYPE_NAME]
 
 - 같은 연산을 AI 도구에서 부르려면 [MCP 서버 레퍼런스](./mcp.md)를 보세요.
 - Python에서 부르려면 [Python 가이드](../guide/python.md)를 보세요.
+
+## 0.18 오류 코드와 종료 상태
+
+CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 같은 실패 단계와 도메인 거부 사유에 같은 `OpsCode` 문자열을 사용합니다. 여러 결함이 있으면 실제로 먼저 실패한 검사로 분류하며, 메시지·힌트·응답 봉투까지 같다는 뜻은 아닙니다. 퇴역 별명과 옛 문자열 lookup은 제공하지 않습니다.
+
+| 실패 단계·원인                                           | 코드                                                        |
+| -------------------------------------------------------- | ----------------------------------------------------------- |
+| 입력 HWPX / Markdown / HWP5 해석                         | `DECODE_FAILED` / `MD_DECODE_FAILED` / `HWP5_DECODE_FAILED` |
+| 편집 전 no-op 검증·인코드·재디코드 또는 의미 왕복 불일치 | `INPUT_NOT_ROUNDTRIP_SAFE`                                  |
+| 입력 ZIP 엔트리 미보존                                   | `INPUT_ENTRIES_NOT_CARRIED`                                 |
+| 명시적 문서 검증·메모리 문서 깊이 검사                   | `VALIDATION_FAILED`                                         |
+| 출력 생성 / 의미 손실 때문에 출력 거부                   | `ENCODE_FAILED` / `ENCODE_SEMANTIC_LOSS`                    |
+| 생성 산출물 읽기·재디코드·대조                           | `SELF_VERIFY_FAILED`                                        |
+| 보호 필드 침범 / 내부 불변식 파손                        | `PROTECTED_FIELD_RANGE` / `INTERNAL_INVARIANT`              |
+| 보존 patch의 변경·metadata 거부 / fill 고유 거부         | `PATCH_FAILED` / `FILL_FAILED`                              |
+| 아직 분류하지 않은 상류 variant                          | `UPSTREAM_UNMAPPED`                                         |
+
+`INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
+
+종료 상태는 **(명령, 코드)로** 결정합니다. 같은 명령·코드는 오류 payload나 발생 경로에 따라 달라지지 않습니다. 0은 성공이고, `validate`의 3은 디코드된 문서가 유효하지 않다는 판정입니다. 오류의 1·2만으로 원인을 구분하지 말고 `code`를 확인하세요.
+
+| I/O 코드                             | 종료 상태                                                  |
+| ------------------------------------ | ---------------------------------------------------------- |
+| `FILE_NOT_FOUND`, `FILE_READ_FAILED` | `to-md`·`convert-hwp5`는 2, 나머지는 1                     |
+| `INPUT_TOO_LARGE`                    | 일반 파일 사전 검사·FIFO 모두 1                            |
+| `FILE_WRITE_FAILED`                  | `delete-para`·`insert-para`·`convert-hwp5`는 2, 나머지는 1 |
+
+0.18에서 바뀌는 종료 값은 다음 여섯 변경군입니다.
+
+| 명령·실패                                                               | 이전 | 0.18 코드·종료                 |
+| ----------------------------------------------------------------------- | ---: | ------------------------------ |
+| `delete-para`·`insert-para`: no-op validate·encode·재decode             |    2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
+| `stamp`: no-op validate·encode·재decode                                 |    2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
+| `set-cell`: 입력 decode·원본 패키지 읽기                                |    1 | `DECODE_FAILED` / 2            |
+| `delete-para`·`insert-para`: 출력 decode·생성 산출물 읽기·fragment 파싱 |    2 | `SELF_VERIFY_FAILED` / 1       |
+| `to-md`·`convert-hwp5`: 크기 한도를 넘는 FIFO 입력                      |    2 | `INPUT_TOO_LARGE` / 1          |
+| `convert-hwp5`: 쓰기 성공 직후 stat 실패                                |    1 | `FILE_WRITE_FAILED` / 2        |
+
+CLI 전용 `INVALID_SET`·`DUPLICATE_SET`과 진단용 네 코드는 유지합니다. 잘못된 명령행 문법은 기존 파서의 종료 2와 사용법 텍스트를 유지합니다. PDF의 `cause.code`는 별도 렌더러 코드 체계입니다.
+
+이전 코드로 분기하던 소비자는 다음 이행표를 참고하세요. 아래 왼쪽 열은 과거 이름이며 0.18 출력이나 lookup 별명이 아닙니다.
+
+| 이전 코드·용도                                                                                  | 0.18 코드                                                                                                                   |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `DECODE_ERROR`, `HWPX_DECODE_FAILED`                                                            | `DECODE_FAILED`                                                                                                             |
+| `ENCODE_ERROR`                                                                                  | `ENCODE_FAILED`                                                                                                             |
+| `VALIDATION_ERROR`, `VALIDATE_FAILED`                                                           | `VALIDATION_FAILED`                                                                                                         |
+| `MD_DECODE_ERROR`, `JSON_PARSE_ERROR`                                                           | `MD_DECODE_FAILED`, `JSON_PARSE_FAILED`                                                                                     |
+| `SERIALIZE_ERROR`, `STAMP_MANIFEST_SERIALIZE`                                                   | `JSON_SERIALIZE_FAILED`                                                                                                     |
+| `UNKNOWN_PRESET`                                                                                | `PRESET_NOT_FOUND`                                                                                                          |
+| `STYLE_STORE_ERROR`, `STYLE_REBIND_ERROR`                                                       | `STYLE_STORE_FAILED`, `STYLE_REBIND_FAILED`                                                                                 |
+| `FILL_ERROR`, 포괄 `FILL_FAILED`                                                                | 고유 fill 거부는 `FILL_FAILED`, 나머지는 실패 단계·patch·불변식 코드                                                        |
+| `PATCH_ERROR`, 포괄 `PATCH_FAILED`                                                              | 보존 정책 거부는 `PATCH_FAILED`, 나머지는 실패 단계·보호 필드·불변식·구역 범위 코드                                         |
+| `SET_CELL_CODEC_FAILED`, `STAMP_CODEC_FAILED`, `STRUCTURAL_CODEC`                               | 해당 단계 코드, `PROTECTED_FIELD_RANGE`, `INTERNAL_INVARIANT`; 의미 손실은 `ENCODE_SEMANTIC_LOSS`                           |
+| `READ_SECTION_OUT_OF_RANGE`, `READ_TABLE_OUT_OF_RANGE`, `READ_FIELD_NOT_FOUND`                  | `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`                                                                |
+| `STAMP_DELTA_MISMATCH`, `STAMP_CELL_TARGET_DUPLICATE`                                           | `SELF_VERIFY_FAILED`, `CELL_TARGET_DUPLICATE`                                                                               |
+| `INDEX_OUT_OF_RANGE`                                                                            | `SECTION_OUT_OF_RANGE` 또는 `PARAGRAPH_OUT_OF_RANGE`                                                                        |
+| `UNCARRIED_ZIP_ENTRIES`                                                                         | `INPUT_ENTRIES_NOT_CARRIED`                                                                                                 |
+| MCP 앞 삽입 거부의 `SECTION_PROPERTIES_PARAGRAPH`                                               | `INSERT_BEFORE_SECTION_PROPERTIES`; 원래 구역 속성 문단 보호에는 기존 코드 유지                                             |
+| `STRUCTURAL_EDIT_FAILED`                                                                        | 정밀 도메인 코드 또는 `UPSTREAM_UNMAPPED`                                                                                   |
+| `SECTION_WORKFLOW_FAILED`, `SECTION_WORKFLOW_ERROR`, `SET_CELL_FAILED`, `STAMP_FAILED` fallback | `UPSTREAM_UNMAPPED`                                                                                                         |
+| 포괄 `HWP5_CONVERT_FAILED`                                                                      | decode는 `HWP5_DECODE_FAILED`, 직접 검증은 `VALIDATION_FAILED`, 출력 생성은 `ENCODE_FAILED`; layout replay는 기존 코드 유지 |
+| `READ_ERROR`, `METADATA_ERROR`, `STDIN_READ_FAILED`                                             | `FILE_READ_FAILED`; 입력 부재는 `FILE_NOT_FOUND`                                                                            |
+| `WRITE_ERROR`, `DIR_CREATE_ERROR`, `DIR_CREATE_FAILED`                                          | 출력 I/O는 `FILE_WRITE_FAILED`, 출력 경로 정책은 `INVALID_OUTPUT_PATH`                                                      |
+
+과거 로그의 포괄 코드는 당시 실패 단계를 모르면 새 코드 하나로 자동 변환할 수 없습니다.
+
+MCP의 도구 필드 역직렬화 실패는 필드 경로를 메시지에 포함한 `INVALID_PARAMS`입니다. 경고가 있는 18개 도구는 `{code, message, hint?}` 객체 배열을 반환하며, 빈 경고는 생략합니다. `templates`에는 경고 필드가 없습니다. 전송·JSON-RPC·알 수 없는 도구·worker 실패는 기존 프로토콜 경계를 유지합니다.
+
+Python 파일 I/O는 `HwpForgeError`와 `OSError`로 포착할 수 있고, 입력 부재는 `FileNotFoundError`로도 포착할 수 있습니다. 정확한 타입 비교나 `PermissionError` 같은 세부 포착은 달라집니다. Python 호출 규약·인자 변환의 `TypeError`·`ValueError`는 유지합니다.

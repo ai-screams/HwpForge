@@ -146,4 +146,4 @@ Tool errors use `OpsCode` strings directly: `DECODE_FAILED`, `ENCODE_FAILED`, `V
 
 ### 0.18 warnings
 
-Every tool but `hwpforge_templates` reports non-fatal warnings in `data.warnings` as `{code, message, hint?}` objects, in the order the operation produced them; the key is omitted when there are none. `hint` is omitted when absent. Migrating from 0.17: read `message` where you read the string; `hwpforge_insert_para`/`hwpforge_delete_para` no longer prefix the code (for example `"LAYOUT_CACHE_DROPPED: "`) to decode and encode messages, so read it from `code` (see the `[Unreleased] — 0.18` entry in [CHANGELOG.md](CHANGELOG.md)).
+Every tool but `hwpforge_templates` reports non-fatal warnings in `data.warnings` as `{code, message, hint?}` objects, in the order the operation produced them; the key is omitted when there are none. `hint` is omitted when absent. Migrating from 0.17: read `message` where you read the string; `hwpforge_insert_para`/`hwpforge_delete_para` no longer prefix the code (for example `"LAYOUT_CACHE_DROPPED: "`) to decode and encode messages, so read it from `code` (see the `[Unreleased]` entry in [CHANGELOG.md](CHANGELOG.md)).
