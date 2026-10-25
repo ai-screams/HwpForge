@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - styled 본문 문단에서 줄머리의 메모·차트 주석 뒤에 글이 이어지면 주석 뒤에서 줄을 바꾼다. 뒤 글은 HTML 주석 블록에 흡수되지 않고 새 문단으로 남으며, 메모 주석도 남는다. 목록 continuation 등 다른 출력은 이전과 같다.
 - 위 규칙으로 막을 수 없는 드문 본문 문단은 서식 없는 글로 바꾸고 `MarkupWrittenAsText` 경고를 남긴다. 상호참조·필드·알 수 없는 컨트롤은 대체 글에서도 정상 출력과 같은 표시값을 쓴다.
 - 출력에 정의 목록이 남지 않아, 그 때문에 from-md 가 실패하던 경우가 없어진다.
+- styled 본문 문단·캡션·표 칸에서 굵게·기울임·취소선이 맞붙거나(`**a****1**`) 유니코드 문장부호 뒤에서 이어지면 다시 읽을 때 글자나 서식이 바뀌던 문제를 고쳤다. 강조 표지를 문단 단위로 배치한 뒤 최종 출력을 다시 읽어 확인하고, 맞는 배치가 없으면 그 칸이나 문단을 서식 없는 글로 쓰며 `MarkupWrittenAsText` 경고를 문단당 하나 남긴다. 목록·제목·각주·lossy 출력은 이전과 같다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.0...hwpforge-smithy-md-v0.17.1) - 2026-10-24
 

@@ -342,12 +342,23 @@ pub(crate) fn checked(
             blocks.iter().map(|b| b.markdown.as_str()).filter(|m| !m.is_empty()).collect();
         parts.join("\n\n")
     };
-    let fall_back = |b: &mut Block, warnings: &mut Vec<super::MdWarning>| {
+    // Paragraphs already written as plain text by the renderer (a guarded
+    // paragraph's emphasis, `styled.rs`) keep their one warning.
+    let mut warned: HashSet<(usize, usize)> = warnings
+        .iter()
+        .filter_map(|w| match w {
+            super::MdWarning::MarkupWrittenAsText { section, paragraph } => {
+                Some((*section, *paragraph))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut fall_back = |b: &mut Block, warnings: &mut Vec<super::MdWarning>| {
         if let Some(src) = b.source.take() {
             let text: Vec<String> = src.texts.iter().map(|t| plain_text(t)).collect();
             b.markdown = format!("{}{}", src.prefix, text.join("\n\n"));
-            for (section, paragraph) in src.at {
-                warnings.push(super::MdWarning::MarkupWrittenAsText { section, paragraph });
+            for at in src.at {
+                written_as_text(warnings, &mut warned, at);
             }
         }
     };
@@ -375,17 +386,32 @@ pub(crate) fn checked(
     join(&blocks)
 }
 
+/// Records that the paragraph at `at` was written as plain text: one
+/// warning per paragraph, whichever step wrote it (`warned` holds the
+/// paragraphs already reported).
+/// 이것을 실패시키는 것: 중복 검사 삭제(`one_warning_per_paragraph`).
+pub(crate) fn written_as_text(
+    warnings: &mut Vec<super::MdWarning>,
+    warned: &mut HashSet<(usize, usize)>,
+    at: (usize, usize),
+) {
+    if warned.insert(at) {
+        warnings.push(super::MdWarning::MarkupWrittenAsText { section: at.0, paragraph: at.1 });
+    }
+}
+
 /// Whether a Body block, parsed alone as the decoder parses, holds block
 /// structure its text must not make: a list (its items and task markers
 /// are inside one), heading, code block, block quote, note definition,
 /// definition list (its titles and definitions are inside one) or
-/// thematic break. The decoder's options read no metadata block.
-/// Paragraphs, tables, HTML blocks and inline events are allowed: a
-/// comment the encoder writes at a line start ends its line
-/// (`styled::comment_ends_line`), so no text is taken into one.
-/// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제
+/// thematic break — or, as a safety net, text after a comment that opens
+/// an HTML block (`styled::comment_ends_line` ends such lines first). The
+/// decoder's options read no metadata block. Paragraphs, tables, other
+/// HTML blocks and inline events are allowed.
+/// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제 · 주석 꼬리 검사 삭제
 /// (`body_structure_finds_what_body_text_must_not_make`).
 fn body_structure(markdown: &str) -> bool {
+    let mut html: Option<String> = None;
     for event in Parser::new_ext(markdown, super::md_options()) {
         match event {
             Event::Start(
@@ -397,6 +423,24 @@ fn body_structure(markdown: &str) -> bool {
                 | Tag::DefinitionList,
             )
             | Event::Rule => return true,
+            // A safety net: after `styled::comment_ends_line` no comment's
+            // HTML block takes text in, so this does not fire.
+            Event::Start(Tag::HtmlBlock) => html = Some(String::new()),
+            Event::Html(h) => {
+                if let Some(block) = &mut html {
+                    block.push_str(&h);
+                }
+            }
+            Event::End(pulldown_cmark::TagEnd::HtmlBlock) => {
+                let block = html.take().unwrap_or_default();
+                if let Some(comment) = block.trim_start().strip_prefix("<!--") {
+                    // The block ends with the line holding `-->`.
+                    let tail = comment.find("-->").map_or("", |end| &comment[end + 3..]);
+                    if !tail.trim().is_empty() {
+                        return true;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -412,8 +456,18 @@ mod tests {
     /// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제.
     #[test]
     fn body_structure_finds_what_body_text_must_not_make() {
-        for found in ["- x", "# h", "```\nx\n```", "a\n\n    b", "> q", "[^1]: x", "a\n: b", "***"]
-        {
+        for found in [
+            "- x",
+            "# h",
+            "```\nx\n```",
+            "a\n\n    b",
+            "> q",
+            "[^1]: x",
+            "a\n: b",
+            "***",
+            "<!-- chart -->x",
+            "a\n\n<!-- memo: m -->- x",
+        ] {
             assert!(body_structure(found), "{found:?}");
         }
         for allowed in [

@@ -27,10 +27,11 @@ fn read_back(url: &str) -> String {
     url.replace('\n', "%0A").replace('\r', "%0D")
 }
 
-/// Markdown the encoder made, and whether its last non-whitespace content
-/// is a table the encoder made ([`Md::ending_block`]).
+/// Markdown the encoder made, whether its last non-whitespace content is a
+/// table the encoder made ([`Md::ending_block`]), and how many `\` end it
+/// (kept so [`join`] does not count them again for every piece).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Md(String, bool);
+pub(crate) struct Md(String, bool, usize);
 
 /// Markdown safe inside a GFM table cell.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -172,6 +173,12 @@ impl Md {
         Self::of(out)
     }
 
+    /// Document text as plain text ([`super::guard::plain_text`]): every
+    /// ASCII punctuation mark escaped, line endings as spaces.
+    pub(crate) fn plain(raw: &str) -> Self {
+        Self::of(super::guard::plain_text(raw))
+    }
+
     /// A lossy paragraph: its document text escaped only where CommonMark
     /// reads markup, judged in one pass over the whole paragraph — the
     /// markup the encoder made included, as context ([`escape_pieces`]).
@@ -264,17 +271,27 @@ impl Md {
     /// 이것을 실패시키는 것: 빈 줄 넣기 삭제 · 공백에서 표시 끄기 · 앞 공백 남기기
     /// (`body_check_and_table_end_close_the_rest`).
     pub(crate) fn push(&mut self, other: Md) {
-        if other.0.chars().all(char::is_whitespace) {
-            join(&mut self.0, &other.0);
-            return;
-        }
-        if self.1 {
+        self.push_placed(other);
+    }
+
+    /// [`Md::push`], saying where `other` landed: the byte range of its
+    /// markup in `self`, and where an escape went in earlier in `self` (a
+    /// `!` before a link, [`join`]), shifting what was there.
+    pub(crate) fn push_placed(&mut self, other: Md) -> (std::ops::Range<usize>, Option<usize>) {
+        let piece = if !other.0.chars().all(char::is_whitespace) && self.1 {
             self.0.push_str("\n\n");
-            join(&mut self.0, other.0.trim_start());
+            self.2 = 0;
+            other.0.trim_start()
         } else {
-            join(&mut self.0, &other.0);
+            &other.0
+        };
+        let (shifted, tail) = join(&mut self.0, piece, self.2);
+        self.2 = tail;
+        let range = self.0.len() - piece.len()..self.0.len();
+        if !other.0.chars().all(char::is_whitespace) {
+            self.1 = other.1;
         }
-        self.1 = other.1;
+        (range, shifted)
     }
 
     /// The markup marked as ending with a table the encoder made: content
@@ -285,7 +302,8 @@ impl Md {
     }
 
     fn of(s: String) -> Self {
-        Self(s, false)
+        let tail = trailing_backslashes(&s);
+        Self(s, false, tail)
     }
 
     /// Appends the encoder's own syntax.
@@ -310,7 +328,9 @@ impl Md {
     /// Keeps [`Md::ending_block`]: the layouts trim whitespace or wrap a
     /// comment, never add content after the table.
     pub(crate) fn layout(self, f: impl FnOnce(String) -> String) -> Self {
-        Self(f(self.0), self.1)
+        let s = f(self.0);
+        let tail = trailing_backslashes(&s);
+        Self(s, self.1, tail)
     }
 
     /// As a GFM table cell: `|` escaped, line endings `<br>` (markup has only
@@ -352,7 +372,9 @@ impl Cell {
 
     /// Appends cell markup ([`join`]).
     pub(crate) fn push(&mut self, other: Cell) {
-        join(&mut self.0, &other.0);
+        // Lossy cells count the tail each time (out of the styled fix).
+        let run = trailing_backslashes(&self.0);
+        join(&mut self.0, &other.0, run);
     }
 
     /// Appends Markdown, made cell-safe.
@@ -422,22 +444,39 @@ impl Cell {
 /// Appends `next` markup to `out`. A lone `\` ending `out` would escape the
 /// next character, and a `!` before a link would make it an image, so
 /// either is escaped first.
+/// `run` is how many `\` end `out`; the count ending the result is
+/// returned with where an escape went in before the end, if anywhere.
 /// 이것을 실패시키는 것: 끝 역슬래시 처리 삭제(`lossy_text_escapes_only_markup`) ·
-/// `!` 처리 삭제(`markup_safety`).
-fn join(out: &mut String, next: &str) {
-    if !next.is_empty() {
-        let run = out.chars().rev().take_while(|&c| c == '\\').count();
-        if run % 2 == 1 && next.starts_with(|c: char| c.is_ascii_punctuation()) {
-            out.push('\\');
-        } else if next.starts_with('[') && out.ends_with('!') {
-            let bang = out.len() - 1;
-            let before = out[..bang].chars().rev().take_while(|&c| c == '\\').count();
-            if before % 2 == 0 {
-                out.insert(bang, '\\');
-            }
+/// `!` 처리 삭제(`markup_safety`) · 꼬리를 조각마다 다시 세기(`backslash_tail_is_kept`).
+fn join(out: &mut String, next: &str, run: usize) -> (Option<usize>, usize) {
+    if next.is_empty() {
+        return (None, run);
+    }
+    let mut shifted = None;
+    let mut escaped = 0;
+    if run % 2 == 1 && next.starts_with(|c: char| c.is_ascii_punctuation()) {
+        out.push('\\');
+        escaped = 1;
+    } else if next.starts_with('[') && out.ends_with('!') {
+        let bang = out.len() - 1;
+        let before = out[..bang].chars().rev().take_while(|&c| c == '\\').count();
+        if before % 2 == 0 {
+            out.insert(bang, '\\');
+            shifted = Some(bang);
         }
     }
     out.push_str(next);
+    let tail = if next.bytes().all(|b| b == b'\\') {
+        run + escaped + next.len()
+    } else {
+        trailing_backslashes(next)
+    };
+    (shifted, tail)
+}
+
+/// How many `\` end `s`.
+fn trailing_backslashes(s: &str) -> usize {
+    s.len() - s.trim_end_matches('\\').len()
 }
 
 fn row_line(row: Vec<Cell>, width: usize, bar: &str) -> String {
@@ -1033,6 +1072,45 @@ pub(crate) fn lossless_element(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kept count of `\` ending the markup is the count read again,
+    /// after every kind of push: all `\`, mixed, an escape put in before
+    /// punctuation, a `!` before a link, after a table's blank line, and
+    /// after a layout.
+    /// 이것을 실패시키는 것: 전부 `\` 일 때 누적하지 않기 · 빈 줄 뒤 0 으로 두지 않기 ·
+    /// layout 뒤 다시 세지 않기 · 이스케이프 한 자를 빼기.
+    #[test]
+    fn backslash_tail_is_kept() {
+        let check = |md: &Md| assert_eq!(md.2, trailing_backslashes(&md.0), "{:?}", md.0);
+        let mut md = Md::text("a\\");
+        check(&md);
+        for piece in [
+            Md::syntax("\\"),
+            Md::syntax("\\"),
+            Md::syntax("*"),
+            Md::text("b\\"),
+            Md::syntax("\\"),
+            Md::syntax("!"),
+            Md::syntax("[x]"),
+            Md::syntax("\\"),
+            Md::syntax(""),
+            Md::syntax(" "),
+        ] {
+            md.push(piece);
+            check(&md);
+        }
+        let mut table = Md::syntax("| a |").ending_block();
+        table.push(Md::syntax("\\x\\"));
+        check(&table);
+        // A table ending in `\` (its last cell's text): the blank line
+        // after it ends the run, so the next `\` is not escaped.
+        let mut table = Md::syntax("| a\\").ending_block();
+        table.push(Md::syntax("\\"));
+        check(&table);
+        assert_eq!(table.as_str(), "| a\\\n\n\\");
+        let laid = md.layout(|s| format!("{s}\\"));
+        check(&laid);
+    }
 
     /// Long runs and text before later markup need only linear scanning.
     /// 이것을 실패시키는 것: 매 글자에서 run 또는 마크업 suffix 다시 검색하기.

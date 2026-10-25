@@ -36,6 +36,11 @@ mod cases {
     pub const BOLD: usize = 1;
     pub const UNDERLINE: usize = 2;
     pub const CODE: usize = 3;
+    /// Character shapes by emphasis: bold, italic, strikeout and their
+    /// combinations (bit 1 bold, bit 2 italic, bit 4 strikeout, plus 16).
+    pub fn emphasis(bold: bool, italic: bool, strike: bool) -> usize {
+        16 + usize::from(bold) + 2 * usize::from(italic) + 4 * usize::from(strike)
+    }
     /// Paragraph shapes.
     pub const BODY: usize = 0;
     pub const BULLET: usize = 1;
@@ -50,7 +55,13 @@ mod cases {
 
     impl StyleLookup for Styles {
         fn char_bold(&self, id: CharShapeIndex) -> Option<bool> {
-            Some(id.get() == BOLD)
+            Some(id.get() == BOLD || (id.get() >= 16 && id.get() & 1 == 1))
+        }
+        fn char_italic(&self, id: CharShapeIndex) -> Option<bool> {
+            Some(id.get() >= 16 && id.get() & 2 == 2)
+        }
+        fn char_strikeout(&self, id: CharShapeIndex) -> Option<bool> {
+            Some(id.get() >= 16 && id.get() & 4 == 4)
         }
         fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType> {
             (id.get() == UNDERLINE).then_some(UnderlineType::Bottom)
@@ -317,6 +328,59 @@ mod cases {
                     p(CONT1, vec![memo(vec![body(vec![t("m")])]), t("- x")]),
                 ]),
             ),
+            (
+                "g12_table_memo",
+                doc(vec![body(vec![
+                    t("a"),
+                    table(one_cell(body(vec![t("v")]))),
+                    memo(vec![body(vec![t("m")])]),
+                    t("*x*"),
+                ])]),
+            ),
+            (
+                "g12_caption_memo",
+                doc(vec![body(vec![
+                    t("a"),
+                    captioned(
+                        one_cell(body(vec![t("v")])),
+                        vec![body(vec![t("cap"), memo(vec![body(vec![t("m")])])])],
+                    ),
+                    t("*x*"),
+                ])]),
+            ),
+            (
+                "g12_picture_caption_memo",
+                doc(vec![body(vec![
+                    t("a"),
+                    image("BinData/p.png", Some(vec![body(vec![memo(vec![body(vec![t("m")])])])])),
+                    t("*x*"),
+                ])]),
+            ),
+            (
+                "g12_text_box_memo",
+                doc(vec![body(vec![
+                    text_box(vec![body(vec![memo(vec![body(vec![t("m")])])])]),
+                    t("*x*"),
+                ])]),
+            ),
+            (
+                "g12_comments_lf",
+                doc(vec![body(vec![
+                    memo(vec![body(vec![t("m")])]),
+                    t("\n"),
+                    memo(vec![body(vec![t("m")])]),
+                    t("x"),
+                ])]),
+            ),
+            (
+                "g12_comments_space",
+                doc(vec![body(vec![
+                    memo(vec![body(vec![t("m")])]),
+                    t(" "),
+                    memo(vec![body(vec![t("m")])]),
+                    t("x"),
+                ])]),
+            ),
             ("g10_html_cell", doc(vec![body(vec![table(merged(body(vec![nested_bold()])))])])),
         ]
     }
@@ -369,6 +433,13 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g11_cont_memo_list", "- a\n\n  <!-- memo: m -->- x", "a\n\n- x"),
     ("g11_cont_chart_number", "- a\n\n  <!-- chart -->1. x", "a\n\n1. x"),
     ("g11_cont1_memo_list", "  - a\n\n    <!-- memo: m -->- x", "a\n\n- x"),
+    // g12: written by 61d3631d (G2, before this writer).
+    ("g12_table_memo", "a\n| v |\n| --- |\n\n<!-- memo: m -->\n\\*x\\*", "a\n\n| v |\n| --- |\n\n*x*"),
+    ("g12_caption_memo", "a\n| v |\n| --- |\n\ncap<!-- memo: m -->\\*x\\*", "a\n\n| v |\n| --- |\n\n\n\ncap\n\n*x*"),
+    ("g12_picture_caption_memo", "a ![p](images/p.png)\n\n<!-- memo: m -->\n\\*x\\*", "a ![p](BinData/p.png)*x*"),
+    ("g12_text_box_memo", "<!-- memo: m -->\n\\*x\\*", "*x*"),
+    ("g12_comments_lf", "<!-- memo: m -->\n<!-- memo: m -->\nx", "\nx"),
+    ("g12_comments_space", "<!-- memo: m -->\n<!-- memo: m -->\nx", " x"),
     ("g10_html_cell", "<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">- x</td>\n</tr>\n</tbody>\n</table>", "|  |\n| --- |"),
 ];
 
@@ -1012,6 +1083,605 @@ fn line_start_comments_are_linear() {
     assert_eq!(out, format!("{}x", "<!-- chart -->\n".repeat(100_000)));
 }
 
+/// Each character of the output with the emphasis it is read with
+/// (bold, italic, strikeout), whitespace left out.
+fn emphasized(markdown: &str) -> Vec<(char, bool, bool, bool)> {
+    let (mut b, mut i, mut st) = (0, 0, 0);
+    let mut out = Vec::new();
+    for event in Parser::new_ext(markdown, md_options()) {
+        match event {
+            Event::Start(Tag::Strong) => b += 1,
+            Event::End(pulldown_cmark::TagEnd::Strong) => b -= 1,
+            Event::Start(Tag::Emphasis) => i += 1,
+            Event::End(pulldown_cmark::TagEnd::Emphasis) => i -= 1,
+            Event::Start(Tag::Strikethrough) => st += 1,
+            Event::End(pulldown_cmark::TagEnd::Strikethrough) => st -= 1,
+            Event::Text(t) => out.extend(
+                t.chars().filter(|c| !c.is_whitespace()).map(|c| (c, b > 0, i > 0, st > 0)),
+            ),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Two formatted pieces meeting with nothing drawn between them — an
+/// empty control, an empty text run, a picture without a path, a bookmark,
+/// an empty text box — or through a text box's text, in every pair of
+/// emphasis: where text is guarded each character is read with its own
+/// emphasis, the output holds no HTML and the decoder reads it. Outside the
+/// guarantee, as before. The first case is the generator's failing case of
+/// 2026-10-25, kept so it does not depend on the seed.
+/// 이것을 실패시키는 것: 병합 삭제 · 글상자 경계에서 병합하지 않기 · `guarded` 제한 삭제.
+#[test]
+fn adjacent_formatted_text_keeps_its_characters() {
+    use hwpforge_core::control::Control;
+    let (out, fallbacks) =
+        styled(&doc(vec![body(vec![styled_t("a", BOLD), compose(""), styled_t("1", BOLD)])]));
+    assert_eq!((out.as_str(), fallbacks), ("**a1**", 0));
+    let shapes: Vec<(usize, (bool, bool, bool))> = (0..8)
+        .map(|k| (k & 1 == 1, k & 2 == 2, k & 4 == 4))
+        .filter(|f| *f != (false, false, false))
+        .map(|f| (emphasis(f.0, f.1, f.2), f))
+        .collect();
+    let gaps = || {
+        vec![
+            vec![],
+            vec![compose("")],
+            vec![t("")],
+            vec![image("", None)],
+            vec![ctrl(Control::bookmark("b"))],
+            vec![text_box(vec![body(vec![t("")])])],
+        ]
+    };
+    let mut problems = Vec::new();
+    for &(left, lf) in &shapes {
+        for &(right, rf) in &shapes {
+            let boxed = |s: &str, shape| text_box(vec![body(vec![styled_t(s, shape)])]);
+            let mut placements: Vec<Vec<hwpforge_core::Run>> = gaps()
+                .into_iter()
+                .map(|gap| {
+                    let mut runs = vec![styled_t("a", left)];
+                    runs.extend(gap);
+                    runs.push(styled_t("1", right));
+                    runs
+                })
+                .collect();
+            placements.push(vec![styled_t("a", left), boxed("1", right)]);
+            placements.push(vec![boxed("a", left), styled_t("1", right)]);
+            placements.push(vec![boxed("a", left), boxed("1", right)]);
+            for runs in placements {
+                let (out, fallbacks) = styled(&doc(vec![body(runs.clone())]));
+                let want = vec![('a', lf.0, lf.1, lf.2), ('1', rf.0, rf.1, rf.2)];
+                let html = Parser::new_ext(&out, md_options())
+                    .any(|e| matches!(e, Event::Html(_) | Event::InlineHtml(_)));
+                if fallbacks != 0
+                    || html
+                    || emphasized(&out) != want
+                    || crate::MdDecoder::decode_with_default(&out).is_err()
+                {
+                    problems.push(format!("{lf:?} {rf:?} {runs:?} → {out:?}"));
+                }
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}:\n{}", problems.len(), problems.join("\n"));
+    // A `*` of the document's text before italic text is text, not a
+    // marker to merge.
+    let italic = emphasis(false, true, false);
+    let (out, _) = styled(&doc(vec![body(vec![t("a*"), styled_t("1", italic)])]));
+    assert_eq!(
+        emphasized(&out),
+        [('a', false, false, false), ('*', false, false, false), ('1', false, true, false)],
+        "{out}"
+    );
+    // Outside the guarantee, as before.
+    let runs = vec![styled_t("a", BOLD), compose(""), styled_t("1", BOLD)];
+    assert_eq!(styled(&doc(vec![cases::p(BULLET, runs)])).0, "- **a****1**");
+}
+
+/// Whether emphasis over three pieces nests: each emphasis covers a run of
+/// neighbouring pieces, and two such runs are nested or apart.
+fn nests(pieces: &[(bool, bool, bool)]) -> bool {
+    let span = |f: fn(&(bool, bool, bool)) -> bool| {
+        let on: Vec<usize> = (0..pieces.len()).filter(|&i| f(&pieces[i])).collect();
+        match (on.first(), on.last()) {
+            (Some(&a), Some(&b)) if b - a + 1 == on.len() => Some(Some((a, b))),
+            (None, None) => Some(None),
+            _ => None,
+        }
+    };
+    let spans = [span(|p| p.0), span(|p| p.1), span(|p| p.2)];
+    if spans.iter().any(Option::is_none) {
+        return false;
+    }
+    let spans: Vec<(usize, usize)> = spans.into_iter().flatten().flatten().collect();
+    spans.iter().all(|&(a, b)| {
+        spans.iter().all(|&(c, d)| b < c || d < a || (a <= c && d <= b) || (c <= a && b <= d))
+    })
+}
+
+/// Three pieces `a`, `b`, `c` in every emphasis (7³), next to each other
+/// and with the last two in text boxes: where the emphasis nests, every
+/// character is read with its own emphasis, with no HTML and no warning,
+/// and the decoder reads it; where it crosses, the same, or the paragraph
+/// is written as plain text with one warning and every character kept. The
+/// review's four failing cases are among them.
+/// 이것을 실패시키는 것: 구성 되돌리기(조각마다 표지) · 평문 대체 끄기 · 빈 조각 건너뛰기 삭제.
+#[test]
+fn three_emphasized_pieces_keep_their_emphasis() {
+    let kinds: Vec<(bool, bool, bool)> =
+        (1..8).map(|k| (k & 1 == 1, k & 2 == 2, k & 4 == 4)).collect();
+    let shape = |f: (bool, bool, bool)| emphasis(f.0, f.1, f.2);
+    let mut problems = Vec::new();
+    let mut fell_back = 0;
+    for &x in &kinds {
+        for &y in &kinds {
+            for &z in &kinds {
+                let nested = nests(&[x, y, z]);
+                let boxed = |s: &str, f| text_box(vec![body(vec![styled_t(s, shape(f))])]);
+                for runs in [
+                    vec![styled_t("a", shape(x)), styled_t("b", shape(y)), styled_t("c", shape(z))],
+                    vec![
+                        styled_t("a", shape(x)),
+                        compose(""),
+                        styled_t("b", shape(y)),
+                        styled_t("c", shape(z)),
+                    ],
+                    vec![styled_t("a", shape(x)), boxed("b", y), boxed("c", z)],
+                ] {
+                    let (out, fallbacks) = styled(&doc(vec![body(runs.clone())]));
+                    let want =
+                        vec![('a', x.0, x.1, x.2), ('b', y.0, y.1, y.2), ('c', z.0, z.1, z.2)];
+                    let html = Parser::new_ext(&out, md_options())
+                        .any(|e| matches!(e, Event::Html(_) | Event::InlineHtml(_)));
+                    let exact = fallbacks == 0
+                        && !html
+                        && emphasized(&out) == want
+                        && crate::MdDecoder::decode_with_default(&out).is_ok();
+                    let plain = fallbacks == 1 && squeeze(&visible(&out)) == "abc";
+                    if plain {
+                        fell_back += 1;
+                    }
+                    if !(exact || (!nested && plain)) {
+                        problems.push(format!(
+                            "{x:?} {y:?} {z:?} nested={nested} → {out:?} ({fallbacks})"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}:\n{}", problems.len(), problems.join("\n"));
+    // The review's four cases (bold → bold italic → italic and back, with
+    // and without strikeout over all three) are crossing. Some crossing
+    // placements this writer does not handle and writes as plain text
+    // (with a warning, every character kept, as checked above); a better
+    // writer may handle more of them, never more of them fall back.
+    // 15 of 1029 now (24 before italic as `_` was tried).
+    assert!(fell_back <= 15, "{fell_back}");
+}
+
+/// A guarded cell whose emphasis the writer cannot place (bold `a` → bold
+/// italic `b` → italic `c`, a crossing it does not handle) is written as
+/// plain text in that cell alone, with one warning: the table stays a
+/// table, and the one-table paragraph's caption (out of the guarantee) is
+/// as before, `**CAP**`. In a Body paragraph the same text falls back in
+/// that paragraph only, the paragraph after it as it is.
+/// 이것을 실패시키는 것: 대체를 블록 전체로 넓히기.
+#[test]
+fn emphasis_fallback_stays_in_its_paragraph() {
+    let crossing = || {
+        vec![
+            styled_t("a", emphasis(true, false, false)),
+            styled_t("b", emphasis(true, true, false)),
+            styled_t("c", emphasis(false, true, false)),
+        ]
+    };
+    let caption = vec![body(vec![styled_t("CAP", BOLD)])];
+    let (out, fallbacks) =
+        styled(&doc(vec![body(vec![captioned(one_cell(body(crossing())), caption)])]));
+    assert_eq!(fallbacks, 1, "{out}");
+    assert_eq!(out, "| abc |\n| --- |\n\n**CAP**");
+    assert_eq!(count(&out, |t| matches!(t, Tag::Table(_))), 1);
+    let (out, fallbacks) = styled(&doc(vec![body(crossing()), body(vec![styled_t("next", BOLD)])]));
+    assert_eq!((out.as_str(), fallbacks), ("abc\n\n**next**", 1));
+}
+
+/// A caption's final punctuation meets the text outside it, with and
+/// without another outer emphasis to force the parent's check. The same
+/// check includes pictures, nested captions, shapes and memo anchors.
+/// 이것을 실패시키는 것: 캡션 독립 검사 · 자식 범위 누락 · 표 뒤 trim 위치 미보정.
+#[test]
+fn captions_are_checked_in_the_final_body() {
+    // Every placement: Unicode punctuation closing the caption's emphasis
+    // right before `b` cannot be written with markers (the closer would not
+    // be right-flanking), so each is plain text with its one warning.
+    let mut want = [
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b", 1),
+        ("a。b", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+        ("h a。b z", 1),
+        ("a。b z", 1),
+    ]
+    .into_iter();
+    for shape in [BOLD, emphasis(false, true, false)] {
+        for suffix in [false, true] {
+            for nesting in 0..4 {
+                let run = styled_t("a。", shape);
+                let cap = body(vec![match nesting {
+                    0 => run,
+                    1 => text_box(vec![body(vec![run])]),
+                    2 => anchored_memo(vec![anchored_memo(vec![run])]),
+                    _ => image("", Some(vec![body(vec![run])])),
+                }]);
+                for picture in [false, true] {
+                    let first = if picture {
+                        image("", Some(vec![cap.clone()]))
+                    } else {
+                        captioned(one_cell(body(vec![t("h")])), vec![cap.clone()])
+                    };
+                    let mut runs = vec![first, t("b")];
+                    if suffix {
+                        runs.extend([t(" "), styled_t("z", BOLD)]);
+                    }
+                    let (out, warnings) = styled(&doc(vec![body(runs)]));
+                    assert_eq!((out.as_str(), warnings), want.next().unwrap());
+                    let want = format!(
+                        "{}a。b{}",
+                        if picture { "" } else { "h" },
+                        if suffix { "z" } else { "" }
+                    );
+                    assert_eq!(squeeze(&visible(&out)), want, "{out:?}");
+                    assert!(warnings <= 1, "{out:?}");
+                    assert!(crate::MdDecoder::decode_with_default(&out).is_ok(), "{out:?}");
+                    if warnings == 0 {
+                        let a = emphasized(&out).into_iter().find(|(c, ..)| *c == 'a').unwrap();
+                        assert_eq!(a, ('a', shape == BOLD, shape != BOLD, false), "{out:?}");
+                    }
+                }
+            }
+        }
+    }
+    // No false positive from child offsets: the whole caption prefix and
+    // its leading whitespace are trimmed at the table's existing Md join.
+    let (out, warnings) = styled(&doc(vec![body(vec![
+        captioned(one_cell(body(vec![t("h")])), vec![body(vec![styled_t("  a", BOLD)])]),
+        t("b"),
+    ])]));
+    assert_eq!((out.as_str(), warnings), ("| h |\n| --- |\n\n**a**b", 0));
+}
+
+/// A complete GFM cell is checked after its paragraphs are joined and LF
+/// becomes <br>. A failed caption boundary stays in that cell, including
+/// in a standalone table with an out-of-scope caption.
+/// 이것을 실패시키는 것: 칸 실패시 대체 생략 · 실패를 표 전체로 전파. (칸 문맥 제거는
+/// 여기서 죽지 않는다: `fix6_devices_are_pinned` 의 MB 사례.)
+#[test]
+fn joined_cell_emphasis_stays_local() {
+    use hwpforge_core::{Table, TableCell, TableRow};
+    let table = Table::new(vec![TableRow::new(vec![
+        TableCell::new(
+            vec![
+                body(vec![image("", Some(vec![body(vec![styled_t("a。", BOLD)])])), t("b")]),
+                body(vec![styled_t("safe", BOLD)]),
+            ],
+            u(1000),
+        ),
+        TableCell::new(vec![body(vec![styled_t("next", BOLD)])], u(1000)),
+    ])]);
+    let (out, warnings) =
+        styled(&doc(vec![body(vec![captioned(table, vec![body(vec![styled_t("CAP", BOLD)])])])]));
+    assert_eq!(warnings, 1, "{out:?}");
+    assert_eq!(squeeze(&visible(&out)), "a。bsafenextCAP", "{out:?}");
+    assert!(out.contains("| **next** |"), "{out:?}");
+    assert!(out.ends_with("\n\n**CAP**"), "{out:?}");
+    assert_eq!(count(&out, |t| matches!(t, Tag::Table(_))), 1);
+    let mut table = one_cell(body(vec![styled_t("a。", BOLD)]));
+    table.rows[0].cells[0].paragraphs.push(body(vec![styled_t("b", BOLD)]));
+    let (out, warnings) = styled(&doc(vec![body(vec![cases::table(table)])]));
+    assert_eq!((out.as_str(), warnings), ("| **a。**<br>**b** |\n| --- |", 0));
+}
+
+/// The emphasis writer's other long inputs: a text box with many empty
+/// paragraphs before its text, and emphasized text, `!` and a link over and
+/// over (each `!` before a link is escaped, moving the places after it).
+/// 이것을 실패시키는 것: 앞 공백 항목을 하나씩 지우기 · `!` 이스케이프마다 모든 자리 다시 훑기.
+#[test]
+fn emphasis_writer_is_linear() {
+    use hwpforge_core::control::Control;
+    let mut paragraphs: Vec<hwpforge_core::Paragraph> =
+        (0..100_000).map(|_| body(vec![t("")])).collect();
+    paragraphs.push(body(vec![styled_t("x", BOLD)]));
+    let boxed = doc(vec![body(vec![text_box(paragraphs)])]);
+    let started = std::time::Instant::now();
+    let (out, fallbacks) = styled(&boxed);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!((out.as_str(), fallbacks), ("**x**", 0));
+    let mut runs = Vec::new();
+    for _ in 0..100_000 {
+        runs.push(styled_t("a", BOLD));
+        runs.push(t("!"));
+        runs.push(ctrl(Control::hyperlink("b", "https://e.invalid/")));
+    }
+    let linked = doc(vec![body(runs)]);
+    let started = std::time::Instant::now();
+    let (out, fallbacks) = styled(&linked);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(fallbacks, 0);
+    assert!(out.starts_with("**a**\\![b](https://e.invalid/)**a**"), "{}", &out[..60]);
+}
+
+/// Many refused links whose text is `\\`: each piece's join reads the kept
+/// count of `\\` before it instead of counting the whole tail again.
+/// 이것을 실패시키는 것: `join` 이 꼬리를 조각마다 다시 세기.
+#[test]
+fn backslash_links_are_linear() {
+    use hwpforge_core::control::Control;
+    let runs: Vec<hwpforge_core::Run> =
+        (0..100_000).map(|_| ctrl(Control::hyperlink("\\", "javascript:x"))).collect();
+    let doc = doc(vec![body(runs)]);
+    let started = std::time::Instant::now();
+    let (out, fallbacks) = styled(&doc);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(fallbacks, 0);
+    assert_eq!(out, "\\\\".repeat(100_000));
+}
+
+/// A comment at a paragraph's start, then emphasis over three pieces in
+/// every emphasis (7³): the check reads the text after the comment as it is
+/// written (on its own line), so nested emphasis is exact and crossing is
+/// exact or plain text with one warning — never markers shown as text. The
+/// review's case is a memo, then bold `a`, bold italic `b`, italic `c`.
+/// 이것을 실패시키는 것: 주석 뒤 줄 끝내기를 검사 뒤로 미루기 · 읽지 않은 글을 통과시키기.
+#[test]
+fn hidden_emphasis_is_not_passed() {
+    let kinds: Vec<(bool, bool, bool)> =
+        (1..8).map(|k| (k & 1 == 1, k & 2 == 2, k & 4 == 4)).collect();
+    let shape = |f: (bool, bool, bool)| emphasis(f.0, f.1, f.2);
+    let mut problems = Vec::new();
+    for lead in [memo(vec![body(vec![t("m")])]), chart()] {
+        for &x in &kinds {
+            for &y in &kinds {
+                for &z in &kinds {
+                    let runs = vec![
+                        lead.clone(),
+                        styled_t("a", shape(x)),
+                        styled_t("b", shape(y)),
+                        styled_t("c", shape(z)),
+                    ];
+                    let (out, fallbacks) = styled(&doc(vec![body(runs)]));
+                    let want =
+                        vec![('a', x.0, x.1, x.2), ('b', y.0, y.1, y.2), ('c', z.0, z.1, z.2)];
+                    let exact = fallbacks == 0 && emphasized(&out) == want;
+                    let plain = fallbacks == 1 && squeeze(&visible(&out)).ends_with("abc");
+                    if !(exact || (!nests(&[x, y, z]) && plain)) {
+                        problems.push(format!("{x:?} {y:?} {z:?} → {out:?} ({fallbacks})"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// One paragraph written as plain text twice — a cell whose emphasis the
+/// writer cannot place, then the Body check for `1` + `. x` — still has one
+/// warning.
+/// 이것을 실패시키는 것: 받침 대체가 같은 규칙을 쓰지 않기.
+#[test]
+fn one_warning_per_paragraph() {
+    let crossing = vec![
+        styled_t("a", emphasis(true, false, false)),
+        styled_t("b", emphasis(true, true, false)),
+        styled_t("c", emphasis(false, true, false)),
+    ];
+    let runs = vec![t("1"), compose(". x"), table(one_cell(body(crossing)))];
+    let out = encode_styled(&doc(vec![body(runs)]), &Styles);
+    let warned =
+        out.warnings.iter().filter(|w| matches!(w, MdWarning::MarkupWrittenAsText { .. })).count();
+    assert_eq!(warned, 1, "{:?} {}", out.warnings, out.markdown);
+}
+
+/// Many paragraphs written as plain text, each its own warning: whether a
+/// paragraph is reported is looked up, not searched for.
+/// 이것을 실패시키는 것: 경고 목록을 처음부터 찾기.
+#[test]
+fn many_fallbacks_are_linear() {
+    let crossing = || {
+        body(vec![
+            styled_t("a", emphasis(true, false, false)),
+            styled_t("b", emphasis(true, true, false)),
+            styled_t("c", emphasis(false, true, false)),
+        ])
+    };
+    let doc = doc((0..N_FALLBACKS).map(|_| crossing()).collect());
+    let started = std::time::Instant::now();
+    let (_, fallbacks) = styled(&doc);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(fallbacks, N_FALLBACKS);
+}
+
+const N_FALLBACKS: usize = 100_000;
+
+/// Backslashes of the document's text, then many controls that draw
+/// nothing: each is left out once, the text's tail is not scanned again.
+/// 이것을 실패시키는 것: 빈 조각마다 앞 출력을 다시 훑기.
+#[test]
+fn empty_pieces_after_text_are_linear() {
+    use hwpforge_core::control::Control;
+    let mut runs = vec![t(&"\\".repeat(100_000))];
+    runs.extend((0..100_000).map(|_| ctrl(Control::bookmark("b"))));
+    runs.push(styled_t("x", BOLD));
+    let doc = doc(vec![body(runs)]);
+    let started = std::time::Instant::now();
+    let (out, fallbacks) = styled(&doc);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(fallbacks, 0);
+    assert!(out.ends_with("**x**"), "{}", &out[out.len() - 20..]);
+}
+
+/// A comment that comes to a line start through the block's own bytes —
+/// after a table's blank line, at a caption's end, in a picture's caption,
+/// in a text box — or two comments with a line ending or a space between:
+/// the bytes G2 wrote before this writer (no warning).
+/// 이것을 실패시키는 것: 줄 끝내기를 완성 블록이 아닌 작성기 안에서 하기 · 줄 끝내기 삭제.
+#[test]
+fn line_start_comments_are_g2_bytes() {
+    for name in [
+        "g12_table_memo",
+        "g12_caption_memo",
+        "g12_picture_caption_memo",
+        "g12_text_box_memo",
+        "g12_comments_lf",
+        "g12_comments_space",
+    ] {
+        assert_eq!(styled(&case(name)), (base(name).0.to_string(), 0), "{name}");
+    }
+}
+
+/// Text with no markers of its own (plain text, a compose) between
+/// emphasized text: it is checked to read with no emphasis, so markers that
+/// cannot close next to it (after Unicode punctuation, `**a。**b**z**`) or
+/// that would run over it (`~~**p**~~q~~r~~`) are caught. Each here cannot
+/// be written with markers and is plain text with one warning, every
+/// character kept (fix5 did the same; fix6 let them through).
+/// 이것을 실패시키는 것: 평문을 검사에서 빼기 · 글 컨트롤을 검사에서 빼기 · 코드 스팬을
+/// 글로 읽지 않기.
+#[test]
+fn plain_text_keeps_no_emphasis() {
+    let strike = |bold| emphasis(bold, false, true);
+    for (runs, want) in [
+        (
+            vec![
+                captioned(one_cell(body(vec![t("v")])), vec![body(vec![styled_t("a。", BOLD)])]),
+                t("b"),
+                styled_t("z", BOLD),
+            ],
+            "v a。bz",
+        ),
+        (vec![styled_t("제1조。", BOLD), t("본문"), styled_t("강조", BOLD)], "제1조。본문강조"),
+        (vec![styled_t("p", strike(true)), t("q"), styled_t("r", strike(false))], "pqr"),
+        (vec![styled_t("a。", BOLD), compose("b"), styled_t("z", BOLD)], "a。bz"),
+    ] {
+        assert_eq!(styled(&doc(vec![body(runs)])), (want.to_string(), 1));
+    }
+    // A code span (an unknown control) is read as text: bold `a` next to it
+    // is written as it is, no warning.
+    let (out, fallbacks) = styled(&doc(vec![body(vec![styled_t("a", BOLD), unknown("x")])]));
+    assert_eq!((out.as_str(), fallbacks), ("**a**`[x]`", 0));
+}
+
+/// fix6's devices, pinned by bytes and warnings.
+/// - MA, a caption's text ranges carried into the Body's check: caption
+///   plain `a`, bold strikeout `b`, plain `c`, then strikeout `p`, plain
+///   `q`, `r` cannot be written (plain text, one warning); without the
+///   ranges `c` silently took the strikeout.
+/// - MB, a GFM cell checked in its cell: `**a**<br><br>    *x*` is right
+///   there (in a Body the indent after the blank line would be code).
+/// - MC, spans closed before a caption joins: `p` bold, a caption `c`,
+///   `q` bold stay three spans in the cell, not `**p<br><br>cq**`.
+///
+/// 이것을 실패시키는 것: MA 자식 범위 전달 삭제 · MB 칸을 Body 문맥으로 검사 ·
+/// MC 합류 앞 닫기 삭제.
+#[test]
+fn fix6_devices_are_pinned() {
+    let cell = |ps: Vec<hwpforge_core::Paragraph>| {
+        let mut table = one_cell(ps[0].clone());
+        table.rows[0].cells[0].paragraphs = ps;
+        doc(vec![body(vec![cases::table(table)])])
+    };
+    let caption = vec![body(vec![t("a"), styled_t("b", emphasis(true, false, true)), t("c")])];
+    let ma = doc(vec![body(vec![
+        captioned(one_cell(body(vec![t("v")])), caption),
+        styled_t("p", emphasis(false, false, true)),
+        t("q"),
+        t("r"),
+    ])]);
+    assert_eq!(styled(&ma), ("v abcpqr".to_string(), 1));
+    let italic = emphasis(false, true, false);
+    let mb = cell(vec![
+        body(vec![styled_t("a", BOLD)]),
+        body(vec![t("")]),
+        body(vec![styled_t("    x", italic)]),
+    ]);
+    assert_eq!(styled(&mb), ("| **a**<br><br>    *x* |\n| --- |".to_string(), 0));
+    let mc = cell(vec![body(vec![
+        styled_t("p", BOLD),
+        image("", Some(vec![body(vec![t("c")])])),
+        styled_t("q", BOLD),
+    ])]);
+    assert_eq!(styled(&mc), ("| **p**<br><br>c**q** |\n| --- |".to_string(), 0));
+}
+
+/// Text controls that read as no text or as math: a link with no text
+/// (`[](url)`) and an equation (`$a*b*c$`, its `*` the math's) are written
+/// as they are next to emphasis, as they are alone — no warning. `x+y`, a
+/// fraction and a subscript too. The pairs alone and with bold `x`.
+/// 이것을 실패시키는 것: 빈 라벨 링크에 글 읽기 요구 · 수식을 평문으로 검사.
+#[test]
+fn text_controls_with_nothing_or_math() {
+    use hwpforge_core::control::Control;
+    let eq = |s: &str| ctrl(Control::equation(s));
+    let link = || ctrl(Control::hyperlink("", "https://example.org"));
+    for (runs, want) in [
+        (vec![eq("a*b*c")], "$a*b*c$"),
+        (vec![styled_t("x", BOLD), eq("a*b*c")], "**x**$a*b*c$"),
+        (vec![styled_t("x", BOLD), eq("a*b*c"), styled_t("y", BOLD)], "**x**$a*b*c$**y**"),
+        (vec![styled_t("x", BOLD), eq("x+y")], "**x**$x+y$"),
+        (vec![styled_t("x", BOLD), eq("{a} over {b}")], "**x**$\\frac{a}{b}$"),
+        (vec![styled_t("x", BOLD), eq("x_2")], "**x**$x_{2}$"),
+        (vec![link()], "[](https://example.org)"),
+        (vec![styled_t("x", BOLD), link()], "**x**[](https://example.org)"),
+    ] {
+        assert_eq!(styled(&doc(vec![body(runs)])), (want.to_string(), 0));
+    }
+}
+
+/// An equation full of its own emphasis next to bold text: each text
+/// event inside it asks only whether the outermost open span began before
+/// it, not every open span.
+/// 이것을 실패시키는 것: 열린 강조를 전부 훑기.
+#[test]
+fn math_check_is_linear() {
+    use hwpforge_core::control::Control;
+    let n = 128_000;
+    let script = format!("{}a{}b{}", "*".repeat(n), "\\!".repeat(n), "*".repeat(n));
+    let doc = doc(vec![body(vec![styled_t("x", BOLD), ctrl(Control::equation(&script))])]);
+    let started = std::time::Instant::now();
+    let (out, fallbacks) = styled(&doc);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(fallbacks, 0);
+    assert!(out.starts_with("**x**$"), "{}", &out[..20]);
+}
+
 /// Line starts are found in one pass: a long run of line endings costs
 /// what its length does (the same run scanned again at each line ending
 /// took billions of steps).
@@ -1066,24 +1736,46 @@ mod generated {
 
     /// A carrier and the text a reader must see for it.
     fn carrier() -> impl Strategy<Value = (hwpforge_core::Run, String)> {
-        (0..6usize, piece()).prop_map(|(kind, s)| match kind {
+        (0..11usize, piece()).prop_map(|(kind, s)| match kind {
+            // A link (its text may be empty), an equation, an unknown control.
+            8 => (ctrl(hwpforge_core::control::Control::hyperlink(&s, "https://e.invalid/")), s),
+            9 if s.len() % 2 == 0 => {
+                (ctrl(hwpforge_core::control::Control::equation("x+y")), "x+y".into())
+            }
+            // An equation with its own `*` and `\!`.
+            // Its inside is the math's, read as `a!b` (or `*a\!b*` as plain
+            // text): each reading counts as one `§` on both sides (no `!`,
+            // `\`, `§` in the alphabet), so a lost or doubled equation shows.
+            9 => (ctrl(hwpforge_core::control::Control::equation("*a\\!b*")), "§".into()),
+            // After `u`: two code spans next to each other read as one (a gap
+            // of the code span writer, base 61d3631d the same, not text made
+            // into markup: followups).
+            10 => {
+                let tag = s.replace('\n', " ");
+                (text_box(vec![body(vec![t("u"), unknown(&tag)])]), format!("u[{tag}]"))
+            }
+            // A comment: at a line start it ends its line.
+            6 => (chart(), String::new()),
             0 => (t(&s), s),
             // Bold text across a blank line shows its `**` (a known gap of
             // inline formats, not text made into markup: followups).
-            1 => {
-                let s = s.replace('\n', " ");
-                (styled_t(&s, BOLD), s)
-            }
+            // Emphasis of any of the seven kinds (picked by the text's length).
+            1 => (styled_t(&s, emphasis(s.len() % 2 == 0, s.len() % 3 == 0, s.len() % 5 < 2)), s),
             2 => (compose(&s), s),
             3 => (field(&s), if s.is_empty() { "____".into() } else { s }),
             4 => (cross_ref(&s), if s.is_empty() { "[ref]".into() } else { s }),
-            _ => (text_box(vec![body(vec![t(&s)])]), s),
+            5 => (text_box(vec![body(vec![t(&s)])]), s),
+            // A text box's emphasized text: it meets the text around it.
+            _ => (
+                text_box(vec![body(vec![styled_t(&s, emphasis(true, s.len() % 2 == 0, false))])]),
+                s,
+            ),
         })
     }
 
     /// A Body paragraph: maybe a text box holding a GFM table first, 1–4
-    /// carriers, maybe a table (GFM or HTML) and a space after it. Each
-    /// table is followed by `a`. Two known gaps, not text made into markup,
+    /// carriers, maybe a table (GFM or HTML), and a caption whose Unicode
+    /// punctuation meets outer text. Two known gaps, not text made into markup,
     /// are left out (followups): a text box's GFM table after other text on
     /// its line, and a tab or Unicode space right after a GFM table (it
     /// ends the delimiter row, so the table's bars show as text — the base
@@ -1093,20 +1785,51 @@ mod generated {
             prop::option::of(piece()),
             prop::collection::vec(carrier(), 1..5),
             prop::option::of((any::<bool>(), piece(), any::<bool>(), 0..5usize)),
+            prop::option::of((
+                any::<bool>(),
+                prop::sample::select(vec!['。', '！', '？', '，', '；']),
+                any::<bool>(),
+                any::<bool>(),
+            )),
         )
-            .prop_map(|(boxed, mut carriers, table_run)| {
+            .prop_map(|(boxed, mut carriers, table_run, caption)| {
                 if let Some((html, cell, space, at)) = table_run {
-                    let cell_p = body(vec![t(&cell)]);
+                    let shape = emphasis(cell.len() % 2 == 0, cell.len() % 3 == 0, false);
+                    let cell_p = body(vec![styled_t(&cell, shape)]);
                     let at = at.min(carriers.len());
                     let after = if space { vec![(t(" "), " ".into())] } else { vec![] };
                     let run = table(if html { merged(cell_p) } else { one_cell(cell_p) });
-                    let tail = [(run, cell)].into_iter().chain(after).chain([(t("a"), "a".into())]);
+                    // After the table: a comment by the cell's length, then
+                    // text that needs escapes.
+                    let comment = (cell.len() % 2 == 0).then(|| (chart(), String::new()));
+                    let tail = [(run, cell)]
+                        .into_iter()
+                        .chain(after)
+                        .chain(comment)
+                        .chain([(t("*x*"), "*x*".into())]);
                     carriers.splice(at..at, tail);
                 }
                 if let Some(s) = boxed {
                     let cell = body(vec![t(&s)]);
                     let run = text_box(vec![body(vec![table(one_cell(cell))]), body(vec![])]);
-                    carriers.splice(0..0, [(run, s), (t("a"), "a".into())]);
+                    let comment = (s.len() % 2 == 0).then(|| (chart(), String::new()));
+                    let after =
+                        [(run, s)].into_iter().chain(comment).chain([(t("*x*"), "*x*".into())]);
+                    carriers.splice(0..0, after);
+                }
+                if let Some((bold, punct, picture, suffix)) = caption {
+                    let text = format!("a{punct}");
+                    let cap = vec![body(vec![styled_t(&text, emphasis(bold, !bold, false))])];
+                    let run = if picture {
+                        image("", Some(cap))
+                    } else {
+                        captioned(one_cell(body(vec![t("h")])), cap)
+                    };
+                    let text = format!("{}{text}", if picture { "" } else { "h" });
+                    carriers.extend([(run, text), (t("b"), "b".into())]);
+                    if suffix {
+                        carriers.extend([(t(" "), " ".into()), (styled_t("z", BOLD), "z".into())]);
+                    }
                 }
                 let (runs, text): (Vec<_>, String) = carriers.into_iter().unzip();
                 (body(runs), text)
@@ -1123,7 +1846,8 @@ mod generated {
         /// The final output, parsed again: no forbidden block, no
         /// definition list, the paragraphs' characters, at most one
         /// warning per paragraph; read back when it holds no HTML.
-        /// 이것을 실패시키는 것: 규칙·Body 단계·`ending_block`·전체 검사 중 하나 삭제.
+        /// 이것을 실패시키는 것: 규칙·Body 단계·`ending_block`·전체 검사 중 하나 삭제 ·
+        /// 캡션 강조 범위를 부모 검사에서 누락.
         #[test]
         fn guarded_output_postconditions(paragraphs in prop::collection::vec(paragraph(), 1..4)) {
             let text: String = paragraphs.iter().map(|(_, s)| s.as_str()).collect();
@@ -1131,7 +1855,10 @@ mod generated {
             let out = encode_styled(&doc, &Styles);
             let md = &out.markdown;
             prop_assert!(forbidden(md).is_empty(), "{:?}", md);
-            prop_assert_eq!(squeeze(&visible(md)), squeeze(&text), "{:?}", md);
+            // An equation's `$` delimiters are not document text.
+            // 이것을 실패시키는 것: 출력에서 수식 지우기 · 수식 두 번 쓰기.
+            let seen = squeeze(&visible(md)).replace("*a\\!b*", "§").replace("a!b", "§").replace('$', "");
+            prop_assert_eq!(seen, squeeze(&text), "{:?}", md);
             let mut per = std::collections::HashMap::new();
             for w in &out.warnings {
                 if let MdWarning::MarkupWrittenAsText { section, paragraph } = w {
