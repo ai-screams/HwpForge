@@ -22,14 +22,14 @@ With `--json`, a failure prints one object on **stderr** and nothing on stdout:
 
 Branch on `code`, not on the exit code — which of 1 and 2 a failure uses is fixed per (command, code).
 
-| Exit | Meaning                                                                                                                                  |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| 0    | success (still read `warnings`)                                                                                                          |
-| 1    | as a rule a refused input: missing file, unknown field or preset, fail-closed edit refusals                                              |
-| 2    | as a rule a codec/schema failure: undecodable input, bad JSON, `PATCH_FAILED`, `PDF_RENDER_FAILED`, `MD_DECODE_FAILED`, bad command line |
-| 3    | `validate` only — decodes but fails validation; stdout carries `{"status":"ok","valid":false,…,"errors":[…]}`                            |
+| Exit | Meaning                                                                                                                                                                                         |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | success (still read `warnings`)                                                                                                                                                                 |
+| 1    | as a rule a refused input: missing file, unknown field or preset, fail-closed edit refusals                                                                                                     |
+| 2    | as a rule a codec/schema failure: undecodable input, bad JSON, `PATCH_FAILED`, `PDF_RENDER_FAILED`, `MD_DECODE_FAILED`, bad command line                                                        |
+| 3    | `validate` only — decodes but fails validation; stdout carries `{"status":"ok","valid":false,…,"errors":[…]}`. A document nested deeper than 32 levels does not decode: `DECODE_FAILED`, exit 2 |
 
-In 0.18, editor no-op validation, encoding, and re-decoding failures use `INPUT_NOT_ROUNDTRIP_SAFE` (exit 1). This changes paragraph-edit and stamp no-op admission failures from exit 2 to 1. Set-cell input decoding and original package reads use `DECODE_FAILED` (exit 2, previously 1). Paragraph-edit output decoding, artifact reads, and fragment parsing use `SELF_VERIFY_FAILED` (exit 1, previously 2). The two I/O exit changes are listed below under Size limits.
+In 0.18, editor no-op validation, encoding, and re-decoding failures use `INPUT_NOT_ROUNDTRIP_SAFE` (exit 1). This changes paragraph-edit and stamp no-op admission failures from exit 2 to 1. Set-cell input decoding and original package reads use `DECODE_FAILED` (exit 2, previously 1). Paragraph-edit output decoding, artifact reads, and fragment parsing use `SELF_VERIFY_FAILED` (exit 1, previously 2). `validate` on a document the parser accepts but whose Core nesting exceeds 32 levels now fails with `DECODE_FAILED` (exit 2) instead of reporting `valid:false` (exit 3). The two I/O exit changes are listed below under Size limits.
 
 ## Main codes and next steps (CLI)
 

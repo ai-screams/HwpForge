@@ -246,6 +246,9 @@ class Document:
 
         A document that fails validation reports ``ok: False`` rather than
         raising; only a document that cannot be decoded at all is an error.
+        A document whose nesting exceeds the depth limit (32) cannot be
+        decoded, so it raises ``HwpForgeError`` (code ``DECODE_FAILED``)
+        instead of returning ``ok: False``.
 
         Returns:
             Whether the document is valid, its section and paragraph counts,

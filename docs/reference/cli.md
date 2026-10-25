@@ -250,12 +250,12 @@ hwpforge validate [OPTIONS] <FILE>
 
 종료 코드는 `--help`에 다음과 같이 정의돼 있습니다.
 
-| 종료 코드 | 의미                                                                                         |
-| --------- | -------------------------------------------------------------------------------------------- |
-| 0         | 문서가 유효합니다                                                                            |
-| 1         | 파일을 읽을 수 없음(없거나 읽을 수 없거나 크기 상한을 넘는 파일)                             |
-| 2         | 명령행 인자가 잘못됐거나 바이트가 디코드 가능한 HWPX 패키지가 아닙니다                       |
-| 3         | 디코드는 되지만 검증에 실패합니다(오류가 아니라 판정이며, `--json` 출력의 `errors`를 보세요) |
+| 종료 코드 | 의미                                                                                                                                                                                                           |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0         | 문서가 유효합니다                                                                                                                                                                                              |
+| 1         | 파일을 읽을 수 없음(없거나 읽을 수 없거나 크기 상한을 넘는 파일)                                                                                                                                               |
+| 2         | 명령행 인자가 잘못됐거나 바이트가 디코드 가능한 HWPX 패키지가 아닙니다                                                                                                                                         |
+| 3         | 디코드는 되지만 검증에 실패합니다(오류가 아니라 판정이며, `--json` 출력의 `errors`를 보세요). 파서는 통과하고 Core 중첩 깊이가 32를 넘는 문서는 디코드에서 거부되므로 3이 아니라 `DECODE_FAILED`(종료 2)입니다 |
 
 인자를 잘못 준 경우(필수 인자 누락, 알 수 없는 옵션)는 clap이 종료 코드 2로 끝냅니다. 아래 오류 계약은 다른 명령의 종료 정책도 함께 설명합니다.
 
@@ -410,7 +410,7 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 
 `INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
 
-종료 상태는 **(명령, 코드)로** 결정합니다. 같은 명령·코드는 오류 payload나 발생 경로에 따라 달라지지 않습니다. 0은 성공이고, `validate`의 3은 디코드된 문서가 유효하지 않다는 판정입니다. 오류의 1·2만으로 원인을 구분하지 말고 `code`를 확인하세요.
+종료 상태는 **(명령, 코드)로** 결정합니다. 같은 명령·코드는 오류 payload나 발생 경로에 따라 달라지지 않습니다. 0은 성공이고, `validate`의 3은 디코드된 문서가 유효하지 않다는 판정입니다(Core 중첩 깊이 32 초과는 디코드 거부라 `DECODE_FAILED`입니다). 오류의 1·2만으로 원인을 구분하지 말고 `code`를 확인하세요.
 
 | I/O 코드                             | 종료 상태                                                  |
 | ------------------------------------ | ---------------------------------------------------------- |
@@ -418,16 +418,17 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 | `INPUT_TOO_LARGE`                    | 일반 파일 사전 검사·FIFO 모두 1                            |
 | `FILE_WRITE_FAILED`                  | `delete-para`·`insert-para`·`convert-hwp5`는 2, 나머지는 1 |
 
-0.18에서 바뀌는 종료 값은 다음 여섯 변경군입니다.
+0.18에서 바뀌는 종료 값은 다음 일곱 변경군입니다.
 
-| 명령·실패                                                               | 이전 | 0.18 코드·종료                 |
-| ----------------------------------------------------------------------- | ---: | ------------------------------ |
-| `delete-para`·`insert-para`: no-op validate·encode·재decode             |    2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
-| `stamp`: no-op validate·encode·재decode                                 |    2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
-| `set-cell`: 입력 decode·원본 패키지 읽기                                |    1 | `DECODE_FAILED` / 2            |
-| `delete-para`·`insert-para`: 출력 decode·생성 산출물 읽기·fragment 파싱 |    2 | `SELF_VERIFY_FAILED` / 1       |
-| `to-md`·`convert-hwp5`: 크기 한도를 넘는 FIFO 입력                      |    2 | `INPUT_TOO_LARGE` / 1          |
-| `convert-hwp5`: 쓰기 성공 직후 stat 실패                                |    1 | `FILE_WRITE_FAILED` / 2        |
+| 명령·실패                                                               |    이전 | 0.18 코드·종료                 |
+| ----------------------------------------------------------------------- | ------: | ------------------------------ |
+| `delete-para`·`insert-para`: no-op validate·encode·재decode             |       2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
+| `stamp`: no-op validate·encode·재decode                                 |       2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
+| `set-cell`: 입력 decode·원본 패키지 읽기                                |       1 | `DECODE_FAILED` / 2            |
+| `delete-para`·`insert-para`: 출력 decode·생성 산출물 읽기·fragment 파싱 |       2 | `SELF_VERIFY_FAILED` / 1       |
+| `to-md`·`convert-hwp5`: 크기 한도를 넘는 FIFO 입력                      |       2 | `INPUT_TOO_LARGE` / 1          |
+| `convert-hwp5`: 쓰기 성공 직후 stat 실패                                |       1 | `FILE_WRITE_FAILED` / 2        |
+| `validate`: 파서는 통과하고 Core 중첩 깊이가 32를 넘는 HWPX             | 3(판정) | `DECODE_FAILED` / 2            |
 
 CLI 전용 `INVALID_SET`·`DUPLICATE_SET`과 진단용 네 코드는 유지합니다. 잘못된 명령행 문법은 기존 파서의 종료 2와 사용법 텍스트를 유지합니다. PDF의 `cause.code`는 별도 렌더러 코드 체계입니다.
 

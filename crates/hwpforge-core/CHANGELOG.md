@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - 문단·표·이미지 순회(와 그 아래 크레이트 순회)를 명시적 스택으로 돌려, 100,000단계로 중첩된 Draft를 순회해도 스택이 넘치지 않는다. 방문 순서, 캡션 제외, 자식을 콜백 뒤에 나열하는 규칙은 그대로다.
-- `FieldInventory`가 깊이 32단계를 넘는 문서도 끝까지 읽고 깊이 진단을 더한다. 이런 문서에서 replace·insert·delete는 거부되고 clear는 아무것도 하지 않는다.
+- `FieldInventory`가 깊이 32단계를 넘는 문서도 끝까지 읽고 깊이 진단을 더한다. 이런 문서에서 replace·insert·delete는 거부되고 clear는 아무것도 하지 않는다. clear가 아무것도 하지 않는 것은 깊이 초과일 때뿐이고, 다른 진단이 있어도 편집 가능한 값은 이전처럼 비운다. replace·insert·delete가 진단이 있으면 거부하는 동작은 이전과 같다.
 - ZIP 중앙 헤더 예산이 `zip` 9.1에서 헤더 읽기를 세지 못해, 고정 레코드 상한이 `zip`의 대체 경로에서 작업량을 제한하지 못하던 것을 고친다. 이제 정확히 46바이트이고 중앙 헤더 서명으로 시작하는 읽기를 레코드 하나로 센다. 상한(4 x `MAX_ENTRIES`)은 그대로이며 `zip` 9.0과 9.1 모두에서 적용된다. 바깥 항목의 주석 안에 숨긴 디렉터리는 `zip` 9.0의 대체 경로에서 전부 파싱하지 않고 40,001개째 레코드에서 멈추고, `zip` 9.1에서는 디렉터리 구조 검사에서 거부한다. 서명으로 시작하는 46바이트 이름·extra·주석도 레코드로 세므로 그런 archive는 상한에 더 일찍 닿는다. 일반 HWPX는 그런 모양이 아니다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.17.0...hwpforge-core-v0.17.1) - 2026-10-24

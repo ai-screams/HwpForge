@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- styled 출력은 메모를 펼친 문단 사본을 문서 처리가 끝날 때까지 보관하므로, 메모가 많은 큰 문서에서 메모리를 더 사용한다.
 - styled 출력은 `ContainerTooDeep` 경고를 내지 않는다. 0.17.1 부터 Core 검증이 깊이 32단계를 넘는 문서를 거부해(#267) 검증된 문서는 styled 가 그리는 깊이 한도에 닿지 않으므로, 그 뒤로는 나지 않던 경고다. 변종은 lossy 출력의 표 중첩 경고로 그대로 쓰인다.
 
 ### Fixed

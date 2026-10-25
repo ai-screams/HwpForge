@@ -137,6 +137,8 @@ impl<'a> FieldEntry<'a> {
 pub struct FieldInventory<'a> {
     fields: Vec<FieldEntry<'a>>,
     diagnostics: Vec<ValidationError>,
+    // Retain the depth-check result independently of diagnostic display text.
+    depth_exceeded: bool,
     warnings: Vec<ValidationError>,
     positions: HashMap<CorePath, (String, usize)>,
     protected: HashMap<(usize, String), Vec<bool>>,
@@ -180,7 +182,8 @@ impl<'a> FieldInventory<'a> {
     }
     /// Build an inventory without copying text or subtrees.
     /// Over-budget input is reported through [`Self::diagnostics`]. Fields and
-    /// read-only protection remain complete; editing still rejects diagnostics.
+    /// read-only protection remain complete; value clearing rejects only depth
+    /// violations, while insert/delete/replace reject all diagnostics.
     pub fn from_sections(sections: &'a [Section]) -> Self {
         Self::from_sections_at(sections, 0)
     }
@@ -191,6 +194,8 @@ impl<'a> FieldInventory<'a> {
         // 이것을 실패시키는 것: 깊이 관문 삭제 (field_inventory_depth_diagnostics).
         for (si, section) in sections.iter().enumerate() {
             if let Err(error) = section.check_nesting_depth() {
+                // 이것을 실패시키는 것: 깊이 초과 기록 삭제 (clear_editable_values_is_noop_only_above_depth_limit).
+                inventory.depth_exceeded = true;
                 inventory.invalid(
                     si + first_section,
                     "paragraphs",
@@ -679,10 +684,12 @@ impl<'a> FieldInventory<'a> {
     }
     /// Clear editable scalar values for structural comparison after preflight.
     /// Protected fields remain intact, including computed display values.
+    /// Over-budget input is a no-op; unrelated boundary diagnostics do not
+    /// prevent clearing editable fields in independent flows.
     pub fn clear_editable_values(sections: &mut [Section], first_section: usize) {
         let inventory = FieldInventory::from_sections_at(sections, first_section);
-        // Clearing over-budget drafts is now a no-op; previously it cleared editable values.
-        if !inventory.diagnostics().is_empty() {
+        // 이것을 실패시키는 것: 모든 진단으로 확대하거나 깊이 관문 삭제 (clear_editable_values_*).
+        if inventory.depth_exceeded {
             return;
         }
         let paths: HashSet<_> = inventory

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SERIALIZE_ERROR`·`STAMP_MANIFEST_SERIALIZE`를 `JSON_SERIALIZE_FAILED`로 통합한다. set-cell·stamp의 의미 손실은 `ENCODE_SEMANTIC_LOSS`다. 구조 편집의 범위 실패는 `SECTION_OUT_OF_RANGE`·`PARAGRAPH_OUT_OF_RANGE`, ZIP 미보존은 `INPUT_ENTRIES_NOT_CARRIED`다.
 - 19개 도구의 필드 역직렬화 실패를 구조화된 `INVALID_PARAMS`로 반환하고 메시지에 필드 경로를 담는다. 빠진 필드는 소속 객체의 경로(루트는 `$`)를 알린다. 입력 스키마와 프로토콜 오류는 유지한다.
 - `hwpforge_patch`·`hwpforge_fill`은 실패 단계와 원인을 구분한다. 입력 decode는 `DECODE_FAILED`, 문서 검증은 `VALIDATION_FAILED`, 출력 생성은 `ENCODE_FAILED`, 보호 필드 침범은 `PROTECTED_FIELD_RANGE`, 내부 불변식 파손은 `INTERNAL_INVARIANT`다. `PATCH_FAILED`는 보존 patch가 거부하는 변경·metadata에 남고 fill은 이 원인을 그대로 전달한다. fill 입력 decode의 힌트는 `Check that the file is valid HWPX.`를 유지한다.
+- `hwpforge_validate` 는 파서는 통과하고 Core 중첩 깊이가 32 를 넘는 HWPX 에서 `valid:false` 데이터 대신 `DECODE_FAILED` 도구 오류를 반환한다.
 - `convert`·`from_json`·`restyle`·`insert_para`·`delete_para`의 비어 있지 않은 `warnings`가 문자열 배열에서 `{code, message, hint?}` 객체 배열로 바뀐다. 문자열 대신 `message`를 읽는다. `insert_para`·`delete_para`의 decode·encode 메시지에서 코드 접두를 빼므로 `code`를 읽는다. 18개 도구의 빈 경고 생략과 `templates`의 경고 필드 부재는 유지한다.
 
 ### Changed
