@@ -33,7 +33,7 @@ hwpforge stamp doc.hwpx --map specs.json -o form.hwpx          # stamp.md
 # check / render
 hwpforge diff doc.hwpx out.hwpx --json
 hwpforge diff doc.hwpx out.hwpx --json -o report.json          # also writes the full report (top-level keys, no .diff wrapper)
-hwpforge validate doc.hwpx --json                   # exit 0 valid, 1 file error, 2 not HWPX, 3 decodes but invalid
+hwpforge validate doc.hwpx --json                   # exit 0 valid, 1 file error, 2 not HWPX or nested over 32 levels, 3 decodes but invalid
 hwpforge to-pdf doc.hwpx -o doc.pdf --discovery platform       # pdf.md
 
 # presets / schemas — schema kinds: document, exported-document, exported-section

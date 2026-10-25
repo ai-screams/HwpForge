@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - cell·stamp·structural 편집기의 입력 decode는 `DECODE_FAILED`, no-op validate·encode·재decode는 `INPUT_NOT_ROUNDTRIP_SAFE`, 편집 문서 검증은 `VALIDATION_FAILED`, 출력 생성은 `ENCODE_FAILED`, 산출물 검증은 `SELF_VERIFY_FAILED`로 분류한다. 보호 필드 침범은 `PROTECTED_FIELD_RANGE`, source-map·provenance 불변식은 `INTERNAL_INVARIANT`다. CLI·MCP·Python이 같은 코드를 반환한다.
 - stamp의 delta 검증 코드는 `SELF_VERIFY_FAILED`, 같은 셀 중복 지정은 `CELL_TARGET_DUPLICATE`로 통일한다.
-- CLI 종료 상태는 명령과 비공개 typed 코드로 결정하며, 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않는다. 아래 네 편집기 변경군과 뒤의 두 I/O 변경군을 적용한다.
+- CLI 종료 상태는 명령과 비공개 typed 코드로 결정하며, 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않는다. 아래 네 편집기 변경군과 뒤의 I/O 두 변경군, validate 한 변경군(모두 일곱 변경군)을 적용한다.
 
 | 명령·실패                                                      | 이전 종료 | 0.18 종료 |
 | -------------------------------------------------------------- | --------: | --------: |
@@ -38,13 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fill` 은 내부 patch 의 원인을 그대로 전달하므로 `PATCH_FAILED` 도 낼 수 있다(예: 다시 만들 수 없는 인라인 표지가 든 칸). 검사 순서는 그대로라 metadata 가 없고 XML 도 손상된 patch 는 계속 `PATCH_FAILED` 다. CLI 종료 값은 두 명령 모두 바뀐 코드에서도 이전 `PATCH_FAILED`·`FILL_FAILED` 와 같은 2 다(patch 의 구역 범위 거부 `SECTION_OUT_OF_RANGE` 1 은 그대로).
 - `convert-hwp5`·`to-pdf`(CLI)와 Python `convert_hwp5`·`to_pdf` 의 HWP5 변환 실패도 단계별 코드를 낸다. 읽은 문서의 Core 검증 실패는 `VALIDATION_FAILED`, HWPX 출력 생성 실패는 `ENCODE_FAILED` 이고, 디코더가 스스로 거부한 스타일·테두리 참조(예: 정의가 없는 표 테두리 번호)는 `HWP5_CONVERT_FAILED` 대신 `HWP5_DECODE_FAILED` 다. `HWP5_CONVERT_FAILED` 는 생성한 패키지에 줄 배치 정보를 다시 입히는 단계에만 남는다. 두 CLI 명령의 종료 값은 바뀐 코드에서도 이전과 같은 2 이고, 힌트도 그대로다. Python `convert_hwp5`·`Document.to_pdf` 에서는 디코더가 거부한 참조의 힌트가 코드를 따라 `Check that the source is a supported HWP5 document` 에서 `Check that the file is a valid HWP5 document` 로 바뀐다(검증·출력 생성 실패의 힌트는 그대로).
 
-I/O의 종료 값 변경은 다음과 같다. 편집기의 네 변경군은 위 표에 적었다.
+I/O와 validate의 종료 값 변경은 다음과 같다. 편집기의 네 변경군은 위 표에 적었다.
 
 | 명령·실패                                       | 이전 코드·종료                           | 0.18 코드·종료              |
 | ----------------------------------------------- | ---------------------------------------- | --------------------------- |
 | to-md·convert-hwp5의 크기 한도를 넘는 FIFO 입력 | `DECODE_FAILED`·`HWP5_DECODE_FAILED` / 2 | `INPUT_TOO_LARGE` / **1**   |
 | convert-hwp5의 쓰기 성공 직후 stat 실패         | `FILE_WRITE_FAILED` / 1                  | `FILE_WRITE_FAILED` / **2** |
+| validate: 파서는 통과하고 Core 중첩 깊이가 32 를 넘는 HWPX | 판정(`valid:false`) / 3 | `DECODE_FAILED` / **2** |
 
+- `validate` 는 파서는 통과하지만 Core 중첩 깊이가 32 를 넘는 HWPX 에서 판정(`valid:false`) 대신 `DECODE_FAILED` 로 실패한다. HWPX decode 진입점이 이 깊이를 거부하기 때문이며(오류 E4008), 파서 한도(표 중첩·XML 예산)에 걸린 문서는 0.17.1 에서도 `DECODE_FAILED` 였으므로 그대로다. 이행: Rust ops 의 `validate` 는 `Ok(ValidateOutput { ok: false, .. })` 대신 `Err` 를 반환하고, MCP `hwpforge_validate` 는 `valid:false` 데이터 대신 도구 오류를 반환하며, Python `Document.validate()` 는 `ok: False` 를 돌려주지 않고 코드 `DECODE_FAILED` 의 `HwpForgeError` 를 일으킨다. CLI 는 stdout 판정과 종료 3 대신 stderr 의 `DECODE_FAILED` 와 종료 2 를 낸다. 깊이 초과를 판정으로 받던 호출부는 오류 경로에서 처리한다.
 - HWPX에서 읽은 본문의 CR이 `\r` 대신 `\n`으로 나온다(to-json, Python, MCP, 무손실 Markdown). 이행: `\r`에 기대던 코드를 고치고, 0.17에서 내보낸 보존 metadata 중 CR이 든 칸이 있으면 다시 내보낸 뒤 patch한다. 자세한 것은 `hwpforge-smithy-hwpx` 항목을 본다.
 
 ### Changed
