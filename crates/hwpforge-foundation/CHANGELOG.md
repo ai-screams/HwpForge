@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — 0.18
 
+- Breaking (W3): remove `SetCellCodecFailed`, `StampCodecFailed`, `StructuralCodec`, `StampDeltaMismatch`, and `StampCellTargetDuplicate`, including string lookup. Use the codec stage code, `InternalInvariant`, `SelfVerifyFailed`, or `CellTargetDuplicate` as appropriate.
+
 - Breaking: retire `ReadSectionOutOfRange`, `ReadTableOutOfRange`, `ReadFieldNotFound`, `SectionWorkflowFailed`, `SetCellFailed`, `StampFailed`, and `StructuralEditFailed`, including string lookup. Use canonical domain codes or `UpstreamUnmapped`.
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.16.11...hwpforge-foundation-v0.17.0) - 2026-10-23

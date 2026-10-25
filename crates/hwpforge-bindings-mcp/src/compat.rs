@@ -108,9 +108,13 @@ const TABLE: &[Row] = &[
     row!(SetCell, CellHasNonTextContent, "표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다."),
     row!(SetCell, CellTargetDuplicate, "두 편집이 같은 앵커 셀로 resolve 됐습니다."),
     row!(SetCell, CellTargetConflict, "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다."),
+    row!(SetCell, DecodeFailed, "Check that the file is valid HWPX."),
+    row!(Stamp, DecodeFailed, "Check that the file is valid HWPX."),
+    row!(StampPlan, DecodeFailed, "Check that the file is valid HWPX."),
+    row!(InsertPara, DecodeFailed, "Check that the file is valid HWPX."),
+    row!(DeletePara, DecodeFailed, "Check that the file is valid HWPX."),
     row!(SetCell, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 — 둘 다 원본 ZIP 엔트리를 보존합니다."),
     row!(SetCell, InputEntriesNotCarried, "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
-    row!(SetCell, SetCellCodecFailed, "Report this as a bug."),
     row!(SetCell, UpstreamUnmapped, "Report this as a bug."),
 
     row!(InsertPara, InsertTextRequired, "Use `text` for a single paragraph or `texts` for a contiguous block."),
@@ -130,8 +134,6 @@ const TABLE: &[Row] = &[
     row!(DeletePara, DuplicateTarget, "Each paragraph index may appear once per batch."),
     row!(InsertPara, SelfVerifyFailed, "The edit did not verify; no output was written."),
     row!(DeletePara, SelfVerifyFailed, "The edit did not verify; no output was written."),
-    row!(InsertPara, StructuralCodec, "Check that the file is valid HWPX."),
-    row!(DeletePara, StructuralCodec, "Check that the file is valid HWPX."),
 
     row!(InsertPara, InsertBeforeSectionProperties, "The section's first paragraph holds page setup; it cannot be deleted or displaced."),
 
@@ -143,20 +145,18 @@ const TABLE: &[Row] = &[
     row!(InsertPara, UpstreamUnmapped, "The structural edit was refused."),
     row!(DeletePara, UpstreamUnmapped, "The structural edit was refused."),
 
-    row!(StampPlan, StampCodecFailed, "Check that the file is valid HWPX."),
 
-    row!(Stamp, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가 — 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 (둘 다 원본 ZIP 엔트리를 보존합니다)."),
+    row!(Stamp, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill을 사용하세요"),
     row!(Stamp, InputEntriesNotCarried, "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
     row!(Stamp, StampManifestInvariant, "Report this as a bug — the output inventory violated an invariant."),
-    row!(Stamp, StampCodecFailed, "Check that the file is valid HWPX."),
     row!(Stamp, StampSourceHashMismatch, "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행해 source_sha256 을 갱신하세요."),
-    row!(Stamp, StampDeltaMismatch, "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다."),
+    row!(Stamp, SelfVerifyFailed, "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다."),
     row!(Stamp, TableNotFound, "hwpforge_stamp_plan 의 cells[].table 서수를 사용하세요."),
     row!(Stamp, TableGridInvalid, "이 표는 논리 격자를 만들 수 없어 셀 스탬핑 대상이 아닙니다."),
     row!(Stamp, StampCellNotEmpty, "클래스-B 대상은 whitespace-only 빈 셀이어야 합니다."),
     row!(Stamp, StampLabelDrift, "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행하세요."),
     row!(Stamp, StampCellNotCandidate, "ignore 는 live 후보에만 가능합니다."),
-    row!(Stamp, StampCellTargetDuplicate, "같은 셀을 두 번 분류했습니다."),
+    row!(Stamp, CellTargetDuplicate, "같은 셀을 두 번 분류했습니다."),
     row!(Stamp, StampNameEmpty, "빈 이름은 허용되지 않습니다."),
     row!(Stamp, StampHintBlank, "빈 셀엔 마커가 없어 hint 가 필수입니다 — plan 의 suggested_hint 를 참고하세요."),
     row!(Stamp, StampSpecStale, "문서가 변경됐거나 span 이 어긋났습니다 — hwpforge_stamp_plan 을 다시 실행하세요."),
@@ -377,6 +377,101 @@ mod tests {
     fn assert_code(tool: Tool, err: OpsError, expected: &str) {
         let got = tool_error(tool, err);
         assert_eq!(got.code, expected, "{tool:?}: {got:?}");
+    }
+
+    #[test]
+    fn w3_editors_share_decode_and_admission_fixtures() {
+        // 이것을 실패시키는 것: E3 structural admission 호출 목적을 Output으로 변경.
+        use crate::tools::{set_cell, stamp, structural};
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx");
+        let output = out.to_str().unwrap();
+        let spec = hwpforge_smithy_hwpx::CellSpec {
+            table: 0,
+            target: hwpforge_smithy_hwpx::CellTarget::At(
+                hwpforge_core::table::grid::GridCoord::new(0, 0),
+            ),
+            text: "text".into(),
+        };
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
+                .unwrap();
+        let check = |id: &str, error: ToolErrorInfo| {
+            let case =
+                manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
+            assert_eq!(error.code, case["expected_code"].as_str().unwrap(), "{id}");
+            assert!(!error.hint.contains("Report this as a bug."));
+            assert!(!out.exists());
+        };
+        for (fixture, ids) in [
+            (
+                "corrupt-input.hwpx",
+                [
+                    "cell.input_decode",
+                    "structural.input_decode",
+                    "structural_delete.input_decode",
+                    "stamp.input_decode",
+                ],
+            ),
+            (
+                "edit-empty-section.hwpx",
+                [
+                    "cell.admission",
+                    "structural.admission",
+                    "structural_delete.admission",
+                    "stamp.admission",
+                ],
+            ),
+        ] {
+            let input = data.join(fixture);
+            let file = input.to_str().unwrap();
+            check(
+                ids[0],
+                set_cell::run_set_cell(file, std::slice::from_ref(&spec), output).err().unwrap(),
+            );
+            check(
+                ids[1],
+                structural::run_insert_para(file, 0, 0, false, Some("text"), None, output)
+                    .err()
+                    .unwrap(),
+            );
+            check(ids[2], structural::run_delete_para(file, 0, &[0], output).err().unwrap());
+            check(ids[3], stamp::run_stamp(file, &[], &[], None, output, None).err().unwrap());
+        }
+        // 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+        // 이것을 실패시키는 것: F6 MCP stamp admission 힌트를 코덱 갭 대기로 복원.
+        let request: hwpforge_smithy_hwpx::stamp::StampRequestV2 =
+            serde_json::from_str(include_str!("../../hwpforge/tests/data/stamp-v2-admission.json"))
+                .unwrap();
+        let error = stamp::run_stamp(
+            data.join("edit-empty-section.hwpx").to_str().unwrap(),
+            &request.text,
+            &request.cells,
+            Some(&request.source_sha256),
+            output,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.hint, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill을 사용하세요");
+        check("stamp.v2_admission", error);
+        check(
+            "stamp_plan.input_decode",
+            stamp::run_stamp_plan(data.join("corrupt-input.hwpx").to_str().unwrap()).err().unwrap(),
+        );
+        for name in ["depth-table-42", "depth-table-33", "depth-group-32", "depth-xml-broken"] {
+            check(
+                &format!("cell.{name}"),
+                set_cell::run_set_cell(
+                    data.join(format!("{name}.hwpx")).to_str().unwrap(),
+                    std::slice::from_ref(&spec),
+                    output,
+                )
+                .err()
+                .unwrap(),
+            );
+        }
     }
 
     #[test]
@@ -743,10 +838,15 @@ mod tests {
 
     #[test]
     fn set_cell_codec_and_admission_keep_distinct_codes() {
+        // 이것을 실패시키는 것: T8 CellEditError::Codec 매핑을 InvalidInput으로 변경.
         assert_code(
             Tool::SetCell,
-            OpsError::CellEdit(CellEditError::Codec("x".into())),
-            "SET_CELL_CODEC_FAILED",
+            OpsError::CellEdit(CellEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "x".into(),
+            })),
+            "ENCODE_FAILED",
         );
         assert_code(
             Tool::SetCell,
@@ -788,6 +888,8 @@ mod tests {
     // WM-A: params case를 어댑터로 주입하거나 어느 도구든 CheckedParams 관문을 우회.
     // 이것을 실패시키는 것: params.*의 fixture 모드를 injected로 변경.
     async fn w1_manifest_canonical_adapter() {
+        // 이것을 실패시키는 것: F13 새 v2 baseline 행의 코드를 다른 값으로 변경.
+        // 이것을 실패시키는 것: B2 Draft-only unreachable 건너뛰기 삭제.
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
                 .unwrap();
@@ -800,6 +902,9 @@ mod tests {
         let mut covered = Vec::new();
         for case in manifest["cases"].as_array().unwrap() {
             let Some(surface) = case["surfaces"].get("mcp") else { continue };
+            if surface["mode"] == "unreachable" {
+                continue;
+            }
             let command = match surface["operation"].as_str().unwrap() {
                 "convert" => Tool::ConvertMd,
                 "inspect" => Tool::Inspect,

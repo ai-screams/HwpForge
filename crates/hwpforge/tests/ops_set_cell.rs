@@ -288,13 +288,14 @@ fn an_unmatched_label_is_a_cell_lookup_failure() {
 
 #[test]
 fn a_non_document_input_is_a_codec_failure() {
+    // 이것을 실패시키는 것: T1 해당 입력 decode stage를 Encode로 변경.
     let err = set_cell(
         b"not a zip at all",
         &SetCellOptions::default().with_table(0).with_at("0,0").with_text("v"),
     )
     .expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::SetCellCodecFailed, "{err}");
+    assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
 }
 
 /// The regenerating-edit policy row: an encode that loses meaning produces

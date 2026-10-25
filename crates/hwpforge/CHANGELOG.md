@@ -7,11 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — W3 오류 단계와 CLI 종료 상태
+
+- `INPUT_NOT_ROUNDTRIP_SAFE` 힌트는 코덱 갭 수정 대기 안내 대신 원본을 보존하는 텍스트 `to-json(section) → patch`·누름틀 `fill` 경로를 안내한다. MCP stamp도 해당 도구 이름으로 같은 안내를 제공한다.
+
+- cell·stamp·structural 편집기의 입력 decode는 `DECODE_FAILED`, no-op validate·encode·재decode는 `INPUT_NOT_ROUNDTRIP_SAFE`, 편집 문서 검증은 `VALIDATION_FAILED`, 출력 생성은 `ENCODE_FAILED`, 산출물 검증은 `SELF_VERIFY_FAILED`로 분류한다. 보호 필드 침범은 `PROTECTED_FIELD_RANGE`, source-map·provenance 불변식은 `INTERNAL_INVARIANT`다. CLI·MCP·Python이 같은 코드를 반환한다.
+- stamp의 delta 검증 코드는 `SELF_VERIFY_FAILED`, 같은 셀 중복 지정은 `CELL_TARGET_DUPLICATE`로 통일한다.
+- CLI 종료 상태는 명령과 코드로만 결정한다. 다음 네 변경군을 적용한다. 그 밖의 종료 정책은 유지한다.
+
+| 명령·실패                                                      | 이전 종료 | 0.18 종료 |
+| -------------------------------------------------------------- | --------: | --------: |
+| delete-para·insert-para: no-op validate·encode·재decode        |         2 |         1 |
+| stamp: no-op validate·encode·재decode                          |         2 |         1 |
+| set-cell: 입력 decode·원본 패키지 읽기                         |         1 |         2 |
+| delete-para·insert-para: 출력 decode·산출물 읽기·fragment 파싱 |         2 |         1 |
+
+- Draft `apply_set_cells` 깊이 초과는 `CellEditError::NestingTooDeep { section: usize, reason }`이며 Display는 `nesting depth exceeds the limit: {reason}`다. 바이트 입력은 D4 decode 관문에서 먼저 거부한다.
+
 ### Changed
 
 - `to_json` 은 파서는 통과하지만 Core 중첩 깊이 32단계를 넘는 HWPX 입력에서 `GRID_ADDR_PROJECTION_FAILED` 대신 읽기 단계의 `DECODE_FAILED` 를 반환한다.
-- `stamp-plan` 은 이전에 성공하던 같은 깊이 초과 입력을 읽기 단계에서 `STAMP_CODEC_FAILED` 로 거부한다.
-- `fill`·`stamp`·`insert-para`·`delete-para`·`set-cell`·`patch` 는 같은 깊이 초과 입력에서 이제 decode 단계에서 실패하고, 메시지는 `Core error:` 를 포함한 깊이 초과 진단으로 바뀐다. `stamp`·`insert-para`·`delete-para`·`set-cell` 의 오류 코드는 그대로이고, `fill`·`patch` 는 아래 단계 분류에 따라 `DECODE_FAILED` 를 반환한다.
+- `stamp-plan` 은 이전에 성공하던 같은 깊이 초과 입력을 읽기 단계에서 `DECODE_FAILED` 로 거부한다.
+- `fill`·`stamp`·`insert-para`·`delete-para`·`set-cell`·`patch` 는 같은 깊이 초과 입력에서 이제 decode 단계에서 실패하고, 메시지는 `Core error:` 를 포함한 깊이 초과 진단으로 바뀐다. 여섯 편집기 모두 아래 단계 분류에 따라 `DECODE_FAILED` 를 반환한다.
 - CLI·MCP는 공통 `OpsCode::as_str()`를 출력합니다. `DECODE_ERROR`, `UNKNOWN_PRESET`, `INDEX_OUT_OF_RANGE` 등의 창구별 별명은 제거했습니다. 정밀한 기존 도메인 코드와 의미 손실 코드도 그대로 전달합니다.
 - read의 구역·표·필드 부재는 `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`로 통합했습니다. 관련 read variant 3개와 소비자가 없어진 `SectionWorkflowFailed`, `SetCellFailed`, `StampFailed`, `StructuralEditFailed` 및 옛 lookup을 삭제했습니다(breaking).
 - 입력 부재/기타 읽기/크기 상한/출력 I/O는 `FILE_NOT_FOUND`/`FILE_READ_FAILED`/`INPUT_TOO_LARGE`/`FILE_WRITE_FAILED`입니다. MCP 출력 경로 정책 거부는 `INVALID_OUTPUT_PATH`입니다.
@@ -24,12 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `patch`·`fill` 의 오류를 실패 단계와 원인으로 나눈다. 입구 검사를 통과한 뒤 원본을 읽거나 decode 하지 못하면 `PATCH_FAILED`·`FILL_FAILED` 대신 `DECODE_FAILED` 다. 편집한 문서의 검증 실패는 `VALIDATION_FAILED`, 출력 작성 실패는 `ENCODE_FAILED`, 보호 필드의 값·범위 변경은 `PROTECTED_FIELD_RANGE`, 내부 source map·위치 불변식 파손은 `INTERNAL_INVARIANT` 다. `PATCH_FAILED` 는 보존 patch 가 받지 않는 변경과 metadata 부재·불일치에만, `FILL_FAILED` 는 필드 목록 진단에만 남는다.
 - `fill` 은 내부 patch 의 원인을 그대로 전달하므로 `PATCH_FAILED` 도 낼 수 있다(예: 다시 만들 수 없는 인라인 표지가 든 칸). 검사 순서는 그대로라 metadata 가 없고 XML 도 손상된 patch 는 계속 `PATCH_FAILED` 다. CLI 종료 값은 두 명령 모두 바뀐 코드에서도 이전 `PATCH_FAILED`·`FILL_FAILED` 와 같은 2 다(patch 의 구역 범위 거부 `SECTION_OUT_OF_RANGE` 1 은 그대로).
 
-설계 §14의 종료 값 변경 안내에 대응하는 W1 변경은 다음과 같습니다. 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않습니다. 기존 승인 네 건(admission·출력 검증 등의 단계 분리)은 W3 소유이며 이 W1 목록에서 구현 완료로 간주하지 않습니다.
+설계 §14의 종료 값 변경 안내에 대응하는 W1 변경은 다음과 같습니다. 같은 명령·코드의 종료 값은 오류 payload나 발생 경로에 따라 달라지지 않습니다. W3의 네 변경군은 위 표에 별도로 적었습니다.
 
-| 명령·실패 | 이전 코드·종료 | 0.18 코드·종료 |
-|---|---|---|
-| to-md·convert-hwp5의 크기 한도를 넘는 FIFO 입력 | `DECODE_FAILED`·`HWP5_DECODE_FAILED` / 2 | `INPUT_TOO_LARGE` / **1** |
-| convert-hwp5의 쓰기 성공 직후 stat 실패 | `FILE_WRITE_FAILED` / 1 | `FILE_WRITE_FAILED` / **2** |
+| 명령·실패                                       | 이전 코드·종료                           | 0.18 코드·종료              |
+| ----------------------------------------------- | ---------------------------------------- | --------------------------- |
+| to-md·convert-hwp5의 크기 한도를 넘는 FIFO 입력 | `DECODE_FAILED`·`HWP5_DECODE_FAILED` / 2 | `INPUT_TOO_LARGE` / **1**   |
+| convert-hwp5의 쓰기 성공 직후 stat 실패         | `FILE_WRITE_FAILED` / 1                  | `FILE_WRITE_FAILED` / **2** |
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/v0.17.0...v0.17.1) - 2026-10-24
 

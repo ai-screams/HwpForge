@@ -315,6 +315,7 @@ mod tests {
     #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn error_code_mapping_covers_common_rejections() {
+        // 이것을 실패시키는 것: T9 StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
         let dir = tempfile::tempdir().unwrap();
         let base = base_doc(&dir);
         let out = dir.path().join("out.hwpx");
@@ -340,7 +341,7 @@ mod tests {
         std::fs::write(&garbage, b"not a zip").unwrap();
         let err =
             run_delete_para(garbage.to_str().unwrap(), 0, &[0], out.to_str().unwrap()).unwrap_err();
-        assert_eq!(err.code, "STRUCTURAL_CODEC");
+        assert_eq!(err.code, "DECODE_FAILED");
     }
 
     fn fixture(rel: &str) -> String {

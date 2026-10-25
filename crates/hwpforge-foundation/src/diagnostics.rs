@@ -177,21 +177,15 @@ ops_codes! {
     InputNotRoundtripSafe => "INPUT_NOT_ROUNDTRIP_SAFE",
     /// ZIP entries of the input would be lost by re-encoding, so the edit was refused.
     InputEntriesNotCarried => "INPUT_ENTRIES_NOT_CARRIED",
-    /// Cell edit failed inside the codec.
-    SetCellCodecFailed => "SET_CELL_CODEC_FAILED",
     /// Cell edit arguments are inconsistent (single target and spec list mixed, …).
     InvalidSetCellArgs => "INVALID_SET_CELL_ARGS",
     /// Cell edit spec list is malformed.
     InvalidSetCellMap => "INVALID_SET_CELL_MAP",
     // ── stamp ──────────────────────────────────────────────────────
-    /// Stamping failed inside the codec.
-    StampCodecFailed => "STAMP_CODEC_FAILED",
     /// Stamp manifest violated an invariant.
     StampManifestInvariant => "STAMP_MANIFEST_INVARIANT",
     /// Stamp request was made for a different source document (hash mismatch).
     StampSourceHashMismatch => "STAMP_SOURCE_HASH_MISMATCH",
-    /// Stamp output failed self-verification.
-    StampDeltaMismatch => "STAMP_DELTA_MISMATCH",
     /// Cell stamp target is not the anchor of its merged region.
     StampCellNotAnchor => "STAMP_CELL_NOT_ANCHOR",
     /// Cell stamp target is not an empty cell.
@@ -200,8 +194,6 @@ ops_codes! {
     StampLabelDrift => "STAMP_LABEL_DRIFT",
     /// Cell stamp target is not a plan candidate.
     StampCellNotCandidate => "STAMP_CELL_NOT_CANDIDATE",
-    /// The same cell was stamped twice.
-    StampCellTargetDuplicate => "STAMP_CELL_TARGET_DUPLICATE",
     /// Stamp field name is empty.
     StampNameEmpty => "STAMP_NAME_EMPTY",
     /// Cell stamp hint is blank.
@@ -223,8 +215,6 @@ ops_codes! {
     /// A v2 stamp request lacks `source_sha256`.
     MissingSourceSha256 => "MISSING_SOURCE_SHA256",
     // ── structural edit ────────────────────────────────────────────
-    /// Structural edit failed inside the codec.
-    StructuralCodec => "STRUCTURAL_CODEC",
     /// Paragraph index is outside the section.
     ParagraphOutOfRange => "PARAGRAPH_OUT_OF_RANGE",
     /// The same paragraph was targeted twice.

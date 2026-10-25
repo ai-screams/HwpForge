@@ -26,7 +26,14 @@ use error_inventory::{Inventory, SiteKey};
 /// Enums whose every variant the manifest must register. A wave adds an
 /// enum here in the change that registers its cases; until then the
 /// inventory comparison only checks that registered variants exist.
-const CONTRACT_INVENTORY_SCOPE: &[&str] = &["FillError", "PatchError", "SectionWorkflowError"];
+const CONTRACT_INVENTORY_SCOPE: &[&str] = &[
+    "FillError",
+    "PatchError",
+    "SectionWorkflowError",
+    "CellEditError",
+    "StructuralEditError",
+    "StamperError",
+];
 
 /// Files the design names as generation-site homes; the scan must reach
 /// each of them and visit its fns, so an empty result cannot come from a
@@ -188,6 +195,7 @@ fn manifest_is_consistent() {
 
 #[test]
 fn manifest_sites_match_the_production_generation_sites() {
+    // 이것을 실패시키는 것: A5 layout carry의 최종 ZIP 작성 stage를 Verification으로 변경.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let scan = error_inventory::collect_sites(&manifest.audited_variants);
 
@@ -211,6 +219,7 @@ fn manifest_sites_match_the_production_generation_sites() {
 
 #[test]
 fn manifest_inventory_refs_match_the_enum_inventory() {
+    // 이것을 실패시키는 것: A4 audited_variants에서 CellEditError::NestingTooDeep 삭제.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let refs: Vec<(String, String, Option<String>)> = manifest
         .cases
@@ -250,6 +259,30 @@ fn deleting_a_w2_workflow_reference_is_reported() {
         compare_inventory(&refs, &inventory, CONTRACT_INVENTORY_SCOPE),
         vec!["SectionWorkflowError::PreservingPatch is not registered".to_owned()]
     );
+}
+
+#[test]
+fn deleting_w3_inventory_references_is_reported() {
+    // 이것을 실패시키는 것: A1–A3 scope에서 각 W3 enum 삭제, A6 삭제 필터의 &&를 ||로 변경.
+    let manifest = error_contract::load(&error_inventory::workspace_root());
+    let inventory = error_inventory::collect();
+    for (name, variant) in [
+        ("CellEditError", "NestingTooDeep"),
+        ("StructuralEditError", "ProtectedFieldRange"),
+        ("StamperError", "Invariant"),
+    ] {
+        let refs = manifest
+            .cases
+            .iter()
+            .flat_map(|case| &case.inventory)
+            .filter(|r| !(r.enum_name == name && r.variant == variant))
+            .map(|r| (r.enum_name.clone(), r.variant.clone(), r.stage.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            compare_inventory(&refs, &inventory, CONTRACT_INVENTORY_SCOPE),
+            vec![format!("{name}::{variant} is not registered")]
+        );
+    }
 }
 
 // ── value types ──────────────────────────────────────────────────

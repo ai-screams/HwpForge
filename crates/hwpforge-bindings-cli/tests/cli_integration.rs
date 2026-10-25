@@ -4331,6 +4331,7 @@ fn structural_edit_reference_and_roundtrip_rejections() {
 
 #[test]
 fn structural_edit_batch_and_structural_rejections() {
+    // 이것을 실패시키는 것: T10 StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
     let f = fixture("plain_paragraphs.hwpx"); // 4 paragraphs, index 0 = secPr
     let tmp = test_tmp();
     let out = tmp.join("o.hwpx");
@@ -4435,7 +4436,7 @@ fn structural_edit_batch_and_structural_rejections() {
         out.to_str().unwrap(),
     ]);
     assert_eq!(c, 2);
-    assert_eq!(err["code"], "STRUCTURAL_CODEC");
+    assert_eq!(err["code"], "DECODE_FAILED");
 }
 
 #[test]
@@ -5564,9 +5565,8 @@ fn to_pdf_human_mode_error_output() {
 }
 
 /// R1 F4 회귀 잠금 (CLI stamp): 의미 손상은 typed `StamperError::SemanticLoss`
-/// 가 됐지만, CLI 가 내보내는 **코드·메시지·exit code 는 과거 `Codec` 경로와
-/// 바이트 동일**해야 한다. 명시 arm 이 빠지면 `other` 로 떨어져 코드가
-/// STAMP_CODEC_FAILED → STAMP_FAILED 로 조용히 바뀐다.
+/// 를 canonical `ENCODE_SEMANTIC_LOSS`로 내보내며 exit 2를 유지한다.
+/// 의미 손상을 포괄 실패로 축약하면 이 계약이 깨진다.
 ///
 /// fixture 는 `smithy-hwpx/tests/note_numbering_roundtrip.rs` 의
 /// `stamper_fails_closed_on_note_head_skip` 과 같은 구성이다: 각주 본문의
@@ -6961,4 +6961,100 @@ fn assert_cli_manifest_case(id: &str, error: &serde_json::Value, exit: i32) {
     let case = manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
     assert_eq!(error["code"], case["expected_code"], "{id}");
     assert_eq!(exit, case["surfaces"]["cli"]["exit"].as_i64().unwrap() as i32, "{id}");
+}
+
+#[test]
+fn w3_editors_share_decode_and_admission_fixtures() {
+    // 이것을 실패시키는 것: E2/E4 cell·stamp admission 호출 목적을 Output으로 변경.
+    // 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+    let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
+    let dir = test_tmp();
+    let out = dir.join("out.hwpx");
+    let map = dir.join("map.json");
+    std::fs::write(&map, "[]").unwrap();
+    for (fixture, ids) in [
+        (
+            "corrupt-input.hwpx",
+            [
+                "cell.input_decode",
+                "structural.input_decode",
+                "structural_delete.input_decode",
+                "stamp.input_decode",
+            ],
+        ),
+        (
+            "edit-empty-section.hwpx",
+            [
+                "cell.admission",
+                "structural.admission",
+                "structural_delete.admission",
+                "stamp.admission",
+            ],
+        ),
+    ] {
+        let input = data.join(fixture);
+        let file = input.to_str().unwrap();
+        let output = out.to_str().unwrap();
+        for (id, args) in [
+            (
+                ids[0],
+                vec![
+                    "set-cell", file, "--table", "0", "--at", "0,0", "--text", "text", "-o", output,
+                ],
+            ),
+            (
+                ids[1],
+                vec![
+                    "insert-para",
+                    file,
+                    "--section",
+                    "0",
+                    "--anchor",
+                    "0",
+                    "--text",
+                    "text",
+                    "-o",
+                    output,
+                ],
+            ),
+            (ids[2], vec!["delete-para", file, "--section", "0", "--index", "0", "-o", output]),
+            (ids[3], vec!["stamp", file, "--map", map.to_str().unwrap(), "-o", output]),
+        ] {
+            let (error, _, exit) = run_json(&args);
+            assert_cli_manifest_case(id, &error, exit);
+            assert!(!out.exists());
+        }
+    }
+    let input = data.join("edit-empty-section.hwpx");
+    let v2_map = data.join("stamp-v2-admission.json");
+    let (error, _, exit) = run_json(&[
+        "stamp",
+        input.to_str().unwrap(),
+        "--map",
+        v2_map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_cli_manifest_case("stamp.v2_admission", &error, exit);
+    assert!(!out.exists());
+    let input = data.join("corrupt-input.hwpx");
+    let (error, _, exit) = run_json(&["stamp-plan", input.to_str().unwrap()]);
+    assert_cli_manifest_case("stamp_plan.input_decode", &error, exit);
+    for name in ["depth-table-42", "depth-table-33", "depth-group-32", "depth-xml-broken"] {
+        let input = data.join(format!("{name}.hwpx"));
+        let (error, _, exit) = run_json(&[
+            "set-cell",
+            input.to_str().unwrap(),
+            "--table",
+            "0",
+            "--at",
+            "0,0",
+            "--text",
+            "text",
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        assert_cli_manifest_case(&format!("cell.{name}"), &error, exit);
+        assert!(!error["hint"].as_str().unwrap_or_default().contains("Report this as a bug."));
+    }
 }

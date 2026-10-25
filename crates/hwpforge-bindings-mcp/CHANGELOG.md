@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — 0.18
 
+- `INPUT_NOT_ROUNDTRIP_SAFE` 힌트는 코덱 갭 수정 대기 안내 대신 원본을 보존하는 텍스트 `to-json(section) → patch`·누름틀 `fill` 경로를 안내한다. MCP stamp도 해당 도구 이름으로 같은 안내를 제공한다.
+
+- W3: cell, stamp, and paragraph edits now preserve decode/admission/validation/encode/verification error codes. Protected field edits report `PROTECTED_FIELD_RANGE`; internal provenance failures report `INTERNAL_INVARIANT`. Byte depth errors report `DECODE_FAILED` without a bug-report hint. Stamp delta and duplicate-cell errors use `SELF_VERIFY_FAILED` and `CELL_TARGET_DUPLICATE`.
+
 - Breaking: output canonical `OpsCode` strings without aliases; preserve tool-specific hints. Read targets use `SECTION_OUT_OF_RANGE`, `TABLE_NOT_FOUND`, `FIELD_NOT_FOUND`. File errors use canonical I/O codes and path refusals use `INVALID_OUTPUT_PATH`. The new baseline links each row to the shared error manifest.
 - Serialization failures `SERIALIZE_ERROR` and `STAMP_MANIFEST_SERIALIZE` now use `JSON_SERIALIZE_FAILED`; set-cell/stamp semantic loss uses `ENCODE_SEMANTIC_LOSS`. Structural range failures preserve `SECTION_OUT_OF_RANGE`/`PARAGRAPH_OUT_OF_RANGE` and uncarried input uses `INPUT_ENTRIES_NOT_CARRIED`.
 - Breaking: invalid arguments to all 19 tools now return structured `INVALID_PARAMS` errors with the failing field path in the message. Missing fields report their containing object (`$` at the root); tool input schemas and protocol errors are unchanged.

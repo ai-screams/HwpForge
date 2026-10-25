@@ -289,6 +289,18 @@
           "discriminant": null
         },
         {
+          "name": "Invariant",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NestingTooDeep",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "NotRoundTripSafe",
           "shape": "struct",
           "cfg": [],
@@ -365,6 +377,18 @@
         {
           "name": "Codec",
           "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Invariant",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ProtectedFieldRange",
+          "shape": "struct",
           "cfg": [],
           "discriminant": null
         },
@@ -559,6 +583,12 @@
         {
           "name": "Codec",
           "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Invariant",
+          "shape": "struct",
           "cfg": [],
           "discriminant": null
         },

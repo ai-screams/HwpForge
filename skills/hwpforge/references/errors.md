@@ -29,6 +29,8 @@ Branch on `code`, not on the exit code — which of 1 and 2 a failure uses is fi
 | 2    | as a rule a codec/schema failure: undecodable input, bad JSON, `PATCH_FAILED`, `PDF_RENDER_FAILED`, `MD_DECODE_FAILED`, bad command line |
 | 3    | `validate` only — decodes but fails validation; stdout carries `{"status":"ok","valid":false,…,"errors":[…]}`                            |
 
+In 0.18, editor no-op validation, encoding, and re-decoding failures use `INPUT_NOT_ROUNDTRIP_SAFE` (exit 1). This changes paragraph-edit and stamp no-op admission failures from exit 2 to 1. Set-cell input decoding and original package reads use `DECODE_FAILED` (exit 2, previously 1). Paragraph-edit output decoding, artifact reads, and fragment parsing use `SELF_VERIFY_FAILED` (exit 1, previously 2). Other exit policies are unchanged.
+
 ## Main codes and next steps (CLI)
 
 The codes an agent meets most often. Not exhaustive — any other code comes with a `message` and usually a `hint`; follow those.

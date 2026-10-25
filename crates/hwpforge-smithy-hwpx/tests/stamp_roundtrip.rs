@@ -271,9 +271,17 @@ fn stamp_error_display_names_the_rejection() {
 
 #[test]
 fn stamper_error_display_names_the_rejection() {
+    // 이것을 실패시키는 것: T7 StamperError::Codec Display의 codec failure 접두 삭제.
     use hwpforge_smithy_hwpx::stamp::{StampError, StamperError};
     let cases: Vec<(StamperError, &str)> = vec![
-        (StamperError::Codec("boom".into()), "codec failure"),
+        (
+            StamperError::Codec(hwpforge_smithy_hwpx::CodecFailure {
+                stage: hwpforge_smithy_hwpx::CodecStage::Encode,
+                code: hwpforge_smithy_hwpx::HwpxErrorCode::Zip,
+                detail: "boom".into(),
+            }),
+            "codec failure",
+        ),
         (
             StamperError::NotRoundTripSafe {
                 component: "document".into(),

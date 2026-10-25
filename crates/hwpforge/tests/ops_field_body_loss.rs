@@ -125,13 +125,17 @@ fn a_lost_field_body_is_refused_by_the_editors() {
             );
             assert!(err.to_string().contains("field_body"), "{surface} cached={cached}: {err}");
         }
-        // Reading succeeds and says what it lost.
-        let md = hwpforge::ops::markdown::to_md(&lost, &Default::default()).expect("to-md");
-        assert!(
-            md.warnings.iter().any(|w| format!("{w:?}").contains("field_body")),
-            "cached={cached}: {:?}",
-            md.warnings
-        );
+        // 이것을 실패시키는 것: F9 ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
+        #[cfg(feature = "ops-md")]
+        {
+            // Reading succeeds and says what it lost.
+            let md = hwpforge::ops::markdown::to_md(&lost, &Default::default()).expect("to-md");
+            assert!(
+                md.warnings.iter().any(|w| format!("{w:?}").contains("field_body")),
+                "cached={cached}: {:?}",
+                md.warnings
+            );
+        }
     }
     // The same document without that paragraph edits fine.
     restyle(&source, &opts).expect("plain restyle");
@@ -160,7 +164,7 @@ fn recovered_bodies_survive_all_editors() {
                 "{kind}: {:?}",
                 decoded.warnings
             );
-            let outputs = [
+            let _outputs = [
                 restyle(&bytes, &RestyleOptions::default().with_preset("modern")).unwrap().bytes,
                 set_cell(
                     &bytes,
@@ -170,7 +174,10 @@ fn recovered_bodies_survive_all_editors() {
                 .bytes,
                 stamp_all(&bytes).unwrap().bytes,
             ];
-            for output in outputs {
+            // 이것을 실패시키는 것: F10 ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
+            // All editors still run above when Markdown checks are disabled.
+            #[cfg(feature = "ops-md")]
+            for output in _outputs {
                 let md = hwpforge::ops::markdown::to_md(&output, &Default::default()).unwrap();
                 assert!(
                     md.markdown.contains(r"IMPORTANT\_BODY"),

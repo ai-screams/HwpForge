@@ -109,12 +109,131 @@ fn w2_rust_cases() -> Vec<(&'static str, OpsError)> {
     ]
 }
 
+fn w3_rust_cases() -> Vec<(&'static str, OpsError)> {
+    use hwpforge::hwpx::stamp::StamperError;
+    use hwpforge::hwpx::{CellEditError, StructuralEditError};
+    let mut cases = Vec::new();
+    for (stage, cell, structural, stamp) in [
+        (CodecStage::Decode, "cell.codec.decode", "structural.codec.decode", "stamp.codec.decode"),
+        (
+            CodecStage::Admission,
+            "cell.codec.admission",
+            "structural.codec.admission",
+            "stamp.codec.admission",
+        ),
+        (
+            CodecStage::Validation,
+            "cell.codec.validation",
+            "structural.codec.validation",
+            "stamp.codec.validation",
+        ),
+        (CodecStage::Encode, "cell.codec.encode", "structural.codec.encode", "stamp.codec.encode"),
+        (
+            CodecStage::Verification,
+            "cell.codec.verification",
+            "structural.codec.verification",
+            "stamp.codec.verification",
+        ),
+    ] {
+        cases.push((cell, OpsError::CellEdit(CellEditError::Codec(failure(stage)))));
+        cases.push((
+            structural,
+            OpsError::StructuralEdit(StructuralEditError::Codec(failure(stage))),
+        ));
+        cases.push((stamp, OpsError::Stamper(StamperError::Codec(failure(stage)))));
+    }
+    cases.extend([
+        (
+            "cell.invariant",
+            OpsError::CellEdit(CellEditError::Invariant { detail: "source".into() }),
+        ),
+        (
+            "structural.invariant",
+            OpsError::StructuralEdit(StructuralEditError::Invariant { detail: "source".into() }),
+        ),
+        ("stamp.invariant", OpsError::Stamper(StamperError::Invariant { detail: "source".into() })),
+        (
+            "structural.protected_field",
+            OpsError::StructuralEdit(StructuralEditError::ProtectedFieldRange {
+                section: 1,
+                index: 2,
+                detail: "protected".into(),
+            }),
+        ),
+    ]);
+    for (bytes, ids) in [
+        (
+            include_bytes!("data/corrupt-input.hwpx").as_slice(),
+            [
+                "cell.input_decode",
+                "structural.input_decode",
+                "structural_delete.input_decode",
+                "stamp.input_decode",
+            ],
+        ),
+        (
+            include_bytes!("data/edit-empty-section.hwpx").as_slice(),
+            [
+                "cell.admission",
+                "structural.admission",
+                "structural_delete.admission",
+                "stamp.admission",
+            ],
+        ),
+    ] {
+        cases.extend([
+            (
+                ids[0],
+                ops::edit::set_cell(
+                    bytes,
+                    &ops::edit::SetCellOptions::default()
+                        .with_table(0)
+                        .with_at("0,0")
+                        .with_text("text"),
+                )
+                .unwrap_err(),
+            ),
+            (
+                ids[1],
+                ops::edit::insert_para(
+                    bytes,
+                    &ops::edit::InsertParaOptions::default().with_text(vec!["text".into()]),
+                )
+                .unwrap_err(),
+            ),
+            (
+                ids[2],
+                ops::edit::delete_para(
+                    bytes,
+                    &ops::edit::DeleteParaOptions::default().with_indexes(vec![0]),
+                )
+                .unwrap_err(),
+            ),
+            (
+                ids[3],
+                ops::stamp::stamp(
+                    bytes,
+                    &hwpforge::hwpx::stamp::StampMap::Legacy(vec![]),
+                    &Default::default(),
+                )
+                .unwrap_err(),
+            ),
+        ]);
+    }
+    cases.push((
+        "stamp_plan.input_decode",
+        ops::stamp::stamp_plan(include_bytes!("data/corrupt-input.hwpx")).unwrap_err(),
+    ));
+    cases
+}
+
 #[test]
 // 이것을 실패시키는 것: OpsError::Io(NotFound)를 FileReadFailed로 변경, 기타 OpsError::Io를 FileNotFound로 변경, read 구역 범위를 InvalidInput으로 변경, read 표 부재를 InvalidInput으로 변경, read 필드 부재를 InvalidInput으로 변경, manifest에 미소비 Rust surface 추가.
 // 이것을 실패시키는 것(W2): stage→코드 매핑 한 갈래 교체, PreservingPatch 위임을 PATCH_FAILED 로 고정,
 // FillError::Patch 위임을 FILL_FAILED 로 고정, patch 원본 decode 를 Rejected 로 감싸기,
 // metadata 검사를 원본 decode 뒤로 옮기기, 구역 범위 검사를 Rejected 로, fill 입력 decode 를 Workflow 로.
 fn w1_read_and_io_causes_are_canonical() {
+    // 이것을 실패시키는 것: O1–O3/I1–I3 W3 Codec·Invariant 매핑을 InvalidInput으로 변경, B4 Draft 전용 Rust case 제외 제거.
     // 이것을 실패시키는 것: read 매핑을 InvalidInput으로 치환하거나 NotFound/기타 I/O 매핑을 뒤바꿈.
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("data/error_contract_018.json")).unwrap();
@@ -135,6 +254,7 @@ fn w1_read_and_io_causes_are_canonical() {
     ]
     .into_iter()
     .chain(w2_rust_cases())
+    .chain(w3_rust_cases())
     {
         consumed.insert(id);
         let case = manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
@@ -144,7 +264,10 @@ fn w1_read_and_io_causes_are_canonical() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|case| case["surfaces"].get("rust").is_some())
+        .filter(|case| {
+            case["surfaces"].get("rust").is_some()
+                && !case["surfaces"]["rust"]["operation"].as_str().unwrap().starts_with("w3.")
+        })
         .map(|case| case["id"].as_str().unwrap())
         .collect();
     assert_eq!(consumed, declared);
@@ -153,8 +276,14 @@ fn w1_read_and_io_causes_are_canonical() {
 #[test]
 // 이것을 실패시키는 것: 퇴역 variant 7개와 lookup을 복원.
 fn w1_retired_codes_are_not_lookup_aliases() {
+    // 이것을 실패시키는 것: R1 SetCellCodecFailed variant와 lookup 복원.
     // 이것을 실패시키는 것: 퇴역 OpsCode variant와 lookup을 복원.
     for code in [
+        "SET_CELL_CODEC_FAILED",
+        "STAMP_CODEC_FAILED",
+        "STRUCTURAL_CODEC",
+        "STAMP_DELTA_MISMATCH",
+        "STAMP_CELL_TARGET_DUPLICATE",
         "READ_SECTION_OUT_OF_RANGE",
         "READ_TABLE_OUT_OF_RANGE",
         "READ_FIELD_NOT_FOUND",

@@ -106,10 +106,11 @@ fn discovery_never_touches_the_document() {
 
 #[test]
 fn a_non_document_input_is_a_stamp_codec_failure() {
+    // 이것을 실패시키는 것: T4 해당 입력 decode stage를 Encode로 변경.
     let err = stamp_plan(b"not a zip at all").expect_err("must reject");
 
-    assert_eq!(err.code(), OpsCode::StampCodecFailed, "{err}");
-    assert_eq!(err.code().as_str(), "STAMP_CODEC_FAILED");
+    assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
+    assert_eq!(err.code().as_str(), "DECODE_FAILED");
 }
 
 #[test]
