@@ -1418,3 +1418,50 @@ fn one_code_never_offers_two_different_hints() {
     }
     assert!(hints_per_code.len() > 20, "the samples should cover most of the code table");
 }
+
+#[test]
+fn public_ops_codes_have_contract_coverage() {
+    // 이것을 실패시키는 것: Exchange(LegacyJsonTabs)를 JsonParseFailed로 분류.
+    // The manifest owns cause expectations; compact adapter baselines retain unchanged rows.
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("data/error_contract_018.json")).unwrap();
+    let mut covered: BTreeSet<String> = manifest["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case["expected_code"].as_str().unwrap().to_owned())
+        .collect();
+    for baseline in [
+        include_str!("../../hwpforge-bindings-cli/tests/data/codes-0.18.txt"),
+        include_str!("../../hwpforge-bindings-mcp/tests/data/codes-0.18.txt"),
+    ] {
+        covered.extend(
+            baseline
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .map(|line| line.split('\t').nth(1).unwrap().to_owned()),
+        );
+    }
+    // Asset contracts are exercised by the upstream inventory rather than frontend cases.
+    covered.extend(
+        wrapped_errors().into_values().flatten().map(|(_, error)| error.code().as_str().to_owned()),
+    );
+    covered.extend(
+        hwpx_errors()
+            .into_iter()
+            .map(|(_, error)| OpsError::Exchange(error).code().as_str().to_owned()),
+    );
+    // This published OpsCode has no error producer; its wire string remains a live warning.
+    let grid = OpsWarning::GridAddr(hwpforge::hwpx::grid_addr::GridAddrWarning {
+        section: 0,
+        table_ordinal: 0,
+        reason: "ragged table".into(),
+    });
+    covered.insert(grid.info().code);
+    let missing: Vec<_> = OpsCode::ALL
+        .iter()
+        .map(|code| code.as_str())
+        .filter(|code| !covered.contains(*code))
+        .collect();
+    assert!(missing.is_empty(), "public codes without contract coverage: {missing:?}");
+}

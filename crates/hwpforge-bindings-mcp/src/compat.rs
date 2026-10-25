@@ -79,7 +79,6 @@ const TABLE: &[Row] = &[
 
     row!(ToJson, JsonSerializeFailed, "This may be a bug."),
     row!(ToJson, GridAddrProjectionFailed, "This may be a bug."),
-    row!(ToJson, PatchFailed, "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow."),
 
     row!(FromJson, JsonParseFailed, "Ensure JSON matches the ExportedDocument schema from hwpforge_to_json output."),
     row!(FromJson, GridAddrInvalid, "Grid addresses come from hwpforge_to_json output; after structural edits, drop the stale addr fields (or re-export) and retry."),
@@ -377,6 +376,16 @@ mod tests {
     fn assert_code(tool: Tool, err: OpsError, expected: &str) {
         let got = tool_error(tool, err);
         assert_eq!(got.code, expected, "{tool:?}: {got:?}");
+    }
+
+    #[test]
+    // 이것을 실패시키는 것: 같은 (도구, 코드) 행 중복
+    fn table_has_no_duplicate_tool_code_rows() {
+        let mut seen = std::collections::HashSet::new();
+        for row in TABLE {
+            let key = (row.tool, row.code.as_str());
+            assert!(seen.insert(key), "duplicate row: {key:?}");
+        }
     }
 
     #[test]
@@ -883,29 +892,22 @@ mod tests {
         assert!(info.hint.is_none());
     }
 
-    #[tokio::test]
-    // 이것을 실패시키는 것: 코드 출력·힌트 변경, 미소비 기준선 또는 정책 행 추가.
-    // WM-A: params case를 어댑터로 주입하거나 어느 도구든 CheckedParams 관문을 우회.
-    // 이것을 실패시키는 것: params.*의 fixture 모드를 injected로 변경.
-    async fn w1_manifest_canonical_adapter() {
-        // 이것을 실패시키는 것: F13 새 v2 baseline 행의 코드를 다른 값으로 변경.
-        // 이것을 실패시키는 것: B2 Draft-only unreachable 건너뛰기 삭제.
-        let manifest: serde_json::Value =
-            serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
-                .unwrap();
-        let baseline: std::collections::BTreeSet<_> = include_str!("../tests/data/codes-0.18.txt")
+    #[test]
+    fn all_policy_rows_match_baseline() {
+        // 이것을 실패시키는 것: TABLE 행의 코드·힌트·종료 값 변경, 행 추가 또는 기준선에서 TABLE 행 삭제.
+        let mut covered = Vec::new();
+        for line in include_str!("../tests/data/codes-0.18.txt")
             .lines()
             .filter(|line| !line.starts_with('#'))
-            .map(|line| line.rsplit_once('\t').unwrap().0.to_owned())
-            .collect();
-        let mut consumed = std::collections::BTreeSet::new();
-        let mut covered = Vec::new();
-        for case in manifest["cases"].as_array().unwrap() {
-            let Some(surface) = case["surfaces"].get("mcp") else { continue };
-            if surface["mode"] == "unreachable" {
+        {
+            let fields: Vec<_> = line.split('\t').collect();
+            // INVALID_PARAMS belongs to CheckedParams, exercised below through the router.
+            if fields[2].starts_with("params.") {
                 continue;
             }
-            let command = match surface["operation"].as_str().unwrap() {
+            let operation = fields[0];
+            let expected = fields[1];
+            let command = match operation {
                 "convert" => Tool::ConvertMd,
                 "inspect" => Tool::Inspect,
                 "outline" => Tool::Outline,
@@ -927,35 +929,21 @@ mod tests {
                 "to-md" => Tool::ToMd,
                 other => panic!("unconsumed mcp operation: {other}"),
             };
-            let expected = case["expected_code"].as_str().unwrap();
-            consumed.insert(format!(
-                "{}\t{}\t{}",
-                surface["operation"].as_str().unwrap(),
-                expected,
-                case["id"].as_str().unwrap()
-            ));
             let code = OpsCode::lookup(expected).unwrap();
             covered.push((command, code));
-            let got = match case["id"].as_str().unwrap().strip_prefix("params.") {
-                Some(_) => {
-                    assert_eq!(surface["mode"], "fixture", "{}", case["id"]);
-                    crate::server::param_tests::assert_invalid_case(case).await
-                }
-                None => tool_error(
-                    command,
-                    OpsError::Rejected { code, reason: "injected adapter boundary".into() },
-                ),
-            };
-            assert_eq!(got.code, expected, "{}", case["id"]);
-            let baseline_row = include_str!("../tests/data/codes-0.18.txt")
-                .lines()
-                .find(|line| line.split('\t').any(|field| field == case["id"].as_str().unwrap()))
-                .unwrap();
-            let hint: Option<String> =
-                serde_json::from_str(baseline_row.rsplit_once('\t').unwrap().1).unwrap();
+            let got = tool_error(
+                command,
+                OpsError::Rejected { code, reason: "injected adapter boundary".into() },
+            );
+            assert_eq!(got.code, expected, "{line}");
+            let hint: Option<String> = serde_json::from_str(fields[3]).unwrap();
             match hint.as_deref() {
                 Some("@dynamic" | "@ops") => {}
-                expected => assert_eq!(got.hint, expected.unwrap_or_default(), "{}", case["id"]),
+                expected => assert_eq!(
+                    Some(got.hint.as_str()).filter(|hint| !hint.is_empty()),
+                    expected,
+                    "{line}"
+                ),
             }
         }
         for row in TABLE {
@@ -966,6 +954,56 @@ mod tests {
                 row.code
             );
         }
-        assert_eq!(consumed, baseline, "baseline rows must link to consumed manifest cases");
+    }
+
+    #[tokio::test]
+    async fn manifest_surface_cases_are_consumed() {
+        // 이것을 실패시키는 것: read.section 소비 누락·기준선 코드 변경, 미검토 unreachable ID 추가.
+        // 이것을 실패시키는 것: unreachable 이유 비우기, manifest에 없는 기준선 ID 추가.
+        // 이것을 실패시키는 것: params 기준선 힌트를 변경.
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
+                .unwrap();
+        let baseline: Vec<Vec<&str>> = include_str!("../tests/data/codes-0.18.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| line.split('\t').collect())
+            .collect();
+        let expected_ids: std::collections::BTreeSet<_> = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["surfaces"].get("mcp").is_some())
+            .map(|case| case["id"].as_str().unwrap())
+            .collect();
+        let mut consumed = std::collections::BTreeSet::new();
+        let mut linked = std::collections::BTreeSet::new();
+        for case in manifest["cases"].as_array().unwrap() {
+            let Some(surface) = case["surfaces"].get("mcp") else { continue };
+            let id = case["id"].as_str().unwrap();
+            if surface["mode"] == "unreachable" {
+                assert_eq!(id, "cell.draft_depth", "unreviewed unreachable case: {id}");
+                assert!(!surface["reason"].as_str().unwrap().is_empty());
+            } else {
+                let row = baseline
+                    .iter()
+                    .find(|row| row[2] == id)
+                    .unwrap_or_else(|| panic!("unconsumed case: {id}"));
+                assert_eq!(row[0], surface["operation"].as_str().unwrap(), "{id}");
+                assert_eq!(row[1], case["expected_code"].as_str().unwrap(), "{id}");
+                if id.starts_with("params.") {
+                    assert_eq!(surface["mode"], "fixture", "{id}");
+                    let got = crate::server::param_tests::assert_invalid_case(case).await;
+                    assert_eq!(got.code, case["expected_code"], "{id}");
+                    let hint: Option<String> = serde_json::from_str(row[3]).unwrap();
+                    assert_eq!(got.hint, hint.unwrap_or_default(), "{id}");
+                }
+                linked.insert(id);
+            }
+            consumed.insert(id);
+        }
+        assert_eq!(consumed, expected_ids, "unconsumed surface case IDs");
+        let baseline_ids = baseline.iter().map(|row| row[2]).filter(|id| *id != "-").collect();
+        assert_eq!(linked, baseline_ids, "baseline links must name consumed cases");
     }
 }

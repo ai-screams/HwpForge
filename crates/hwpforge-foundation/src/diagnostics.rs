@@ -17,7 +17,7 @@
 //! Naming follows the CLI contract: `<AREA>_<NOUN>` and `_FAILED` for
 //! failures, in SCREAMING_SNAKE_CASE. Where the CLI historically used two
 //! spellings for one meaning, this table holds the canonical one and the
-//! frontends keep their legacy spelling through a compatibility table.
+//! frontends emit that canonical spelling unchanged.
 
 use std::fmt;
 
@@ -25,7 +25,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Declares [`OpsCode`] once: variant, wire string and doc line.
 ///
-/// Generates the enum, `as_str`, `ALL` and `from_str` from a single list so
+/// Generates the enum, `as_str`, `ALL` and `lookup` from a single list so
 /// the three can never drift apart.
 macro_rules! ops_codes {
     ($( $(#[$doc:meta])* $variant:ident => $wire:literal ),+ $(,)?) => {
@@ -33,7 +33,7 @@ macro_rules! ops_codes {
         ///
         /// The string form ([`OpsCode::as_str`]) is the public contract that
         /// CLI JSON errors, MCP tool errors and Python `HwpForgeError.code`
-        /// expose. Variants are additive; the enum is `#[non_exhaustive]`, so
+        /// expose. Removing or renaming a code is breaking; the enum is `#[non_exhaustive]`, so
         /// match on it with a wildcard arm outside this crate.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[non_exhaustive]
