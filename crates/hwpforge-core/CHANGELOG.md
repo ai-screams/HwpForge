@@ -7,9 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- `Paragraph`와 `Control`이 `Drop`을 구현해, 100,000단계로 중첩된 Draft(메모·묶음·글상자·캡션·표 칸)를 스택 넘침 없이, 패닉 unwinding 중에도 해제한다. `validate`는 거절한 문서를 더 이상 직접 해체하지 않는다. 이행: `Paragraph`·`Control`에서 `Copy`가 아닌 필드를 밖으로 옮기는 코드(`let runs = paragraph.runs;`, `let Control::Group { children, .. } = control`, `*boxed_control` 매칭)는 E0509로 컴파일되지 않는다. 필드를 빌리거나 mutable 바인딩에서 `std::mem::take`·`Option::take`로 꺼낸다. `Run`·`Table`·`Image` 등은 전처럼 분해할 수 있고, clone·Debug·동등 비교·직렬화는 여전히 재귀다.
+
+### Changed
+
+- `FieldInventory`가 필드 없는 문서에서도 모든 run의 경로 키와 흐름 이름을 저장해 D단계 중첩 Draft에 O(D^2) 바이트를 쓰던 것을, 경로를 하나의 커서에 두고 필드 관련 run이 있는 흐름만 주소를 기록하게 바꾼다. 필드 없는 글상자 사슬 깊이 10,000에서 inventory 최대 메모리가 4,018 MB에서 12 MB로, `stamp::plan`이 7,983 MB에서 14 MB로 줄었다. 질의 결과·순서·문자열 형태는 같다. 필드가 있는 문서의 깊은 경로 질의는 질의마다 O(D^2) 시간이 걸린다.
+
 ### Added
 
 - Core 의미 깊이 상한 `MAX_NESTING_DEPTH`(32)를 공개한다. MD·HWPX·HWP5 파서의 총량 예산도 이 값을 참조하지만 카운터의 의미가 같다는 뜻은 아니다.
+### Fixed
+
+- 문단·표·이미지 순회(와 그 아래 크레이트 순회)를 명시적 스택으로 돌려, 100,000단계로 중첩된 Draft를 순회해도 스택이 넘치지 않는다. 방문 순서, 캡션 제외, 자식을 콜백 뒤에 나열하는 규칙은 그대로다.
+- `FieldInventory`가 깊이 32단계를 넘는 문서도 끝까지 읽고 깊이 진단을 더한다. 이런 문서에서 replace·insert·delete는 거부되고 clear는 아무것도 하지 않는다.
+- ZIP 중앙 헤더 예산이 `zip` 9.1에서 헤더 읽기를 세지 못해, 고정 레코드 상한이 `zip`의 대체 경로에서 작업량을 제한하지 못하던 것을 고친다. 이제 정확히 46바이트이고 중앙 헤더 서명으로 시작하는 읽기를 레코드 하나로 센다. 상한(4 x `MAX_ENTRIES`)은 그대로이며 `zip` 9.0과 9.1 모두에서 적용된다. 바깥 항목의 주석 안에 숨긴 디렉터리는 `zip` 9.0의 대체 경로에서 전부 파싱하지 않고 40,001개째 레코드에서 멈추고, `zip` 9.1에서는 디렉터리 구조 검사에서 거부한다. 서명으로 시작하는 46바이트 이름·extra·주석도 레코드로 세므로 그런 archive는 상한에 더 일찍 닿는다. 일반 HWPX는 그런 모양이 아니다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.17.0...hwpforge-core-v0.17.1) - 2026-10-24
 

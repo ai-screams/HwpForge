@@ -45,6 +45,8 @@ I/O의 종료 값 변경은 다음과 같다. 편집기의 네 변경군은 위 
 | to-md·convert-hwp5의 크기 한도를 넘는 FIFO 입력 | `DECODE_FAILED`·`HWP5_DECODE_FAILED` / 2 | `INPUT_TOO_LARGE` / **1**   |
 | convert-hwp5의 쓰기 성공 직후 stat 실패         | `FILE_WRITE_FAILED` / 1                  | `FILE_WRITE_FAILED` / **2** |
 
+- HWPX에서 읽은 본문의 CR이 `\r` 대신 `\n`으로 나온다(to-json, Python, MCP, 무손실 Markdown). 이행: `\r`에 기대던 코드를 고치고, 0.17에서 내보낸 보존 metadata 중 CR이 든 칸이 있으면 다시 내보낸 뒤 patch한다. 자세한 것은 `hwpforge-smithy-hwpx` 항목을 본다.
+
 ### Changed
 
 - `INPUT_NOT_ROUNDTRIP_SAFE` 힌트는 코덱 갭 수정 대기 안내 대신 원본을 보존하는 텍스트 `to-json(section) → patch`·누름틀 `fill` 경로를 안내한다. MCP stamp도 해당 도구 이름으로 같은 안내를 제공한다.

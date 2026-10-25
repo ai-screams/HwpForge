@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - preserve-first patch 의 오류 타입 `PatchError` 를 새로 둔다. variant 는 `Codec(CodecFailure)`·`Rejected(HwpxError)`·`SectionOutOfRange`·`ProtectedFieldRange`·`Invariant` 이고 `#[non_exhaustive]` 다. `patch_section_preserving`·`patch_section_preserving_with_diagnostics`·`patch_section_preserving_with_codec_diagnostics`·`export_section_preservation` 의 오류 반환형이 `HwpxError` 에서 `PatchError` 로 바뀌고, `SectionWorkflowError::PreservingPatch` 는 `PatchError` 를 담는다. `Codec` 은 실패 단계(`CodecStage`)와 원래 오류의 코드·메시지만 담고 원래 오류의 source chain 은 담지 않는다.
 - `FillError` 에 `Codec(CodecFailure)`·`Patch(PatchError)`·`Invariant { detail }` 을 더하고 `From<HwpxError> for FillError` 를 지운다. 입력 decode 실패는 `Codec`, 섹션 patch 실패는 `Patch`, 필드 목록 진단은 계속 `Workflow` 다. `FillError` 는 계속 exhaustive 다.
 
+- 본문의 CR(`\r`)을 줄바꿈으로 다룬다. 한컴은 본문의 CR을 줄바꿈으로 보여 주지만 다시 저장하면 지워 앞뒤 글을 붙인다. 인코더는 CR을 `<hp:lineBreak/>`로 쓰고 한 글 조각 안의 CRLF는 줄바꿈 하나로 접으며, HWPX 디코더는 CR 참조를 LF 하나로 읽는다. 수식 스크립트·글맵시·속성값은 기존 규칙을 유지한다. CRLF를 접느라 줄 배치 위치가 어긋나는 문단은 줄 배치 캐시를 버리고 `LayoutCacheDropped` 경고로 알린다. `fill`과 보존 `patch`는 같은 접기를 거친 값으로 비교하므로 같은 CR 글을 두 번 써도 바뀌지 않는다. 이행: HWPX에서 읽은 본문이 `\r` 대신 `\n`을 돌려주므로 `\r`에 기대던 코드를 고치고, 0.17에서 내보낸 보존 metadata 중 CR이 든 칸이 있으면 다시 내보낸 뒤 patch한다.
+
 ### Changed
 
 - stamp·cell 코덱 오류 메시지에서 `output decode:`, `fixed-point decode:`, `reference decode:`, `layout carry:`, `zip:` 같은 호출 문맥 접두를 제거한다. `CodecFailure.detail`은 원래 오류의 문자열을 한 번만 보존하며 실패 단계는 `stage`로 구분한다.
@@ -28,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - patch 의 깊이 거부·보호 필드 거부 메시지에서 앞에 붙던 `Invalid HWPX structure:` 가 빠지고, 내부 불변식 실패 메시지는 `internal invariant violated:` 로 시작한다. 그 밖의 거부·decode 메시지는 그대로다.
 - 구역(`<hs:sec>`) 바로 아래의 글·모르는 요소·`<hp:t>` 처럼 문단이 아닌 내용도 `CONTENT_LOST` 경고(종류 `section_content`, 위치는 그 구역)로 알리고, 위 편집기들은 그런 문서를 거부한다. 문단 사이의 들여쓰기 공백은 알리지 않는다. 측정한 HWPX 372개 중 이 경고가 새로 생긴 문서는 없다.
 - 각주·미주 첫 문단의 번호 머리 run 에 위 내용이 섞이면 번호 머리로 보고 떼어 내지 않고, 경고와 함께 일반 run 으로 읽는다. 형광펜·제목 표지만 섞인 번호 머리는 전처럼 떼어 낸다.
+
+- stamp `apply`·`apply_cells`, 격자 주소 함수 네 개, registry rebind는 중첩이 32단계를 넘는 문서를 순회하기 전에 기존 오류 variant로 거부한다. 오류를 반환할 수 없는 `stamp::plan`은 대신 반복 방식으로 순회한다.
+
+### Added
+
+- 편집기 오류가 싣는 `CodecStage`(`Decode`·`Admission`·`Validation`·`Encode`·`Verification`)와 `CodecFailure`(`stage`·`code`·`detail`)를 공개한다. `CodecStage`는 일부러 `#[non_exhaustive]`가 아니어서 단계를 더하면 breaking이다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.0...hwpforge-smithy-hwpx-v0.17.1) - 2026-10-24
 
