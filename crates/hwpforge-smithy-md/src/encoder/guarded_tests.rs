@@ -66,6 +66,19 @@ mod cases {
         fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType> {
             (id.get() == UNDERLINE).then_some(UnderlineType::Bottom)
         }
+        /// Two pictures with the same file name and other bytes; `N/<i>/a.png`
+        /// all named `a.png`, each its own bytes (`i + 1` zeros).
+        fn image_data(&self, key: &str) -> Option<&[u8]> {
+            static ZEROS: [u8; 8192] = [0; 8192];
+            match key {
+                "A/one.png" => Some(b"1"),
+                "B/one.png" => Some(b"2"),
+                _ => key
+                    .strip_prefix("N/")
+                    .and_then(|k| k.split('/').next()?.parse::<usize>().ok())
+                    .map(|i| &ZEROS[..=i]),
+            }
+        }
         fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
             Some(if id.get() == CODE { "D2Coding" } else { "Batang" })
         }
@@ -928,7 +941,11 @@ fn definition_lists_never_reach_the_decoder() {
     // (b)
     let block = |md: &str, at| Block {
         markdown: md.into(),
-        source: Some(Source { prefix: String::new(), texts: vec![md.into()], at: vec![at] }),
+        source: Some(Source {
+            prefix: String::new(),
+            texts: vec![super::guard::plain_text(md)],
+            at: vec![at],
+        }),
         body: true,
     };
     let dests = std::collections::HashSet::new();
@@ -1682,6 +1699,502 @@ fn math_check_is_linear() {
     assert!(out.starts_with("**x**$"), "{}", &out[..20]);
 }
 
+/// A paragraph written as plain text keeps its content: pictures, note
+/// references and allowed links stay as they were drawn, only the text is
+/// escaped. Every fallback path — a guarded paragraph's emphasis, a GFM
+/// cell's, the Body check, the whole-document check — and the edges: a note
+/// reference at a line start before `:`, a memo in the paragraph (its body is
+/// text, as before), a link not allowed (its text, as before).
+/// 이것을 실패시키는 것: 그림·각주 참조·링크를 남기지 않기 · 둘째 조각부터 앞 공백 지우기.
+#[test]
+fn fallback_keeps_pictures_links_and_notes() {
+    use hwpforge_core::control::Control;
+    let cross = || {
+        vec![
+            styled_t("a", emphasis(true, false, false)),
+            styled_t("b", emphasis(true, true, false)),
+            styled_t("c", emphasis(false, true, false)),
+        ]
+    };
+    let picture = || image("BinData/p.png", None);
+    let note = || footnote(vec![body(vec![t("n")])]);
+    let with = |tail: Vec<hwpforge_core::Run>| {
+        let mut runs = cross();
+        runs.extend(tail);
+        runs
+    };
+    let cases: Vec<(hwpforge_core::Document<hwpforge_core::Validated>, &str, usize)> = vec![
+        // A guarded paragraph's emphasis.
+        (
+            doc(vec![body(with(vec![t(" "), picture(), t(" x"), note()]))]),
+            "abc ![p](images/p.png) x[^1]\n\n[^1]: n",
+            1,
+        ),
+        // The Body check (`1` + `. x` makes a list).
+        (
+            doc(vec![body(vec![t("1"), compose(". x"), t(" "), picture(), note()])]),
+            "1\\. x ![p](images/p.png)[^1]\n\n[^1]: n",
+            1,
+        ),
+        // A GFM cell's emphasis: the cell alone.
+        (
+            doc(vec![body(vec![
+                t("z"),
+                table(one_cell(body(with(vec![t(" "), picture(), t(" x"), note()])))),
+            ])]),
+            "z\n| abc ![p](images/p.png) x[^1] |\n| --- |\n\n[^1]: n",
+            1,
+        ),
+        // An allowed link kept, its text escaped; one not allowed is text.
+        (
+            doc(vec![body(with(vec![
+                ctrl(Control::hyperlink("t*", "https://e.invalid/")),
+                ctrl(Control::hyperlink("u", "javascript:x")),
+            ]))]),
+            "abc[t\\*](https://e.invalid/)u",
+            1,
+        ),
+        // A note reference at a line start, `:` after it escaped.
+        (doc(vec![body([vec![note(), t(": x")], cross()].concat())]), "[^1]\\: xabc\n\n[^1]: n", 1),
+        // The whole-document check (a definition list across blocks).
+        (
+            doc(vec![
+                cases::p(HEADING, vec![t("h")]),
+                body(vec![t("a "), picture()]),
+                body(vec![image("", Some(vec![body(vec![t(":b")])]))]),
+            ]),
+            "h\n\na ![p](images/p.png)\n\n\\:b",
+            3,
+        ),
+        // A memo in the paragraph (it is drawn from a copy): the reference
+        // still kept; the memo's body is text, as before.
+        (
+            doc(vec![body([vec![memo(vec![body(vec![t("m")])])], cross(), vec![note()]].concat())]),
+            "mabc[^1]\n\n[^1]: n",
+            1,
+        ),
+        // A memo's body was a comment: its picture and link are its text
+        // (none kept), even where the same picture is drawn outside it.
+        (
+            doc(vec![body(
+                [
+                    vec![memo(vec![body(vec![
+                        picture(),
+                        ctrl(Control::hyperlink("L", "https://e.invalid/")),
+                    ])])],
+                    cross(),
+                    vec![picture()],
+                ]
+                .concat(),
+            )]),
+            "Labc![p](images/p.png)",
+            1,
+        ),
+    ];
+    for (doc, want, warnings) in cases {
+        assert_eq!(styled(&doc), (want.to_string(), warnings));
+    }
+}
+
+/// A fallback keeps what was drawn for each occurrence: a note in a cell a
+/// GFM table cut (not drawn, not registered) is its text, the note after
+/// it keeps its reference; a picture in the cut cell was never drawn and
+/// gets no asset. Two pictures with one file name and other bytes keep
+/// their own keys, the assets as without the fallback.
+/// 이것을 실패시키는 것: 각주를 개수로 맞추기(어긋나면 모두 글) · 그리지 않은 그림 등록 ·
+/// 키 다시 매기기.
+#[test]
+fn fallback_keeps_only_what_was_drawn() {
+    use hwpforge_core::{TableCell, TableRow};
+    let cross = || {
+        vec![
+            styled_t("a", emphasis(true, false, false)),
+            styled_t("b", emphasis(true, true, false)),
+            styled_t("c", emphasis(false, true, false)),
+        ]
+    };
+    let note = |n: &str| footnote(vec![body(vec![t(n)])]);
+    let mut cut = one_cell(body(vec![t("h")]));
+    cut.rows.push(TableRow::new(vec![
+        TableCell::new(vec![body(vec![t("v")])], u(1000)),
+        TableCell::new(vec![body(vec![note("cut"), image("A/one.png", None)])], u(1000)),
+    ]));
+    let doc_cut = doc(vec![body([cross(), vec![table(cut), note("kept")]].concat())]);
+    let out = encode_styled(&doc_cut, &Styles);
+    assert_eq!(out.markdown, "abc h v cut[^1]\n\n[^1]: kept");
+    assert!(out.images.is_empty(), "{:?}", out.images.keys());
+    let pictures = || vec![image("A/one.png", None), t(" "), image("B/one.png", None)];
+    let fell = encode_styled(&doc(vec![body([cross(), pictures()].concat())]), &Styles);
+    assert_eq!(fell.markdown, "abc![one](images/one.png) ![one](images/one-2.png)");
+    let drawn = encode_styled(&doc(vec![body(pictures())]), &Styles);
+    let keys = |o: &crate::MdOutput| {
+        let mut k: Vec<_> = o.images.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        k.sort();
+        k
+    };
+    assert_eq!(keys(&fell), keys(&drawn));
+}
+
+/// A note in a paragraph with a memo is drawn from a copy (`expand_memos`):
+/// the fallback still keeps its reference, at the top level, in a GFM
+/// cell, and in a cell of a paragraph that is itself a copy (the copy's
+/// alias resolved to the document's note). A memo in another memo's
+/// anchor draws the anchor from a copy too.
+/// 이것을 실패시키는 것: 별칭 삭제 · 별칭을 문서 주소로 풀지 않기 · 별칭 조회 삭제.
+#[test]
+fn fallback_keeps_notes_by_occurrence() {
+    let cross = || {
+        vec![
+            styled_t("a", emphasis(true, false, false)),
+            styled_t("b", emphasis(true, true, false)),
+            styled_t("c", emphasis(false, true, false)),
+        ]
+    };
+    let note = |n: &str| footnote(vec![body(vec![t(n)])]);
+    let m = || memo(vec![body(vec![t("m")])]);
+    let cell = || one_cell(body([vec![m()], cross(), vec![note("k")]].concat()));
+    let mut cases = vec![
+        (doc(vec![body([vec![m()], cross(), vec![note("k")]].concat())]), "mabc[^1]\n\n[^1]: k"),
+        (doc(vec![body(vec![t("z"), table(cell())])]), "z\n| mabc[^1] |\n| --- |\n\n[^1]: k"),
+        (
+            doc(vec![body(vec![t("z"), m(), table(cell())])]),
+            "z<!-- memo: m -->\n| mabc[^1] |\n| --- |\n\n[^1]: k",
+        ),
+        (
+            doc(vec![body(
+                [cross(), vec![anchored_memo(vec![anchored_memo(vec![note("k")])])]].concat(),
+            )]),
+            "abc [^1]\n\n[^1]: k",
+        ),
+    ];
+    // A note in a memo's body (inline in the comment) is not paired: the
+    // anchor's note keeps its own reference.
+    let both = ctrl(hwpforge_core::control::Control::memo_with_anchor(
+        vec![body(vec![note("x")])],
+        vec![note("a")],
+    ));
+    cases.push((doc(vec![body([vec![both], cross()].concat())]), "[^1] xabc\n\n[^1]: a"));
+    for (doc, want) in cases {
+        assert_eq!(styled(&doc), (want.to_string(), 1));
+    }
+}
+
+/// A link label in a fallback keeps every character: leading spaces, a
+/// tab, a label of spaces only.
+/// 이것을 실패시키는 것: 라벨 앞 공백 지우기.
+#[test]
+fn fallback_link_labels_keep_their_spaces() {
+    use hwpforge_core::control::Control;
+    let cross = || {
+        vec![
+            styled_t("a", emphasis(true, false, false)),
+            styled_t("b", emphasis(true, true, false)),
+            styled_t("c", emphasis(false, true, false)),
+        ]
+    };
+    let doc = doc(vec![body(
+        [
+            cross(),
+            vec![
+                ctrl(Control::hyperlink(" L", "https://e.invalid/")),
+                ctrl(Control::hyperlink("\tT", "https://e.invalid/")),
+                ctrl(Control::hyperlink("  ", "https://e.invalid/")),
+            ],
+        ]
+        .concat(),
+    )]);
+    assert_eq!(
+        styled(&doc),
+        (
+            "abc[ L](https://e.invalid/)[\tT](https://e.invalid/)[  ](https://e.invalid/)"
+                .to_string(),
+            1
+        )
+    );
+}
+
+/// Pictures whose keys collide (`a.png`, `a-2.png` …) cost what their
+/// number does, drawn and in a fallback (each walked the keys before it:
+/// 4,096 pictures took seconds).
+/// 이것을 실패시키는 것: 키를 매번 처음부터 걷기 · 접두 기록 조건 삭제.
+#[test]
+fn colliding_pictures_take_linear_time() {
+    let n = 4096;
+    let mut runs = vec![
+        styled_t("a", emphasis(true, false, false)),
+        styled_t("b", emphasis(true, true, false)),
+        styled_t("c", emphasis(false, true, false)),
+    ];
+    runs.extend((0..n).map(|i| image(&format!("N/{i}/a.png"), None)));
+    let doc = doc(vec![body(runs)]);
+    let started = std::time::Instant::now();
+    let out = encode_styled(&doc, &Styles);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(out.images.len(), n);
+    assert!(
+        out.markdown.ends_with(&format!("![a](images/a-{n}.png)")),
+        "{}",
+        &out.markdown[out.markdown.len() - 40..]
+    );
+    assert_eq!(out.markdown.matches("![a]").count(), n);
+}
+
+/// The text a reader gets back: every paragraph's (a list item's with the
+/// decoder's marker), a note's body after `|`, paragraphs joined by `/`.
+fn decoded_text(markdown: &str) -> String {
+    fn text(paragraphs: &[hwpforge_core::Paragraph], out: &mut Vec<String>) {
+        for p in paragraphs {
+            let mut line = String::new();
+            for run in &p.runs {
+                if let Some(t) = run.content.plain_text() {
+                    line.push_str(&t);
+                }
+                if let Some(hwpforge_core::control::Control::Footnote { paragraphs, .. }) =
+                    run.content.as_control()
+                {
+                    let mut body = Vec::new();
+                    text(paragraphs, &mut body);
+                    line.push('|');
+                    line.push_str(&body.join("/"));
+                }
+            }
+            out.push(line);
+        }
+    }
+    let doc = crate::MdDecoder::decode_with_default(markdown).expect("decodes").document;
+    let mut out = Vec::new();
+    for section in doc.sections() {
+        text(&section.paragraphs, &mut out);
+    }
+    out.join("/")
+}
+
+/// A tab after a list marker makes a block like a space in a note body
+/// too: the marker is escaped, the `\` before the punctuation of an ordered
+/// marker (1–9 digits); read back, the body is the document's.
+/// 이것을 실패시키는 것: 목록 표지 뒤 탭 무시(각주 본문 · 순서 목록) · 탭 뒤 숫자 앞에 `\` ·
+/// 10자리 숫자를 목록으로.
+#[test]
+fn tab_after_a_marker_makes_no_block() {
+    for (raw, want) in [
+        ("-\tx", "\\-\tx"),
+        ("+\tx", "\\+\tx"),
+        ("1.\tx", "1\\.\tx"),
+        ("23)\tx", "23\\)\tx"),
+        ("1234567890.\tx", "1234567890.\tx"),
+    ] {
+        let (md, warnings) =
+            styled(&doc(vec![body(vec![t("a"), footnote(vec![body(vec![t(raw)])])])]));
+        assert_eq!((md.as_str(), warnings), (format!("a[^1]\n\n[^1]: {want}").as_str(), 0));
+        assert_eq!(decoded_text(&md), format!("a|{raw}"), "{md:?}");
+    }
+}
+
+/// Definition-shaped document text in a body paragraph, every combination
+/// of a list marker or quote (or none), a tab and 0–4 spaces or 0–6
+/// spaces, a definition, note definition, split definition, bracket or
+/// lone `[`, with and without a list item before it. Escaping such text is
+/// left as it was in bd3f6e67 (its CLI's output in
+/// `tests/fixtures/definition_shapes_base.txt`); a definition it lets
+/// through is the final check's, which falls the paragraph back with a
+/// warning. So for each text and view: lossy without a fallback writes the
+/// earlier bytes; read back, the text is the earlier output's, unless the
+/// output carries the warning or the earlier output did not read back (a
+/// definition that reached it); and a new fallback only where the earlier
+/// output did not read back. The same texts in a note body (styled): no
+/// warning, and read back the earlier output's text or the document's own;
+/// only six named texts do not read back, as before.
+/// 이것을 실패시키는 것: 줄 첫 표지 뒤 탭을 구분자로 받기(fix4 의 예외, 코드 안 `[` 에 `\`) ·
+/// 최종 검사의 각주 정의 갈래 삭제 · 각주 본문 탭 뒤 숫자 앞에 `\` · 각주 본문 탭 표지
+/// 이스케이프 삭제(디코드 실패) · 각주 본문 글자 바꾸기(`[r]` → `[s]`).
+#[test]
+fn lossy_definition_shapes() {
+    fn unescape(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some(other) => out.push(other),
+                None => {}
+            }
+        }
+        out
+    }
+    let read =
+        |md: &str| crate::MdDecoder::decode_with_default(md).is_ok().then(|| decoded_text(md));
+    let base: Vec<Vec<String>> = include_str!("../../tests/fixtures/definition_shapes_base.txt")
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| l.split('\t').map(unescape).collect())
+        .collect();
+    let mut texts = Vec::new();
+    for before in ["", "- x\n\n", "- x\n"] {
+        for marker in ["-", "+", "1.", "1)", ">", ""] {
+            let indents = (0..5).map(|k| format!("\t{}", " ".repeat(k)));
+            for indent in indents.chain((0..7).map(|k| " ".repeat(k))) {
+                for shape in ["[r]: /u", "[^r]: y", "[r]\n]: /u", "[^r]\n]: y", "[r]", "["] {
+                    texts.push(format!("{before}{marker}{indent}{shape}"));
+                }
+            }
+        }
+    }
+    assert_eq!(texts.len(), base.len());
+    for (raw, base) in texts.iter().zip(&base) {
+        assert_eq!(raw, &base[0]);
+        let d = doc(vec![body(vec![t(raw)])]);
+        let (lossy, warned) = crate::MdEncoder::encode_lossy_with_report(&d).unwrap();
+        let lossy = (lossy, warned.len());
+        let styled = styled(&d);
+        if lossy.1 == 0 {
+            assert_eq!(lossy.0, base[1], "{raw:?}");
+        }
+        for ((md, warnings), (old, old_warnings)) in
+            [(lossy, (&base[1], &base[2])), (styled, (&base[3], &base[4]))]
+        {
+            let earlier = read(old);
+            if warnings == 0 && earlier.is_some() {
+                assert_eq!(read(&md), earlier, "{raw:?}: {md:?}");
+            }
+            if warnings > 0 && old_warnings == "0" {
+                assert_eq!(earlier, None, "{raw:?}: a new fallback for {old:?}");
+            }
+        }
+    }
+    // In a note body (styled only): read back, the text is the earlier
+    // output's, or the document's own where the earlier one read wrong or
+    // not at all (a tab after a list marker, now escaped). Six texts did
+    // not read back before and do not now: a second paragraph indented a
+    // tab and four spaces.
+    let known_failures = [
+        "- x\n\n\t    [r]: /u",
+        "- x\n\n\t    [^r]: y",
+        "- x\n\n\t    [r]\n]: /u",
+        "- x\n\n\t    [^r]\n]: y",
+        "- x\n\n\t    [r]",
+        "- x\n\n\t    [",
+    ];
+    let mut failures = Vec::new();
+    for (raw, base) in texts.iter().zip(&base) {
+        let (md, warnings) =
+            styled(&doc(vec![body(vec![t("a"), footnote(vec![body(vec![t(raw)])])])]));
+        assert_eq!((warnings, base[6].as_str()), (0, "0"), "{raw:?}");
+        let own = format!("a|{}", raw.replace("\n\n", "/").replace('\n', " "));
+        match (read(&md), read(&base[5])) {
+            (None, earlier) => {
+                assert_eq!((md.as_str(), earlier), (base[5].as_str(), None), "{raw:?}");
+                failures.push(raw.as_str());
+            }
+            (Some(now), earlier) => {
+                assert!(earlier.as_ref() == Some(&now) || now == own, "{raw:?}: {md:?} {now:?}");
+            }
+        }
+    }
+    assert_eq!(failures, known_failures);
+    let dests = std::collections::HashSet::new();
+    let lossy =
+        Allowed { tags: super::guard::LOSSY_TAGS, destinations: &dests, decoder_structure: false };
+    let block = Block {
+        markdown: "- x\n\t[^r]: y".into(),
+        source: Some(Source {
+            prefix: String::new(),
+            texts: vec![super::guard::plain_text("- x\n\t[^r]: y")],
+            at: vec![(0, 0)],
+        }),
+        body: false,
+    };
+    let mut warnings = Vec::new();
+    assert_eq!(checked(vec![block], &lossy, &mut warnings), "\\- x \t\\[\\^r\\]\\: y");
+    assert_eq!(warnings.len(), 1);
+}
+
+/// The regression rows of the G4 reviews, lossy: the document text, the
+/// output and warnings of 0.17.1 (`a5e33451`; bd3f6e67 wrote the same),
+/// this view's, and the text this view's output reads back as. Each row
+/// writes the earlier bytes, or falls back with a warning where the earlier
+/// output did not read back (an orphan note definition).
+/// 이것을 실패시키는 것: 줄 첫 표지 뒤 탭 예외 · 최종 검사의 각주 정의 갈래 삭제 · 들여쓰기·
+/// 컨테이너 짐작(코드에 `\`).
+#[test]
+fn lossy_definition_rows() {
+    let rows: &[(&str, &str, usize, &str, usize, &str)] = &[
+        ("- x\n\n      [r]", "- x\n\n      [r]", 0, "- x\n\n      [r]", 0, "- x/[r]"),
+        ("- x\n\n      [", "- x\n\n      [", 0, "- x\n\n      [", 0, "- x/["),
+        ("- x\n\n\t\t[r]: /u", "- x\n\n\t\t[r]: /u", 0, "- x\n\n\t\t[r]: /u", 0, "- x/  [r]: /u"),
+        ("- x\n    [^r]: y", "- x\n    \\[^r]: y", 0, "- x\n    \\[^r]: y", 0, "- x [^r]: y"),
+        ("- x\n\n    [^r]: y", "- x\n\n    \\[^r]: y", 0, "- x\n\n    \\[^r]: y", 0, "- x/[^r]: y"),
+        ("- x\n\t[^r]: y", "- x\n\t[^r]: y", 0, "\\- x \t\\[\\^r\\]\\: y", 1, "- x \t[^r]: y"),
+        (
+            "- x\n  \t[^r]: y",
+            "- x\n  \t[^r]: y",
+            0,
+            "\\- x   \t\\[\\^r\\]\\: y",
+            1,
+            "- x   \t[^r]: y",
+        ),
+        ("> - x\n>   [^r]: y", "> - x\n>   \\[^r]: y", 0, "> - x\n>   \\[^r]: y", 0, "- x [^r]: y"),
+        (
+            "> - x\n>     [^r]: y",
+            "> - x\n>     \\[^r]: y",
+            0,
+            "> - x\n>     \\[^r]: y",
+            0,
+            "- x [^r]: y",
+        ),
+        ("1. x\n    [^r]: y", "1. x\n    \\[^r]: y", 0, "1. x\n    \\[^r]: y", 0, "1. x [^r]: y"),
+        (
+            "- x\n    [^r]: y\n\n    z[^r]",
+            "- x\n    \\[^r]: y\n\n    z[^r]",
+            0,
+            "- x\n    \\[^r]: y\n\n    z[^r]",
+            0,
+            "- x [^r]: y/z[^r]",
+        ),
+        ("\t[r]: /u", "\t[r]: /u", 0, "\t[r]: /u", 0, "[r]: /u"),
+        ("  \t[r]: /u", "  \t[r]: /u", 0, "  \t[r]: /u", 0, "[r]: /u"),
+        ("-\t\t[r]: /u", "-\t\t[r]: /u", 0, "-\t\t[r]: /u", 0, "-   [r]: /u"),
+        ("-\t[r]: /u", "\\-\t\\[r\\]\\: \\/u", 1, "\\-\t\\[r\\]\\: \\/u", 1, "-\t[r]: /u"),
+        ("-  \t[r]: /u", "\\-  \t\\[r\\]\\: \\/u", 1, "\\-  \t\\[r\\]\\: \\/u", 1, "-  \t[r]: /u"),
+        (">\t[r]: /u", "\\>\t\\[r\\]\\: \\/u", 1, "\\>\t\\[r\\]\\: \\/u", 1, ">\t[r]: /u"),
+        ("1)\t[r]: /u", "1\\)\t\\[r\\]\\: \\/u", 1, "1\\)\t\\[r\\]\\: \\/u", 1, "1)\t[r]: /u"),
+        ("-\t\t- [r]: /u", "-\t\t- [r]: /u", 0, "-\t\t- [r]: /u", 0, "-   - [r]: /u"),
+        ("x\n    [r]: /u", "x\n    \\[r]: /u", 0, "x\n    \\[r]: /u", 0, "x [r]: /u"),
+        ("\t- x\n\n\t[r]: /u", "\t- x\n\n\t[r]: /u", 0, "\t- x\n\n\t[r]: /u", 0, "- x\n\n[r]: /u"),
+        ("-x\n    [r]: /u", "-x\n    \\[r]: /u", 0, "-x\n    \\[r]: /u", 0, "-x [r]: /u"),
+        (
+            "> -\t[r]: /u",
+            "\\> \\-\t\\[r\\]\\: \\/u",
+            1,
+            "\\> \\-\t\\[r\\]\\: \\/u",
+            1,
+            "> -\t[r]: /u",
+        ),
+        (
+            "- -\t[r]: /u",
+            "\\- \\-\t\\[r\\]\\: \\/u",
+            1,
+            "\\- \\-\t\\[r\\]\\: \\/u",
+            1,
+            "- -\t[r]: /u",
+        ),
+    ];
+    for &(raw, old, old_warnings, new, warnings, read) in rows {
+        let (md, got) =
+            crate::MdEncoder::encode_lossy_with_report(&doc(vec![body(vec![t(raw)])])).unwrap();
+        assert_eq!((md.as_str(), got.len()), (new, warnings), "{raw:?}");
+        assert_eq!(decoded_text(&md), read, "{raw:?}");
+        if (new, warnings) != (old, old_warnings) {
+            assert_eq!((old_warnings, warnings), (0, 1), "{raw:?}");
+            assert!(crate::MdDecoder::decode_with_default(old).is_err(), "{raw:?}");
+        }
+    }
+}
+
 /// Line starts are found in one pass: a long run of line endings costs
 /// what its length does (the same run scanned again at each line ending
 /// took billions of steps).
@@ -1702,7 +2215,7 @@ fn guarded_text_is_linear() {
 /// A Body paragraph that falls back keeps a cross reference's target, an
 /// empty field's `____` and an unknown control's `[tag]`; lossy is as it
 /// was.
-/// 이것을 실패시키는 것: `deep_text` 를 공용 함수 없이 되돌리기 · lossy 에도 styled
+/// 이것을 실패시키는 것: `fallback_markdown` 의 styled 표시값을 공용 함수 없이 되돌리기 · lossy 에도 styled
 /// 표시값.
 #[test]
 fn fallback_text_shows_what_styled_shows() {
@@ -1736,7 +2249,9 @@ mod generated {
 
     /// A carrier and the text a reader must see for it.
     fn carrier() -> impl Strategy<Value = (hwpforge_core::Run, String)> {
-        (0..11usize, piece()).prop_map(|(kind, s)| match kind {
+        (0..12usize, piece()).prop_map(|(kind, s)| match kind {
+            // A picture: its alt text shows, and a fallback keeps it.
+            11 => (image("BinData/pic.png", None), "pic".into()),
             // A link (its text may be empty), an equation, an unknown control.
             8 => (ctrl(hwpforge_core::control::Control::hyperlink(&s, "https://e.invalid/")), s),
             9 if s.len() % 2 == 0 => {

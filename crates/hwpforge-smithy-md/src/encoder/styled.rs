@@ -143,37 +143,51 @@ fn render_definition(label: &str, paragraphs: &[Md]) -> String {
 ///
 /// A body line beginning with `- ` / `* ` / `+ ` / `1. ` / `#` / `>` would
 /// re-parse as a structural block inside the definition, which this decoder
-/// rejects — the emitter must keep such text literal.
+/// rejects — the emitter must keep such text literal. A tab after a marker
+/// opens a list too: there the `\` goes before the punctuation (`1\.\t`,
+/// a `\` before a digit would be a character) and only 1–9 digits are a
+/// marker. With a space the output is the base's (`\1. `, notes are
+/// outside the guarantee: `markup_safety_base.txt`).
+/// 이것을 실패시키는 것: 탭 무시 · 탭 뒤 숫자 앞에 `\` · 10자리 숫자를 목록으로
+/// (`tab_after_a_marker_makes_no_block`).
 fn escape_footnote_paragraph(paragraph: &str) -> String {
     paragraph
         .split('\n')
         .map(|line| {
             let trimmed = line.trim_start();
-            let needs_escape = trimmed.starts_with("- ")
-                || trimmed.starts_with("* ")
-                || trimmed.starts_with("+ ")
+            let at = if matches!(trimmed.as_bytes(), [b'-' | b'*' | b'+', b' ' | b'\t', ..])
                 || trimmed.starts_with('#')
                 || trimmed.starts_with('>')
-                || is_ordered_marker(trimmed);
-            if needs_escape {
-                let indent_len = line.len() - trimmed.len();
-                format!("{}\\{}", &line[..indent_len], trimmed)
+            {
+                Some(0)
             } else {
-                line.to_string()
+                ordered_marker_escape(trimmed)
+            };
+            match at {
+                Some(at) => {
+                    let at = line.len() - trimmed.len() + at;
+                    format!("{}\\{}", &line[..at], &line[at..])
+                }
+                None => line.to_string(),
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// `1. ` / `23) ` 형태의 순서 목록 마커 판정.
-fn is_ordered_marker(s: &str) -> bool {
+/// Where the `\` goes in a line starting `1. ` / `23) ` (or ending there):
+/// before it, as the base wrote; with a tab after the marker, before the
+/// punctuation of a 1–9 digit marker.
+fn ordered_marker_escape(s: &str) -> Option<usize> {
     let digits = s.bytes().take_while(|b| b.is_ascii_digit()).count();
-    if digits == 0 {
-        return false;
+    if digits == 0 || !matches!(s.as_bytes().get(digits), Some(b'.' | b')')) {
+        return None;
     }
-    matches!(s.as_bytes().get(digits), Some(b'.') | Some(b')'))
-        && matches!(s.as_bytes().get(digits + 1), Some(b' ') | None)
+    match s.as_bytes().get(digits + 1) {
+        Some(b' ') | None => Some(0),
+        Some(b'\t') if digits <= 9 => Some(digits),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,9 +264,30 @@ struct State {
     /// The paragraphs already reported as written as plain text
     /// ([`super::guard::written_as_text`]).
     warned: std::collections::HashSet<(usize, usize)>,
+    /// The reference registered for each note occurrence of the document
+    /// (its address, [`State::note_at`]), which a fallback keeps
+    /// ([`fallback`]).
+    note_marks: HashMap<usize, Md>,
+    /// A copy's note occurrences and the document's they stand for
+    /// ([`alias_copy`]).
+    note_alias: HashMap<usize, usize>,
+    /// The copies drawn ([`expanded`]), kept so their addresses stay theirs.
+    copies: Vec<std::rc::Rc<Paragraph>>,
 }
 
 impl State {
+    /// Keeps a copy drawn from until the document is drawn.
+    fn keep(&mut self, copy: Paragraph) -> std::rc::Rc<Paragraph> {
+        let copy = std::rc::Rc::new(copy);
+        self.copies.push(copy.clone());
+        copy
+    }
+
+    /// The note occurrence `at` stands for ([`alias_copy`]).
+    fn note_at(&self, at: usize) -> usize {
+        self.note_alias.get(&at).copied().unwrap_or(at)
+    }
+
     fn new() -> Self {
         Self {
             destinations: Default::default(),
@@ -261,6 +296,9 @@ impl State {
             warnings: Vec::new(),
             at: (0, 0),
             warned: Default::default(),
+            note_marks: HashMap::new(),
+            note_alias: HashMap::new(),
+            copies: Vec::new(),
         }
     }
 }
@@ -274,6 +312,31 @@ struct Assets {
     images: HashMap<String, Vec<u8>>,
     /// Keys used by links whose picture has no bytes: no file may take them.
     link_only: std::collections::HashSet<String>,
+    /// The key each registered source picture got: the same source always
+    /// gets the same one, and a fallback writes it ([`Kept`]).
+    drawn: HashMap<String, String>,
+    /// Per candidate key, its keys already found taken ([`Taken`]).
+    taken: HashMap<String, Taken>,
+}
+
+/// The first `len` keys of a candidate (`a.png`, `a-2.png` …), all taken —
+/// a taken key stays taken, with the same bytes — with where each content
+/// first sits among them and the first taken only by a link without bytes,
+/// so a picture never walks them again (one walk per key in all).
+/// 이것을 실패시키는 것: 매번 처음부터 걷기 · 같은 바이트·바이트 없는 키 조회 삭제
+/// (`colliding_pictures_take_linear_time`, `asset_keys_match_the_full_walk`).
+#[derive(Default)]
+struct Taken {
+    len: u32,
+    bytes: HashMap<u64, Vec<u32>>,
+    link_only: Option<u32>,
+}
+
+fn bytes_hash(data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    h.finish()
 }
 
 impl Assets {
@@ -294,19 +357,8 @@ impl Assets {
             return candidate;
         }
         let data = styles.image_data(path);
-        let mut key = candidate.clone();
-        let mut n = 1;
-        loop {
-            match (self.images.get(&key), data) {
-                (Some(existing), Some(d)) if existing.as_slice() == d => break,
-                (None, Some(_)) if !self.link_only.contains(&key) => break,
-                (None, None) => break,
-                _ => {
-                    n += 1;
-                    key = suffixed_key(&candidate, n);
-                }
-            }
-        }
+        let key = self.free_key(&candidate, data);
+        self.drawn.insert(path.to_string(), key.clone());
         match data {
             Some(d) => {
                 self.images.entry(key.clone()).or_insert_with(|| d.to_vec());
@@ -316,6 +368,45 @@ impl Assets {
             }
         }
         key
+    }
+
+    /// The first of `candidate`'s keys a picture with `data` may use: one
+    /// holding the same bytes, or a free one (not taken by a link without
+    /// bytes); without bytes, the first key no file holds. The keys already
+    /// found taken are looked up ([`Taken`]), the rest walked once.
+    fn free_key(&mut self, candidate: &str, data: Option<&[u8]>) -> String {
+        let at = |n: u32| if n == 1 { candidate.to_string() } else { suffixed_key(candidate, n) };
+        let taken = self.taken.entry(candidate.to_string()).or_default();
+        let hash = data.map(bytes_hash);
+        let reused = match (data, hash) {
+            (Some(d), Some(h)) => taken.bytes.get(&h).and_then(|ns| {
+                ns.iter().copied().find(|&n| self.images.get(&at(n)).is_some_and(|e| e == d))
+            }),
+            _ => taken.link_only,
+        };
+        if let Some(n) = reused {
+            return at(n);
+        }
+        let mut n = taken.len + 1;
+        loop {
+            let key = at(n);
+            match (self.images.get(&key), data) {
+                (Some(existing), Some(d)) if existing.as_slice() == d => return key,
+                (None, Some(_)) if !self.link_only.contains(&key) => return key,
+                (None, None) => return key,
+                (existing, _) => {
+                    // Taken, right after the keys already found taken.
+                    taken.len = n;
+                    match existing {
+                        Some(e) => taken.bytes.entry(bytes_hash(e)).or_default().push(n),
+                        None => {
+                            taken.link_only.get_or_insert(n);
+                        }
+                    }
+                    n += 1;
+                }
+            }
+        }
     }
 }
 
@@ -421,7 +512,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 let at = code.iter().map(|(_, at)| *at).collect();
                 blocks.push(Block {
                     markdown: Md::code_block(&lines.join("\n")).into_string(),
-                    source: source(lines, at),
+                    source: source(lines.iter().map(|l| super::guard::plain_text(l)).collect(), at),
                     body: false,
                 });
                 code.clear();
@@ -460,7 +551,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             let (markdown, body) =
                 encode_paragraph_styled(paragraph, styles, &mut st, continuation_level.is_some());
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph, 0, true);
+                let text =
+                    fallback(std::slice::from_ref(paragraph), 0, &mut st).remove(0).into_string();
                 // A continuation is its own block (`join` writes the same
                 // blank line before it as appending did), so it can fall
                 // back alone and a Body block's check never sees it.
@@ -665,9 +757,10 @@ fn paragraph_text_styled(
         // fall back locally in `table_to_gfm`; captions join the parent.
         // 이것을 실패시키는 것: 블록 전체로 넓히기(`emphasis_fallback_stays_in_its_paragraph`).
         super::guard::written_as_text(&mut st.warnings, &mut st.warned, st.at);
-        return Md::plain(&super::guard::deep_text(paragraph, ctx.depth, true));
+        return fallback(std::slice::from_ref(paragraph), ctx.depth, st).remove(0);
     }
-    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
+    let mut kept = None;
+    let paragraph = expanded(paragraph, st, &mut kept);
     let mut output = Md::new();
 
     // Group consecutive text runs by InlineFormat for proper wrapping.
@@ -742,7 +835,8 @@ fn guarded_runs(
     ctx: Ctx,
     line: &mut Line,
 ) {
-    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
+    let mut kept = None;
+    let paragraph = expanded(paragraph, st, &mut kept);
     for (part, cs) in super::spread_groups(&paragraph.runs) {
         match part {
             Part::Text(content) => {
@@ -796,7 +890,9 @@ fn guarded_runs(
                     line.raw(Md::syntax(TOO_DEEP));
                     continue;
                 };
-                guarded_runs(&super::memo_anchor(anchor_runs), styles, st, inner, line);
+                let anchor = st.keep(super::memo_anchor(anchor_runs));
+                alias_copy(anchor_runs, &anchor.runs, st);
+                guarded_runs(&anchor, styles, st, inner, line);
                 line.raw(memo(content, styles, st, ctx));
             }
             // A control whose output is document text (a link's text, a
@@ -1355,6 +1451,76 @@ fn emphasis_kept(
     seen.iter().all(|&s| s)
 }
 
+/// `original`, or its memo-expanded copy (`expand_memos`) kept for the
+/// whole document ([`State::keep`]): the paragraph to draw.
+fn expanded<'a>(
+    original: &'a Paragraph,
+    st: &mut State,
+    kept: &'a mut Option<std::rc::Rc<Paragraph>>,
+) -> &'a Paragraph {
+    match hwpforge_core::field_view::expand_memos(original) {
+        std::borrow::Cow::Borrowed(_) => original,
+        std::borrow::Cow::Owned(copy) => {
+            let copy = kept.insert(st.keep(copy));
+            alias_copy(&original.runs, &copy.runs, st);
+            copy
+        }
+    }
+}
+
+/// A copy's note occurrences stand for the document's (`original`'s, or
+/// what those stand for), paired in the order the fallback walk meets them
+/// ([`super::guard::note_order`]: a memo's anchor in place, its body
+/// skipped, as `expand_memos` keeps it). The copy lives as long as the
+/// document is drawn ([`State::keep`]), so no address is taken twice.
+/// Unpaired (the orders differ), the copy's notes stand for themselves,
+/// which no fallback walk of the document meets: their text.
+/// 이것을 실패시키는 것: 별칭 삭제 · 별칭을 문서 주소로 풀지 않기
+/// (`fallback_keeps_notes_by_occurrence`).
+fn alias_copy(original: &[hwpforge_core::Run], copy: &[hwpforge_core::Run], st: &mut State) {
+    let from = super::guard::note_order(copy);
+    let to = super::guard::note_order(original);
+    if from.len() == to.len() {
+        for (c, o) in from.into_iter().zip(to) {
+            let o = st.note_at(o);
+            st.note_alias.insert(c, o);
+        }
+    }
+}
+
+/// The styled plain-text fallback of `paragraphs` drawn at `depth`
+/// ([`super::guard::fallback_markdown`]): it keeps the pictures the view
+/// registered, allowed links, and the references of the notes it
+/// registered.
+fn fallback(paragraphs: &[Paragraph], depth: usize, st: &mut State) -> Vec<Md> {
+    super::guard::fallback_markdown(paragraphs, depth, true, &mut Kept { st })
+}
+
+/// The styled view's [`super::guard::Keeper`]: pictures with the key the
+/// view gave their source (none is registered anew), allowed links, the
+/// reference registered for the very note.
+struct Kept<'a> {
+    st: &'a mut State,
+}
+
+impl super::guard::Keeper for Kept<'_> {
+    fn picture(&mut self, image: &hwpforge_core::image::Image) -> Option<Md> {
+        let key = self.st.assets.drawn.get(&image.path)?;
+        Some(Md::image(Md::text(image_stem(&image.path)), key, &mut self.st.destinations))
+    }
+
+    fn link(&mut self, text: &str, url: &str) -> Option<Md> {
+        super::link_url_allowed(url).then(|| {
+            let label = Md::plain_parts(&[super::guard::Fallback::Text(text.to_string())]);
+            Md::link(label, url, &mut self.st.destinations)
+        })
+    }
+
+    fn note(&mut self, note: &Control) -> Option<Md> {
+        self.st.note_marks.get(&self.st.note_at(note as *const Control as usize)).cloned()
+    }
+}
+
 /// Encodes a single control element into styled markdown.
 fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
     match control {
@@ -1540,18 +1706,23 @@ fn note_definition(
     ctx: Ctx,
 ) -> Md {
     let raw = match ctx.enter() {
-        Some(inner) => paragraphs
-            .iter()
-            .map(|p| super::guard::deep_text(p, inner.depth, true))
+        // Notes in a note body are written inline, not registered: none to
+        // keep as references.
+        Some(inner) => fallback(paragraphs, inner.depth, st)
+            .into_iter()
+            .map(Md::into_string)
             .collect::<Vec<_>>()
             .join(" "),
-        None => TOO_DEEP.to_string(),
+        None => super::guard::plain_text(TOO_DEEP),
     };
-    if matches!(control, Control::Footnote { .. }) {
+    let mark = if matches!(control, Control::Footnote { .. }) {
         st.notes.add_footnote(body, raw, st.at)
     } else {
         st.notes.add_endnote(body, raw, st.at)
-    }
+    };
+    let at = st.note_at(control as *const Control as usize);
+    st.note_marks.insert(at, mark.clone());
+    mark
 }
 
 /// Equation script as Markdown text with `$` escaped too, so it opens no
@@ -1871,13 +2042,7 @@ fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ct
                     // 이것을 실패시키는 것: 칸 실패를 부모 Body로 전파
                     // (`joined_cell_emphasis_stays_local`).
                     super::guard::written_as_text(&mut st.warnings, &mut st.warned, st.at);
-                    Md::join(
-                        cell.paragraphs
-                            .iter()
-                            .map(|p| Md::plain(&super::guard::deep_text(p, ctx.depth, true)))
-                            .collect(),
-                        "\n",
-                    )
+                    Md::join(fallback(&cell.paragraphs, ctx.depth, st), "\n")
                 };
                 cells.push(md.into_cell());
                 continue;
@@ -1925,7 +2090,8 @@ fn extract_paragraph_text_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Html {
-    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
+    let mut kept = None;
+    let paragraph = expanded(paragraph, st, &mut kept);
     let mut output = Html::new();
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
@@ -4232,6 +4398,74 @@ mod tests {
     /// whichever comes first; a picture without bytes never shares a key with
     /// a file.
     ///
+    /// Keys found by looking up the keys already taken are the keys the
+    /// full walk from `a.png` finds, for every order of five of seven pictures
+    /// (two file names, one another's `-2`; equal bytes, other bytes, none), and
+    /// the assets end the same.
+    /// 이것을 실패시키는 것: 같은 바이트 재사용 조회 삭제 · 바이트 없는 키 재사용 조회 삭제 ·
+    /// 접두 기록에 넘친 키 넣기.
+    #[test]
+    fn asset_keys_match_the_full_walk() {
+        let pool: [(&str, Option<&[u8]>); 7] = [
+            ("A/a.png", Some(b"1")),
+            ("B/a.png", Some(b"2")),
+            ("C/a.png", None),
+            ("D/a.png", Some(b"1")),
+            ("E/a-2.png", Some(b"2")),
+            ("F/a-2.png", None),
+            ("G/a.png", None),
+        ];
+        let mut styles = MockStyles::new();
+        for (p, d) in pool {
+            if let Some(d) = d {
+                styles.image_data.insert(p.to_string(), d.to_vec());
+            }
+        }
+        // The walk before: every key from the candidate on.
+        let walk = |images: &mut HashMap<String, Vec<u8>>,
+                    link_only: &mut std::collections::HashSet<String>,
+                    path: &str| {
+            let candidate = image_rel_path(path, &styles);
+            let data = styles.image_data(path);
+            let mut key = candidate.clone();
+            let mut n = 1;
+            loop {
+                match (images.get(&key), data) {
+                    (Some(e), Some(d)) if e.as_slice() == d => break,
+                    (None, Some(_)) if !link_only.contains(&key) => break,
+                    (None, None) => break,
+                    _ => {
+                        n += 1;
+                        key = suffixed_key(&candidate, n);
+                    }
+                }
+            }
+            match data {
+                Some(d) => {
+                    images.entry(key.clone()).or_insert_with(|| d.to_vec());
+                }
+                None => {
+                    link_only.insert(key.clone());
+                }
+            }
+            key
+        };
+        let mut checked = 0;
+        for code in 0..7usize.pow(5) {
+            let order: Vec<&str> = (0..5).map(|k| pool[code / 7usize.pow(k) % 7].0).collect();
+            let mut assets = Assets::default();
+            let (mut images, mut link_only) = (HashMap::new(), std::collections::HashSet::new());
+            for path in &order {
+                let want = walk(&mut images, &mut link_only, path);
+                assert_eq!(assets.key(path, &styles, true), want, "{order:?}");
+            }
+            assert_eq!(assets.images, images, "{order:?}");
+            assert_eq!(assets.link_only, link_only, "{order:?}");
+            checked += 1;
+        }
+        assert_eq!(checked, 16807);
+    }
+
     /// 이것을 실패시키는 것: 충돌 시 덮어쓰기 · 접미사 규칙 바꾸기 · 바이트 없는 링크가
     /// 남의 파일 키를 쓰기 · 파일이 바이트 없는 링크의 키를 쓰기.
     #[test]
@@ -4561,7 +4795,11 @@ mod tests {
                     let mut blocks = st.notes.render_definitions();
                     assert_eq!(blocks.len(), 1);
                     assert!(blocks[0].markdown.contains(expected));
-                    assert_eq!(blocks[0].source.as_ref().unwrap().texts, vec![expected]);
+                    // The fallback Markdown, its text escaped.
+                    assert_eq!(
+                        blocks[0].source.as_ref().unwrap().texts,
+                        vec![super::super::guard::plain_text(expected)]
+                    );
                     blocks[0].markdown = "<script>bad</script>".into();
                     let allowed = super::super::guard::Allowed {
                         tags: super::super::guard::STYLED_TAGS,

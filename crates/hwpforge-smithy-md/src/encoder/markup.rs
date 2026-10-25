@@ -173,10 +173,25 @@ impl Md {
         Self::of(out)
     }
 
-    /// Document text as plain text ([`super::guard::plain_text`]): every
-    /// ASCII punctuation mark escaped, line endings as spaces.
-    pub(crate) fn plain(raw: &str) -> Self {
-        Self::of(super::guard::plain_text(raw))
+    /// Plain-text fallback pieces: their text as
+    /// [`super::guard::escape_plain`] writes it (every ASCII punctuation mark
+    /// escaped, line endings as spaces, no whitespace dropped) with the
+    /// markup it keeps in place ([`super::guard::Fallback`]). A paragraph's
+    /// leading whitespace is dropped by its caller
+    /// ([`super::guard::fallback_markdown`]); a link label keeps all of it.
+    /// 이것을 실패시키는 것: 앞 공백 지우기 · 남긴 표지 이스케이프
+    /// (`fallback_keeps_pictures_links_and_notes`, `fallback_link_labels_keep_their_spaces`).
+    pub(crate) fn plain_parts(parts: &[super::guard::Fallback]) -> Self {
+        let mut out = Self::new();
+        for part in parts {
+            match part {
+                super::guard::Fallback::Text(t) => {
+                    out.push(Self::of(super::guard::escape_plain(t)));
+                }
+                super::guard::Fallback::Kept(md) => out.push(md.clone()),
+            }
+        }
+        out
     }
 
     /// A lossy paragraph: its document text escaped only where CommonMark
