@@ -6954,6 +6954,24 @@ fn w2_patch_and_fill_shared_fixtures() {
     assert!(!out.exists(), "a refused edit writes no output");
 }
 
+#[test]
+// 이것을 실패시키는 것(W4): convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기
+// (inspect 단계는 이 입력을 통과시키므로 convert-hwp5 도 ops 분류를 그대로 보인다).
+fn w4_hwp5_decoder_core_shared_fixture() {
+    let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
+    let source = data.join("hwp5-dangling-table-border-fill.hwp");
+    let out = test_tmp().join("out.hwpx");
+    let (err, _, exit) =
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_cli_manifest_case("hwp5.decode_core", &err, exit);
+    assert!(!out.exists(), "a refused conversion writes no output");
+    let pdf = test_tmp().join("out.pdf");
+    let (err, _, exit) =
+        run_json(&["to-pdf", source.to_str().unwrap(), "-o", pdf.to_str().unwrap()]);
+    assert_cli_manifest_case("hwp5.to_pdf.decode_core", &err, exit);
+    assert!(!pdf.exists(), "a refused render writes no output");
+}
+
 fn assert_cli_manifest_case(id: &str, error: &serde_json::Value, exit: i32) {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))

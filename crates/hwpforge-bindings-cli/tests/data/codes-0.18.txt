@@ -260,3 +260,9 @@ patch	PATCH_FAILED	patch.missing_metadata_first	"Re-export the target section wi
 fill	DECODE_FAILED	fill.input_decode	"Check that the file is a valid HWPX document"
 fill	PATCH_FAILED	fill.patch.rejected	null
 fill	SECTION_OUT_OF_RANGE	fill.patch.section_out_of_range	null
+# W4 HWP5: validate·encode get their own codes (exit 2 as the former HWP5_CONVERT_FAILED); a decoder Core error is a decode failure (shared fixture).
+convert-hwp5	VALIDATION_FAILED	adapter.convert-hwp5.validation_failed	"Check that the source is a supported HWP5 document and the output path is writable"
+convert-hwp5	ENCODE_FAILED	adapter.convert-hwp5.encode_failed	"Check that the source is a supported HWP5 document and the output path is writable"
+to-pdf	ENCODE_FAILED	adapter.to-pdf.encode_failed	null
+convert-hwp5	HWP5_DECODE_FAILED	hwp5.decode_core	"Check that the source is a supported HWP5 document and the output path is writable"
+to-pdf	HWP5_DECODE_FAILED	hwp5.to_pdf.decode_core	null

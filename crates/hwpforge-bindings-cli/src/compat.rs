@@ -113,11 +113,14 @@ const TABLE: &[Row] = &[
 
     row!(ConvertHwp5, Hwp5DecodeFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
     row!(ConvertHwp5, Hwp5ConvertFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
+    row!(ConvertHwp5, ValidationFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
+    row!(ConvertHwp5, EncodeFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
 
     row!(ToPdf, Hwp5DecodeFailed, 2),
     row!(ToPdf, Hwp5ConvertFailed, 2),
     row!(ToPdf, DecodeFailed, 2),
     row!(ToPdf, ValidationFailed, 2),
+    row!(ToPdf, EncodeFailed, 2),
     row!(ToPdf, UnrecognizedFormat, 2, "to-pdf detects the format by content — the extension is only a hint"),
     row!(ToPdf, PdfRenderFailed, 2, "cacheless documents need a Hancom re-save; font errors may need --font-dir/--discovery or --degraded"),
     row!(ToPdf, InvalidDiscovery, 2),
@@ -673,6 +676,47 @@ mod tests {
             Some("Check that the source is a supported HWP5 document and the output path is writable")
         );
         assert_eq!(exit_code(Command::ConvertHwp5, got.code), 2);
+    }
+
+    #[test]
+    // 이것을 실패시키는 것(W4): convert-hwp5·to-pdf 의 VALIDATION_FAILED·ENCODE_FAILED 표 행 삭제(힌트 소실),
+    // 행의 종료 값을 1 로, ops 분류를 HWP5_CONVERT_FAILED 로 되돌리기.
+    fn hwp5_validate_and_encode_stages_keep_hint_and_exit() {
+        use hwpforge_convert::ConvertError;
+        use hwpforge_core::CoreError;
+        use hwpforge_smithy_hwpx::HwpxError;
+
+        let staged = || {
+            [
+                (
+                    ConvertError::Validate(CoreError::InvalidStructure {
+                        context: "document".into(),
+                        reason: "no sections".into(),
+                    }),
+                    "VALIDATION_FAILED",
+                ),
+                (
+                    ConvertError::Encode(HwpxError::XmlSerialize { detail: "section0.xml".into() }),
+                    "ENCODE_FAILED",
+                ),
+            ]
+        };
+        for (error, code) in staged() {
+            let got = convert_error(Command::ConvertHwp5, ConvertOpsError::Convert(error));
+            assert_eq!(got.code.as_str(), code);
+            assert_eq!(
+                got.hint.as_deref(),
+                Some("Check that the source is a supported HWP5 document and the output path is writable")
+            );
+            assert_eq!(registered_exit(Command::ConvertHwp5, got.code), Some(2));
+        }
+        for (error, code) in staged() {
+            let got = convert_error(Command::ToPdf, ConvertOpsError::Convert(error));
+            assert_eq!(got.code.as_str(), code);
+            // to-pdf prints no hint for a conversion failure, as before.
+            assert!(got.hint.is_none(), "{got:?}");
+            assert_eq!(registered_exit(Command::ToPdf, got.code), Some(2));
+        }
     }
 
     #[test]

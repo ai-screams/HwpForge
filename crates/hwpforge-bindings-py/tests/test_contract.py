@@ -582,13 +582,14 @@ def test_convert_md_rejects_an_unknown_preset() -> None:
 
 def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
     # 이것을 실패시키는 것: OSError 포장/복원 제거, DECODE_FAILED를 INVALID_INPUT으로 치환.
+    # 이것을 실패시키는 것(W4): convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기.
     import copy
     import errno
     import pickle
     from functools import partial
     from pathlib import Path
 
-    from hwpforge import Document, HwpForgeFileNotFoundError, HwpForgeIOError
+    from hwpforge import Document, HwpForgeFileNotFoundError, HwpForgeIOError, convert_hwp5
 
     data = Path(__file__).resolve().parents[2] / "hwpforge/tests/data"
     manifest = json.loads((data / "error_contract_018.json").read_text())
@@ -620,6 +621,14 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
         "fill.input_decode": partial(
             Document((data / "corrupt-input.hwpx").read_bytes()).fill, {"a": "b"}
         ),
+        # W4: a decoder Core error (broken table borderFill reference) is a decode failure.
+        "hwp5.decode_core": partial(
+            convert_hwp5, (data / "hwp5-dangling-table-border-fill.hwp").read_bytes()
+        ),
+        # `to_pdf` detects the container by content, so HWP5 bytes take the HWP5 leg.
+        "hwp5.to_pdf.decode_core": Document(
+            (data / "hwp5-dangling-table-border-fill.hwp").read_bytes()
+        ).to_pdf,
     }
     for case in manifest["cases"]:
         if "python" not in case["surfaces"]:

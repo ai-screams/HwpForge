@@ -145,6 +145,12 @@ fn w1_read_and_io_causes_are_canonical() {
         .unwrap()
         .iter()
         .filter(|case| case["surfaces"].get("rust").is_some())
+        // `convert.*` operations live in hwpforge-convert, which this crate
+        // cannot depend on; `hwpforge-convert/tests/w4_errors.rs` consumes them.
+        // 이것을 실패시키는 것: 이 거르기 삭제(convert 몫 case 를 이 harness 가 소비하지 못해 집합 불일치).
+        .filter(|case| {
+            !case["surfaces"]["rust"]["operation"].as_str().unwrap().starts_with("convert.")
+        })
         .map(|case| case["id"].as_str().unwrap())
         .collect();
     assert_eq!(consumed, declared);

@@ -97,10 +97,11 @@ pub struct Hwp5Meta {
 /// # Errors
 ///
 /// [`ConvertOpsError::Convert`], which names the stage that failed:
-/// `HWP5_DECODE_FAILED` when the container or its records could not be read,
-/// and `HWP5_CONVERT_FAILED` for every stage after that — validation, HWPX
-/// encoding and the layout-hint replay. See [`ConvertOpsError::code`] for the
-/// full table.
+/// `HWP5_DECODE_FAILED` when the container, its records or the decoder's own
+/// reference checks failed, `VALIDATION_FAILED` when the decoded document
+/// failed Core validation, `ENCODE_FAILED` when the HWPX output could not be
+/// built, and `HWP5_CONVERT_FAILED` for the layout-hint replay. See
+/// [`ConvertOpsError::code`] for the full table.
 ///
 /// # Examples
 ///
