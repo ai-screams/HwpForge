@@ -32,7 +32,6 @@ pub enum Command {
     Patch,
     Templates,
 
-    #[allow(dead_code, reason = "schema stays CLI-local; variant keeps the inventory exhaustive")]
     Schema,
     ToMd,
 
@@ -290,8 +289,6 @@ const TABLE: &[Row] = &[
     row!(Stamp, StampNameDuplicate, 1),
     row!(Stamp, ValidationFailed, 2),
     row!(ToJson, InvalidExtension, 1),
-    row!(ToJson, PatchFailed, 2),
-    row!(ToJson, SectionIndexMismatch, 2),
     row!(ToJson, SectionOutOfRange, 1),
     row!(ToJson, UpstreamUnmapped, 2),
     row!(Validate, JsonSerializeFailed, 2),
@@ -545,6 +542,16 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 같은 (명령, 코드) 행 중복
+    fn table_has_no_duplicate_command_code_rows() {
+        let mut seen = std::collections::HashSet::new();
+        for row in TABLE {
+            let key = (row.cmd, row.code.as_str());
+            assert!(seen.insert(key), "duplicate row: {key:?}");
+        }
+    }
+
+    #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn preset_not_found_code_is_shared_by_commands() {
         assert_code(
@@ -753,26 +760,32 @@ mod tests {
     }
 
     #[test]
-    // 이것을 실패시키는 것: 코드 출력·종료 정책·등록을 변경, 미소비 기준선 또는 정책 행을 추가.
-    fn w1_manifest_canonical_adapter() {
-        // 이것을 실패시키는 것: F12 새 v2 baseline 행의 코드를 다른 값으로 변경.
-        // 이것을 실패시키는 것: B1 Draft-only unreachable 건너뛰기 삭제, B3 stamp SelfVerifyFailed의 ops hint 위임 삭제.
+    fn all_policy_rows_match_baseline() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
                 .unwrap();
-        let baseline: std::collections::BTreeSet<_> = include_str!("../tests/data/codes-0.18.txt")
+        // 이것을 실패시키는 것: TABLE 행의 코드·힌트·종료 값 변경, 행 추가 또는 기준선에서 TABLE 행 삭제.
+        let mut covered = Vec::new();
+        for line in include_str!("../tests/data/codes-0.18.txt")
             .lines()
             .filter(|line| !line.starts_with('#'))
-            .map(|line| line.rsplit_once('\t').unwrap().0.to_owned())
-            .collect();
-        let mut consumed = std::collections::BTreeSet::new();
-        let mut covered = Vec::new();
-        for case in manifest["cases"].as_array().unwrap() {
-            let Some(surface) = case["surfaces"].get("cli") else { continue };
-            if surface["mode"] == "unreachable" {
-                continue;
-            }
-            let command = match surface["operation"].as_str().unwrap() {
+        {
+            let fields: Vec<_> = line.split('\t').collect();
+            let operation = fields[0];
+            let expected = fields[1];
+            // Two copies only: implementation + oracle. Linked causes keep their exit in the manifest.
+            let exit = if fields[2] == "-" {
+                fields[3].parse::<i32>().unwrap()
+            } else {
+                let case = manifest["cases"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|case| case["id"] == fields[2])
+                    .unwrap();
+                case["surfaces"]["cli"]["exit"].as_i64().unwrap() as i32
+            };
+            let command = match operation {
                 "audit-hwp5" => Command::AuditHwp5,
                 "census-hwp5" => Command::CensusHwp5,
                 "convert-hwp5" => Command::ConvertHwp5,
@@ -798,13 +811,6 @@ mod tests {
                 "validate" => Command::Validate,
                 other => panic!("unconsumed cli operation: {other}"),
             };
-            let expected = case["expected_code"].as_str().unwrap();
-            consumed.insert(format!(
-                "{}\t{}\t{}",
-                surface["operation"].as_str().unwrap(),
-                expected,
-                case["id"].as_str().unwrap()
-            ));
             let code = match expected {
                 "INVALID_SET" => CliCode::Cli(CliOnly::InvalidSet),
                 "DUPLICATE_SET" => CliCode::Cli(CliOnly::DuplicateSet),
@@ -822,30 +828,14 @@ mod tests {
                 ),
                 CliCode::Cli(_) => CliError::new(code, "CLI argument or diagnostic rejection"),
             };
-            assert_eq!(
-                registered_exit(command, code),
-                Some(surface["exit"].as_i64().unwrap() as i32),
-                "{}",
-                case["id"]
-            );
-            assert_eq!(got.code.as_str(), expected, "{}", case["id"]);
-            let baseline_row = include_str!("../tests/data/codes-0.18.txt")
-                .lines()
-                .find(|line| line.split('\t').any(|field| field == case["id"].as_str().unwrap()))
-                .unwrap();
-            let hint: Option<String> =
-                serde_json::from_str(baseline_row.rsplit_once('\t').unwrap().1).unwrap();
+            assert_eq!(registered_exit(command, code), Some(exit), "{line}");
+            assert_eq!(exit_code(command, got.code), exit, "{line}");
+            assert_eq!(got.code.as_str(), expected, "{line}");
+            let hint: Option<String> = serde_json::from_str(fields[4]).unwrap();
             match hint.as_deref() {
                 Some("@dynamic" | "@ops") => {}
-                expected => assert_eq!(got.hint.as_deref(), expected, "{}", case["id"]),
+                expected => assert_eq!(got.hint.as_deref(), expected, "{line}"),
             }
-
-            assert_eq!(
-                exit_code(command, got.code),
-                surface["exit"].as_i64().unwrap() as i32,
-                "{}",
-                case["id"]
-            );
         }
         for row in TABLE {
             assert!(
@@ -855,8 +845,53 @@ mod tests {
                 row.code
             );
         }
-        assert_eq!(consumed, baseline, "baseline rows must link to consumed manifest cases");
     }
+
+    #[test]
+    fn manifest_surface_cases_are_consumed() {
+        // 이것을 실패시키는 것: read.section 소비 누락·기준선 코드 변경, 미검토 unreachable ID 추가.
+        // 이것을 실패시키는 것: unreachable 이유 비우기, manifest에 없는 기준선 ID 추가.
+        // 이것을 실패시키는 것: @case를 중복 종료 literal로 변경.
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))
+                .unwrap();
+        let baseline: Vec<Vec<&str>> = include_str!("../tests/data/codes-0.18.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| line.split('\t').collect())
+            .collect();
+        let expected_ids: std::collections::BTreeSet<_> = manifest["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["surfaces"].get("cli").is_some())
+            .map(|case| case["id"].as_str().unwrap())
+            .collect();
+        let mut consumed = std::collections::BTreeSet::new();
+        let mut linked = std::collections::BTreeSet::new();
+        for case in manifest["cases"].as_array().unwrap() {
+            let Some(surface) = case["surfaces"].get("cli") else { continue };
+            let id = case["id"].as_str().unwrap();
+            if surface["mode"] == "unreachable" {
+                assert_eq!(id, "cell.draft_depth", "unreviewed unreachable case: {id}");
+                assert!(!surface["reason"].as_str().unwrap().is_empty());
+            } else {
+                let row = baseline
+                    .iter()
+                    .find(|row| row[2] == id)
+                    .unwrap_or_else(|| panic!("unconsumed case: {id}"));
+                assert_eq!(row[0], surface["operation"].as_str().unwrap(), "{id}");
+                assert_eq!(row[1], case["expected_code"].as_str().unwrap(), "{id}");
+                assert_eq!(row[3], "@case", "linked exit belongs only to the manifest: {id}");
+                linked.insert(id);
+            }
+            consumed.insert(id);
+        }
+        assert_eq!(consumed, expected_ids, "unconsumed surface case IDs");
+        let baseline_ids = baseline.iter().map(|row| row[2]).filter(|id| *id != "-").collect();
+        assert_eq!(linked, baseline_ids, "baseline links must name consumed cases");
+    }
+
     #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn to_pdf_hint_follows_the_render_cause() {

@@ -11,7 +11,7 @@ A document 한컴 has saved carries package entries HwpForge's encoder does not 
 | `fill`                       | works               | writes the named 누름틀, keeps every other entry byte for byte            |
 | `patch`                      | works               | text inside existing paragraphs and cells; package preserved              |
 | `set-cell`                   | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1       |
-| `insert-para`, `delete-para` | refused             | `UNCARRIED_ZIP_ENTRIES` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1           |
+| `insert-para`, `delete-para` | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1       |
 | `stamp`                      | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1       |
 | `from-json --base`           | lossy               | succeeds; inherits images, drops the entries above and every layout cache |
 | `restyle` (MCP, Python)      | lossy               | succeeds; re-encodes like `from-json` — see [templates.md](templates.md)  |

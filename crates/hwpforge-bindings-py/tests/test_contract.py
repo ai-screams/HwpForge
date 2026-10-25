@@ -673,10 +673,16 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
         calls[f"cell.{name}"] = partial(
             Document((data / f"{name}.hwpx").read_bytes()).set_cell, table=0, at="0,0", text="text"
         )
+    # 이것을 실패시키는 것: read.section 소비 누락, 미검토 unreachable ID 또는 빈 이유.
+    expected_ids = {case["id"] for case in manifest["cases"] if "python" in case["surfaces"]}
+    consumed = set()
     for case in manifest["cases"]:
         if "python" not in case["surfaces"]:
             continue
         if case["surfaces"]["python"]["mode"] == "unreachable":
+            assert case["id"] == "cell.draft_depth"
+            assert case["surfaces"]["python"]["reason"]
+            consumed.add(case["id"])
             continue
         operation = case["surfaces"]["python"]["operation"]
         source = OSError(errno.EACCES, "denied", "first", None, "second")
@@ -692,6 +698,7 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
                 calls[operation]()
         error = caught.value
         assert error.code == case["expected_code"]
+        consumed.add(case["id"])
         if operation.startswith("cell.depth-"):
             # 이것을 실패시키는 것: F7 깊이 fixture의 decode 오류에 bug 힌트 추가.
             assert "Report this as a bug." not in (error.hint or "")
@@ -729,6 +736,8 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
                         "winerror",
                     ):
                         assert getattr(restored, name, None) == getattr(original, name, None)
+
+    assert consumed == expected_ids, f"unconsumed Python case IDs: {expected_ids - consumed}"
 
 
 def test_io_repr_preserves_subclass_and_os_fields():

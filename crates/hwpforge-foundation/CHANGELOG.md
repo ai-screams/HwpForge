@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.18
+## [Unreleased]
 
-- Breaking (W3): remove `SetCellCodecFailed`, `StampCodecFailed`, `StructuralCodec`, `StampDeltaMismatch`, and `StampCellTargetDuplicate`, including string lookup. Use the codec stage code, `InternalInvariant`, `SelfVerifyFailed`, or `CellTargetDuplicate` as appropriate.
+### Changed (BREAKING)
 
-- Breaking: retire `ReadSectionOutOfRange`, `ReadTableOutOfRange`, `ReadFieldNotFound`, `SectionWorkflowFailed`, `SetCellFailed`, `StampFailed`, and `StructuralEditFailed`, including string lookup. Use canonical domain codes or `UpstreamUnmapped`.
+- `SetCellCodecFailed`·`StampCodecFailed`·`StructuralCodec`·`StampDeltaMismatch`·`StampCellTargetDuplicate`와 옛 문자열 lookup을 삭제한다. 실패 단계에 맞는 코드, `InternalInvariant`·`SelfVerifyFailed`·`CellTargetDuplicate`를 사용한다.
+- `ReadSectionOutOfRange`·`ReadTableOutOfRange`·`ReadFieldNotFound`·`SectionWorkflowFailed`·`SetCellFailed`·`StampFailed`·`StructuralEditFailed`와 옛 문자열 lookup을 삭제한다. 해당 도메인 코드나 `UpstreamUnmapped`를 사용한다.
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.16.11...hwpforge-foundation-v0.17.0) - 2026-10-23
 

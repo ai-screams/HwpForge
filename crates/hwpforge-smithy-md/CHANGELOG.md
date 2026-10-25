@@ -7,21 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- `MdDocument` 가 `#[non_exhaustive]` 가 되고 `warnings: Vec<MdWarning>` 필드를 추가한다. 대상이 빈 이미지(`![x]()`)는 그림을 넣지 않고 이 필드에 `ImageEmbedSkipped`(`src` 빈 문자열, 이유 `Unreadable`)로 남긴다. 이행: `MdDocument { document, style_registry }` 로 구조 분해하던 코드는 `MdDocument { document, style_registry, .. }` 로 바꾸고, 경고가 필요하면 `warnings` 를 읽는다. 이 구조체는 디코더만 만든다.
+
 ### Changed
 
-- (breaking) `MdDocument` 가 `#[non_exhaustive]` 가 되고 `warnings: Vec<MdWarning>` 필드가 생겼다. 대상이 빈 이미지(`![x]()`)는 그림을 넣지 않고 이 필드에 `ImageEmbedSkipped`(`src` 빈 문자열, 이유 `Unreadable`)로 남긴다. 이행: `MdDocument { document, style_registry }` 로 구조 분해하던 코드는 `MdDocument { document, style_registry, .. }` 로 바꾸고, 경고가 필요하면 `warnings` 를 읽는다. 이 구조체는 디코더만 만든다.
 - styled 출력은 `ContainerTooDeep` 경고를 내지 않는다. 0.17.1 부터 Core 검증이 깊이 32단계를 넘는 문서를 거부해(#267) 검증된 문서는 styled 가 그리는 깊이 한도에 닿지 않으므로, 그 뒤로는 나지 않던 경고다. 변종은 lossy 출력의 표 중첩 경고로 그대로 쓰인다.
 
 ### Fixed
 
 - Markdown 의 대상이 빈 이미지(`![x]()`)가 0.17.1 에서 경고 없이 50×30mm 빈 그림 틀로 남던 것을, 0.17.0 처럼 "넣지 못함" 경고(`image "" not embedded (file unreadable) — image dropped`)와 함께 뺀다. 판정은 일반 Markdown 디코더에서 하므로, 한컴이 자산을 잃은 채 저장한 그림 틀(#266)은 HWPX·lossless 디코드와 두 자산 진입점(`load_referenced_images`, `collect_asset_plan`→`finish_assets`)에서 그대로 남는다.
 - styled Markdown 출력에서 본문 문단과 표 칸의 글자가 줄 머리에서 `- `·`1. `·`: `·`===`·표 구분 행처럼 Markdown 구조로 다시 읽히지 않도록 그 표지 앞에 `\` 를 붙인다. 목록·제목·각주·캡션과 lossy 출력은 이전과 같다(정의 목록이 생기던 블록만 아래처럼 바뀐다).
-- 문단 안 표 바로 뒤의 글이 표에 흡수되던 문제를 고쳤다. 표 뒤에 빈 줄을 넣어 뒤 글이 새 문단으로 남고, GFM 표 행에서 버려지던 글자도 보존된다.
+- 문단 안 표 바로 뒤의 글이 표에 흡수되던 문제를 고친다. 표 뒤에 빈 줄을 넣어 뒤 글이 새 문단으로 남고, GFM 표 행에서 버려지던 글자도 보존된다.
 - styled 본문 문단에서 줄머리의 메모·차트 주석 뒤에 글이 이어지면 주석 뒤에서 줄을 바꾼다. 뒤 글은 HTML 주석 블록에 흡수되지 않고 새 문단으로 남으며, 메모 주석도 남는다. 목록 continuation 등 다른 출력은 이전과 같다.
 - 위 규칙으로 막을 수 없는 드문 본문 문단은 서식 없는 글로 바꾸고 `MarkupWrittenAsText` 경고를 남긴다. 상호참조·필드·알 수 없는 컨트롤은 대체 글에서도 정상 출력과 같은 표시값을 쓴다.
 - 출력에 정의 목록이 남지 않아, 그 때문에 from-md 가 실패하던 경우가 없어진다.
-- styled 본문 문단·캡션·표 칸에서 굵게·기울임·취소선이 맞붙거나(`**a****1**`) 유니코드 문장부호 뒤에서 이어지면 다시 읽을 때 글자나 서식이 바뀌던 문제를 고쳤다. 강조 표지를 문단 단위로 배치한 뒤 최종 출력을 다시 읽어 확인하고, 맞는 배치가 없으면 그 칸이나 문단을 서식 없는 글로 쓰며 `MarkupWrittenAsText` 경고를 문단당 하나 남긴다. 목록·제목·각주·lossy 출력은 이전과 같다.
-
+- styled 본문 문단·캡션·표 칸에서 굵게·기울임·취소선이 맞붙거나(`**a****1**`) 유니코드 문장부호 뒤에서 이어지면 다시 읽을 때 글자나 서식이 바뀌던 문제를 고친다. 강조 표지를 문단 단위로 배치한 뒤 최종 출력을 다시 읽어 확인하고, 맞는 배치가 없으면 그 칸이나 문단을 서식 없는 글로 쓰며 `MarkupWrittenAsText` 경고를 문단당 하나 남긴다. 목록·제목·각주·lossy 출력은 이전과 같다.
 
 ## [0.17.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.0...hwpforge-smithy-md-v0.17.1) - 2026-10-24
 

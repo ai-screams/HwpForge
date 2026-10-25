@@ -115,7 +115,7 @@ pub use hwpforge_smithy_hwpx::stamp::CellStampSpec;
 /// version (`format!("{}.manifest.json", output.trim_end_matches(".hwpx"))`)
 /// strips *every* trailing `.hwpx` — `str::trim_end_matches` repeats the
 /// match — and collapsed the same input to `form.manifest.json`. Neither
-/// frontend's audited legacy contract (`tests/data/legacy_codes.txt`; codes
+/// frontend's audited legacy contract (`tests/data/codes-0.18.txt`; codes
 /// and hints, not path arithmetic) pins either behaviour, and no known caller
 /// passes a doubly-suffixed output path, so this migration keeps the CLI's
 /// `Path`-based rule for both rather than compat-mapping the divergence.
