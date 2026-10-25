@@ -9,11 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/v0.17.1...v0.18.0) - 2026-10-25
 
-### Added
-
-- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
-
-
 ### Changed (BREAKING)
 
 - cell·stamp·structural 편집기의 입력 decode는 `DECODE_FAILED`, no-op validate·encode·재decode는 `INPUT_NOT_ROUNDTRIP_SAFE`, 편집 문서 검증은 `VALIDATION_FAILED`, 출력 생성은 `ENCODE_FAILED`, 산출물 검증은 `SELF_VERIFY_FAILED`로 분류한다. 보호 필드 침범은 `PROTECTED_FIELD_RANGE`, source-map·provenance 불변식은 `INTERNAL_INVARIANT`다. CLI·MCP·Python이 같은 코드를 반환한다.

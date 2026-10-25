@@ -9,11 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.1...hwpforge-bindings-mcp-v0.18.0) - 2026-10-25
 
-### Added
-
-- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
-
-
 ### Changed (BREAKING)
 
 - 공통 `OpsCode` 문자열을 별명 없이 출력하고 도구별 힌트는 유지한다. read의 구역·표·필드 부재는 `SECTION_OUT_OF_RANGE`·`TABLE_NOT_FOUND`·`FIELD_NOT_FOUND`다. 파일 오류는 공통 I/O 코드, 출력 경로 거부는 `INVALID_OUTPUT_PATH`다.

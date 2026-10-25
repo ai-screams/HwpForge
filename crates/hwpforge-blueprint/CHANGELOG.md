@@ -7,10 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.17.1...hwpforge-blueprint-v0.18.0) - 2026-10-25
 
-### Added
+### Changed
 
-- **BREAKING** 0.18 error codes, depth limits and styled Markdown fixes ([#272](https://github.com/ai-screams/HwpForge/pull/272))
-
+- 다른 `hwpforge-*` 크레이트를 같은 릴리스 버전(`0.18.0`)으로 요구한다. 이전에는 `0.x` 아무 버전이나 받아 다른 minor 와 섞일 수 있었다.
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.16.11...hwpforge-blueprint-v0.17.0) - 2026-10-23
 
