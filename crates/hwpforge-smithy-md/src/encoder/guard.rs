@@ -20,7 +20,8 @@ pub(crate) struct Allowed<'a> {
     pub(crate) destinations: &'a HashSet<String>,
     /// Parse as the Markdown decoder does ([`super::md_options`]) and count
     /// a definition list as foreign too: the decoder fails on it. The
-    /// styled view sets it; lossy keeps its own check.
+    /// styled view sets it; lossy keeps its own check, which also counts a
+    /// note definition as foreign (lossy writes none).
     pub(crate) decoder_structure: bool,
 }
 
@@ -59,6 +60,10 @@ pub(crate) fn foreign_markup(markdown: &str, allowed: &Allowed<'_>) -> bool {
             // `md_options` reads no metadata block, so a definition list is
             // the one structure the decoder fails on.
             Event::Start(Tag::DefinitionList) if allowed.decoder_structure => return true,
+            // Lossy writes notes inline, so a note definition in its output
+            // came from document text (styled escapes every `[` of it).
+            // 이것을 실패시키는 것: 이 갈래 삭제(`lossy_definition_shapes`).
+            Event::Start(Tag::FootnoteDefinition(_)) if !allowed.decoder_structure => return true,
             Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. })
                 if !allowed.destinations.contains(dest_url.as_ref()) =>
             {
@@ -159,8 +164,14 @@ fn unescape_attr(s: &str) -> String {
 /// whitespace dropped (no block structure).
 /// 이것을 실패시키는 것: escape 삭제(`guard_falls_back_to_plain_text`).
 pub(crate) fn plain_text(raw: &str) -> String {
+    escape_plain(raw.trim_start())
+}
+
+/// [`plain_text`] without dropping the leading whitespace (a piece after
+/// the first).
+pub(crate) fn escape_plain(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() * 2);
-    for c in raw.trim_start().chars() {
+    for c in raw.chars() {
         match c {
             '\r' | '\n' => out.push(' '),
             c if c.is_ascii_punctuation() => {
@@ -181,82 +192,207 @@ pub(crate) fn enter_depth(depth: usize) -> Option<usize> {
 /// Written instead of content below the rendered-depth limit.
 pub(crate) const TOO_DEEP: &str = "(중첩 깊이 초과로 생략)";
 
-/// Paragraph text for [`plain_text`], with the same container-depth limit
-/// as styled rendering. A cut-off subtree contributes only its notice;
-/// groups are spread without consuming a level, as in the renderer. For
-/// the styled view (`styled`) a cross reference, field or unknown control
-/// gives the text styled shows for it ([`super::styled_display`]); lossy
-/// keeps the value and hint it writes.
+/// A piece of a paragraph's plain-text fallback: document text (escaped
+/// when written, [`fallback_markdown`]) or markup the view drew and the
+/// fallback keeps as it is — a picture, an allowed link, a note reference.
+/// The fallback gives up formatting, not content.
+pub(crate) enum Fallback {
+    Text(String),
+    Kept(super::markup::Md),
+}
+
+/// What a view's fallback keeps as markup instead of text: what the view
+/// drew for this very picture, link or note, looked up, never drawn anew.
+pub(crate) trait Keeper {
+    /// The picture's Markdown as the view drew it; `None` if it drew none
+    /// (no path, or a picture whose asset the view never registered).
+    fn picture(&mut self, image: &hwpforge_core::image::Image) -> Option<super::markup::Md>;
+    /// The link's Markdown, its text escaped, when its URL is allowed.
+    fn link(&mut self, text: &str, url: &str) -> Option<super::markup::Md>;
+    /// The reference the view registered for this note occurrence; `None`
+    /// for one it wrote inline or did not draw (a cut cell's), whose body
+    /// is then written as text.
+    fn note(&mut self, note: &hwpforge_core::Control) -> Option<super::markup::Md>;
+}
+
+/// Paragraph text as the fallback reads it, nothing kept: for tests.
+#[cfg(test)]
 pub(crate) fn deep_text(
     paragraph: &hwpforge_core::Paragraph,
     depth: usize,
     styled: bool,
 ) -> String {
-    deep_text_at(paragraph, depth, styled, &mut || {})
+    let mut out = Vec::new();
+    walk(&paragraph.runs, depth, styled, &mut None, false, &mut out, &mut || {});
+    out.into_iter()
+        .map(|p| match p {
+            Fallback::Text(t) => t,
+            Fallback::Kept(md) => md.into_string(),
+        })
+        .collect()
 }
 
-fn deep_text_at(
-    paragraph: &hwpforge_core::Paragraph,
+/// The plain-text fallback of each of `paragraphs`, drawn at `depth`:
+/// their text escaped (leading whitespace dropped), with what `keeper`
+/// keeps as markup. The same container-depth limit as the renderers: a
+/// cut-off subtree contributes only its notice; groups are spread without
+/// consuming a level. For the styled view (`styled`) a cross reference,
+/// field or unknown control gives the text styled shows for it
+/// ([`super::styled_display`]); lossy keeps the value and hint it writes.
+/// 이것을 실패시키는 것: 그림·링크·각주 참조를 글로 쓰기
+/// (`fallback_keeps_pictures_links_and_notes`, `lossy_fallback_keeps_pictures_and_links`).
+pub(crate) fn fallback_markdown(
+    paragraphs: &[hwpforge_core::Paragraph],
     depth: usize,
     styled: bool,
+    keeper: &mut dyn Keeper,
+) -> Vec<super::markup::Md> {
+    paragraphs
+        .iter()
+        .map(|p| {
+            let mut out = Vec::new();
+            walk(&p.runs, depth, styled, &mut Some(&mut *keeper), false, &mut out, &mut || {});
+            if let Some(Fallback::Text(t)) = out.first_mut() {
+                *t = t.trim_start().to_string();
+            }
+            super::markup::Md::plain_parts(&out)
+        })
+        .collect()
+}
+
+/// The addresses of the notes in `runs` outside memo bodies, in the order
+/// [`fallback_markdown`] meets them (a memo's anchor in place, its body
+/// skipped): a copy and what it was made from give the same order.
+pub(crate) fn note_order(runs: &[hwpforge_core::Run]) -> Vec<usize> {
+    struct Order(Vec<usize>);
+    impl Keeper for Order {
+        fn picture(&mut self, _: &hwpforge_core::image::Image) -> Option<super::markup::Md> {
+            None
+        }
+        fn link(&mut self, _: &str, _: &str) -> Option<super::markup::Md> {
+            None
+        }
+        fn note(&mut self, note: &hwpforge_core::Control) -> Option<super::markup::Md> {
+            self.0.push(note as *const hwpforge_core::Control as usize);
+            None
+        }
+    }
+    let mut order = Order(Vec::new());
+    walk(runs, 0, true, &mut Some(&mut order), false, &mut Vec::new(), &mut || {});
+    order.0
+}
+
+fn push_text(out: &mut Vec<Fallback>, text: &str) {
+    if let Some(Fallback::Text(t)) = out.last_mut() {
+        t.push_str(text);
+    } else if !text.is_empty() {
+        out.push(Fallback::Text(text.to_string()));
+    }
+}
+
+/// The walk behind [`fallback_markdown`] over one paragraph's `runs` (the
+/// document's own: the walk makes no copies, so `keeper` can look up what
+/// was drawn for each occurrence); `memo` is inside a memo's body, which
+/// the view wrote as a comment.
+fn walk(
+    runs: &[hwpforge_core::Run],
+    depth: usize,
+    styled: bool,
+    keeper: &mut Option<&mut dyn Keeper>,
+    memo: bool,
+    out: &mut Vec<Fallback>,
     visit: &mut impl FnMut(),
-) -> String {
+) {
     visit();
     use hwpforge_core::Control;
-    let mut out = String::new();
-    let mut paras = |out: &mut String, ps: &[hwpforge_core::Paragraph]| {
+    // Nested paragraphs (their runs), a space between them and before them.
+    let mut paras = |out: &mut Vec<Fallback>,
+                     ps: &mut dyn Iterator<Item = &[hwpforge_core::Run]>,
+                     memo: bool,
+                     keeper: &mut Option<&mut dyn Keeper>| {
         let Some(inner) = enter_depth(depth) else {
-            out.push_str(TOO_DEEP);
+            push_text(out, TOO_DEEP);
             return;
         };
         for p in ps {
+            // Each paragraph walked on its own, as a separate string before.
+            let mut sub = Vec::new();
+            walk(p, inner, styled, keeper, memo, &mut sub, visit);
             if !out.is_empty() {
-                out.push(' ');
+                push_text(out, " ");
             }
-            out.push_str(&deep_text_at(p, inner, styled, visit));
+            for part in sub {
+                match part {
+                    Fallback::Text(t) => push_text(out, &t),
+                    kept => out.push(kept),
+                }
+            }
         }
     };
-    for (part, _) in super::spread_groups(&paragraph.runs) {
+    fn runs_of(ps: &[hwpforge_core::Paragraph]) -> impl Iterator<Item = &[hwpforge_core::Run]> {
+        ps.iter().map(|p| p.runs.as_slice())
+    }
+    for (part, _) in super::spread_groups(runs) {
         match part {
             super::Part::Text(content) => {
                 if let Some(t) = content.plain_text() {
-                    out.push_str(&t);
+                    push_text(out, &t);
                 }
             }
             super::Part::Image(image) => {
+                if !memo {
+                    if let Some(md) = keeper.as_mut().and_then(|k| k.picture(image)) {
+                        out.push(Fallback::Kept(md));
+                    }
+                }
                 if let Some(c) = &image.caption {
-                    paras(&mut out, &c.paragraphs);
+                    paras(out, &mut runs_of(&c.paragraphs), memo, keeper);
                 }
             }
             super::Part::Table(table) => {
                 if enter_depth(depth).is_none() {
-                    out.push_str(TOO_DEEP);
+                    push_text(out, TOO_DEEP);
                 } else {
                     for cell in table.rows.iter().flat_map(|r| &r.cells) {
-                        paras(&mut out, &cell.paragraphs);
+                        paras(out, &mut runs_of(&cell.paragraphs), memo, keeper);
                     }
                 }
                 if let Some(c) = &table.caption {
-                    paras(&mut out, &c.paragraphs);
+                    paras(out, &mut runs_of(&c.paragraphs), memo, keeper);
                 }
             }
             super::Part::Control(control) => match control {
                 Control::CrossRef { .. } | Control::Field { .. } | Control::Unknown { .. }
                     if styled =>
                 {
-                    out.push_str(&super::styled_display(control).unwrap_or_default());
+                    push_text(out, &super::styled_display(control).unwrap_or_default());
                 }
-                Control::Hyperlink { text, .. } => out.push_str(text),
-                Control::Footnote { paragraphs, .. }
-                | Control::Endnote { paragraphs, .. }
-                | Control::TextBox { paragraphs, .. }
+                Control::Hyperlink { text, url } => {
+                    match keeper.as_mut().filter(|_| !memo).and_then(|k| k.link(text, url)) {
+                        Some(md) => out.push(Fallback::Kept(md)),
+                        None => push_text(out, text),
+                    }
+                }
+                // A note the view registered is a definition at the
+                // document's end: its reference is kept, its body is not
+                // written again. Any other (inline, or not drawn) is text.
+                Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+                    // A memo's body was a comment: its notes are inline.
+                    match keeper.as_mut().filter(|_| !memo).and_then(|k| k.note(control)) {
+                        Some(mark) => out.push(Fallback::Kept(mark)),
+                        None => paras(out, &mut runs_of(paragraphs), memo, keeper),
+                    }
+                }
+                Control::TextBox { paragraphs, .. }
                 | Control::Ellipse { paragraphs, .. }
-                | Control::Polygon { paragraphs, .. } => paras(&mut out, paragraphs),
+                | Control::Polygon { paragraphs, .. } => {
+                    paras(out, &mut runs_of(paragraphs), memo, keeper)
+                }
                 Control::FieldBoundary {
                     boundary: hwpforge_core::control::FieldBoundary::Start(start),
                 } => {
                     if let Some(content) = &start.annotation {
-                        paras(&mut out, content);
+                        paras(out, &mut runs_of(content), true, keeper);
                     }
                 }
                 // A memo's anchor read as a paragraph, as styled draws it
@@ -265,38 +401,40 @@ fn deep_text_at(
                 // order and, at the depth limit, the level.
                 // 이것을 실패시키는 것: 앵커 순회 삭제(`memo_anchor_follows_the_renderer`).
                 Control::Memo { content, anchor_runs, .. } if styled => {
-                    paras(&mut out, &[super::memo_anchor(anchor_runs)]);
-                    paras(&mut out, content);
+                    paras(out, &mut std::iter::once(anchor_runs.as_slice()), memo, keeper);
+                    paras(out, &mut runs_of(content), true, keeper);
                 }
                 Control::Memo { content, anchor_runs, .. } => {
                     for run in anchor_runs {
                         if let Some(text) = run.content.plain_text() {
-                            out.push_str(&text);
+                            push_text(out, &text);
                         }
                     }
-                    paras(&mut out, content);
+                    paras(out, &mut runs_of(content), true, keeper);
                 }
                 Control::Dutmal { main_text, sub_text, .. } => {
-                    out.push_str(&format!("{main_text}({sub_text})"));
+                    push_text(out, &format!("{main_text}({sub_text})"));
                 }
-                Control::Compose { compose_text, .. } => out.push_str(compose_text),
-                Control::CrossRef { display_text, .. } => out.push_str(display_text),
+                Control::Compose { compose_text, .. } => push_text(out, compose_text),
+                Control::CrossRef { display_text, .. } => push_text(out, display_text),
                 Control::Field { display_text, hint_text, .. } => {
-                    out.push_str(if display_text.is_empty() {
-                        hint_text.as_deref().unwrap_or("")
-                    } else {
-                        display_text
-                    });
+                    push_text(
+                        out,
+                        if display_text.is_empty() {
+                            hint_text.as_deref().unwrap_or("")
+                        } else {
+                            display_text
+                        },
+                    );
                 }
-                Control::Equation { script, .. } => out.push_str(script),
+                Control::Equation { script, .. } => push_text(out, script),
                 Control::AutoNumber { num, format, .. } => {
-                    out.push_str(&super::auto_number_text(*num, format));
+                    push_text(out, &super::auto_number_text(*num, format));
                 }
                 _ => {}
             },
         }
     }
-    out
 }
 
 /// One block of a view's output and the top-level paragraphs it came from
@@ -318,7 +456,8 @@ pub(crate) struct Block {
 pub(crate) struct Source {
     /// The fallback's prefix (`[^1]: ` for a note definition, else empty).
     pub(crate) prefix: String,
-    /// The raw text to escape, per paragraph.
+    /// The fallback Markdown, per paragraph: its text escaped, with what the
+    /// view keeps as markup (pictures, links, note references).
     pub(crate) texts: Vec<String>,
     /// The (section, top-level paragraph) of each.
     pub(crate) at: Vec<(usize, usize)>,
@@ -355,8 +494,7 @@ pub(crate) fn checked(
         .collect();
     let mut fall_back = |b: &mut Block, warnings: &mut Vec<super::MdWarning>| {
         if let Some(src) = b.source.take() {
-            let text: Vec<String> = src.texts.iter().map(|t| plain_text(t)).collect();
-            b.markdown = format!("{}{}", src.prefix, text.join("\n\n"));
+            b.markdown = format!("{}{}", src.prefix, src.texts.join("\n\n"));
             for at in src.at {
                 written_as_text(warnings, &mut warned, at);
             }
@@ -559,7 +697,15 @@ mod tests {
             }
             for depth in [0, 1, 31, 32] {
                 let mut visits = 0;
-                let raw = deep_text_at(&p, depth, true, &mut || visits += 1);
+                let mut parts = Vec::new();
+                walk(&p.runs, depth, true, &mut None, false, &mut parts, &mut || visits += 1);
+                let raw: String = parts
+                    .into_iter()
+                    .map(|p| match p {
+                        Fallback::Text(t) => t,
+                        Fallback::Kept(md) => md.into_string(),
+                    })
+                    .collect();
                 assert_eq!(visits, (32 - depth).min(containers) + 1);
                 let expected = if containers + depth <= 32 { "core" } else { TOO_DEEP };
                 assert_eq!(raw, expected);
@@ -567,7 +713,7 @@ mod tests {
                     markdown: "<script>bad</script>".into(),
                     source: Some(Source {
                         prefix: String::new(),
-                        texts: vec![raw],
+                        texts: vec![plain_text(&raw)],
                         at: vec![(0, 0)],
                     }),
                     body: false,
@@ -632,7 +778,7 @@ mod tests {
             markdown: md.to_string(),
             source: Some(Source {
                 prefix: String::new(),
-                texts: vec![raw.to_string()],
+                texts: vec![plain_text(raw)],
                 at: vec![at],
             }),
             body: false,

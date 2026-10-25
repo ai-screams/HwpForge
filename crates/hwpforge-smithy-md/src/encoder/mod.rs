@@ -200,7 +200,7 @@ pub(crate) fn md_options() -> pulldown_cmark::Options {
 /// document text: a cross reference without display text shows its target
 /// in brackets, a field its value, else its hint, else `____`, an unknown
 /// control `[tag]`. The styled renderers and the styled plain-text fallback
-/// (`guard::deep_text`) both use it, so a fallback keeps what the view
+/// (`guard::fallback_markdown`) both use it, so a fallback keeps what the view
 /// showed.
 /// 이것을 실패시키는 것: 갈래 하나씩 삭제(`fallback_text_shows_what_styled_shows`).
 pub(crate) fn styled_display(
@@ -226,7 +226,7 @@ pub(crate) fn styled_display(
 /// A memo's anchor runs as a paragraph: styled draws a memo control still
 /// standing after `expand_memos` (one in another memo's anchor) this way,
 /// one container deeper, and its plain-text fallback reads it the same way
-/// (`guard::deep_text`).
+/// (`guard::fallback_markdown`).
 pub(crate) fn memo_anchor(anchor_runs: &[hwpforge_core::Run]) -> hwpforge_core::Paragraph {
     hwpforge_core::Paragraph::with_runs(
         anchor_runs.to_vec(),

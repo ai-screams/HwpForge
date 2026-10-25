@@ -89,7 +89,7 @@ fn encode_body(
                 }
             }
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph, 0, false);
+                let text = fallback_text(paragraph, &mut destinations);
                 let at = (section_index, paragraph_index);
                 match (current_continuation_level, blocks.last_mut()) {
                     (Some(level), Some(last)) => {
@@ -127,6 +127,43 @@ fn encode_body(
         decoder_structure: false,
     };
     super::guard::checked(blocks, &allowed, warnings)
+}
+
+/// A paragraph's plain-text fallback in the lossy view: its text escaped,
+/// its pictures and allowed links kept as lossy writes them ([`Kept`]).
+/// 이것을 실패시키는 것: 그림·링크를 글로 쓰기(`lossy_fallback_keeps_pictures_and_links`).
+fn fallback_text(
+    paragraph: &Paragraph,
+    destinations: &mut std::collections::HashSet<String>,
+) -> String {
+    let mut keeper = Kept { destinations };
+    super::guard::fallback_markdown(std::slice::from_ref(paragraph), 0, false, &mut keeper)
+        .remove(0)
+        .into_string()
+}
+
+/// The lossy view's [`super::guard::Keeper`]: pictures and allowed links
+/// as lossy writes them; notes are inline text in lossy.
+struct Kept<'a> {
+    destinations: &'a mut std::collections::HashSet<String>,
+}
+
+impl super::guard::Keeper for Kept<'_> {
+    fn picture(&mut self, image: &hwpforge_core::image::Image) -> Option<Md> {
+        (!image.path.is_empty()).then(|| {
+            let alt = Md::lossy_label(&image_alt_text(&image.path));
+            Md::image(alt, &image.path, self.destinations)
+        })
+    }
+
+    fn link(&mut self, text: &str, url: &str) -> Option<Md> {
+        super::link_url_allowed(url)
+            .then(|| Md::link(Md::lossy_label(text), url, self.destinations))
+    }
+
+    fn note(&mut self, _: &hwpforge_core::Control) -> Option<Md> {
+        None
+    }
 }
 
 fn encode_paragraph(
@@ -1640,6 +1677,59 @@ mod tests {
 
         let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "㊀");
+    }
+
+    /// The lossy fallback keeps a picture and an allowed link as lossy
+    /// writes them; a link not allowed and a note are their text, the rest
+    /// escaped, leading whitespace dropped. Through the check: the block
+    /// falls back to exactly that.
+    /// 이것을 실패시키는 것: 그림을 남기지 않기 · 링크를 남기지 않기 · 첫 공백 남기기.
+    #[test]
+    fn lossy_fallback_keeps_pictures_and_links() {
+        use super::super::guard::{checked, Allowed, Block, Source, LOSSY_TAGS};
+        let image = hwpforge_core::Image::new(
+            "BinData/p.png",
+            hwpforge_foundation::HwpUnit::from_mm(5.0).unwrap(),
+            hwpforge_foundation::HwpUnit::from_mm(5.0).unwrap(),
+            hwpforge_core::ImageFormat::Png,
+        );
+        let c = |control| Run::control(control, CharShapeIndex::new(0));
+        let paragraph = Paragraph::with_runs(
+            vec![
+                Run::text("-\t[r]: /u\n\n", CharShapeIndex::new(0)),
+                Run::image(image, CharShapeIndex::new(0)),
+                c(Control::Hyperlink { text: " L".into(), url: "https://e.invalid/".into() }),
+                c(Control::Hyperlink { text: "J".into(), url: "javascript:x".into() }),
+                c(Control::footnote(vec![Paragraph::with_runs(
+                    vec![Run::text("n", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )])),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let mut destinations = std::collections::HashSet::new();
+        let text = fallback_text(&paragraph, &mut destinations);
+        assert_eq!(text, "\\-\t\\[r\\]\\: \\/u  ![p](BinData/p.png)[ L](https://e.invalid/)J n");
+        let block = Block {
+            markdown: "<script>x</script>".into(),
+            source: Some(Source {
+                prefix: String::new(),
+                texts: vec![text.clone()],
+                at: vec![(0, 0)],
+            }),
+            body: false,
+        };
+        let allowed =
+            Allowed { tags: LOSSY_TAGS, destinations: &destinations, decoder_structure: false };
+        let mut warnings = Vec::new();
+        assert_eq!(checked(vec![block], &allowed, &mut warnings), text);
+        assert_eq!(warnings.len(), 1);
+        // Its leading whitespace is dropped (four spaces would make code).
+        let indented = Paragraph::with_runs(
+            vec![Run::text("    a", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        assert_eq!(fallback_text(&indented, &mut destinations), "a");
     }
 
     #[test]
