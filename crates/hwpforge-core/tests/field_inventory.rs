@@ -33,6 +33,66 @@ fn document(runs: Vec<Run>) -> Document {
     doc
 }
 
+fn scalar_field(value: &str) -> Run {
+    let mut field = Control::field("hint");
+    if let Control::Field { display_text, .. } = &mut field {
+        *display_text = value.into();
+    }
+    Run::control(field, CharShapeIndex::new(0))
+}
+
+/// 이것을 실패시키는 것: 깊이 초과 대신 모든 진단으로 clear를 전역 중단하기.
+#[test]
+fn clear_editable_values_ignores_unrelated_boundary_diagnostic() {
+    for first_section in [0, 7] {
+        let mut sections = vec![
+            Section::with_paragraphs(vec![para(vec![scalar_field("value")])], PageSettings::a4()),
+            Section::with_paragraphs(vec![para(vec![end("unpaired")])], PageSettings::a4()),
+        ];
+        let inventory = FieldInventory::from_sections_at(&sections, first_section);
+        assert_eq!(inventory.diagnostics().len(), 1);
+        assert_eq!(inventory.fields()[0].editability(), FieldEditability::Editable);
+        let mut expected = sections.clone();
+        expected[0].paragraphs[0].runs[0] = scalar_field("");
+
+        FieldInventory::clear_editable_values(&mut sections, first_section);
+
+        assert_eq!(sections, expected);
+    }
+}
+
+/// 이것을 실패시키는 것: 깊이 초과 기록·clear 관문 삭제 또는 정상 깊이까지 no-op 확대.
+#[test]
+fn clear_editable_values_is_noop_only_above_depth_limit() {
+    for depth in [hwpforge_core::MAX_NESTING_DEPTH, hwpforge_core::MAX_NESTING_DEPTH + 1] {
+        let mut nested = para(vec![text("leaf")]);
+        for _ in 0..depth {
+            nested = para(vec![Run::control(
+                Control::text_box(
+                    vec![nested],
+                    hwpforge_foundation::HwpUnit::ZERO,
+                    hwpforge_foundation::HwpUnit::ZERO,
+                ),
+                CharShapeIndex::new(0),
+            )]);
+        }
+        let mut sections = vec![
+            Section::with_paragraphs(vec![para(vec![scalar_field("value")])], PageSettings::a4()),
+            Section::with_paragraphs(vec![nested], PageSettings::a4()),
+        ];
+        let over_budget = depth > hwpforge_core::MAX_NESTING_DEPTH;
+        assert_eq!(sections[1].check_nesting_depth().is_err(), over_budget);
+        let mut expected = sections.clone();
+        if !over_budget {
+            expected[0].paragraphs[0].runs[0] = scalar_field("");
+        }
+
+        FieldInventory::clear_editable_values(&mut sections, 0);
+
+        assert_eq!(sections, expected);
+    }
+}
+
 /// 이것을 실패시키는 것: 부모 흐름의 시작과 각주·메모의 끝을 짝짓기.
 #[test]
 fn field_ids_are_local_to_independent_flows() {
