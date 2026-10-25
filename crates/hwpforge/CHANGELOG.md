@@ -51,6 +51,7 @@ I/O와 validate의 종료 값 변경은 다음과 같다. 편집기의 네 변�
 
 ### Changed
 
+- `hwpforge-*` 크레이트끼리의 의존 요구가 `"0"`(0.x 아무 버전) 대신 릴리스 버전(예: `"0.18.0"`)을 최소 버전으로 요구한다. 그래서 cargo 가 이 의존에 다른 `hwpforge-*` 크레이트의 이전 minor 를 고르지 않는다. `hwpforge-*` 를 직접 여러 개 의존한다면 함께 올린다.
 - `INPUT_NOT_ROUNDTRIP_SAFE` 힌트는 코덱 갭 수정 대기 안내 대신 원본을 보존하는 텍스트 `to-json(section) → patch`·누름틀 `fill` 경로를 안내한다. MCP stamp도 해당 도구 이름으로 같은 안내를 제공한다.
 
 ### Fixed
