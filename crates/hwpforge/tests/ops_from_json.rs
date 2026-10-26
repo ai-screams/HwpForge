@@ -138,9 +138,10 @@ fn a_document_exported_without_styles_falls_back_to_the_full_default_preset() {
 /// JSON carries image references, never image bytes, so a picture document
 /// needs its original package to keep the pictures.
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_base_package_supplies_the_images_the_json_only_references() {
-    let bytes = fixture("SimplePicture.hwpx");
-    let json = exported_text("SimplePicture.hwpx");
+    let bytes = fixture("green_swatch.hwpx");
+    let json = exported_text("green_swatch.hwpx");
 
     let without = from_json(&json, &FromJsonOptions::default()).expect("no base");
     let with = from_json(&json, &FromJsonOptions::default().with_base(bytes)).expect("with base");
@@ -160,9 +161,10 @@ fn a_base_package_supplies_the_images_the_json_only_references() {
 /// 이것을 실패시키는 것: 인코더의 참조 검사 호출을 빼는 것, 또는
 /// `from_json` 이 인코드 경고를 버리는 것.
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_picture_without_its_base_package_is_reported_unresolved() {
-    let bytes = fixture("SimplePicture.hwpx");
-    let json = exported_text("SimplePicture.hwpx");
+    let bytes = fixture("green_swatch.hwpx");
+    let json = exported_text("green_swatch.hwpx");
 
     let without = from_json(&json, &FromJsonOptions::default()).expect("no base").meta().warnings;
     let with = from_json(&json, &FromJsonOptions::default().with_base(bytes))

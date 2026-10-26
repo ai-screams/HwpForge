@@ -22,6 +22,6 @@ Only the `--preset` flag (MCP `hwpforge_convert` `preset`, Python `convert_md(pr
 MCP `hwpforge_restyle` and Python `Document.restyle(preset=…)` exist; the CLI has no equivalent. What they do is narrow and lossy:
 
 - They swap the document's **first font face** for the preset's font — nothing else (sizes, paragraph shapes and page setup stay).
-- They re-encode the whole package like `from-json --base`: on a 한컴-saved file the result loses `Preview/*` and `META-INF/container.rdf`, and every line-layout cache, so it can no longer go through `to-pdf` until 한컴 re-saves it. In the measured case (`table_01_basic_2x2.hwpx`, 0.16.6) this happened with `warnings: []`.
+- They re-encode the whole package like `from-json --base`: on a 한컴-saved file the result loses `Preview/*` and `META-INF/container.rdf`, and every line-layout cache, so it can no longer go through `to-pdf` until 한컴 re-saves it. Check the returned `warnings` and inspect the output before using it.
 
 Do not restyle a submitted government form. When editing an existing document through the JSON round-trip, the document keeps its own styles ([editing-workflow.md](editing-workflow.md)).

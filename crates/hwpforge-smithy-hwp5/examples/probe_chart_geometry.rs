@@ -3,7 +3,7 @@
 //!
 //! Usage:
 //!   cargo run -p hwpforge-smithy-hwp5 --example probe_chart_geometry -- \
-//!     tests/fixtures/charts/chart_02_single_pie.hwp
+//!     input.hwp
 
 use std::io::{Cursor, Read};
 
@@ -11,9 +11,8 @@ use cfb::CompoundFile;
 use flate2::read::DeflateDecoder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "tests/fixtures/charts/chart_02_single_pie.hwp".to_string());
+    // 이것을 실패시키는 것: 필수 입력 경로 인자를 생략하기.
+    let path = std::env::args().nth(1).ok_or("usage: probe_chart_geometry <input.hwp>")?;
 
     let bytes = std::fs::read(&path)?;
     let mut comp = CompoundFile::open(Cursor::new(&bytes[..]))?;

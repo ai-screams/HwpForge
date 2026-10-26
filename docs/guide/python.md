@@ -101,7 +101,7 @@ except hwpforge.HwpForgeError as exc:
 
 ## 예제에 쓰인 파일
 
-하위 페이지의 예제는 저장소의 테스트 픽스처를 다음 이름으로 복사해 둔 것을 전제합니다. 같은 이름으로 준비하면 모든 코드 블록이 적힌 그대로 실행됩니다.
+하위 페이지의 예제는 저장소의 테스트 픽스처를 다음 이름으로 복사해 둔 것을 전제합니다. 같은 이름으로 준비하면 HWPX 코드 블록을 그대로 실행할 수 있습니다. `hancom.hwpx`(한컴에서 저장한 HWPX)와 HWP5 변환 예제의 `old.hwp`는 사용자가 준비한 입력입니다.
 
 | 예제 파일       | 원본 (`tests/fixtures/…`)          | 특징                                        |
 | --------------- | ---------------------------------- | ------------------------------------------- |
@@ -109,8 +109,6 @@ except hwpforge.HwpForgeError as exc:
 | `grid.hwpx`     | `tables/merged_grid_form.hwpx`     | 3×2 표(라벨 `성명`·`비고`), HwpForge 생성본 |
 | `template.hwpx` | `stamp/placeholder_basic.hwpx`     | 스탬프 후보 `(   )`·`□`                     |
 | `plain.hwpx`    | `structural/plain_paragraphs.hwpx` | 문단 4개, HwpForge 생성본                   |
-| `hancom.hwpx`   | `tables/table_01_basic_2x2.hwpx`   | 한컴 오피스가 저장한 문서                   |
-| `old.hwp`       | `structural/plain_inserted.hwp`    | HWP5 바이너리                               |
 
 ## 다음 단계
 

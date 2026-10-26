@@ -187,12 +187,19 @@ async fn wm_w_convert_reports_warning_objects_and_summarizes_messages() {
 
 #[tokio::test]
 // 이것을 실패시키는 것: `FromJsonData::warnings` 를 `Vec<String>` 으로 되돌리는 것.
+// 이것을 실패시키는 것: 입력 layout cache 제거 (실제 음성 대조 실행).
 async fn wm_w_from_json_reports_warning_objects() {
     let dir = tempfile::tempdir().unwrap();
-    let structure = crate::tools::to_json::run_to_json(&fixture("shapes/rect.hwpx"), None, None)
-        .unwrap()
-        .json_content
-        .unwrap();
+    let structure = crate::tools::to_json::run_to_json(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/hwp5_review/rect_simple.hwpx")
+            .to_string_lossy(),
+        None,
+        None,
+    )
+    .unwrap()
+    .json_content
+    .unwrap();
     let envelope = envelope(
         "hwpforge_from_json",
         json!({"structure": structure, "output_path": out(&dir, "f.hwpx")}),

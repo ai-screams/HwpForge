@@ -1,6 +1,6 @@
-//! C4: the encoder checks the package it writes — manifest ids two items
-//! share, and `binaryItemIDRef` values that do not resolve to image or OLE
-//! data. The checks only report; the bytes stay as they are.
+#[path = "support/package_references.rs"]
+mod shared;
+use shared::*;
 
 use std::io::Read;
 
@@ -37,13 +37,6 @@ fn try_encode_runs(
 
 fn encode_runs(runs: Vec<Run>, images: &ImageStore) -> EncodeOutcome {
     try_encode_runs(runs, images).expect("encode")
-}
-
-fn part(bytes: &[u8], name: &str) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut text = String::new();
-    zip.by_name(name).expect("part").read_to_string(&mut text).expect("utf-8");
-    text
 }
 
 fn conflicts(warnings: &[EncodeWarning]) -> Vec<(String, Vec<String>)> {
@@ -108,33 +101,6 @@ fn ids_are_compared_as_the_written_content_hpf_reads() {
     );
 }
 
-/// `opf:item@id` values of a `content.hpf`, read with an XML reader.
-fn written_ids(hpf: &str) -> Vec<String> {
-    let mut reader = quick_xml::Reader::from_str(hpf);
-    let mut ids = Vec::new();
-    loop {
-        match reader.read_event().expect("well-formed content.hpf") {
-            quick_xml::events::Event::Empty(e) | quick_xml::events::Event::Start(e)
-                if e.name().as_ref() == "opf:item" =>
-            {
-                for attr in e.attributes() {
-                    let attr = attr.expect("attribute");
-                    if attr.key.as_ref() == "id" {
-                        ids.push(
-                            attr.normalized_value(quick_xml::XmlVersion::Explicit1_0)
-                                .expect("value")
-                                .into_owned(),
-                        );
-                    }
-                }
-            }
-            quick_xml::events::Event::Eof => break,
-            _ => {}
-        }
-    }
-    ids
-}
-
 /// 이것을 실패시키는 것: 항목이 하나뿐인 id 도 보고하는 것.
 #[test]
 fn distinct_image_keys_are_not_a_conflict() {
@@ -149,58 +115,6 @@ fn distinct_image_keys_are_not_a_conflict() {
 fn fixture(path: &str) -> Vec<u8> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/");
     std::fs::read(format!("{root}{path}")).unwrap_or_else(|e| panic!("fixture {path}: {e}"))
-}
-
-/// Decodes `bytes` and encodes the result again with `images`.
-fn reencode(bytes: &[u8], images: Option<&ImageStore>) -> EncodeOutcome {
-    let decoded = HwpxDecoder::decode(bytes).expect("decode");
-    HwpxEncoder::encode_with_diagnostics(
-        &decoded.document.validate().expect("validate"),
-        &decoded.style_store,
-        images.unwrap_or(&decoded.image_store),
-        EncodeOptions::default(),
-    )
-    .expect("encode")
-}
-
-fn unresolved(warnings: &[EncodeWarning]) -> Vec<(String, String, String)> {
-    warnings
-        .iter()
-        .filter_map(|w| match w {
-            EncodeWarning::ImageReferenceUnresolved { part, location, reference } => {
-                Some((part.clone(), location.clone(), reference.clone()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn triple(part: &str, location: &str, reference: &str) -> (String, String, String) {
-    (part.into(), location.into(), reference.into())
-}
-
-/// A border fill's image brush lives in the header. Without the decoded
-/// images (what `from-json` without `--base` does) its reference resolves to
-/// nothing.
-///
-/// 이것을 실패시키는 것: header part 를 검사 목록에서 빼는 것.
-#[test]
-fn a_border_fill_image_without_its_asset_is_reported_in_the_header() {
-    let outcome =
-        reencode(&fixture("tables/table_16c_image_fill_tile.hwpx"), Some(&ImageStore::new()));
-    assert_eq!(
-        unresolved(&outcome.warnings),
-        [triple("Contents/header.xml", "hc:img@binaryItemIDRef", "image1")]
-    );
-    assert!(outcome.warnings.iter().any(EncodeWarning::is_semantic_loss));
-}
-
-/// 이것을 실패시키는 것: 이미지 항목을 id 가 아니라 확장자를 포함한 저장소
-/// 키(`image1.png`)로 대조하는 것.
-#[test]
-fn a_border_fill_image_with_its_asset_resolves() {
-    let outcome = reencode(&fixture("tables/table_16c_image_fill_tile.hwpx"), None);
-    assert_eq!(unresolved(&outcome.warnings), []);
 }
 
 /// An embedded chart (the HWP5 carry) writes `<hp:ole binaryItemIDRef="ole1">`
@@ -398,51 +312,6 @@ fn a_dangling_picture_reference_is_reported_and_kept() {
     let section = part(&outcome.bytes, "Contents/section0.xml");
     assert!(section.contains("binaryItemIDRef=\"image1\""), "the resolved picture stays");
     assert!(section.contains("binaryItemIDRef=\"image2\""), "the dangling reference stays");
-}
-
-/// F6, after Hancom saved it again: the lost picture's reference is empty
-/// (`binaryItemIDRef=""`), which is not a reference, and `image1` resolves.
-/// The empty reference still carries a picture frame through Core.
-///
-/// 이것을 실패시키는 것: 빈 참조 그림 버리기 / C4 빈 참조 제외 삭제 /
-/// 빈 경로의 가짜 manifest 항목 생성 / 정상 image1 참조 삭제.
-#[test]
-fn hancom_resave_of_a_dangling_reference_reports_nothing() {
-    let bytes = fixture("images/f6-dangling-image-resaved.hwpx");
-    let wire = part(&bytes, "Contents/section0.xml");
-    assert!(wire.contains("binaryItemIDRef=\"\""), "Hancom empties the lost reference");
-
-    let outcome = reencode(&bytes, None);
-    assert_eq!(unresolved(&outcome.warnings), []);
-    assert!(!outcome.warnings.iter().any(EncodeWarning::is_semantic_loss));
-    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
-    assert!(!decoded.warnings.iter().any(|w| w.is_content_loss()));
-    let section = part(&outcome.bytes, "Contents/section0.xml");
-    assert_eq!(section.matches("<hp:pic ").count(), wire.matches("<hp:pic ").count());
-    fn assetless_picture(xml: &str) -> &str {
-        let reference = xml.find(r#"binaryItemIDRef="""#).expect("empty reference");
-        let start = xml[..reference].rfind("<hp:pic ").expect("picture start");
-        let end = reference
-            + xml[reference..].find("</hp:pic>").expect("picture end")
-            + "</hp:pic>".len();
-        &xml[start..end]
-    }
-    // 기존 인코더 정규화 세 가지를 명시한 뒤 요소 전체 문자열을 비교한다:
-    // curSz=표시 크기, hc:img의 스키마 순서, 빈 effects 생략.
-    // 이것을 실패시키는 것: 빈 참조 그림의 hp:offset 등 그 외 틀 속성 변경.
-    let expected = assetless_picture(&wire).replace(
-        r#"<hp:curSz width="0" height="0"/>"#,
-        r#"<hp:curSz width="8504" height="5669"/>"#,
-    );
-    let img_start = expected.find("<hc:img ").unwrap();
-    let img_end = img_start + expected[img_start..].find("/>").unwrap() + 2;
-    let img = &expected[img_start..img_end];
-    let expected = expected.replacen(img, "", 1).replace("<hp:effects/>", img);
-    assert_eq!(expected, assetless_picture(&section));
-    assert!(section.contains(r#"binaryItemIDRef="image1""#));
-    let manifest = part(&outcome.bytes, "Contents/content.hpf");
-    assert!(!written_ids(&manifest).iter().any(String::is_empty));
-    assert!(!manifest.contains(r#"href="BinData/""#));
 }
 
 /// 이것을 실패시키는 것: 빈 참조 버리기 / 빈 경로 대신 BinData/ 저장 /

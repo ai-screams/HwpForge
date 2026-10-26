@@ -347,7 +347,7 @@ fn push(out: &mut Vec<(&'static str, u64)>, kind: &'static str, id: Option<Objec
 /// order. An id held only by footnotes and endnotes is left out: Hancom
 /// itself saves several notes with one instance id (corpus: three
 /// footnotes sharing 6029409 in one document, a footnote and an endnote
-/// sharing 1 in `full_report.hwp`), so such a share says nothing about a
+/// sharing 1 in a source document), so such a share says nothing about a
 /// cross reference. An id a note shares with any other object is kept.
 /// Every id is still reserved.
 /// 이것을 실패시키는 것: 주석만인 경우 제외 삭제(각주·미주 공유가 경고) · 주석을

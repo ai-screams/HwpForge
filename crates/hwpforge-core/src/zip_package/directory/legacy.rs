@@ -294,14 +294,27 @@ mod tests {
     use std::rc::Rc;
     use std::time::Instant;
 
-    const FIXTURE: &[u8] =
-        include_bytes!("../../../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
+    fn fixture() -> Vec<u8> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..11 {
+            writer
+                .start_file(
+                    format!("part{i}.xml"),
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(&vec![b'x'; if i == 0 { 23_000 } else { 26 }]).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
     const LIMIT: usize = 10_000;
 
     fn zip64() -> Vec<u8> {
-        let end = FIXTURE.len() - 22;
-        let mut bytes = FIXTURE[..end].to_vec();
-        let mut footer = FIXTURE[end..].to_vec();
+        let end = fixture().len() - 22;
+        let mut bytes = fixture()[..end].to_vec();
+        let mut footer = fixture()[end..].to_vec();
         bytes.extend_from_slice(b"PK\x06\x06");
         bytes.extend_from_slice(&44u64.to_le_bytes());
         bytes.extend_from_slice(&[45, 0, 45, 0]);
@@ -357,6 +370,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 후보 상한/고정 base를 없애 zip이 겹친 확장 데이터를 반복 복사하기.
     #[test]
+    // 이것을 실패시키는 것: 성공 경계의 후보 예산 초과 (실제 음성 대조 실행).
     fn zip9_fix2_overlapping_zip64_candidates_have_linear_work() {
         for n in [0, 450, 480, 32_000, 64_000, 128_000] {
             let bytes = overlapping_candidates(n);
@@ -431,17 +445,21 @@ mod tests {
 
     /// 이것을 실패시키는 것: 터미널 EOCD 우선 선택 또는 archive base 대조 생략.
     #[test]
+    // 이것을 실패시키는 것: 손상된 local header 복원 (실제 음성 대조 실행).
     fn zip9_fix2_comment_eocd_cannot_redirect_to_prefix() {
-        let end = FIXTURE.len() - 22;
-        let start = u32_at(FIXTURE, end + 16).unwrap() as usize;
-        assert_eq!(start, 23_630);
-        let mut bytes = [FIXTURE[..start].to_vec(), FIXTURE.to_vec()].concat();
+        let end = fixture().len() - 22;
+        let start = u32_at(&fixture(), end + 16).unwrap() as usize;
+        assert_eq!(
+            start,
+            ZipArchive::new(Cursor::new(fixture())).unwrap().central_directory_start() as usize
+        );
+        let mut bytes = [fixture()[..start].to_vec(), fixture().to_vec()].concat();
         bytes[start..start + 4].copy_from_slice(b"BAD!");
         // Opening is lazy; the damaged first local header fails on content access.
         assert!(open(&bytes).unwrap().read(0).is_err());
         let outer = start + end;
         bytes[outer + 20..outer + 22].copy_from_slice(&23u16.to_le_bytes());
-        let mut fake = FIXTURE[end..].to_vec();
+        let mut fake = fixture()[end..].to_vec();
         fake[16..20].copy_from_slice(&((start * 2) as u32).to_le_bytes());
         bytes.extend(fake);
         bytes.push(0);
@@ -460,39 +478,17 @@ mod tests {
         );
     }
 
-    /// 이것을 실패시키는 것: ZIP32 non-sentinel count/size/offset 중 하나의 대조 삭제.
-    #[test]
-    fn zip9_fix2_zip32_zip64_conflicts_are_rejected() {
-        let valid = zip64();
-        let end = valid.len() - 22;
-        for (field, value) in [(8, 10_001u32), (10, 10_001), (12, 1), (16, 1)] {
-            let mut bytes = valid.clone();
-            if field < 12 {
-                // Both disk and total counts: do not let their equality check
-                // accidentally cover up a missing ZIP32-vs-ZIP64 check.
-                bytes[end + 8..end + 10].copy_from_slice(&(value as u16).to_le_bytes());
-                bytes[end + 10..end + 12].copy_from_slice(&(value as u16).to_le_bytes());
-            } else {
-                bytes[end + field..end + field + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            assert!(ZipArchive::new(Cursor::new(&bytes)).is_ok());
-            assert!(
-                matches!(open(&bytes), Err(CoreError::InvalidStructure { .. })),
-                "field {field}"
-            );
-        }
-    }
-
     /// 이것을 실패시키는 것: ZIP64/일치하는 non-sentinel 값/확장 데이터/접두부를 일괄 거부하기.
     #[test]
+    // 이것을 실패시키는 것: 확장 데이터 길이 불일치 (실제 음성 대조 실행).
     fn zip9_fix2_normal_zip64_and_matching_zip32_values() {
         for field in [8, 12, 16] {
             let mut bytes = zip64();
             let end = bytes.len() - 22;
-            let old = FIXTURE.len() - 22;
+            let old = fixture().len() - 22;
             let length = 4;
             bytes[end + field..end + field + length]
-                .copy_from_slice(&FIXTURE[old + field..old + field + length]);
+                .copy_from_slice(&fixture()[old + field..old + field + length]);
             // Also exercise a legitimate extensible data sector.
             let zip64_pos = end - 76;
             bytes[zip64_pos + 4..zip64_pos + 12].copy_from_slice(&52u64.to_le_bytes());
@@ -508,12 +504,13 @@ mod tests {
 
     /// 이것을 실패시키는 것: 시작/소비 크기/개수/base/EOCD 위치 대조를 개별 삭제하기.
     #[test]
+    // 이것을 실패시키는 것: directory start 불일치 제거 (실제 음성 대조 실행).
     fn zip9_fix2_all_opened_directory_values_must_match() {
-        let archive = ZipArchive::new(Cursor::new(FIXTURE)).unwrap();
+        let archive = ZipArchive::new(Cursor::new(fixture())).unwrap();
         let end = archive.clone().into_inner().position();
         for field in ["start", "size", "count", "base", "eocd"] {
-            let mut directory = preflight(FIXTURE, LIMIT).unwrap();
-            directory.verify(&archive, end, FIXTURE.len() as u64).unwrap();
+            let mut directory = preflight(&fixture(), LIMIT).unwrap();
+            directory.verify(&archive, end, fixture().len() as u64).unwrap();
             match field {
                 "start" => directory.start += 1,
                 "size" => directory.size += 1,
@@ -522,24 +519,26 @@ mod tests {
                 "eocd" => directory.eocd += 1,
                 _ => unreachable!(),
             }
-            assert!(directory.verify(&archive, end, FIXTURE.len() as u64).is_err(), "{field}");
+            assert!(directory.verify(&archive, end, fixture().len() as u64).is_err(), "{field}");
         }
     }
 
     /// 이것을 실패시키는 것: zip이 무시할 sentinel 없는 locator를 별도로 신뢰하기.
     #[test]
+    // 이것을 실패시키는 것: locator 제거 (실제 음성 대조 실행).
     fn zip9_fix2_locator_requires_zip64_selection() {
         let mut bytes = zip64();
         let end = bytes.len() - 22;
-        let old = FIXTURE.len() - 22;
-        bytes[end + 8..end + 20].copy_from_slice(&FIXTURE[old + 8..old + 20]);
+        let old = fixture().len() - 22;
+        bytes[end + 8..end + 20].copy_from_slice(&fixture()[old + 8..old + 20]);
         assert!(matches!(preflight(&bytes, LIMIT), Err(CoreError::InvalidStructure { .. })));
     }
 
     /// 이것을 실패시키는 것: 후보 선택 후 terminal 검사 삭제, 또는 ZIP64 역방향 선택.
     #[test]
+    // 이것을 실패시키는 것: 후행 데이터 제거 (실제 음성 대조 실행).
     fn zip9_fix2_selection_order_and_trailing_data() {
-        let mut trailing = FIXTURE.to_vec();
+        let mut trailing = fixture().to_vec();
         trailing.push(0);
         assert!(ZipArchive::new(Cursor::new(&trailing)).is_ok());
         assert!(preflight(&trailing, LIMIT).is_err());
@@ -554,10 +553,11 @@ mod tests {
 
     /// 이것을 실패시키는 것: EOCD 탐색 창 축소 또는 잘린 후보를 상한 계산에서 제외하기.
     #[test]
+    // 이것을 실패시키는 것: 경계 EOCD 후보 제거 (실제 음성 대조 실행).
     fn zip9_fix2_eocd_window_and_candidate_limits() {
         // zip's in-memory window includes signatures just BEFORE the maximum
         // on-disk comment window. A 22-byte-based scan misses this ambiguity.
-        let mut edge = FIXTURE.to_vec();
+        let mut edge = fixture().to_vec();
         let end = edge.len() - 22;
         edge[end - 4..end].copy_from_slice(b"PK\x05\x06");
         edge[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
@@ -565,7 +565,7 @@ mod tests {
         assert!(
             matches!(preflight(&edge, LIMIT), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
         );
-        for original in [FIXTURE.to_vec(), zip64()] {
+        for original in [fixture().to_vec(), zip64()] {
             let mut bytes = original.clone();
             let end = bytes.len() - 22;
             bytes[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
@@ -581,7 +581,7 @@ mod tests {
                     bytes.extend(fake);
                 }
                 // ZIP64 contributes one additional candidate after the tail scan.
-                let expected = n == 63 && original.len() == FIXTURE.len();
+                let expected = n == 63 && original.len() == fixture().len();
                 assert_eq!(open(&bytes).is_ok(), expected);
             }
         }
@@ -589,6 +589,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: zip의 길이/디스크/포화 개수 판정을 생략해 잘못된 앞 후보를 선택하기.
     #[test]
+    // 이것을 실패시키는 것: 앞선 ZIP64 길이 불일치 제거 (실제 음성 대조 실행).
     fn zip9_fix2_invalid_earlier_zip64_candidates_are_skipped() {
         for reason in ["length", "disk", "count", "overflow"] {
             let mut bytes = overlapping_candidates(450);

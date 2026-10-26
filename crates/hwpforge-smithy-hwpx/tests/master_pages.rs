@@ -1,18 +1,12 @@
-//! 바탕쪽(master page) 디코드·인코드 — 일반 문단 디코더·인코더 재사용 (P6).
-//!
-//! 한컴 정답 fixture = `tests/fixtures/master_pages/f5*.hwpx` (한컴독스에서 같은
-//! 4쪽 본문에 바탕쪽만 만들어 저장): f5a 양쪽 + 마지막 쪽, f5b 임의 쪽 3,
-//! f5c 짝수(masterpage0)·홀수(masterpage1), f5d 마지막 쪽 + 앞 바탕쪽과 겹침,
-//! f5e 바탕쪽 앞으로, f5f 사각형·그림.
-//!
-//! 합성 입력은 이 코덱이 만든 패키지의 바탕쪽 part 를 바꿔 만든다 — 이 코덱의
-//! 출력이라 편집기 admission 을 통과하므로, 거부가 바탕쪽 때문인지 가릴 수 있다.
+#[path = "support/master_pages.rs"]
+mod shared;
+use shared::*;
 
 use std::io::{Cursor, Read, Write};
 
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::run::{Run, RunContent};
-use hwpforge_core::section::{MasterPage, MasterPageSpecial, Section};
+use hwpforge_core::section::{MasterPage, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
@@ -22,283 +16,12 @@ use hwpforge_smithy_hwpx::{
     HwpxEncoder, HwpxError,
 };
 
-// ── helpers ──────────────────────────────────────────────────────
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = format!("{}/../../tests/fixtures/master_pages/{name}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
-}
-
-fn part(bytes: &[u8], name: &str) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name(name).unwrap_or_else(|e| panic!("{name}: {e}")).read_to_string(&mut out).unwrap();
-    out
-}
-
-/// `bytes` with entry `name` replaced by `xml`; every other entry copied as is.
-fn with_part(bytes: &[u8], name: &str, xml: &str) -> Vec<u8> {
-    let mut src = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for i in 0..src.len() {
-        let mut entry = src.by_index(i).unwrap();
-        let entry_name = entry.name().expect("ZIP entry name").to_string();
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(entry.compression());
-        out.start_file(&entry_name, options).unwrap();
-        if entry_name == name {
-            out.write_all(xml.as_bytes()).unwrap();
-        } else {
-            std::io::copy(&mut entry, &mut out).unwrap();
-        }
-    }
-    out.finish().unwrap().into_inner()
-}
-
-fn styles() -> HwpxStyleStore {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    styles
-}
-
-fn para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-/// A section with a 2×2 table (so set-cell has a target) and one master page.
-fn section_with_master(master_text: &str) -> Section {
-    let width = HwpUnit::new(8000).unwrap();
-    let table = Table::new(vec![
-        TableRow::new(vec![
-            TableCell::new(vec![para("성명")], width),
-            TableCell::new(vec![para("")], width),
-        ]),
-        TableRow::new(vec![
-            TableCell::new(vec![para("소속")], width),
-            TableCell::new(vec![para("")], width),
-        ]),
-    ]);
-    let mut host = Paragraph::new(ParaShapeIndex::new(0));
-    host.add_run(Run::table(table, CharShapeIndex::new(0)));
-    let mut section = Section::with_paragraphs(vec![host], PageSettings::a4());
-    section.master_pages =
-        Some(vec![MasterPage::new(ApplyPageType::Both, vec![para(master_text)])]);
-    section
-}
-
-/// This codec's own package: `sections` sections, each with one master page.
-fn package(master_text: &str, sections: usize) -> Vec<u8> {
-    let mut doc = Document::new();
-    for _ in 0..sections {
-        doc.add_section(section_with_master(master_text));
-    }
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles(), &ImageStore::new())
-        .expect("encode")
-}
-
-/// `bytes` with master page part `n` given a new root `type` and subList body.
-fn with_master(bytes: &[u8], n: usize, root_attrs: &str, body: &str) -> Vec<u8> {
-    let name = format!("Contents/masterpage{n}.xml");
-    let xml = part(bytes, &name);
-    let root_at = xml.find("<masterPage").unwrap();
-    let id_at = root_at + xml[root_at..].find(" id=").unwrap();
-    let root_end = root_at + xml[root_at..].find('>').unwrap();
-    let sub_open = xml.find("<hp:subList").unwrap();
-    let sub_body = sub_open + xml[sub_open..].find('>').unwrap() + 1;
-    let sub_close = xml.find("</hp:subList>").unwrap();
-    let new = format!(
-        "{} id=\"masterpage{n}\" {root_attrs}>{}{body}{}",
-        &xml[..id_at],
-        &xml[root_end + 1..sub_body],
-        &xml[sub_close..]
-    );
-    with_part(bytes, &name, &new)
-}
-
-const BOTH: &str = r#"type="BOTH" pageNumber="0" pageDuplicate="0" pageFront="0""#;
-
-fn p(runs: &str) -> String {
-    format!(
-        r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">{runs}</hp:p>"#
-    )
-}
-
-fn decode(bytes: &[u8]) -> HwpxDocument {
-    HwpxDecoder::decode(bytes).expect("decode")
-}
-
-fn masters(doc: &HwpxDocument, section: usize) -> &[MasterPage] {
-    doc.document.sections()[section].master_pages.as_deref().unwrap_or_default()
-}
-
-fn content_lost(doc: &HwpxDocument) -> Vec<(String, String, String)> {
-    doc.warnings
-        .iter()
-        .filter_map(|w| match w {
-            DecodeWarning::ContentLost { part, path, kind, .. } => {
-                Some((part.clone(), path.to_string(), kind.clone()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn reencode(doc: HwpxDocument) -> Vec<u8> {
-    let validated = doc.document.validate().expect("validate");
-    HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store).expect("encode")
-}
-
 fn cell_spec() -> Vec<CellSpec> {
     vec![CellSpec {
         table: 0,
         target: CellTarget::At(hwpforge_core::table::grid::GridCoord::new(0, 1)),
         text: "홍길동".to_string(),
     }]
-}
-
-// ── Hancom answer key ────────────────────────────────────────────
-
-// 이것을 실패시키는 것: 범위 표에서 LAST_PAGE·OPTIONAL_PAGE 를 빼기(Both 로
-// 떨어짐), `pageNumber`·`pageDuplicate`·`pageFront` 를 읽지 않기, subList 크기를
-// 읽지 않기, 바탕쪽을 파일 번호 순서가 아닌 다른 순서로 배정하기.
-#[test]
-fn hancom_master_pages_decode_with_their_scope_and_area() {
-    let a = decode(&fixture("f5a-last-page.hwpx"));
-    let [both, last] = masters(&a, 0) else { panic!("f5a has two master pages") };
-    assert_eq!((both.apply_page_type, both.special), (ApplyPageType::Both, None));
-    assert_eq!(last.special, Some(MasterPageSpecial::LastPage));
-    assert_eq!(last.paragraphs[0].text_content(), "마지막");
-    assert_eq!((both.text_width.as_i32(), both.text_height.as_i32()), (48190, 67181));
-
-    let b = decode(&fixture("f5b-optional-page3.hwpx"));
-    assert_eq!(masters(&b, 0)[0].special, Some(MasterPageSpecial::OptionalPage { page_number: 3 }));
-
-    let c = decode(&fixture("f5c-odd-even.hwpx"));
-    let kinds: Vec<_> = masters(&c, 0).iter().map(|m| m.apply_page_type).collect();
-    assert_eq!(kinds, [ApplyPageType::Even, ApplyPageType::Odd], "masterpage0 is EVEN");
-
-    let d = decode(&fixture("f5d-overlap.hwpx"));
-    assert_eq!(
-        masters(&d, 0).iter().map(|m| (m.special, m.page_duplicate)).collect::<Vec<_>>(),
-        [(None, false), (Some(MasterPageSpecial::LastPage), true)]
-    );
-
-    let e = decode(&fixture("f5e-front.hwpx"));
-    assert!(masters(&e, 0)[0].page_front);
-
-    for doc in [&a, &b, &c, &d, &e] {
-        assert!(content_lost(doc).is_empty(), "{:?}", doc.warnings);
-    }
-}
-
-// 이것을 실패시키는 것: 바탕쪽 문단을 문자열 스캐너로 되돌리기(도형·그림 소실),
-// 또는 인코더가 글자 아닌 run 을 버리기.
-#[test]
-fn hancom_master_page_shapes_and_picture_reach_core() {
-    let f = decode(&fixture("f5f-shapes.hwpx"));
-    let runs = &masters(&f, 0)[0].paragraphs[0].runs;
-    assert!(matches!(runs[0].content, RunContent::Control(_)), "{runs:?}");
-    assert!(matches!(runs[1].content, RunContent::Image(_)), "{runs:?}");
-    assert!(content_lost(&f).is_empty(), "{:?}", f.warnings);
-
-    let a = decode(&fixture("f5a-last-page.hwpx"));
-    let both = &masters(&a, 0)[0].paragraphs[0];
-    assert!(matches!(both.runs[0].content, RunContent::Control(_)), "rect: {:?}", both.runs);
-    assert_eq!(both.text_content(), "양쪽");
-}
-
-/// A group picture on a master page is judged for a crop against the
-/// package's image sizes like one in the body: Hancom's F3a logo group
-/// (three uncropped pictures, `imgClip` = the whole image) placed on a
-/// master page with its `imgDim` removed decodes without a loss.
-///
-/// 이것을 실패시키는 것: 바탕쪽 디코드 문맥에 패키지 그림 픽셀 크기를 넘기지 않기
-/// (세 그림이 "크기 모름" 자르기로 `ContentLost` 보고된다).
-#[test]
-fn a_master_page_group_picture_without_img_dim_uses_the_image_size() {
-    let path =
-        format!("{}/../../tests/fixtures/shapes/group-f3a-logo.hwpx", env!("CARGO_MANIFEST_DIR"));
-    let hancom = std::fs::read(&path).unwrap();
-    let body = part(&hancom, "Contents/section0.xml");
-    let start = body.find("<hp:container").expect("F3a has a group");
-    let end = body.find("</hp:container>").unwrap() + "</hp:container>".len();
-    let mut group = body[start..end].to_string();
-    assert_eq!(group.matches("<hp:pic ").count(), 3, "premise: three pictures");
-    while let Some(at) = group.find("<hp:imgDim ") {
-        let close = at + group[at..].find("/>").unwrap() + 2;
-        group.replace_range(at..close, "");
-    }
-
-    // This codec's package of F3a (BinData kept) with one master page, whose
-    // body is then swapped for the Hancom group.
-    let mut doc = decode(&hancom);
-    doc.document.sections_mut()[0].master_pages =
-        Some(vec![MasterPage::new(ApplyPageType::Both, vec![para("바탕")])]);
-    let bytes = reencode(doc);
-    let run = format!(r#"<hp:run charPrIDRef="0">{group}</hp:run>"#);
-    let back = decode(&with_master(&bytes, 0, BOTH, &p(&run)));
-
-    assert!(content_lost(&back).is_empty(), "{:?}", back.warnings);
-    let master = &masters(&back, 0)[0];
-    assert!(
-        master.paragraphs[0].runs.iter().any(|r| matches!(&r.content, RunContent::Control(c)
-            if matches!(c.as_ref(), hwpforge_core::control::Control::Group { .. }))),
-        "the group reached the master page: {master:?}"
-    );
-}
-
-// 이것을 실패시키는 것: 인코더가 루트·subList 값을 하드코딩하기(범위·쪽 번호·
-// 겹침·앞으로·크기 중 하나), 또는 글자 아닌 run 을 버리기.
-#[test]
-fn hancom_master_pages_keep_their_wire_attributes_through_reencode() {
-    let root_and_area = |xml: &str| {
-        let root = &xml[xml.find("<masterPage").unwrap()..];
-        let root = &root[..root.find('>').unwrap()];
-        let attrs: Vec<&str> = root
-            .split(' ')
-            .filter(|a| {
-                ["type=", "pageNumber=", "pageDuplicate=", "pageFront="]
-                    .iter()
-                    .any(|k| a.starts_with(k))
-            })
-            .collect();
-        let sub = &xml[xml.find("<hp:subList").unwrap()..];
-        let sub = &sub[..sub.find('>').unwrap()];
-        let area: Vec<&str> = sub
-            .split(' ')
-            .filter(|a| {
-                ["vertAlign=", "textWidth=", "textHeight="].iter().any(|k| a.starts_with(k))
-            })
-            .collect();
-        (attrs.join(" "), area.join(" "))
-    };
-    for name in [
-        "f5a-last-page.hwpx",
-        "f5b-optional-page3.hwpx",
-        "f5c-odd-even.hwpx",
-        "f5d-overlap.hwpx",
-        "f5e-front.hwpx",
-        "f5f-shapes.hwpx",
-    ] {
-        let original = fixture(name);
-        let count = masters(&decode(&original), 0).len();
-        let again = reencode(decode(&original));
-        for n in 0..count {
-            let part_name = format!("Contents/masterpage{n}.xml");
-            let (before, after) = (part(&original, &part_name), part(&again, &part_name));
-            assert_eq!(root_and_area(&after), root_and_area(&before), "{name} {part_name}");
-            for tag in ["<hp:rect", "<hp:pic"] {
-                assert_eq!(
-                    after.matches(tag).count(),
-                    before.matches(tag).count(),
-                    "{name} {part_name} {tag}"
-                );
-            }
-        }
-    }
-    let c = reencode(decode(&fixture("f5c-odd-even.hwpx")));
-    assert!(part(&c, "Contents/masterpage0.xml").contains(r#"type="EVEN""#));
 }
 
 // ── wire text through the paragraph decoder (G2 §3.1) ────────────
@@ -571,4 +294,42 @@ fn a_master_page_shape_without_fill_stays_without_fill() {
     };
     let Control::Rect { style, .. } = c.as_ref() else { panic!("{c:?}") };
     assert_eq!(style.as_ref().and_then(|s| s.fill.clone()), Some(Fill::None));
+}
+
+fn styles() -> HwpxStyleStore {
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    styles.push_char_shape(HwpxCharShape::default());
+    styles.push_para_shape(HwpxParaShape::default());
+    styles
+}
+
+/// A section with a 2×2 table (so set-cell has a target) and one master page.
+fn section_with_master(master_text: &str) -> Section {
+    let width = HwpUnit::new(8000).unwrap();
+    let table = Table::new(vec![
+        TableRow::new(vec![
+            TableCell::new(vec![para("성명")], width),
+            TableCell::new(vec![para("")], width),
+        ]),
+        TableRow::new(vec![
+            TableCell::new(vec![para("소속")], width),
+            TableCell::new(vec![para("")], width),
+        ]),
+    ]);
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(table, CharShapeIndex::new(0)));
+    let mut section = Section::with_paragraphs(vec![host], PageSettings::a4());
+    section.master_pages =
+        Some(vec![MasterPage::new(ApplyPageType::Both, vec![para(master_text)])]);
+    section
+}
+
+/// This codec's own package: `sections` sections, each with one master page.
+fn package(master_text: &str, sections: usize) -> Vec<u8> {
+    let mut doc = Document::new();
+    for _ in 0..sections {
+        doc.add_section(section_with_master(master_text));
+    }
+    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles(), &ImageStore::new())
+        .expect("encode")
 }

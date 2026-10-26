@@ -109,6 +109,7 @@ mod tests {
     /// since a `.hwp` file is the case the audit actually measured (it is
     /// not even a ZIP archive, so `HwpxDecoder` fails immediately).
     #[test]
+    // 이것을 실패시키는 것: 정상 ZIP 입력으로 decode-failure 조건 제거 (실제 음성 대조 실행).
     fn validate_reports_decode_failure_as_an_error_not_as_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.hwpx");
@@ -123,7 +124,10 @@ mod tests {
             err.hint
         );
 
-        let hwp_path = fixture("tables/table_01_basic_2x2.hwp");
+        let hwp_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hwpforge/tests/data/hwp5-dangling-table-border-fill.hwp")
+            .to_string_lossy()
+            .into_owned();
         let err = run_validate(&hwp_path)
             .expect_err("a real .hwp file must be an error, not a valid:false payload");
         assert_eq!(err.code, "DECODE_FAILED");

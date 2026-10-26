@@ -392,13 +392,14 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: (예시) 접두사를 일반 본문으로 바꾸기.
     fn instruction_markers_guard_paragraph() {
         assert_eq!(
             paragraph_guard("【작성방법】 각 항목을 기재"),
             Some(GuardReason::InstructionContext)
         );
         assert_eq!(
-            paragraph_guard("(예시) 교육자료 개발비 : 10명 × 500,000원"),
+            paragraph_guard("(예시) 달빛 정원 관찰 키트 : 7상자 × 12,000원"),
             Some(GuardReason::InstructionContext)
         );
     }

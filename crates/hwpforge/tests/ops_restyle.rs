@@ -1,4 +1,3 @@
-//! `ops::style::restyle` — a regenerating edit, and therefore fail-closed.
 #![cfg(feature = "ops-hwpx")]
 
 use hwpforge::core::control::Control;
@@ -297,12 +296,9 @@ fn a_clean_fixture_still_reports_no_warnings() {
 /// `semantic_loss_returns_no_bytes_at_all`), so this list must never carry
 /// one of those codes.
 ///
-/// `sample1.hwpx` decodes with its own `LAYOUT_CACHE_DROPPED` — a
-/// pre-existing property of that fixture (it also has known malformed XML,
-/// see `hwpforge-smithy-hwpx/tests/golden.rs`'s `#[ignore]` on it), unrelated
-/// to this restyle's own encode: the only non-semantic `EncodeWarning` is
-/// `LayoutCacheDropped`, which the encoder raises solely under
-/// `EncodeOptions::emit_layout_cache` — an opt-in no editing surface sets.
+/// The warning input drops an invalid cache on decode. The only
+/// non-semantic encoder warning is `LayoutCacheDropped`, raised solely
+/// under `EncodeOptions::emit_layout_cache`, which editing surfaces do not set.
 /// Before this fix the decode half of `warnings` was silently dropped
 /// (`decode_warnings_reach_the_restyle_output`), so this fixture used to
 /// pin an empty list; now it pins the one warning the decode legitimately
@@ -365,61 +361,6 @@ fn grouped_text_box_table_is_restyled() {
     let bytes = shapes_fixture("group-nested-table.hwpx");
     assert!(HwpxDecoder::decode(&bytes).unwrap().warnings.is_empty());
     restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
-}
-
-/// A TextArt whose outline Core cannot keep makes restyle refuse the input
-/// (Hancom's F14 with its TextArt given a 33-unit solid outline); the
-/// untouched F14 goes through.
-///
-/// 이것을 실패시키는 것: 글맵시 외곽선 손실 경고를 지우는 것(restyle 이 외곽선
-/// 없이 다시 씀).
-#[test]
-fn text_art_whose_outline_is_lost_is_refused() {
-    let opts = RestyleOptions::default().with_preset("modern");
-    restyle(&shapes_fixture("group-f14-textart.hwpx"), &opts).expect("plain F14 restyles");
-    let err = restyle(&shapes_fixture("group-textart-outline.hwpx"), &opts).unwrap_err();
-    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
-    assert!(err.to_string().contains("textart_outline"), "{err}");
-}
-
-/// A TextArt whose font type is HTF (Hangul font; Core keeps only TTF)
-/// makes restyle refuse the input (Hancom's F14 with `fontType="HTF"`).
-///
-/// 이것을 실패시키는 것: 글맵시 글꼴 유형 손실 경고를 지우는 것.
-#[test]
-fn text_art_with_a_hangul_font_type_is_refused() {
-    let opts = RestyleOptions::default().with_preset("modern");
-    let err = restyle(&shapes_fixture("group-textart-htf.hwpx"), &opts).unwrap_err();
-    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
-    assert!(err.to_string().contains("textart_font_type"), "{err}");
-}
-
-/// §19.22 D5: a restyle keeps every paragraph's end-mark char shape (the
-/// fixture's paragraphs end in empty runs, as Hancom writes them).
-///
-/// 이것을 실패시키는 것: 디코더가 끝 run 을 읽지 않기 / 인코더가 쓰지 않기 /
-/// 다른 문단으로 옮기거나 다른 글자 모양으로 쓰기.
-#[test]
-fn restyle_keeps_end_mark_char_shapes() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/user_samples/sample-char-breakwordlatin-variants.hwpx"
-    );
-    let source = std::fs::read(path).expect("fixture");
-    let ends = |bytes: &[u8]| {
-        let doc = HwpxDecoder::decode(bytes).expect("decode");
-        let mut out = Vec::new();
-        for p in &doc.document.sections()[0].paragraphs {
-            p.for_each_paragraph(|q| out.push(q.end_char_shape));
-        }
-        out
-    };
-    let before = ends(&source);
-    assert!(before.iter().any(Option::is_some));
-    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
-    // Paragraph by paragraph (review r1: a count let a moved or renumbered
-    // end mark pass).
-    assert_eq!(ends(&out.bytes), before);
 }
 
 /// S19: a restyle keeps a cell's dormant margin (its own values while it

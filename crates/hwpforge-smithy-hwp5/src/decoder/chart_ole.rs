@@ -144,44 +144,8 @@ pub(crate) fn extract_chart_payload_from_inflated(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::fs;
-    use std::path::PathBuf;
-
-    /// Raw (still DEFLATE-compressed) `/BinData/BIN0001.OLE` of the
-    /// single-column chart fixture.
-    pub(crate) fn chart_fixture_raw_bin0001() -> Vec<u8> {
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/charts/chart_01_single_column.hwp");
-        let bytes = fs::read(&fixture).expect("chart fixture must exist");
-        let mut cfb = CompoundFile::open(Cursor::new(bytes)).expect("fixture is CFB");
-        let mut stream = cfb.open_stream("/BinData/BIN0001.OLE").expect("BIN0001.OLE");
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).expect("read BIN0001.OLE");
-        buf
-    }
-
-    /// Inflated `/BinData/BIN0001.OLE` of the single-column chart fixture.
     pub(crate) fn chart_fixture_inflated() -> Vec<u8> {
-        crate::decoder::package::decompress_stream(&chart_fixture_raw_bin0001())
-            .expect("fixture OLE inflates")
-    }
-
-    #[test]
-    fn extract_chart_payload_from_real_fixture_returns_ooxml_and_ole_bytes() {
-        let inflated = chart_fixture_inflated();
-        let payload = extract_chart_payload_from_inflated(&inflated, inflated.len() as u64)
-            .expect("extraction should succeed");
-        assert!(
-            payload.chart_xml.contains("<c:chartSpace"),
-            "chart_xml should contain <c:chartSpace> root, got prefix={:?}",
-            &payload.chart_xml.chars().take(64).collect::<String>()
-        );
-        assert_eq!(payload.ole_bytes, inflated[4..], "ole_bytes = inflated minus the prefix");
-        assert_eq!(
-            &payload.ole_bytes[..4],
-            b"\xD0\xCF\x11\xE0",
-            "ole_bytes must start with OLE2 magic"
-        );
+        crate::decoder::section::tests::r3_chart_asset(1).2
     }
 
     #[test]
@@ -194,6 +158,7 @@ pub(crate) mod tests {
     // - `.take(inner_cap + 1)` 제거 → 스트림 전체를 읽어 보고된 길이가 커진다.
     // - 읽은 뒤의 `> inner_cap` 비교 제거 → 오류가 사라지고 추출이 성공한다.
     #[test]
+    // 이것을 실패시키는 것: inner cap 경계 1바이트 증가 (실제 음성 대조 실행).
     fn inner_chart_stream_read_stops_one_byte_past_inner_cap() {
         let inflated = chart_fixture_inflated();
         let inner_cap = 16;

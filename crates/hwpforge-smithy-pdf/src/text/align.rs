@@ -44,7 +44,7 @@ pub struct LinePlacement {
 /// 정렬 배분을 계산한다.
 ///
 /// - `is_last_line`: 문단의 마지막 lineseg 여부 — JUSTIFY 는 마지막 줄을
-///   자연폭(LEFT)으로 둔다 (W0 실측: rules-justify 4째 줄 459.50 < 538.44).
+///   자연폭(LEFT)으로 둔다 (W0 실측: 한컴 저장 문서 4째 줄 459.50 < 538.44).
 /// - 자연폭이 `horzsize` 를 넘으면 늘이지 않는다 (extra 0, LEFT 기점) —
 ///   음수 배분은 발명이며 실측 근거가 없다.
 /// - [`Alignment::Distribute`]/[`Alignment::DistributeFlush`] 는 W0 미실측 —
@@ -103,7 +103,7 @@ pub fn place_line(
 mod tests {
     use super::*;
 
-    // W0 실측 (rules-table 표B): 셀 내부폭 hsize=94.68pt=9468HU,
+    // W0 실측 (한컴 저장 문서 표B): 셀 내부폭 hsize=94.68pt=9468HU,
     // '가운데 정렬 텍스트' 자연폭 90pt=9000HU (8자×10pt + 공백2×5pt).
     const CELL: LineBox = LineBox { horzpos: 0, horzsize: 9468 };
 
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn justify_distributes_excess_equally_over_spaces_only() {
-        // W0 (rules-justify): 본문 hsize 48188HU, 잉여를 공백 수로 균등 나눔.
+        // W0 (한컴 저장 문서): 본문 hsize 48188HU, 잉여를 공백 수로 균등 나눔.
         // '분배 규칙을' — 공백 1개에 몰빵 46.14pt-5pt=잉여 전량 실측.
         let p = place_line(
             Alignment::Justify,
@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(p.extra_per_space, 9468.0 - 5354.0);
         assert!(!p.needs_warning);
 
-        // 공백 3개 균등 (rules-justify 2째 줄 12.18pt×3 실측 패턴)
+        // 공백 3개 균등 (한컴 저장 문서 2째 줄 12.18pt×3 실측 패턴)
         let p3 = place_line(
             Alignment::Justify,
             LineBox { horzpos: 0, horzsize: 9468 },
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn justify_last_line_stays_natural() {
-        // W0: 마지막 줄 = 자연폭 (rules-justify 4째 줄 끝 459.50 < 538.44)
+        // W0: 마지막 줄 = 자연폭 (한컴 저장 문서 4째 줄 끝 459.50 < 538.44)
         let p = place_line(
             Alignment::Justify,
             CELL,

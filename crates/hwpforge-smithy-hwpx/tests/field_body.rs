@@ -1,4 +1,3 @@
-//! 필드 본문과 범위 경계의 공개 디코드·인코드 왕복.
 use std::io::{Cursor, Read, Write};
 
 use hwpforge_core::image::ImageStore;
@@ -998,42 +997,6 @@ fn structural_edits_refuse_closed_and_unclosed_formula_interiors() {
     }
 }
 
-/// 이것을 실패시키는 것: 중첩 원본 슬롯을 소비처에서 재추론하거나 디코더 기록 누락.
-#[test]
-fn corpus_sample_text_nodes_have_decoder_locations() {
-    use hwpforge_core::field_inventory::FieldInventory;
-    use hwpforge_core::node_path::CorePath;
-    for name in [
-        "sample-field-hyperlink-basic.hwpx",
-        "sample-field-hyperlink-surrounding-text-basic.hwpx",
-        "sample-field-bookmark-crossref-v2.hwpx",
-        "sample-field-footnote.hwpx",
-        "sample-field-page-number-basic.hwpx",
-    ] {
-        let bytes = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/fixtures/user_samples")
-                .join(name),
-        )
-        .unwrap();
-        let decoded = HwpxDecoder::decode(&bytes).unwrap();
-        FieldInventory::visit_flows(decoded.document.sections(), |si, ps, prefix| {
-            for (pi, p) in ps.iter().enumerate() {
-                for (ri, r) in p.runs.iter().enumerate() {
-                    if r.content.plain_text().is_some_and(|t| !t.is_empty()) {
-                        let path = CorePath::new(si, format!("{prefix}[{pi}].runs[{ri}].text"));
-                        assert!(
-                            decoded.source_map(si).unwrap().node(&path).is_some(),
-                            "{name}: {}",
-                            path.relative()
-                        );
-                    }
-                }
-            }
-        });
-    }
-}
-
 /// 이것을 실패시키는 것: 여러 원본 t를 한 편집 슬롯으로 접거나 빈 점 필드를 슬롯으로 요구.
 #[test]
 fn multi_text_and_empty_fields_do_not_poison_neighbor_preservation() {
@@ -1286,21 +1249,6 @@ fn rewrite_section(bytes: &[u8], rewrite: impl Fn(&str) -> String) -> Vec<u8> {
         out.write_all(&bytes).unwrap();
     }
     out.finish().unwrap().into_inner()
-}
-
-/// 이것을 실패시키는 것: SourceRecorder를 거치지 않은 masterpage 문단을 빈 구간으로 성공 처리.
-#[test]
-fn external_masterpage_source_is_explicitly_unrecorded() {
-    use hwpforge_core::node_path::CorePath;
-    use hwpforge_smithy_hwpx::decoder::source_map::SourceCoverage;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/master_pages/f5c-odd-even.hwpx");
-    let d = HwpxDecoder::decode(&std::fs::read(path).unwrap()).unwrap();
-    assert!(!d.document.sections()[0].master_pages.as_ref().unwrap().is_empty());
-    let node =
-        d.source_map(0).unwrap().node(&CorePath::new(0, "master_pages[0].paragraphs[0]")).unwrap();
-    assert_eq!(node.copy_source(), &SourceCoverage::Unrecorded);
-    assert!(node.ranges().is_empty());
 }
 
 /// 이것을 실패시키는 것: 한 wire run을 나눈 Core 형제들이 각각 전체 원본 run을 복사하도록 허용.

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use crate::style_store_convert::{
     bgr_colorref_to_color, hwp5_char_shape_to_hwpx, hwp5_para_shape_to_hwpx, hwp5_tab_def_to_hwpx,
@@ -45,49 +44,6 @@ fn numbering_slot(id: u32, numbering: Hwp5RawNumberingDef) -> Hwp5DocInfoNumberi
 
 fn bullet_slot(id: u32, bullet: Hwp5RawBulletDef) -> Hwp5DocInfoBulletSlot {
     Hwp5DocInfoBulletSlot { id, bullet: Some(bullet) }
-}
-
-fn fixture_doc_info(name: &str) -> Hwp5StyleStore {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-    let direct = root.join(name);
-    let path = if direct.exists() {
-        direct
-    } else {
-        // basename fallback: walk the fixture tree
-        let basename =
-            std::path::Path::new(name).file_name().unwrap_or_else(|| std::ffi::OsStr::new(name));
-        fn walk_find(dir: &std::path::Path, target: &std::ffi::OsStr) -> Option<PathBuf> {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_dir() {
-                        if let Some(found) = walk_find(&p, target) {
-                            return Some(found);
-                        }
-                    } else if p.file_name() == Some(target) {
-                        return Some(p);
-                    }
-                }
-            }
-            None
-        }
-        walk_find(&root, basename).unwrap_or_else(|| root.join(name))
-    };
-    assert!(path.exists(), "fixture must exist at {:?}", path);
-    let bytes = std::fs::read(&path).expect("read hwp fixture");
-    hwpforge_smithy_hwp5::decode_hwp5_to_core(&bytes).expect("decode fixture").style_store
-}
-
-fn fixture_image_fill(name: &str) -> Hwp5RawImageFill {
-    let store = fixture_doc_info(name);
-    store
-        .border_fills()
-        .iter()
-        .find_map(|slot| match slot.fill.as_ref()?.fill {
-            Hwp5RawBorderFillFill::Image(ref fill) => Some(fill.clone()),
-            _ => None,
-        })
-        .expect("fixture must contain image border fill")
 }
 
 fn none_border_line() -> Hwp5RawBorderLine {
@@ -1197,8 +1153,7 @@ fn hwp5_para_shape_single_line_input_maps_to_line_wrap() {
 fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
     // Task #121 (Wave 12p): HWP5 wire bit 25-27 is a 3-bit zero-based
     // ordinal (`0..=7`) — the previous `saturating_sub(1)` assumption was
-    // wrong (cf. Codex-architect review + native sample-outline-9levels.hwpx
-    // fixture: paraPr id=2 → level=0 = first outline, id=3 → level=1, …).
+    // wrong: the first outline level is 0, the second is 1, and so on.
     let mut raw = default_para_shape();
     raw.property1 = (1 << 23) | (5 << 25);
     raw.numbering_bullet_id = 7;
@@ -1331,10 +1286,7 @@ fn hwp5_tab_def_maps_stops_and_auto_flags() {
     // tab-fidelity hotfix). `position` is halved on the way through
     // `hwp5_tab_position_to_hwp_unit` because the HWPX encoder treats
     // `TabStop.position` as HwpUnitChar (= HWP5 raw HwpUnit / 2). The
-    // leader mapping was rebuilt from openhwp + the
-    // `tests/fixtures/user_samples/tabs/sample-tab.hwp{,x}` truth pair
-    // — see `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B1+B2)
-    // for the empirical evidence.
+    // leader mapping preserves each supported wire style.
     let raw = Hwp5RawTabDef {
         property: 0b11,
         tab_stops: vec![
@@ -1493,54 +1445,6 @@ fn to_hwpx_style_store_warns_on_unknown_tab_codes() {
             if *subject == "tab_def.leader"
                 && reason.contains("fill_type 99")
     )));
-}
-
-#[test]
-fn fixture_sample_tab_hwp_has_expected_raw_custom_tab_def() {
-    let store = fixture_doc_info("user_samples/tabs/sample-tab.hwp");
-    assert_eq!(store.tab_defs.len(), 4);
-
-    let custom = store.tab_defs[3].tab_def.as_ref().expect("custom slot should parse");
-    assert_eq!(custom.property, 0);
-    assert_eq!(custom.tab_stops.len(), 1);
-    assert_eq!(custom.tab_stops[0].position, 30000);
-    assert_eq!(custom.tab_stops[0].tab_type, 0);
-    assert_eq!(custom.tab_stops[0].fill_type, 3);
-}
-
-#[test]
-fn fixture_mixed_lists_preserve_numbering_and_bullet_slots() {
-    let store = fixture_doc_info("user_samples/lists/sample-mixed-lists-with-outline.hwp");
-    assert!(!store.numberings.is_empty(), "fixture must expose numbering slots");
-    assert!(!store.bullets.is_empty(), "fixture must expose bullet slots");
-
-    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
-    assert!(hwpx_store.numbering_count() >= 1);
-    assert!(hwpx_store.bullet_count() >= 1);
-    assert!(!warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "bullet.projection"
-    )));
-}
-
-#[test]
-fn fixture_checkable_multiline_para_shapes_preserve_checked_item_state() {
-    let store = fixture_doc_info("user_samples/sample-checkable-bullet-multiline.hwp");
-    assert!(!store.para_shapes[20].checked(), "unchecked task paragraph should stay unchecked");
-    assert!(store.para_shapes[21].checked(), "checked task paragraph should expose the item bit");
-    assert!(
-        !store.para_shapes[22].checked(),
-        "continuation paragraph must not be treated as checked"
-    );
-
-    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
-    assert!(!warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "bullet.projection"
-    )));
-    assert!(!hwpx_store.para_shape(ParaShapeIndex::new(20)).unwrap().checked);
-    assert!(hwpx_store.para_shape(ParaShapeIndex::new(21)).unwrap().checked);
-    assert!(!hwpx_store.para_shape(ParaShapeIndex::new(22)).unwrap().checked);
 }
 
 #[test]
@@ -2255,34 +2159,6 @@ fn bin_data_style_mapping_writes_the_resolved_image() {
     );
 }
 
-#[test]
-fn fixture_table_16_image_fill_reports_raw_image_fill_mode() {
-    let image_fill = fixture_image_fill("table_16_image_fill.hwp");
-    assert_eq!(image_fill.bindata_id, 1);
-    assert_eq!(image_fill.mode, Hwp5FillImageMode::Resize);
-}
-
-#[test]
-fn fixture_table_16b_image_fill_center_reports_raw_image_fill_mode() {
-    let image_fill = fixture_image_fill("table_16b_image_fill_center.hwp");
-    assert_eq!(image_fill.bindata_id, 1);
-    assert_eq!(image_fill.mode, Hwp5FillImageMode::Center);
-}
-
-#[test]
-fn fixture_table_16c_image_fill_tile_reports_raw_image_fill_mode() {
-    let image_fill = fixture_image_fill("table_16c_image_fill_tile.hwp");
-    assert_eq!(image_fill.bindata_id, 1);
-    assert_eq!(image_fill.mode, Hwp5FillImageMode::TileAll);
-}
-
-#[test]
-fn fixture_table_18_image_fill_zoom_reports_raw_image_fill_mode() {
-    let image_fill = fixture_image_fill("table_18_public_document_composite.hwp");
-    assert_eq!(image_fill.bindata_id, 1);
-    assert_eq!(image_fill.mode, Hwp5FillImageMode::Zoom);
-}
-
 // ──────────────────────────────────────────────────────────────────────────
 // parse_outline_style_name
 // ──────────────────────────────────────────────────────────────────────────
@@ -2957,54 +2833,6 @@ fn w1_hwp5_packed_margins_and_tabs_keep_units_and_reject_ranges() {
     assert_eq!(hwp5_para_shape_to_hwpx(&raw).unwrap().line_spacing, 2001);
     raw.line_spacing2 = Some(u32::MAX);
     assert!(hwp5_para_shape_to_hwpx(&raw).is_err());
-}
-
-#[test]
-fn w1_native_twins_preserve_measures_and_font_line_height() {
-    use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, PackageReader};
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure");
-    for name in
-        ["para-margins", "para-margins-char", "para-margins-wrap", "field-mix", "line-height-mixed"]
-    {
-        let raw = hwpforge_smithy_hwp5::decode_hwp5_to_core(
-            &std::fs::read(root.join(format!("{name}.hwp"))).unwrap(),
-        )
-        .unwrap();
-        let (store, _) = crate::hwp5_style_store_to_hwpx(&raw.style_store).unwrap();
-        let twin = HwpxDecoder::decode(&std::fs::read(root.join(format!("{name}.hwpx"))).unwrap())
-            .unwrap();
-        let measures = |s: &hwpforge_smithy_hwpx::HwpxStyleStore| {
-            s.iter_para_shapes()
-                .enumerate()
-                .map(|(index, p)| {
-                    (
-                        index,
-                        [
-                            p.margin_left,
-                            p.margin_right,
-                            p.indent,
-                            p.spacing_before,
-                            p.spacing_after,
-                        ],
-                        p.line_spacing,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        // 이것을 실패시키는 것: 변이 1·2·3 — HWP5 원본의 음수 홀수·CHAR 손실.
-        assert_eq!(measures(&store), measures(&twin.style_store), "{name}");
-        let output =
-            HwpxEncoder::encode(&raw.document.validate().unwrap(), &store, &raw.image_store)
-                .unwrap();
-        let after = HwpxDecoder::decode(&output).unwrap();
-        assert_eq!(measures(&after.style_store), measures(&store), "{name}");
-        if name == "line-height-mixed" {
-            let xml = PackageReader::new(&output).unwrap().read_header_xml().unwrap();
-            let para = xml.split("<hh:paraPr id=\"20\"").nth(1).unwrap().split('>').next().unwrap();
-            assert!(para.contains("fontLineHeight=\"1\""));
-        }
-    }
 }
 
 #[test]

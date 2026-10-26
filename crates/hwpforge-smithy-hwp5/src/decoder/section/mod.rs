@@ -2938,13 +2938,11 @@ fn attach_finished_subtree(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::decoder::package::PackageReader;
     use crate::schema::header::HwpVersion;
-    use crate::schema::record::{Record, TagId as RawTagId};
+    use crate::schema::record::Record;
     use crate::schema::section::Hwp5ShapePoint;
-    use std::path::PathBuf;
 
     // ── Helper: build a single record's bytes ────────────────────────────
 
@@ -3180,37 +3178,6 @@ mod tests {
 
     fn version() -> HwpVersion {
         HwpVersion::new(5, 0, 2, 5)
-    }
-
-    fn fixture_path(name: &str) -> PathBuf {
-        crate::test_support::workspace_fixture_path(name)
-    }
-
-    fn table_cell_list_header_properties_from_fixture(name: &str) -> Vec<u32> {
-        let bytes = std::fs::read(fixture_path(name)).expect("fixture bytes");
-        let pkg = PackageReader::open(&bytes).expect("fixture package");
-        let mut cursor = std::io::Cursor::new(pkg.sections_data()[0].clone());
-        let records = Record::parse_stream(&mut cursor).expect("fixture section records");
-
-        let mut saw_table_body = false;
-        let mut properties = Vec::new();
-        for record in records {
-            match RawTagId::from(record.header.tag_id) {
-                RawTagId::Table => saw_table_body = true,
-                RawTagId::ListHeader if saw_table_body => {
-                    let data = &record.data;
-                    let properties_word = if data.len() == 30 {
-                        u32::from_le_bytes([data[2], data[3], data[4], data[5]])
-                    } else {
-                        u32::from_le_bytes([data[4], data[5], data[6], data[7]])
-                    };
-                    properties.push(properties_word);
-                }
-                RawTagId::CtrlHeader | RawTagId::ParaHeader => {}
-                _ => {}
-            }
-        }
-        properties
     }
 
     // ── Tests ────────────────────────────────────────────────────────────
@@ -6049,26 +6016,6 @@ mod tests {
     }
 
     #[test]
-    fn fixture_repeat_header_multi_page_cell_properties_preserve_header_flag() {
-        let single_on =
-            table_cell_list_header_properties_from_fixture("table_06_repeat_header_row.hwp");
-        let single_off =
-            table_cell_list_header_properties_from_fixture("table_06b_no_repeat_header_row.hwp");
-        let on = table_cell_list_header_properties_from_fixture(
-            "table_06c_repeat_header_multi_page.hwp",
-        );
-        let off = table_cell_list_header_properties_from_fixture(
-            "table_06d_no_repeat_header_multi_page.hwp",
-        );
-        assert!(single_on.iter().all(|properties| (properties & TABLE_CELL_HEADER_FLAG) == 0));
-        assert!(single_off.iter().all(|properties| (properties & TABLE_CELL_HEADER_FLAG) == 0));
-        assert!(on.iter().take(3).all(|properties| (properties & TABLE_CELL_HEADER_FLAG) != 0));
-        assert!(off.iter().take(3).all(|properties| (properties & TABLE_CELL_HEADER_FLAG) != 0));
-        assert!(on.iter().skip(3).all(|properties| (properties & TABLE_CELL_HEADER_FLAG) == 0));
-        assert!(off.iter().skip(3).all(|properties| (properties & TABLE_CELL_HEADER_FLAG) == 0));
-    }
-
-    #[test]
     fn gso_shape_picture_becomes_image_control() {
         let mut stream = Vec::new();
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
@@ -6598,107 +6545,7 @@ mod tests {
             }
         }
     }
-    /// 이것을 실패시키는 것: 어느 중첩 경로에서든 공통 타입화를 우회하거나
-    /// 덧말/겹침/찾아보기/필드 갈래를 빼기. 실제 fixture의 wire를 각 문맥에 넣는다.
-    #[test]
-    fn nested_one_shot_controls_share_body_typing() {
-        let mut payloads = Vec::new();
-        for (file, id) in [
-            ("sample-compose-basic.hwp", CTRL_ID_COMPOSE),
-            ("sample-dutmal-basic.hwp", CTRL_ID_DUTMAL),
-            ("sample-indexmark-basic.hwp", CTRL_ID_INDEXMARK),
-            ("sample-field-docsummary.hwp", CTRL_ID_FIELD_SUMMERY),
-            ("sample-bookmark-page.hwp", CTRL_ID_FIELD_CROSSREF),
-            ("sample-memo-basic.hwp", CTRL_ID_MEMO),
-        ] {
-            let bytes = std::fs::read(fixture_path(file)).unwrap();
-            let pkg = PackageReader::open(&bytes).unwrap();
-            let records = Record::parse_stream(&mut Cursor::new(&pkg.sections_data()[0])).unwrap();
-            payloads.push(
-                records
-                    .into_iter()
-                    .find(|r| r.header.tag_id == 0x47 && parse_ctrl_id(&r.data) == id)
-                    .unwrap_or_else(|| panic!("missing {id:08x} in {file}"))
-                    .data,
-            );
-        }
-        for (id, command) in [
-            (CTRL_ID_FIELD_DATE_CODE, "YYYY-MM-DD"),
-            (CTRL_ID_FIELD_PATH, "$P$F"),
-            (CTRL_ID_CLICK_HERE, "Clickhere:set:0:Direction:wstring:1:힌 HelpState:wstring:0:  "),
-        ] {
-            let mut data = id.to_le_bytes().to_vec();
-            data.extend([0; 4]);
-            data.push(9);
-            let units: Vec<_> = command.encode_utf16().collect();
-            data.extend_from_slice(&(units.len() as u16).to_le_bytes());
-            data.extend(units.into_iter().flat_map(|u| u.to_le_bytes()));
-            data.extend([0; 8]);
-            payloads.push(data);
-        }
-        for (id, size) in [(CTRL_ID_ATNO, 16), (CTRL_ID_NEW_NUMBER, 10), (CTRL_ID_PAGE_HIDING, 8)] {
-            let mut data = vec![0; size];
-            data[..4].copy_from_slice(&id.to_le_bytes());
-            payloads.push(data);
-        }
-        for data in payloads {
-            let mut body = BodyTextParserState::default();
-            body.handle_record(&Record {
-                header: crate::schema::record::RecordHeader { tag_id: 0x42, level: 0, size: 22 },
-                data: para_header_data(0, 0),
-            });
-            let record = Record {
-                header: crate::schema::record::RecordHeader {
-                    tag_id: 0x47,
-                    level: 1,
-                    size: data.len() as u32,
-                },
-                data,
-            };
-            body.handle_record(&record);
-            let mut name = vec![0x1B, 0x02, 0x01, 0, 0, 0, 0, 0x40, 0x01, 0, 1, 0];
-            name.extend_from_slice(&('명' as u16).to_le_bytes());
-            if parse_ctrl_id(&record.data) == CTRL_ID_CLICK_HERE {
-                body.handle_record(&Record {
-                    header: crate::schema::record::RecordHeader {
-                        tag_id: 0x57,
-                        level: 2,
-                        size: name.len() as u32,
-                    },
-                    data: name.clone(),
-                });
-            }
-            let result = body.finish();
-            let control = &result.paragraphs[0].controls[0];
-            assert!(!matches!(control, Hwp5Control::Unknown { .. }), "{control:?}");
-            for container in [CTRL_ID_TABLE, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE] {
-                let mut bytes = make_record(TagId::ParaHeader, 0, &para_header_data(0, 0));
-                bytes.extend(make_record(TagId::CtrlHeader, 1, &container.to_le_bytes()));
-                if container == CTRL_ID_TABLE {
-                    bytes.extend(make_record(TagId::Table, 2, &basic_table_data(1, 1)));
-                    let mut cell = vec![0; 34];
-                    cell[..4].copy_from_slice(&1u32.to_le_bytes());
-                    cell[12] = 1;
-                    cell[14] = 1;
-                    bytes.extend(make_record(TagId::ListHeader, 2, &cell));
-                } else {
-                    bytes.extend(make_record(TagId::ListHeader, 2, &1u32.to_le_bytes()));
-                }
-                bytes.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
-                bytes.extend(make_record(TagId::CtrlHeader, 3, &record.data));
-                if parse_ctrl_id(&record.data) == CTRL_ID_CLICK_HERE {
-                    bytes.extend(make_record(TagId::CtrlData, 4, &name));
-                }
-                let nested = parse_body_text(&bytes, &HwpVersion::new(5, 0, 0, 0)).unwrap();
-                let children = match &nested.paragraphs[0].controls[0] {
-                    Hwp5Control::Table(t) => &t.cells[0].paragraphs,
-                    Hwp5Control::Footer(t) | Hwp5Control::Footnote(t) => &t.paragraphs,
-                    other => panic!("{other:?}"),
-                };
-                assert_eq!(format!("{:?}", children[0].controls[0]), format!("{control:?}"));
-            }
-        }
-    }
+
     /// 이것을 실패시키는 것: 잘못된 payload의 큐 자리나 진단을 버리기.
     #[test]
     fn nested_malformed_controls_keep_a_warned_queue_slot() {

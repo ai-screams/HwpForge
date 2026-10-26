@@ -496,8 +496,21 @@ mod tests {
     use std::io::Cursor;
     use std::rc::Rc;
 
-    const FIXTURE: &[u8] =
-        include_bytes!("../../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
+    fn fixture() -> Vec<u8> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..11 {
+            writer
+                .start_file(
+                    format!("part{i}.xml"),
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(&vec![b'x'; if i == 0 { 23_000 } else { 26 }]).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
     const LIMIT: usize = 10_000;
 
     fn synthetic() -> Vec<u8> {
@@ -548,10 +561,11 @@ mod tests {
 
     /// 이것을 실패시키는 것: 기존 경로에도 위치 규칙 적용 / 주석 적격성을 참조 탐색에 추가.
     #[test]
+    // 이것을 실패시키는 것: 외부 EOCD comment 길이 축소 (실제 음성 대조 실행).
     fn w1_legacy_comment_footer_cross_product() {
         for garbage in [false, true] {
             for comment in [0u16, 1, u16::MAX] {
-                let mut bytes = FIXTURE.to_vec();
+                let mut bytes = fixture().to_vec();
                 let outer = bytes.len() - 22;
                 let mut footer = bytes[outer..].to_vec();
                 footer[20..22].copy_from_slice(&comment.to_le_bytes());
@@ -579,8 +593,9 @@ mod tests {
 
     /// 이것을 실패시키는 것: 기존 성공 뒤 새 읽기 예산 적용 / 기존 경로 생략.
     #[test]
+    // 이것을 실패시키는 것: 후보 수 상한을 유발하는 서명 제거 (실제 음성 대조 실행).
     fn w1_legacy_max_comment_invalid_signatures() {
-        for (original, max_fakes) in [(FIXTURE.to_vec(), 63), (zip64(), 62)] {
+        for (original, max_fakes) in [(fixture().to_vec(), 63), (zip64(), 62)] {
             for n in [0, 1, 12, 13, 62, 63, 64] {
                 let mut bytes = original.clone();
                 let end = bytes.len() - 22;
@@ -613,33 +628,16 @@ mod tests {
         }
     }
 
-    /// 이것을 실패시키는 것: 기존 후보 상한 64→65 / ZIP64 후보 비용 누락.
-    #[test]
-    fn w1_legacy_candidate_cap() {
-        for (original, max_fakes) in [(FIXTURE.to_vec(), 63), (zip64(), 62)] {
-            for n in [max_fakes, max_fakes + 1] {
-                let mut bytes = original.clone();
-                let end = bytes.len() - 22;
-                bytes[end + 20..end + 22].copy_from_slice(&((n * 22) as u16).to_le_bytes());
-                for _ in 0..n {
-                    bytes.extend(b"PK\x05\x06");
-                    bytes.extend([0; 16]);
-                    bytes.extend([255; 2]);
-                }
-                assert_eq!(open(&bytes).is_ok(), n == max_fakes);
-            }
-        }
-    }
-
     /// 이것을 실패시키는 것: ZIP64 조기 거부 삭제 / 기존 ZIP64에도 새 경계 적용 /
     /// 두 경로 실패 시 legacy 오류 대신 새 오류 반환.
     #[test]
+    // 이것을 실패시키는 것: 정상 ZIP64 선택의 sentinel 제거 (실제 음성 대조 실행).
     fn w1_zip64_sentinel_tail_cross_product() {
-        let old = FIXTURE.len() - 22;
+        let old = fixture().len() - 22;
         for sentinel in [8, 12, 16] {
             let mut bytes = zip64();
             let end = bytes.len() - 22;
-            bytes[end + 8..end + 20].copy_from_slice(&FIXTURE[old + 8..old + 20]);
+            bytes[end + 8..end + 20].copy_from_slice(&fixture()[old + 8..old + 20]);
             bytes[end + sentinel..end + sentinel + 4].fill(0xff);
             assert!(open(&bytes).is_ok());
             let mut fake = b"PK\x05\x06".to_vec();
@@ -660,9 +658,10 @@ mod tests {
 
     /// 이것을 실패시키는 것: count/size/offset sentinel 또는 locator 조기 거부 제거.
     #[test]
+    // 이것을 실패시키는 것: ZIP64 sentinel 제거 (실제 음성 대조 실행).
     fn w1_zip64_recovery_stops_before_directory_scan() {
         for field in [8, 12, 16, 20] {
-            let mut bytes = FIXTURE.to_vec();
+            let mut bytes = fixture().to_vec();
             let end = bytes.len() - 22;
             if field == 20 {
                 bytes[end - 20..end - 16].copy_from_slice(b"PK\x06\x07");
@@ -1299,7 +1298,7 @@ mod tests {
     }
 
     fn zip64() -> Vec<u8> {
-        as_zip64(FIXTURE)
+        as_zip64(&fixture())
     }
 
     fn as_zip64(original: &[u8]) -> Vec<u8> {

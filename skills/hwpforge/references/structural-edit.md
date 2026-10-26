@@ -53,7 +53,7 @@ Deleting a paragraph that holds an index mark succeeds with an advisory in `warn
 
 ## Reading the diff of a paragraph edit
 
-`diff` first strips the paragraphs that are identical at the start and at the end of the section, then compares the remaining middle by position. Paragraphs compare equal only when their layout cache is equal too, so the report depends on the input (measured on `plain_inserted.hwp` converted with and without the layout cache — `convert-hwp5` carries it by default, `--no-layout-cache` leaves it out — inserting after paragraph 1 and deleting paragraph 2):
+`diff` first strips the paragraphs that are identical at the start and at the end of the section, then compares the remaining middle by position. Paragraphs compare equal only when their layout cache is equal too, so the report depends on the input (for example, insert after paragraph 1 and delete paragraph 2 in `tests/fixtures/structural/plain_paragraphs.hwpx`; cached input can produce a different diff):
 
 | Input                                                               | `insert-para` shows                                                                                                  | `delete-para` shows                                              |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |

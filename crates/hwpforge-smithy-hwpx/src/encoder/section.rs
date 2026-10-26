@@ -6057,7 +6057,7 @@ mod tests {
         use hwpforge_foundation::{BorderLineType, Color, HwpUnit};
 
         // Reproduces the Hancom-native wire captured in
-        // examples/hwp5_review/_verify/nativ-colline.hwpx:
+        // Observed column separators saved by Hancom:
         //   <hp:colPr ... sameGap="2268">
         //     <hp:colLine type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"/>
         //   </hp:colPr>

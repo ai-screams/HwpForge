@@ -30,7 +30,7 @@ use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 /// 14 circleType labels in OWPML enum order
-/// (see `.docs/references/hwpx-owpml-model/OWPML/Class/enumdef.h` 623-639).
+/// Ordered according to the OWPML shape-circle enumeration.
 const CIRCLE_TYPES: &[&str] = &[
     "CHAR",
     "SHAPE_CIRCLE",

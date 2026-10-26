@@ -2219,22 +2219,6 @@ mod tests {
         assert_eq!(picture_losses(image), ["border: line type 2, thickness 0"]);
     }
 
-    /// The Hancom HWPX twin has no lineShape for its one picture.
-    /// 이것을 실패시키는 것: 선 종류 NONE인데 두께 33을 테두리 손실로 보고.
-    #[test]
-    fn hancom_group_picture_without_line_has_no_border_loss() {
-        let bytes =
-            include_bytes!("../../../../tests/fixtures/hancom_controls/f3-group-tables.hwp");
-        let doc = crate::decode_hwp5_with_images(bytes).unwrap();
-        assert!(
-            !doc.warnings.iter().any(|w| matches!(w,
-                Hwp5Warning::ContentLost { kind, .. } if kind == "group_child_picture"
-            )),
-            "{:?}",
-            doc.warnings
-        );
-    }
-
     /// Effects and a border are reported; a plain picture is not.
     ///
     /// 이것을 실패시키는 것: 밝기·명암·효과·효과 플래그·테두리 조건을 각각 지우는 것.

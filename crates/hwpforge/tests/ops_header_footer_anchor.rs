@@ -1,7 +1,7 @@
-//! The re-encoding surfaces keep a header in the paragraph it is anchored to
-//! (§19.17 F2). Before, every surface moved it into the first paragraph, so
-//! Hancom applied it from page 1 (x4b: header C belongs to page 2 onwards).
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/ops_header_footer_anchor.rs"]
+mod shared;
+use shared::*;
 
 use std::io::{Cursor, Read};
 
@@ -15,65 +15,7 @@ use hwpforge::hwpx::stamp::{StampAction, StampMap, StampSpec};
 use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge::hwpx::HwpxEncoder;
 use hwpforge::ops::edit::{set_cell, SetCellOptions};
-use hwpforge::ops::exchange::{from_json, to_json, FromJsonOptions, ToJsonOptions};
 use hwpforge::ops::stamp::{stamp, stamp_plan, StampOptions};
-use hwpforge::ops::style::{restyle, RestyleOptions};
-
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/section0.xml").expect("section").read_to_string(&mut out).unwrap();
-    out
-}
-
-/// Top-level paragraph indices whose XML holds `needle`.
-fn paragraphs_with(xml: &str, needle: &str) -> Vec<usize> {
-    let mut found = Vec::new();
-    let (mut depth, mut index, mut start, mut i) = (0usize, 0usize, 0usize, 0usize);
-    while i < xml.len() {
-        let rest = &xml[i..];
-        if rest.starts_with("<hp:p ") || rest.starts_with("<hp:p>") {
-            if depth == 0 {
-                start = i;
-            }
-            depth += 1;
-            i += 5;
-        } else if rest.starts_with("</hp:p>") {
-            depth -= 1;
-            i += 7;
-            if depth == 0 {
-                if xml[start..i].contains(needle) {
-                    found.push(index);
-                }
-                index += 1;
-            }
-        } else {
-            i += rest.chars().next().map_or(1, char::len_utf8);
-        }
-    }
-    found
-}
-
-/// 이것을 실패시키는 것: 인코더가 앵커를 무시하고 첫 문단에 주입(세 표면
-/// 모두 `[0]`).
-#[test]
-fn restyle_and_from_json_keep_x4b_header_in_paragraph_14() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/header_footer/x4b-header-only-later.hwpx"
-    );
-    let source = std::fs::read(path).expect("x4b");
-    let restyled =
-        restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle").bytes;
-    assert_eq!(paragraphs_with(&section_xml(&restyled), "<hp:header "), [14], "restyle");
-
-    let json = to_json(&source, &ToJsonOptions::default()).expect("to_json").document.to_string();
-    assert!(json.contains(r#""anchor_paragraph":14"#), "to_json carries the anchor");
-    let rebuilt = from_json(&json, &FromJsonOptions::default().with_base(source.clone()))
-        .expect("from_json --base")
-        .bytes;
-    assert_eq!(paragraphs_with(&section_xml(&rebuilt), "<hp:header "), [14], "from_json --base");
-}
 
 fn text_para(text: &str) -> Paragraph {
     Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))

@@ -7,7 +7,7 @@
 //! - 분할이 일어나면 [`PdfWarning::TablePaginationComputed`] 를 **항상** 방출
 //! - 계산 결과를 캐시 앵커로 **이중 검산** (fatal): ① 첫 조각 높이 ==
 //!   재저장 sz(있을 때) ② 표 다음 문단의 캐시 v == 마지막 조각 종료 +
-//!   outMargin.bottom (rules-pagespan3 실측 62102 = 283+48×1282+283, 0 오차)
+//!   outMargin.bottom (한컴 저장 문서 실측 62102 = 283+48×1282+283, 0 오차)
 //!
 //! 프로파일 밖(중첩 표·위아래가 아닌 caption·캐시 없는 caption·비기본
 //! pos·cellSpacing≠0·분할 경계 교차 rowspan·본문보다 큰 행·셀 캐시 결손·
@@ -34,7 +34,7 @@ use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::run::RunContent;
 
 /// 분할 조각 하단 예약 (HWPUNIT) — wire `outMargin.bottom` 에 더해지는
-/// 고정 여유는 실측상 불요 (rules-pagespan3: 예약 = outMargin.bottom 만으로
+/// 고정 여유는 실측상 불요 (한컴 저장 문서: 예약 = outMargin.bottom 만으로
 /// 44/49/48 분할 정확 재현). blank-HPC 게이트가 반증하면 여기서 재보정.
 const SPLIT_BOTTOM_EXTRA: i32 = 0;
 
@@ -69,7 +69,7 @@ pub(crate) struct TableReplayOutcome {
     /// 계산된 표 총높이 (Σ행높이, outMargin 미포함) — 미분할 표의 흐름 모델
     /// 판별용: host lineseg vertsize ≥ 이 값이면 글자취급(인라인) 표라
     /// host 줄이 흐름 소비를 담고(기재부 corpus 실측), 미만이면 앵커형이라
-    /// 계산치(`expected_next_v`)가 흐름이다 (rules-table 실측).
+    /// 계산치(`expected_next_v`)가 흐름이다 (한컴 저장 문서 실측).
     pub total_height: i32,
 }
 
@@ -847,7 +847,7 @@ fn compute_row_heights(
         heights[r] = heights[r].max(auto.max(min));
     }
     // span>1 합 제약 + deficit 배분: 부족분은 **span 의 마지막 행이 전부
-    // 흡수**한다 (rules-rowspan-deficit 실측 2026-08-07 — 표A 명시높이
+    // 흡수**한다 (한컴 저장 문서 실측 2026-08-07 — 표A 명시높이
     // 25000·표B 콘텐츠 30082 모두 행0..n-1 최소 유지 + 마지막 행 몰빵,
     // PDF 행 간격 12.8pt 균일 + 재저장 sz 체크섬 정합). 겹치는 스팬은
     // end-row 오름차순 fixpoint — blank-HPC 표별 앵커 검산이 재검증한다.

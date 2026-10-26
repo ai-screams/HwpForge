@@ -23,10 +23,16 @@ fn a_sound_document_passes_with_no_errors() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn every_shipped_fixture_validates() {
     // A fixture that stopped validating would silently weaken every other
     // test that decodes it.
-    for name in ["SimpleTable.hwpx", "SimplePicture.hwpx", "charts.hwpx", "sample1.hwpx"] {
+    for name in [
+        "SimpleTable.hwpx",
+        "green_swatch.hwpx",
+        "../../../../examples/hwp5_review/mixed_01_image_and_chart_same_doc.hwpx",
+        "garden_notes.hwpx",
+    ] {
         let out = validate(&fixture(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(out.ok, "{name}: {:?}", out.errors);
     }

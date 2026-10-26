@@ -212,8 +212,7 @@ fn diff_attributes_each_decode_warning_to_the_input_it_came_from() {
 fn set_cells_twin_returns_the_same_package_as_the_plain_entry_point() {
     // Built and encoded here rather than read from disk: a package this
     // codec produced is round-trip safe by construction, which is what the
-    // editor's admission gate requires. `SimpleTable.hwpx` is a Hancom
-    // package and is rejected before any encode happens.
+    // editor's admission gate requires.
     let bytes = admissible_table_package();
     let specs = vec![hwpforge_smithy_hwpx::CellSpec {
         table: 0,

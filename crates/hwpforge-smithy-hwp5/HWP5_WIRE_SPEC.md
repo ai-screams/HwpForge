@@ -195,7 +195,7 @@ sameGap="2268"`).
 The Border block carries the **column separator line** (`<hp:colLine>`).
 Projection maps `kind → BorderLineType`, `width index → mm`, and
 `COLORREF → Color` into `ColumnSettings.col_line` (a `ColumnLine`).
-Verified byte-identical against the native `colline.hwp` fixture: cold
+Verified byte-identical against the native column-separator document saved by Hancom: cold
 bytes `… 08 09 CA 56 A7 00` → `<hp:colLine type="DOUBLE_SLIM"
 width="0.7 mm" color="#CA56A7"/>`. Source: `decoder/section/mod.rs`
 (`Hwp5ColumnDef` + `Hwp5ColumnBorder`) + `projection/mod.rs` section loop
@@ -552,7 +552,7 @@ encoding is used by Compose (`tcps`), Dutmal (`tdut`), and IndexMark
 
 After the split-leader `main_text` + length-prefixed `sub_text`, the
 `tdut` payload carries five u32 LE tail words. Offsets pinned by the
-one-knob-per-paragraph `sample-dutmal-variants.hwp` fixture
+one-knob-per-paragraph phonetic-guide document saved by Hancom
 (`probe_dutmal_tail` diff vs baseline):
 
 | tail offset | field      | values observed                                             |
@@ -569,7 +569,7 @@ warning. Source: `schema/section.rs::Hwp5DutmalControl`.
 ### Compose (`tcps`) layouts + decoration glyph (task #74)
 
 The full 14-circleType × 2-composeType matrix
-(`sample-compose-all-shapes.hwp`, `probe_compose_variants`) observed
+(overlapping-character shapes saved by Hancom, `probe_compose_variants`) observed
 two layouts with two-character inputs:
 
 - `0x0003` (unpacked) — text fully in body; `properties.high` holds a
@@ -579,7 +579,7 @@ two layouts with two-character inputs:
 - `0x0002` (packed) — `composeText[0]` in `properties.high`; observed
   on exactly one matrix cell (`CHAR + OVERLAP`).
 
-The purpose-made `tests/fixtures/hancom_controls/f2-compose-links.hwp`
+The purpose-made document with overlapping characters and links
 also has unpacked `efg`: `properties.low=4`, `properties.high=0x25C6`
 (◆), followed by three UTF-16 units and the fixed 44-byte trailer.
 Its Hancom HWPX twin has `composeText="efg"` and
@@ -594,7 +594,7 @@ Source: `schema/section.rs::Hwp5ComposeControl`.
 The split-leader packing **does split surrogate pairs**: an
 emoji-leading primary stores the high surrogate alone in
 `properties.high` and the low surrogate as the first body unit
-(`sample-indexmark-surrogate.hwp`, `probe_indexmark_surrogate`:
+(index-mark document with surrogate characters, `probe_indexmark_surrogate`:
 `emoji-first` → header `U+D83D`, body starts `00 DE`).
 `parse_split_leader_utf16` collects all units before UTF-16
 validation, so the pair reassembles correctly — verified end-to-end
@@ -899,7 +899,7 @@ Wire = `(attribute >> 5) & 0x1F`. OWPML `NumberType1` enum 과 ordinal 1:1.
 - bits 8-11 = `header_data[5]` = 위치 (기존부터 읽고 있던 값)
 
 **진짜 버그였음** — 형식 바이트를 안 읽어 항상 `Digit` 였음. native
-`sample-pagenu-roman` (로마자 대문자 → ROMAN_CAPITAL) byte-identical 확인.
+한컴이 저장한 로마자 쪽번호 (로마자 대문자 → ROMAN_CAPITAL) byte-identical 확인.
 
 ### 22.3 이미지 채우기 모드 (`hwp5_image_fill_mode_to_hwpx`, style_store_border_fill.rs)
 
@@ -962,7 +962,7 @@ hwp-rs `common_properties.rs` 대조 + 아래 native fixture 바이트 검증:
   hwp.js `TextFlowMethod` 는 6값(Square·Tight·Through·TopAndBottom·
   BehindText·InFrontOfText) 순서로 읽지만, 한컴 저장본은 `0` 어울림·`1`
   자리 차지·`2` 글 뒤로·`3` 글 앞으로를 쓴다. 근거: 한컴 저작 X2
-  (`tests/fixtures/shapes/x2-wrap-modes.hwp` — 사각형 4 개 속성 word
+  (한컴이 저장한 배치 방식별 도형 — 사각형 4 개 속성 word
   `0x040a4000`·`0x042a4000`·`0x046a4000`·`0x044a4000`, bit 21–23 = 0·1·3·2,
   HWPX 짝 `SQUARE`·`TOP_AND_BOTTOM`·`IN_FRONT_OF_TEXT`·`BEHIND_TEXT`) 4/4,
   한컴 `.hwp`/`.hwpx` 짝의 떠 있는 개체 457/457. 코퍼스의 떠 있는 개체 값은
@@ -982,10 +982,10 @@ hwp-rs `common_properties.rs` 대조 + 아래 native fixture 바이트 검증:
 
 **바이트 검증 (native `.hwp` 속성 word ↔ 한컴 `.hwpx` 쌍 `<hp:pos>`/`textWrap`)**:
 
-| fixture                    | attr word    | 디코드 (실측 일치)                                                                           |
-| -------------------------- | ------------ | -------------------------------------------------------------------------------------------- |
-| `textbox_anchored` (rect)  | `0x040a4110` | treatAsChar=0·vertRelTo=PARA·horzRelTo=PAGE·wrap=SQUARE·overlap=1·flow=0·vOff=2834·hOff=8503 |
-| `anchored_zero_origin_png` | `0x040a2310` | treatAsChar=0·vertRelTo=PARA·horzRelTo=PARA·wrap=SQUARE·flow=1→overlap 강제 0·off (0,0)      |
+| fixture               | attr word    | 디코드 (실측 일치)                                                                           |
+| --------------------- | ------------ | -------------------------------------------------------------------------------------------- |
+| 떠 있는 글상자 (rect) | `0x040a4110` | treatAsChar=0·vertRelTo=PARA·horzRelTo=PAGE·wrap=SQUARE·overlap=1·flow=0·vOff=2834·hOff=8503 |
+| 원점에 배치한 그림    | `0x040a2310` | treatAsChar=0·vertRelTo=PARA·horzRelTo=PARA·wrap=SQUARE·flow=1→overlap 강제 0·off (0,0)      |
 
 두 fixture 모두 native `.hwp` 디코드 == companion `.hwpx` 디코드 (전-축
 parity, `crates/hwpforge-convert/src/tests.rs`).
@@ -1172,7 +1172,7 @@ details and missing picture assets retain the existing warnings.
 
 `ShapePicture` (`0x55`) starts with the same colour/thickness/properties
 triple at payload offsets 0/4/8. In Hancom's
-`hancom_controls/f3-group-tables.hwp`, Section0 record 148 (zero-based,
+A Hancom-saved document containing grouped tables, Section0 record 148 (zero-based,
 inflated stream offset 5917), these 12 bytes are
 `00 00 00 00 21 00 00 00 40 00 00 D1`: black, thickness 33,
 properties `0xD1000040`. Its type (`properties & 0x3F`) is NONE;
@@ -1195,7 +1195,7 @@ not claimed as Hancom-confirmed picture rendering.
 | 6          | Open           | EMPTY_BOX     |
 
 The HWP 5.0 specification PDF's shape-name table is wrong starting at value 2.
-These mappings come from the Hancom-saved `tests/fixtures/shapes/arrows.*`
+These mappings come from the Hancom-saved line-arrow documents
 pair. Filled/empty is independent of shape, including EMPTY_* names.
 
 | HWP5 size | Core ArrowSize (stable discriminant) | HWPX          |
@@ -1232,7 +1232,7 @@ the center, first axis endpoint and second axis endpoint, each an `(x, y)`
 pair of little-endian i32 HWPUNIT values. The three Hancom arc-border buttons
 0 / 1 / 2 map to HWPX NORMAL / PIE / CHORD respectively.
 
-Fixture 32 (`tests/fixtures/shapes/fills.*`) adds the following evidence:
+Fixture 32 (shape-fill documents) adds the following evidence:
 
 - No fill has two HWP5 forms: the existing fill kind 0, and fixture 32's
   kind 1 (solid) with face COLORREF `0xFFFFFFFF` and pattern −1.

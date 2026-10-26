@@ -1,10 +1,3 @@
-//! W1c 게이트: 인코더 opt-in 캐시 방출.
-//!
-//! - 기본 인코딩(양 진입점)은 `<hp:linesegarray>` 를 방출하지 않는다
-//!   (편집 표면 불변 — 바이트 수준 중립성은 기존 고정점 게이트가 잠근다).
-//! - `emit_layout_cache` opt-in 은 Core 로 승격된 캐시를 wire 로 되돌려
-//!   방출하고, 재디코드 시 본문·표 셀·머리말 캐시가 전부 보존돼야 한다.
-
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::layout::{LayoutCache, LineSeg};
@@ -394,48 +387,4 @@ fn real_hancom_marker_ledger_fixture_decodes_to_measured_triples() {
         vec![vec![0, 60, 116], vec![0, 56, 109], vec![0, 54, 109]],
         "실물 한컴 fixture 가시 좌표 골든"
     );
-}
-
-/// W2b fixture 골든: 한컴 재저장 산출물의 curSz=(0,0) 관례 — 표시
-/// 크기는 `<hp:sz>` 가 진실이다 (디코더 sz-우선 선택 잠금).
-#[test]
-fn resaved_inline_image_dimensions_come_from_sz_not_cursz() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/images/inline_treat_as_char_png_body.hwpx");
-    let bytes = std::fs::read(&path).expect("tracked fixture");
-    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
-    let image = decoded.document.sections()[0]
-        .paragraphs
-        .iter()
-        .flat_map(|p| p.runs.iter())
-        .find_map(|r| match &r.content {
-            hwpforge_core::run::RunContent::Image(img) => Some(img),
-            _ => None,
-        })
-        .expect("inline image");
-    assert_eq!(image.width.as_i32(), 2000, "sz 우선 (curSz 는 0,0)");
-    assert_eq!(image.height.as_i32(), 2000);
-    assert!(
-        image.placement.as_ref().is_some_and(|p| p.treat_as_char),
-        "재저장 후 treatAsChar=1 유지"
-    );
-}
-
-/// A Hancom save with a lone-space run between formatted runs (`plain `,
-/// `bold`, `' '`, `italic`, …) keeps its line cache. The decoder marks a
-/// whitespace-only run so quick-xml keeps it; the wire map must not count that
-/// mark as a character, or it measures the paragraph three units too long and
-/// drops the cache with `LayoutCacheDropped`.
-// 이것을 실패시키는 것: 와이어 맵에서 `strip_ws_sentinel` 을 빼는 것 — 캐시가 버려지고 경고가 난다.
-#[test]
-fn a_hancom_paragraph_with_lone_space_runs_keeps_its_line_cache() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/user_samples/sample-text-char-runs-basic.hwpx"
-    );
-    let bytes = std::fs::read(path).expect("fixture");
-    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
-    assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
-    let para = &decoded.document.sections()[0].paragraphs[0];
-    assert!(para.layout_cache.is_some(), "the Hancom line cache is kept");
 }

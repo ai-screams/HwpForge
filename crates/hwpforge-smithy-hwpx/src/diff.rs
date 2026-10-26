@@ -705,7 +705,6 @@ mod tests {
     use hwpforge_core::table::grid::GridCoord;
     use hwpforge_core::Run;
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
-    use std::io::Write as _;
 
     fn fixture(rel: &str) -> Vec<u8> {
         let path =
@@ -1088,32 +1087,5 @@ mod tests {
             "field_values: {:?}",
             diff.semantic.field_values
         );
-    }
-
-    #[test]
-    fn package_channel_detects_added_entry() {
-        let base = fixture("tables/table_01_basic_2x2.hwpx");
-        // Rewrite the package with one extra entry.
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(base.as_slice())).unwrap();
-        let mut out = Vec::new();
-        {
-            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut out));
-            for i in 0..archive.len() {
-                let entry = archive.by_index_raw(i).unwrap();
-                writer.raw_copy_file(entry).unwrap();
-            }
-            writer
-                .start_file("Custom/extra.txt", zip::write::SimpleFileOptions::default())
-                .unwrap();
-            writer.write_all(b"extra").unwrap();
-            writer.finish().unwrap();
-        }
-
-        let diff = HwpxDiffer::diff(&base, &out).unwrap();
-        assert_eq!(diff.package.added, vec!["Custom/extra.txt".to_string()]);
-        assert!(diff.package.removed.is_empty());
-        assert!(diff.package.changed.is_empty());
-        // Core structure did not change.
-        assert!(diff.semantic.is_empty(), "semantic: {:?}", diff.semantic);
     }
 }

@@ -1049,7 +1049,7 @@ fn memo_anchor_out_of_scope_is_base_output() {
     }
 }
 
-/// A memo at a paragraph's start (as Hancom saves it, `sample-memo-basic`):
+/// A memo at a paragraph's start, as saved by Hancom:
 /// its comment stays, the text after it reads as written, and the memo's
 /// body does not mix into the text. Also with the memo body over two
 /// lines.

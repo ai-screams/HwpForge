@@ -59,6 +59,6 @@ fn main() {
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시 생성):");
     println!("  1. 파일 열기 → 진하게 문단이 실제 굵게 보이는지 확인");
-    println!("  2. 다른 이름으로 저장 → tests/fixtures/pdf-rules/rules-bold.hwpx");
-    println!("  3. PDF 로 인쇄 → tests/fixtures/pdf-rules/rules-bold.pdf");
+    println!("  2. 다른 이름으로 저장 → 선택한 출력 경로");
+    println!("  3. PDF 로 인쇄 → 선택한 PDF 경로");
 }

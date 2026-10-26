@@ -34,7 +34,7 @@ pub struct ShapedText {
     /// baseline 아래 하강분 (HWPUNIT — `|hhea descender| × size / upem`).
     ///
     /// W5-b 쪽번호 세로 앵커에 사용: baseline = em 하단 앵커 − descent
-    /// (한컴 콘텐트 스트림 실측 — rules-pagenum §8c, 모델 오차 ≤0.16pt).
+    /// (한컴 콘텐트 스트림 실측 — 한컴 저장 문서 §8c, 모델 오차 ≤0.16pt).
     pub descent: f64,
     /// 폰트에 글리프가 없는(notdef, glyph_id 0) 입력 문자 수.
     ///

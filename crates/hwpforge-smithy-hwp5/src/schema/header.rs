@@ -1322,7 +1322,7 @@ fn parse_numbering_para_head(
     // it clear — so reading it unconditionally is safe: numbering and
     // non-checkable bullets simply yield `false`. Verified against real Hancom
     // BULLET records (`sample-checkable-bullet-*.hwp` carry attribute 0x28 with
-    // bit 5 set; `sample-bullet-list.hwp` carries 0x08 with bit 5 clear).
+    // bit 5 set; a plain bullet carries 0x08 with bit 5 clear).
     let checkable = (attribute >> 5) & 1 != 0;
     let width_adjust = cur.read_i16::<LittleEndian>()?;
     let text_offset = cur.read_i16::<LittleEndian>()?;
@@ -1350,7 +1350,7 @@ fn parse_numbering_para_head(
 fn numbering_attr_num_format(attribute: u32) -> &'static str {
     // Paragraph numbering format. The 5-bit code's ordinals match the
     // KS X 6101 OWPML `NumberType1` enum 1:1 — verified against native HWPX
-    // (`sample-numbering-hangul`) for codes 0/1/3/4/5/7/8/9/10, so the full
+    // numbering for codes 0/1/3/4/5/7/8/9/10, so the full
     // enum order is trusted for the remaining codes. Codes 6/12/13/14 were
     // previously missing (silently → DIGIT) and code 11 was wrongly emitted
     // as the invalid string "HANJA_DIGIT" (real 11 = 원 ㄱ,ㄴ,ㄷ =
@@ -2130,7 +2130,7 @@ mod tests {
         assert_eq!(checkable.check_bullet_char.as_deref(), Some("☑"));
 
         // Attribute 0x08 = bit 3 only (auto-indent), bit 5 clear → not
-        // checkable, matching real `sample-bullet-list.hwp`.
+        // checkable, matching the plain-bullet wire layout.
         let plain = Hwp5RawBulletDef::parse(&make_bullet_def_bytes_full(false, 0x20, 0x08))
             .expect("bullet parse should succeed");
         assert!(!plain.paragraph_head.checkable);
@@ -2149,7 +2149,7 @@ mod tests {
         // The 5-bit numbering code lives in bits 5-9 of the attribute word.
         let attr = |code: u32| code << 5;
         // Codes 0-10 are verified 1:1 against native HWPX
-        // (sample-numbering-hangul). Codes 6/11/12/13/14 are the P0-1 fix:
+        // (Hancom-saved numbering). Codes 6/11/12/13/14 are the P0-1 fix:
         // 6 was missing, 11 was the invalid string "HANJA_DIGIT", and
         // 12/13/14 were silently collapsing to DIGIT.
         assert_eq!(numbering_attr_num_format(attr(0)), "DIGIT");

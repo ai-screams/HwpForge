@@ -67,8 +67,7 @@ mdbook build     # Build the project book (mdBook 0.4 line — see below)
 
 **Always run `make ci` before pushing.** It uses the same flags CI does, so it catches what
 bare `cargo clippy` or `cargo fmt --check` would miss. It is not, however, the whole pipeline:
-`make ci` is the five fast lanes, and CI additionally runs Coverage, MSRV, the HWP5 Audit Gate,
-Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
+`make ci` is the five fast lanes, and CI additionally runs Coverage, MSRV, Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
 `make py-all` as well, and `mdbook build` if you touched docs.
 
 `mdbook build` needs the **mdBook 0.4 line**: CI pins mdBook 0.4.52 with mdbook-admonish 1.20.0

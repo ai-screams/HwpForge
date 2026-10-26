@@ -20,12 +20,8 @@ if TYPE_CHECKING:
 CRATES = Path(__file__).resolve().parent.parent.parent
 REPO = CRATES.parent
 HWPX_FIXTURES = CRATES / "hwpforge-smithy-hwpx" / "tests" / "fixtures"
-USER_SAMPLES = REPO / "tests" / "fixtures" / "user_samples"
 FIELD_FIXTURES = REPO / "tests" / "fixtures" / "fields"
-PDF_FIXTURES = REPO / "tests" / "fixtures" / "pdf-rules"
-LIST_FIXTURES = REPO / "tests" / "fixtures" / "user_samples" / "lists"
 LAYOUT_FIXTURES = REPO / "tests" / "fixtures" / "layout"
-TABLE_FIXTURES = REPO / "tests" / "fixtures" / "tables"
 STAMP_FIXTURES = REPO / "tests" / "fixtures" / "stamp"
 SYNTHETIC_FACE = Path(__file__).resolve().parent / "fixtures" / "synthetic_face.hwpx"
 PDF_TEST_FONTS = Path(__file__).resolve().parent / "fixtures" / "fonts"
@@ -44,15 +40,11 @@ GENERATED_MARKDOWN = """# 제목
 """
 """Markdown for a document the editing operations accept.
 
-The committed HWPX fixtures are Hancom-authored, and the preserve-first editors
-refuse any input they cannot prove re-encodes losslessly
+The preserve-first editors refuse any input they cannot prove re-encodes losslessly
 (`INPUT_NOT_ROUNDTRIP_SAFE`). A document this library generated itself is
 round-trip safe by construction, so it is what the editing contract calls use.
 """
 
-
-INVALID_CACHE = {"stage": "render", "code": "INVALID_CACHE"}
-"""The whole `cause` of a layout cache that disagrees with the document."""
 
 FONT_UNRESOLVED = {"stage": "render", "code": "FONT_UNRESOLVED"}
 """The whole `cause` of a face the renderer cannot find.
@@ -68,7 +60,7 @@ def _read(path: Path) -> bytes:
 
     A missing fixture is a broken repository, not a property of this machine,
     so it must not become a skip: a skipped contract case would take one of the
-    23 functions out of the gate while the suite still reported success.
+    functions out of the gate while the suite still reported success.
     """
     if not path.is_file():
         pytest.fail(f"committed fixture is missing: {path}")
@@ -76,32 +68,28 @@ def _read(path: Path) -> bytes:
 
 
 @pytest.fixture(scope="session")
+# 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 def table_bytes() -> bytes:
     """A small document with one table."""
     return _read(HWPX_FIXTURES / "SimpleTable.hwpx")
 
 
 @pytest.fixture(scope="session")
+# 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 def picture_bytes() -> bytes:
     """A document with an embedded image, for the Markdown image path."""
-    return _read(HWPX_FIXTURES / "SimplePicture.hwpx")
+    return _read(HWPX_FIXTURES / "green_swatch.hwpx")
 
 
 @pytest.fixture(scope="session")
 def sample_bytes() -> bytes:
-    """A longer document, for the paragraph-editing operations."""
-    return _read(HWPX_FIXTURES / "sample1.hwpx")
-
-
-@pytest.fixture(scope="session")
-def hwp5_bytes() -> bytes:
-    """A binary HWP5 document, the input `convert_hwp5` takes."""
-    return _read(USER_SAMPLES / "sample-compose-basic.hwp")
+    """Generated notes with a deliberately stale line cache."""
+    return _read(HWPX_FIXTURES / "garden_notes.hwpx")
 
 
 @pytest.fixture(scope="session")
 def fields_bytes() -> bytes:
-    """A Hancom-authored document with one named, unfilled click-here field."""
+    """An encoder-generated document with one named, unfilled click-here field."""
     return _read(FIELD_FIXTURES / "clickhere_named.hwpx")
 
 
@@ -113,9 +101,10 @@ def generated_bytes() -> bytes:
 
 
 @pytest.fixture(scope="session")
+# 이것을 실패시키는 것: 생성 입력을 빈 바이트로 바꾸기.
 def pdf_bytes() -> bytes:
-    """A Hancom-saved document that carries the layout cache the renderer needs."""
-    return _read(PDF_FIXTURES / "rules-bold.hwpx")
+    """A generated document with cached layout and an unavailable font."""
+    return _read(HWPX_FIXTURES / "SimpleTable.hwpx")
 
 
 @pytest.fixture(scope="session")
@@ -125,15 +114,17 @@ def pdf_font_dir() -> str:
 
 
 @pytest.fixture(scope="session")
+# 이것을 실패시키는 것: 생성 입력을 빈 바이트로 바꾸기.
 def checkable_list_bytes() -> bytes:
     """A document whose list items carry a checkbox, both ticked and not."""
-    return _read(LIST_FIXTURES / "sample-checkable-bullet-basic.hwpx")
+    return _hwpforge.convert_md("- [x] Done\n- [ ] Pending\n")[0]
 
 
 @pytest.fixture(scope="session")
+# 이것을 실패시키는 것: 생성 입력을 빈 바이트로 바꾸기.
 def heading_and_numbered_bytes() -> bytes:
     """A document with a heading and a numbered list, for the other two variants."""
-    return _read(LIST_FIXTURES / "sample-checkable-bullet-transition.hwpx")
+    return _read(REPO / "examples/showcase/lists/list_acceptance_visual/02_numbered_outline.hwpx")
 
 
 @pytest.fixture(scope="session")
@@ -143,14 +134,28 @@ def stale_line_cache_bytes() -> bytes:
 
 
 @pytest.fixture(scope="session")
-def nested_table_bytes() -> bytes:
+# 이것을 실패시키는 것: 생성 입력을 빈 바이트로 바꾸기.
+def nested_table_bytes(generated_bytes: bytes) -> bytes:
     """A table nested inside another table's cell.
 
     `inspect`'s shallow (`top_level_*`) counts stop at the outer table, so
-    this is the smallest committed fixture where the shallow and deep table
+    this generated input makes the shallow and deep table
     counts of a section genuinely disagree.
     """
-    return _read(TABLE_FIXTURES / "table_08_nested_table.hwpx")
+    import copy
+    import json
+
+    exported = _hwpforge.to_json(generated_bytes)["document"]
+    paragraphs = exported["document"]["sections"][0]["paragraphs"]
+    table = next(
+        run["content"]["Table"]
+        for para in paragraphs
+        for run in para["runs"]
+        if "Table" in run["content"]
+    )
+    nested = copy.deepcopy(table)
+    table["rows"][0]["cells"][0]["paragraphs"][0]["runs"][0]["content"] = {"Table": nested}
+    return _hwpforge.from_json(json.dumps(exported))[0]
 
 
 @pytest.fixture(scope="session")
@@ -174,18 +179,10 @@ def all_paragraphs(data: bytes) -> list:
 
 
 @pytest.fixture(scope="session")
-def stale_cache_bytes() -> bytes:
-    """A document whose cached layout disagrees with replaying its own pagination."""
-    return _read(PDF_FIXTURES / "rules-pagespan.hwpx")
-
-
-@pytest.fixture(scope="session")
 def synthetic_face_bytes() -> bytes:
     """A document that renders anywhere, because its faces are the committed test fonts.
 
-    Every other committed fixture names a Hancom face such as 함초롬바탕, and
-    the renderer resolves faces by the name inside the font file and never
-    substitutes, so none of them render on a machine without Hancom Office.
+    The renderer resolves faces by their internal names and never substitutes.
     This one names `HwpForge Test`, which `pdf_font_dir` holds, and contains
     only characters that family draws — so it renders in the default fatal
     mode with no warnings at all.
@@ -247,14 +244,13 @@ def ffi_calls(
     picture_bytes: bytes,
     fields_bytes: bytes,
     generated_bytes: bytes,
-    hwp5_bytes: bytes,
     exported_json: str,
     section_json: str,
     stamp_request: StampRequestV2,
     synthetic_face_bytes: bytes,
     pdf_font_dir: str,
 ) -> dict:
-    """The smallest valid call for each of the 23 extension functions.
+    """The smallest valid call for each report contract.
 
     The value is `(args, kwargs)`. Keeping them in one table means the contract
     test can be a single parametrised case rather than 23 near-copies.
@@ -281,6 +277,5 @@ def ffi_calls(
         "restyle": ((generated_bytes,), {"preset": "modern"}),
         "templates": ((), {}),
         "schema": ((), {"kind": "document"}),
-        "convert_hwp5": ((hwp5_bytes,), {}),
         "to_pdf": ((synthetic_face_bytes,), {"font_dirs": [pdf_font_dir]}),
     }

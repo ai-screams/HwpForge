@@ -1,18 +1,10 @@
-//! Batch audit tool for Phase 11 Wave 0.
+//! Batch conversion warning audit.
 //!
-//! Walks one or more directories for `.hwp` fixtures, runs `hwp5_to_hwpx_bytes`
-//! on each, and aggregates warnings into a JSON report grouped by semantic
-//! category. The output is used both as a one-time gap inventory and as the
-//! CI fidelity baseline (`.audit/hwp5_baseline.json`).
+//! Scans `.hwp` inputs and groups conversion warnings by semantic category.
+//! Labels and the complete `inputs` list are relative to the supplied root.
 //!
-//! Usage:
-//!
-//! ```text
-//! cargo run -p hwpforge-convert --example audit_batch -- <dir> [<dir> ...]
-//! ```
-//!
-//! The JSON schema is intentionally simple so a small `jq` / diff step in CI
-//! can detect regressions without pulling additional dependencies.
+//! Usage: `audit_batch <root> [relative-file-or-directory ...]`
+//! Without selections, all `.hwp` files below the root are scanned.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -39,6 +31,7 @@ struct FixtureFailure {
 #[derive(Serialize)]
 struct AuditReport {
     schema_version: u32,
+    inputs: Vec<String>,
     fixtures_scanned: usize,
     fixtures_decoded: usize,
     fixtures_failed: usize,
@@ -50,23 +43,28 @@ struct AuditReport {
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: audit_batch <dir> [<dir> ...]");
+        eprintln!("usage: audit_batch <root> [relative-file-or-directory ...]");
         return ExitCode::from(2);
     }
 
+    let root = PathBuf::from(&args[0]);
+    // 이것을 실패시키는 것: 선택한 파일 대신 루트 전체를 항상 순회하기.
+    let selections = if args.len() == 1 {
+        vec![root.clone()]
+    } else {
+        args[1..].iter().map(|arg| root.join(arg)).collect()
+    };
     let mut hwp_paths: Vec<PathBuf> = Vec::new();
-    for arg in &args {
-        let root = PathBuf::from(arg);
-        if !root.exists() {
-            eprintln!("warning: skipping nonexistent path: {}", root.display());
-            continue;
-        }
-        collect_hwp_files(&root, &mut hwp_paths);
+    for selection in selections {
+        collect_hwp_files(&selection, &mut hwp_paths);
     }
     hwp_paths.sort();
+    // 이것을 실패시키는 것: 중복 선택을 입력 목록에 두 번 기록하기.
+    hwp_paths.dedup();
 
     let mut report = AuditReport {
         schema_version: 1,
+        inputs: hwp_paths.iter().map(|path| relative_label(&root, path)).collect(),
         fixtures_scanned: hwp_paths.len(),
         fixtures_decoded: 0,
         fixtures_failed: 0,
@@ -81,7 +79,7 @@ fn main() -> ExitCode {
             Err(err) => {
                 report.fixtures_failed += 1;
                 report.failures.push(FixtureFailure {
-                    fixture: relative_label(path),
+                    fixture: relative_label(&root, path),
                     error: format!("io: {err}"),
                 });
                 continue;
@@ -92,7 +90,7 @@ fn main() -> ExitCode {
             Ok((_hwpx_bytes, warnings)) => {
                 report.fixtures_decoded += 1;
                 report.total_warnings += warnings.len();
-                let fixture_label = relative_label(path);
+                let fixture_label = relative_label(&root, path);
                 for warning in &warnings {
                     let key = category_key(warning);
                     let entry = report.categories.entry(key).or_default();
@@ -103,7 +101,7 @@ fn main() -> ExitCode {
             Err(err) => {
                 report.fixtures_failed += 1;
                 report.failures.push(FixtureFailure {
-                    fixture: relative_label(path),
+                    fixture: relative_label(&root, path),
                     error: format!("{err}"),
                 });
             }
@@ -190,7 +188,7 @@ fn normalize_stream_name(name: &str) -> String {
     trimmed.to_string()
 }
 
-fn relative_label(path: &Path) -> String {
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    path.strip_prefix(&cwd).unwrap_or(path).display().to_string()
+// 이것을 실패시키는 것: 루트 상대 경로 대신 basename 또는 절대 경로를 기록하기.
+fn relative_label(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root).expect("input must be below the supplied root").display().to_string()
 }

@@ -6,11 +6,7 @@
 //! re-saved as `.hwp` (HWP5), and its `gso ` shape sub-record hex-inspected
 //! without any surrounding noise.
 //!
-//! These are *staging* inputs only. The authoritative fixtures committed under
-//! `tests/fixtures/user_samples/` are the 한컴-produced `.hwp`/`.hwpx` pair, not
-//! the files this generator emits. (The connect-line case in particular needs
-//! a natively-drawn 한컴 connector — see `sample-gso-connectline-native` — to
-//! exercise the real connector encoding rather than a demoted plain line.)
+//! Each output contains one shape for inspecting its encoded geometry.
 //!
 //! Usage:
 //!   cargo run -p hwpforge-smithy-hwpx --example gso_shape_fixtures

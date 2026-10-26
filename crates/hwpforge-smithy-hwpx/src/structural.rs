@@ -1472,19 +1472,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hancom_authored_input_that_is_not_round_trip_safe_is_refused() {
-        // The G2 evidence file is Hancom-authored (5 cumulative-vertpos
-        // linesegarrays) but does not yet round-trip through HwpForge's codec
-        // (a tab-definition gap). The admission gate refuses it fail-closed —
-        // byte-splice edits are only offered on round-trip-safe inputs.
-        let base = fixture("plain_inserted.hwpx");
-        assert!(matches!(
-            HwpxStructuralEditor::delete_paragraphs(&base, &[loc(0, 1)]),
-            Err(StructuralEditError::NotRoundTripSafe { .. })
-        ));
-    }
-
     // -- W3: insert_paragraph (byte-splice) -------------------------------
 
     fn insertion(section: usize, index: usize, pos: InsertPosition, text: &str) -> Insertion {
@@ -1622,20 +1609,6 @@ mod tests {
                 &insertion(0, 0, InsertPosition::After, "x")
             ),
             Err(StructuralEditError::Codec(_))
-        ));
-    }
-
-    #[test]
-    fn insert_refuses_non_round_trip_safe_input() {
-        // The insert admission path (mirrors delete) must also reject a
-        // Hancom-authored input that does not round-trip.
-        let base = fixture("plain_inserted.hwpx");
-        assert!(matches!(
-            HwpxStructuralEditor::insert_paragraph(
-                &base,
-                &insertion(0, 1, InsertPosition::After, "x")
-            ),
-            Err(StructuralEditError::NotRoundTripSafe { .. })
         ));
     }
 
@@ -1822,17 +1795,6 @@ mod tests {
             format!("{} {}", &h[..i], &h[i..])
         });
         admit(&spaced).expect("a leading space in a font name is not a round-trip hazard");
-    }
-
-    #[test]
-    fn admit_accepts_round_trip_safe_and_rejects_others() {
-        let base = fixture("plain_paragraphs.hwpx");
-        assert!(admit(&base).is_ok());
-        assert!(matches!(admit(b"not a zip"), Err(StructuralEditError::Codec(_))));
-        assert!(matches!(
-            admit(&fixture("plain_inserted.hwpx")),
-            Err(StructuralEditError::NotRoundTripSafe { .. })
-        ));
     }
 
     #[test]

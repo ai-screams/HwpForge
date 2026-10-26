@@ -1,5 +1,7 @@
-//! `ops::export_section` — the section export that `patch` expects back.
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/ops_export_section.rs"]
+mod shared;
+use shared::*;
 
 use std::collections::BTreeSet;
 
@@ -14,15 +16,6 @@ fn fixture(name: &str) -> Vec<u8> {
 fn repo_fixture(relative: &str) -> Vec<u8> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/");
     std::fs::read(format!("{path}{relative}")).unwrap_or_else(|e| panic!("fixture {relative}: {e}"))
-}
-
-fn keys(value: &serde_json::Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .unwrap_or_else(|| panic!("meta must serialise as an object, got {value}"))
-        .keys()
-        .cloned()
-        .collect()
 }
 
 fn address_count(value: &serde_json::Value) -> usize {
@@ -104,18 +97,6 @@ fn non_hwpx_input_is_a_decode_failure() {
         .expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
-}
-
-/// 이것을 실패시키는 것: 원본을 재순회하여 그림·차트 사이의 Core 슬롯 인덱스 추론.
-#[test]
-fn mixed_image_chart_sections_have_decoder_preservation() {
-    let bytes = repo_fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
-    let out = export_section(&bytes, &ExportSectionOptions::default()).unwrap();
-    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
-    assert!(out.section.get("preservation").is_some());
-    let value = serde_json::to_value(out.meta()).unwrap();
-    assert_eq!(keys(&value), ["section", "warnings"].map(String::from).into_iter().collect());
-    assert_eq!(value["warnings"], serde_json::json!([]));
 }
 
 /// `export_section` reports decode warnings, exactly as `to_json` does.

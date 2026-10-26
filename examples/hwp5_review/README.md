@@ -1,25 +1,15 @@
-# HWP5 → HWPX 변환 결과 검토
+# HWP5 → HWPX conversion output
 
-이 디렉토리는 `convert-hwp5`로 HWP5(.hwp) truth fixture를 HWPX(.hwpx)로 변환한 결과입니다.
-한컴에서 열어 원본과 시각적으로 비교하기 위한 검토용입니다.
+This directory contains HwpForge encoder output for inspecting supported
+format features. For self-contained generation examples, see
+[`../showcase/`](../showcase/) and `crates/hwpforge-smithy-hwpx/examples`.
 
-- 생성일: 2026-05-23
-- 변환 도구: `hwpforge convert-hwp5`
-- 변환 결과: 생성일 기준 **전부 성공, 0 warnings** (Wave 4c chart carry 포함). 현재 추적 중인 변환 `.hwpx`는 아래 목록이 전부 담습니다
+To convert your own input:
 
-## 비교 방법
-
-각 항목은 세 파일을 비교할 수 있습니다:
-
-| 파일      | 위치                                      | 의미                                    |
-| --------- | ----------------------------------------- | --------------------------------------- |
-| 원본 HWP5 | `tests/fixtures/` 아래 `<name>.hwp`       | 한컴이 만든 원본                        |
-| 정답 HWPX | `tests/fixtures/` 아래 `<name>.hwpx`      | 한컴이 만든 HWPX (정답)                 |
-| 변환 HWPX | `examples/hwp5_review/<name>.hwpx`        | **HwpForge가 .hwp → .hwpx 변환한 결과** |
-
-원본과 정답은 `user_samples/`(하위 디렉터리 포함) 또는 `charts/`·`shapes/`·`mixed/`에 있습니다 (`find tests/fixtures -name '<name>.hwp'`로 찾습니다).
-
-가장 의미 있는 비교: **정답 HWPX vs 변환 HWPX**를 한컴에서 나란히 열어 시각 차이를 확인.
+```bash
+hwpforge convert-hwp5 input.hwp -o output.hwpx
+hwpforge inspect output.hwpx
+```
 
 ## 변환 목록
 

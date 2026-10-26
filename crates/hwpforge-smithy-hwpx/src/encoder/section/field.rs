@@ -233,7 +233,7 @@ pub(super) fn build_clickhere_field_xml(
 
 /// Builds a SUMMERY (Author/LastSavedBy/CreatedTime/ModifiedTime/Title) `<hp:run>` XML.
 ///
-/// Reference: `tests/fixtures/fields/date_field.hwpx`. The HWP5 ctrl_id `%smr`
+/// The HWP5 ctrl_id `%smr`
 /// is shared by all SUMMERY auto-fields; discrimination is via the `Command`
 /// `$token`. Token mapping verified against 한컴 native fixtures in Wave 12n
 /// (see `.docs/research/2026-06-02_auto_field_wire_dump.md`).
@@ -326,7 +326,7 @@ pub(super) fn build_summary_run_xml_raw(
             r#"</hp:ctrl>"#,
             // Wave 12n Step 6.5: trailing `<hp:t/>` matches Hancom native
             // wire shape — its absence triggers the "low-security recovery"
-            // warning on open (verified against sample-field-docsummary
+            // warning on open (verified against Hancom-saved document-summary fields
             // wire diff). Same structural requirement as PATH runs.
             r#"<hp:t/>"#,
             r#"</hp:run>"#,
@@ -345,8 +345,7 @@ pub(super) fn build_summary_run_xml_raw(
 /// in the `Format` parameter. Wave 12n Step 6 — replaces the prior
 /// SUMMERY surrogate for `Control::PathField`.
 ///
-/// Wire shape (empirically derived from Hancom Office native
-/// `sample-field-docsummary.hwp` → `.hwpx` conversion):
+/// Native PATH field wire shape:
 ///
 /// - `type="PATH"` (not SUMMERY — different field semantics)
 /// - `fieldid="628121972"` (distinct from the SUMMERY `628321650`)
@@ -368,7 +367,7 @@ pub(super) fn build_path_field_run_xml_raw(
     // Wave 12n Step 6.5 / #120: the body between fieldBegin/fieldEnd carries
     // the cached resolved path (was a bare `<hp:t/>`; an empty body triggers
     // the "낮은 보안 수준 복구" warning — verified against
-    // `sample-field-docsummary.hwpx` wire diff + 한컴 실측 2026-06-13).
+    // native field wire observations).
     // A trailing `<hp:t/>` after fieldEnd is also required (its absence is a
     // separate trigger).
     format!(

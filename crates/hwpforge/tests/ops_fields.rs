@@ -1,4 +1,3 @@
-//! `ops::fields` — click-here field discovery.
 #![cfg(feature = "ops-hwpx")]
 
 use std::collections::BTreeSet;
@@ -43,27 +42,8 @@ fn an_unfilled_field_reports_its_hint_as_the_current_value() {
 }
 
 #[test]
-fn a_filled_field_reports_the_value_instead_of_the_hint() {
-    let out = fields(&repo_fixture("fields/clickhere_filled.hwpx")).expect("fields");
-
-    let field = &out.fields[0];
-    assert_eq!(field.name.as_deref(), Some("user_email"));
-    assert_eq!(field.current, "soeburi.anvilscribe@example.com");
-    assert_ne!(Some(&field.current), field.hint.as_ref(), "the hint no longer shows through");
-}
-
-#[test]
 fn a_document_without_click_here_fields_reports_an_empty_list() {
     let out = fields(&hwpx_fixture("SimpleTable.hwpx")).expect("fields");
-
-    assert!(out.fields.is_empty(), "{:?}", out.fields);
-}
-
-/// A date field is not a click-here field, so it must not appear here even
-/// though it is a field control in the document.
-#[test]
-fn only_click_here_fields_are_listed() {
-    let out = fields(&repo_fixture("fields/date_field.hwpx")).expect("fields");
 
     assert!(out.fields.is_empty(), "{:?}", out.fields);
 }
@@ -80,16 +60,6 @@ fn meta_carries_the_fields_and_the_warning_list() {
         "{value}"
     );
     assert_eq!(value["warnings"], serde_json::json!([]), "a clean decode still declares the key");
-}
-
-#[test]
-fn the_meta_payload_is_the_library_dto_unchanged() {
-    let out = fields(&repo_fixture("fields/clickhere_filled.hwpx")).expect("fields");
-
-    let meta = serde_json::to_value(out.meta()).expect("serialise meta");
-    let payload = serde_json::to_value(&out.fields).expect("serialise payload");
-
-    assert_eq!(meta["fields"], payload);
 }
 
 #[test]

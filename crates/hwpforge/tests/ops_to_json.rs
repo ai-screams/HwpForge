@@ -86,8 +86,9 @@ fn cell_grid_addresses_are_annotated_onto_the_tree() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_document_without_tables_has_nothing_to_annotate() {
-    let out = to_json(&fixture("SimplePicture.hwpx"), &ToJsonOptions::default()).expect("to_json");
+    let out = to_json(&fixture("green_swatch.hwpx"), &ToJsonOptions::default()).expect("to_json");
 
     assert!(addresses(&out.document).is_empty());
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);

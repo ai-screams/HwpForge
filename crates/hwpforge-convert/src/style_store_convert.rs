@@ -625,8 +625,7 @@ fn hwp5_tab_align_to_foundation(tab_type: u8) -> TabAlign {
 ///
 /// **This is NOT the table 25 (border line types) mapping**, despite the
 /// HWP 5.0 spec §4.2.7 referencing table 25 verbatim. Empirical evidence
-/// from 한컴-authored truth fixtures (see
-/// `examples/probe_tabdef.rs` against `sample-tab.hwpx`) and openhwp's
+/// from native tab definitions and openhwp's
 /// reference encoder (`crates/hwp/src/convert/to_ir.rs:521-527` joined
 /// with `crates/hwpx/src/convert/from_ir.rs:2286-2290`) confirm a
 /// dedicated tab-leader enum:

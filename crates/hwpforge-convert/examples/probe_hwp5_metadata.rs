@@ -3,7 +3,8 @@
 //! Phase 3 end-to-end check.
 
 fn main() {
-    let path = "examples/hwp5_review/sample-field-docsummary.hwp";
+    // 이것을 실패시키는 것: 필수 입력 경로 인자를 생략하기.
+    let path = std::env::args().nth(1).expect("usage: probe_hwp5_metadata <input.hwp>");
     let bytes = std::fs::read(path).expect("read sample");
     let (hwpx_bytes, warnings) = hwpforge_convert::hwp5_to_hwpx_bytes(&bytes).expect("convert");
     println!("warnings: {}", warnings.len());

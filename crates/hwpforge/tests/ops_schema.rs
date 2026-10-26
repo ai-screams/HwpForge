@@ -210,12 +210,7 @@ fn group_payload_from_0_16_10_still_validates_and_reads() {
 /// `exported-document` schema and still builds a package.
 ///
 /// `tests/data/master_pages_v0_16_10.json` is the 0.16.10 release binary's
-/// output for the master page fixture with even and odd master pages:
-///
-/// ```text
-/// hwpforge to-json tests/fixtures/master_pages/f5c-odd-even.hwpx --no-styles \
-///     -o crates/hwpforge/tests/data/master_pages_v0_16_10.json
-/// ```
+/// output for a document with even and odd master pages, exported without styles.
 ///
 /// Its master pages carry only `apply_page_type` and `paragraphs`; every
 /// field added since must stay optional in the schema.

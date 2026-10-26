@@ -37,8 +37,9 @@ fn a_document_against_itself_is_identical() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn two_different_documents_are_not_identical() {
-    let out = diff(&fixture("SimpleTable.hwpx"), &fixture("SimplePicture.hwpx")).expect("diff");
+    let out = diff(&fixture("SimpleTable.hwpx"), &fixture("green_swatch.hwpx")).expect("diff");
 
     assert!(!out.diff.identical);
     assert!(!out.diff.package.is_empty(), "the packages differ");
@@ -64,8 +65,9 @@ fn meta_flattens_the_report_and_adds_warnings() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn the_flattened_payload_matches_the_dto_key_for_key() {
-    let out = diff(&fixture("SimpleTable.hwpx"), &fixture("SimplePicture.hwpx")).expect("diff");
+    let out = diff(&fixture("SimpleTable.hwpx"), &fixture("green_swatch.hwpx")).expect("diff");
 
     let meta = serde_json::to_value(out.meta()).expect("serialise meta");
     let payload = serde_json::to_value(&out.diff).expect("serialise payload");

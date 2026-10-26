@@ -209,7 +209,7 @@ pub struct LaidBorder {
 
 /// 합성 쪽번호 (캐시 재생이 아니라 §8c 실측 규칙으로 합성).
 ///
-/// 가로 = 페이지 폭 중앙(장식 포함 자연폭 기준 — 여백 무관, rules-pagenum
+/// 가로 = 페이지 폭 중앙(장식 포함 자연폭 기준 — 여백 무관, 한컴 저장 문서
 /// Δ0.08pt) · 세로 = baseline 을 `anchor_bottom − hhea descent × size` 에
 /// 앵커 (렌더 층이 폰트 메트릭으로 확정 — 한컴 콘텐트 스트림 실측 783.00pt,
 /// 모델 오차 ≤0.16pt).
@@ -598,8 +598,8 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
 ///   왼쪽 = 본문 왼쪽). 수평은 문단 좌변 기준으로 한컴과 일치 (Δ0.05pt).
 /// - 마커 가시 좌표가 줄 경계(lineseg 시작)와 정확히 일치하면 **뒤
 ///   세그먼트(새 줄)** 를 채택하고 [`PdfWarning::AnchorMarkerOnLineBoundary`]
-///   로 표면화한다 (§11b F3 — 한컴도 아랫줄 기준임을 `anchored_marker_boundary`
-///   fixture 로 byte-ground 확정, Δ≤0.03pt).
+///   로 표면화한다 (§11b F3 — 한컴이 저장한 줄 경계 앵커 그림에서도
+///   아랫줄 기준임을 바이트 대조로 확인, Δ≤0.03pt).
 fn collect_anchored_images(
     para: &hwpforge_core::paragraph::Paragraph,
     section: &Section,
@@ -851,7 +851,7 @@ fn emit_page_numbers(
 /// 머리말/꼬리말 오버레이 (규칙 §5 R6 + W5 §8 실측).
 ///
 /// 본문 쪽이 확정된 **뒤** 섹션의 각 쪽에 밴드-상대 캐시를 재생한다. 밴드는
-/// 앵커일 뿐이다: 클립도, 본문 리플로도 없다 (rules-header-overflow 실측 —
+/// 앵커일 뿐이다: 클립도, 본문 리플로도 없다 (한컴 저장 문서 실측 —
 /// `v+vertsize` 가 밴드를 넘으면 [`PdfWarning::BandOverflow`] 만 표면화).
 /// ODD/EVEN 선택은 물리 쪽 서수(1-기반) 홀짝이다 (odd-even fixture 실측).
 #[allow(clippy::too_many_arguments)]
@@ -1052,7 +1052,7 @@ struct BandGeom {
 }
 
 /// 머리말/꼬리말 한 항목을 한 쪽에 재생한다 (본문과 동일한 lineseg 재생,
-/// 원점만 밴드 top — rules-header-multi 실측: 다문단 = v 누적, 특수 로직 없음).
+/// 원점만 밴드 top — 한컴 저장 문서 실측: 다문단 = v 누적, 특수 로직 없음).
 #[allow(clippy::too_many_arguments)]
 fn replay_band_item(
     input: &PdfInput<'_>,
@@ -1292,7 +1292,7 @@ fn replay_section(
             //   의 outMargin 합산이 실제 간격보다 +190HU 과대 → 다음 문단을
             //   새 쪽으로 오판했다).
             // ② 앵커형 표 = host lineseg 는 순수 줄높이(vertsize ≪ 표높이) —
-            //   흐름 = 계산치 host_v+om+Σ행높이+om (rules-table 실측 정확 일치).
+            //   흐름 = 계산치 host_v+om+Σ행높이+om (한컴 저장 문서 실측 정확 일치).
             // 판별 = host.vertsize ≥ 계산 총높이. 분할 표는 항상 계산 흐름
             // (캐시가 연속 조각을 표현 못 함 — prev_v 를 host v 로 두면 후속
             // 문단의 작아진 v 가 "새 쪽"으로 오판되는 기존 근거 유지).
@@ -4126,7 +4126,7 @@ mod tests {
 
     #[test]
     fn header_baseline_is_band_relative_not_body() {
-        // R6: 머리말 원점 = margin.top (body_top 아님 — rules-headerfooter 실측).
+        // R6: 머리말 원점 = margin.top (body_top 아님 — 한컴 저장 문서 실측).
         let doc =
             doc_with_bands(body_pages(1), vec![hf_item(ApplyPageType::Both, &["머리말"])], vec![]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
@@ -4271,7 +4271,7 @@ mod tests {
 
     #[test]
     fn multi_paragraph_header_accumulates_vertpos() {
-        // rules-header-multi 실측: 문단2 vertpos=1600 — 밴드-상대 누적 재생.
+        // 한컴 저장 문서 실측: 문단2 vertpos=1600 — 밴드-상대 누적 재생.
         let mut hf = HeaderFooter::new(
             vec![
                 para_with_cache("첫째", vec![seg(0, 0)]),
@@ -4291,7 +4291,7 @@ mod tests {
 
     #[test]
     fn band_overflow_renders_unclipped_with_warning() {
-        // rules-header-overflow 실측: 무클립 재생 + 경고 (fatal 아님).
+        // 한컴 저장 문서 실측: 무클립 재생 + 경고 (fatal 아님).
         let hf = HeaderFooter::new(
             vec![
                 para_with_cache("일", vec![seg(0, 0)]),
@@ -5164,7 +5164,7 @@ mod tests {
     #[test]
     fn anchored_table_flow_uses_computed_margins() {
         // 앵커형(비-글자취급) 표: host lineseg 는 순수 줄높이(1000 ≪ 표높이)
-        // — 흐름 = host_v + om + Σ행높이 + om (rules-table 실물 wire 정확 일치
+        // — 흐름 = host_v + om + Σ행높이 + om (한컴 저장 문서 실물 wire 정확 일치
         // 모델). 인라인 판별(vertsize ≥ 표높이)에 걸리지 않아야 한다.
         let tall_cell = TableCell::new(
             vec![para_with_cache("셀", vec![seg(0, 0), seg(1, 1500)])],
@@ -5424,7 +5424,7 @@ mod tests {
     fn merged_cell_deficit_goes_to_last_spanned_row() {
         use hwpforge_core::table::TableLayoutCache;
         // 2행 격자: (0,1) rowspan2 높이 요구 5000 > 행 최소합 2000 —
-        // 부족분은 마지막 스팬 행 몰빵 (rules-rowspan-deficit 실측 2026-08-07)
+        // 부족분은 마지막 스팬 행 몰빵 (한컴 저장 문서 실측 2026-08-07)
         // → 행높이 [1000, 4000], 총 5000. 검산 앵커가 총높이를 잠근다.
         let make = || {
             let tall = TableCell::with_span(

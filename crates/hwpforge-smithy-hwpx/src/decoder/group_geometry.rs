@@ -14,7 +14,7 @@
 //! nested group map straight into the outermost group's space; the matrices
 //! of the groups in between are not on the leaf's path. Every matrix carries
 //! its translation (`e3`, `e6`). This was checked shape by shape against
-//! Hancom's own "ungroup" output (`tests/fixtures/shapes/group-f1-*`).
+//! Hancom's own output after ungrouping nested shapes.
 
 use crate::schema::section::{HxMatrix, HxRenderingInfo};
 
@@ -22,7 +22,7 @@ use crate::schema::section::{HxMatrix, HxRenderingInfo};
 /// point and where the encoder would put it from the decoded Core value,
 /// still treated as exact. Hancom itself rounds a reflected group's axis
 /// to an even width, so its own "ungroup" result can differ from the exact
-/// reflection by 1.23 (fixture `group-f1-g3-flipped`).
+/// reflection by 1.23 in measured reflected groups.
 pub(crate) const EXACT_TOLERANCE: f64 = 2.0;
 
 /// 2D affine map `x' = a·x + b·y + c`, `y' = d·x + e·y + f` — the wire's

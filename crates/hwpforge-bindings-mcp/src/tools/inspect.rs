@@ -244,8 +244,12 @@ mod tests {
     /// so the assertions track whatever the decoder actually reports instead
     /// of a value copied out of a one-off run.
     #[test]
+    // 이것을 실패시키는 것: MCP all_images 매핑 결과 오염 (실제 음성 대조 실행).
     fn inspect_section_detail_carries_ops_package_scope_and_deep_counts() {
-        let path = fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/hwp5_review/mixed_01_image_and_chart_same_doc.hwpx")
+            .to_string_lossy()
+            .into_owned();
         let bytes = std::fs::read(&path).unwrap();
         let ops_out = ops::inspect(&bytes, &InspectOptions::default()).unwrap();
         let ops_section =
@@ -293,8 +297,12 @@ mod tests {
     /// Python `TypedDict` that iterates `.items()`) would otherwise silently
     /// pick up the wrong value for an older field.
     #[test]
+    // 이것을 실패시키는 것: 직렬화 키 누락 (실제 음성 대조 실행).
     fn inspect_section_detail_key_order_is_existing_eight_then_new_nine() {
-        let path = fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/hwp5_review/mixed_01_image_and_chart_same_doc.hwpx")
+            .to_string_lossy()
+            .into_owned();
         let data = run_inspect(&path, false).unwrap();
         let detail = data.section_details.first().expect("fixture has at least one section");
 

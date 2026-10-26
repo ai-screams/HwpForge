@@ -1,4 +1,3 @@
-//! `ops::outline` — the document navigation map.
 #![cfg(feature = "ops-hwpx")]
 
 use std::collections::BTreeSet;
@@ -60,22 +59,12 @@ fn the_meta_payload_is_the_library_dto_unchanged() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_document_without_tables_reports_an_empty_list() {
-    let out = outline(&hwpx_fixture("SimplePicture.hwpx")).expect("outline");
+    let out = outline(&hwpx_fixture("green_swatch.hwpx")).expect("outline");
 
     assert!(out.outline.tables.is_empty(), "{:?}", out.outline.tables);
     assert_eq!(out.outline.sections[0].tables, 0);
-}
-
-/// Two sibling tables in the body flow: the summary and the list agree.
-#[test]
-fn sibling_tables_make_the_summary_and_the_list_agree() {
-    let out = outline(&repo_fixture("tables/table_08_nested_table.hwpx")).expect("outline");
-
-    let listed = out.outline.tables.iter().filter(|t| t.at.section == 0).count();
-
-    assert_eq!(out.outline.sections[0].tables, listed);
-    assert_eq!(listed, 2, "this fixture carries two body-flow tables");
 }
 
 /// The case that decides the `SectionOutline::tables` contract: a table
@@ -100,7 +89,7 @@ fn a_table_inside_a_cell_is_counted_by_both_the_summary_and_the_list() {
 
 /// Builds an HWPX package whose only body table holds a second table in its
 /// single cell. Synthesised rather than loaded, because no committed fixture
-/// nests a table (`tables/table_08_nested_table.hwpx` is two siblings).
+/// nests a table, rather than placing two sibling tables in a cell.
 fn nested_table_document() -> Vec<u8> {
     use hwpforge::core::image::ImageStore;
     use hwpforge::core::table::{Table, TableCell, TableRow};

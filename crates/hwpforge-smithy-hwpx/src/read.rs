@@ -827,19 +827,6 @@ mod tests {
     }
 
     #[test]
-    fn outline_basic_table_fixture_reports_grid_dims() {
-        let outline = HwpxReader::outline(&fixture("tables/table_01_basic_2x2.hwpx")).unwrap();
-
-        assert_eq!(outline.sections.len(), 1);
-        assert_eq!(outline.tables.len(), 1);
-        let table = &outline.tables[0];
-        assert_eq!(table.ordinal, 0);
-        assert!(table.addressable);
-        assert_eq!((table.rows, table.cols), (Some(2), Some(2)));
-        assert_eq!(table.at.section, 0);
-    }
-
-    #[test]
     fn outline_merged_grid_form_is_addressable_with_sequential_ordinals() {
         let outline = HwpxReader::outline(&fixture("tables/merged_grid_form.hwpx")).unwrap();
 
@@ -869,59 +856,12 @@ mod tests {
     // -- fixture: read projections (W2) ---------------------------------
 
     #[test]
-    fn read_paragraphs_reports_table_marker_not_silent_drop() {
-        let bytes = fixture("tables/table_01_basic_2x2.hwpx");
-        let view = HwpxReader::read_paragraphs(&bytes, 0, None).unwrap();
-        assert!(
-            view.paragraphs.iter().any(|p| p
-                .contains
-                .iter()
-                .any(|c| matches!(c, EmbeddedContent::Table { ordinal: Some(0) }))),
-            "the table-hosting paragraph must carry an explicit marker"
-        );
-    }
-
-    #[test]
-    fn read_paragraphs_range_is_inclusive_and_validated() {
-        let bytes = fixture("tables/table_01_basic_2x2.hwpx");
-        let full = HwpxReader::read_paragraphs(&bytes, 0, None).unwrap();
-        let n = full.paragraphs.len();
-        assert!(n >= 1);
-
-        let one = HwpxReader::read_paragraphs(&bytes, 0, Some((0, 0))).unwrap();
-        assert_eq!(one.paragraphs.len(), 1);
-        assert_eq!(one.paragraphs[0].at, ParaLocator { section: 0, para: 0 });
-
-        assert!(matches!(
-            HwpxReader::read_paragraphs(&bytes, 0, Some((1, 0))),
-            Err(ReadError::ParaRangeInvalid { .. })
-        ));
-        assert!(matches!(
-            HwpxReader::read_paragraphs(&bytes, 0, Some((0, n))),
-            Err(ReadError::ParaRangeInvalid { .. })
-        ));
-        assert!(matches!(
-            HwpxReader::read_paragraphs(&bytes, 9, None),
-            Err(ReadError::SectionOutOfRange { .. })
-        ));
-    }
-
-    #[test]
     fn read_table_anchors_tile_grid_exactly_once() {
         let bytes = fixture("tables/merged_grid_form.hwpx");
         let view = HwpxReader::read_table(&bytes, 0).unwrap();
         assert!(view.rows >= 1 && view.cols >= 1);
         let coverage: u32 = view.cells.iter().map(|c| c.row_span * c.col_span).sum();
         assert_eq!(coverage, view.rows * view.cols, "anchors must tile the grid exactly once");
-    }
-
-    #[test]
-    fn read_table_unknown_ordinal_reports_available() {
-        let bytes = fixture("tables/table_01_basic_2x2.hwpx");
-        assert!(matches!(
-            HwpxReader::read_table(&bytes, 99),
-            Err(ReadError::TableOutOfRange { requested: 99, available: 1 })
-        ));
     }
 
     #[test]

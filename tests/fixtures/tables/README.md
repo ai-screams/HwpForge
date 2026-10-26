@@ -1,13 +1,4 @@
-# 한컴 시험 문서
+# Table inputs
 
-출처: 이 시험을 위해 macOS 한컴오피스로 만든 문서, 가상 내용.
-같은 문서를 HWP5와 HWPX로 저장했으며 원본 바이트를 그대로 복사했다.
-
-f1-cell-headers: 4열 × 3행 표, 첫 행 개별 제목 셀 0,0,1,0; 디코드·왕복·CLI 감사.
-
-모든 파일은 3 MiB 미만이다.
-
-| 파일                 | 바이트 | SHA-256                                                            |
-| -------------------- | -----: | ------------------------------------------------------------------ |
-| f1-cell-headers.hwp  |  27136 | `e64521c498d74379f7d671a8d72141d79d988980779b2d4aca826a68513b440f` |
-| f1-cell-headers.hwpx |  28970 | `6aec33c55075f181e08eb763bd8da7bb1e06f5146efc88d5bf0daa142051d2b0` |
+`merged_grid_form.hwpx` is HwpForge encoder output: a 3×2 grid with the labels
+`성명` and `비고`, used by table reading and editing tests.

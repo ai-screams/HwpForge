@@ -53,9 +53,6 @@ mod semantic_adapter;
 pub mod style_store;
 mod table_cell_vertical_align;
 mod table_page_break;
-#[cfg(test)]
-/// Test-only helpers for resolving shared workspace fixtures.
-pub(crate) mod test_support;
 mod warning_utils;
 mod wire_text_map;
 

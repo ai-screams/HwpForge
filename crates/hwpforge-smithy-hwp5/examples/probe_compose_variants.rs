@@ -1,7 +1,7 @@
 //! Task #74 probe — compose (`tcps`) properties.high shape glyph +
 //! layout variant 관찰.
 //!
-//! `sample-compose-all-shapes.hwp` 는 OWPML SHAPECIRCLETYPE 14종 ×
+//! `input.hwp` 는 OWPML SHAPECIRCLETYPE 14종 ×
 //! COMPOSETYPE 2종 = 28개의 글자겹침을 문서 순서대로 담고 있다
 //! (SPREAD 14개 → OVERLAP 14개, 각 그룹 안에서 OWPML enum 순서).
 //! 이 probe 는 각 `tcps` CtrlHeader 의 `properties.low`(layout
@@ -12,7 +12,7 @@
 //!
 //! Usage:
 //!   cargo run -p hwpforge-smithy-hwp5 --example probe_compose_variants -- \
-//!     examples/hwp5_review/sample-compose-all-shapes.hwp
+//!     input.hwp
 
 use std::io::{Cursor, Read};
 
@@ -41,9 +41,8 @@ const CIRCLE_TYPES: &[&str] = &[
 const COMPOSE_TYPES: &[&str] = &["SPREAD", "OVERLAP"];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "examples/hwp5_review/sample-compose-all-shapes.hwp".to_string());
+    // 이것을 실패시키는 것: 필수 입력 경로 인자를 생략하기.
+    let path = std::env::args().nth(1).ok_or("usage: probe_compose_variants <input.hwp>")?;
 
     let bytes = std::fs::read(&path)?;
     let cursor = Cursor::new(&bytes[..]);

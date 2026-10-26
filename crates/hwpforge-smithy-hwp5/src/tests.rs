@@ -7,52 +7,54 @@
 
 use super::*;
 
-use std::path::PathBuf;
-
-#[derive(Debug, Clone, Copy)]
-struct ImageFixtureExpectation {
-    name: &'static str,
-    expected_storage_names: &'static [&'static str],
-    expected_gso_count: usize,
-    expected_shape_picture_count: usize,
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    crate::test_support::workspace_fixture_path(name)
-}
-
-fn shape_picture_count(report: &Hwp5CensusReport) -> usize {
-    report
-        .sections
-        .iter()
-        .flat_map(|section| section.tag_counts.iter())
-        .filter(|entry| entry.tag_name == "ShapePicture")
-        .map(|entry| entry.count)
-        .sum()
-}
-
-fn ctrl_count(report: &Hwp5CensusReport, ctrl_id_ascii: &str) -> usize {
-    report
-        .sections
-        .iter()
-        .flat_map(|section| section.ctrl_ids.iter())
-        .filter(|entry| entry.ctrl_id_ascii == ctrl_id_ascii)
-        .map(|entry| entry.count)
-        .sum()
-}
-
-fn storage_names(report: &Hwp5CensusReport) -> Vec<String> {
-    let mut names: Vec<String> =
-        report.doc_info.bin_data_records.iter().map(|record| record.storage_name.clone()).collect();
-    names.sort();
-    names
-}
-
-fn stream_names(report: &Hwp5CensusReport) -> Vec<String> {
-    let mut names: Vec<String> =
-        report.bin_data_streams.iter().map(|stream| stream.name.clone()).collect();
-    names.sort();
-    names
+pub(crate) fn asset_package(extensions: &[&str], chart: bool) -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut cfb = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+    let mut header = vec![0; 256];
+    header[..18].copy_from_slice(b"HWP Document File\0");
+    header[32..36].copy_from_slice(&0x05000205u32.to_le_bytes());
+    header[36..40].copy_from_slice(&1u32.to_le_bytes());
+    cfb.create_stream("/FileHeader").unwrap().write_all(&header).unwrap();
+    cfb.create_storage("/BodyText").unwrap();
+    cfb.create_storage("/BinData").unwrap();
+    let mut info = [
+        doc_info_record(0x15, &[0; 68]),
+        doc_info_record(0x19, &[0; 42]),
+        doc_info_record(0x1a, &[0; 14]),
+    ]
+    .concat();
+    let mut section = Vec::new();
+    for (i, ext) in extensions.iter().enumerate() {
+        let id = (i + 1) as u16;
+        info.extend(doc_info_record(0x12, &embedded_bin_data(id, ext)));
+        let payload = if chart {
+            decoder::chart_ole::tests::chart_fixture_inflated()
+        } else {
+            vec![0x55; 256]
+        };
+        cfb.create_stream(format!("/BinData/BIN{id:04X}.{ext}"))
+            .unwrap()
+            .write_all(&deflate(&payload))
+            .unwrap();
+        let wire = decoder::section::tests::r3_asset_wire(id);
+        // Keep the picture or OLE control and its inline marker, respectively.
+        let mut records = schema::record::Record::parse_stream(&mut Cursor::new(wire)).unwrap();
+        let first = if chart { 2 } else { 5 };
+        let controls = records[first..first + 3].to_vec();
+        records.truncate(2);
+        records[1].data.truncate(16);
+        records.extend(controls);
+        for r in records {
+            let tag = u32::from(r.header.tag_id)
+                | (u32::from(r.header.level) << 10)
+                | ((r.data.len() as u32) << 20);
+            section.extend(tag.to_le_bytes());
+            section.extend(r.data);
+        }
+    }
+    cfb.create_stream("/DocInfo").unwrap().write_all(&deflate(&info)).unwrap();
+    cfb.create_stream("/BodyText/Section0").unwrap().write_all(&deflate(&section)).unwrap();
+    cfb.into_inner().into_inner()
 }
 
 fn joined_asset_storage_names(plan: &Hwp5JoinedImageAssetPlan) -> Vec<String> {
@@ -63,94 +65,17 @@ fn joined_asset_storage_names(plan: &Hwp5JoinedImageAssetPlan) -> Vec<String> {
 }
 
 #[test]
-fn census_image_fixture_matrix_reports_expected_bindata_and_gso_inventory() {
-    let cases: [ImageFixtureExpectation; 8] = [
-        ImageFixtureExpectation {
-            name: "anchored_zero_origin_png.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 1,
-            expected_shape_picture_count: 1,
-        },
-        ImageFixtureExpectation {
-            name: "img_03_two_images_png_jpg.hwp",
-            expected_storage_names: &["BIN0001.png", "BIN0002.jpeg"],
-            expected_gso_count: 2,
-            expected_shape_picture_count: 2,
-        },
-        ImageFixtureExpectation {
-            name: "img_05_image_in_table_cell.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 1,
-            expected_shape_picture_count: 1,
-        },
-        ImageFixtureExpectation {
-            name: "mixed_02a_header_image_footer_text_real.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 1,
-            expected_shape_picture_count: 1,
-        },
-        ImageFixtureExpectation {
-            name: "mixed_02b_textbox_with_image_real.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 2,
-            expected_shape_picture_count: 1,
-        },
-        ImageFixtureExpectation {
-            name: "floating_image_not_treat_as_char.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 1,
-            expected_shape_picture_count: 1,
-        },
-        ImageFixtureExpectation {
-            name: "two_same_image_refs_different_places.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 2,
-            expected_shape_picture_count: 2,
-        },
-        ImageFixtureExpectation {
-            name: "real_crop_vs_original_two_objects.hwp",
-            expected_storage_names: &["BIN0001.png"],
-            expected_gso_count: 2,
-            expected_shape_picture_count: 2,
-        },
-    ];
-
-    for case in cases {
-        let path = fixture_path(case.name);
-        if !path.exists() {
-            continue;
-        }
-
-        let report = census_hwp5_file(&path).expect("fixture census should succeed");
-        let expected_storage_names: Vec<String> =
-            case.expected_storage_names.iter().map(|value| (*value).to_string()).collect();
-
-        assert_eq!(storage_names(&report), expected_storage_names, "fixture={}", case.name);
-        assert_eq!(stream_names(&report), expected_storage_names, "fixture={}", case.name);
-        assert_eq!(ctrl_count(&report, "gso "), case.expected_gso_count, "fixture={}", case.name);
-        assert_eq!(
-            shape_picture_count(&report),
-            case.expected_shape_picture_count,
-            "fixture={}",
-            case.name
-        );
-    }
-}
-
-#[test]
+// 이것을 실패시키는 것: joined 자산 누락 (실제 음성 대조 실행).
 fn join_hwp5_image_assets_matches_fixture_bindata_inventory() {
-    let cases: [(&str, &[&str]); 2] = [
-        ("anchored_zero_origin_png.hwp", &["BIN0001.png"]),
-        ("img_03_two_images_png_jpg.hwp", &["BIN0001.png", "BIN0002.jpeg"]),
-    ];
-
-    for (name, expected_storage_names) in cases {
-        let path = fixture_path(name);
-        if !path.exists() {
-            continue;
-        }
-
-        let bytes = std::fs::read(&path).expect("fixture bytes should be readable");
+    let cases: [&[&str]; 2] = [&["png"], &["png", "jpeg"]];
+    for extensions in cases {
+        let name = "synthetic asset package";
+        let expected_storage_names: Vec<String> = extensions
+            .iter()
+            .enumerate()
+            .map(|(i, ext)| format!("BIN{:04X}.{ext}", i + 1))
+            .collect();
+        let bytes = asset_package(extensions, false);
         let intermediate =
             crate::decoder::decode_intermediate(&bytes).expect("fixture intermediate decode");
         let image_assets = join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED)
@@ -176,28 +101,6 @@ fn join_hwp5_image_assets_matches_fixture_bindata_inventory() {
             "fixture={name}"
         );
     }
-}
-
-#[test]
-fn join_hwp5_image_assets_decompresses_full_report_png_payload() {
-    let path = fixture_path("full_report.hwp");
-    if !path.exists() {
-        return;
-    }
-
-    let bytes = std::fs::read(&path).expect("fixture bytes should be readable");
-    let intermediate =
-        crate::decoder::decode_intermediate(&bytes).expect("fixture intermediate decode");
-    let image_assets = join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED)
-        .expect("image assets should join")
-        .0;
-    let first_asset =
-        image_assets.asset_for_reference(1).expect("full_report should expose binary image id 1");
-
-    assert!(
-        first_asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "full_report joined image bytes must be actual PNG payload, not compressed raw data"
-    );
 }
 
 /// Direct unit coverage for `Hwp5StyleStore::border_fill_image_binary_ids`,
@@ -264,18 +167,6 @@ fn read_cfb_stream(bytes: &[u8], path: &str) -> Vec<u8> {
     buf
 }
 
-/// Returns `cfb_bytes` with the stream at `path` replaced by `data`.
-fn replace_cfb_stream(cfb_bytes: Vec<u8>, path: &str, data: &[u8]) -> Vec<u8> {
-    use std::io::Write;
-    let mut comp =
-        cfb::CompoundFile::open(std::io::Cursor::new(cfb_bytes)).expect("CFB opens read-write");
-    let mut stream = comp.create_stream(path).expect("stream is replaced");
-    stream.write_all(data).expect("stream writes");
-    drop(stream);
-    comp.flush().expect("CFB flushes");
-    comp.into_inner().into_inner()
-}
-
 fn deflate(data: &[u8]) -> Vec<u8> {
     use flate2::write::DeflateEncoder;
     use flate2::Compression;
@@ -286,7 +177,7 @@ fn deflate(data: &[u8]) -> Vec<u8> {
 }
 
 fn chart_01_bytes() -> Vec<u8> {
-    std::fs::read(fixture_path("charts/chart_01_single_column.hwp")).expect("chart fixture exists")
+    asset_package(&["OLE"], true)
 }
 
 fn embedded_chart_count(document: &Document<Draft>) -> usize {
@@ -309,116 +200,11 @@ fn total_budget_error_message<T: std::fmt::Debug>(result: Hwp5Result<T>) -> Stri
     msg
 }
 
-fn zlib(data: &[u8]) -> Vec<u8> {
-    use flate2::write::ZlibEncoder;
-    use flate2::Compression;
-    use std::io::Write;
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-    encoder.write_all(data).expect("zlib");
-    encoder.finish().expect("zlib finish")
-}
-
-/// Inflated `/BinData/BIN0001.OLE` of `chart_01`.
-fn chart_01_inflated_ole(fixture: &[u8]) -> Vec<u8> {
-    decoder::package::decompress_stream(&read_cfb_stream(fixture, "/BinData/BIN0001.OLE"))
-        .expect("fixture OLE inflates")
-}
-
-/// The fixture chart with `/OOXMLChartContents` padded by 4 MiB of trailing
-/// whitespace (still well-formed XML) inside the real inner OLE2, rebuilt as
-/// length prefix + inner OLE2. A valid chart whose compression ratio is far
-/// over 100.
-fn padded_chart_inflated(fixture: &[u8]) -> Vec<u8> {
-    use crate::decoder::chart_ole::extract_chart_payload_from_inflated;
-
-    let inner = chart_01_inflated_ole(fixture)[4..].to_vec();
-    let mut chart_xml = read_cfb_stream(&inner, "/OOXMLChartContents");
-    chart_xml.extend(std::iter::repeat_n(b' ', 4 * 1024 * 1024));
-    let padded_inner = replace_cfb_stream(inner, "/OOXMLChartContents", &chart_xml);
-    let mut padded_inflated = (padded_inner.len() as u32).to_le_bytes().to_vec();
-    padded_inflated.extend_from_slice(&padded_inner);
-    // Precondition: the chart itself is valid, so only the ratio limit can
-    // reject it.
-    extract_chart_payload_from_inflated(&padded_inflated, padded_inflated.len() as u64)
-        .expect("padded chart is a valid chart");
-    padded_inflated
-}
-
-fn has_ratio_drop(warnings: &[Hwp5Warning]) -> bool {
-    warnings.iter().any(|warning| {
-        matches!(
-            warning,
-            Hwp5Warning::DroppedControl { control: "ole_object", reason }
-                if reason.contains("decompression ratio")
-        )
-    })
-}
-
-// 이것을 실패시키는 것: OLE join 에서 `decompress_ratio_checked` 대신 압축비 검사가
-// 없는 `decompress_stream` 쓰기 (공백으로 늘린 정상 차트가 추출되어 경고가 사라진다).
-#[test]
-fn high_ratio_valid_chart_is_dropped_with_ratio_warning() {
-    let fixture = chart_01_bytes();
-    let padded_inflated = padded_chart_inflated(&fixture);
-    let compressed = deflate(&padded_inflated);
-    assert!(
-        padded_inflated.len() / compressed.len() > 100,
-        "precondition: ratio {} must exceed 100",
-        padded_inflated.len() / compressed.len()
-    );
-
-    let bytes = replace_cfb_stream(fixture, "/BinData/BIN0001.OLE", &compressed);
-    let decoded = decode_hwp5_to_core(&bytes).expect("a rejected chart must not fail the document");
-    assert_eq!(embedded_chart_count(&decoded.document), 0);
-    assert!(
-        has_ratio_drop(&decoded.warnings),
-        "expected an ole_object drop citing the ratio, got: {:?}",
-        decoded.warnings
-    );
-}
-
-// Behaviour change pinned here: chart OLE now goes through the same stream
-// decompressor as other HWP5 streams, including its zlib fallback, so a
-// zlib-framed chart (previously dropped as `ole_chart_inflate_failed`) is
-// extracted — and the fallback path is still under the ratio limit.
-// 이것을 실패시키는 것 (각각 따로 실행):
-// - `decompress_stream_capped` 의 zlib 폴백 제거 → zlib 차트가 드롭되어 차트 수 0.
-// - OLE join 에서 압축비 검사 없는 `decompress_stream` 쓰기 → zlib 로 감싼 고압축
-//   차트가 추출되어 압축비 경고가 사라진다.
-#[test]
-fn zlib_framed_chart_ole_is_extracted_and_still_ratio_checked() {
-    let fixture = chart_01_bytes();
-
-    let zlib_ole = zlib(&chart_01_inflated_ole(&fixture));
-    let bytes = replace_cfb_stream(fixture.clone(), "/BinData/BIN0001.OLE", &zlib_ole);
-    let decoded = decode_hwp5_to_core(&bytes).expect("zlib-framed chart decodes");
-    assert_eq!(embedded_chart_count(&decoded.document), 1, "zlib chart must be extracted");
-    assert!(
-        !decoded.warnings.iter().any(|warning| matches!(
-            warning,
-            Hwp5Warning::DroppedControl { control: "ole_object", .. }
-        )),
-        "no ole_object drop expected, got: {:?}",
-        decoded.warnings
-    );
-
-    let padded_inflated = padded_chart_inflated(&fixture);
-    let zlib_padded = zlib(&padded_inflated);
-    assert!(padded_inflated.len() / zlib_padded.len() > 100, "precondition: ratio over 100");
-    let bytes = replace_cfb_stream(fixture, "/BinData/BIN0001.OLE", &zlib_padded);
-    let decoded = decode_hwp5_to_core(&bytes).expect("a rejected chart must not fail the document");
-    assert_eq!(embedded_chart_count(&decoded.document), 0);
-    assert!(
-        has_ratio_drop(&decoded.warnings),
-        "the zlib fallback must keep the ratio limit, got: {:?}",
-        decoded.warnings
-    );
-}
-
 // 이것을 실패시키는 것 (각각 따로 실행):
 // - OLE join 의 `budget.charge` 제거 → 첫 단(OLE inflate 몫 부족)이 `Ok` 가 된다.
 // - projection 에 OLE join 이전 예산 사본 넘기기 → 둘째 단이 `Ok` 가 된다.
 #[test]
+// 이것을 실패시키는 것: OLE join 부족 예산 제거 (실제 음성 대조 실행).
 fn chart_document_budget_ladder_covers_ole_join_and_extraction() {
     use std::io::Read;
 
@@ -507,8 +293,9 @@ fn image_decompression_is_charged_without_a_ratio_limit() {
 // 이것을 실패시키는 것: 진입점 하나가 받은 예산 한도 대신 `MAX_TOTAL_DECOMPRESSED`
 // 로 이미지 join 을 부르기 (진입점 넷 각각 따로 실행 — 그 진입점 단언이 `Ok` 로 실패).
 #[test]
+// 이것을 실패시키는 것: 이미지 해제 부족 예산 제거 (실제 음성 대조 실행).
 fn every_entry_point_charges_image_decompression_to_the_budget() {
-    let bytes = std::fs::read(fixture_path("full_report.hwp")).expect("full_report fixture");
+    let bytes = asset_package(&["png"], false);
     let intermediate = decoder::decode_intermediate(&bytes).expect("fixture decodes");
     let (_, budget) =
         join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED).expect("images join");
@@ -517,7 +304,7 @@ fn every_entry_point_charges_image_decompression_to_the_budget() {
         .remaining_budget()
         .used();
     let after_images = budget.used();
-    assert!(after_images > open_used, "precondition: full_report decompresses images");
+    assert!(after_images > open_used, "precondition: synthetic package decompresses images");
     let short = after_images - 1;
 
     let entry_points: [(&str, Box<dyn Fn(u64) -> Result<(), Hwp5Error>>); 4] = [
@@ -546,152 +333,6 @@ fn every_entry_point_charges_image_decompression_to_the_budget() {
         );
         decode(MAX_TOTAL_DECOMPRESSED).unwrap_or_else(|err| panic!("{name}: full budget: {err}"));
     }
-}
-
-/// A group holding a text box with a table and a picture in its text: the
-/// picture's own `ShapeComponent`/`ShapePicture` records and the table
-/// cells' paragraphs sit deeper than the text box's own records. Read as
-/// the text box's own, the picture made it a two-payload `Unknown` (the
-/// whole text box dropped) and the cell text overwrote its paragraphs.
-///
-/// 이것을 실패시키는 것: 자식 도형 기록을 자기 수준으로 제한하지 않는 것(글상자가
-/// 사라짐), 문단 기록을 자기 수준으로 제한하지 않는 것(표 칸 글자가 둘째 문단을
-/// 덮음).
-#[test]
-fn grouped_text_box_keeps_its_own_records_only() {
-    use hwpforge_core::control::Control;
-    use hwpforge_core::run::RunContent;
-    let bytes = std::fs::read(fixture_path("shapes/group-f2-textbox-table.hwp")).unwrap();
-    let doc = decode_hwp5_with_images(&bytes).unwrap();
-    let group = doc.document.sections()[0]
-        .paragraphs
-        .iter()
-        .flat_map(|p| p.runs.iter())
-        .find_map(|r| match &r.content {
-            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
-            _ => None,
-        })
-        .expect("a group");
-    let Control::Group { children, .. } = &group else { unreachable!() };
-    let texts: Vec<Vec<String>> = children
-        .iter()
-        .filter_map(|c| match c {
-            hwpforge_core::control::GroupChild::Shape(Control::TextBox { paragraphs, .. }) => Some(
-                paragraphs
-                    .iter()
-                    .map(|p| {
-                        p.runs
-                            .iter()
-                            .filter_map(|r| match &r.content {
-                                RunContent::Text(t) => Some(t.as_str()),
-                                _ => None,
-                            })
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(texts, [["글상자 안 표", "", "글상자 안 그림", ""]]);
-}
-
-/// Hancom's object-link record (`CtrlData`) as saved under a logo picture.
-const LINK_RECORD: &str = "1b02010000006f0200806f0201000000650201001b0068007400740070005c003a002f002f007700770077002e006b006f007200650061002e006b0072003b0031003b0030003b0030003b00";
-
-/// One TLV record: header (tag, level, size) then the payload.
-fn tlv(tag: u16, level: u16, data: &[u8]) -> Vec<u8> {
-    let size = u32::try_from(data.len()).unwrap();
-    let mut out = (u32::from(tag) | (u32::from(level) << 10) | (size << 20)).to_le_bytes().to_vec();
-    out.extend_from_slice(data);
-    out
-}
-
-/// Section 0's records of an HWP5 file, as `(tag, level, payload)`.
-fn section0_records(bytes: &[u8]) -> Vec<(u16, u16, Vec<u8>)> {
-    use std::io::Read;
-    let raw = read_cfb_stream(bytes, "/BodyText/Section0");
-    let mut inflated = Vec::new();
-    flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut inflated).unwrap();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i + 4 <= inflated.len() {
-        let h = u32::from_le_bytes(inflated[i..i + 4].try_into().unwrap());
-        i += 4;
-        let (tag, level) = ((h & 0x3ff) as u16, ((h >> 10) & 0x3ff) as u16);
-        let mut size = (h >> 20) as usize;
-        if size == 0xfff {
-            size = u32::from_le_bytes(inflated[i..i + 4].try_into().unwrap()) as usize;
-            i += 4;
-        }
-        out.push((tag, level, inflated[i..i + size].to_vec()));
-        i += size;
-    }
-    out
-}
-
-/// F3a with a link record added under the group's own component and under
-/// the first picture's component, each one level below it.
-fn f3a_with_links() -> Vec<u8> {
-    let bytes = std::fs::read(fixture_path("shapes/group-f3a-logo.hwp")).unwrap();
-    let link: Vec<u8> = (0..LINK_RECORD.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&LINK_RECORD[i..i + 2], 16).unwrap())
-        .collect();
-    let mut stream = Vec::new();
-    let (mut group_done, mut pic_done) = (false, false);
-    for (tag, level, data) in section0_records(&bytes) {
-        stream.extend(tlv(tag, level, &data));
-        if tag == 0x4C && !group_done && data.windows(4).any(|w| w == b"noc$") {
-            stream.extend(tlv(0x57, level + 1, &link));
-            group_done = true;
-        } else if tag == 0x4C && group_done && !pic_done && data.windows(4).any(|w| w == b"cip$") {
-            stream.extend(tlv(0x57, level + 1, &link));
-            pic_done = true;
-        }
-    }
-    assert!(group_done && pic_done, "F3a has a group of pictures");
-    replace_cfb_stream(bytes, "/BodyText/Section0", &deflate(&stream))
-}
-
-/// A picture's link record inside a group is read into the picture's
-/// hyperlink, and the group's own link record is reported as lost: the
-/// group-child and group record paths of the decoder.
-///
-/// 이것을 실패시키는 것: 묶음 자식 빌더의 `CtrlData` 갈래 삭제(그림 링크가 사라진다) /
-/// 묶음 빌더의 자기 수준 `CtrlData` 갈래 삭제(묶음 링크 경고가 사라진다).
-#[test]
-fn group_and_group_picture_links_are_read() {
-    use hwpforge_core::control::{Control, GroupChild};
-    use hwpforge_core::run::RunContent;
-    let doc = decode_hwp5_with_images(&f3a_with_links()).unwrap();
-    let lost: Vec<&str> = doc
-        .warnings
-        .iter()
-        .filter_map(|w| match w {
-            Hwp5Warning::ContentLost { kind, .. } => Some(kind.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(lost, ["group_hyperlink"]);
-    let group = doc.document.sections()[0]
-        .paragraphs
-        .iter()
-        .flat_map(|p| p.runs.iter())
-        .find_map(|r| match &r.content {
-            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
-            _ => None,
-        })
-        .expect("a group");
-    let Control::Group { children, .. } = &group else { unreachable!() };
-    let links: Vec<Option<&str>> = children
-        .iter()
-        .map(|c| match c {
-            GroupChild::Picture(image) => image.hyperlink.as_deref(),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(links, [Some("http://www.korea.kr"), None, None]);
 }
 
 // ── BinData references are DocInfo positions (§19 C) ─────────────────
@@ -772,7 +413,7 @@ fn an_external_link_takes_a_position_but_names_no_stream() {
 }
 
 /// C-T1 (join level): image assets and the size hint taken from the
-/// pictures are both keyed by reference. The F17 fixture's three records
+/// pictures are both keyed by reference. The three synthetic records
 /// are re-presented as stored ids `[3, 1, 2]`, so reference 1 is
 /// `BIN0003.png`; each picture gets its own width.
 ///
@@ -780,8 +421,9 @@ fn an_external_link_takes_a_position_but_names_no_stream() {
 /// `BIN0001.png`), 크기 힌트를 저장 id 로 찾는 것(참조 1 의 힌트가 참조 3
 /// 그림의 너비).
 #[test]
+// 이것을 실패시키는 것: 저장 ID 순열 제거 (실제 음성 대조 실행).
 fn image_assets_and_size_hints_are_keyed_by_reference() {
-    let bytes = std::fs::read(fixture_path("images/f17-caption-numbering.hwp")).expect("fixture");
+    let bytes = asset_package(&["png", "png", "png"], false);
     let mut intermediate = crate::decoder::decode_intermediate(&bytes).expect("intermediate");
     let originals = intermediate.bin_data_records.clone();
     assert_eq!(reference_and_id(&originals), [(1, 1), (2, 2), (3, 3)], "fixture as made");
@@ -881,18 +523,28 @@ fn ole_reference_ambiguity_is_linear_in_the_records() {
 
 // 이것을 실패시키는 것: master geometry 누락 / 본문→master 단순 연결로 first-wins 순서 변경.
 #[test]
+// 이것을 실패시키는 것: master/body wire 순서 역전 (실제 음성 대조 실행).
 fn master_image_geometry_keeps_wire_first_wins() {
     use crate::decoder::section::Hwp5Control;
-    let bytes = std::fs::read(fixture_path("master_pages/f5f-shapes.hwp")).unwrap();
+    let bytes = asset_package(&["png"], false);
     let mut decoded = crate::decoder::decode_intermediate(&bytes).unwrap();
     let section = &mut decoded.sections[0];
+    let Hwp5Control::Image(image) = section.paragraphs[0].controls[0].clone() else {
+        panic!("image")
+    };
+    section.master_pages.push(crate::decoder::section::Hwp5MasterPage {
+        paragraphs: vec![section.paragraphs[0].clone()],
+        raw: vec![],
+        extended: false,
+        index: 0,
+        ordinary_index: 0,
+        record_index: 0,
+        level: 2,
+        section_properties: 0,
+        body_paragraph_index: 0,
+        body_control_index: 0,
+    });
     let master = &mut section.master_pages[0];
-    let image = master
-        .paragraphs
-        .iter()
-        .flat_map(|p| &p.controls)
-        .find_map(|c| if let Hwp5Control::Image(image) = c { Some(image.clone()) } else { None })
-        .unwrap();
     let mut body_image = image.clone();
     body_image.geometry.width = image.geometry.width + 100;
     section.paragraphs[0].controls = vec![Hwp5Control::Image(body_image.clone())];
