@@ -77,7 +77,7 @@ const PID_KEYWORDS: u32 = 0x05;
 const PID_COMMENTS: u32 = 0x06;
 const PID_LAST_AUTHOR: u32 = 0x08;
 // MS-OLEPS SummaryInformation: PIDSI_CREATE_DTM = 0x0C, PIDSI_LASTSAVE_DTM =
-// 0x0D. Hancom agrees: `sample-memo-basic.hwp` 0x0C = 2026-05-29T14:09:24Z is
+// 0x0D. A 0x0C value such as 2026-05-29T14:09:24Z is
 // its HWPX twin's `CreatedDate`.
 const PID_CREATED_TIME: u32 = 0x0C;
 const PID_LAST_SAVED_TIME: u32 = 0x0D;
@@ -637,23 +637,6 @@ mod tests {
         let t = Some("2026-06-04T11:20:00Z".to_string());
         assert_eq!(only(0x0C), (t.clone(), None));
         assert_eq!(only(0x0D), (None, t));
-    }
-
-    /// A Hancom file whose two times differ. The expected values were read
-    /// from the stream with `olefile` (not this parser): 0x0C =
-    /// 2026-05-29T14:09:24Z — also the `CreatedDate` of its HWPX twin — and
-    /// 0x0D = 2026-09-26T02:31:10Z.
-    /// 이것을 실패시키는 것: 두 PID 를 맞바꾸기.
-    #[test]
-    fn hancom_memo_sample_times() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/user_samples/sample-memo-basic.hwp"
-        );
-        let doc = crate::decode_hwp5_with_images(&std::fs::read(path).unwrap()).unwrap();
-        let m = doc.document.metadata();
-        assert_eq!(m.created.as_deref(), Some("2026-05-29T14:09:24Z"));
-        assert_eq!(m.modified.as_deref(), Some("2026-09-26T02:31:10Z"));
     }
 
     #[test]

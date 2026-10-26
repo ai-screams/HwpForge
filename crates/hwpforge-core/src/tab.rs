@@ -41,7 +41,7 @@ impl TabDef {
 
     /// Returns the 3 default tab properties (한글 Modern).
     ///
-    /// Matches golden fixture `tests/fixtures/shapes/textbox.hwpx`:
+    /// Modern tab defaults:
     ///
     /// - id=0: no auto tabs (default for most paragraphs)
     /// - id=1: `autoTabLeft=1` (outline numbering auto-indent)

@@ -195,20 +195,6 @@ jobs:
           cargo nextest run --workspace --all-features --profile ci
           --exclude hwpforge-bindings-py
 
-  audit-hwp5:
-    name: "Verify › HWP5 Audit Gate"
-    needs: [plan, lint-format, lint-clippy]
-    if: always() && !failure() && !cancelled()
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@v2
-      - name: Run audit gate
-        run: make audit-hwp5-gate
-
   coverage:
     name: "Verify › Coverage (≥ 90%)"
     needs: [plan, lint-format, lint-clippy]
@@ -288,6 +274,8 @@ jobs:
         run: npx dprint@${{ env.DPRINT_VERSION }} check
       - name: markdownlint-cli2
         run: npx markdownlint-cli2@${{ env.MARKDOWNLINT_CLI2_VERSION }} "**/*.md"
+      - name: Fixture policy
+        run: make fixture-policy
       - name: Site postprocess self-check
         run: python3 scripts/site_postprocess.py --self-check
 

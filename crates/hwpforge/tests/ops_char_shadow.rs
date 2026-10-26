@@ -1,9 +1,7 @@
-//! A `charPr` shadow the style store cannot hold as written is lost content
-//! (S21): the editors that re-encode their input — restyle, set-cell,
-//! stamp — refuse it rather than write a fallback shadow, while the
-//! byte-preserving `patch` keeps the header untouched and succeeds. A shadow
-//! the store can hold survives a re-encoding edit.
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/ops_char_shadow.rs"]
+mod shared;
+use shared::*;
 
 use std::io::{Cursor, Read, Write};
 
@@ -43,13 +41,6 @@ fn editable() -> Vec<u8> {
     styles.push_para_shape(HwpxParaShape::default());
     HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
         .expect("encode")
-}
-
-fn header(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/header.xml").expect("header").read_to_string(&mut out).unwrap();
-    out
 }
 
 /// `bytes` with the first `<hh:shadow>` type set to `SPARKLE`.
@@ -140,29 +131,4 @@ fn patch_keeps_an_unreadable_shadow_byte_for_byte() {
     let opts = PatchOptions::default().with_patch(serde_json::to_string(&section).unwrap());
     let out = patch(&lost, &opts).expect("patch");
     assert_eq!(header(&out.bytes), header(&lost));
-}
-
-/// Every `<hh:shadow …/>` element, in document order.
-fn shadows(header: &str) -> Vec<String> {
-    header
-        .match_indices("<hh:shadow ")
-        .map(|(at, _)| header[at..at + header[at..].find("/>").expect("end") + 2].to_string())
-        .collect()
-}
-
-/// Hancom's shadows (DROP 5 5, CONTINUOUS #123456 −3 4) survive restyle,
-/// which re-encodes the header.
-///
-/// 이것을 실패시키는 것: 디코더가 색·간격을 읽지 않는 것(재인코드가 DEFAULT 를 씀).
-#[test]
-fn restyle_keeps_hancom_shadows() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/user_samples/sample-char-shadow.hwpx"
-    );
-    let source = std::fs::read(path).expect("fixture");
-    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
-    let before = shadows(&header(&source));
-    assert_eq!(before.len(), 10);
-    assert_eq!(shadows(&header(&out.bytes)), before);
 }

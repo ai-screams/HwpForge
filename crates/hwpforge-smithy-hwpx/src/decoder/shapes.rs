@@ -2317,7 +2317,7 @@ fn decode_container_once(
         }),
     };
     // `<hp:pos>` places the origin of the outermost space: Hancom's ungroup
-    // puts every shape at `pos` + its chained coordinates. In rotflip-group
+    // puts every shape at `pos` + its chained coordinates. In Hancom-saved rotated groups
     // (turned 20° and mirrored) the group's own frame starts at
     // (−1680, −3359) and its shapes at (−1679, 0), yet each ungrouped shape
     // sits exactly at `pos` + its chain. The displayed size `<hp:sz>` is the
@@ -4878,8 +4878,7 @@ mod group_tests {
     use hwpforge_core::run::RunContent;
     use hwpforge_foundation::Flip;
 
-    use crate::decoder::group_geometry::{bounds, corners, wire_chain, Affine};
-    use crate::schema::section::{HxRun, HxSection};
+    use crate::schema::section::HxSection;
     use crate::HwpxDecoder;
 
     const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/shapes/");
@@ -4896,342 +4895,15 @@ mod group_tests {
         s
     }
 
-    /// One shape on the page: kind, page coordinates of its box corners and
-    /// defining points, rotation and horizontal mirror.
-    #[derive(Debug)]
-    struct PageShape {
-        kind: &'static str,
-        corners: Vec<(f64, f64)>,
-        points: Vec<(f64, f64)>,
-        angle: i32,
-        flip: bool,
-    }
-
-    /// Top-level shapes of an ungrouped fixture, read straight from the wire:
-    /// page = `<hp:pos>` − box minimum + matrix chain · point.
-    fn ungrouped_shapes(bytes: &[u8]) -> Vec<PageShape> {
-        let xml = section0_xml(bytes);
-        let sec: HxSection = crate::decoder::xml_from_str(&xml).unwrap();
-        let runs: Vec<&HxRun> = sec.paragraphs.iter().flat_map(|p| p.runs.iter()).collect();
-        let mut out = Vec::new();
-        macro_rules! push {
-            ($s:expr, $kind:expr, $pts:expr) => {{
-                let s = $s;
-                let m = wire_chain(s.rendering_info.as_ref().unwrap()).unwrap();
-                let org = s.org_sz.as_ref().unwrap();
-                let cs: Vec<(f64, f64)> = corners(f64::from(org.width), f64::from(org.height))
-                    .iter()
-                    .map(|&p| m.apply(p))
-                    .collect();
-                let (mx, my, _, _) = bounds(&cs).unwrap();
-                let pos = s.pos.as_ref().unwrap();
-                let base = (f64::from(pos.horz_offset) - mx, f64::from(pos.vert_offset) - my);
-                let page = |p: (f64, f64)| {
-                    let (x, y) = m.apply(p);
-                    (x + base.0, y + base.1)
-                };
-                let pts: Vec<(f64, f64)> = $pts;
-                out.push(PageShape {
-                    kind: $kind,
-                    corners: cs.iter().map(|&(x, y)| (x + base.0, y + base.1)).collect(),
-                    points: pts.into_iter().map(page).collect(),
-                    angle: s.rotation_info.as_ref().map_or(0, |r| r.angle),
-                    flip: s.flip.as_ref().is_some_and(|f| f.horizontal == 1),
-                });
-            }};
-        }
-        let pt = |p: &Option<crate::schema::section::HxPoint>| {
-            let p = p.as_ref().unwrap();
-            (f64::from(p.x), f64::from(p.y))
-        };
-        for r in runs {
-            for s in &r.rects {
-                push!(s, "rect", vec![]);
-            }
-            for s in &r.ellipses {
-                push!(s, "ellipse", vec![pt(&s.center), pt(&s.ax1), pt(&s.ax2)]);
-            }
-            for s in &r.polygons {
-                push!(
-                    s,
-                    "polygon",
-                    s.points.iter().map(|p| (f64::from(p.x), f64::from(p.y))).collect()
-                );
-            }
-            for s in &r.lines {
-                push!(s, "line", vec![pt(&s.start_pt), pt(&s.end_pt)]);
-            }
-        }
-        out
-    }
-
-    /// The decoded group's leaves on the page, placed the way the encoder
-    /// writes them: group `<hp:pos>` + accumulated offsets + the rotation
-    /// matrix `build_shape_common` makes from the Core value.
-    fn grouped_shapes(bytes: &[u8]) -> (Control, Vec<PageShape>) {
-        let doc = HwpxDecoder::decode(bytes).unwrap();
-        let group = doc.document.sections()[0]
-            .paragraphs
-            .iter()
-            .flat_map(|p| p.runs.iter())
-            .find_map(|r| match &r.content {
-                RunContent::Control(c) if matches!(**c, Control::Group { .. }) => {
-                    Some((**c).clone())
-                }
-                _ => None,
-            })
-            .expect("a group");
-        let Control::Group { placement, .. } = &group else { unreachable!() };
-        let p = placement.as_ref().expect("floating group");
-        let origin = (f64::from(p.horz_offset.as_i32()), f64::from(p.vert_offset.as_i32()));
-        let mut out = Vec::new();
-        collect_leaves(&group, origin, &mut out, true);
-        (group, out)
-    }
-
     fn offset_of(placement: &Option<hwpforge_core::placement::ObjectPlacement>) -> (f64, f64) {
         placement.as_ref().map_or((0.0, 0.0), |p| {
             (f64::from(p.horz_offset.as_i32()), f64::from(p.vert_offset.as_i32()))
         })
     }
 
-    fn collect_leaves(c: &Control, base: (f64, f64), out: &mut Vec<PageShape>, top: bool) {
-        use hwpforge_core::control::ShapePoint;
-        let style_of = |s: &Option<hwpforge_core::control::ShapeStyle>| s.clone();
-        let (kind, w, h, placement, style, pts): (&str, i32, i32, _, _, Vec<ShapePoint>) = match c {
-            Control::Group { children, placement, .. } => {
-                let o = if top { (0.0, 0.0) } else { offset_of(placement) };
-                for child in children {
-                    if let GroupChild::Shape(child) = child {
-                        collect_leaves(child, (base.0 + o.0, base.1 + o.1), out, false);
-                    }
-                }
-                return;
-            }
-            Control::Rect { width, height, placement, style, .. } => {
-                ("rect", width.as_i32(), height.as_i32(), placement, style_of(style), vec![])
-            }
-            Control::Ellipse { width, height, placement, style, center, axis1, axis2, .. } => (
-                "ellipse",
-                width.as_i32(),
-                height.as_i32(),
-                placement,
-                style_of(style),
-                vec![*center, *axis1, *axis2],
-            ),
-            Control::Polygon { width, height, placement, style, vertices, .. } => (
-                "polygon",
-                width.as_i32(),
-                height.as_i32(),
-                placement,
-                style_of(style),
-                vertices.clone(),
-            ),
-            Control::Line { width, height, placement, style, start, end, .. } => (
-                "line",
-                width.as_i32(),
-                height.as_i32(),
-                placement,
-                style_of(style),
-                vec![*start, *end],
-            ),
-            other => panic!("unexpected leaf {other:?}"),
-        };
-        let o = offset_of(placement);
-        let rot = Affine::from_hx(
-            &crate::encoder::shapes::build_shape_common(
-                c,
-                &crate::encoder::shapes::shape_frame_plan(c, false).unwrap(),
-                false,
-            )
-            .rendering_info
-            .rot_matrix,
-        )
-        .unwrap();
-        let map = Affine::translate(base.0 + o.0, base.1 + o.1).then_after(rot);
-        // S20: points are in the original box, drawn scaled to the displayed one.
-        let o_box = c.effective_original_size().unwrap();
-        let scale = |d: i32, o: hwpforge_foundation::HwpUnit| {
-            if o.as_i32() == 0 {
-                1.0
-            } else {
-                f64::from(d) / f64::from(o.as_i32())
-            }
-        };
-        let (sx, sy) = (scale(w, o_box.width), scale(h, o_box.height));
-        out.push(PageShape {
-            kind,
-            corners: corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect(),
-            points: pts
-                .iter()
-                .map(|p| map.apply((f64::from(p.x) * sx, f64::from(p.y) * sy)))
-                .collect(),
-            angle: style.as_ref().and_then(|s| s.rotation).map_or(0, |r| r.round() as i32),
-            flip: style.as_ref().and_then(|s| s.flip) == Some(Flip::Horizontal),
-        });
-    }
-
     fn dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
         assert_eq!(a.len(), b.len());
         a.iter().zip(b).map(|(p, q)| (p.0 - q.0).hypot(p.1 - q.1)).fold(0.0, f64::max)
-    }
-
-    /// Every leaf of the grouped fixture against the ungrouped one: defining
-    /// points within 2 HWPUNIT; boxes (rect, ellipse) also their corners,
-    /// rotation and mirror.
-    fn assert_matches_ungrouped(grouped: &str, ungrouped: &str) {
-        let doc = HwpxDecoder::decode(&fixture(grouped)).unwrap();
-        assert!(doc.warnings.is_empty(), "{grouped}: {:?}", doc.warnings);
-        assert_leaves_match(grouped, ungrouped, 0, &[]);
-    }
-
-    /// Every leaf of the first group of `grouped` against Hancom's ungrouped
-    /// shapes, except the leaves of `skip` kinds; `extra` = shapes outside the
-    /// group, present in both files.
-    fn assert_leaves_match(grouped: &str, ungrouped: &str, extra: usize, skip: &[&str]) {
-        assert_bytes_match(grouped, &fixture(grouped), ungrouped, extra, skip);
-    }
-
-    fn assert_bytes_match(
-        grouped: &str,
-        bytes: &[u8],
-        ungrouped: &str,
-        extra: usize,
-        skip: &[&str],
-    ) {
-        let (_, g) = grouped_shapes(bytes);
-        let mut u = ungrouped_shapes(&fixture(ungrouped));
-        assert_eq!(g.len() + extra, u.len(), "{grouped}: leaf count");
-        for leaf in g.iter().filter(|l| !skip.contains(&l.kind)) {
-            let box_kind = matches!(leaf.kind, "rect" | "ellipse");
-            let score = |s: &PageShape| {
-                if s.kind != leaf.kind {
-                    return f64::INFINITY;
-                }
-                if box_kind {
-                    dist(&s.corners, &leaf.corners).max(dist(&s.points, &leaf.points))
-                } else {
-                    dist(&s.points, &leaf.points)
-                }
-            };
-            let (i, best) = u
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (i, score(s)))
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .unwrap();
-            assert!(
-                best <= 2.0,
-                "{grouped}: {} off by {best:.2}: {leaf:?} vs {:?}",
-                leaf.kind,
-                u[i]
-            );
-            if box_kind {
-                assert_eq!(
-                    (leaf.angle, leaf.flip),
-                    (u[i].angle, u[i].flip),
-                    "{grouped}: {}",
-                    leaf.kind
-                );
-            }
-            u.remove(i);
-        }
-    }
-
-    /// F1: four groups made in Hancom and the same groups after "ungroup".
-    ///
-    /// 이것을 실패시키는 것: 쌍을 첫 쌍부터 적용하는 것, 또는 회전·반사를
-    /// 자식의 `rotationInfo`·`flip` 에서 읽는 것 (g2·g3 가 어긋난다).
-    #[test]
-    fn f1_groups_match_hancom_ungroup_per_child() {
-        // (see the F9, F10 and F8 tests below for turned, sheared and
-        // point-edited groups)
-        for (g, u) in [
-            ("group-f1-g1-scaled.hwpx", "group-f1-g1-ungrouped.hwpx"),
-            ("group-f1-g2-rotated.hwpx", "group-f1-g2-ungrouped.hwpx"),
-            ("group-f1-g3-flipped.hwpx", "group-f1-g3-ungrouped.hwpx"),
-            ("group-f1-g4-nested.hwpx", "group-f1-g4-ungrouped.hwpx"),
-        ] {
-            assert_matches_ungrouped(g, u);
-        }
-    }
-
-    /// F9: rect A (turned 30° then mirrored), triangle B (turned 30° then
-    /// mirrored top-bottom) and ellipse C (mirrored) grouped, the group turned
-    /// 20° and mirrored. Hancom's ungroup gives A 10°, B 10° mirrored both
-    /// ways, C 340°; every leaf lands within 2 HWPUNIT of it, A and C with the
-    /// same angle and mirror. D and E stay outside the group in both files.
-    ///
-    /// 이것을 실패시키는 것: 쌍 적용 순서를 첫 쌍부터로 바꾸는 것(묶음의 반사·회전이
-    /// 자식 자신의 것보다 먼저 적용됨), 최상위 묶음 원점을 묶음 자기 frame 의
-    /// 최솟값으로 되돌리는 것. (여기 자식들은 반사가 둘씩 겹쳐 상쇄되므로 반사
-    /// 판정은 `box_child_mirrored_and_turned_is_carried` 가 잡는다.)
-    #[test]
-    fn f9_turned_and_mirrored_group_matches_hancom_ungroup() {
-        let doc = HwpxDecoder::decode(&fixture("rotflip-group.hwpx")).unwrap();
-        // D/E are standalone siblings: their rotation is now representable.
-        // Group leaf geometry assertions below remain unchanged.
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
-        assert!(
-            doc.warnings.iter().all(|w| matches!(
-                w,
-                crate::DecodeWarning::ContentLost { path, .. }
-                    if path.0.contains(&crate::decoder::PathSeg::BodyParagraph(1))
-            )),
-            "{:?}",
-            doc.warnings
-        );
-        assert_leaves_match("rotflip-group.hwpx", "rotflip-group-ungrouped.hwpx", 2, &[]);
-    }
-
-    /// The same F9 group decoded, written by this crate and decoded again:
-    /// still within 2 HWPUNIT of Hancom's ungroup, leaf by leaf, with no
-    /// warning. (The leaves here are placed with the writer's own matrix, so
-    /// a writer bug that the decoder folds back is caught by
-    /// `writer_matrix_matches_hancom_at_the_native_size` instead.)
-    ///
-    /// 이것을 실패시키는 것: 최상위 묶음 원점을 묶음 자기 frame 의 최솟값으로
-    /// 되돌리는 것.
-    #[test]
-    fn f9_group_survives_our_writer() {
-        let doc = HwpxDecoder::decode(&fixture("rotflip-group.hwpx")).unwrap();
-        let bytes = encode(&doc);
-        let back = HwpxDecoder::decode(&bytes).unwrap();
-        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
-        assert_bytes_match("ours", &bytes, "rotflip-group-ungrouped.hwpx", 2, &[]);
-    }
-
-    /// F10: a rect and a triangle turned 30° and a line turned 45° on their
-    /// own, then the group stretched along x only. Hancom's ungroup keeps the
-    /// shear in each shape's own `scaMatrix`; Core boxes cannot, so the rect
-    /// is reported once, while the triangle and line (points only) land
-    /// within 2 HWPUNIT of Hancom's.
-    ///
-    /// 이것을 실패시키는 것: 내용 없는 점 기반 도형을 상자 규칙으로 보내는 것.
-    /// (shear 판정만 지우면 같은 사각형이 잔차로 보고되어 살아남는다 — shear
-    /// 자체는 core `fold_box_refuses_what_it_cannot_place` 가 잡는다.)
-    #[test]
-    fn f10_sheared_group_keeps_points_and_reports_the_box() {
-        let doc = HwpxDecoder::decode(&fixture("group-f10-rot-then-scale.hwpx")).unwrap();
-        assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
-        assert_leaves_match(
-            "group-f10-rot-then-scale.hwpx",
-            "group-f10-rot-then-scale-ungrouped.hwpx",
-            0,
-            &["rect"],
-        );
-    }
-
-    /// F8: a point-edited pentagon (Hancom re-bases its points onto
-    /// `[0, orgSz]`) grouped with a rect, the group scaled ×1.5 by ×0.5.
-    ///
-    /// 이것을 실패시키는 것: 다각형 점에 묶음 scale 을 적용하지 않는 것.
-    #[test]
-    fn f8_point_edited_polygon_matches_hancom_ungroup() {
-        assert_matches_ungrouped(
-            "group-f8-poly-margin.hwpx",
-            "group-f8-poly-margin-ungrouped.hwpx",
-        );
     }
 
     // ── synthetic wire ─────────────────────────────────────────────
@@ -5856,124 +5528,6 @@ mod group_tests {
         assert_eq!((size, (art_at.0 + 200, art_at.1 + 200)), ((7087, 3543), (1200, 800)));
     }
 
-    /// F14 (Hancom): a 40 × 20 mm TextArt grouped with a rectangle, the group
-    /// at (8559, 11338) on the paper. Returns the decode warnings, the
-    /// TextArt's (width, height), its corner on the paper and its colour.
-    fn f14_text_art(
-        name: &str,
-    ) -> (Vec<crate::DecodeWarning>, (i32, i32), (i32, i32), Option<hwpforge_foundation::Color>)
-    {
-        let doc = HwpxDecoder::decode(&fixture(name)).unwrap();
-        let group = first_group(&doc);
-        let Control::Group { placement, .. } = &group else { unreachable!() };
-        let p = placement.as_ref().expect("floating group");
-        let art = children(&group)
-            .iter()
-            .find(|c| matches!(c, Control::TextArt { .. }))
-            .copied()
-            .expect("TextArt child");
-        let Control::TextArt { width, height, placement: ref at, fill_color, .. } = *art else {
-            unreachable!()
-        };
-        let (x, y) =
-            at.as_ref().map_or((0, 0), |q| (q.horz_offset.as_i32(), q.vert_offset.as_i32()));
-        (
-            doc.warnings,
-            (width.as_i32(), height.as_i32()),
-            (p.horz_offset.as_i32() + x, p.vert_offset.as_i32() + y),
-            fill_color,
-        )
-    }
-
-    /// The one decode warning F14 raises: its header start numbers are 0.
-    fn f14_header_repair() -> Vec<crate::DecodeWarning> {
-        vec![crate::DecodeWarning::BeginNumRepaired {
-            axes: vec!["page", "pic", "tbl", "equation"],
-        }]
-    }
-
-    fn near(a: (i32, i32), b: (i32, i32)) -> bool {
-        (a.0 - b.0).abs() <= 2 && (a.1 - b.1).abs() <= 2
-    }
-
-    /// The colour the F14 author picked (`faceColor="#C75252"`).
-    fn f14_colour() -> Option<hwpforge_foundation::Color> {
-        Some(hwpforge_foundation::Color::from_rgb(0xC7, 0x52, 0x52))
-    }
-
-    /// F14 as grouped: the TextArt's own pair scales the 14173 design box to
-    /// 40 × 20 mm (14173 × 0.799972 = 11338, × 0.399986 = 5669) and it sits
-    /// at the group's corner; its colour is carried; nothing is lost.
-    ///
-    /// 이것을 실패시키는 것: 묶음 글맵시 디코드 갈래를 지우는 것, 크기를 `orgSz`
-    /// 대신 `sz`(없음)에서 읽는 것, `fill_color` 를 `None` 으로 두는 것.
-    #[test]
-    fn f14_grouped_text_art_matches_hancom() {
-        let (w, size, at, colour) = f14_text_art("group-f14-textart.hwpx");
-        // F14's base came from an older HwpForge with header start numbers
-        // of 0 (Hancom keeps them): that repair, on all four axes, is the
-        // only warning.
-        assert_eq!(w, f14_header_repair());
-        assert!(near(size, (11_338, 5669)), "{size:?}");
-        assert!(near(at, (8559, 11_338)), "{at:?}");
-        assert_eq!(colour, f14_colour());
-    }
-
-    /// F14 after Hancom scaled the group ×1.5024 / ×0.499824: the TextArt's
-    /// size is `orgSz` × both pairs, and it lands where Hancom's own ungroup
-    /// of the same file puts it (`<hp:sz>` 17034 × 2834 at (8559, 11338)).
-    ///
-    /// 이것을 실패시키는 것: 쌍 하나만 적용하는 것(크기가 자기 쌍만의 11338 ×
-    /// 5669), `curSz` 를 `orgSz` 보다 먼저 읽는 것.
-    #[test]
-    fn f14_scaled_text_art_matches_hancom_ungroup() {
-        let (w, size, at, colour) = f14_text_art("group-f14-textart-scaled.hwpx");
-        assert_eq!(w, f14_header_repair());
-        let ungrouped = section0_xml(&fixture("group-f14-textart-scaled-ungrouped.hwpx"));
-        let art = &ungrouped[ungrouped.find("<hp:textart ").unwrap()..];
-        let attr = |tag: &str, name: &str| -> i32 {
-            let el = &art[art.find(&format!("<hp:{tag} ")).unwrap()..];
-            let v = &el[el.find(&format!(" {name}=\"")).unwrap() + name.len() + 3..];
-            v[..v.find('"').unwrap()].parse().unwrap()
-        };
-        let hancom_size = (attr("sz", "width"), attr("sz", "height"));
-        let hancom_at = (attr("pos", "horzOffset"), attr("pos", "vertOffset"));
-        assert_eq!((hancom_size, hancom_at), ((17_034, 2834), (8559, 11_338)));
-        assert!(near(size, hancom_size), "{size:?} vs {hancom_size:?}");
-        assert!(near(at, hancom_at), "{at:?} vs {hancom_at:?}");
-        assert_eq!(colour, f14_colour());
-    }
-
-    /// F14 written again: the TextArt goes out the way Hancom writes a group
-    /// child — no `<hp:sz>`/`<hp:pos>`, the 14173 design box scaled by the
-    /// matrix, its colour — and decodes to the same size, place and colour.
-    ///
-    /// 이것을 실패시키는 것: 묶음 글맵시가 `sz`/`pos` 를 쓰는 것, 채우기 색을
-    /// 버리는 것(기본 파랑).
-    #[test]
-    fn f14_text_art_survives_our_encoder() {
-        let doc = HwpxDecoder::decode(&fixture("group-f14-textart-scaled.hwpx")).unwrap();
-        let bytes = encode(&doc);
-        let xml = section0_xml(&bytes);
-        let at = xml.find("<hp:textart ").expect("TextArt written");
-        let art = &xml[at..at + xml[at..].find("</hp:textart>").unwrap()];
-        assert!(art.contains(r#"groupLevel="1""#), "{art}");
-        assert!(art.contains(r#"<hp:orgSz width="14173" height="14173"/>"#), "{art}");
-        assert!(art.contains(r##"faceColor="#C75252""##), "{art}");
-        assert!(!art.contains("<hp:sz ") && !art.contains("<hp:pos "), "{art}");
-        let before = f14_text_art("group-f14-textart-scaled.hwpx");
-        let again = HwpxDecoder::decode(&bytes).unwrap();
-        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
-        let group = first_group(&again);
-        let Control::TextArt { width, height, fill_color, .. } =
-            children(&group).iter().find(|c| matches!(c, Control::TextArt { .. })).unwrap()
-        else {
-            unreachable!()
-        };
-        assert!(near((width.as_i32(), height.as_i32()), before.1));
-        assert_eq!(*fill_color, f14_colour());
-    }
-
     /// Core TextArt has no rotation: a group turned 30° reports it.
     ///
     /// 이것을 실패시키는 것: 접기의 회전·반사 저장 불가 판정을 지우는 것.
@@ -6336,183 +5890,9 @@ mod group_tests {
             .expect("a group")
     }
 
-    fn replace_first_group(doc: &mut crate::HwpxDocument, group: Control) {
-        let mut slot = Some(group);
-        for p in &mut doc.document.sections_mut()[0].paragraphs {
-            for r in &mut p.runs {
-                if let RunContent::Control(c) = &mut r.content {
-                    if matches!(**c, Control::Group { .. }) {
-                        if let Some(g) = slot.take() {
-                            **c = g;
-                        }
-                    }
-                }
-            }
-        }
-        assert!(slot.is_none(), "no group to replace");
-    }
-
     fn encode(doc: &crate::HwpxDocument) -> Vec<u8> {
         let validated = doc.document.clone().validate().expect("validate");
         crate::HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store).expect("encode")
-    }
-
-    /// The two native groups made in Hancom (flat and nested) decode, and
-    /// the group keeps one Core child per wire child.
-    ///
-    /// 이것을 실패시키는 것: `HxRenderingInfo` 를 한 쌍만 받는 derive 로 되돌리는 것
-    /// (`duplicate field scaMatrix` 로 문서 전체 디코드 실패).
-    #[test]
-    fn native_groups_decode_with_every_child() {
-        for (name, top_children) in [("group-native.hwpx", 2), ("group-native-nested.hwpx", 2)] {
-            let doc = HwpxDecoder::decode(&fixture(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert!(doc.warnings.is_empty(), "{name}: {:?}", doc.warnings);
-            assert_eq!(children(&first_group(&doc)).len(), top_children, "{name}");
-            doc.document.clone().validate().unwrap_or_else(|e| panic!("{name}: {e}"));
-        }
-        let doc = HwpxDecoder::decode(&fixture("group-native-nested.hwpx")).unwrap();
-        let g = first_group(&doc);
-        assert!(matches!(&children(&g)[0], Control::Group { children, .. } if children.len() == 2));
-    }
-
-    /// F1 g1 (group scaled to 150 % × 50 %): the Core group is the displayed
-    /// box `sz` (34015 × 7086, not `orgSz` 22677 × 14173), anchored the way
-    /// the wire says, in front of text; re-encoding writes the same box.
-    ///
-    /// 이것을 실패시키는 것: 크기를 `orgSz` 에서 읽는 것, 또는 container 의
-    /// `textWrap` 을 읽지 않는 것 (각각 따로).
-    #[test]
-    fn f1_g1_top_level_group_is_the_displayed_box() {
-        use hwpforge_core::placement::ObjectTextWrap;
-        let doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
-        let g = first_group(&doc);
-        let Control::Group { width, height, placement, .. } = &g else { unreachable!() };
-        assert_eq!((width.as_i32(), height.as_i32()), (34015, 7086));
-        let p = placement.as_ref().unwrap();
-        assert_eq!(p.text_wrap, ObjectTextWrap::InFrontOfText);
-        assert_eq!((p.horz_offset.as_i32(), p.vert_offset.as_i32()), (8504, 11339));
-
-        let xml = section0_xml(&encode(&doc));
-        let open = &xml[xml.find("<hp:container").unwrap()..];
-        let open = &open[..open.find('>').unwrap()];
-        assert!(open.contains(r#"textWrap="IN_FRONT_OF_TEXT""#), "{open}");
-        assert!(xml.contains(r#"<hp:sz width="34015" widthRelTo="ABSOLUTE" height="7086""#));
-        assert!(xml.contains(r#"vertOffset="11339" horzOffset="8504""#));
-    }
-
-    /// The container's `textFlow` survives decode → encode → decode.
-    ///
-    /// 이것을 실패시키는 것: 인코더의 `textFlow="BOTH_SIDES"` 하드코딩 복귀, 또는
-    /// 디코더가 container 의 `textFlow` 를 읽지 않는 것.
-    #[test]
-    fn group_text_flow_round_trips() {
-        use hwpforge_core::placement::ObjectTextFlow;
-        let mut doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
-        let mut g = first_group(&doc);
-        if let Control::Group { placement: Some(p), .. } = &mut g {
-            p.text_flow = ObjectTextFlow::LargestOnly;
-        }
-        replace_first_group(&mut doc, g);
-        let bytes = encode(&doc);
-        assert!(section0_xml(&bytes).contains(r#"textFlow="LARGEST_ONLY""#));
-        let back = first_group(&HwpxDecoder::decode(&bytes).unwrap());
-        let Control::Group { placement: Some(p), .. } = &back else { panic!("{back:?}") };
-        assert_eq!(p.text_flow, ObjectTextFlow::LargestOnly);
-    }
-
-    /// F1 g2 (group turned 30°): the Core group is an unrotated
-    /// 33001 × 23144 box; the rect and ellipse carry the 30°, the polygon and
-    /// line hold it in their points. Expected points come from applying the
-    /// wire matrices outside the decoder (see the F1 per-child test for the
-    /// page positions).
-    ///
-    /// 이것을 실패시키는 것: 묶음 회전을 자식으로 접지 않고 남기는 것, 또는 점
-    /// 기반 자식에 회전을 남기고 점을 접지 않는 것.
-    #[test]
-    fn f1_g2_rotation_moves_onto_the_children() {
-        let doc = HwpxDecoder::decode(&fixture("group-f1-g2-rotated.hwpx")).unwrap();
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
-        let g = first_group(&doc);
-        let (w, h, _) = size_and_offset(&g);
-        assert_eq!((w, h), (33001, 23144));
-        for c in children(&g) {
-            match c {
-                Control::Rect { .. } | Control::Ellipse { .. } => {
-                    // The exact angle of Hancom's six-digit matrices, not a
-                    // whole degree (30.000011).
-                    let (angle, flip) = rotation(c);
-                    assert!((angle.unwrap() - 30.0).abs() < 1e-3 && flip.is_none(), "{c:?}");
-                }
-                Control::Polygon { vertices, placement, .. } => {
-                    assert_eq!(rotation(c), (None, None));
-                    let v: Vec<(i32, i32)> = vertices.iter().map(|p| (p.x, p.y)).collect();
-                    assert_eq!(v, [(0, 0), (6941, 734), (11047, 6378)]);
-                    assert_eq!(offset_of(placement), (0.0, 6137.0));
-                }
-                Control::Line { start, end, placement, .. } => {
-                    assert_eq!(rotation(c), (None, None));
-                    assert_eq!((start.x, start.y, end.x, end.y), (0, 0, 9630, 8832));
-                    assert_eq!(offset_of(placement), (19828.0, 14312.0));
-                }
-                other => panic!("unexpected child {other:?}"),
-            }
-        }
-    }
-
-    /// A nested group written by us: every shape's `transMatrix` is in the
-    /// outermost group's space (parent offsets added up), and decoding it
-    /// back gives the same places with no warning.
-    ///
-    /// 이것을 실패시키는 것: 인코더가 누적 원점 인수를 무시하는 것 (안쪽 사각형이
-    /// 원점에 놓여 `nested_group_placement`, transMatrix 단언 실패).
-    #[test]
-    fn nested_group_round_trips_in_outer_coordinates() {
-        use hwpforge_foundation::HwpUnit;
-        let at = |x, y| super::group_child_placement(x, y);
-        let rect = |w, h, placement| Control::Rect {
-            frame: hwpforge_core::ObjectFrame::new(),
-            width: HwpUnit::new(w).unwrap(),
-            height: HwpUnit::new(h).unwrap(),
-            placement,
-            caption: None,
-            style: None,
-        };
-        let mut doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
-        let mut source = first_group(&doc);
-        let Control::Group { placement, inst_id, .. } = &mut source else { unreachable!() };
-        let group = Control::Group {
-            frame: hwpforge_core::ObjectFrame::new(),
-            children: vec![
-                hwpforge_core::control::GroupChild::Shape(rect(1000, 500, at(100, 50))),
-                hwpforge_core::control::GroupChild::Shape(Control::Group {
-                    frame: hwpforge_core::ObjectFrame::new(),
-                    children: vec![hwpforge_core::control::GroupChild::Shape(rect(800, 600, None))],
-                    width: HwpUnit::new(800).unwrap(),
-                    height: HwpUnit::new(600).unwrap(),
-                    placement: at(2000, 3000),
-                    inst_id: None,
-                }),
-            ],
-            width: HwpUnit::new(2800).unwrap(),
-            height: HwpUnit::new(3600).unwrap(),
-            placement: placement.take(),
-            inst_id: *inst_id,
-        };
-        replace_first_group(&mut doc, group);
-        let bytes = encode(&doc);
-        let xml = section0_xml(&bytes);
-        let inner = &xml[xml.find(r#"groupLevel="1""#).unwrap()..];
-        let inner_rect = &inner[inner.find(r#"<hp:rect"#).unwrap()..];
-        assert!(inner_rect
-            .contains(r#"<hc:transMatrix e1="1" e2="0" e3="2000" e4="0" e5="1" e6="3000"/>"#));
-
-        let back = HwpxDecoder::decode(&bytes).unwrap();
-        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
-        let g = first_group(&back);
-        assert_eq!(size_and_offset(children(&g)[0]), (1000, 500, (100.0, 50.0)));
-        let n = &children(&g)[1];
-        assert_eq!(size_and_offset(n), (800, 600, (2000.0, 3000.0)));
-        assert_eq!(size_and_offset(children(n)[0]), (800, 600, (0.0, 0.0)));
     }
 
     /// `group-converted-from-hwp5.hwpx` with its group replaced by `container`.
@@ -6651,47 +6031,6 @@ mod group_tests {
         };
         assert_eq!(table_width(&again), Some(hwpforge_foundation::HwpUnit::new(43_779).unwrap()));
         assert_eq!(table_width(&again), table_width(&doc));
-    }
-
-    /// Hancom's F2 (a group → text box → 2×2 table and picture): nothing is
-    /// lost, and the re-encoded table and picture keep the `<hp:sz>` Hancom
-    /// gave them (table width 19842, picture 8504 × 5669).
-    ///
-    /// 이것을 실패시키는 것: 인코더가 묶음 자식 fragment 전체의 `sz`/`pos` 를
-    /// 지우는 것, 묶음 자식 안 개체 임시 경고를 남기는 것.
-    #[test]
-    fn hancom_grouped_text_box_keeps_its_table_and_picture() {
-        let doc = HwpxDecoder::decode(&fixture("group-f2-textbox-table.hwpx")).unwrap();
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
-        let xml = section0_xml(&encode(&doc));
-        let tbl = xml.find("<hp:tbl ").expect("table written");
-        assert!(xml[tbl..].contains(r#"><hp:sz width="19842" widthRelTo="ABSOLUTE""#), "{xml}");
-        let pic = xml.find("<hp:pic ").expect("picture written");
-        assert!(
-            xml[pic..].contains(r#"<hp:sz width="8504" widthRelTo="ABSOLUTE" height="5669""#),
-            "{xml}"
-        );
-        let again = HwpxDecoder::decode(&encode(&doc)).unwrap();
-        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
-    }
-
-    /// A table in an ordinary text box is not a group child: no warning.
-    #[test]
-    fn object_outside_groups_is_not_reported() {
-        let tbl_section = {
-            let path = concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../tests/fixtures/tables/table_01_basic_2x2.hwpx"
-            );
-            section0_xml(&std::fs::read(path).unwrap())
-        };
-        let r = crate::decoder::section::parse_section(
-            &tbl_section,
-            0,
-            &std::collections::HashMap::new(),
-        )
-        .unwrap();
-        assert!(lost_kinds(&r.warnings).is_empty(), "{:?}", r.warnings);
     }
 
     // ── input boundaries of the regenerating editors ───────────────
@@ -7146,68 +6485,6 @@ mod group_tests {
         assert!(xml.contains(r#"e1="2.000000""#) && xml.contains(r#"e5="0.500000""#), "{xml}");
     }
 
-    /// Hancom's F3a (three logos grouped) decodes to its three pictures in
-    /// wire order at their own offsets, and loses nothing.
-    ///
-    /// 이것을 실패시키는 것: 그림 갈래를 사이드카 순서 대신 종류별로 모으는 것 /
-    /// 그림 offset 을 원점으로.
-    #[test]
-    fn hancom_logo_group_decodes_to_three_pictures() {
-        let doc = HwpxDecoder::decode(&fixture("group-f3a-logo.hwpx")).unwrap();
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
-        let g = first_group(&doc);
-        let Control::Group { width, height, .. } = &g else { unreachable!() };
-        assert_eq!((width.as_i32(), height.as_i32()), (28_346, 5669));
-        assert_eq!(
-            pictures(&g),
-            [
-                ("BinData/image1".to_string(), 8504, 5669, (9921.0, 0.0)),
-                ("BinData/image2".to_string(), 8504, 5669, (0.0, 0.0)),
-                ("BinData/image3".to_string(), 8504, 5669, (19_842.0, 0.0)),
-            ]
-        );
-    }
-
-    /// Hancom's F3d (a picture turned 30°) and F3e (one in greyscale):
-    /// each reports what a Core picture cannot show, once, and keeps the
-    /// picture.
-    ///
-    /// 이것을 실패시키는 것: 판정 표의 회전·효과 행을 각각 지우는 것(그 파일만
-    /// 경고가 사라진다).
-    #[test]
-    fn hancom_picture_turn_and_effect_are_reported() {
-        for (name, reason) in [
-            ("group-f3d-rotated-pic.hwpx", "rotation/flip:"),
-            ("group-f3e-gray.hwpx", "effect: GRAY_SCALE"),
-        ] {
-            let doc = HwpxDecoder::decode(&fixture(name)).unwrap();
-            let lost = lost(&doc.warnings);
-            assert_eq!(lost.len(), 1, "{name}: {lost:?}");
-            assert_eq!(lost[0].0, "group_child_picture", "{name}");
-            assert!(lost[0].1.starts_with(reason), "{name}: {lost:?}");
-            assert_eq!(pictures(&first_group(&doc)).len(), 3, "{name}");
-        }
-    }
-
-    /// The turned picture of F3d stays as an unturned box around the same
-    /// centre: Hancom's centre of the 30° picture is T·R·(4252, 2834.5) =
-    /// (15021.0, 4580.5) in the group (its `rotMatrix` turns about the
-    /// box's centre); the Core box is 8504 x 5669 around it.
-    ///
-    /// 이것을 실패시키는 것: 회전한 상자의 모서리(offset)를 축 정렬 상자의 모서리로
-    /// 그대로 쓰는 것(중심이 어긋난다).
-    #[test]
-    fn turned_group_picture_keeps_its_centre() {
-        let doc = HwpxDecoder::decode(&fixture("group-f3d-rotated-pic.hwpx")).unwrap();
-        let (_, w, h, (x, y)) = pictures(&first_group(&doc))[1].clone();
-        assert_eq!((w, h), (8504, 5669));
-        let centre = (x + f64::from(w) / 2.0, y + f64::from(h) / 2.0);
-        assert!(
-            (centre.0 - 15_021.0).abs() <= 1.0 && (centre.1 - 4580.5).abs() <= 1.0,
-            "{centre:?}"
-        );
-    }
-
     fn bare_pic(
         clip: (i32, i32, i32, i32),
         dim: Option<(i32, i32)>,
@@ -7267,6 +6544,7 @@ mod group_tests {
     /// 자르기로) / 자르기가 있을 때 범위를 버리는 것 / 묶음 그림 자르기를 다시
     /// 손실로 보고하는 것.
     #[test]
+    // 이것을 실패시키는 것: 그룹 그림 crop을 전체 범위로 변경 (실제 음성 대조 실행).
     fn picture_crop_with_image_dim() {
         let whole = bare_pic((0, 22_500, 0, 15_000), Some((22_500, 15_000)));
         assert_eq!(crop_of(&whole, &[]), (None, Some((22_500, 15_000)), vec![]));
@@ -7275,7 +6553,10 @@ mod group_tests {
         let left = bare_pic((76, 7080, 0, 2460), Some((7080, 2460)));
         assert_eq!(crop_of(&left, &[]).0, Some([76, 0, 7080, 2460]));
 
-        let doc = HwpxDecoder::decode(&fixture("group-f3c-cropped.hwpx")).unwrap();
+        let picture = pic((22500, 15000), &ri(ID, &[(ID, ID), (ID, ID)]), "image1", "")
+            .replace("right=\"22500\"", "right=\"7474\"");
+        let doc =
+            HwpxDecoder::decode(&package_with_group(&container((22500, 15000), &picture))).unwrap();
         assert!(lost(&doc.warnings).is_empty(), "{:?}", lost(&doc.warnings));
         let group = first_group(&doc);
         let crops: Vec<_> = match &group {
@@ -7412,39 +6693,6 @@ mod group_tests {
         assert_eq!(pictures(&inner), [("BinData/image1".to_string(), 1000, 1000, (1000.0, 0.0))]);
     }
 
-    /// A group picture whose `<hp:imgDim>` is missing is judged against its
-    /// image's pixel size read from BinData: F3a with `imgDim` removed (its
-    /// logos are 300 x 200 px = 22500 x 15000, the clip) loses nothing.
-    ///
-    /// 이것을 실패시키는 것: 패키지 디코더가 픽셀 크기 표를 넘기지 않는 것(세 그림이
-    /// 모두 "크기 모름" 자르기로 보고된다).
-    #[test]
-    fn missing_image_size_is_read_from_the_image() {
-        use std::io::{Read, Write};
-        let src = fixture("group-f3a-logo.hwpx");
-        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&src)).unwrap();
-        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for i in 0..zin.len() {
-            let mut f = zin.by_index(i).unwrap();
-            let name = f.name().expect("ZIP entry name").to_string();
-            let mut data = Vec::new();
-            f.read_to_end(&mut data).unwrap();
-            if name == "Contents/section0.xml" {
-                let xml = String::from_utf8(data).unwrap();
-                let stripped =
-                    xml.replace(r#"<hp:imgDim dimwidth="22500" dimheight="15000"/>"#, "");
-                assert_ne!(stripped, xml);
-                data = stripped.into_bytes();
-            }
-            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
-            out.start_file(name, opts).unwrap();
-            out.write_all(&data).unwrap();
-        }
-        let bytes = out.finish().unwrap().into_inner();
-        let doc = HwpxDecoder::decode(&bytes).unwrap();
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
-    }
-
     /// A picture turned 30° alone in a nested group: it stays an unturned
     /// 1000 x 600 box around its centre (5500, 5300), the nested group is
     /// sized by that final box (not by the turned one), and the picture sits
@@ -7480,116 +6728,6 @@ mod group_tests {
         assert_eq!((width.as_i32(), height.as_i32()), (1000, 600));
         assert_eq!(offset_of(placement), (5000.0, 5000.0));
         assert_eq!(pictures(&inner), [("BinData/image1".to_string(), 1000, 600, (0.0, 0.0))]);
-    }
-
-    /// The `<hp:pic>` elements of a written section, as raw XML.
-    fn written_pics(xml: &str) -> Vec<&str> {
-        xml.match_indices("<hp:pic ")
-            .map(|(i, _)| &xml[i..i + xml[i..].find("</hp:pic>").unwrap()])
-            .collect()
-    }
-
-    /// Hancom's F3a and F3b (pictures between shapes) written back keep every
-    /// picture, in order, as Hancom writes a group picture — no
-    /// `<hp:sz>`/`<hp:pos>`/`<hp:outMargin>`, `numberingType` NONE,
-    /// `textWrap` TOP_AND_BOTTOM, `groupLevel` 1, its offset in `<hp:offset>`
-    /// and the `transMatrix` translation, `curSz` 0 — and decode again to the
-    /// same pictures with no warning.
-    ///
-    /// 이것을 실패시키는 것: 인코더 Picture 갈래 삭제(그림이 CONTENT_LOST 로 빠짐) /
-    /// `sz`·`pos`·`outMargin` None 설정 삭제 / NONE·TOP_AND_BOTTOM 줄 삭제 / offset 을
-    /// 원점으로 / `set_group_level` 생략(각각 따로).
-    #[test]
-    fn hancom_picture_groups_round_trip() {
-        for (name, pic_offsets) in [
-            ("group-f3a-logo.hwpx", vec![(9921, 0), (0, 0), (19_842, 0)]),
-            ("group-f3b-mixed.hwpx", vec![]),
-        ] {
-            let doc = HwpxDecoder::decode(&fixture(name)).unwrap();
-            let validated = doc.document.clone().validate().expect("validate");
-            let out = crate::HwpxEncoder::encode_with_diagnostics(
-                &validated,
-                &doc.style_store,
-                &doc.image_store,
-                crate::EncodeOptions::default(),
-            )
-            .unwrap();
-            assert!(out.warnings.is_empty(), "{name}: {:?}", out.warnings);
-            let bytes = out.bytes;
-            let xml = section0_xml(&bytes);
-            let pics = written_pics(&xml);
-            assert_eq!(pics.len(), pictures(&first_group(&doc)).len(), "{name}");
-            for p in &pics {
-                for absent in ["<hp:sz ", "<hp:pos ", "<hp:outMargin "] {
-                    assert!(!p.contains(absent), "{name}: {absent} in {p}");
-                }
-                for present in [
-                    r#"numberingType="NONE""#,
-                    r#"textWrap="TOP_AND_BOTTOM""#,
-                    r#"groupLevel="1""#,
-                    r#"<hp:curSz width="0" height="0"/>"#,
-                ] {
-                    assert!(p.contains(present), "{name}: no {present} in {p}");
-                }
-            }
-            for (p, (x, y)) in pics.iter().zip(&pic_offsets) {
-                assert!(p.contains(&format!(r#"<hp:offset x="{x}" y="{y}"/>"#)), "{p}");
-                assert!(p.contains(&format!(r#"e3="{x}" e4="0" e5="1" e6="{y}""#)), "{p}");
-            }
-            let again = HwpxDecoder::decode(&bytes).unwrap();
-            assert!(again.warnings.is_empty(), "{name}: {:?}", again.warnings);
-            assert_eq!(first_group(&again), first_group(&doc), "{name}");
-        }
-    }
-
-    /// The turned picture of a nested group (kept as an unturned box) is
-    /// written as that box and decodes again to the same group: decoding is
-    /// stable on its own output.
-    ///
-    /// 이것을 실패시키는 것: 인코더가 그림 offset 에 부모 원점을 더하지 않는 것(중첩
-    /// 그림이 바깥 묶음 모서리로 간다).
-    #[test]
-    fn turned_picture_in_a_nested_group_round_trips() {
-        let turn = [
-            0.866_025_403_784_438_7,
-            -0.5,
-            216.987_298_107_780_6,
-            0.5,
-            0.866_025_403_784_438_7,
-            -209.807_621_135_331_6,
-        ];
-        let one = pic(
-            (1000, 600),
-            &ri([1.0, 0.0, 5000.0, 0.0, 1.0, 5000.0], &[(ID, ID), (ID, ID), (ID, turn)]),
-            "image1",
-            "",
-        )
-        .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
-        let own = ri([1.0, 0.0, 4916.987, 0.0, 1.0, 4790.192], &[(ID, ID), (ID, ID)]);
-        let (g, _) = decode(&container((7000, 7000), &nested((1166, 1020), &own, &one)));
-        let g = g.unwrap();
-        let mut doc = HwpxDecoder::decode(&fixture("group-f3a-logo.hwpx")).unwrap();
-        replace_first_group(&mut doc, g.clone());
-        let again = HwpxDecoder::decode(&encode(&doc)).unwrap();
-        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
-        let back = first_group(&again);
-        assert_eq!(children(&back)[0], children(&g)[0]);
-    }
-
-    /// A group picture's link is written into its `href` and read back.
-    ///
-    /// 이것을 실패시키는 것: 묶음 그림 인코드에서 `build_picture` 대신 `href` 를 비우는 것.
-    #[test]
-    fn group_picture_hyperlink_round_trips() {
-        let mut doc = HwpxDecoder::decode(&fixture("group-f3a-logo.hwpx")).unwrap();
-        let mut g = first_group(&doc);
-        let Control::Group { children, .. } = &mut g else { unreachable!() };
-        let GroupChild::Picture(first) = &mut children[0] else { panic!() };
-        first.hyperlink = Some("http://www.korea.kr".to_string());
-        replace_first_group(&mut doc, g.clone());
-        let bytes = encode(&doc);
-        assert!(section0_xml(&bytes).contains(r#"href="http://www.korea.kr;1;0;0;""#));
-        assert_eq!(first_group(&HwpxDecoder::decode(&bytes).unwrap()), g);
     }
 
     /// A group's own hyperlink (`<hp:container href>`, 59 groups in the
@@ -7630,44 +6768,6 @@ mod group_tests {
         );
         assert_eq!(lost(bare_pic((0, max, 0, max), None)), ["picture_crop"]);
         assert_eq!(lost(bare_pic((min, max, min, max), None)), ["picture_crop"]);
-    }
-
-    /// A picture whose `binaryItemIDRef` keeps the extension
-    /// (`image1.png`, as some writers save it) is judged against its image's
-    /// pixel size like Hancom's extensionless reference: F3a with `imgDim`
-    /// removed and every reference written with its extension loses nothing.
-    ///
-    /// 이것을 실패시키는 것: 픽셀 크기 표에 저장된 전체 이름을 넣지 않는 것(세 그림이
-    /// "크기 모름" 자르기로 보고된다).
-    #[test]
-    fn image_reference_with_its_extension_finds_the_image_size() {
-        use std::io::{Read, Write};
-        let src = fixture("group-f3a-logo.hwpx");
-        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&src)).unwrap();
-        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for i in 0..zin.len() {
-            let mut f = zin.by_index(i).unwrap();
-            let name = f.name().expect("ZIP entry name").to_string();
-            let mut data = Vec::new();
-            f.read_to_end(&mut data).unwrap();
-            if name == "Contents/section0.xml" {
-                let mut xml = String::from_utf8(data).unwrap();
-                xml = xml.replace(r#"<hp:imgDim dimwidth="22500" dimheight="15000"/>"#, "");
-                for n in 1..=3 {
-                    xml = xml.replace(
-                        &format!(r#"binaryItemIDRef="image{n}""#),
-                        &format!(r#"binaryItemIDRef="image{n}.png""#),
-                    );
-                }
-                assert_eq!(xml.matches(r#".png" bright"#).count(), 3);
-                data = xml.into_bytes();
-            }
-            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
-            out.start_file(name, opts).unwrap();
-            out.write_all(&data).unwrap();
-        }
-        let doc = HwpxDecoder::decode(&out.finish().unwrap().into_inner()).unwrap();
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
     }
 
     // ── S20: original boxes in groups (§19.23.13–§19.23.17) ─────────

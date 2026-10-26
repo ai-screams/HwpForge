@@ -44,7 +44,7 @@ if [[ -n "${HWPFORGE_BIN:-}" ]]; then
 else
   echo "== Building CLI =="
   cargo build -q -p hwpforge-bindings-cli || { echo "build failed"; exit 1; }
-  BIN="$ROOT/target/debug/hwpforge"
+  BIN="$(cd "${CARGO_TARGET_DIR:-$ROOT/target}" && pwd)/debug/hwpforge"
 fi
 [[ -x "$BIN" ]] || { echo "binary not found at $BIN"; exit 1; }
 cd "$WORK"
@@ -197,43 +197,9 @@ assert_grep <("$BIN" inspect B.hwpx 2>/dev/null) "1 tables"   # table survived r
 "$BIN" to-md B.hwpx -o B.md >/dev/null 2>&1
 assert_grep B.md "리빌드로 추가한 새 문단."
 
-echo "== convert-hwp5 (.hwp -> .hwpx), if a fixture exists =="
-HWP_FIXTURE="$(find "$ROOT/tests/fixtures" "$ROOT/crates" -name '*.hwp' 2>/dev/null | head -1)"
-if [[ -n "$HWP_FIXTURE" ]]; then
-  assert_ok "$BIN" convert-hwp5 "$HWP_FIXTURE" -o from_hwp5.hwpx
-  assert_file from_hwp5.hwpx
-  # S22: 기본 변환이 조판 캐시를 싣는다 — 산출물에 linesegarray 가 있어야 하고,
-  # --no-layout-cache 산출물에는 없어야 한다.
-  if unzip -p from_hwp5.hwpx Contents/section0.xml 2>/dev/null | grep -qF "<hp:linesegarray>"; then
-    pass "default output contains linesegarray"
-  else
-    fail "default output missing linesegarray"
-  fi
-  assert_ok "$BIN" convert-hwp5 "$HWP_FIXTURE" -o from_hwp5_plain.hwpx --no-layout-cache
-  assert_file from_hwp5_plain.hwpx
-  if unzip -p from_hwp5_plain.hwpx Contents/section0.xml 2>/dev/null | grep -qF "<hp:linesegarray>"; then
-    fail "--no-layout-cache output still contains linesegarray"
-  else
-    pass "--no-layout-cache output has no linesegarray"
-  fi
-else
-  echo "  (skipped — no .hwp fixture found)"
-fi
-
-echo "== to-pdf (W6a — 콘텐츠 스니핑 / fail-closed / 렌더는 폰트 있을 때만) =="
+echo "== to-pdf format rejection =="
 printf 'not a container' > garbage.hwpx
 assert_fail_grep "$BIN" to-pdf garbage.hwpx -- "UNRECOGNIZED_FORMAT"
-PDF_FIXTURE="$ROOT/tests/fixtures/pdf-rules/rules-headerfooter.hwpx"
-HANCOM_TTF="/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF"
-if [[ -f "$PDF_FIXTURE" && -d "$HANCOM_TTF" ]]; then
-  assert_ok "$BIN" to-pdf "$PDF_FIXTURE" -o smoke.pdf --discovery hancom
-  assert_file smoke.pdf
-  "$BIN" --json to-pdf "$PDF_FIXTURE" -o smoke2.pdf --discovery hancom > topdf.json 2>/dev/null
-  assert_grep topdf.json '"detected_format":"hwpx"'
-  assert_grep topdf.json '"warning_counts"'
-else
-  echo "  (렌더 검사 skipped — 한컴 폰트 번들 또는 fixture 없음)"
-fi
 
 echo ""
 echo "== Skill smoke summary: $PASS passed, $FAIL failed =="

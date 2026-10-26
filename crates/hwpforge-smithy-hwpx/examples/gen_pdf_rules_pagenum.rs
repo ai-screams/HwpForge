@@ -56,6 +56,6 @@ fn main() {
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시 생성):");
     println!("  1. 파일 열기 → 본문이 16pt 굵게, 쪽 아래 가운데에 쪽번호가 보이는지 확인");
-    println!("  2. 다른 이름으로 저장 → tests/fixtures/pdf-rules/rules-pagenum.hwpx");
-    println!("  3. PDF 로 인쇄 → tests/fixtures/pdf-rules/rules-pagenum.pdf");
+    println!("  2. 다른 이름으로 저장 → 선택한 출력 경로");
+    println!("  3. PDF 로 인쇄 → 선택한 PDF 경로");
 }

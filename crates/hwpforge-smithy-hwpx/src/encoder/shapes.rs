@@ -147,7 +147,7 @@ fn shape_position(placement: Option<&ObjectPlacement>) -> HxTablePos {
 /// whole degrees, matrix coefficients are written with six decimals, and one
 /// `rotMatrix` holds a mirror and a rotation together — Hancom itself writes
 /// a shape turned and mirrored as its stored angle and flip with the single
-/// matrix `R(angle)·F` (fixture `shapes/rotflip-single`).
+/// matrix `R(angle)·F`, as observed in saved rotated and mirrored shapes.
 pub(crate) const HWPX_POLICY: EmissionPolicy =
     EmissionPolicy::new(AngleRounding::WholeDegrees, CoefficientRounding::Decimals(6), true);
 
@@ -733,7 +733,7 @@ pub(crate) fn encode_line_to_hx(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: None, // lines have no fill brush per golden (line.hwpx)
+        fill_brush: None, // lines have no fill brush
         shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
             width: w,

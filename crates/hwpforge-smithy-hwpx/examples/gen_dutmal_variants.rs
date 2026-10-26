@@ -1,8 +1,7 @@
 //! Task #73 dutmal (덧말) tail-field fixture — sz_ratio / align variants.
 //!
 //! HWP5 의 `tdut` tail 영역 (`sz_ratio`, `align`, `styleIDRef`, reserved
-//! words) 은 지금까지 모든 한컴 fixture 가 default 값이라 wire offset 을
-//! 관찰하지 못했다 (Wave 12i 보류). 이 generator 는 **한 문단에 한
+//! words) 의 wire offset 을 관찰하기 위해 **한 문단에 한
 //! 속성만** baseline 에서 바꾼 변형 6종을 emit 한다 — 한컴에서 열어
 //! `.hwp` 로 저장하면 각 변형의 tail bytes 를 baseline 과 diff 해서
 //! offset 을 1:1 귀속할 수 있다.
@@ -22,7 +21,7 @@
 //!     temp/sample-dutmal-variants.hwpx
 //! ```
 //! 이후 한컴에서 열어 모든 덧말이 의도대로 보이는지 확인하고
-//! `examples/hwp5_review/sample-dutmal-variants.hwp` 로 다른 이름 저장.
+//! `output.hwp` 로 다른 이름 저장.
 
 use std::path::PathBuf;
 

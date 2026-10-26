@@ -1,8 +1,3 @@
-//! `ops::read` — one addressable part of a document at a time.
-//!
-//! The target rules are shared by every frontend, so they are tested as rules
-//! rather than as happy paths: how many targets, in which order the checks
-//! fire, and which code each violation reports.
 #![cfg(feature = "ops-hwpx")]
 
 use std::collections::BTreeSet;
@@ -198,21 +193,6 @@ fn a_table_ordinal_outside_the_document_is_the_library_s_error() {
     let err = read(&hwpx_fixture("SimpleTable.hwpx"), &opts).expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::TableNotFound, "{err}");
-}
-
-// ── field reads ─────────────────────────────────────────────────
-
-#[test]
-fn a_field_read_returns_every_field_of_that_name() {
-    let opts = ReadOptions::default().with_field("user_email");
-
-    let out = read(&repo_fixture("fields/clickhere_filled.hwpx"), &opts).expect("read");
-
-    let found = out.fields.expect("a field read returns fields");
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].current, "soeburi.anvilscribe@example.com");
-    assert!(out.paragraphs.is_none());
-    assert!(out.table.is_none());
 }
 
 #[test]

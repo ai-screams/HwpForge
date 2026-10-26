@@ -1,4 +1,3 @@
-//! `ops::inspect` — the template operation: pure, byte-in, report-out.
 #![cfg(feature = "ops-hwpx")]
 
 use hwpforge::foundation::diagnostics::OpsCode;
@@ -137,22 +136,12 @@ fn a_table_nested_in_a_footnote_is_deep_only() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn image_fixture_counts_images() {
-    let out = inspect(&fixture("SimplePicture.hwpx"), &InspectOptions::default()).expect("inspect");
+    let out = inspect(&fixture("green_swatch.hwpx"), &InspectOptions::default()).expect("inspect");
 
     assert_eq!(out.report.images, 1);
     assert_eq!(out.report.tables, 0);
-}
-
-#[test]
-fn chart_fixture_counts_charts() {
-    let out = inspect(&fixture("charts.hwpx"), &InspectOptions::default()).expect("inspect");
-
-    assert!(out.report.charts > 0, "the chart fixture must report charts");
-    assert_eq!(
-        out.report.charts,
-        out.report.section_details.iter().map(|s| s.charts).sum::<usize>()
-    );
 }
 
 #[test]

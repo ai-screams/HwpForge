@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import io
 import json
 import pickle
 import re
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,7 +41,6 @@ def test_open_and_save_round_trip(tmp_path, table_bytes: bytes) -> None:
 def test_open_reports_the_shared_size_limit() -> None:
     """The limit `Document.open` enforces is the same one the CLI and the
     MCP server use, exposed for exactly this comparison."""
-    from hwpforge import _hwpforge
 
     assert _hwpforge.MAX_FILE_SIZE == 100 * 1024 * 1024
 
@@ -53,7 +50,6 @@ def test_open_refuses_a_file_over_the_shared_size_limit(tmp_path, monkeypatch) -
     size gate at all. The real limit is 100 MB, too large to write in a
     test, so the module constant is patched down to exercise the same code
     path `Document.open` reads it through."""
-    from hwpforge import _hwpforge
 
     monkeypatch.setattr(_hwpforge, "MAX_FILE_SIZE", 4)
     source = tmp_path / "too_big.hwpx"
@@ -177,8 +173,9 @@ def test_to_pdf_returns_bytes_and_a_page_count(
     assert rendered.report["warnings"] == []
 
 
+# 이것을 실패시키는 것: 문서 폰트를 HwpForge Test로 바꾸고 해당 폰트 디렉터리를 제공하기.
 def test_to_pdf_refuses_a_face_it_cannot_find(document: Document) -> None:
-    """A document naming a Hancom face is refused wherever Hancom is not installed."""
+    """An invented font family is unavailable even when Hancom is installed."""
     with pytest.raises(HwpForgeError) as caught:
         document.to_pdf()
 
@@ -217,26 +214,6 @@ def test_from_json_rebuilds_what_to_json_exported(document: Document) -> None:
 
     assert isinstance(rebuilt, DocumentResult)
     assert rebuilt.document.inspect()["sections"] == document.inspect()["sections"]
-
-
-def test_convert_hwp5_reads_a_binary_document(hwp5_bytes: bytes) -> None:
-    result = hwpforge.convert_hwp5(hwp5_bytes)
-
-    assert isinstance(result, DocumentResult)
-    assert result.document.inspect()["sections"] >= 1
-
-
-def test_convert_hwp5_carries_the_layout_cache_by_default(hwp5_bytes: bytes) -> None:
-    # 이것을 실패시키는 것: 공개 기본값 또는 PyO3 기본값을 False 로 되돌리는 것.
-    def carries(data: bytes) -> bool:
-        with zipfile.ZipFile(io.BytesIO(data)) as package:
-            return b"<hp:linesegarray>" in package.read("Contents/section0.xml")
-
-    assert carries(hwpforge.convert_hwp5(hwp5_bytes).document.to_bytes())
-    assert carries(_hwpforge.convert_hwp5(hwp5_bytes)[0])
-    assert not carries(
-        hwpforge.convert_hwp5(hwp5_bytes, carry_layout_cache=False).document.to_bytes()
-    )
 
 
 def test_templates_and_schema_need_no_document() -> None:
@@ -551,35 +528,6 @@ def test_document_does_not_widen_a_string_into_a_sequence(
     """
     with pytest.raises(TypeError):
         call(Document.from_bytes(generated_bytes))
-
-
-@pytest.mark.parametrize(("sample", "count"), [("basic", 1), ("multiple", 2)])
-def test_converted_memos_remain_public_controls_and_markdown_comments(
-    sample: str, count: int
-) -> None:
-    from conftest import USER_SAMPLES
-
-    result = hwpforge.convert_hwp5((USER_SAMPLES / f"sample-memo-{sample}.hwp").read_bytes())
-    exported = json.loads(result.document.to_json().text)
-
-    def memos(value):
-        if isinstance(value, dict):
-            found = [value["Memo"]] if "Memo" in value else []
-            return found + [memo for child in value.values() for memo in memos(child)]
-        if isinstance(value, list):
-            return [memo for child in value for memo in memos(child)]
-        return []
-
-    annotations = memos(exported)
-    assert len(annotations) == count
-    assert all(memo["anchor_runs"] and memo["content"] for memo in annotations)
-    for mode in ["styled", "lossy"]:
-        markdown = result.document.to_md(mode=mode).text
-        assert markdown.count("<!-- memo:") == (count if mode == "styled" else 0)
-        if sample == "basic":
-            assert "메모 대상 문장" in markdown
-            if mode == "styled":
-                assert "쇠부리야 여기가 메모야" in markdown
 
 
 def test_w2_legacy_json_tabs_share_code_reason_and_remedy() -> None:

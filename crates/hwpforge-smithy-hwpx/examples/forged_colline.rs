@@ -1,8 +1,7 @@
 //! colLine(다단 구분선) 시각 검증: 우리 encoder 가 만든 2단 + 구분선 HWPX 가
 //! 한컴에서 정상 렌더되는지 확인.
 //!
-//! 구분선 값은 한컴 native fixture(`examples/hwp5_review/_verify/nativ-colline.hwpx`)
-//! 와 동일: `type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"`.
+//! 구분선 값: `type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"`.
 //!
 //! Usage:
 //!   cargo run --release -p hwpforge-smithy-hwpx --example forged_colline

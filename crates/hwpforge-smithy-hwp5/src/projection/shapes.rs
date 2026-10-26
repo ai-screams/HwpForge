@@ -29,8 +29,8 @@ use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapePoint};
 /// axes decoded from the shared `gso ` CtrlHeader word (표 70):
 /// `vertRelTo`/`horzRelTo`/`textWrap`/`textFlow`/`flowWithText`/`allowOverlap`
 /// plus the signed `(x, y)` offset — no longer the pre-W5 anchor/wrap
-/// convention. The `textbox_anchored` native `.hwp`/`.hwpx` pair (a floating
-/// `<hp:rect>` 글상자: `vertRelTo=PARA`, `horzRelTo=PAGE`, `textWrap=SQUARE`)
+/// convention. A Hancom-saved HWP5/HWPX pair containing a floating
+/// `<hp:rect>` 글상자 (`vertRelTo=PARA`, `horzRelTo=PAGE`, `textWrap=SQUARE`)
 /// is the byte-comparison gate.
 ///
 /// `warnings` carries the byte-ground fail-closed diagnostics (unknown
@@ -904,7 +904,7 @@ mod tests {
         assert_eq!(zeroed.text_wrap, ObjectTextWrap::Square);
         assert!(!zeroed.flow_with_text);
         assert!(!zeroed.allow_overlap);
-        // 실측 속성 word (textbox_anchored native fixture, attr=0x040a4110) →
+        // 실측 속성 word (한컴이 저장한 글상자, attr=0x040a4110) →
         // 축이 이제 byte-ground: PARA/PAGE/SQUARE, overlap=1, flow=0.
         let real =
             shape_placement(&geometry, 0x040a_4110, &mut Vec::new()).expect("floating placement");

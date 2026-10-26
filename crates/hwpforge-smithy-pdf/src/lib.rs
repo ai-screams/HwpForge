@@ -233,8 +233,8 @@ pub enum PdfWarning {
     /// PARA 앵커 이미지의 마커 가시 좌표가 줄 경계(lineseg 시작)와 정확히
     /// 일치함 — **뒤 세그먼트(새 줄) 기준**으로 배치하고 표면화한다.
     ///
-    /// 한컴 선택도 아랫줄 기준임이 byte-ground 확정됨 (`anchored_marker_boundary`
-    /// fixture, Δ≤0.03pt — §11c). 경고는 경계 케이스 가시화용으로 유지.
+    /// 한컴이 저장한 줄 경계 앵커 그림도 아랫줄 기준임을 바이트 대조로 확인
+    /// (Δ≤0.03pt — §11c). 경고는 경계 케이스 가시화용으로 유지.
     AnchorMarkerOnLineBoundary {
         /// 문서 내 위치.
         location: String,
@@ -269,7 +269,7 @@ pub enum PdfWarning {
         /// 생략한 속성 (예: `cell fill`, `border line style`).
         what: &'static str,
     },
-    /// 머리말/꼬리말 캐시가 밴드 높이를 넘음 — 한컴 실측(rules-header-overflow)
+    /// 머리말/꼬리말 캐시가 밴드 높이를 넘음 — 한컴 실측(한컴 저장 문서)
     /// 대로 **무클립 재생**한다 (본문 리플로 없음, 잉크 겹침 가능성만 표면화).
     BandOverflow {
         /// 밴드 종류 (`header`/`footer`).
@@ -288,7 +288,7 @@ pub enum PdfWarning {
         /// 머리말/꼬리말 위치.
         location: String,
     },
-    /// 쪽번호를 생략함 — BOTTOM_CENTER + DIGIT 조합만 실측(rules-pagenum),
+    /// 쪽번호를 생략함 — BOTTOM_CENTER + DIGIT 조합만 실측(한컴 저장 문서),
     /// 그 외 position/포맷은 좌표 근거가 없어 그리지 않는다 (본문은 정상).
     PageNumberSkipped {
         /// 섹션 인덱스.

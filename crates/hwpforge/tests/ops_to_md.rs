@@ -78,19 +78,20 @@ fn all_three_modes_render_the_same_document() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn only_styled_extracts_images() {
     // The other two renderings have no syntax for an extracted binary, so
     // an image map from them would be bytes no reader could reach.
-    let styled = export("SimplePicture.hwpx", MdMode::Styled);
+    let styled = export("green_swatch.hwpx", MdMode::Styled);
     assert!(!styled.images.is_empty(), "the picture fixture must yield an image");
 
     for mode in [MdMode::Lossy, MdMode::Lossless] {
-        assert!(export("SimplePicture.hwpx", mode).images.is_empty(), "{}", mode.as_str());
+        assert!(export("green_swatch.hwpx", mode).images.is_empty(), "{}", mode.as_str());
     }
     // The lossless rendering carries the picture's original box (S20,
     // design §19.23.21: original 17664 x 5975, shown 25942 x 8775).
     // 이것을 실패시키는 것: 그림 원래 크기를 쓰지 않거나 거부하기.
-    let lossless = export("SimplePicture.hwpx", MdMode::Lossless).markdown;
+    let lossless = export("green_swatch.hwpx", MdMode::Lossless).markdown;
     assert!(
         lossless.contains(r#"data-original-width-unit="17664" data-original-height-unit="5975""#),
         "{lossless}"
@@ -98,8 +99,9 @@ fn only_styled_extracts_images() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn every_extracted_image_is_referenced_by_the_markdown_that_carries_it() {
-    let out = export("SimplePicture.hwpx", MdMode::Styled);
+    let out = export("green_swatch.hwpx", MdMode::Styled);
 
     for key in out.images.keys() {
         assert!(
@@ -118,8 +120,9 @@ fn lossless_carries_frontmatter_so_the_decoder_can_read_it_back() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn meta_carries_exactly_the_mode_images_and_warnings_keys() {
-    let out = export("SimplePicture.hwpx", MdMode::Lossy);
+    let out = export("green_swatch.hwpx", MdMode::Lossy);
 
     let value = serde_json::to_value(out.meta()).expect("serialise");
     let mut fields: Vec<&str> =
@@ -132,8 +135,9 @@ fn meta_carries_exactly_the_mode_images_and_warnings_keys() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn meta_images_keep_their_keys_and_bytes() {
-    let out = export("SimplePicture.hwpx", MdMode::Styled);
+    let out = export("green_swatch.hwpx", MdMode::Styled);
     let meta = out.meta();
 
     assert_eq!(
@@ -147,10 +151,11 @@ fn meta_images_keep_their_keys_and_bytes() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn meta_round_trips_through_json() {
     // `serde_bytes` must not be write-only: the Python stub and the pytest
     // contract test both read the shape back.
-    let meta = export("SimplePicture.hwpx", MdMode::Styled).meta();
+    let meta = export("green_swatch.hwpx", MdMode::Styled).meta();
 
     let json = serde_json::to_string(&meta).expect("serialise");
     let back: hwpforge::ops::markdown::MdExportMeta =

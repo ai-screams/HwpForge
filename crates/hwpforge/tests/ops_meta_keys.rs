@@ -37,8 +37,9 @@ fn inspect_meta_reserves_the_warnings_key() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn diff_meta_reserves_the_warnings_key() {
-    let out = diff(&fixture("SimpleTable.hwpx"), &fixture("SimplePicture.hwpx")).expect("diff");
+    let out = diff(&fixture("SimpleTable.hwpx"), &fixture("green_swatch.hwpx")).expect("diff");
     let payload = serde_json::to_value(&out.diff).expect("payload");
     let meta = serde_json::to_value(out.meta()).expect("meta");
     assert_flatten_contract(&payload, &meta, "DiffMeta");

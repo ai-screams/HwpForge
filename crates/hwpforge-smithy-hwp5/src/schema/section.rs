@@ -1806,10 +1806,10 @@ fn parse_length_prefixed_utf16(
 /// The first `main_text` char is folded into the same 32-bit word as the
 /// length on the wire — packing them together saves a u16 over the more
 /// natural "header (len) → body (chars)" layout. `sz_ratio` / `align_raw`
-/// offsets were pinned by the task #73 one-knob-per-paragraph fixture
-/// (`sample-dutmal-variants.hwp`; `probe_dutmal_tail` diff vs baseline:
+/// offsets were pinned by varying one property at a time:
+///
 /// szRatio=50/75 flips tail `[4]` to `0x32`/`0x4B`, align=LEFT/RIGHT
-/// flips tail `[16]` to `01`/`02`). `styleIDRef` remains unattributed —
+/// flips tail `[16]` to `01`/`02`. `styleIDRef` remains unattributed —
 /// the fixture could not vary it (Core does not model it yet), so the
 /// reserved word stays un-promoted per the "carry wire metadata only
 /// when the source actually populates it" rule.
@@ -1901,8 +1901,8 @@ impl Hwp5DutmalControl {
 /// Compose (글자겹침) control parsed from a `tcps` CtrlHeader
 /// (`0x74637073` BE-ascii).
 ///
-/// Wire layout observed on a 한컴-authored fixture
-/// (`sample-compose-basic` — composeText = `"한韓"`):
+/// Wire layout observed on Hancom-saved overlapping characters
+/// (composeText = `"한韓"`):
 ///
 /// | offset | bytes | field | encoding |
 /// |---:|---|---|---|
@@ -1959,8 +1959,7 @@ impl Hwp5ComposeControl {
     ///
     /// The wire has two observed layouts discriminated by the
     /// `properties` low half (`data[4..6]` as LE u16). Task #74 ran the
-    /// full 14-circleType × 2-composeType matrix
-    /// (`sample-compose-all-shapes.hwp`, `probe_compose_variants`) and
+    /// full 14-circleType × 2-composeType matrix and
     /// observed the following layouts with two-character inputs:
     ///
     /// - **`0x0003` (unpacked)** — `composeText` is fully in the body
@@ -1984,8 +1983,7 @@ impl Hwp5ComposeControl {
     ///   body trailer layout is unchanged; only the leading
     ///   char-region shrinks by one `u16`.
     ///
-    /// The purpose-made `hancom_controls/f2-compose-links.hwp` additionally
-    /// stores `efg` with low half 4 and the decoration glyph U+25C6 in the
+    /// The longer unpacked layout stores `efg` with low half 4 and the decoration glyph U+25C6 in the
     /// high half. Longer unpacked text counts its UTF-16 units plus that
     /// glyph; accept it only when the payload length agrees. Preserve the
     /// already supported 2/3 layouts and reject other inconsistent values.
@@ -3444,7 +3442,7 @@ mod tests {
 
     #[test]
     fn para_text_fwspace_between_text_runs() {
-        // Mirrors the Hancom-authored `sample-fwspace-fixed.hwp` wire shape:
+        // The fixed-width-space wire shape:
         // FWLEFT<U+001F>FWRIGHT
         let mut data = utf16le("FWLEFT");
         data.extend_from_slice(&cp_bytes(0x1F));
@@ -4986,7 +4984,7 @@ mod tests {
 
     #[test]
     fn crossref_parse_bookmark_page_baseline() {
-        // Wave 12m Phase 1 fixture #1 (sample-bookmark-page.hwp):
+        // Bookmark page-reference wire shape:
         //   "?target1;6;0;0;0;" → Bookmark + Page, no hyperlink
         let data = make_xrf_envelope("?target1;6;0;0;0;", 0x420D_43BE, 0);
         let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).expect("parse");
@@ -5041,8 +5039,7 @@ mod tests {
     #[test]
     fn crossref_parse_hyperlink_toggle_carries_n3() {
         // N3 = 0 (no hyperlink) and 1 (hyperlink) — observed in
-        // sample-bookmark-page.hwp (N3=0) and
-        // sample-bookmark-page-hyperlink.hwp (N3=1).
+        // page-reference commands with N3=0 and N3=1.
         for n3 in 0..=1u8 {
             let command = format!("?target1;6;0;{n3};0;");
             let data = make_xrf_envelope(&command, 0, 0);

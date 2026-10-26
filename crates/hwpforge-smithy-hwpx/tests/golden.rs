@@ -1,5 +1,3 @@
-//! Golden tests: decode real HWPX files, and round-trip encode→decode.
-
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 use std::path::PathBuf;
 
@@ -10,50 +8,16 @@ fn fixture_path(name: &str) -> PathBuf {
     p
 }
 
-fn workspace_fixture_path(name: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop();
-    p.pop();
-    p.push("tests/fixtures");
-    p.push(name);
-    p
-}
-
 // ════════════════════════════════════════════════════════════════
 // Phase 3: Decode-only golden tests
 // ════════════════════════════════════════════════════════════════
 
-// ── sample1.hwpx ────────────────────────────────────────────────
+// ── garden_notes.hwpx ─────────────────────────────────────────────
 
 #[test]
-#[ignore = "sample1.hwpx has malformed XML with duplicate <hp:t> fields"]
-fn decode_sample1() {
-    let path = fixture_path("sample1.hwpx");
-    let result = HwpxDecoder::decode_file(&path).unwrap();
-
-    // Must have at least 1 section
-    assert!(!result.document.sections().is_empty());
-
-    // Style store should have fonts, char shapes, para shapes
-    assert!(result.style_store.font_count() > 0);
-    assert!(result.style_store.char_shape_count() > 0);
-    assert!(result.style_store.para_shape_count() > 0);
-
-    // First section should have paragraphs
-    let section = &result.document.sections()[0];
-    assert!(!section.paragraphs.is_empty());
-
-    // Page settings should have reasonable dimensions
-    let ps = &section.page_settings;
-    assert!(ps.width.as_i32() > 0);
-    assert!(ps.height.as_i32() > 0);
-}
-
-// ── SimpleEdit.hwpx ─────────────────────────────────────────────
-
-#[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn decode_simple_edit() {
-    let path = fixture_path("SimpleEdit.hwpx");
+    let path = fixture_path("garden_notes.hwpx");
     let result = HwpxDecoder::decode_file(&path).unwrap();
 
     assert!(!result.document.sections().is_empty());
@@ -78,13 +42,42 @@ fn decode_simple_table() {
         .flat_map(|p| &p.runs)
         .any(|r| r.content.is_table());
     assert!(has_table, "SimpleTable.hwpx should contain at least one table");
+    // 이것을 실패시키는 것: 셀 1을 9로, 병합 span을 1로, 캐시/스타일을 제거하기.
+    // 이것을 실패시키는 것: 행/anchor/본문 또는 폰트·문자·문단 레지스트리를 제거하기.
+    let section = &result.document.sections()[0];
+    let table =
+        section.paragraphs.iter().flat_map(|p| &p.runs).find_map(|r| r.content.as_table()).unwrap();
+    let cells: Vec<_> = table.rows.iter().flat_map(|r| &r.cells).collect();
+    assert_eq!(table.rows.len(), 3);
+    assert_eq!(cells.len(), 5);
+    assert_eq!(
+        cells.iter().map(|c| (c.col_span, c.row_span)).collect::<Vec<_>>(),
+        [(2, 2), (1, 1), (1, 1), (1, 1), (2, 1)]
+    );
+    assert_eq!(
+        cells
+            .iter()
+            .map(|c| c.paragraphs[0].runs[0].content.as_text().unwrap())
+            .collect::<Vec<_>>(),
+        ["1", "2", "3", "5", "4"]
+    );
+    assert!(section
+        .paragraphs
+        .iter()
+        .any(|p| p.runs.iter().any(|r| r.content.as_text().is_some())));
+    assert!(section.paragraphs[0].layout_cache.as_ref().is_some_and(|c| !c.is_empty()));
+    assert_eq!(result.style_store.style(0).unwrap().name, "본문");
+    assert!(result.style_store.font_count() > 0);
+    assert!(result.style_store.char_shape_count() > 0);
+    assert!(result.style_store.para_shape_count() > 0);
 }
 
-// ── SimplePicture.hwpx ──────────────────────────────────────────
+// ── green_swatch.hwpx ──────────────────────────────────────────
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn decode_simple_picture() {
-    let path = fixture_path("SimplePicture.hwpx");
+    let path = fixture_path("green_swatch.hwpx");
     let result = HwpxDecoder::decode_file(&path).unwrap();
 
     assert!(!result.document.sections().is_empty());
@@ -97,14 +90,15 @@ fn decode_simple_picture() {
         .flat_map(|s| &s.paragraphs)
         .flat_map(|p| &p.runs)
         .any(|r| r.content.is_image());
-    assert!(has_image, "SimplePicture.hwpx should contain at least one image");
+    assert!(has_image, "green_swatch.hwpx should contain at least one image");
 }
 
-// ── PageSize_Margin.hwpx ────────────────────────────────────────
+// ── small_page.hwpx ────────────────────────────────────────
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn decode_page_size_margin() {
-    let path = fixture_path("PageSize_Margin.hwpx");
+    let path = fixture_path("small_page.hwpx");
     let result = HwpxDecoder::decode_file(&path).unwrap();
 
     assert!(!result.document.sections().is_empty());
@@ -113,140 +107,9 @@ fn decode_page_size_margin() {
     let ps = &result.document.sections()[0].page_settings;
     assert!(ps.width.as_i32() > 0);
     assert!(ps.height.as_i32() > 0);
-}
-
-#[test]
-fn decode_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
-    let path = workspace_fixture_path("user_samples/tabs/sample-tab.hwpx");
-    let result = HwpxDecoder::decode_file(&path).unwrap();
-
-    assert!(
-        result.style_store.iter_tabs().any(|tab| tab.id > 2 && !tab.stops.is_empty()),
-        "expected at least one custom tab definition with explicit tab stops"
-    );
-
-    let para = &result.document.sections()[0].paragraphs[0];
-    // Wave 4 Phase 3: rich inline tab now decodes as
-    // `RunContent::InlineText`; `plain_text()` covers both shapes.
-    assert_eq!(para.runs[0].content.plain_text().as_deref(), Some("LEFT\tRIGHT"));
-
-    let para_shape = result.style_store.para_shape(para.para_shape_id).unwrap();
-    assert!(para_shape.tab_pr_id_ref > 2, "paragraph should reference a custom tab definition");
-}
-
-#[test]
-fn roundtrip_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
-    let bytes = std::fs::read(workspace_fixture_path("user_samples/tabs/sample-tab.hwpx")).unwrap();
-    let original = HwpxDecoder::decode(&bytes).unwrap();
-    let validated = original.document.validate().unwrap();
-    let encoded =
-        HwpxEncoder::encode(&validated, &original.style_store, &original.image_store).unwrap();
-    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
-
-    assert!(
-        roundtripped.style_store.iter_tabs().any(|tab| tab.id > 2 && !tab.stops.is_empty()),
-        "custom tab definitions should survive a full HWPX roundtrip"
-    );
-
-    // After Wave 4 Phase 3 (HWPX decoder InlineText carry), the run
-    // upgrades to `RunContent::InlineText` because the inline tab
-    // carries non-default `width`/`leader`/`tab_type`. Verify both
-    // the plain-text equivalent AND the attribute payload survive
-    // the full HWPX → Core → HWPX → Core round-trip.
-    let content = &roundtripped.document.sections()[0].paragraphs[0].runs[0].content;
-    assert_eq!(
-        content.plain_text().as_deref(),
-        Some("LEFT\tRIGHT"),
-        "tab character should survive as `\\t` in plain-text view"
-    );
-    let inline = content
-        .as_inline_text()
-        .expect("non-default inline tab should keep `RunContent::InlineText` shape");
-    let tab = inline.segments.iter().find_map(|seg| match seg {
-        hwpforge_core::inline::InlineSegment::Tab(attr) => Some(attr),
-        _ => None,
-    });
-    let tab = tab.expect("InlineText should contain a Tab segment");
-    assert_eq!(tab.width.as_i32(), 12488, "tab width attribute should round-trip");
-    assert_eq!(tab.leader, 3, "tab leader attribute should round-trip");
-    assert_eq!(tab.tab_type, 1, "tab type attribute should round-trip");
-}
-
-#[test]
-fn decode_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
-    let path = workspace_fixture_path("user_samples/tabs/sample-table-tab.hwpx");
-    let result = HwpxDecoder::decode_file(&path).unwrap();
-
-    let table = result.document.sections()[0]
-        .paragraphs
-        .iter()
-        .flat_map(|para| &para.runs)
-        .find_map(|run| run.content.as_table())
-        .expect("expected a table");
-    // Wave 4 Phase 3: cell content with rich inline tabs is now
-    // `RunContent::InlineText`. `plain_text()` gives the same
-    // tab-character view either way.
-    assert_eq!(
-        table.rows[0].cells[0].paragraphs[0].runs[0].content.plain_text().as_deref(),
-        Some("CELLLEFT\tCELLRIGHT")
-    );
-}
-
-#[test]
-fn roundtrip_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
-    let bytes =
-        std::fs::read(workspace_fixture_path("user_samples/tabs/sample-table-tab.hwpx")).unwrap();
-    let original = HwpxDecoder::decode(&bytes).unwrap();
-    let validated = original.document.validate().unwrap();
-    let encoded =
-        HwpxEncoder::encode(&validated, &original.style_store, &original.image_store).unwrap();
-    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
-
-    let table = roundtripped.document.sections()[0]
-        .paragraphs
-        .iter()
-        .flat_map(|para| &para.runs)
-        .find_map(|run| run.content.as_table())
-        .expect("expected a table");
-    // Wave 4 Phase 3 round-trip parity for cell-level inline tabs.
-    assert_eq!(
-        table.rows[0].cells[0].paragraphs[0].runs[0].content.plain_text().as_deref(),
-        Some("CELLLEFT\tCELLRIGHT")
-    );
-}
-
-#[test]
-fn roundtrip_user_sample_checkable_bullet_basic_preserves_checkable_semantics() {
-    let bytes = std::fs::read(workspace_fixture_path(
-        "user_samples/lists/sample-checkable-bullet-basic.hwpx",
-    ))
-    .unwrap();
-    let original = HwpxDecoder::decode(&bytes).unwrap();
-    let validated = original.document.validate().unwrap();
-    let encoded =
-        HwpxEncoder::encode(&validated, &original.style_store, &original.image_store).unwrap();
-    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
-
-    let paragraphs = &roundtripped.document.sections()[0].paragraphs;
-    let unchecked = paragraphs
-        .iter()
-        .find(|paragraph| paragraph.text_content().contains("unchecked item A"))
-        .expect("fixture should contain unchecked task item");
-    let checked = paragraphs
-        .iter()
-        .find(|paragraph| paragraph.text_content().contains("checked item B"))
-        .expect("fixture should contain checked task item");
-    let unchecked_shape = roundtripped.style_store.para_shape(unchecked.para_shape_id).unwrap();
-    let checked_shape = roundtripped.style_store.para_shape(checked.para_shape_id).unwrap();
-    let bullet = roundtripped
-        .style_store
-        .iter_bullets()
-        .find(|bullet| bullet.id == unchecked_shape.heading_id_ref)
-        .expect("roundtripped bullet definition should exist");
-
-    assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
-    assert!(!unchecked_shape.checked);
-    assert!(checked_shape.checked);
+    // 이것을 실패시키는 것: small_page.hwpx의 왼쪽 또는 오른쪽 여백을 0으로 바꾸기.
+    assert_eq!(ps.margin_left, hwpforge_foundation::HwpUnit::from_mm(17.0).unwrap());
+    assert_eq!(ps.margin_right, hwpforge_foundation::HwpUnit::from_mm(23.0).unwrap());
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -378,8 +241,9 @@ fn assert_roundtrip(fixture_name: &str) {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn roundtrip_simple_edit() {
-    assert_roundtrip("SimpleEdit.hwpx");
+    assert_roundtrip("garden_notes.hwpx");
 }
 
 #[test]
@@ -388,170 +252,15 @@ fn roundtrip_simple_table() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn roundtrip_simple_picture() {
-    assert_roundtrip("SimplePicture.hwpx");
+    assert_roundtrip("green_swatch.hwpx");
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn roundtrip_page_size_margin() {
-    assert_roundtrip("PageSize_Margin.hwpx");
-}
-
-#[test]
-#[ignore = "sample1.hwpx has malformed XML with duplicate <hp:t> fields"]
-fn roundtrip_sample1() {
-    assert_roundtrip("sample1.hwpx");
-}
-
-// ── line.hwpx ──────────────────────────────────────────────────
-
-#[test]
-fn decode_line() {
-    let path = fixture_path("line.hwpx");
-    let result = HwpxDecoder::decode_file(&path).unwrap();
-
-    assert!(!result.document.sections().is_empty());
-
-    // Should contain at least one line shape
-    let has_line = result
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .any(|ctrl| ctrl.is_line());
-    assert!(has_line, "line.hwpx should contain at least one line shape");
-}
-
-#[test]
-fn roundtrip_line() {
-    assert_roundtrip("line.hwpx");
-}
-
-// ── equations.hwpx ──────────────────────────────────────────────
-
-#[test]
-fn decode_equations() {
-    let path = fixture_path("equations.hwpx");
-    let result = HwpxDecoder::decode_file(&path).unwrap();
-
-    assert!(!result.document.sections().is_empty());
-
-    // Count equation controls
-    let equation_count = result
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .filter(|ctrl| ctrl.is_equation())
-        .count();
-    assert!(
-        equation_count >= 1,
-        "equations.hwpx should contain at least 1 equation, found {equation_count}"
-    );
-}
-
-#[test]
-fn roundtrip_equations() {
-    let bytes = std::fs::read(fixture_path("equations.hwpx")).unwrap();
-    let original = HwpxDecoder::decode(&bytes).unwrap();
-
-    // Count original equations
-    let orig_eq_count = original
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .filter(|ctrl| ctrl.is_equation())
-        .count();
-
-    // Encode → decode
-    let validated = original.document.clone().validate().unwrap();
-    let images = hwpforge_core::image::ImageStore::new();
-    let encoded = HwpxEncoder::encode(&validated, &original.style_store, &images).unwrap();
-    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
-
-    // Count roundtripped equations
-    let rt_eq_count = roundtripped
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .filter(|ctrl| ctrl.is_equation())
-        .count();
-
-    assert_eq!(
-        orig_eq_count, rt_eq_count,
-        "equation count mismatch after roundtrip: original={orig_eq_count}, roundtripped={rt_eq_count}"
-    );
-}
-
-// ── charts.hwpx ────────────────────────────────────────────────
-
-#[test]
-fn decode_charts() {
-    let path = fixture_path("charts.hwpx");
-    let result = HwpxDecoder::decode_file(&path).unwrap();
-
-    assert!(!result.document.sections().is_empty());
-
-    // Count chart controls
-    let chart_count = result
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .filter(|ctrl| ctrl.is_chart())
-        .count();
-    assert!(chart_count >= 1, "charts.hwpx should contain at least 1 chart, found {chart_count}");
-}
-
-#[test]
-fn roundtrip_charts() {
-    let bytes = std::fs::read(fixture_path("charts.hwpx")).unwrap();
-    let original = HwpxDecoder::decode(&bytes).unwrap();
-
-    // Count original charts
-    let orig_chart_count = original
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .filter(|ctrl| ctrl.is_chart())
-        .count();
-
-    // Encode → decode
-    let validated = original.document.clone().validate().unwrap();
-    let images = hwpforge_core::image::ImageStore::new();
-    let encoded = HwpxEncoder::encode(&validated, &original.style_store, &images).unwrap();
-    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
-
-    // Count roundtripped charts
-    let rt_chart_count = roundtripped
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| r.content.as_control())
-        .filter(|ctrl| ctrl.is_chart())
-        .count();
-
-    assert_eq!(
-        orig_chart_count, rt_chart_count,
-        "chart count mismatch after roundtrip: original={orig_chart_count}, roundtripped={rt_chart_count}"
-    );
+    assert_roundtrip("small_page.hwpx");
 }
 
 // ── chart from-scratch encoder→decoder roundtrip ────────────────

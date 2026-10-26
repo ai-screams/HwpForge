@@ -64,7 +64,6 @@ This enables:
 make ci               # push 전 필수 — ci-fast 별칭 (fmt·clippy·test·deny·lint-md, CI 플래그 일치)
 make ci-full          # 위 + coverage + MSRV (릴리스·큰 변경 전)
 make py-all           # Python 바인딩 (lint·타입·Rust/Python 테스트·coverage)
-make audit-hwp5-gate  # HWP5 감사 게이트 — 현재 결과 vs .audit/hwp5_baseline.json (CI 필수, 기준선 갱신은 근거를 커밋 메시지에)
 make site-check       # 문서 사이트 빌드·후처리 (CI Docs Build 와 같은 경로, mdBook 0.4 필요)
 mdbook build          # 문서 변경 시 — mdBook 0.4 라인 필수 (`make install-tools`)
 cargo nextest run -p <crate>          # 크레이트 한정 (전 워크스페이스 cold 15분+ 금지)
@@ -72,7 +71,7 @@ cargo clippy -p <crate> --all-targets -- -D warnings   # 커밋 전 touched 크�
 bacon / bacon test    # watch 모드
 ```
 
-`make ci` 는 CI 전체가 아니라 빠른 다섯 레인이다 — CI 는 여기에 Coverage·MSRV·HWP5 Audit Gate·Docs Build·Python(release 전용 테스트 포함)·Workflow Lint 를 더 돌린다. 상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
+`make ci` 는 CI 전체가 아니라 빠른 다섯 레인이다 — CI 는 여기에 Coverage·MSRV·Docs Build·Python(release 전용 테스트 포함)·Workflow Lint 를 더 돌린다. 상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
 
 ---
 

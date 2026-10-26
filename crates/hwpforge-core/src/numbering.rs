@@ -130,7 +130,7 @@ impl ParagraphListRef {
 impl NumberingDef {
     /// Creates the default 10-level outline numbering (한글 Modern default).
     ///
-    /// Matches golden fixture `tests/fixtures/shapes/textbox.hwpx`:
+    /// Modern outline defaults:
     ///
     /// - Level 1: DIGIT `^1.` checkable=false
     /// - Level 2: HANGUL_SYLLABLE `^2.` checkable=false

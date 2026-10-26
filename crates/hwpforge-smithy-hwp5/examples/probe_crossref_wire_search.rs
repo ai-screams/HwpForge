@@ -14,7 +14,7 @@
 //!
 //! Example:
 //!   cargo run -p hwpforge-smithy-hwp5 --example probe_crossref_wire_search -- \
-//!     examples/hwp5_review/sample-field-crossref-footnote.hwp 1108165575
+//!     input.hwp 1108165575
 
 use std::io::{Cursor, Read};
 

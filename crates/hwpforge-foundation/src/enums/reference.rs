@@ -146,8 +146,7 @@ impl FieldType {
     /// Returns the HWPX `<hp:fieldBegin editable="…">` value for this
     /// field type (Wave 12p task #124).
     ///
-    /// Empirically derived from the Hancom-native
-    /// `sample-field-docsummary.hwpx`:
+    /// Native document-summary field behavior:
     /// - `Author`, `Title` → `false` (stable user metadata; Hancom keeps
     ///   the authored value)
     /// - `LastSavedBy`, `CreatedTime`, `ModifiedTime` → `true` (Hancom

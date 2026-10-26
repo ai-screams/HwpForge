@@ -345,6 +345,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 소수 회전 손실 제거 (실제 음성 대조 실행).
     fn error_code_mapping_reference_and_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.hwpx");
@@ -357,8 +358,43 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "HARD_BREAK_LOSS");
 
-        let err = run_delete_para(&fixture("plain_inserted.hwpx"), 0, &[1], out.to_str().unwrap())
-            .unwrap_err();
+        // 이것을 실패시키는 것: fractional rotation을 정수 회전으로 바꾸면 admission 오류가 사라진다.
+        let source = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/hwp5_review/rect_simple.hwpx"),
+        )
+        .unwrap();
+        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(source)).unwrap();
+        let mut zout = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        use std::io::{Read, Write};
+        let angle = 30.4_f64.to_radians();
+        for i in 0..zin.len() {
+            let mut entry = zin.by_index(i).unwrap();
+            let name = entry.name().unwrap().into_owned();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            if name == "Contents/section0.xml" {
+                let xml = String::from_utf8(data).unwrap();
+                data = xml
+                    .replace(
+                        r#"<hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
+                        &format!(
+                            r#"<hc:rotMatrix e1="{}" e2="{}" e3="0" e4="{}" e5="{}" e6="0"/>"#,
+                            angle.cos(),
+                            -angle.sin(),
+                            angle.sin(),
+                            angle.cos()
+                        ),
+                    )
+                    .into_bytes();
+            }
+            zout.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zout.write_all(&data).unwrap();
+        }
+        let source = dir.path().join("fractional-shape.hwpx");
+        std::fs::write(&source, zout.finish().unwrap().into_inner()).unwrap();
+        let err =
+            run_delete_para(source.to_str().unwrap(), 0, &[1], out.to_str().unwrap()).unwrap_err();
         assert_eq!(err.code, "INPUT_NOT_ROUNDTRIP_SAFE");
     }
 }

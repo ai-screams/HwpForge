@@ -20,8 +20,7 @@
 //! cargo run -p hwpforge-smithy-hwpx --example gen_indexmark_surrogate -- \
 //!     temp/sample-indexmark-surrogate.hwpx
 //! ```
-//! 이후 한컴에서 열어 `examples/hwp5_review/sample-indexmark-surrogate.hwp`
-//! 로 다른 이름 저장.
+//! 필요하면 생성한 문서를 열어 다른 형식으로 저장할 수 있다.
 
 use std::path::PathBuf;
 

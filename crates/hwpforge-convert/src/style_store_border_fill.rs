@@ -387,7 +387,7 @@ fn colorref_to_hwpx_color(raw: u32) -> String {
 /// COLORREF null sentinel `0xFFFF_FFFF` inside a *Color* fill record (not a
 /// None fill). 한컴 native writes `faceColor="none"` for that, so map the
 /// sentinel to `"none"` instead of the literal `"#FFFFFFFF"` (P1-5). Verified
-/// against native `sample-cell-diagonal` / `table_17_diagonal_border` (id=2
+/// against Hancom-saved diagonal table borders (id=2
 /// background = 0xFFFFFFFF → `faceColor="none"`). Scoped to fills — border-line
 /// colors keep the plain mapping (native uses real `#RRGGBB` there).
 fn colorref_to_hwpx_fill_color(raw: u32) -> String {

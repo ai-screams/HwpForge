@@ -4,11 +4,6 @@
 //! script so it can be opened in 한컴 Office, re-saved as `.hwp` (HWP5), and its
 //! `eqed` ctrl + `HWPTAG_EQEDIT` (0x58) script record hex-inspected.
 //!
-//! Staging input only. The authoritative fixture committed under
-//! `tests/fixtures/user_samples/` is the 한컴-produced `.hwp`/`.hwpx` pair.
-//! If 한컴 renders this equation oddly, type a simple equation directly in the
-//! 수식 편집기 instead — that yields an equally valid `eqed` record.
-//!
 //! Usage:
 //!   cargo run -p hwpforge-smithy-hwpx --example equation_fixture
 //!

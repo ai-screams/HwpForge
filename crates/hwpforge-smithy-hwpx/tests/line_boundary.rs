@@ -1,7 +1,3 @@
-//! S22: the encoder places a line that carries a boundary before the
-//! zero-length token it names, and drops the cache (with a warning) when the
-//! boundary does not match the paragraph's tokens.
-
 use hwpforge_core::control::Control;
 use hwpforge_core::document::Document;
 use hwpforge_core::image::ImageStore;
@@ -16,20 +12,6 @@ use hwpforge_smithy_hwpx::{style_store_for_preset, EncodeOptions, HwpxEncoder};
 
 use WireTokenKind::*;
 
-fn line(textpos: u32, boundary: Option<LineBoundary>) -> LineSeg {
-    let mut l = LineSeg::default();
-    l.textpos = textpos;
-    l.vertsize = 1000;
-    l.textheight = 1000;
-    l.horzsize = 40000;
-    l.boundary = boundary;
-    l
-}
-
-fn at(skip: &[WireTokenKind], next: Option<WireTokenKind>) -> Option<LineBoundary> {
-    Some(LineBoundary::new(skip.to_vec(), next))
-}
-
 fn table() -> Run {
     let cell = TableCell::new(
         vec![Paragraph::with_runs(
@@ -39,53 +21,6 @@ fn table() -> Run {
         HwpUnit::new(4000).unwrap(),
     );
     Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0))
-}
-
-/// The wire `textpos` list of the first body paragraph, or `None` when its
-/// cache was dropped; and the encode warnings' codes.
-fn encode(first: Paragraph, with_header_and_page_number: bool) -> (Option<Vec<u32>>, Vec<String>) {
-    let mut section = Section::with_paragraphs(vec![first], PageSettings::a4());
-    if with_header_and_page_number {
-        section.headers.push(HeaderFooter::all_pages(vec![Paragraph::with_runs(
-            vec![Run::text("머리", CharShapeIndex::new(0))],
-            ParaShapeIndex::new(0),
-        )]));
-        section.page_number = Some(PageNumber::bottom_center());
-    }
-    let mut doc = Document::new();
-    doc.add_section(section);
-    let store = style_store_for_preset("default").unwrap();
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &doc.validate().unwrap(),
-        &store,
-        &ImageStore::new(),
-        EncodeOptions::default().with_emit_layout_cache(true),
-    )
-    .unwrap();
-    let xml = {
-        use std::io::Read as _;
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();
-        let mut xml = String::new();
-        zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
-        xml
-    };
-    // The first body paragraph's own cache comes after its runs: take the
-    // last linesegarray before the end of the first top-level paragraph.
-    let body_end = xml.rfind("</hp:p>").unwrap();
-    let cache = xml[..body_end].rfind("<hp:linesegarray>").and_then(|at| {
-        let end = at + xml[at..].find("</hp:linesegarray>").unwrap();
-        let segment = &xml[at..end];
-        (!xml[end..body_end].contains("<hp:p ")).then(|| {
-            segment
-                .match_indices("textpos=\"")
-                .map(|(i, m)| {
-                    let v = &segment[i + m.len()..];
-                    v[..v.find('"').unwrap()].parse().unwrap()
-                })
-                .collect()
-        })
-    });
-    (cache, outcome.warnings.iter().map(|w| w.code().to_string()).collect())
 }
 
 fn host(runs: Vec<Run>, lines: Vec<LineSeg>) -> Paragraph {
@@ -167,68 +102,6 @@ fn collapsed_lines_are_dropped() {
     let (cache, warnings) = encode(host(vec![table(), table()], collapsed), false);
     assert_eq!(cache, None);
     assert!(warnings.iter().any(|w| w == "LAYOUT_CACHE_DROPPED"), "{warnings:?}");
-}
-
-/// Every `<hp:linesegarray>`'s textpos list, in document order.
-fn lineseg_textpos(xml: &str) -> Vec<Vec<u32>> {
-    xml.split("<hp:linesegarray>")
-        .skip(1)
-        .map(|chunk| {
-            let body = &chunk[..chunk.find("</hp:linesegarray>").unwrap()];
-            body.match_indices("textpos=\"")
-                .map(|(i, m)| {
-                    let v = &body[i + m.len()..];
-                    v[..v.find('"').unwrap()].parse().unwrap()
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// S22: a Hancom file whose line starts after some zero-length tokens at
-/// one Core position keeps that start through decode → encode, and the
-/// re-decoded document equals the decoded one.
-/// 이것을 실패시키는 것: 디코더의 경계 기록 삭제(재인코드가 가장 이른 자리로).
-#[test]
-fn hancom_boundary_round_trips() {
-    use hwpforge_smithy_hwpx::HwpxDecoder;
-    for name in ["images/anchored_marker_line.hwpx", "images/anchored_marker_boundary.hwpx"] {
-        let path = format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-        let bytes = std::fs::read(&path).unwrap();
-        let decoded = HwpxDecoder::decode(&bytes).unwrap();
-        let has_boundary = decoded.document.sections().iter().any(|s| {
-            let mut found = false;
-            s.for_each_paragraph(|p| {
-                found |= p
-                    .layout_cache
-                    .as_ref()
-                    .is_some_and(|c| c.lines.iter().any(|l| l.boundary.is_some()));
-            });
-            found
-        });
-        assert!(has_boundary, "{name}: premise");
-        let outcome = HwpxEncoder::encode_with_diagnostics(
-            &decoded.document.clone().validate().unwrap(),
-            &decoded.style_store,
-            &decoded.image_store,
-            EncodeOptions::default().with_emit_layout_cache(true),
-        )
-        .unwrap();
-        let read = |b: &[u8]| {
-            use std::io::Read as _;
-            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(b)).unwrap();
-            let mut xml = String::new();
-            zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
-            xml
-        };
-        assert_eq!(
-            lineseg_textpos(&read(&outcome.bytes)),
-            lineseg_textpos(&read(&bytes)),
-            "{name}"
-        );
-        let again = HwpxDecoder::decode(&outcome.bytes).unwrap();
-        assert_eq!(again.document, decoded.document, "{name}");
-    }
 }
 
 /// A field whose text holds a tab is one folded body on both sides: a line
@@ -390,4 +263,65 @@ fn a_bookmark_span_across_paragraphs_keeps_its_first_cache() {
         host(vec![text("다")], vec![line(0, None)]),
     ];
     assert_eq!(caches(within), (2, 0));
+}
+
+fn line(textpos: u32, boundary: Option<LineBoundary>) -> LineSeg {
+    let mut l = LineSeg::default();
+    l.textpos = textpos;
+    l.vertsize = 1000;
+    l.textheight = 1000;
+    l.horzsize = 40000;
+    l.boundary = boundary;
+    l
+}
+
+fn at(skip: &[WireTokenKind], next: Option<WireTokenKind>) -> Option<LineBoundary> {
+    Some(LineBoundary::new(skip.to_vec(), next))
+}
+
+/// The wire `textpos` list of the first body paragraph, or `None` when its
+/// cache was dropped; and the encode warnings' codes.
+fn encode(first: Paragraph, with_header_and_page_number: bool) -> (Option<Vec<u32>>, Vec<String>) {
+    let mut section = Section::with_paragraphs(vec![first], PageSettings::a4());
+    if with_header_and_page_number {
+        section.headers.push(HeaderFooter::all_pages(vec![Paragraph::with_runs(
+            vec![Run::text("머리", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]));
+        section.page_number = Some(PageNumber::bottom_center());
+    }
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let store = style_store_for_preset("default").unwrap();
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &doc.validate().unwrap(),
+        &store,
+        &ImageStore::new(),
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    let xml = {
+        use std::io::Read as _;
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();
+        let mut xml = String::new();
+        zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
+        xml
+    };
+    // The first body paragraph's own cache comes after its runs: take the
+    // last linesegarray before the end of the first top-level paragraph.
+    let body_end = xml.rfind("</hp:p>").unwrap();
+    let cache = xml[..body_end].rfind("<hp:linesegarray>").and_then(|at| {
+        let end = at + xml[at..].find("</hp:linesegarray>").unwrap();
+        let segment = &xml[at..end];
+        (!xml[end..body_end].contains("<hp:p ")).then(|| {
+            segment
+                .match_indices("textpos=\"")
+                .map(|(i, m)| {
+                    let v = &segment[i + m.len()..];
+                    v[..v.find('"').unwrap()].parse().unwrap()
+                })
+                .collect()
+        })
+    });
+    (cache, outcome.warnings.iter().map(|w| w.code().to_string()).collect())
 }

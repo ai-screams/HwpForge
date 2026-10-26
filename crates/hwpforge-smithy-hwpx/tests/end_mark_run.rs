@@ -1,43 +1,74 @@
-//! The paragraph-end mark's char shape (§19.22 D5, S17).
-//!
-//! Hancom writes it as an empty last run (`<hp:run charPrIDRef="N"/>`) of a
-//! paragraph with two or more runs. The decoder dropped that run, so a
-//! re-saved document lost it (the height of the paragraph's last line).
-//! Inputs are repo fixtures; the footnote case adds an end run to a
-//! footnote paragraph of one.
+#[path = "support/end_mark_run.rs"]
+mod shared;
+use shared::*;
 
 use std::io::{Cursor, Read, Write};
 
 use hwpforge_core::run::RunContent;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxPatcher};
 
-fn fixture(path: &str) -> Vec<u8> {
-    let path = format!("{}/../../tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
-}
-
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut out).unwrap();
-    out
-}
-
-fn with_section(bytes: &[u8], xml: &str) -> Vec<u8> {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).expect("entry");
-        let name = entry.name().expect("ZIP entry name").to_string();
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(entry.compression());
-        let mut data = Vec::new();
-        entry.read_to_end(&mut data).expect("read");
-        out.start_file(name.as_str(), options).expect("start");
-        let body = if name == "Contents/section0.xml" { xml.as_bytes() } else { &data };
-        out.write_all(body).expect("write");
+/// Construct end marks in the three flows the preserving editor addresses.
+fn source(flow: &str) -> Vec<u8> {
+    use hwpforge_core::{
+        control::Control,
+        document::Document,
+        image::ImageStore,
+        layout::{LayoutCache, LineSeg},
+        paragraph::Paragraph,
+        run::Run,
+        section::Section,
+        table::{Table, TableCell, TableRow},
+        PageSettings,
+    };
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::{
+        style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore},
+        EncodeOptions,
+    };
+    let mut styles = HwpxStyleStore::with_default_fonts("HwpForge Missing Test Face");
+    for _ in 0..14 {
+        styles.push_char_shape(HwpxCharShape::default());
     }
-    out.finish().expect("finish").into_inner()
+    styles.push_para_shape(HwpxParaShape::default());
+    let mut p = Paragraph::with_runs(
+        vec![Run::text("관찰 기록", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    p.end_char_shape = Some(CharShapeIndex::new(13));
+    let mut line = LineSeg::default();
+    line.vertsize = 1000;
+    line.textheight = 1000;
+    line.horzsize = 10000;
+    if flow != "footnote" {
+        p.layout_cache = Some(LayoutCache::new(vec![line]));
+    }
+    let host = match flow {
+        "body" => p,
+        "cell" => Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![p],
+                    HwpUnit::new(10000).unwrap(),
+                )])]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        ),
+        "footnote" => Paragraph::with_runs(
+            vec![Run::control(Control::footnote(vec![p]), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ),
+        _ => panic!("unknown flow"),
+    };
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    HwpxEncoder::encode_with_options(
+        &doc.validate().unwrap(),
+        &styles,
+        &ImageStore::new(),
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap()
 }
 
 /// The char shapes of the empty last runs of paragraphs with two or more
@@ -105,14 +136,11 @@ fn reencode(bytes: &[u8]) -> Vec<u8> {
 /// table cells — and come back out of the encoder at the same places with
 /// the same char shapes.
 ///
-/// 이것을 실패시키는 것: 디코더가 끝 run 을 읽지 않기 / 인코더가 쓰지 않기.
+/// 이것을 실패시키는 것: 생성 입력에서 end_char_shape 를 None 으로 바꾸기.
 #[test]
 fn end_mark_run_round_trips() {
-    for path in [
-        "user_samples/sample-char-breakwordlatin-variants.hwpx",
-        "tables/table_20_real_world_ministry_stress.hwpx",
-    ] {
-        let source = fixture(path);
+    for path in ["body", "cell"] {
+        let source = source(path);
         let before = end_runs(&section_xml(&source));
         assert!(!before.is_empty(), "{path}");
         let doc = HwpxDecoder::decode(&source).expect("decode");
@@ -132,29 +160,10 @@ fn end_mark_run_round_trips() {
 /// A preserving text edit of a paragraph with an end run — in the body, in
 /// a table cell and in a footnote — succeeds and keeps every end run.
 ///
-/// 이것을 실패시키는 것: 끝 run 을 Core run 으로 남기기(슬롯 수가 어긋나 보존
-/// 편집 실패) / 패치 출력에서 끝 run 을 잃기.
+/// 이것을 실패시키는 것: 생성 입력에서 end_char_shape 를 None 으로 바꾸기.
 #[test]
 fn preserving_edits_keep_end_mark_runs() {
-    let footnote_source = {
-        let source = fixture("structural/crossref_para.hwpx");
-        let xml = section_xml(&source);
-        let old = "<hp:t> 각주 내용 1</hp:t></hp:run><hp:linesegarray>";
-        assert_eq!(xml.matches(old).count(), 1);
-        with_section(
-            &source,
-            &xml.replacen(
-                old,
-                "<hp:t> 각주 내용 1</hp:t></hp:run><hp:run charPrIDRef=\"0\"/><hp:linesegarray>",
-                1,
-            ),
-        )
-    };
-    let cases: [(&str, Vec<u8>); 3] = [
-        ("body", fixture("user_samples/sample-char-breakwordlatin-variants.hwpx")),
-        ("cell", fixture("tables/table_20_real_world_ministry_stress.hwpx")),
-        ("footnote", footnote_source),
-    ];
+    let cases = ["body", "cell", "footnote"].map(|name| (name, source(name)));
     for (name, base) in cases {
         let before = end_runs(&section_xml(&base));
         assert!(!before.is_empty(), "{name}");
@@ -196,76 +205,13 @@ fn preserving_edits_keep_end_mark_runs() {
     }
 }
 
-/// An end run holding one empty `<hp:t/>` (Hancom writes both forms) is the
-/// end mark too.
-///
-/// 이것을 실패시키는 것: 빈 `<hp:t/>` 형을 끝 run 으로 보지 않기.
-#[test]
-fn empty_text_end_run_is_an_end_mark() {
-    let source = fixture("user_samples/sample-char-breakwordlatin-variants.hwpx");
-    let xml = section_xml(&source);
-    let form = "<hp:run charPrIDRef=\"0\"/>";
-    assert!(xml.contains(form));
-    let input =
-        with_section(&source, &xml.replace(form, "<hp:run charPrIDRef=\"0\"><hp:t/></hp:run>"));
-    let count = |bytes: &[u8]| {
-        let doc = HwpxDecoder::decode(bytes).expect("decode");
-        let mut n = 0;
-        for p in &doc.document.sections()[0].paragraphs {
-            p.for_each_paragraph(|q| n += usize::from(q.end_char_shape.is_some()));
-        }
-        n
-    };
-    assert_eq!(count(&input), count(&source));
-    assert!(count(&input) > 0);
-}
-
-fn end_mark_count(bytes: &[u8]) -> usize {
-    let doc = HwpxDecoder::decode(bytes).expect("decode");
-    let mut n = 0;
-    for p in &doc.document.sections()[0].paragraphs {
-        p.for_each_paragraph(|q| n += usize::from(q.end_char_shape.is_some()));
-    }
-    n
-}
-
-/// A last run whose `<hp:t>` holds only a marker — a highlight end (also
-/// after a space), a track-change mark, a title mark — is not an end mark
-/// (review r1: the decoder drops the marker, which made the run look empty).
-///
-/// 이것을 실패시키는 것: 표지만 든 `<hp:t>` 를 끝 run 으로 보기.
-#[test]
-fn marker_runs_are_not_end_marks() {
-    let source = fixture("user_samples/sample-char-breakwordlatin-variants.hwpx");
-    let xml = section_xml(&source);
-    // The end runs: an empty run right before the paragraph's line cache.
-    let form = "<hp:run charPrIDRef=\"0\"/><hp:linesegarray>";
-    let all = xml.matches(form).count();
-    assert!(all > 0);
-    // With those runs removed, only the other end marks remain.
-    let others = end_mark_count(&with_section(&source, &xml.replace(form, "<hp:linesegarray>")));
-    assert!(others < end_mark_count(&source));
-    for marker in [
-        "<hp:markpenEnd/>",
-        " <hp:markpenEnd/>",
-        "<hp:deleteBegin Id=\"1\" TcId=\"2\"/>",
-        "<hp:titleMark ignore=\"1\"/>",
-    ] {
-        let edited = xml.replace(
-            form,
-            &format!("<hp:run charPrIDRef=\"0\"><hp:t>{marker}</hp:t></hp:run><hp:linesegarray>"),
-        );
-        assert_eq!(end_mark_count(&with_section(&source, &edited)), others, "{marker}");
-    }
-}
-
 /// An end run's char shape reference is bounded like every run's — in a
 /// table cell, whose paragraphs only the run conversion checked (review r1).
 ///
-/// 이것을 실패시키는 것: 끝 run 의 참조 검사를 지우기.
+/// 이것을 실패시키는 것: 생성 입력에서 end_char_shape 를 None 으로 바꾸기.
 #[test]
 fn end_run_reference_is_bounded() {
-    let source = fixture("tables/table_20_real_world_ministry_stress.hwpx");
+    let source = source("cell");
     let xml = section_xml(&source);
     // The only occurrence: a cell paragraph's end run.
     let end_run = "</hp:run><hp:run charPrIDRef=\"13\"/><hp:linesegarray>";

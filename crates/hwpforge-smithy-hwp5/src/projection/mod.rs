@@ -1059,9 +1059,9 @@ const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 /// bit0(글자처럼 취급)=1 이면 나머지 축 비트는 의미가 없으므로
 /// [`ObjectPlacement::legacy_inline_defaults`] 를 반환한다 (도형은 `None` 으로
 /// collapse, 이미지는 인라인 유지 — W2p 계약 보존). bit0=0(부유)일 때만 축을
-/// 디코드한다 (비트 배치는 hwp-rs `common_properties.rs` 대조 + `textbox_anchored`
-/// ·`anchored_zero_origin_png` fixture 의 속성 word 와 한컴 `.hwpx` 쌍 `<hp:pos>`
-/// 바이트 검증):
+/// 디코드한다 (비트 배치는 hwp-rs `common_properties.rs` 대조 및
+/// 한컴이 저장한 떠 있는 글상자·그림의 속성 word 와 HWPX `<hp:pos>`
+/// 바이트 대조로 검증):
 ///
 /// - `vertRelTo` bits 3-4 (`0`=Paper `1`=Page `2`=Para)
 /// - `horzRelTo` bits 8-9 (`0`=Paper `1`=Page `2`=Column `3`=Para)
@@ -1070,7 +1070,7 @@ const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 /// - `textWrap` bits 21-23 (`0`=Square `1`=TopAndBottom `2`=BehindText
 ///   `3`=InFrontOfText — **한컴 저장본의 4값**이다. 공식 스펙 rev1.3 표 70·
 ///   hwp-rs·hwp.js 의 6값(Square·Tight·Through·TopAndBottom·BehindText·
-///   InFrontOfText)은 한컴이 쓰는 값과 다르다: X2 fixture(`x2-wrap-modes`)
+///   InFrontOfText)은 한컴이 쓰는 값과 다르다: 배치 방식 실측
 ///   4/4·한컴 짝의 떠 있는 개체 457/457 이 이 4값과 일치, `wire-gotchas.md`
 ///   #38)
 /// - `textFlow` bits 24-25 (`0`=BothSides `1`=LeftOnly `2`=RightOnly
@@ -3445,7 +3445,7 @@ fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::sect
 /// matching ids).
 ///
 /// `properties` bit semantics (verified against the
-/// `sample-page-border-fill` 한글 fixture; only this fixture so far, so
+/// page borders saved by Hancom; only one document observed so far, so
 /// the bit-0 → text-border mapping is asserted from observed truth):
 /// - bit 0: border base — set → `"PAPER"` (paper edge), clear →
 ///   `"CONTENT"` (text area)
@@ -3599,7 +3599,7 @@ fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
 /// Codes follow 한글's real encoding (same table as
 /// `schema::border_fill::Hwp5BorderLineKind`): `0=없음`, `1=실선`, `2=점선`,
 /// `8=이중선`. Codes with no direct Core equivalent fall back to `Solid`.
-/// Verified against the native `cold` ctrl in `nativ-colline.hwpx` (kind 8 →
+/// Verified against the native `cold` ctrl in Hancom-saved columns (kind 8 →
 /// `DOUBLE_SLIM`).
 fn hwp5_col_border_kind_to_line_type(code: u8) -> BorderLineType {
     match code {
@@ -3617,7 +3617,7 @@ fn hwp5_col_border_kind_to_line_type(code: u8) -> BorderLineType {
 
 /// Maps a HWP5 border-width index to millimetres (한글's 16-step table).
 ///
-/// Verified: index `9` → `0.7 mm` (native `nativ-colline.hwpx`). Out-of-range
+/// Verified: index `9` → `0.7 mm` (Hancom-saved columns). Out-of-range
 /// indices fall back to the OWPML default `0.12 mm`.
 fn hwp5_border_width_mm(index: u8) -> f64 {
     const WIDTHS_MM: [f64; 16] =
@@ -3700,7 +3700,7 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     // (the position above is property bits 8-11 = header_data[5]). The HWP5
     // `HWPNumberShape` codes map 1:1 to `NumberFormatType` (0=Digit,
     // 1=CircledDigit, 2=RomanCapital, 3=RomanSmall, …), verified against the
-    // native `sample-pagenu-roman` fixture (ROMAN_CAPITAL = shape 2). Before
+    // Roman page numbering saved by Hancom (ROMAN_CAPITAL = shape 2). Before
     // this the format byte was never read and every page number emitted
     // `Digit`, silently dropping Roman/Hangul/Latin page numbering (P0-3).
     let number_format = header_data
@@ -4123,9 +4123,8 @@ fn project_ole_object_run(
             // `ShapeComponentOle` extent fields hold the OLE's *internal
             // canvas* size (observed constant 7200×7200), which 한컴
             // mirrors into `hp:orgSz`/`hc:extent`, NOT `hp:sz`. The
-            // chart-fixture ground truth (`chart_02_single_pie.hwpx`
-            // 한컴-native pair: hp:sz 32250×18750 == CtrlHeader geometry)
-            // pinned this; using the extent shrank converted charts to
+            // native pie-chart geometry (hp:sz 32250×18750 equals
+            // CtrlHeader geometry) confirms this; using the extent shrank converted charts to
             // ≈2.5cm. Extent stays as the fallback for a zero geometry.
             // The geometry x/y mirror the placement convention used by
             // the other shape projections (zero-offset == inline).
@@ -6207,7 +6206,7 @@ mod tests {
             original_size: None,
             instance_id: 0,
             // W5 w0: 배치가 이제 속성 word 실비트로 결정되므로, 실측 anchored
-            // 이미지 word(anchored_zero_origin_png native fixture, 0x040a2310 →
+            // 이미지 word(한컴이 저장한 개체, 0x040a2310 →
             // Para/Para/Square, flowWithText=1)를 싣는다 (이전엔 TextBox 관례가
             // 이 값을 합성했다).
             ctrl_properties: 0x040a_2310,
@@ -6572,7 +6571,7 @@ mod tests {
         assert_eq!(zeroed.vert_offset, HwpUnit::ZERO);
         assert_eq!(zeroed.horz_offset, HwpUnit::ZERO);
 
-        // 실측 속성 word (anchored_zero_origin_png native fixture,
+        // 실측 속성 word (한컴이 저장한 개체,
         // attr=0x040a2310) → Para/Para/Square, flow=true → overlap 강제 false.
         let img = image_placement_from_wire(
             &zero_origin,
@@ -6646,7 +6645,7 @@ mod tests {
             width: 100,
             height: 200,
         };
-        // textbox_anchored native fixture attr=0x040a4110 → Para/Page/Square.
+        // 한컴이 저장한 개체 attr=0x040a4110 → Para/Page/Square.
         let flow = image_placement_from_wire(
             &geometry,
             ImageProjectionContext::Flow,
@@ -6767,7 +6766,7 @@ mod tests {
             Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "object_placement.text_wrap"
         )));
 
-        // 유효 word (anchored_zero_origin_png attr) 는 경고 0.
+        // 유효 word (한컴이 저장한 그림의 속성) 는 경고 0.
         let mut clean = Vec::new();
         let _ = object_placement_from_ctrl_properties(0x040a_2310, 0, 0, &mut clean);
         assert!(clean.is_empty(), "valid property word must not emit fail-closed warnings");
@@ -8871,6 +8870,7 @@ mod tests {
     // 이것을 실패시키는 것: `project_ole_object_run` 의 추출 charge 제거
     // (두 번째 차트도 성공해 문서가 `Ok`).
     #[test]
+    // 이것을 실패시키는 것: 차트 추출 부족 예산을 정확한 예산으로 변경 (실제 음성 대조 실행).
     fn chart_extractions_are_charged_and_overrun_fails_the_document() {
         let one = one_chart_extraction_len();
         let section = || {
@@ -8893,6 +8893,7 @@ mod tests {
     // 이것을 실패시키는 것: 같은 binary_data_id 는 처음 한 번만 charge 하기
     // (자산당 1회로 세면 두 번째 참조가 예산 밖에서 할당된다).
     #[test]
+    // 이것을 실패시키는 것: 차트 추출 부족 예산을 정확한 예산으로 변경 (실제 음성 대조 실행).
     fn repeated_references_to_one_chart_asset_are_charged_per_reference() {
         let one = one_chart_extraction_len();
         let section = || {
@@ -8955,6 +8956,7 @@ mod tests {
     // 이것을 실패시키는 것: `project_to_core_internal` 의 `Ok` 직전
     // `budget_error` 검사 제거 (네 컨테이너 모두 문서가 `Ok` 로 반환된다).
     #[test]
+    // 이것을 실패시키는 것: 첫 추출 예산 경계 1바이트 증가 (실제 음성 대조 실행).
     fn chart_budget_overrun_in_any_container_fails_the_document() {
         let one = one_chart_extraction_len();
         for container in ["body", "table_cell", "header", "textbox"] {
@@ -8975,6 +8977,7 @@ mod tests {
     // `budget_error.is_some()` 조기 반환 제거 (초과 뒤에도 표 셀·글상자의
     // 차트를 계속 추출해 호출 수가 3이 되고, 마지막 오류가 첫 오류를 덮는다).
     #[test]
+    // 이것을 실패시키는 것: 첫 추출 예산 경계 1바이트 증가 (실제 음성 대조 실행).
     fn extraction_stops_after_budget_overrun_and_first_error_is_kept() {
         let one = one_chart_extraction_len();
         let sections = || {

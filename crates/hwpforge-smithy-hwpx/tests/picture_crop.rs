@@ -1,116 +1,16 @@
-//! Picture crop, image extent and original box (§19.20 H-v3, S8).
-//!
-//! The encoder used to write every picture's `orgSz`, `imgRect`, `imgClip`
-//! and `imgDim` from its display size, which drops a crop (the whole image
-//! shows, shrunk) and the original box. Inputs are repo fixtures and Core
-//! pictures built through the API.
+#[path = "support/picture_crop.rs"]
+mod shared;
+use shared::*;
 
 use std::io::{Cursor, Read};
 
 use hwpforge_core::image::{Image, ImageCrop, ImageFormat, ImageStore};
-use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, Size};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
-
-fn fixture(path: &str) -> Vec<u8> {
-    let path = format!("{}/../../tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
-}
-
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut out).unwrap();
-    out
-}
-
-fn reencode(bytes: &[u8]) -> Vec<u8> {
-    let doc = HwpxDecoder::decode(bytes).expect("decode");
-    HwpxEncoder::encode(
-        &doc.document.validate().expect("validate"),
-        &doc.style_store,
-        &doc.image_store,
-    )
-    .expect("encode")
-}
-
-/// Each picture's frame elements, in document order: `orgSz`, `imgClip`,
-/// `imgDim` (or `-`), and the `scaMatrix` `e1`/`e5` as numbers.
-fn frames(xml: &str) -> Vec<(String, String, String, (f64, f64))> {
-    let mut out = Vec::new();
-    let mut rest = xml;
-    while let Some(at) = rest.find("<hp:pic ") {
-        let end = at + rest[at..].find("</hp:pic>").expect("pic end");
-        let pic = &rest[at..end];
-        let element = |tag: &str| {
-            pic.find(&format!("<{tag} "))
-                .map(|p| pic[p..p + pic[p..].find("/>").unwrap() + 2].to_string())
-                .unwrap_or_else(|| "-".to_string())
-        };
-        let sca = element("hc:scaMatrix");
-        let num = |name: &str| attr(&sca, name).parse::<f64>().unwrap();
-        out.push((
-            element("hp:orgSz"),
-            element("hp:imgClip"),
-            element("hp:imgDim"),
-            (num("e1"), num("e5")),
-        ));
-        rest = &rest[end..];
-    }
-    out
-}
-
-fn attr<'a>(tag: &'a str, name: &str) -> &'a str {
-    let needle = format!(" {name}=\"");
-    let at = tag.find(&needle).unwrap_or_else(|| panic!("{name} in {tag}")) + needle.len();
-    &tag[at..at + tag[at..].find('"').unwrap()]
-}
-
-fn u(v: i32) -> HwpUnit {
-    HwpUnit::new(v).unwrap()
-}
-
-/// Hancom's cropped picture and its uncropped twin (each scaled from a
-/// 275220 x 153600 original box) re-encode with the same `orgSz`,
-/// `imgClip`, `imgDim` and scale, and decode to the crop in the image's
-/// own coordinates.
-///
-/// 이것을 실패시키는 것: 디코더가 `crop`·`image_extent`·`frame.original_size` 중 하나를
-/// 버리는 것 / 인코더가 표시 크기로 되돌려 쓰는 것 / 배율 행렬을 항등으로 두는 것.
-#[test]
-fn hancom_crop_and_original_box_round_trip() {
-    let original = fixture("images/real_crop_vs_original_two_objects.hwpx");
-    let doc = HwpxDecoder::decode(&original).expect("decode");
-    let images: Vec<&Image> = doc.document.sections()[0]
-        .paragraphs
-        .iter()
-        .flat_map(|p| &p.runs)
-        .filter_map(|r| match &r.content {
-            RunContent::Image(img) => Some(img),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(images.len(), 2);
-    assert_eq!(images[0].crop, None);
-    assert_eq!(images[0].image_extent, Some((u(206_400), u(115_200))));
-    assert_eq!(images[0].frame.original_size, Some(Size::new(u(275_220), u(153_600))));
-    assert_eq!(
-        images[1].crop,
-        Some(ImageCrop { left: u(54_464), top: u(21_128), right: u(151_936), bottom: u(115_200) })
-    );
-    assert_eq!(images[1].image_extent, Some((u(206_400), u(115_200))));
-
-    let before = frames(&section_xml(&original));
-    let after = frames(&section_xml(&reencode(&original)));
-    assert_eq!(before.len(), 2);
-    for (b, a) in before.iter().zip(&after) {
-        assert_eq!((&b.0, &b.1, &b.2), (&a.0, &a.1, &a.2));
-        assert!((b.3 .0 - a.3 .0).abs() < 1e-6 && (b.3 .1 - a.3 .1).abs() < 1e-6, "{b:?} {a:?}");
-    }
-}
+use hwpforge_smithy_hwpx::HwpxEncoder;
 
 fn encode_picture(image: Image) -> String {
     let para = Paragraph::with_runs(
@@ -128,10 +28,6 @@ fn encode_picture(image: Image) -> String {
     let bytes =
         HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &store).expect("encode");
     section_xml(&bytes)
-}
-
-fn picture() -> Image {
-    Image::new("BinData/image1.png", u(10_625), u(3_612), ImageFormat::Png)
 }
 
 /// What the encoder writes for each combination of the three fields:
@@ -184,4 +80,8 @@ fn encoder_writes_each_frame_state() {
         "{xml}"
     );
     assert!(xml.contains(r#"<hp:curSz width="10625" height="3612"/>"#), "{xml}");
+}
+
+fn picture() -> Image {
+    Image::new("BinData/image1.png", u(10_625), u(3_612), ImageFormat::Png)
 }

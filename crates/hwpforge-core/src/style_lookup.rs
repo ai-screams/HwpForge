@@ -174,7 +174,7 @@ pub trait StyleLookup {
     ///
     /// Hancom renders page numbers (`hp:pageNum`) with the dedicated
     /// "쪽 번호"/"Page Number" CHAR style rather than the document default —
-    /// fixture-verified (rules-pagenum, 2026-08-10). Consumers that
+    /// verified against Hancom-saved page numbers (2026-08-10). Consumers that
     /// synthesize such text need the style's char shape to match Hancom
     /// output. The default implementation reports no style table.
     fn char_style_shape(&self, _name: &str) -> Option<CharShapeIndex> {

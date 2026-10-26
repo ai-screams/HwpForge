@@ -1,8 +1,4 @@
-.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc site-check cov deny machete msrv msrv-pdf ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test py-dev py-test py-cov py-lint py-check py-rust-test py-all
-
-AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
-AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
-AUDIT_HWP5_CURRENT    ?= .audit/hwp5_current.json
+.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc site-check cov deny machete msrv msrv-pdf ci ci-fast ci-full clean fixture-policy skill-test py-dev py-test py-cov py-lint py-check py-rust-test py-all
 
 MDBOOK_VERSION ?= 0.4.52
 MDBOOK_ADMONISH_VERSION ?= 1.20.0
@@ -43,10 +39,8 @@ help:
 	@echo "  make msrv             MSRV compatibility check (Rust 1.89)"
 	@echo "  make msrv-pdf         MSRV check for the 1.92 crates + fuzz smoke"
 	@echo ""
-	@echo "HWP5 audit / skill:"
-	@echo "  make audit-hwp5            Run the HWP5 audit batch over the fixtures"
-	@echo "  make audit-hwp5-baseline   Refresh the HWP5 audit baseline"
-	@echo "  make audit-hwp5-gate       HWP5 audit gate against the baseline (as in CI)"
+	@echo "Fixture policy / skill:"
+	@echo "  make fixture-policy        Check committed document metadata"
 	@echo "  make skill-test            Smoke-test the documented skill workflows"
 	@echo ""
 	@echo "Python bindings (uv):"
@@ -233,7 +227,7 @@ py-rust-test:
 py-all: py-lint py-check py-rust-test py-test py-cov
 	@echo "✅ Python binding checks passed!"
 
-ci-fast: fmt clippy test deny lint-md
+ci-fast: fixture-policy fmt clippy test deny lint-md
 	@echo "✅ Fast CI checks passed!"
 
 ci-full: ci-fast cov msrv msrv-pdf
@@ -242,17 +236,9 @@ ci-full: ci-fast cov msrv msrv-pdf
 ci: ci-fast
 	@echo "✅ CI checks passed!"
 
-audit-hwp5:
-	@mkdir -p .audit
-	cargo run -q -p hwpforge-convert --example audit_batch -- $(AUDIT_HWP5_FIXTURE_DIRS) > $(AUDIT_HWP5_CURRENT)
-	@echo "audit-hwp5 → $(AUDIT_HWP5_CURRENT)"
-
-audit-hwp5-baseline: audit-hwp5
-	cp $(AUDIT_HWP5_CURRENT) $(AUDIT_HWP5_BASELINE)
-	@echo "audit-hwp5 baseline refreshed → $(AUDIT_HWP5_BASELINE)"
-
-audit-hwp5-gate: audit-hwp5
-	python3 scripts/audit_hwp5_gate.py --baseline $(AUDIT_HWP5_BASELINE) --current $(AUDIT_HWP5_CURRENT)
+fixture-policy:
+	python3 -m unittest discover -s scripts -p test_check_fixture_policy.py
+	python3 scripts/check_fixture_policy.py
 
 skill-test:
 	bash scripts/skill-smoke.sh

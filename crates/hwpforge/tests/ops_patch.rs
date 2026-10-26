@@ -34,9 +34,10 @@ fn exported_section_text(name: &str, section: usize) -> String {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn an_unedited_patch_round_trips() {
-    let bytes = fixture("SimpleEdit.hwpx");
-    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+    let bytes = fixture("garden_notes.hwpx");
+    let opts = PatchOptions::default().with_patch(exported_section_text("garden_notes.hwpx", 0));
 
     let out = patch(&bytes, &opts).expect("patch");
 
@@ -49,9 +50,10 @@ fn an_unedited_patch_round_trips() {
 /// semantically identical — this is what makes it safe to use for a narrow
 /// edit on a document whose layout matters.
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn an_unedited_patch_preserves_the_document() {
-    let bytes = fixture("SimpleEdit.hwpx");
-    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+    let bytes = fixture("garden_notes.hwpx");
+    let opts = PatchOptions::default().with_patch(exported_section_text("garden_notes.hwpx", 0));
 
     let patched = patch(&bytes, &opts).expect("patch").bytes;
 
@@ -60,9 +62,10 @@ fn an_unedited_patch_preserves_the_document() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn meta_keys_are_section_and_warnings() {
-    let bytes = fixture("SimpleEdit.hwpx");
-    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+    let bytes = fixture("garden_notes.hwpx");
+    let opts = PatchOptions::default().with_patch(exported_section_text("garden_notes.hwpx", 0));
 
     let value =
         serde_json::to_value(patch(&bytes, &opts).expect("patch").meta()).expect("serialise meta");
@@ -75,13 +78,14 @@ fn meta_keys_are_section_and_warnings() {
 ///
 /// The `warnings` channel must carry whatever the library produced on the
 /// path; for `patch` that is the base decode, which used to be dropped and
-/// the wrapper hard-coded to empty. `SimpleEdit.hwpx` is a committed fixture
+/// the wrapper hard-coded to empty. `garden_notes.hwpx` is a committed fixture
 /// whose decode drops a layout cache, so the loss is observable rather than
 /// theoretical.
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn the_base_decode_warnings_reach_the_caller() {
-    let bytes = fixture("SimpleEdit.hwpx");
-    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+    let bytes = fixture("garden_notes.hwpx");
+    let opts = PatchOptions::default().with_patch(exported_section_text("garden_notes.hwpx", 0));
 
     let out = patch(&bytes, &opts).expect("patch");
 
@@ -102,20 +106,22 @@ fn a_clean_base_reports_nothing() {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_patch_that_is_not_json_is_a_parse_failure() {
     let opts = PatchOptions::default().with_patch("{ not json");
 
-    let err = patch(&fixture("SimpleEdit.hwpx"), &opts).expect_err("must reject");
+    let err = patch(&fixture("garden_notes.hwpx"), &opts).expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::JsonParseFailed, "{err}");
     assert_eq!(err.code().as_str(), "JSON_PARSE_FAILED");
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_patch_that_is_not_an_exported_section_is_a_parse_failure() {
     let opts = PatchOptions::default().with_patch(r#"{"unexpected": true}"#);
 
-    let err = patch(&fixture("SimpleEdit.hwpx"), &opts).expect_err("must reject");
+    let err = patch(&fixture("garden_notes.hwpx"), &opts).expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::JsonParseFailed, "{err}");
 }
@@ -123,12 +129,13 @@ fn a_patch_that_is_not_an_exported_section_is_a_parse_failure() {
 /// Writing section 0's content over section 1 would silently destroy a
 /// section, so the index carried by the JSON has to agree with the request.
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn a_section_index_that_disagrees_with_the_json_is_refused() {
     let opts = PatchOptions::default()
         .with_section(1)
-        .with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+        .with_patch(exported_section_text("garden_notes.hwpx", 0));
 
-    let err = patch(&fixture("SimpleEdit.hwpx"), &opts).expect_err("must reject");
+    let err = patch(&fixture("garden_notes.hwpx"), &opts).expect_err("must reject");
 
     assert!(
         matches!(err.code(), OpsCode::SectionIndexMismatch | OpsCode::SectionOutOfRange),
@@ -176,8 +183,9 @@ fn corrupt_first_address(value: &mut serde_json::Value, patched: &mut usize) {
 }
 
 #[test]
+// 이것을 실패시키는 것: 생성 입력 경로를 없는 파일로 바꾸기.
 fn an_undecodable_base_is_a_decode_failure() {
-    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+    let opts = PatchOptions::default().with_patch(exported_section_text("garden_notes.hwpx", 0));
 
     let err = patch(b"not a zip at all", &opts).expect_err("must reject");
 

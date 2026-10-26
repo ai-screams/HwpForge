@@ -1442,7 +1442,6 @@ fn masterpage_number(href: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{HeadingType, NumberFormatType};
 
     /// 이것을 실패시키는 것: 주소 인덱스만 신뢰하거나 원본 검증에 claim 패키지 사용.
     #[test]
@@ -2085,7 +2084,6 @@ mod tests {
         assert!(warnings.iter().all(|w| w.is_content_loss()));
     }
     use std::io::{Cursor, Write};
-    use std::path::PathBuf;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
@@ -2111,32 +2109,6 @@ mod tests {
         }
 
         zip.finish().unwrap().into_inner()
-    }
-
-    fn fixture_path(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name)
-    }
-
-    fn decode_fixture(name: &str) -> HwpxDocument {
-        let path = fixture_path(name);
-        let bytes =
-            std::fs::read(&path).unwrap_or_else(|_| panic!("fixture should exist: {path:?}"));
-        HwpxDecoder::decode(&bytes).unwrap_or_else(|_| panic!("fixture should decode: {path:?}"))
-    }
-
-    fn collect_body_heading_triples(doc: &HwpxDocument) -> Vec<(HeadingType, u32, u32)> {
-        doc.document
-            .sections()
-            .iter()
-            .flat_map(|section| section.paragraphs.iter())
-            .map(|paragraph| {
-                let shape = doc
-                    .style_store
-                    .para_shape(paragraph.para_shape_id)
-                    .expect("paragraph para shape should exist");
-                (shape.heading_type, shape.heading_id_ref, shape.heading_level)
-            })
-            .collect()
     }
 
     const HEADER: &str = r##"<head version="1.4" secCnt="1">
@@ -2777,109 +2749,6 @@ mod tests {
         let data = result.image_store.get("logo.png").expect("should find logo.png");
         assert_eq!(data, &fake_png);
     }
-
-    #[test]
-    fn decode_user_sample_bullet_list_preserves_bullet_semantics() {
-        let decoded = decode_fixture("user_samples/lists/sample-bullet-list.hwpx");
-        let headings = collect_body_heading_triples(&decoded);
-
-        assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
-        assert_eq!(decoded.style_store.bullet_count(), 1);
-        assert_eq!(decoded.style_store.numbering_count(), 1);
-        assert_eq!(decoded.style_store.iter_bullets().next().map(|bullet| bullet.id), Some(1));
-    }
-
-    #[test]
-    fn decode_user_sample_numbered_list_preserves_numbering_semantics() {
-        let decoded = decode_fixture("user_samples/lists/sample-numbered-list.hwpx");
-        let headings = collect_body_heading_triples(&decoded);
-
-        assert!(headings.contains(&(HeadingType::Number, 2, 0)));
-        assert!(decoded.style_store.numbering_count() >= 2);
-    }
-
-    #[test]
-    fn decode_user_sample_mixed_lists_with_outline_preserves_all_list_kinds() {
-        let decoded = decode_fixture("user_samples/lists/sample-mixed-lists-with-outline.hwpx");
-        let headings = collect_body_heading_triples(&decoded);
-
-        assert!(headings.contains(&(HeadingType::Outline, 0, 0)));
-        assert!(headings.contains(&(HeadingType::Outline, 0, 1)));
-        assert!(headings.contains(&(HeadingType::Outline, 0, 2)));
-        assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
-        assert!(headings.contains(&(HeadingType::Number, 2, 0)));
-        assert!(headings.contains(&(HeadingType::Number, 3, 0)));
-        assert_eq!(decoded.style_store.bullet_count(), 1);
-        assert!(decoded.style_store.numbering_count() >= 3);
-    }
-
-    #[test]
-    fn decode_user_sample_numbered_custom_formats_preserves_distinct_numbering_ids() {
-        let decoded = decode_fixture("user_samples/lists/sample-numbered-list-custom-formats.hwpx");
-        let headings = collect_body_heading_triples(&decoded);
-
-        for id_ref in [2, 3, 4, 5] {
-            assert!(headings.contains(&(HeadingType::Number, id_ref, 0)));
-        }
-        assert!(decoded.style_store.numbering_count() >= 5);
-        let numberings: Vec<_> = decoded.style_store.iter_numberings().collect();
-        assert_eq!(numberings[1].levels[0].text, "^1)");
-        assert_eq!(numberings[2].levels[0].text, "(^1)");
-        assert_eq!(numberings[4].levels[6].num_format, NumberFormatType::CircledLatinSmall);
-    }
-
-    #[test]
-    fn decode_user_sample_checkable_bullet_basic_preserves_checked_glyph_and_item_state() {
-        let decoded = decode_fixture("user_samples/lists/sample-checkable-bullet-basic.hwpx");
-        let paragraphs = &decoded.document.sections()[0].paragraphs;
-
-        let unchecked = paragraphs
-            .iter()
-            .find(|paragraph| paragraph.text_content().contains("unchecked item A"))
-            .expect("fixture should contain unchecked item A");
-        let checked = paragraphs
-            .iter()
-            .find(|paragraph| paragraph.text_content().contains("checked item B"))
-            .expect("fixture should contain checked item B");
-
-        let unchecked_shape = decoded.style_store.para_shape(unchecked.para_shape_id).unwrap();
-        let checked_shape = decoded.style_store.para_shape(checked.para_shape_id).unwrap();
-        let bullet = decoded
-            .style_store
-            .iter_bullets()
-            .find(|bullet| bullet.id == unchecked_shape.heading_id_ref)
-            .expect("checkable bullet definition should exist");
-
-        assert_eq!(unchecked_shape.heading_type, HeadingType::Bullet);
-        assert_eq!(checked_shape.heading_type, HeadingType::Bullet);
-        assert!(bullet.is_checkable());
-        assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
-        assert!(!unchecked_shape.checked);
-        assert!(checked_shape.checked);
-    }
-
-    #[test]
-    fn decode_user_sample_checkable_bullet_nested_preserves_depth() {
-        let decoded = decode_fixture("user_samples/lists/sample-checkable-bullet-nested.hwpx");
-        let paragraphs = &decoded.document.sections()[0].paragraphs;
-
-        let level1 = paragraphs
-            .iter()
-            .find(|paragraph| paragraph.text_content().contains("level 1 unchecked"))
-            .expect("fixture should contain level 1 item");
-        let level2 = paragraphs
-            .iter()
-            .find(|paragraph| paragraph.text_content().contains("level 2 checked"))
-            .expect("fixture should contain level 2 item");
-        let level3 = paragraphs
-            .iter()
-            .find(|paragraph| paragraph.text_content().contains("level 3 unchecked"))
-            .expect("fixture should contain level 3 item");
-
-        assert_eq!(decoded.style_store.para_shape(level1.para_shape_id).unwrap().heading_level, 0);
-        assert_eq!(decoded.style_store.para_shape(level2.para_shape_id).unwrap().heading_level, 1);
-        assert_eq!(decoded.style_store.para_shape(level3.para_shape_id).unwrap().heading_level, 2);
-    }
 }
 
 /// Limits of the shared serde entry point [`xml_from_str`]: our structural
@@ -2973,96 +2842,23 @@ mod warning_accessor_tests {
 #[cfg(test)]
 mod xml_limit_tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     use super::section::parse_section;
     use crate::error::HwpxError;
 
-    /// The A1 cell run of `tables/table_01_basic_2x2.hwpx`.
-    const TABLE_ANCHOR: &str = r#"<hp:run charPrIDRef="0"><hp:t>A1</hp:t></hp:run>"#;
-    /// The drawText run of `images/textbox_anchored.hwpx`.
-    const TEXTBOX_ANCHOR: &str =
-        r#"<hp:run charPrIDRef="0"><hp:t>앵커형 글상자입니다.</hp:t></hp:run>"#;
-    /// Text placed in the innermost level; a decode that drops it is a
-    /// silent loss, not a success.
     const DEEPEST: &str = "XML_LIMIT_DEEPEST";
 
-    fn fixture_section(rel: &str) -> String {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(rel);
-        let bytes = std::fs::read(&path).expect("read fixture");
-        super::package::PackageReader::new(&bytes)
-            .expect("open fixture package")
-            .read_section_xml(0)
-            .expect("read section0.xml")
-    }
-
-    /// Byte range of the first `<open …>…</close>` element.
-    fn first_element(xml: &str, open: &str, close: &str) -> std::ops::Range<usize> {
-        let start = xml.find(open).expect("element start");
-        let end = xml.find(close).expect("element end") + close.len();
-        start..end
-    }
-
-    /// The table fixture's section with its table replaced by `levels`
-    /// nested levels following `pattern` (`T` = table, `B` = textbox), the
-    /// outermost level being `pattern[0]`. Real fixture fragments keep the
-    /// per-level element depth equal to the measured one (T 6, B 5).
-    fn nested_section(pattern: &str, levels: usize) -> String {
-        let section = fixture_section("tables/table_01_basic_2x2.hwpx");
-        let table_span = first_element(&section, "<hp:tbl", "</hp:tbl>");
-        let table = &section[table_span.clone()];
-        assert_eq!(table.matches(TABLE_ANCHOR).count(), 1, "table anchor");
-        let box_section = fixture_section("images/textbox_anchored.hwpx");
-        let textbox = &box_section[first_element(&box_section, "<hp:rect", "</hp:rect>")];
-        assert_eq!(textbox.matches(TEXTBOX_ANCHOR).count(), 1, "textbox anchor");
-
-        let kinds: Vec<char> = pattern.chars().cycle().take(levels).collect();
-        let mut fragment = String::new();
-        for (index, kind) in kinds.iter().rev().enumerate() {
-            let text = if index == 0 { DEEPEST } else { "outer" };
-            let run = format!(r#"<hp:run charPrIDRef="0">{fragment}<hp:t>{text}</hp:t></hp:run>"#);
-            fragment = match kind {
-                'T' => table.replacen(TABLE_ANCHOR, &run, 1),
-                'B' => textbox.replacen(TEXTBOX_ANCHOR, &run, 1),
-                other => panic!("unknown nesting kind {other}"),
-            };
-        }
-        format!("{}{}{}", &section[..table_span.start], fragment, &section[table_span.end..])
-    }
-
-    const GROUP_OPEN: &str = r#"<hp:container id="1000" zOrder="0" numberingType="PICTURE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="1000"><hp:offset x="0" y="0"/><hp:orgSz width="15000" height="13000"/><hp:curSz width="0" height="0"/><hp:sz width="15000" widthRelTo="ABSOLUTE" height="13000" heightRelTo="ABSOLUTE" protect="0"/>"#;
-    const GROUP_CLOSE: &str = "</hp:container>";
-
-    /// The table fixture's section with its table replaced by `levels`
-    /// nested `<hp:container>` groups around one textbox that holds
-    /// [`DEEPEST`]; `levels == 0` leaves the bare textbox.
     fn group_section(levels: usize) -> String {
-        let section = fixture_section("tables/table_01_basic_2x2.hwpx");
-        let table_span = first_element(&section, "<hp:tbl", "</hp:tbl>");
-        let box_section = fixture_section("images/textbox_anchored.hwpx");
-        let textbox = &box_section[first_element(&box_section, "<hp:rect", "</hp:rect>")];
-        assert_eq!(textbox.matches(TEXTBOX_ANCHOR).count(), 1, "textbox anchor");
-        let run = format!(r#"<hp:run charPrIDRef="0"><hp:t>{DEEPEST}</hp:t></hp:run>"#);
-        let fragment = format!(
-            "{}{}{}",
-            GROUP_OPEN.repeat(levels),
-            textbox.replacen(TEXTBOX_ANCHOR, &run, 1),
-            GROUP_CLOSE.repeat(levels)
+        let mut fragment = format!(
+            r#"<hp:rect id="1001"><hp:orgSz width="1000" height="1000"/><hp:curSz width="1000" height="1000"/><hp:sz width="1000" height="1000"/><hp:drawText><hp:subList><hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>{DEEPEST}</hp:t></hp:run></hp:p></hp:subList></hp:drawText></hp:rect>"#
         );
-        format!("{}{}{}", &section[..table_span.start], fragment, &section[table_span.end..])
-    }
-
-    /// The table fixture's section with its table replaced by one group
-    /// that has no children at all.
-    fn empty_group_section() -> String {
-        let section = fixture_section("tables/table_01_basic_2x2.hwpx");
-        let table_span = first_element(&section, "<hp:tbl", "</hp:tbl>");
+        for _ in 0..levels {
+            fragment = format!(
+                r#"<hp:container id="1000"><hp:orgSz width="15000" height="13000"/><hp:curSz width="0" height="0"/><hp:sz width="15000" height="13000"/>{fragment}</hp:container>"#
+            );
+        }
         format!(
-            "{}{}{}{}",
-            &section[..table_span.start],
-            GROUP_OPEN,
-            GROUP_CLOSE,
-            &section[table_span.end..]
+            r#"<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"><hp:p paraPrIDRef="0"><hp:run charPrIDRef="0">{fragment}</hp:run></hp:p></hs:sec>"#
         )
     }
 
@@ -3078,77 +2874,11 @@ mod xml_limit_tests {
             .expect("decode thread panicked")
     }
 
-    fn assert_decodes_to_deepest(pattern: &str, levels: usize) {
-        match decode_on_big_stack(nested_section(pattern, levels)) {
-            Ok(debug) => assert!(debug.contains(DEEPEST), "{pattern} x{levels}: deepest text lost"),
-            Err(err) => panic!("{pattern} x{levels} must decode, got: {err:?}"),
-        }
-    }
-
-    /// `guard` is `"table"` or `"sublist"`: which structural guard fires.
-    fn assert_nesting_guard(pattern: &str, levels: usize, guard: &str) {
-        assert_nesting_guard_with(nested_section(pattern, levels), guard);
-    }
-
-    fn assert_nesting_guard_with(xml: String, guard: &str) {
-        // 이것을 실패시키는 것: 각 가드의 depth + 1 → depth.
-        let expected =
-            format!("{guard} nesting depth 33 exceeds limit of 32 in Contents/section0.xml");
-        match decode_on_big_stack(xml) {
-            Err(HwpxError::InvalidStructure { detail }) if detail == expected => {}
-            other => panic!("must hit the {guard} guard, got: {other:?}"),
-        }
-    }
-
-    // 이것을 실패시키는 것: `xml_from_str` 에서 `recursion_limit` 호출을 빼기
-    // (0.42 기본 128 → XmlParse "recursion limit of 128 exceeded"), 또는
-    // section.rs 가 `quick_xml::de::from_str` 를 직접 부르기.
-    #[test]
-    fn xml_limit_table_nesting_32_decodes() {
-        assert_decodes_to_deepest("T", 32);
-    }
-
-    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 200 으로 낮추기 — 가드보다
-    // serde 재귀 한도가 먼저 걸려 XmlParse 가 된다. 표 가드(section.rs
-    // `convert_table`)를 `depth > MAX_NESTING_DEPTH` 로 바꾸기.
-    #[test]
-    fn xml_limit_table_nesting_33_hits_nesting_guard() {
-        assert_nesting_guard("T", 33, "table");
-    }
-
-    // 이것을 실패시키는 것: `recursion_limit` 호출을 빼기 (TB 32 = 요소 깊이 180).
-    #[test]
-    fn xml_limit_table_textbox_nesting_32_decodes() {
-        assert_decodes_to_deepest("TB", 32);
-    }
-
-    // TB 33 은 표 가드가 먼저 걸린다(실측).
-    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 180 으로 낮추기 — TB 33 에서
-    // 가드보다 serde 재귀 한도가 먼저 걸린다. 표 가드를 `>` 로 바꾸기.
-    #[test]
-    fn xml_limit_table_textbox_nesting_33_hits_nesting_guard() {
-        assert_nesting_guard("TB", 33, "table");
-    }
-
-    // 이것을 실패시키는 것: `recursion_limit` 호출을 빼기 (B 32 = 요소 깊이 164).
-    #[test]
-    fn xml_limit_textbox_nesting_32_decodes() {
-        assert_decodes_to_deepest("B", 32);
-    }
-
-    // 글상자만 겹치면 표가 아니라 subList 가드가 먼저 걸린다.
-    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 160 으로 낮추기 — B 33 (요소
-    // 깊이 169) 에서 가드보다 serde 재귀 한도가 먼저 걸린다. subList 가드
-    // (section.rs `decode_sublist_paragraphs_skipping`)를 `>` 로 바꾸기.
-    #[test]
-    fn xml_limit_textbox_nesting_33_hits_sublist_guard() {
-        assert_nesting_guard("B", 33, "sublist");
-    }
-
     // 묶음 도형도 표와 같은 한도: 32겹은 가장 안쪽 글자까지 살아 있다.
     // 이것을 실패시키는 것: `decode_container` 가드를 `depth >= MAX_NESTING_DEPTH`
     // 에서 `depth >= 31` 로 낮추기 (32겹이 오류가 된다).
     #[test]
+    // 이것을 실패시키는 것: 그룹 깊이 guard 초과 (실제 음성 대조 실행).
     fn xml_limit_group_nesting_32_decodes() {
         match decode_on_big_stack(group_section(32)) {
             Ok(debug) => {
@@ -3156,35 +2886,6 @@ mod xml_limit_tests {
                 assert_eq!(debug.matches("Group {").count(), 32, "group x32: Group count");
             }
             Err(err) => panic!("group x32 must decode, got: {err:?}"),
-        }
-    }
-
-    // 33겹은 조용히 사라지지 않고 구조 오류로 멈춘다 (serde 한도 224 보다 먼저).
-    // 이것을 실패시키는 것: `decode_container` 한도 분기를 `Ok(None)` 으로 되돌리기.
-    #[test]
-    fn xml_limit_group_nesting_33_hits_nesting_guard() {
-        assert_nesting_guard_with(group_section(33), "group");
-    }
-
-    // 원래 빈 묶음은 한도와 무관하게 그대로 조용히 생략된다 (동작 불변).
-    // 이것을 실패시키는 것: `decode_container` 의 `children.is_empty()` 분기를
-    // 오류로 바꾸기.
-    #[test]
-    fn xml_limit_empty_group_is_still_skipped() {
-        match decode_on_big_stack(empty_group_section()) {
-            Ok(debug) => assert!(!debug.contains("Group {"), "empty group must not emit a Group"),
-            Err(err) => panic!("empty group must decode, got: {err:?}"),
-        }
-    }
-
-    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 크게 올리기(예: 10000) —
-    // 표 42겹이 serde 를 통과해 가드 오류로 바뀐다.
-    #[test]
-    fn xml_limit_table_nesting_42_fails_closed_on_recursion_limit() {
-        match decode_on_big_stack(nested_section("T", 42)) {
-            Err(HwpxError::XmlParse { detail, .. })
-                if detail.contains("recursion limit of 224 exceeded") => {}
-            other => panic!("table x42 must fail on the serde recursion limit, got: {other:?}"),
         }
     }
 

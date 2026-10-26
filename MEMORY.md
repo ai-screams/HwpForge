@@ -89,11 +89,8 @@ Remaining structural backlog:
 - mixed ordered-task list list-scope normalization
 - custom checked glyph authoring fixture / policy
 
-Verified local research fixtures:
-
-- `tests/fixtures/user_samples/lists/sample-numbered-list-custom-formats.{hwp,hwpx}`
-- `tests/fixtures/user_samples/lists/sample-numbered-list-multilevel.{hwp,hwpx}`
-- `tests/fixtures/user_samples/lists/sample-mixed-lists-with-outline.{hwp,hwpx}`
+Verified list behavior includes custom number formats, multiple levels, and
+bullet/number/restart/outline coexistence in one section.
 
 Working rules for this slice:
 
@@ -125,7 +122,7 @@ Working rules for this slice:
 - Chart XML parts are ZIP-only and must not be listed in `content.hpf`.
 - TextBox is `rect + drawText`, not a generic control bucket.
 - `Paragraph.heading_level` and HWPX `paraPr/heading(type,idRef,level)` are different axes.
-- `sample-mixed-lists-with-outline` is the current same-section coexistence fixture for bullet/number/restart/outline.
+- Bullet, number, restart, and outline can coexist in the same section.
 - HWPX checkable bullet is `BULLET` + `checkedChar` + `paraHead.checkable` + `paraPr.checked`; miss one and support is fake.
 - `CheckBullet` is not `Bullet + bool`; item state and definition state live on different layers.
 - Markdown ordered task lists are intentionally normalized to unordered checkable semantics because shared HWP semantics do not yet prove a numbered-checkable kind.

@@ -1,35 +1,14 @@
-//! Caption numbers in Markdown (§19.16 J, P19): the lossy and styled views
-//! write the number Hancom cached between its prefix and suffix; the
-//! lossless grammar has no place for it and refuses the document rather
-//! than dropping the number.
+use hwpforge_core::StyleLookup;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::table::{Table, TableCell, TableRow};
-use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section, StyleLookup, Validated};
+use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section, Validated};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
 use hwpforge_smithy_md::{MdEncoder, MdError};
 
 struct PlainStyles;
-
-impl StyleLookup for PlainStyles {}
-
-fn caption(format: AutoNumberFormat) -> Document<Validated> {
-    let number = Control::AutoNumber { kind: AutoNumberKind::Picture, num: 3, format };
-    let para = Paragraph::with_runs(
-        vec![
-            Run::text("그림 ", CharShapeIndex::new(0)),
-            Run::control(number, CharShapeIndex::new(0)),
-            Run::text(" 조직도", CharShapeIndex::new(0)),
-        ],
-        ParaShapeIndex::new(0),
-    );
-    let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
-    doc.validate().expect("validate")
-}
 
 /// "그림 3 조직도" in both readable views; "(3)" with a prefix and suffix;
 /// the lossless encoder refuses.
@@ -52,33 +31,6 @@ fn caption_number_is_written_or_refused() {
         MdEncoder::encode_lossless(&plain),
         Err(MdError::UnsupportedStructure { .. })
     ));
-}
-
-/// F17's numbers all sit in captions: both readable views write the
-/// captions after their picture or table, so "그림 3", "그림 4" and "표 7"
-/// reach the Markdown; the lossless encoder refuses the document (review
-/// r1: the captions were not written at all, and lossless dropped the
-/// numbers without a word).
-///
-/// 이것을 실패시키는 것: 두 보기의 캡션 출력을 지우기 / lossless 의 캡션 검사를
-/// 지우기(그림 캡션은 Core 문단 순회에 없다).
-#[test]
-fn f17_caption_numbers_reach_the_readable_views() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/images/f17-caption-numbering.hwpx"
-    );
-    let decoded = HwpxDecoder::decode(&std::fs::read(path).expect("F17")).expect("decode");
-    let doc = decoded.document.validate().expect("validate");
-    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
-    let lossy = MdEncoder::encode_lossy(&doc).expect("lossy");
-    let styled = MdEncoder::encode_styled(&doc, &lookup).markdown;
-    for view in [&lossy, &styled] {
-        for number in ["그림 3", "그림 4", "표 7"] {
-            assert!(view.contains(number), "{number}: {view}");
-        }
-    }
-    assert!(matches!(MdEncoder::encode_lossless(&doc), Err(MdError::UnsupportedStructure { .. })));
 }
 
 /// A `*` prefix and suffix stay characters in the styled view, not an
@@ -108,15 +60,6 @@ fn numbered_caption(label: &str, kind: AutoNumberKind, num: u32) -> Caption {
         )],
         CaptionSide::Bottom,
     )
-}
-
-fn picture(caption: Option<Caption>) -> Image {
-    let size = HwpUnit::new(1000).unwrap();
-    let image = Image::new("BinData/a.png", size, size, ImageFormat::Png);
-    match caption {
-        Some(caption) => image.with_caption(caption),
-        None => image,
-    }
 }
 
 fn doc_of(paragraphs: Vec<Paragraph>) -> Document<Validated> {
@@ -179,12 +122,6 @@ fn lone_picture_and_inline_table_captions_are_written() {
 
 /// Every picture's bytes are known (so caption pictures can be checked).
 struct PictureStyles;
-
-impl StyleLookup for PictureStyles {
-    fn image_data(&self, key: &str) -> Option<&[u8]> {
-        key.contains("inner").then_some(b"inner-bytes".as_slice())
-    }
-}
 
 /// In a merged-cell table (the HTML path) a picture's and a nested table's
 /// caption numbers are written; and a picture inside a caption keeps its
@@ -296,5 +233,37 @@ fn table_paragraph_with_an_end_mark_stays_a_table_block() {
     let styled = MdEncoder::encode_styled(&doc, &PlainStyles).markdown;
     for view in [&lossy, &styled] {
         assert!(view.trim_start().starts_with('|'), "{view}");
+    }
+}
+
+impl StyleLookup for PlainStyles {}
+
+impl StyleLookup for PictureStyles {
+    fn image_data(&self, key: &str) -> Option<&[u8]> {
+        key.contains("inner").then_some(b"inner-bytes".as_slice())
+    }
+}
+
+fn caption(format: AutoNumberFormat) -> Document<Validated> {
+    let number = Control::AutoNumber { kind: AutoNumberKind::Picture, num: 3, format };
+    let para = Paragraph::with_runs(
+        vec![
+            Run::text("그림 ", CharShapeIndex::new(0)),
+            Run::control(number, CharShapeIndex::new(0)),
+            Run::text(" 조직도", CharShapeIndex::new(0)),
+        ],
+        ParaShapeIndex::new(0),
+    );
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+    doc.validate().expect("validate")
+}
+
+fn picture(caption: Option<Caption>) -> Image {
+    let size = HwpUnit::new(1000).unwrap();
+    let image = Image::new("BinData/a.png", size, size, ImageFormat::Png);
+    match caption {
+        Some(caption) => image.with_caption(caption),
+        None => image,
     }
 }

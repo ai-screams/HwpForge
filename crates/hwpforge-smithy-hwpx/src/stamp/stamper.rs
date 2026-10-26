@@ -1587,14 +1587,57 @@ mod tests {
         assert!(admission_compare(&a, &b).is_ok());
     }
 
-    fn shapes_fixture(name: &str) -> Vec<u8> {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/shapes/");
-        std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
+    fn shape_package(image_fill: bool) -> Vec<u8> {
+        use hwpforge_core::control::{Fill, GroupChild, ShapeStyle};
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+        use hwpforge_foundation::{HwpUnit, ImageFillMode};
+        let u = |v| HwpUnit::new(v).unwrap();
+        let at = || {
+            ObjectPlacement::new(
+                ObjectTextWrap::InFrontOfText,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Paper,
+            )
+            .with_allow_overlap(true)
+            .with_horz_offset(u(100))
+            .with_vert_offset(u(100))
+        };
+        let mut rect = Control::rect(u(2_000_000), u(10_000)).unwrap();
+        if let Control::Rect { placement, style, .. } = &mut rect {
+            *placement = Some(at());
+            *style = Some(ShapeStyle {
+                rotation: Some(30.0),
+                line_width: Some(10),
+                fill: image_fill.then(|| Fill::Image {
+                    image_id: "BinData/brush.png".into(),
+                    mode: ImageFillMode::Tile,
+                }),
+                ..Default::default()
+            });
+        }
+        let group = Control::Group {
+            children: vec![GroupChild::Shape(rect)],
+            width: u(1_740_000),
+            height: u(1_010_000),
+            frame: Default::default(),
+            placement: Some(at()),
+            inst_id: None,
+        };
+        let mut doc = doc_with_text("shape tolerance");
+        doc.document.sections_mut()[0].paragraphs[0]
+            .runs
+            .push(Run::control(group, CharShapeIndex::new(0)));
+        if image_fill {
+            doc.image_store.insert(
+                "BinData/brush.png",
+                include_bytes!("../../../../assets/mascot-main.png").to_vec(),
+            );
+        }
+        encode_hwpx(&doc, EncodePurpose::Admission).unwrap()
     }
 
     /// `decode(bytes)` and the document of `decode(encode(decode(bytes)))`
-    /// with the first decode's stores (Hancom's style store does not round
-    /// trip yet; only the document is under test here).
+    /// with the first decode's stores; only the document is under test here.
     fn no_op_round_trip(bytes: &[u8]) -> (HwpxDocument, HwpxDocument) {
         let d0 = HwpxDecoder::decode(bytes).unwrap();
         let d1 = HwpxDecoder::decode(&encode_hwpx(&d0, EncodePurpose::Admission).unwrap()).unwrap();
@@ -1630,16 +1673,15 @@ mod tests {
             })
     }
 
-    /// Hancom's group turned 20° and mirrored (rotflip-group): the folded
-    /// angles are exact (9.99767° for the rect), HWPX stores whole degrees,
-    /// and the re-decode reads 9.99999° — a different Core value for the
-    /// same shape, well inside 2 HWPUNIT. Admission accepts it.
+    /// A fractional rotation passes through the encoder's six-digit matrix,
+    /// leaving a small real decode/encode/decode drift within two HWPUNIT.
     ///
     /// 이것을 실패시키는 것: 도형 기하를 허용 오차 없이 완전 일치로 비교하는 것
     /// (`align_equivalent_shapes` 호출 삭제).
     #[test]
+    // 이것을 실패시키는 것: 허용 오차 밖으로 자식 이동 (실제 음성 대조 실행).
     fn admission_accepts_a_shape_within_the_tolerance() {
-        let (d0, d1) = no_op_round_trip(&shapes_fixture("rotflip-group.hwpx"));
+        let (d0, d1) = no_op_round_trip(&shape_package(false));
         let mut a = d0.document.clone();
         let mut b = d1.document.clone();
         a.strip_layout_caches();
@@ -1654,8 +1696,9 @@ mod tests {
     /// 이것을 실패시키는 것: 허용 오차를 무한으로 두는 것, 또는 기하 외 필드까지
     /// 덮어써서 비교하는 것.
     #[test]
+    // 이것을 실패시키는 것: 거부를 유발하는 3단위 이동 제거 (실제 음성 대조 실행).
     fn admission_refuses_a_shape_beyond_the_tolerance() {
-        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let bytes = shape_package(false);
         let (d0, _) = no_op_round_trip(&bytes);
         let mut moved = no_op_round_trip(&bytes).1;
         if let Some(Control::Rect { placement: Some(p), .. }) =
@@ -1681,10 +1724,11 @@ mod tests {
     /// 이것을 실패시키는 것: 그림 채우기 자식 정의점 비교에서 D/O 생략,
     /// 동일 모서리를 이유로 브러시 O까지 정규화하여 변경을 무시하기.
     #[test]
+    // 이것을 실패시키는 것: 회전 차이를 제거해 동일 표시점 비교 (실제 음성 대조 실행).
     fn image_fill_admission_compares_displayed_points_but_keeps_brush_box() {
         use hwpforge_core::control::{Fill, GroupChild, ShapeStyle};
         use hwpforge_foundation::{HwpUnit, ImageFillMode, Size};
-        let (d0, d1) = no_op_round_trip(&shapes_fixture("fills.hwpx"));
+        let (d0, d1) = no_op_round_trip(&shape_package(true));
         admission_compare(&d0, &d1).unwrap();
         let u = |v| HwpUnit::new(v).unwrap();
         let shape = |angle| {
@@ -1772,8 +1816,9 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 자식을 부모 좌표에서만 비교하는 것(부모 원점 누적 삭제).
     #[test]
+    // 이것을 실패시키는 것: 부모 누적 오차 제거 (실제 음성 대조 실행).
     fn admission_tolerance_does_not_add_up_through_groups() {
-        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let bytes = shape_package(false);
         let (d0, _) = no_op_round_trip(&bytes);
         let mut group_only = no_op_round_trip(&bytes).1;
         nudge_group(&mut group_only, 1);
@@ -1827,8 +1872,9 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 델타 검증에 허용 오차 비교를 쓰는 것.
     #[test]
+    // 이것을 실패시키는 것: delta 1단위 이동 제거 (실제 음성 대조 실행).
     fn delta_check_refuses_a_shape_moved_by_one_unit() {
-        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let bytes = shape_package(false);
         let (_, d1) = no_op_round_trip(&bytes);
         let mut moved = no_op_round_trip(&bytes).1;
         nudge_rect_child(&mut moved, 1);
@@ -1879,8 +1925,9 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 묶음 `children` 의 원소를 묶음 자식으로 표시하지 않는 것.
     #[test]
+    // 이것을 실패시키는 것: 모서리 허용 오차 초과 (실제 음성 대조 실행).
     fn admission_matches_a_group_child_at_the_corner() {
-        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let bytes = shape_package(false);
         let (mut a, _) = no_op_round_trip(&bytes);
         let (_, mut b) = no_op_round_trip(&bytes);
         let place = |doc: &mut HwpxDocument, x: Option<i32>| {

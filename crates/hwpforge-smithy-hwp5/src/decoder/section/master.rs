@@ -416,6 +416,7 @@ mod tests {
     }
     // 이것을 실패시키는 것: master 중첩 파서 대신 본문 파서로 표 전달 / master hint 큐에서 셀 누락 / 메모 연결에서 master 생략.
     #[test]
+    // 이것을 실패시키는 것: master table cell 본문 누락 (실제 음성 대조 실행).
     fn master_reuses_nested_tables_and_joins_section_memo_contents() {
         let mut records = para(0, "body");
         records.push(secd(1 << 29, 0));
@@ -477,10 +478,7 @@ mod tests {
             Hwp5Warning::DroppedControl { control: "memo_content_cluster", .. }
         )));
         let mut warnings = Vec::new();
-        let bytes = std::fs::read(crate::test_support::workspace_fixture_path(
-            "master_pages/f5f-shapes.hwp",
-        ))
-        .unwrap();
+        let bytes = crate::tests::asset_package(&[], false);
         let mut decoded = crate::decoder::decode_intermediate(&bytes).unwrap();
         decoded.sections = vec![result];
         let semantic = crate::semantic_adapter::adapt_to_semantic(

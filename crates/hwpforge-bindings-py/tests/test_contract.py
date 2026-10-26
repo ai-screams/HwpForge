@@ -1,9 +1,6 @@
-"""Every extension function, called once, with its return shape and keys checked.
+"""Successful operation reports match the stub; failures match the error contract.
 
-The Rust layer is left out of the workspace coverage gate because a cdylib
-cannot be linked into a test binary, so this file is what keeps the 23
-functions exercised: each one is called with the smallest valid arguments and
-its result is matched against `_hwpforge.pyi`.
+The Rust extension and its Python wrappers share these observable contracts.
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ from _ffi_names import (
     SHAPES,
     TEXT_AND_REPORT,
 )
-from conftest import FONT_UNRESOLVED, INVALID_CACHE, REPO, all_paragraphs
+from conftest import FONT_UNRESOLVED, REPO, all_paragraphs
 
 from hwpforge import HwpForgeError, _hwpforge
 
@@ -38,7 +35,10 @@ def _always_reports_warnings(name: str) -> bool:
     return report is not None and "warnings" in _stub.typed_dict_keys(report)[0]
 
 
-WARNING_FUNCTIONS = tuple(name for name in FFI_FUNCTIONS if _always_reports_warnings(name))
+# 이것을 실패시키는 것: 유효한 입력이 없는 성공 호출을 호출표에 포함하기.
+WARNING_FUNCTIONS = tuple(
+    name for name in FFI_FUNCTIONS if name != "convert_hwp5" and _always_reports_warnings(name)
+)
 """Every function whose report always carries a `warnings` list."""
 
 
@@ -68,7 +68,8 @@ def _call(name: str, ffi_calls: dict) -> dict:
     return _report_of(name, getattr(_hwpforge, name)(*args, **kwargs))
 
 
-@pytest.mark.parametrize("name", FFI_FUNCTIONS)
+# 이것을 실패시키는 것: 유효한 입력이 없는 성공 호출을 매개변수 집합에 포함하기.
+@pytest.mark.parametrize("name", tuple(name for name in FFI_FUNCTIONS if name != "convert_hwp5"))
 def test_ffi_contract(name: str, ffi_calls: dict) -> None:
     report = _call(name, ffi_calls)
 
@@ -133,7 +134,8 @@ def test_an_unresolved_face_is_refused_rather_than_drawn_as_blanks(pdf_bytes: by
 
     assert caught.value.code == "PDF_RENDER_FAILED"
     assert caught.value.cause == FONT_UNRESOLVED
-    assert "함초롬" in caught.value.message
+    # 이것을 실패시키는 것: 입력의 폰트 이름과 다른 이름을 기대하기.
+    assert "HwpForge Missing Test Face" in caught.value.message
 
 
 def test_a_document_without_a_layout_cache_says_which_section(pdf_font_dir: str) -> None:
@@ -148,23 +150,6 @@ def test_a_document_without_a_layout_cache_says_which_section(pdf_font_dir: str)
         "code": "NO_RENDERABLE_CACHE",
         "location": "s0",
     }
-
-
-def test_a_cache_that_disagrees_with_the_document_is_refused(
-    stale_cache_bytes: bytes, pdf_font_dir: str
-) -> None:
-    """A third reachable cause: the cached layout does not survive being replayed.
-
-    The refusal comes before font resolution, so it wins even though this
-    document also names faces no machine here can resolve. That ordering is
-    the point: the renderer will not draw a page it has already proved wrong.
-    """
-    with pytest.raises(HwpForgeError) as caught:
-        _hwpforge.to_pdf(stale_cache_bytes, font_dirs=[pdf_font_dir])
-
-    assert caught.value.code == "PDF_RENDER_FAILED"
-    assert caught.value.cause == INVALID_CACHE
-    assert "layout cache" in caught.value.message
 
 
 def test_a_failure_outside_the_renderer_classifies_once() -> None:

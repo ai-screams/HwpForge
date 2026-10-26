@@ -181,8 +181,10 @@ mod tests {
 
     // 이것을 실패시키는 것: opaque 없음 조기 반환 제거, 전체 읽기·쓰기 추가, 출력 바이트 변경.
     #[test]
+    // 이것을 실패시키는 것: 비정규 이름으로 opaque-free 조건 제거 (실제 음성 대조 실행).
     fn opaque_free_carry_keeps_bytes_without_package_io() {
-        let base = include_bytes!("../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
+        let bytes = zeros_zip(&[("Contents/section0.xml", 16), ("Contents/header.xml", 8)]);
+        let base = bytes.as_slice();
         let package = open_package(base, Default::default()).unwrap();
         assert!((0..package.entries().len()).all(|index| !package.is_opaque(index)));
         // A comment makes a redundant rewrite observable in the bytes as well.
