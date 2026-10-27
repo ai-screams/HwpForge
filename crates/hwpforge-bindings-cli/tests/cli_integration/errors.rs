@@ -183,7 +183,8 @@ fn decode_input_shared_fixture() {
 // 원본 decode 뒤로 옮기기(DECODE_FAILED), fill 입력 decode 를 Workflow 로 되돌리기(FILL_FAILED).
 fn w2_patch_and_fill_shared_fixtures() {
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
-    let out = test_tmp().join("out.hwpx");
+    let out_dir = test_tmp();
+    let out = out_dir.join("out.hwpx");
     let base = data.join("patch-inner-decode.hwpx");
     for (id, json) in [
         ("patch.input_decode", "patch-inner-decode.section.json"),
@@ -214,12 +215,14 @@ fn w2_patch_and_fill_shared_fixtures() {
 fn w4_hwp5_decoder_core_shared_fixture() {
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
     let source = data.join("hwp5-dangling-table-border-fill.hwp");
-    let out = test_tmp().join("out.hwpx");
+    let out_dir = test_tmp();
+    let out = out_dir.join("out.hwpx");
     let (err, _, exit) =
         run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_cli_manifest_case("hwp5.decode_core", &err, exit);
     assert!(!out.exists(), "a refused conversion writes no output");
-    let pdf = test_tmp().join("out.pdf");
+    let pdf_dir = test_tmp();
+    let pdf = pdf_dir.join("out.pdf");
     let (err, _, exit) =
         run_json(&["to-pdf", source.to_str().unwrap(), "-o", pdf.to_str().unwrap()]);
     assert_cli_manifest_case("hwp5.to_pdf.decode_core", &err, exit);

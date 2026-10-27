@@ -111,12 +111,9 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
 mod tests {
     use super::*;
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("hwpforge_mcp_to_md_{}", std::process::id()))
-            .join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Fresh temp directory for one test, removed when it drops.
+    fn temp_dir(name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("hwpforge_mcp_to_md_{name}_")).tempdir().unwrap()
     }
 
     /// 병합 표가 든 최소 hwpx 를 만들어 경로를 돌려준다.
@@ -160,8 +157,9 @@ mod tests {
 
     #[test]
     fn to_md_converts_merged_table_as_html_spans() {
-        let dir = temp_dir("convert");
-        let input = merged_form_hwpx(&dir);
+        let tmp = temp_dir("convert");
+        let dir = tmp.path();
+        let input = merged_form_hwpx(dir);
         let data = run_to_md(&input, Some(dir.to_str().unwrap())).unwrap();
         assert!(std::path::Path::new(&data.markdown_path).exists());
         assert_eq!(data.image_count, 0);
@@ -184,7 +182,8 @@ mod tests {
     /// (`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
     #[test]
     fn to_md_surfaces_decode_warnings() {
-        let dir = temp_dir("warnings");
+        let tmp = temp_dir("warnings");
+        let dir = tmp.path();
         let path = fixture("layout/stale-line-cache.hwpx");
         let data = run_to_md(&path, Some(dir.to_str().unwrap())).unwrap();
         assert!(
@@ -200,7 +199,8 @@ mod tests {
 
     #[test]
     fn to_md_rejects_non_hwpx_extension() {
-        let dir = temp_dir("reject");
+        let tmp = temp_dir("reject");
+        let dir = tmp.path();
         let bogus = dir.join("doc.txt");
         std::fs::write(&bogus, b"x").unwrap();
         let err = run_to_md(bogus.to_str().unwrap(), None).unwrap_err();

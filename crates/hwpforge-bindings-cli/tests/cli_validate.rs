@@ -9,18 +9,12 @@ use process::run;
 
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-fn test_tmp() -> PathBuf {
-    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir =
-        std::env::temp_dir().join(format!("hwpforge_validate_test_{id}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+/// Fresh temp directory for one test, removed when it drops.
+fn test_tmp() -> tempfile::TempDir {
+    tempfile::Builder::new().prefix("hwpforge_validate_test_").tempdir().expect("create temp dir")
 }
 
 fn fixture(rel: &str) -> PathBuf {
@@ -92,8 +86,9 @@ fn make_decodable_but_invalid_hwpx(dir: &Path) -> PathBuf {
 
 #[test]
 fn valid_document_exits_0_with_a_pinned_key_set() {
-    let dir = test_tmp();
-    let hwpx = make_valid_hwpx(&dir);
+    let tmp = test_tmp();
+    let dir = tmp.path();
+    let hwpx = make_valid_hwpx(dir);
 
     let (value, stderr, code) = run_json(&["validate", hwpx.to_str().unwrap()]);
     assert_eq!(code, 0, "{value:?}");
@@ -145,8 +140,9 @@ fn stale_line_cache_warning_prints_to_stderr_in_text_mode_only() {
 
 #[test]
 fn decodable_but_invalid_package_reports_valid_false_not_an_error_envelope() {
-    let dir = test_tmp();
-    let path = make_decodable_but_invalid_hwpx(&dir);
+    let tmp = test_tmp();
+    let dir = tmp.path();
+    let path = make_decodable_but_invalid_hwpx(dir);
 
     let (value, stderr, code) = run_json(&["validate", path.to_str().unwrap()]);
     assert_eq!(code, 3, "an invalid-but-decoded document is report semantics, exit 3: {value:?}");
@@ -172,7 +168,8 @@ fn decodable_but_invalid_package_reports_valid_false_not_an_error_envelope() {
 
 #[test]
 fn non_hwpx_file_is_decode_failed_exit_2() {
-    let dir = test_tmp();
+    let tmp = test_tmp();
+    let dir = tmp.path();
     let path = dir.join("garbage.hwpx");
     std::fs::write(&path, b"not a zip file").expect("write garbage");
 
