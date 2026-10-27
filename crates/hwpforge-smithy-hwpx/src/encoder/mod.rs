@@ -182,7 +182,6 @@ mod sanitize_xml_text_tests {
 
     #[test]
     fn preserves_korean_text() {
-        // 이것을 실패시키는 것: 시험 입력 문자열만 이전 이름으로 되돌려 기대 문자열과 어긋나게 하기.
         assert_eq!(sanitize_xml_text("안녕하세요 메타데이터"), "안녕하세요 메타데이터");
     }
 

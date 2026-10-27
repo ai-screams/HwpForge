@@ -238,7 +238,7 @@ fn stamp_v2_admission_is_canonical() {
 #[cfg(feature = "ops-hwpx")]
 #[test]
 fn editor_manifest_cases_are_all_consumed() {
-    // 이것을 실패시키는 것: editor 연산 필터만 이전 접두사로 되돌리기.
+    // 이것을 실패시키는 것: 연산 필터 접두사를 `editor.` 가 아닌 값으로 바꾸기.
     // 이것을 실패시키는 것: manifest에 rust operation=editor.x case 추가.
     // Use the same IDs as the fixture assertions above, never a separate allowlist.
     let consumed: std::collections::BTreeSet<_> =

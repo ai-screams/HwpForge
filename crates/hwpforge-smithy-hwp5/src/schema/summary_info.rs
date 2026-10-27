@@ -594,7 +594,6 @@ mod tests {
 
     #[test]
     fn lpwstr_title_decoded() {
-        // 이것을 실패시키는 것: 시험 입력 제목만 이전 이름으로 되돌려 기대 제목과 어긋나게 하기.
         let bytes =
             build_property_set(&[(PID_TITLE, VT_LPWSTR, lpwstr_payload("메타데이터 데모"))]);
         let m = parse_summary_information(&bytes).unwrap();

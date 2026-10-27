@@ -332,7 +332,6 @@ mod tests {
 
     #[test]
     fn populated_title_decodes() {
-        // 이것을 실패시키는 것: 시험 XML 제목만 이전 이름으로 되돌려 기대 제목과 어긋나게 하기.
         let m = parse("<opf:title>메타데이터 데모</opf:title>");
         assert_eq!(m.title.as_deref(), Some("메타데이터 데모"));
     }

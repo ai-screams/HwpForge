@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn pair_resolves_by_typographic_family_and_style() {
-        // 이것을 실패시키는 것: 시험 글꼴의 이름표만 이전 family 이름으로 되돌리기.
+        // 이것을 실패시키는 것: resolver 가 typographic family(nameID 16) 대신 legacy family(nameID 1)로 찾게 하기.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         let regular = resolver
             .resolve_styled("HwpForge Typographic Pair", FaceStyle::Regular)
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn exact_full_name_carries_its_own_style() {
-        // 이것을 실패시키는 것: 시험 글꼴의 이름표만 이전 full name으로 되돌리기.
+        // 이것을 실패시키는 것: full name(nameID 4) 별칭 등록을 빼기.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         // full name 은 스타일 내재 — 요청 스타일과 face 플래그가 일치할 때만 styled 매칭.
         let bold = resolver
