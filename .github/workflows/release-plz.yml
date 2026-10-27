@@ -61,7 +61,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run release-plz release
         id: release_plz
-        uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5.142
+        uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
         with:
           command: release
         env:
@@ -93,7 +93,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Run release-plz release-pr
-        uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5.142
+        uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5.146
         with:
           command: release-pr
         env:
