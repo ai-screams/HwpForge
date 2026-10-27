@@ -148,7 +148,7 @@ fn section_gutter_mirror() -> Section {
     };
     Section::with_paragraphs(
         vec![
-            text_para("Wave 9: Gutter + Mirror Margins", CS_TITLE, PS_CENTER),
+            text_para("Gutter + Mirror Margins", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("이 섹션은 Gutter=10mm, GutterType=LeftOnly 설정입니다.", CS_NORMAL, PS_BODY),
             text_para(
@@ -244,7 +244,7 @@ fn section_border_fill_begin_num() -> Section {
     let cs = CharShapeIndex::new(CS_NORMAL);
     let mut section = Section::with_paragraphs(
         vec![
-            text_para("Wave 9: PageBorderFill + BeginNum", CS_TITLE, PS_CENTER),
+            text_para("PageBorderFill + BeginNum", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("페이지 테두리(PageBorderFill)가 보여야 합니다.", CS_NORMAL, PS_BODY),
             text_para("페이지 번호가 10부터 시작합니다 (하단 확인).", CS_NORMAL, PS_BODY),
@@ -301,7 +301,7 @@ fn section_master_page() -> Section {
     );
     let mut section = Section::with_paragraphs(
         vec![
-            text_para("Wave 9: MasterPage (배경 페이지)", CS_TITLE, PS_CENTER),
+            text_para("MasterPage (배경 페이지)", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("이 섹션에는 MasterPage가 설정되어 있습니다.", CS_NORMAL, PS_BODY),
             text_para(
@@ -336,7 +336,7 @@ fn section_arcs() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: Arc (호) — 3가지 타입", CS_TITLE, PS_CENTER),
+            text_para("Arc (호) — 3가지 타입", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. Normal (열린 호):", CS_RED, PS_LEFT),
             ctrl_para(arc_normal, CS_NORMAL, PS_CENTER),
@@ -395,7 +395,7 @@ fn section_curves() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: Curve (곡선) — 3가지 패턴", CS_TITLE, PS_CENTER),
+            text_para("Curve (곡선) — 3가지 패턴", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. 지그재그 (직선 세그먼트):", CS_RED, PS_LEFT),
             ctrl_para(zigzag, CS_NORMAL, PS_CENTER),
@@ -461,7 +461,7 @@ fn section_connect_lines() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: ConnectLine + Arrow Styles", CS_TITLE, PS_CENTER),
+            text_para("ConnectLine + Arrow Styles", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. 단순 연결선:", CS_RED, PS_LEFT),
             ctrl_para(cl_simple, CS_NORMAL, PS_CENTER),
@@ -537,7 +537,7 @@ fn section_shape_styles() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: Shape Styles (회전/뒤집기/화살표)", CS_TITLE, PS_CENTER),
+            text_para("Shape Styles (회전/뒤집기/화살표)", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. 타원 — 45도 회전 (파란 테두리):", CS_RED, PS_LEFT),
             ctrl_para(ell_rotated, CS_NORMAL, PS_CENTER),
@@ -600,7 +600,7 @@ fn section_bookmarks_refs_fields() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 12: Bookmark + CrossRef + Field", CS_TITLE, PS_CENTER),
+            text_para("Bookmark + CrossRef + Field", CS_TITLE, PS_CENTER),
             empty_para(),
             // Point bookmark
             text_para("▶ 포인트 책갈피 (아래에 '중요위치' 책갈피 삽입):", CS_RED, PS_LEFT),
@@ -692,7 +692,7 @@ fn section_memo_indexmark() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 12: Memo + IndexMark", CS_TITLE, PS_CENTER),
+            text_para("Memo + IndexMark", CS_TITLE, PS_CENTER),
             empty_para(),
             // Memo 1
             text_para("▶ 간단한 메모 (김검토):", CS_RED, PS_LEFT),
@@ -799,17 +799,17 @@ fn section_combined() -> Section {
 
     // Footnote
     let footnote = Control::footnote(vec![text_para(
-        "이것은 Wave 9/11/12 종합 테스트의 각주입니다.",
+        "이것은 도형·참조 종합 테스트의 각주입니다.",
         CS_NORMAL,
         PS_BODY,
     )]);
 
     let mut section = Section::with_paragraphs(
         vec![
-            text_para("종합 테스트: 모든 Wave 기능 복합", CS_TITLE, PS_CENTER),
+            text_para("종합 테스트: 도형·참조 기능 복합", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para(
-                "이 섹션은 Wave 9 (페이지 레이아웃) + Wave 11 (도형) + Wave 12 (참조) 기능을 복합 사용합니다.",
+                "이 섹션은 페이지 레이아웃, 도형, 참조 기능을 함께 사용합니다.",
                 CS_NORMAL,
                 PS_BODY,
             ),
@@ -881,7 +881,7 @@ fn section_combined() -> Section {
             },
             empty_para(),
             text_para(
-                "=== Wave 9/11/12 종합 테스트 완료 ===",
+                "=== 도형·참조 종합 테스트 완료 ===",
                 CS_TITLE,
                 PS_CENTER,
             ),

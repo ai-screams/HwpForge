@@ -213,7 +213,7 @@ fn build_section_facing_pages() -> Section {
     let mut section = Section::with_paragraphs(
         vec![
             text_para("Section 6: Facing Pages", CS_TITLE, PS_CENTER),
-            text_para("All Wave 9 features combined", CS_NORMAL, PS_BODY),
+            text_para("All page layout features combined", CS_NORMAL, PS_BODY),
         ],
         ps,
     );

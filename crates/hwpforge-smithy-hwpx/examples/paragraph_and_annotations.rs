@@ -236,7 +236,7 @@ fn build_style_store() -> HwpxStyleStore {
 fn build_section1() -> Section {
     let paragraphs = vec![
         // ── Title ──
-        text_para("Wave 10: 강조점(EmphasisType) 및 문자 속성 확장 테스트", CS_TITLE, PS_CENTER),
+        text_para("강조점(EmphasisType) 및 문자 속성 확장 테스트", CS_TITLE, PS_CENTER),
         // ── Blank line ──
         text_para("", CS_NORMAL, PS_BODY),
         // ── EmphasisType variants ──
@@ -347,7 +347,7 @@ fn build_section2() -> Section {
     let paragraphs = vec![
         // ── Title ──
         text_para(
-            "Wave 8: 개요(Outline), 번호매기기(Numbering), 탭(Tab) 테스트",
+            "개요(Outline), 번호매기기(Numbering), 탭(Tab) 테스트",
             CS_TITLE,
             PS_CENTER,
         ),
@@ -402,7 +402,7 @@ fn build_section2() -> Section {
 fn build_section3() -> Section {
     let paragraphs = vec![
         // ── Title ──
-        text_para("Wave 13: 덧말(Dutmal) 및 글자겹침(Compose) 테스트", CS_TITLE, PS_CENTER),
+        text_para("덧말(Dutmal) 및 글자겹침(Compose) 테스트", CS_TITLE, PS_CENTER),
         text_para("", CS_NORMAL, PS_BODY),
         // ── Dutmal: various position combos ──
         text_para("[1] 덧말(Dutmal) — 위치 변형 테스트", CS_RED_BOLD, PS_BODY),

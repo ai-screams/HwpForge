@@ -12,7 +12,7 @@
 //! **Section 1 — 2장: XML 구조 및 네임스페이스 체계**
 //! - 테이블 x2 (네임스페이스, 파일 역할)
 //! - 글상자 (코드 예시)
-//! - 차트 x2 (Column: Phase별 LOC, Bar: 기능 지원)
+//! - 차트 x2 (Column: 크레이트별 LOC, Bar: 기능 지원)
 //! - 각주
 //!
 //! **Section 2 — 3장: 구현 주의사항 (Gotchas)**
@@ -23,7 +23,7 @@
 //! - 구분선(LINE)
 //!
 //! **Section 3 — 4장: 구현 현황 및 결론**
-//! - 테이블 (Phase 현황 7x5)
+//! - 테이블 (크레이트별 현황 7x5)
 //! - 차트 x2 (Line: 테스트 추이, Pie: LOC 비율)
 //! - 미주
 //! - 구분선(LINE)
@@ -422,25 +422,25 @@ fn build_section_1() -> Section {
     ));
     paras.push(empty());
 
-    // 2.3 Phase별 코드량
-    paras.push(text_para("2.3 Phase별 구현 규모 (코드 라인 수)", CS_SUBHEADING, PS_LEFT));
-    paras.push(p("아래 차트는 HwpForge의 Phase 0-5에 걸친 소스 코드 증가 추이를 보여줍니다."));
+    // 2.3 크레이트별 코드량
+    paras.push(text_para("2.3 크레이트별 구현 규모 (코드 라인 수)", CS_SUBHEADING, PS_LEFT));
+    paras.push(p("아래 차트는 HwpForge 크레이트별 소스 코드 규모를 보여줍니다."));
     paras.push(empty());
 
-    // Chart 1: Column — Phase별 LOC
+    // Chart 1: Column — 크레이트별 LOC
     paras.push(chart_para(
         ChartType::Column,
         ChartData::category(
             &["Foundation", "Core", "Blueprint", "Decoder", "Encoder", "smithy-md"],
             &[("LOC", &[4432.0, 5554.0, 4647.0, 3666.0, 10349.0, 3757.0])],
         ),
-        Some("Phase별 소스 코드 라인 수"),
+        Some("크레이트별 소스 코드 라인 수"),
         LegendPosition::Bottom,
         ChartGrouping::Clustered,
         42520,
         21000,
     ));
-    paras.push(text_para("[차트 1] Phase별 소스 코드 라인 수 (Phase 0-5)", CS_ITALIC, PS_CENTER));
+    paras.push(text_para("[차트 1] 크레이트별 소스 코드 라인 수", CS_ITALIC, PS_CENTER));
     paras.push(empty());
 
     // Chart 2: Bar stacked — 기능 지원
@@ -656,13 +656,13 @@ fn build_section_3() -> Section {
     paras.push(text_para("4. 구현 현황 및 결론", CS_HEADING, PS_LEFT));
     paras.push(empty());
 
-    // 4.1 Phase 현황
-    paras.push(text_para("4.1 Phase별 구현 현황", CS_SUBHEADING, PS_LEFT));
+    // 4.1 크레이트별 현황
+    paras.push(text_para("4.1 크레이트별 구현 현황", CS_SUBHEADING, PS_LEFT));
     paras.push(p("HwpForge v1.0 기준 총 37,052 LOC, 988개 테스트, 8개 크레이트입니다."));
     paras.push(empty());
 
     paras.push(table_para(make_table(
-        &["Phase", "크레이트", "상태", "테스트", "LOC"],
+        &["순서", "크레이트", "상태", "테스트", "LOC"],
         &[
             vec!["0", "foundation", "완료 (90+)", "224", "4,432"],
             vec!["1", "core", "완료 (94)", "331", "5,554"],
@@ -670,40 +670,40 @@ fn build_section_3() -> Section {
             vec!["3", "decoder", "완료 (96)", "110", "3,666"],
             vec!["4", "encoder", "완료 (95)", "226", "10,349"],
             vec!["5", "smithy-md", "완료 (91)", "73", "3,757"],
-            vec!["Wave1-6", "확장 기능", "완료", "—", "~4,648"],
+            vec!["6", "확장 기능", "완료", "—", "~4,648"],
         ],
         8400,
-        Some("[표 4] HwpForge Phase별 구현 현황"),
+        Some("[표 4] HwpForge 크레이트별 구현 현황"),
         CaptionSide::Top,
     )));
     paras.push(empty());
 
     // 4.2 테스트 추이
     paras.push(text_para("4.2 테스트 수 성장 추이", CS_SUBHEADING, PS_LEFT));
-    paras.push(p("TDD 방식으로 개발되어 Phase 진행에 따라 테스트가 꾸준히 증가했습니다."));
+    paras.push(p("TDD 방식으로 개발되어 크레이트가 늘어날 때마다 테스트가 꾸준히 증가했습니다."));
     paras.push(empty());
 
     // Chart 3: Line
     paras.push(chart_para(
         ChartType::Line,
         ChartData::category(
-            &["P0", "P1", "P2", "P3", "P4", "P5", "Wave"],
+            &["Foundation", "Core", "Blueprint", "Decoder", "Encoder", "smithy-md", "확장 기능"],
             &[("누적 테스트", &[224.0, 555.0, 755.0, 865.0, 905.0, 978.0, 988.0])],
         ),
-        Some("Phase별 누적 테스트 수 추이"),
+        Some("크레이트별 누적 테스트 수 추이"),
         LegendPosition::Bottom,
         ChartGrouping::Standard,
         42520,
         21000,
     ));
-    paras.push(text_para("[차트 3] Phase별 누적 테스트 수 추이", CS_ITALIC, PS_CENTER));
+    paras.push(text_para("[차트 3] 크레이트별 누적 테스트 수 추이", CS_ITALIC, PS_CENTER));
     paras.push(empty());
 
     // Chart 4: Pie — LOC 비율
     paras.push(chart_para(
         ChartType::Pie,
         ChartData::category(
-            &["foundation", "core", "blueprint", "smithy-hwpx", "smithy-md", "Wave"],
+            &["foundation", "core", "blueprint", "smithy-hwpx", "smithy-md", "확장 기능"],
             &[("LOC", &[4432.0, 5554.0, 4647.0, 14015.0, 3757.0, 4648.0])],
         ),
         Some("크레이트별 LOC 비율"),
@@ -718,14 +718,14 @@ fn build_section_3() -> Section {
     // 4.3 향후 과제
     paras.push(text_para("4.3 향후 과제", CS_SUBHEADING, PS_LEFT));
     paras.push(empty());
-    for (phase, desc) in [
-        ("Phase 6", ": Python 바인딩 (PyO3) 및 CLI"),
-        ("Phase 7", ": MCP 서버 통합 — Claude Code 직접 연동"),
-        ("Phase 8", ": 종합 테스트 및 v1.0 릴리즈"),
-        ("Phase 9", ": HWPX 고급 기능 (OLE, 양식, 변경추적)"),
-        ("Phase 10", ": smithy-hwp5 — HWP5 바이너리 읽기"),
+    for (topic, desc) in [
+        ("Python 바인딩", ": PyO3 기반 Python API 및 CLI"),
+        ("MCP 서버", ": Claude Code 직접 연동"),
+        ("v1.0 릴리즈", ": 종합 테스트"),
+        ("HWPX 고급 기능", ": OLE, 양식, 변경추적"),
+        ("HWP5 읽기", ": smithy-hwp5 — HWP5 바이너리 읽기"),
     ] {
-        paras.push(mixed_para(&[(phase, CS_BOLD), (desc, CS_NORMAL)], PS_JUSTIFY));
+        paras.push(mixed_para(&[(topic, CS_BOLD), (desc, CS_NORMAL)], PS_JUSTIFY));
     }
     paras.push(empty());
 
@@ -741,7 +741,7 @@ fn build_section_3() -> Section {
     paras.push(Paragraph::with_runs(
         vec![
             Run::text(
-                "Wave 1-6에서는 이미지, 머리글/바닥글, 각주/미주, 글상자, 다단, 도형, 캡션, 수식, 차트까지 확장하여 실무 문서 생성에 필요한 대부분의 기능을 갖추었습니다.",
+                "확장 기능으로 이미지, 머리글/바닥글, 각주/미주, 글상자, 다단, 도형, 캡션, 수식, 차트까지 확장하여 실무 문서 생성에 필요한 대부분의 기능을 갖추었습니다.",
                 CharShapeIndex::new(CS_NORMAL),
             ),
             Run::control(
