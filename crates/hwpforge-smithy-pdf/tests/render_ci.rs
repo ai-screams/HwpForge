@@ -164,15 +164,17 @@ fn missing_cache_paragraph_warns_and_still_renders() {
 
 #[test]
 fn bold_run_resolves_real_bold_face_by_default() {
-    // bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge W4
+    // 이것을 실패시키는 것: 시험 글꼴의 이름표만 이전 family 이름으로 되돌리기.
+    // bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge Typographic Pair
     // Bold = Latin 실폭 0.7em vs Regular 0.6em → 출력 바이트가 달라진다).
     let doc = doc_of(vec![para_with_cache("ABC", vec![seg(0, 0)])]);
-    let bold_styles = TestStyles { bold: true, face: "HwpForge W4", ..TestStyles::default() };
+    let bold_styles =
+        TestStyles { bold: true, face: "HwpForge Typographic Pair", ..TestStyles::default() };
     let input = PdfInput { document: &doc, styles: &bold_styles };
     let bold_out = render_document(&input, &options()).expect("bold render");
     assert!(bold_out.warnings.is_empty(), "{:?}", bold_out.warnings);
 
-    let regular_styles = TestStyles { face: "HwpForge W4", ..TestStyles::default() };
+    let regular_styles = TestStyles { face: "HwpForge Typographic Pair", ..TestStyles::default() };
     let input = PdfInput { document: &doc, styles: &regular_styles };
     let regular_out = render_document(&input, &options()).expect("regular render");
     assert_ne!(bold_out.bytes, regular_out.bytes, "Bold 는 실폭이 달라 출력이 다르다");
@@ -269,7 +271,10 @@ fn axis_mismatch_is_fatal_by_default_and_warns_once_in_degraded() {
         para_with_cache("가나 ABC", vec![seg(0, 0)]),
         para_with_cache("다라 DEF", vec![seg(0, 1600)]),
     ]);
-    let styles = TestStyles { axes: &["HwpForge Test", "HwpForge W4"], ..TestStyles::default() };
+    let styles = TestStyles {
+        axes: &["HwpForge Test", "HwpForge Typographic Pair"],
+        ..TestStyles::default()
+    };
     let input = PdfInput { document: &doc, styles: &styles };
     let err = render_document(&input, &options()).unwrap_err();
     assert!(matches!(err, PdfError::FontAxisMismatch { .. }), "{err:?}");

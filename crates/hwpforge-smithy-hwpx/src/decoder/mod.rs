@@ -984,7 +984,7 @@ impl HwpxDecoder {
             let section = Section {
                 paragraphs: result.paragraphs,
                 page_settings,
-                // ADR-002 cardinality — 파서가 wire 순서 그대로의 Vec 을
+                // Header/footer cardinality — 파서가 wire 순서 그대로의 Vec 을
                 // 돌려준다 (ODD/EVEN 다중 머리말 보존).
                 headers: result.headers,
                 footers: result.footers,

@@ -13,7 +13,7 @@ fn generated_hwpx_tails_and_payload_have_no_loss() {
     let mut document = Document::new();
     let mut section = Section::new(PageSettings::default());
     let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
-    paragraph.runs.push(Run::text("W1 합성 문서", CharShapeIndex::new(0)));
+    paragraph.runs.push(Run::text("패키지 종료 합성 문서", CharShapeIndex::new(0)));
     section.paragraphs.push(paragraph);
     document.add_section(section);
     let bytes = HwpxEncoder::encode(
@@ -59,7 +59,7 @@ fn last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
         let mut section = Section::new(PageSettings::default());
         for _ in 0..paragraphs {
             let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
-            paragraph.runs.push(Run::text("W1 교차 문서", CharShapeIndex::new(0)));
+            paragraph.runs.push(Run::text("패키지 종료 교차 문서", CharShapeIndex::new(0)));
             section.paragraphs.push(paragraph);
         }
         document.add_section(section);

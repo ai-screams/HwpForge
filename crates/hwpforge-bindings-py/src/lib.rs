@@ -9,8 +9,8 @@
 //! back. No document logic lives here — if something about an operation looks
 //! wrong, the answer is in the operation, not in this crate.
 //!
-//! The module also exports canonical I/O codes and `MAX_FILE_SIZE` (audit
-//! follow-up) — the shared frontend input size limit `Document.open` checks
+//! The module also exports canonical I/O codes and `MAX_FILE_SIZE` —
+//! the shared frontend input size limit `Document.open` checks
 //! against, re-exported verbatim from `hwpforge::ops::fs::MAX_FILE_SIZE` so
 //! it cannot drift from what the CLI and the MCP server enforce. It is not
 //! one of the 23 operations above: no document logic runs, and nothing is

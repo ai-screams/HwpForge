@@ -15,7 +15,7 @@ pub fn run(file: &PathBuf, json_mode: bool) {
 
     // Decoder warnings (`FieldsOutput::warnings`) were not surfaced previously
     // (matches the pre-migration behaviour, which never captured them
-    // either). additive — a new, omit-if-empty `warnings` key
+    // either). This adds a new, omit-if-empty `warnings` key
     // in `--json`, and one `[fields]`-prefixed stderr line each in text mode.
     let out = match ops::fields(&bytes) {
         Ok(out) => out,

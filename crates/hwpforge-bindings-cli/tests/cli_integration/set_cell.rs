@@ -301,7 +301,7 @@ fn set_cell_has_no_warnings_key_on_a_clean_fixture() {
 // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn set_cell_fifo_map_over_the_size_cap_reports_input_too_large() {
     // `set-cell --map` had no `check_file_size` preflight at all before the
-    // `read_to_string` bounded-read fix (audit follow-up) — unlike every
+    // `read_to_string` bounded-read check — unlike every
     // other read site, it never had an `INPUT_TOO_LARGE` code of its own to
     // reuse. The cap surfaces through this site's existing
     // `FILE_READ_FAILED`/exit 1 (`read_bounded_string`'s `Err` arm), not a

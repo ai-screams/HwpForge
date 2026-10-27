@@ -167,7 +167,7 @@ pub(super) fn inject_header_footer_pagenum(
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<()> {
     // Header — emit each `<hp:header>` element preserving the HWPX
-    // multi-cardinality wire shape (ADR-002) — into the paragraph it is
+    // multi-cardinality wire shape — into the paragraph it is
     // anchored to.
     let mut by_paragraph: std::collections::BTreeMap<usize, String> =
         std::collections::BTreeMap::new();

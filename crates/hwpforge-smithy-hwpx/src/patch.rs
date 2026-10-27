@@ -888,7 +888,7 @@ fn redact_section_texts(section: &mut Section, section_idx: usize) {
         section_idx,
     );
     redact_paragraphs(&mut section.paragraphs);
-    // Redact every header/footer in the Vec (ADR-002 multi-cardinality).
+    // Redact every header/footer in the Vec (multi-cardinality).
     for header in section.headers.iter_mut() {
         redact_header_footer(header);
     }

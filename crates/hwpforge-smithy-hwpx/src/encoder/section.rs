@@ -2517,7 +2517,7 @@ pub(crate) fn build_hx_caption(
 /// Generates a unique object-instance ID string for authored shapes that
 /// carry no imported id.
 ///
-/// # Id-space layout (ADR-010)
+/// # Id-space layout
 ///
 /// HWPX `id`/`instid`/`fieldid`/`beginIDRef` integers are all read by Hancom
 /// as **signed 32-bit**, so every emitted value must stay below `i32::MAX`

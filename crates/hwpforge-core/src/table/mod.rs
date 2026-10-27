@@ -150,7 +150,7 @@ pub struct TableLayoutCache {
     /// omitted it — natively authored split tables do).
     ///
     /// ⚠️ For a page-spanning (split) table this is the **first fragment's
-    /// height**, not the total table height (measurement).
+    /// height**, not the total table height.
     pub saved_sz_height: Option<HwpUnit>,
     /// Whether the wire `<hp:pos>` was the default inline-flow combination
     /// (`treatAsChar=0`, `flowWithText=1`, PARA/COLUMN relative, zero
@@ -214,7 +214,7 @@ pub struct Table {
     /// Optional table-level border/fill reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<u32>,
-    /// instance ID for cross-ref target lookup. HWP5
+    /// Instance ID for cross-ref target lookup. HWP5
     /// 변환 시 Table CtrlHeader trailer 의 instance ID 가 채워지고,
     /// HWPX encoder 가 `<hp:tbl id="...">` attribute 로 emit. `None`
     /// 이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.

@@ -182,7 +182,7 @@ msrv-pdf:
 	  -p hwpforge-bindings-py
 	cargo +1.92 check --manifest-path fuzz/Cargo.toml
 
-# Python 바인딩 (계획 부록 A-3·A-6 의 canonical 명령). 환경·실행·인터프리터는
+# Python 바인딩 canonical 명령. 환경·실행·인터프리터는
 # 전부 uv 가 소유한다 — pip·venv·mypy·pyright 경로는 쓰지 않는다. 인터프리터를
 # 바꾸려면 `UV_PYTHON=3.9 UV_PROJECT_ENVIRONMENT=.venv/3.9 make py-test` 처럼
 # (형제 이름 `.venv-3.9` 는 gitignore·ruff 기본 제외에 걸리지 않아 `ruff check .`

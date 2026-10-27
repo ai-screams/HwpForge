@@ -1603,7 +1603,7 @@ fn line_start_comments_are_g2_bytes() {
 /// cannot close next to it (after Unicode punctuation, `**a。**b**z**`) or
 /// that would run over it (`~~**p**~~q~~r~~`) are caught. Each here cannot
 /// be written with markers and is plain text with one warning, every
-/// character kept (fix5 did the same; fix6 let them through).
+/// character kept.
 /// 이것을 실패시키는 것: 평문을 검사에서 빼기 · 글 컨트롤을 검사에서 빼기 · 코드 스팬을
 /// 글로 읽지 않기.
 #[test]
@@ -1630,7 +1630,7 @@ fn plain_text_keeps_no_emphasis() {
     assert_eq!((out.as_str(), fallbacks), ("**a**`[x]`", 0));
 }
 
-/// fix6's devices, pinned by bytes and warnings.
+/// Caption ranges and table-cell context, pinned by bytes and warnings.
 /// - MA, a caption's text ranges carried into the Body's check: caption
 ///   plain `a`, bold strikeout `b`, plain `c`, then strikeout `p`, plain
 ///   `q`, `r` cannot be written (plain text, one warning); without the
@@ -2017,7 +2017,7 @@ fn tab_after_a_marker_makes_no_block() {
 /// output did not read back. The same texts in a note body (styled): no
 /// warning, and read back the earlier output's text or the document's own;
 /// only six named texts do not read back, as before.
-/// 이것을 실패시키는 것: 줄 첫 표지 뒤 탭을 구분자로 받기(fix4 의 예외, 코드 안 `[` 에 `\`) ·
+/// 이것을 실패시키는 것: 줄 첫 표지 뒤 탭을 구분자로 받기(코드 안 `[` 에 `\`) ·
 /// 최종 검사의 각주 정의 갈래 삭제 · 각주 본문 탭 뒤 숫자 앞에 `\` · 각주 본문 탭 표지
 /// 이스케이프 삭제(디코드 실패) · 각주 본문 글자 바꾸기(`[r]` → `[s]`).
 #[test]

@@ -1,4 +1,4 @@
-"""Acceptance criterion A-1: an unpacked wheel imports and works without pip.
+"""An unpacked wheel imports and works without pip.
 
 Someone who cannot install packages should be able to download the wheel, unzip
 it, put the directory on `PYTHONPATH` and use the library. This script proves

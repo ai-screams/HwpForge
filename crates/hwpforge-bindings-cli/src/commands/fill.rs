@@ -30,7 +30,7 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
         Err(e) => compat::exit_ops_error(Command::Fill, e, json_mode),
     };
     // Warnings (`FillOutput::warnings`: the name-resolution decode, then the
-    // values cleaned of forbidden characters) were not surfaced previously. additive — a new,
+    // values cleaned of forbidden characters) were not surfaced previously. This adds a new,
     // omit-if-empty `warnings` key in `--json`, and one `[fill]`-prefixed
     // stderr line each in text mode.
     let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();

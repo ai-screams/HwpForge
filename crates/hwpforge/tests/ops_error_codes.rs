@@ -233,6 +233,7 @@ fn editor_rust_cases() -> Vec<(&'static str, OpsError)> {
 // FillError::Patch 위임을 FILL_FAILED 로 고정, patch 원본 decode 를 Rejected 로 감싸기,
 // metadata 검사를 원본 decode 뒤로 옮기기, 구역 범위 검사를 Rejected 로, fill 입력 decode 를 Workflow 로.
 fn read_and_io_causes_are_canonical() {
+    // 이것을 실패시키는 것: editor 연산 제외 필터만 이전 접두사로 되돌리기.
     // 이것을 실패시키는 것: Codec·Invariant 매핑을 InvalidInput으로 변경, Draft 전용 Rust case 제외 제거.
     // 이것을 실패시키는 것: read 매핑을 InvalidInput으로 치환하거나 NotFound/기타 I/O 매핑을 뒤바꿈.
     let manifest: serde_json::Value =
@@ -267,11 +268,11 @@ fn read_and_io_causes_are_canonical() {
         .filter(|case| case["surfaces"].get("rust").is_some())
         // `convert.*` operations live in hwpforge-convert, which this crate
         // cannot depend on; `hwpforge-convert/tests/conversion_stage_errors.rs` consumes them.
-        // `w3.*` operations are consumed by `editor_errors.rs`.
+        // `editor.*` operations are consumed by `editor_errors.rs`.
         // 이것을 실패시키는 것: 이 거르기 삭제(convert·편집기 몫 case 를 이 harness 가 소비하지 못해 집합 불일치).
         .filter(|case| {
             let operation = case["surfaces"]["rust"]["operation"].as_str().unwrap();
-            !operation.starts_with("convert.") && !operation.starts_with("w3.")
+            !operation.starts_with("convert.") && !operation.starts_with("editor.")
         })
         .map(|case| case["id"].as_str().unwrap())
         .collect();

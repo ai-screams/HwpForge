@@ -78,7 +78,7 @@ pub struct Image {
     /// Optional placement/presentation metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<ObjectPlacement>,
-    /// instance ID for cross-ref target lookup. HWP5
+    /// Instance ID for cross-ref target lookup. HWP5
     /// 변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX
     /// encoder 가 `<hp:pic id="...">` attribute 로 emit. `None` 이면
     /// encoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.

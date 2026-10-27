@@ -970,8 +970,9 @@ mod tests {
     /// with content="text" intact.
     #[test]
     fn metadata_populated_emits_typed_values() {
+        // 이것을 실패시키는 것: 시험 입력 제목만 이전 이름으로 되돌려 기대 XML 제목과 어긋나게 하기.
         let meta = Metadata::new()
-            .with_title("Wave 12o 데모")
+            .with_title("메타데이터 데모")
             .with_author("홍길동")
             .with_subject("자동 필드 진단")
             .with_description("longer description")
@@ -980,7 +981,7 @@ mod tests {
             .with_created("2026-06-04T09:00:00Z")
             .with_modified("2026-06-04T11:20:00Z");
         let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
-        assert!(hpf.contains("<opf:title>Wave 12o 데모</opf:title>"));
+        assert!(hpf.contains("<opf:title>메타데이터 데모</opf:title>"));
         assert!(hpf.contains(r#"<opf:meta name="creator" content="text">홍길동</opf:meta>"#));
         assert!(
             hpf.contains(r#"<opf:meta name="subject" content="text">자동 필드 진단</opf:meta>"#)

@@ -909,7 +909,7 @@ mod tests {
             assert!(budget.read > before);
             assert!(budget.read <= 8 * (bytes.len() + EOCD_WINDOW));
             eprintln!(
-                "W1_NORMAL len={} count={} read={} records={}",
+                "ZIP_BUDGET_NORMAL len={} count={} read={} records={}",
                 bytes.len(),
                 directory.count,
                 budget.read,
@@ -977,7 +977,7 @@ mod tests {
         // The read budget trips long before the record limit (20 records on
         // zip 9.0.5, which falls back inside one probe; 36 on 9.1.0).
         eprintln!(
-            "W1_EXHAUST read={} candidates={} records={}",
+            "ZIP_BUDGET_EXHAUST read={} candidates={} records={}",
             work.metadata.borrow().read,
             work.candidates,
             work.metadata.borrow().records
@@ -1062,7 +1062,7 @@ mod tests {
         // The record limit is reached before the read budget.
         assert!(metadata.read <= metadata.read_limit, "{} {}", metadata.read, metadata.read_limit);
         eprintln!(
-            "W1_RECORDS len={} read={} read_limit={} records={}",
+            "ZIP_BUDGET_RECORDS len={} read={} read_limit={} records={}",
             bytes.len(),
             metadata.read,
             metadata.read_limit,
@@ -1133,7 +1133,7 @@ mod tests {
         assert!(result.is_err());
         let metadata = work.metadata.borrow();
         eprintln!(
-            "W1_FALLBACK len={} read={} read_limit={} records={} result={result:?}",
+            "ZIP_BUDGET_FALLBACK len={} read={} read_limit={} records={} result={result:?}",
             bytes.len(),
             metadata.read,
             metadata.read_limit,

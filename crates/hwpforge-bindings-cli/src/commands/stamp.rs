@@ -28,7 +28,7 @@ pub fn run_plan(file: &PathBuf, json_mode: bool) {
         Err(e) => compat::exit_ops_error(Command::StampPlan, e, json_mode),
     };
     // Decoder warnings (`StampPlanOutput::warnings`) were not surfaced
-    // previously. additive — a new, omit-if-empty `warnings` key
+    // previously. This adds a new, omit-if-empty `warnings` key
     // in `--json`, and one `[stamp-plan]`-prefixed stderr line each in text
     // mode. Unrelated to `plan.skipped_tables`'s own warning print below,
     // which stays exactly as it was.
@@ -165,7 +165,7 @@ pub fn run(
     };
     // What decoding the input reported, then the successful encode's
     // non-semantic warnings (`StampOutput::warnings`) were not surfaced
-    // previously. additive — a new, omit-if-empty `warnings` key
+    // previously. This adds a new, omit-if-empty `warnings` key
     // in `--json`, and one `[stamp]`-prefixed stderr line each in text mode,
     // for both the legacy and v2 shapes below.
     let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();

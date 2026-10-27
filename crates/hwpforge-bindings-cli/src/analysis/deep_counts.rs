@@ -196,7 +196,7 @@ pub(crate) fn summarize_hwpx_section(
         .iter()
         .filter(|paragraph| paragraph_has_visible_text_deep(paragraph))
         .count();
-    // ADR-002: sum across every `<hp:header>` / `<hp:footer>` in the Vec.
+    // Sum across every `<hp:header>` / `<hp:footer>` in the Vec.
     let deep_paragraphs: usize = count_paragraphs_recursive(&section.paragraphs)
         + section.headers.iter().map(|h| count_paragraphs_recursive(&h.paragraphs)).sum::<usize>()
         + section.footers.iter().map(|f| count_paragraphs_recursive(&f.paragraphs)).sum::<usize>();

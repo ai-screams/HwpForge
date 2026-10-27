@@ -9,7 +9,7 @@ six *different* platforms rather than the same one six times.
 
 Checked per wheel: the filename parses as `hwpforge-<version>-cp39-abi3-<platform>`,
 the platform tag matches the pattern the matrix expects, and `METADATA` agrees on
-`Name` and `Version` and declares no `Requires-Dist` (acceptance criterion A-8).
+`Name` and `Version` and declares no `Requires-Dist`.
 Checked per sdist: the filename is `hwpforge-<version>.tar.gz` and `PKG-INFO`
 agrees on `Name` and `Version`.
 """
@@ -80,7 +80,7 @@ def check_wheel(path: pathlib.Path, expected: str, platform_pattern: str | None)
 
 
 def _check_core_metadata(label: str, text: str, expected: str, kind: str) -> list[str]:
-    """Name, Version and the A-8 dependency-free rule, for both metadata kinds."""
+    """Name, Version and the dependency-free rule, for both metadata kinds."""
     problems: list[str] = []
     name = _metadata_field(text, "Name")
     if name != PROJECT:
@@ -88,8 +88,8 @@ def _check_core_metadata(label: str, text: str, expected: str, kind: str) -> lis
     version = _metadata_field(text, "Version")
     if version != expected:
         problems.append(f"{label}: {kind} Version is {version!r}, expected {expected!r}")
-    # A-8 applies to the sdist too: a dependency declared there would install
-    # from a source build even though no wheel carries it.
+    # The dependency-free rule applies to the sdist too: a declared dependency
+    # would install from a source build even though no wheel carries it.
     requires = [line for line in text.splitlines() if line.startswith("Requires-Dist:")]
     if requires:
         problems.append(f"{label}: {kind} has {len(requires)} Requires-Dist lines, expected 0: {requires}")

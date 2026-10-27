@@ -96,8 +96,8 @@ pub fn hwp5_to_hwpx(
     hwp5_to_hwpx_with_options(input, output, ConvertOptions::default())
 }
 
-/// [`hwp5_to_hwpx`] 에 동작 옵션([`ConvertOptions`])을 더한 변형 (
-/// CLI `convert-hwp5` 가 사용, `--no-layout-cache` 면 carry 끔).
+/// [`hwp5_to_hwpx`] 에 동작 옵션([`ConvertOptions`])을 더한 변형.
+/// CLI `convert-hwp5` 가 사용하며, `--no-layout-cache` 면 carry 를 끈다.
 ///
 /// # Errors
 ///
@@ -152,7 +152,7 @@ pub struct ConvertOptions {
     /// 정확히 놓을 수 없는 문단만 캐시를 버린다(경고). `false` 면 캐시 없이
     /// 쓰고, 줄 나눔은 여는 쪽이 다시 계산한다.
     ///
-    /// (이미지 기능): HWP5 승격 경로가 wire→Core 좌표 ledger 로
+    /// HWP5 이미지 승격 경로가 wire→Core 좌표 ledger 로
     /// textpos 를 가시 좌표로 정규화하고, 인코더가 방출-통합 역변환으로
     /// wire 좌표로 되돌린다. 정규화/역변환이 불가능한 문단(차트 재배치·
     /// 미지 컨트롤·축약점 모호 등)은 캐시를 **드롭**하고

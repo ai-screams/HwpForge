@@ -104,7 +104,7 @@ impl HwpxRegistryBridge {
 
     fn rebind_section(&self, section: &mut Section) -> HwpxResult<()> {
         self.rebind_paragraphs(&mut section.paragraphs)?;
-        // ADR-002: each `<hp:header>` / `<hp:footer>` is independently
+        // Each `<hp:header>` / `<hp:footer>` is independently
         // rebound to keep all multi-cardinality variants consistent.
         for header in section.headers.iter_mut() {
             self.rebind_paragraphs(&mut header.paragraphs)?;

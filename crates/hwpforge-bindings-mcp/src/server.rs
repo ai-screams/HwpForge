@@ -1310,7 +1310,7 @@ mod request_schema_tests {
     //! or reshape fails loudly here instead of silently changing the wire
     //! contract.
     //!
-    //! these tests used to compare against
+    //! These tests used to compare against
     //! `schemars::schema_for!(StampRequest)` directly — the schemars type's
     //! own raw output, complete with a top-level `title`/`description` for
     //! the wrapper type. But that is not what the server actually sends: the

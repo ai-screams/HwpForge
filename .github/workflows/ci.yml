@@ -11,7 +11,7 @@
 #   pr          → fast feedback (fmt/clippy/test/audit/lint — coverage,
 #                 deny, msrv, docs build 는 머지 큐로 이동)
 #   merge_queue → final full gate (coverage + deny + msrv + docs build)
-#     release     → pr 과 동일 플래그 (자동 트리거 경로 없음 —
+#   release     → pr 과 동일 플래그 (자동 트리거 경로 없음 —
 #                 release-plz Preflight 호출 제거됨, dispatch 라벨용 존치)
 #   full        → manual full validation
 # =============================================================================
@@ -325,7 +325,7 @@ jobs:
         # 1.92 를 선언한 크레이트는 넷이고, 전부 publish=false 라 MSRV 소비자
         # 계약이 없다 — 1.89 레인에서 제외하고 아래 1.92 스텝이 커버한다.
         #   smithy-pdf     krilla 0.8 가 1.92 요구
-        # bindings-cli smithy-pdf 소비
+        #   bindings-cli   smithy-pdf 소비
         #   convert        ops::to_pdf 가 smithy-pdf 소비
         #   bindings-py    convert 소비
         run: >-

@@ -1,4 +1,4 @@
-//! editor boundaries, with synthetic inputs only.
+//! Editor boundaries, with synthetic inputs only.
 #![cfg(feature = "hwpx")]
 #[path = "support/document.rs"]
 mod document;
@@ -238,7 +238,8 @@ fn stamp_v2_admission_is_canonical() {
 #[cfg(feature = "ops-hwpx")]
 #[test]
 fn editor_manifest_cases_are_all_consumed() {
-    // 이것을 실패시키는 것: manifest에 rust operation=w3.x case 추가.
+    // 이것을 실패시키는 것: editor 연산 필터만 이전 접두사로 되돌리기.
+    // 이것을 실패시키는 것: manifest에 rust operation=editor.x case 추가.
     // Use the same IDs as the fixture assertions above, never a separate allowlist.
     let consumed: std::collections::BTreeSet<_> =
         [DRAFT_CASE, V2_CASE].into_iter().chain(DEPTH_CASES.iter().map(|(_, _, id)| *id)).collect();
@@ -249,7 +250,9 @@ fn editor_manifest_cases_are_all_consumed() {
         .unwrap()
         .iter()
         .filter(|case| {
-            case["surfaces"]["rust"]["operation"].as_str().is_some_and(|op| op.starts_with("w3."))
+            case["surfaces"]["rust"]["operation"]
+                .as_str()
+                .is_some_and(|op| op.starts_with("editor."))
         })
         .map(|case| case["id"].as_str().unwrap())
         .collect();

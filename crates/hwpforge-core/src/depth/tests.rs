@@ -507,7 +507,7 @@ fn walker_baseline_log() {
 fn iterative_walkers_small_stack() {
     small_stack_child(
         "depth::tests::iterative_walkers_small_stack",
-        "HWPFORGE_W3_WALK",
+        "HWPFORGE_SMALL_STACK_WALK",
         512 * 1024,
         || {
             const N: usize = 100_000;
@@ -725,7 +725,7 @@ fn walker_mutation_and_cache_contracts() {
 fn walker_callback_panic_small_stack() {
     small_stack_child(
         "depth::tests::walker_callback_panic_small_stack",
-        "HWPFORGE_W3_PANIC",
+        "HWPFORGE_SMALL_STACK_PANIC",
         512 * 1024,
         || {
             for kind in 0..3 {

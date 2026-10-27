@@ -36,7 +36,7 @@ pub fn run(
     };
     // Warnings (`PatchOutput::warnings`: the base decode, then the edited
     // slots cleaned of forbidden characters) were
-    // not surfaced previously. additive — a new, omit-if-empty
+    // not surfaced previously. This adds a new, omit-if-empty
     // `warnings` key in `--json`, and one `[patch]`-prefixed stderr line
     // each in text mode.
     let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();

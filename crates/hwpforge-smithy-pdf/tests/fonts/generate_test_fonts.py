@@ -18,9 +18,9 @@ SOURCE_DATE_EPOCH=0 으로 고정해 재생성이 바이트 결정적이다.
   - HwpForgeTest-Bold.ttf (subfamily "Bold" + **regular 플래그** —
     분류기의 "신호 모순 = ambiguous" 레거시 케이스를 겸한다.)
 - 분류기 fixture:
-  - HwpForgeW4-{Regular,Bold}.ttf — 정상 Bold 축 (nameID 16/17 typographic
+  - HwpForgeTypographicPair-{Regular,Bold}.ttf — 정상 Bold 축 (nameID 16/17 typographic
     이름 · fsSelection BOLD · macStyle · weight 700 · 실제 폭 상이).
-    nameID 1 은 의도적으로 다른 이름("HwpForgeW4 Legacy") — 16 우선 검증.
+    nameID 1 은 의도적으로 다른 이름("HwpForge Typographic Pair Legacy") — 16 우선 검증.
   - HwpForgeConflict-Bold.ttf — subfamily "Bold" + regular 플래그 + weight
     400 (모순 → ambiguous 전용 케이스).
   - HwpForgeRank-{R400,R500}.ttf — 같은 (family, Regular) 후보 2개, weight
@@ -163,20 +163,20 @@ if __name__ == "__main__":
     # 정상 Bold 축 쌍 — nameID 16/17 + 진짜 플래그 + 실제 폭 차이.
     build(
         here / "HwpForgeTypographicPair-Regular.ttf",
-        family="HwpForgeW4 Legacy",
+        family="HwpForge Typographic Pair Legacy",
         style_name="Regular",
-        full_name="HwpForge W4 Regular",
-        ps_name="HwpForgeW4-Regular",
-        typo_family="HwpForge W4",
+        full_name="HwpForge Typographic Pair Regular",
+        ps_name="HwpForgeTypographicPair-Regular",
+        typo_family="HwpForge Typographic Pair",
         typo_style="Regular",
     )
     build(
         here / "HwpForgeTypographicPair-Bold.ttf",
-        family="HwpForgeW4 Legacy",
+        family="HwpForge Typographic Pair Legacy",
         style_name="Bold",
-        full_name="HwpForge W4 Bold",
-        ps_name="HwpForgeW4-Bold",
-        typo_family="HwpForge W4",
+        full_name="HwpForge Typographic Pair Bold",
+        ps_name="HwpForgeTypographicPair-Bold",
+        typo_family="HwpForge Typographic Pair",
         typo_style="Bold",
         latin_adv=700,
         weight=700,

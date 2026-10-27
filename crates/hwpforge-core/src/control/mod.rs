@@ -641,7 +641,7 @@ pub enum Control {
     /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로
     /// 구분되어 caller 가 의미를 정확히 알 수 있음.
     ///
-    /// (breaking): `display_text: String` 추가.
+    /// `display_text: String` 은 참조의 표시 문자열이다.
     /// HWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run
     /// 으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display
     /// text 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection

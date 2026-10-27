@@ -1501,7 +1501,7 @@ mod walker_tests {
     fn deep_visible_memo_value() {
         crate::depth::tests::small_stack_child(
             "field_inventory::walker_tests::deep_visible_memo_value",
-            "HWPFORGE_W3_VISIBLE",
+            "HWPFORGE_SMALL_STACK_VISIBLE",
             512 * 1024,
             || {
                 let mut r = Run::text("last", CharShapeIndex::new(0));

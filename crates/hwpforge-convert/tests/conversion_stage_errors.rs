@@ -74,7 +74,7 @@ fn cases() -> Vec<(&'static str, &'static str, &'static str, ConvertOpsError)> {
 #[test]
 // 이것을 실패시키는 것: `hwp5_code` 의 `Core` 를 `Hwp5ConvertFailed` 로, `convert_code` 의 Validate·Encode 를
 // `Hwp5ConvertFailed` 로, LayoutPatch 를 다른 코드로 바꾸기, manifest 에 소비하지 않는 `convert.*` case 추가.
-// 이것을 실패시키는 것(fix1): manifest 의 rust operation 을 없는 이름(`convert.does_not_exist`)으로,
+// 이것을 실패시키는 것: manifest 의 rust operation 을 없는 이름(`convert.does_not_exist`)으로,
 // mode 를 injected → fixture 로 바꾸기.
 fn hwp5_stages_report_the_manifest_codes() {
     let manifest: serde_json::Value =

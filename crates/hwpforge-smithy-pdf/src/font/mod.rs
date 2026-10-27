@@ -668,10 +668,14 @@ mod tests {
 
     #[test]
     fn pair_resolves_by_typographic_family_and_style() {
+        // 이것을 실패시키는 것: 시험 글꼴의 이름표만 이전 family 이름으로 되돌리기.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
-        let regular =
-            resolver.resolve_styled("HwpForge W4", FaceStyle::Regular).expect("regular face");
-        let bold = resolver.resolve_styled("HwpForge W4", FaceStyle::Bold).expect("bold face");
+        let regular = resolver
+            .resolve_styled("HwpForge Typographic Pair", FaceStyle::Regular)
+            .expect("regular face");
+        let bold = resolver
+            .resolve_styled("HwpForge Typographic Pair", FaceStyle::Bold)
+            .expect("bold face");
         assert!(
             regular.path.file_name().unwrap().to_string_lossy().contains("Regular"),
             "unexpected regular file: {:?}",
@@ -684,7 +688,7 @@ mod tests {
         );
         // nameID 16 이 있으면 nameID 1 은 family 로 등록하지 않는다 (16 우선 — 병기 아님).
         assert!(matches!(
-            resolver.resolve("HwpForgeW4 Legacy"),
+            resolver.resolve("HwpForge Typographic Pair Legacy"),
             Err(PdfError::FontUnresolved { .. })
         ));
         // Bold 는 실제 폭이 다르다 (Latin 0.7em vs 0.6em) — bbox 게이트 유효성의 근거.
@@ -736,10 +740,12 @@ mod tests {
 
     #[test]
     fn exact_full_name_carries_its_own_style() {
+        // 이것을 실패시키는 것: 시험 글꼴의 이름표만 이전 full name으로 되돌리기.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         // full name 은 스타일 내재 — 요청 스타일과 face 플래그가 일치할 때만 styled 매칭.
-        let bold =
-            resolver.resolve_styled("HwpForge W4 Bold", FaceStyle::Bold).expect("bold full name");
+        let bold = resolver
+            .resolve_styled("HwpForge Typographic Pair Bold", FaceStyle::Bold)
+            .expect("bold full name");
         assert!(bold.path.file_name().unwrap().to_string_lossy().contains("Bold"));
         // 모순 face (레거시 lying Bold): full name 이라도 styled 요청은 신뢰하지 않는다.
         assert!(matches!(
@@ -815,7 +821,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> TestDir {
-        let dir = std::env::temp_dir().join(format!("hwpforge-w4b-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join(format!("hwpforge-font-license-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         TestDir(dir)

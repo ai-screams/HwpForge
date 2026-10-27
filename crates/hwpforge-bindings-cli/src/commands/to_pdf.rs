@@ -73,7 +73,7 @@ fn detect_format(bytes: &[u8]) -> Option<&'static str> {
 /// render 만 [`ConvertOpsWarning::info`] 로 옮겨 갔다 — `info()` 의 message
 /// 는 location 을 접두한 형태라, render 경고만 같은 값이 `message` 와
 /// `location` 두 열에 실리고 convert·decode 는 한 번만 실리는 불일치가
-/// 한 배열 안에 생겼다(감사 지적). `parts()` 는 접두 전 세 열이므로
+/// 한 배열 안에 생겼다. `parts()` 는 접두 전 세 열이므로
 /// 세 단계가 다시 같은 규칙을 따른다.
 ///
 /// `input` 단계만 예외로 `run` 이 직접 만든다: `EXTENSION_MISMATCH` 는
@@ -512,7 +512,7 @@ mod tests {
     /// `info()` 를 그대로 옮겨 담았으므로 자기 자신과 비교하는 토톨로지였고,
     /// 그 사이 `info()` 가 location 을 message 에 접두하도록 바뀌면서 CLI 의
     /// `message` 열에 접두 문구가 들어오고 `location` 열에도 같은 값이
-    /// 실리는 이중 표기가 생겼는데도 초록이었다(감사 지적). 이제 기대값은
+    /// 실리는 이중 표기가 생겼는데도 초록이었다. 이제 기대값은
     /// 기존 문구이므로 그 회귀가 여기서 실패한다.
     ///
     /// `variant_name` 은 망라 가드다: 프로덕션 코드에서 재사용하지 않은

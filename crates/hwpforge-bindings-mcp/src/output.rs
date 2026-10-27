@@ -335,8 +335,8 @@ mod tests {
 
     // The Cursor-based cap-boundary tests that used to live here (a small
     // `max` against `read_capped`, this file's own private reader) moved
-    // with the reader itself to `hwpforge::ops::fs::tests` — audit
-    // follow-up: one bounded reader, one set of boundary tests, shared by
+    // with the reader itself to `hwpforge::ops::fs::tests`: one bounded
+    // reader, one set of boundary tests, shared by
     // every frontend. `read_file_bytes_over_the_size_cap_reports_input_too_large`
     // below is this file's own regression: the *mapping* from the shared
     // reader's `OpsError` onto this crate's `ToolErrorInfo` shape.

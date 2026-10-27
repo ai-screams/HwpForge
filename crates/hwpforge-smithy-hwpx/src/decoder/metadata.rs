@@ -332,8 +332,9 @@ mod tests {
 
     #[test]
     fn populated_title_decodes() {
-        let m = parse("<opf:title>Wave 12o 데모</opf:title>");
-        assert_eq!(m.title.as_deref(), Some("Wave 12o 데모"));
+        // 이것을 실패시키는 것: 시험 XML 제목만 이전 이름으로 되돌려 기대 제목과 어긋나게 하기.
+        let m = parse("<opf:title>메타데이터 데모</opf:title>");
+        assert_eq!(m.title.as_deref(), Some("메타데이터 데모"));
     }
 
     #[test]
@@ -507,7 +508,7 @@ mod tests {
     fn roundtrip_with_encoder_lossless() {
         use crate::encoder::package as enc;
         let original = Metadata::new()
-            .with_title("Wave 12o")
+            .with_title("메타데이터")
             .with_author("저자")
             .with_subject("subj")
             .with_description("desc")

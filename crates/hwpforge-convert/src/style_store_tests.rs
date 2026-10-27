@@ -1282,8 +1282,8 @@ fn hwp5_para_shape_preserves_custom_tab_ids() {
 
 #[test]
 fn hwp5_tab_def_maps_stops_and_auto_flags() {
-    // Coverage matrix below mirrors what 한컴 actually writes (
-    // tab-fidelity hotfix). `position` is halved on the way through
+    // Coverage matrix below mirrors what 한컴 actually writes.
+    // `position` is halved on the way through
     // `hwp5_tab_position_to_hwp_unit` because the HWPX encoder treats
     // `TabStop.position` as HwpUnitChar (= HWP5 raw HwpUnit / 2). The
     // leader mapping preserves each supported wire style.
@@ -2020,7 +2020,7 @@ fn to_hwpx_style_store_image_fill_round_trips_correctly() {
 }
 
 /// A store with one border fill (label 4, position 1) whose image fill names `BIN0001`.
-/// fix8b: public accessors select position 1 even when the descriptive label is 4.
+/// Public accessors select position 1 even when the descriptive label is 4.
 fn image_fill_store() -> Hwp5StyleStore {
     Hwp5StyleStore {
         id_mappings: None,

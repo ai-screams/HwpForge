@@ -230,7 +230,7 @@ pub(crate) fn summarize_hwpx_table_properties(sections: &[Section]) -> DeepTable
             &mut summary,
             &mut next_table_ordinal,
         );
-        // ADR-002: scan every header/footer variant for table properties.
+        // Scan every header/footer variant for table properties.
         for header in &section.headers {
             accumulate_table_properties_from_paragraphs(
                 &header.paragraphs,
