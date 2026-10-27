@@ -346,11 +346,7 @@ fn build_section1() -> Section {
 fn build_section2() -> Section {
     let paragraphs = vec![
         // ── Title ──
-        text_para(
-            "개요(Outline), 번호매기기(Numbering), 탭(Tab) 테스트",
-            CS_TITLE,
-            PS_CENTER,
-        ),
+        text_para("개요(Outline), 번호매기기(Numbering), 탭(Tab) 테스트", CS_TITLE, PS_CENTER),
         text_para("", CS_NORMAL, PS_BODY),
         // ── Outline headings with styleIDRef for 개요 1-3 ──
         // 개요 1 = style ID 2 (Modern), 개요 2 = style ID 3, 개요 3 = style ID 4

@@ -844,10 +844,7 @@ fn section_combined() -> Section {
             text_para("▶ 각주:", CS_RED, PS_LEFT),
             multi_run_para(
                 vec![
-                    Run::text(
-                        "이 문장에는 각주가 달려 있습니다",
-                        CharShapeIndex::new(CS_NORMAL),
-                    ),
+                    Run::text("이 문장에는 각주가 달려 있습니다", CharShapeIndex::new(CS_NORMAL)),
                     Run::control(footnote, CharShapeIndex::new(CS_NORMAL)),
                     Run::text(".", CharShapeIndex::new(CS_NORMAL)),
                 ],
@@ -857,22 +854,22 @@ fn section_combined() -> Section {
             // ConnectLine with arrows
             text_para("▶ 연결선 (화살표):", CS_RED, PS_LEFT),
             {
-                let mut cl = Control::connect_line(
-                    ShapePoint::new(0, 2000),
-                    ShapePoint::new(15000, 2000),
-                )
-                .unwrap();
+                let mut cl =
+                    Control::connect_line(ShapePoint::new(0, 2000), ShapePoint::new(15000, 2000))
+                        .unwrap();
                 if let Control::ConnectLine { ref mut style, .. } = cl {
                     *style = Some(ShapeStyle {
                         line_color: Some(Color::from_rgb(100, 50, 150)),
                         line_width: Some(20),
                         head_arrow: Some(ArrowStyle {
                             arrow_type: ArrowType::Arrow,
-                            size: ArrowSize::Medium, filled: true,
+                            size: ArrowSize::Medium,
+                            filled: true,
                         }),
                         tail_arrow: Some(ArrowStyle {
                             arrow_type: ArrowType::Arrow,
-                            size: ArrowSize::Medium, filled: true,
+                            size: ArrowSize::Medium,
+                            filled: true,
                         }),
                         ..ShapeStyle::default()
                     });
@@ -880,11 +877,7 @@ fn section_combined() -> Section {
                 ctrl_para(cl, CS_NORMAL, PS_CENTER)
             },
             empty_para(),
-            text_para(
-                "=== 도형·참조 종합 테스트 완료 ===",
-                CS_TITLE,
-                PS_CENTER,
-            ),
+            text_para("=== 도형·참조 종합 테스트 완료 ===", CS_TITLE, PS_CENTER),
         ],
         ps,
     );
