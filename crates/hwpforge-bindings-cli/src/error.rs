@@ -295,12 +295,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod w1_tests {
+mod input_error_tests {
     use super::*;
 
     #[test]
     // 이것을 실패시키는 것: bounded reader의 초과 guard 비활성화, bounded reader의 >를 >=로 변경, reader I/O를 InputTooLarge로 오분류.
-    fn w1_stdin_cap_and_io_classification() {
+    fn stdin_cap_and_io_classification() {
         // 이것을 실패시키는 것: cap의 >를 >=로 변경, cap 제거, reader I/O를 InputTooLarge로 변경.
         assert_eq!(read_capped_string(&b"abcd"[..], 4).unwrap(), "abcd");
         assert_eq!(

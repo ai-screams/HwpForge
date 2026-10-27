@@ -107,7 +107,7 @@ fn each_post_decode_stage_reports_its_own_code() {
     // generated moments earlier*, so reaching it means the encoder and the
     // patcher disagree. The decode stage is the one with a byte-level test —
     // `tests/ops_convert_hwp5.rs` drives it with garbage, a ZIP and a
-    // truncated container, and `tests/w4_errors.rs` with a broken reference.
+    // truncated container, and `tests/conversion_stage_errors.rs` with a broken reference.
     let cases: Vec<(ConvertError, OpsCode, &str)> = vec![
         (
             ConvertError::Validate(CoreError::InvalidStructure {

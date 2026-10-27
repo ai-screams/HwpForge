@@ -3290,7 +3290,7 @@ fn project_memo_run(
 }
 
 #[test]
-fn fix4_nondefault_memo_shape_loss_is_explicit() {
+fn nondefault_memo_shape_loss_is_explicit() {
     // 이것을 실패시키는 것: 메모 모양 참조/파싱 대체값의 무음 방출.
     for id in [0, 7, 99, 65535] {
         let memo = Hwp5MemoControl {
@@ -6763,7 +6763,7 @@ mod tests {
     // ── page_def_to_settings ─────────────────────────────────────────────────
 
     #[test]
-    fn fix2_page_dimensions_reject_unsigned_wrap_and_out_of_range() {
+    fn page_dimensions_reject_unsigned_wrap_and_out_of_range() {
         // 이것을 실패시키는 것: PageDef u32를 as i32로 잘라 음수로 수용 / 범위 오류를 0으로.
         for value in [u32::MAX, 100_000_001] {
             let pd = Hwp5PageDef {

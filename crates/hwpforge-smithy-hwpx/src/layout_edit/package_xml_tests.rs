@@ -58,8 +58,8 @@ fn encoded(xml: &str, encoding: usize) -> Vec<u8> {
 // container/content 전체 Node 누락, 순서 번호 fallback, 미수정 XML 재인코딩,
 // canonical mimetype 접미부 거부(합성 20도 전체 decode/edit 경로로 통과).
 #[test]
-fn w3_package_xml_cross_matrix() {
-    let case = "w3_package_xml_cross_matrix setup".to_owned();
+fn package_xml_cross_matrix() {
+    let case = "package_xml_cross_matrix setup".to_owned();
     let original = rewrite(&base(), "mimetype", b"application/hwp+zip;x=1", &case);
     let pkg = RawPackage::read(&original).unwrap_or_else(|error| panic!("{case}: {error}"));
     let content = pkg
@@ -240,8 +240,8 @@ fn w3_package_xml_cross_matrix() {
 // 이것을 실패시키는 것: content의 package/manifest/spine/item 확장 속성도
 // metadata 요약에만 맡겨 global input에서 지우기.
 #[test]
-fn w3_content_extension_positions() {
-    let case = "w3_content_extension_positions setup".to_owned();
+fn content_extension_positions() {
+    let case = "content_extension_positions setup".to_owned();
     let original = base();
     let package = RawPackage::read(&original).unwrap_or_else(|error| panic!("{case}: {error}"));
     let content = package
@@ -277,13 +277,13 @@ fn w3_content_extension_positions() {
 
 // 이것을 실패시키는 것: 패키지 container를 HWP 도형 container로 취급해 id 소거.
 #[test]
-fn w3_package_container_identity_is_literal() {
+fn package_container_identity_is_literal() {
     package_attribute_changes("META-INF/container.xml", "<ocf:container ", "id", ["1", "2"]);
 }
 
 // 이것을 실패시키는 것: OPF itemref 속성 값을 같은 HWP 정의의 지문으로 치환.
 #[test]
-fn w3_package_itemref_references_are_literal() {
+fn package_itemref_references_are_literal() {
     for attr in ["charPrIDRef", "prIDRef"] {
         package_attribute_changes("Contents/content.hpf", "<opf:itemref ", attr, ["0", "1"]);
     }
@@ -384,7 +384,7 @@ fn package_attribute_changes(part: &str, tag: &str, attr: &str, values: [&str; 2
 // 패키지 하위 Node의 출처를 누락하거나, linesegarray/shell 생략을 다시 적용.
 // 요소의 namespace도 경계가 아니다: HWP namespace여도 입력 출처가 우선한다.
 #[test]
-fn w3_package_nodes_keep_hwp_shaped_data() {
+fn package_nodes_keep_hwp_shaped_data() {
     for inner in [
         "<fieldBegin id='1'/><fieldEnd beginIDRef='1'/>",
         "<linesegarray><lineseg value='1'/></linesegarray>",
@@ -410,7 +410,7 @@ fn w3_package_nodes_keep_hwp_shaped_data() {
 // 이것을 실패시키는 것: 패키지 속성에 HWP 참조 해석/신호 스캔을 재적용하거나
 // fontRef의 속성 값을 생략하기. 원시 값은 header 정의 변경과 독립적이어야 한다.
 #[test]
-fn w3_package_nodes_have_no_hwp_dependencies() {
+fn package_nodes_have_no_hwp_dependencies() {
     for inner in [
         "<itemref charPrIDRef='0' futureIDRef='8'/>",
         "<fontRef latin='0'/>",

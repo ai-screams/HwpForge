@@ -764,7 +764,7 @@ mod tests {
     use hwpforge_foundation::HwpUnit;
 
     #[test]
-    fn w3_mapper_preserves_typed_failures() {
+    fn mapper_preserves_typed_failures() {
         // 이것을 실패시키는 것: typed Codec·Invariant detail 삭제, 예상 밖 helper 오류 detail 삭제.
         for stage in [
             CodecStage::Decode,

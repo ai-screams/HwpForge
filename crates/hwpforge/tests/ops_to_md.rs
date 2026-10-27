@@ -22,7 +22,7 @@ fn styled_is_what_you_get_without_asking() {
 
 // 이것을 실패시키는 것: CHAR 0·오른쪽/위/아래 여백·CHAR 탭의 MD 손실을 숨기기.
 #[test]
-fn w2_all_modes_report_margin_units_and_char_tab_loss() {
+fn all_modes_report_margin_units_and_char_tab_loss() {
     use hwpforge::ops::{
         convert_md, from_json, to_json, ConvertMdOptions, FromJsonOptions, ToJsonOptions,
     };

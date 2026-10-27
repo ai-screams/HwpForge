@@ -307,7 +307,7 @@ mod tests {
 
     // 이것을 실패시키는 것: version/future 때문에 순서를 버리거나 레이아웃에서 제외하기.
     #[test]
-    fn w3_order_attributes() {
+    fn order_attributes() {
         for extra in ["version='1.0'", "version='1.0' future='1'"] {
             let xml = CONTAINER_XML.replace("<c:container ", &format!("<c:container {extra} "));
             let content = CONTENT_XML.replace("idref='beta'", "idref='beta' future='1'");
@@ -321,7 +321,7 @@ mod tests {
     // 이것을 실패시키는 것: rootfiles/rootfile 부가 속성을 레이아웃에서 제외,
     // 알려진 선택 필드를 누락/접두사/중복이어도 유일한 값으로 간주.
     #[test]
-    fn w3_container_attribute_positions() {
+    fn container_attribute_positions() {
         for tag in ["<c:rootfiles>", "<c:rootfile "] {
             let replacement = if tag.ends_with('>') {
                 "<c:rootfiles future='1'>"
@@ -345,7 +345,7 @@ mod tests {
 
     // 이것을 실패시키는 것: 모든 부가 속성을 무조건 무시하여 조건부/경로/접두사 의미를 버리기.
     #[test]
-    fn w3_order_semantic_attributes_fallback() {
+    fn order_semantic_attributes_fallback() {
         for extra in [
             "xml:base='x'",
             "required-namespace='x'",

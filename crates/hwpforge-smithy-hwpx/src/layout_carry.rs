@@ -455,7 +455,7 @@ pub(crate) fn carry_prepared(
 mod tests {
     use super::*;
     #[test]
-    fn w3_carry_read_failure_keeps_verification_payload() {
+    fn carry_read_failure_keeps_verification_payload() {
         // 이것을 실패시키는 것: carry의 원본 package 읽기 stage를 Decode로 변경.
         let source = CacheSource { bytes: vec![], dropped: vec![], warnings: vec![] };
         let original = RawPackage::read(b"bad").err().unwrap();

@@ -865,7 +865,7 @@ fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> 
         }
         // The two lists are written apart, with no length rule between
         // them (Core has none). 이것을 실패시키는 것: 세그먼트를 점 개수에서 다시
-        // 만들기(`w4_shapes_round_trip` 의 점 3·세그먼트 1).
+        // 만들기(`shapes_round_trip` 의 점 3·세그먼트 1).
         Control::Curve { points, segment_types, .. } => {
             out.push_str(&format!(" {}=\"{}\"", g::POINTS, points_str(points)));
             let segs =

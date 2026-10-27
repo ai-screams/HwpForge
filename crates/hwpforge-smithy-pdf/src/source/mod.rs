@@ -5621,7 +5621,7 @@ mod tests {
     }
 
     #[test]
-    fn trailing_non_text_run_is_rejected_before_w2() {
+    fn trailing_non_text_run_is_rejected_as_unrenderable() {
         // 검사는 문단 전체 — trailing 각주도 렌더를 지원하기 전에는
         // InvalidCache 다 (종전 "경고+생략"은 미렌더 원자의 무음 누락).
         let mut para = para_with_cache("본문", vec![seg(0, 0)]);

@@ -428,7 +428,7 @@ fn roundtrip_md(markdown: &str, template: &Template) -> String {
 /// side reaches a fixed point (G1 == G3 — first regeneration equals the
 /// regeneration of its own output).
 #[test]
-fn pipeline_w0_inline_format_fixed_point() {
+fn pipeline_inline_format_fixed_point() {
     let template = builtin_default().expect("builtin_default");
     let g1 =
         roundtrip_md("본문 **굵게** 그리고 *기울임* 그리고 ~~취소선~~ 그리고 `코드` 끝", &template);
@@ -446,7 +446,7 @@ fn pipeline_w0_inline_format_fixed_point() {
 
 /// Nested bold+italic keeps both attributes through the pipeline.
 #[test]
-fn pipeline_w0_nested_format_fixed_point() {
+fn pipeline_nested_format_fixed_point() {
     let template = builtin_default().expect("builtin_default");
     let g1 = roundtrip_md("**굵게 *겹침***", &template);
     let g3 = roundtrip_md(&g1, &template);
@@ -458,7 +458,7 @@ fn pipeline_w0_nested_format_fixed_point() {
 /// acceptance: notes (footnote/endnote, multi-paragraph, table cell,
 /// inline formatting) reach an MD fixed point through the full pipeline.
 #[test]
-fn pipeline_w2_notes_fixed_point() {
+fn pipeline_notes_fixed_point() {
     let template = builtin_default().expect("builtin_default");
     let md = "본문[^1] 그리고[^e1] 끝\n\n\
               | a | b |\n|---|---|\n| 셀[^2] | x |\n\n\
@@ -474,7 +474,7 @@ fn pipeline_w2_notes_fixed_point() {
 /// multi-paragraph definition emission must re-parse as the same number
 /// of paragraphs (blank line + 4-space indent, verified by re-parsing).
 #[test]
-fn pipeline_w2_multiparagraph_emission_reparses_identically() {
+fn pipeline_multiparagraph_emission_reparses_identically() {
     let template = builtin_default().expect("builtin_default");
     let md = "본문[^1]\n\n[^1]: 첫 문단\n\n    둘째 문단\n\n    셋째 문단\n";
     let g1 = roundtrip_md(md, &template);
@@ -497,7 +497,7 @@ fn pipeline_w2_multiparagraph_emission_reparses_identically() {
 /// a note body starting with a list marker must not turn into a
 /// structural list on re-parse — the emitter escapes line-start block marks.
 #[test]
-fn pipeline_w2_note_body_line_start_marker_escaped() {
+fn pipeline_note_body_line_start_marker_escaped() {
     let template = builtin_default().expect("builtin_default");
     // Core 쪽에서 직접 만든 각주 본문이 "- " 로 시작하는 상황을 MD 입력으로는
     // 만들 수 없으므로(디코더가 리스트로 거부), HWPX 파이프라인 대신 인코더

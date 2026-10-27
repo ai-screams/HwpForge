@@ -162,7 +162,7 @@ if __name__ == "__main__":
 
     # 정상 Bold 축 쌍 — nameID 16/17 + 진짜 플래그 + 실제 폭 차이.
     build(
-        here / "HwpForgeW4-Regular.ttf",
+        here / "HwpForgeTypographicPair-Regular.ttf",
         family="HwpForgeW4 Legacy",
         style_name="Regular",
         full_name="HwpForge W4 Regular",
@@ -171,7 +171,7 @@ if __name__ == "__main__":
         typo_style="Regular",
     )
     build(
-        here / "HwpForgeW4-Bold.ttf",
+        here / "HwpForgeTypographicPair-Bold.ttf",
         family="HwpForgeW4 Legacy",
         style_name="Bold",
         full_name="HwpForge W4 Bold",

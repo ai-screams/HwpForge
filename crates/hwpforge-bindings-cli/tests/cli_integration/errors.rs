@@ -115,7 +115,7 @@ fn fifo_input_over_the_size_cap_reports_input_too_large() {
 
 #[test]
 // 이것을 실패시키는 것: 변환 명령 입력 I/O 종료를 1로 변경, InputTooLarge 종료를 2로 변경, 사전 검사 코드를 FileReadFailed로 변경.
-fn w1_input_path_and_metadata_boundaries() {
+fn input_path_and_metadata_boundaries() {
     let dir = test_tmp();
     let missing = dir.join("missing.hwpx");
     let output = dir.join("out.hwpx");
@@ -181,7 +181,7 @@ fn decode_input_shared_fixture() {
 #[test]
 // 이것을 실패시키는 것: patch 원본 decode 를 Rejected 로 감싸기(PATCH_FAILED), metadata 검사를
 // 원본 decode 뒤로 옮기기(DECODE_FAILED), fill 입력 decode 를 Workflow 로 되돌리기(FILL_FAILED).
-fn w2_patch_and_fill_shared_fixtures() {
+fn patch_and_fill_shared_fixtures() {
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
     let out_dir = test_tmp();
     let out = out_dir.join("out.hwpx");
@@ -212,7 +212,7 @@ fn w2_patch_and_fill_shared_fixtures() {
 #[test]
 // 이것을 실패시키는 것: convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기
 // (inspect 단계는 이 입력을 통과시키므로 convert-hwp5 도 ops 분류를 그대로 보인다).
-fn w4_hwp5_decoder_core_shared_fixture() {
+fn hwp5_decoder_core_shared_fixture() {
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
     let source = data.join("hwp5-dangling-table-border-fill.hwp");
     let out_dir = test_tmp();
@@ -230,7 +230,7 @@ fn w4_hwp5_decoder_core_shared_fixture() {
 }
 
 #[test]
-fn w3_editors_share_decode_and_admission_fixtures() {
+fn editors_share_decode_and_admission_fixtures() {
     // 이것을 실패시키는 것: cell·stamp admission 호출 목적을 Output으로 변경.
     // 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");

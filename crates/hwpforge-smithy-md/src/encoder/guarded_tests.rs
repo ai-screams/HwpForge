@@ -1399,7 +1399,7 @@ fn captions_are_checked_in_the_final_body() {
 /// becomes <br>. A failed caption boundary stays in that cell, including
 /// in a standalone table with an out-of-scope caption.
 /// 이것을 실패시키는 것: 칸 실패시 대체 생략 · 실패를 표 전체로 전파. (칸 문맥 제거는
-/// 여기서 죽지 않는다: `fix6_devices_are_pinned` 의 MB 사례.)
+/// 여기서 죽지 않는다: `devices_are_pinned` 의 MB 사례.)
 #[test]
 fn joined_cell_emphasis_stays_local() {
     use hwpforge_core::{Table, TableCell, TableRow};
@@ -1643,7 +1643,7 @@ fn plain_text_keeps_no_emphasis() {
 /// 이것을 실패시키는 것: MA 자식 범위 전달 삭제 · MB 칸을 Body 문맥으로 검사 ·
 /// MC 합류 앞 닫기 삭제.
 #[test]
-fn fix6_devices_are_pinned() {
+fn devices_are_pinned() {
     let cell = |ps: Vec<hwpforge_core::Paragraph>| {
         let mut table = one_cell(ps[0].clone());
         table.rows[0].cells[0].paragraphs = ps;

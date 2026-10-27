@@ -410,7 +410,7 @@ fn shape_grammar_errors() {
 /// 이것을 실패시키는 것: `arc` 점 하나씩 누락 · `segments` 를 점 개수에서 다시 만듦 ·
 /// `control-points` 빈 값 거부 · `connect-type` 에 `escape_attr` 대신 `escape_html`.
 #[test]
-fn w4_shapes_round_trip() {
+fn shapes_round_trip() {
     use hwpforge_foundation::{ArcType, CurveSegmentType};
     let style = Some(full_style(Some(Fill::Solid { color: Color::from_rgb(1, 1, 1) }), Some(3.0)));
     let p = |x, y| ShapePoint::new(x, y);

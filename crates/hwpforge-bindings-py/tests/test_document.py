@@ -530,7 +530,7 @@ def test_document_does_not_widen_a_string_into_a_sequence(
         call(Document.from_bytes(generated_bytes))
 
 
-def test_w2_legacy_json_tabs_share_code_reason_and_remedy() -> None:
+def test_legacy_json_tabs_share_code_reason_and_remedy() -> None:
     source = '{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}'
     with pytest.raises(HwpForgeError) as caught:
         hwpforge.from_json(source)

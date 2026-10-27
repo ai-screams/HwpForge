@@ -425,7 +425,7 @@ mod base64_shim {
 }
 
 #[test]
-fn w2_notes_lists_and_continuation_use_physical_measures() {
+fn notes_lists_and_continuation_use_physical_measures() {
     let markdown =
         "본문[^n]\n\n- [ ] 첫 항목\n\n  계속 문단\n\n  - [x] 안쪽 항목\n\n[^n]: 각주 본문\n";
     let out = convert_md(markdown, None, &ConvertMdOptions::default()).unwrap();

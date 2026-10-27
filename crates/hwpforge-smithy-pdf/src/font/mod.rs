@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn w4_pair_resolves_by_typographic_family_and_style() {
+    fn pair_resolves_by_typographic_family_and_style() {
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         let regular =
             resolver.resolve_styled("HwpForge W4", FaceStyle::Regular).expect("regular face");
@@ -761,7 +761,7 @@ mod tests {
         };
         // 기본 fixture = installable(0x0000) → 무제약 허용.
         assert_eq!(case("HwpForgeTest-Regular.ttf"), EmbedLicense::Allowed);
-        assert_eq!(case("HwpForgeW4-Bold.ttf"), EmbedLicense::Allowed);
+        assert_eq!(case("HwpForgeTypographicPair-Bold.ttf"), EmbedLicense::Allowed);
         // v0 Restricted (ENGDOS 실물형) = 거부.
         assert!(
             matches!(case("HwpForgeFsV0Restricted.ttf"), EmbedLicense::Denied(_)),
@@ -783,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn fs_type_fixtures_classify_normally_in_w4a() {
+    fn fs_type_fixtures_classify_normally() {
         // 라이선스 게이트는 임베드 시점에 적용 — 분류기는 fsType 과 무관하게 해석한다.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         resolver.resolve("HwpForge FsV0Restricted").expect("v0 restricted");

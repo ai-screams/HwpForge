@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn w3_encode_purpose_preserves_stage_leaf_and_detail() {
+    fn encode_purpose_preserves_stage_leaf_and_detail() {
         // 이것을 실패시키는 것: 목적별 validate/encode stage 여섯 갈래를 각각 다른 stage로 변경.
         for (purpose, validation, encoding) in [
             (EncodePurpose::Admission, CodecStage::Admission, CodecStage::Admission),
@@ -1515,7 +1515,7 @@ mod tests {
     }
 
     #[test]
-    fn w3_zip_reads_keep_input_and_artifact_stages() {
+    fn zip_reads_keep_input_and_artifact_stages() {
         // 이것을 실패시키는 것: 원본 ZIP Decode 또는 산출물 ZIP Verification을 Admission으로 변경.
         // 이것을 실패시키는 것: 원래 Core 오류를 HwpxError로 한 번 더 감싸 detail에 접두 추가.
         let good = encode_hwpx(&doc_with_text("x"), EncodePurpose::Output).unwrap();
@@ -1541,7 +1541,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_stamp_rejects_parent_part() {
+    fn stamp_rejects_parent_part() {
         // 이것을 실패시키는 것: zip_entry_names가 이름 검사 전 빈 목록으로 조기 성공.
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

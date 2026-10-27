@@ -2071,7 +2071,7 @@ mod tests {
     }
 
     #[test]
-    fn fix1_bullet_base_and_optional_wchar_lengths() {
+    fn bullet_base_and_optional_wchar_lengths() {
         let full = make_bullet_def_bytes_full(false, 0x2611, 0x08);
         // 이것을 실패시키는 것: 23바이트 기본형 거부 또는 체크 글리프 합성.
         let base = Hwp5RawBulletDef::parse(&full[..23]).unwrap();

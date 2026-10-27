@@ -150,7 +150,7 @@ mod tests {
 #[cfg(test)]
 mod paragraph_measure_contract {
     #[test]
-    fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
+    fn legacy_json_tabs_share_code_reason_and_remedy() {
         let input = r#"{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}"#;
         let error = super::run_from_json(input, "unused.hwpx").unwrap_err();
         assert_eq!(error.code, "LEGACY_JSON_TABS");

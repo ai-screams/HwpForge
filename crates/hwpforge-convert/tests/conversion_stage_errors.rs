@@ -1,7 +1,7 @@
 //! HWP5 conversion failures report the code of the stage that failed.
 //!
 //! Consumes the shared error contract's Rust cases whose operation is
-//! `convert.*` (the umbrella harness, `hwpforge/tests/w1_errors.rs`, skips
+//! `convert.*` (the umbrella harness, `hwpforge/tests/ops_error_codes.rs`, skips
 //! them because the umbrella cannot depend on this crate). Fixture cases run
 //! the shared input through the public operation; injected cases build the
 //! staged error by hand, because validation, HWPX encoding and the layout

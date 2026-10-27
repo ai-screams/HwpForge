@@ -1126,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn w3_generated_fragment_and_output_decode_are_verification() {
+    fn generated_fragment_and_output_decode_are_verification() {
         // 이것을 실패시키는 것: 생성 fragment·출력 decode stage를 Decode로 변경.
         let error = encoded_paragraph_spans("<hs:sec><hp:p>").unwrap_err();
         assert!(matches!(
@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn w3_mapper_preserves_typed_failures() {
+    fn mapper_preserves_typed_failures() {
         // 이것을 실패시키는 것: typed Codec·Invariant detail 삭제, 예상 밖 helper 오류 detail 삭제.
         for stage in [
             CodecStage::Decode,

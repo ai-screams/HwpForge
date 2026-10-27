@@ -1757,7 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_border_writer_does_not_invent_definitions() {
+    fn border_writer_does_not_invent_definitions() {
         // 이것을 실패시키는 것: header writer가 빈 표에 기본 정의 1·2·3을 몰래 추가.
         let xml = build_border_fills_xml(&HwpxStyleStore::new());
         assert_eq!(xml, r#"<hh:borderFills itemCnt="0"></hh:borderFills>"#);

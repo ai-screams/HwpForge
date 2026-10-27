@@ -243,7 +243,7 @@ fn manifest_inventory_refs_match_the_enum_inventory() {
 }
 
 #[test]
-fn deleting_a_w2_workflow_reference_is_reported() {
+fn deleting_a_workflow_reference_is_reported() {
     // 이것을 실패시키는 것: CONTRACT_INVENTORY_SCOPE 에서 SectionWorkflowError 를 빼기.
     // The real manifest with one reference removed: the scope check must name it.
     let manifest = error_contract::load(&error_inventory::workspace_root());
@@ -262,7 +262,7 @@ fn deleting_a_w2_workflow_reference_is_reported() {
 }
 
 #[test]
-fn deleting_w3_inventory_references_is_reported() {
+fn deleting_editor_inventory_references_is_reported() {
     // 이것을 실패시키는 것: scope에서 각 편집 오류 enum 삭제, 삭제 필터의 &&를 ||로 변경.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let inventory = error_inventory::collect();

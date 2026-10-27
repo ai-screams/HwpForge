@@ -2020,7 +2020,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_bold_run_derives_char_shape() {
+    fn bold_run_derives_char_shape() {
         let template = default_template();
         let result = MdDecoder::decode("text **bold** tail", &template).unwrap();
         let para = body_para_with(&result.document, "bold");
@@ -2036,7 +2036,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_italic_run_derives_char_shape() {
+    fn italic_run_derives_char_shape() {
         let template = default_template();
         let result = MdDecoder::decode("a *it* b", &template).unwrap();
         let para = body_para_with(&result.document, "it");
@@ -2049,7 +2049,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_strikethrough_run_derives_char_shape() {
+    fn strikethrough_run_derives_char_shape() {
         let template = default_template();
         let result = MdDecoder::decode("a ~~gone~~ b", &template).unwrap();
         let para = body_para_with(&result.document, "gone");
@@ -2061,7 +2061,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_nested_bold_italic_combines() {
+    fn nested_bold_italic_combines() {
         let template = default_template();
         let result = MdDecoder::decode("**bold *both***", &template).unwrap();
         let para = body_para_with(&result.document, "both");
@@ -2074,7 +2074,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_same_format_combo_reuses_derived_shape() {
+    fn same_format_combo_reuses_derived_shape() {
         let template = default_template();
         let before =
             MdDecoder::decode("plain", &template).unwrap().style_registry.char_shape_count();
@@ -2092,7 +2092,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_unformatted_text_adds_no_derived_shapes() {
+    fn unformatted_text_adds_no_derived_shapes() {
         let template = default_template();
         let before =
             MdDecoder::decode("plain", &template).unwrap().style_registry.char_shape_count();
@@ -2102,7 +2102,7 @@ mod tests {
     }
 
     #[test]
-    fn w0_formatting_inside_heading_derives_from_heading_base() {
+    fn formatting_inside_heading_derives_from_heading_base() {
         let template = default_template();
         let (mapping, _) = resolve_mapping(&template).unwrap();
         let result = MdDecoder::decode("# head **bold**", &template).unwrap();
@@ -2158,7 +2158,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_basic_footnote_resolves_at_reference_site() {
+    fn basic_footnote_resolves_at_reference_site() {
         let template = default_template();
         let result = MdDecoder::decode("본문[^1] 끝\n\n[^1]: 각주 본문\n", &template).unwrap();
         let notes = collect_notes(&result.document);
@@ -2174,7 +2174,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_undefined_reference_stays_literal_text() {
+    fn undefined_reference_stays_literal_text() {
         // 파서 동작: 정의 없는 참조는 이벤트가 아니라 평문으로 강등된다.
         let template = default_template();
         let result = MdDecoder::decode("본문[^nodef] 끝\n", &template).unwrap();
@@ -2184,7 +2184,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_orphan_definition_is_typed_error() {
+    fn orphan_definition_is_typed_error() {
         let template = default_template();
         let err = MdDecoder::decode("본문뿐\n\n[^orphan]: 아무도 안 씀\n", &template).unwrap_err();
         assert!(
@@ -2194,7 +2194,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_duplicate_definition_is_typed_error() {
+    fn duplicate_definition_is_typed_error() {
         let template = default_template();
         let err =
             MdDecoder::decode("본문[^1]\n\n[^1]: 첫째\n\n[^1]: 둘째\n", &template).unwrap_err();
@@ -2202,14 +2202,14 @@ mod tests {
     }
 
     #[test]
-    fn w1_empty_definition_is_typed_error() {
+    fn empty_definition_is_typed_error() {
         let template = default_template();
         let err = MdDecoder::decode("본문[^1]\n\n[^1]:\n", &template).unwrap_err();
         assert!(matches!(&err, MdError::EmptyNoteDefinition { label } if label == "1"));
     }
 
     #[test]
-    fn w1_nested_reference_is_typed_error() {
+    fn nested_reference_is_typed_error() {
         let template = default_template();
         let err = MdDecoder::decode("본문[^1]\n\n[^1]: 안에서[^2] 참조\n\n[^2]: 둘째\n", &template)
             .unwrap_err();
@@ -2217,7 +2217,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_block_content_in_definition_is_rejected() {
+    fn block_content_in_definition_is_rejected() {
         let template = default_template();
         for md in [
             "본문[^1]\n\n[^1]: 머리\n\n    - 항목\n",
@@ -2232,7 +2232,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_definition_before_reference_is_fine() {
+    fn definition_before_reference_is_fine() {
         let template = default_template();
         let result = MdDecoder::decode("[^1]: 본문 먼저\n\n참조[^1]\n", &template).unwrap();
         let notes = collect_notes(&result.document);
@@ -2240,7 +2240,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_e_prefix_label_is_endnote_others_footnote() {
+    fn e_prefix_label_is_endnote_others_footnote() {
         let template = default_template();
         let md = "가[^e1] 나[^1] 다[^note] 라[^example]\n\n[^e1]: 미주\n\n[^1]: 각주하나\n\n[^note]: 각주둘\n\n[^example]: 각주셋\n";
         let result = MdDecoder::decode(md, &template).unwrap();
@@ -2249,7 +2249,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_same_label_multi_reference_duplicates_body() {
+    fn same_label_multi_reference_duplicates_body() {
         let template = default_template();
         let result = MdDecoder::decode("가[^1] 나[^1]\n\n[^1]: 공유 본문\n", &template).unwrap();
         let notes = collect_notes(&result.document);
@@ -2258,7 +2258,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_table_cell_and_body_references_resolve_in_source_order() {
+    fn table_cell_and_body_references_resolve_in_source_order() {
         let template = default_template();
         let md = "| a | b |\n|---|---|\n| 셀[^1] | x |\n\n본문[^2]\n\n[^1]: 셀 각주\n\n[^2]: 본문 각주\n";
         let result = MdDecoder::decode(md, &template).unwrap();
@@ -2271,7 +2271,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_multiparagraph_definition_keeps_paragraphs() {
+    fn multiparagraph_definition_keeps_paragraphs() {
         let template = default_template();
         let md = "본문[^1]\n\n[^1]: 첫 문단\n\n    둘째 문단\n\n    셋째 문단\n";
         let result = MdDecoder::decode(md, &template).unwrap();
@@ -2283,7 +2283,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_definition_body_keeps_inline_formatting_runs() {
+    fn definition_body_keeps_inline_formatting_runs() {
         let template = default_template();
         let result = MdDecoder::decode("본문[^1]\n\n[^1]: 여기 **굵게** 끝\n", &template).unwrap();
         let doc = &result.document;
@@ -2309,7 +2309,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_mixed_notes_preserve_order_and_kind() {
+    fn mixed_notes_preserve_order_and_kind() {
         let template = default_template();
         let md = "가[^1] 나[^e1] 다[^2]\n\n[^1]: 각주 하나\n\n[^e1]: 미주 하나\n\n[^2]: 각주 둘\n";
         let result = MdDecoder::decode(md, &template).unwrap();
@@ -2325,7 +2325,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_case_folded_labels_link_and_classify_together() {
+    fn case_folded_labels_link_and_classify_together() {
         // 파서는 라벨을 UniCase 로 연결한다 — 분류·매칭도 동일 기준.
         let template = default_template();
         let result = MdDecoder::decode("본문[^E1]\n\n[^e1]: 미주 본문\n", &template).unwrap();
@@ -2334,7 +2334,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_note_body_style_uses_footnote_style_slot() {
+    fn note_body_style_uses_footnote_style_slot() {
         // 본문 스타일 재사용이 아니라 기존 "각주"(14)/"미주"(15) 스타일 참조.
         let template = default_template();
         let result = MdDecoder::decode("본문[^1]\n\n[^1]: 각주 본문\n", &template).unwrap();
@@ -2358,7 +2358,7 @@ mod tests {
     }
 
     #[test]
-    fn w1_expansion_budget_rejects_pathological_duplication() {
+    fn expansion_budget_rejects_pathological_duplication() {
         let template = default_template();
         // 큰 본문 1개를 다수 참조 — 전개 총량이 예산을 넘으면 typed 에러.
         let big = "가".repeat(600_000);

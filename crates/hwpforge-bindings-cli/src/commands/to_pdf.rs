@@ -521,7 +521,7 @@ mod tests {
     /// `#[non_exhaustive]` 라 상류에 변형이 늘어도 rustc 가 컴파일을 막지
     /// 못하므로 — 런타임 가드가 그 자리를 대신한다.
     #[test]
-    fn render_stage_dto_pins_the_w5_wording_for_every_variant() {
+    fn render_stage_dto_pins_the_wording_for_every_variant() {
         let loc = || "s0/p1/l2".to_string();
         let cases: Vec<(PdfWarning, &str, &str, Option<&str>)> = vec![
             (

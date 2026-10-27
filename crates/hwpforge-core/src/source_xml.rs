@@ -388,7 +388,7 @@ mod verification_tests {
 
     /// 이것을 실패시키는 것: 원본 증거 경로에서 공용 ZIP 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_source_verification_rejects_parent_part() {
+    fn source_verification_rejects_parent_part() {
         let xml = "<sec><p><run><fieldBegin id=\"open\"/></run></p></sec>";
         let (_, source) = XmlSource::read(xml).unwrap();
         let origin = source

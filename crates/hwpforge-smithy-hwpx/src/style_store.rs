@@ -2208,7 +2208,7 @@ mod tests {
 
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn fix2_style_lookup_does_not_wrap_font_or_heading() {
+    fn style_lookup_does_not_wrap_font_or_heading() {
         // 이것을 실패시키는 것: usize 글꼴 ID / u32 heading level의 좁히는 as 캐스트.
         let mut store = HwpxStyleStore::with_default_fonts("바탕");
         let mut shape = HwpxCharShape::default();

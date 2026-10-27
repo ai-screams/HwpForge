@@ -1827,7 +1827,7 @@ mod tests {
     /// references, are lost content (editors refuse the input).
     /// 이것을 실패시키는 것: 미해결 참조 무시 · 참조 없는 바탕쪽 무시.
     #[test]
-    fn fix6_master_page_count_uses_deserialized_value() {
+    fn master_page_count_uses_deserialized_value() {
         // 이것을 실패시키는 것: 원시 masterPageCnt 문자열 검색 복원, count 전달/경고 생략.
         let base = master_pages_doc(&[None]);
         for attribute in [
@@ -1896,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn fix6_later_section_master_page_count_uses_deserialized_value() {
+    fn later_section_master_page_count_uses_deserialized_value() {
         // 이것을 실패시키는 것: masterPageCnt 원시 문자열 검색 복원,
         // 구역 결과의 count 전달 누락, 0에도 누락 경고 생성.
         for attribute in [
@@ -2150,7 +2150,7 @@ mod tests {
     // ── Full pipeline tests ──────────────────────────────────────
 
     #[test]
-    fn fix5_memo_loss_is_active_in_body_and_image_caption() {
+    fn memo_loss_is_active_in_body_and_image_caption() {
         // 이것을 실패시키는 것: Core for_each_paragraph로 메모를 판정해 그림 캡션 누락,
         // 디코딩 관측/구역 집계 누락, 뒤의 메모 없는 구역으로 존재 사실 덮어쓰기.
         let header = HEADER.replace(
@@ -2202,7 +2202,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_master_page_memo_observation_reaches_document() {
+    fn master_page_memo_observation_reaches_document() {
         // 이것을 실패시키는 것: 바탕쪽의 메모 관측을 반환/문서 집계에서 누락.
         let mut package = crate::patch::RawPackage::read(&two_master_pages()).unwrap();
         let header = package.read_text_entry("Contents/header.xml").unwrap().replace(
@@ -2219,7 +2219,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_memo_parameter_entities_share_deserialized_validation() {
+    fn memo_parameter_entities_share_deserialized_validation() {
         // 이것을 실패시키는 것: name 원시 바이트 비교로 &#82;/&#x52; 우회,
         // 파라미터 조회/손실 경고 생략, 65535 상속 오거부, 속성 오류 무시.
         for name in ["MemoShapeIDRef", "MemoShapeID&#82;ef", "MemoShapeID&#x52;ef"] {
@@ -2277,7 +2277,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_original_border_ids_and_dutmal_are_checked_in_packages() {
+    fn original_border_ids_and_dutmal_are_checked_in_packages() {
         // 이것을 실패시키는 것: 문자 2→None, 표/셀/쪽 검증 누락,
         // 덧말 styleIDRef를 조회 전에 0으로 폐기, 첫 위치 1의 오거부(한컴 실측).
         for id in [2, 4, 99] {
@@ -2331,7 +2331,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_unsupported_definitions_and_dutmal_loss_are_explicit() {
+    fn unsupported_definitions_and_dutmal_loss_are_explicit() {
         // 이것을 실패시키는 것: 미지원 정의/덧말 스타일의 무음 삭제.
         for kind in ["memoPr", "trackChange", "trackChangeAuthor"] {
             let header = HEADER.replace("</refList>", &format!("<{kind} id=\"7\"/></refList>"));
@@ -2352,7 +2352,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_schema_omitted_references_are_resolved_before_loss() {
+    fn schema_omitted_references_are_resolved_before_loss() {
         // 이것을 실패시키는 것: 스키마가 무시하는 secPr/inline/form/메모 참조 조회 및 경고 생략.
         let validate = |refs: &crate::header_references::HeaderReferences, xml: &str| {
             if xml.starts_with("<stringParam") {
@@ -2432,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_change_tracking_references_are_checked_before_loss() {
+    fn change_tracking_references_are_checked_before_loss() {
         // 이것을 실패시키는 것: IDRef가 아닌 charTcId/paraTcId/authorID/
         // charshapeID/parashapeID 조회를 생략하거나 header 교차 조회를 빼기.
         for (owner, field, valid) in [
@@ -2479,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_unused_memo_definitions_do_not_block_content_edits() {
+    fn unused_memo_definitions_do_not_block_content_edits() {
         // 이것을 실패시키는 것: 미사용 기본 정의를 content loss로 취급하거나,
         // 실제 메모가 있는 문서의 손실까지 비활성 경고로 낮추기.
         let header = HEADER.replace(
@@ -2517,7 +2517,7 @@ mod tests {
     }
 
     #[test]
-    fn fix3_unused_empty_tab_case_survives_package_roundtrip() {
+    fn unused_empty_tab_case_survives_package_roundtrip() {
         // 이것을 실패시키는 것: 미사용 빈 case를 default 내용에 따라 거부/대체하거나 경고 누락.
         for default in ["", r#"<tabItem pos="2000"/>"#] {
             let tab = format!(

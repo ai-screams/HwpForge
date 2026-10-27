@@ -2271,7 +2271,7 @@ fn apply_outline_style_level_overrides_skips_non_outline_heading_type() {
 }
 
 #[test]
-fn fix3_outline_style_rejects_out_of_bounds_para_shape_id() {
+fn outline_style_rejects_out_of_bounds_para_shape_id() {
     // 이것을 실패시키는 것: 이름 붙은 스타일의 없는 paraPr 참조를 무시.
     let store = Hwp5StyleStore {
         id_mappings: None,
@@ -2799,7 +2799,7 @@ fn hwp5_face_metadata_unsupported_values_warn() {
 }
 
 #[test]
-fn w1_hwp5_packed_margins_and_tabs_keep_units_and_reject_ranges() {
+fn hwp5_packed_margins_and_tabs_keep_units_and_reject_ranges() {
     // 이것을 실패시키는 것: 변이 1·2·3·12 — 음수 /2 절삭, CHAR 삭제, clamp.
     for value in [-1499, -1, 1, 2001] {
         let mut raw = default_para_shape();
@@ -2836,7 +2836,7 @@ fn w1_hwp5_packed_margins_and_tabs_keep_units_and_reject_ranges() {
 }
 
 #[test]
-fn fix2_missing_font_reference_is_not_clamped() {
+fn missing_font_reference_is_not_clamped() {
     // 이것을 실패시키는 것: 없는 참조의 마지막 글꼴/0 대체, 언어 검사 생략,
     // 빈 언어 그룹에 font 0 외에 다른 언어 그룹의 모든 글꼴 복제.
     for fonts in [vec![], vec![Hwp5RawFaceName::parse(&[0, 1, 0, b'A', 0]).unwrap()]] {
@@ -2859,7 +2859,7 @@ fn fix2_missing_font_reference_is_not_clamped() {
 }
 
 #[test]
-fn fix3_all_header_reference_kinds_use_strict_lookup() {
+fn all_header_reference_kinds_use_strict_lookup() {
     // 이것을 실패시키는 것: 공통 검증 호출 삭제 또는 종류별 조회를 0/기존 정의로 대체.
     let mut valid = Hwp5StyleStore::from_doc_info(&empty_doc_info());
     valid.char_shapes.push(default_char_shape());
@@ -2912,7 +2912,7 @@ fn fix3_all_header_reference_kinds_use_strict_lookup() {
 }
 
 #[test]
-fn fix3_output_only_border_cannot_satisfy_source_reference() {
+fn output_only_border_cannot_satisfy_source_reference() {
     // 이것을 실패시키는 것: 원본 참조 검증 전에 기본/빈 테두리 생성 또는 output=true 검증.
     for missing in [1, 2, 3, 4] {
         let mut store = Hwp5StyleStore::from_doc_info(&empty_doc_info());
@@ -2927,7 +2927,7 @@ fn fix3_output_only_border_cannot_satisfy_source_reference() {
 }
 
 #[test]
-fn fix4_list_head_char_reference_survives_parsing_until_lookup() {
+fn list_head_char_reference_survives_parsing_until_lookup() {
     // 이것을 실패시키는 것: 머리의 charShape ID 폐기/0 치환,
     // numbering 또는 bullet의 공통 조회 생략, 보존된 참조를 다시 버리기.
     for kind in ["numbering", "bullet"] {
@@ -2968,7 +2968,7 @@ fn fix4_list_head_char_reference_survives_parsing_until_lookup() {
 }
 
 #[test]
-fn fix8b_failed_list_slots_rebind_later_references_and_reject_failed_slot() {
+fn failed_list_slots_rebind_later_references_and_reject_failed_slot() {
     // 이것을 실패시키는 것: 실패 슬롯 압축 후 참조 유지, 실패 슬롯을 뒤 정의로 대체,
     // 0 sentinel 재결합, NUMBER/BULLET 재결합 누락 또는 OUTLINE 상속 계약 변경.
     for heading in [HeadingType::Number, HeadingType::Outline, HeadingType::Bullet] {

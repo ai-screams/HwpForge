@@ -73,7 +73,7 @@ fn from_json_complex_roundtrip() {
 }
 
 #[test]
-fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
+fn legacy_json_tabs_share_code_reason_and_remedy() {
     let dir = test_tmp();
     let input = dir.join("legacy.json");
     let output = dir.join("out.hwpx");

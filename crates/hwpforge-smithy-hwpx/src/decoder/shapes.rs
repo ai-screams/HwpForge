@@ -6772,7 +6772,7 @@ mod group_tests {
 
     // ── original boxes in groups ─────────
 
-    fn s20_size(w: i32, h: i32) -> hwpforge_foundation::Size {
+    fn hwp_size(w: i32, h: i32) -> hwpforge_foundation::Size {
         let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
         hwpforge_foundation::Size::new(u(w), u(h))
     }
@@ -6813,8 +6813,8 @@ mod group_tests {
         let (g, w) = decode(&container_with((350, 170), (700, 340), &ri(ID, &[(two, ID)]), &leaf));
         assert!(w.is_empty(), "{w:?}");
         let g = g.unwrap();
-        assert_eq!(framed(children(&g)[0]), (600, 300, (100.0, 40.0), Some(s20_size(100, 50))));
-        assert_eq!(g.frame().unwrap().original_size, Some(s20_size(350, 170)));
+        assert_eq!(framed(children(&g)[0]), (600, 300, (100.0, 40.0), Some(hwp_size(100, 50))));
+        assert_eq!(g.frame().unwrap().original_size, Some(hwp_size(350, 170)));
         let out = group_out(&g);
         assert!(out.contains(r#"<hp:orgSz width="350" height="170"/>"#), "{out}");
         assert!(
@@ -6850,9 +6850,9 @@ mod group_tests {
         let mid = children(&g)[0];
         let inner = children(mid)[0];
         let leaf = children(inner)[0];
-        assert_eq!(framed(mid), (300, 300, (30.0, 20.0), Some(s20_size(100, 100))));
-        assert_eq!(framed(inner), (300, 300, (0.0, 0.0), Some(s20_size(100, 100))));
-        assert_eq!(framed(leaf), (300, 300, (0.0, 0.0), Some(s20_size(100, 100))));
+        assert_eq!(framed(mid), (300, 300, (30.0, 20.0), Some(hwp_size(100, 100))));
+        assert_eq!(framed(inner), (300, 300, (0.0, 0.0), Some(hwp_size(100, 100))));
+        assert_eq!(framed(leaf), (300, 300, (0.0, 0.0), Some(hwp_size(100, 100))));
         let out = group_out(&g);
         let (back, w) = decode(&out);
         assert!(w.is_empty(), "{w:?}");
@@ -6882,7 +6882,7 @@ mod group_tests {
         ));
         assert!(w.is_empty(), "{w:?}");
         let g = g.unwrap();
-        assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)));
+        assert_eq!(framed(children(&g)[0]).3, Some(hwp_size(100, 50)));
         let Control::Rect { frame, style, .. } = children(&g)[1] else { panic!() };
         assert_eq!(frame.original_size, None);
         assert_eq!(style.as_ref().and_then(|s| s.rotation), Some(30.0));
@@ -6916,7 +6916,7 @@ mod group_tests {
         // around its original one.
         let (gw, gh, _) = size_and_offset(&g);
         if let Control::Group { frame, .. } = &mut g {
-            frame.original_size = Some(s20_size(gw / 2, gh / 2));
+            frame.original_size = Some(hwp_size(gw / 2, gh / 2));
         }
         // The pairs store the turns exactly enough: no fallback, two pairs.
         let plan =
@@ -7041,7 +7041,7 @@ mod group_tests {
         ));
         assert!(w.is_empty(), "{w:?}");
         let g = g.unwrap();
-        assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)), "Core keeps B's box");
+        assert_eq!(framed(children(&g)[0]).3, Some(hwp_size(100, 50)), "Core keeps B's box");
         let plan = group_plan(&g, &crate::encoder::shapes::HWPX_POLICY).unwrap();
         assert!(plan.is_fallback());
         assert_eq!(plan.nodes()[0].original_size(), (200, 100));
@@ -7101,7 +7101,7 @@ mod group_tests {
         ));
         let g = g.unwrap();
         assert!(g.frame().unwrap().original_size.is_none());
-        assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)));
+        assert_eq!(framed(children(&g)[0]).3, Some(hwp_size(100, 50)));
     }
 
     /// In a group: the leaf's source end is 1002.49 (original
@@ -7130,7 +7130,7 @@ mod group_tests {
         let leaf = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
         let (g, w) = decode(&container_with((1000, 1000), (800, 800), &ri(ID, &[(ID, ID)]), &leaf));
         assert_eq!(lost_kinds(&w), ["shape_drawn_extent"]);
-        assert_eq!(g.unwrap().frame().unwrap().original_size, Some(s20_size(1000, 1000)));
+        assert_eq!(g.unwrap().frame().unwrap().original_size, Some(hwp_size(1000, 1000)));
     }
 
     /// A group whose box its matrices do not draw is

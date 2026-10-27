@@ -3303,7 +3303,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn fix4_section_outline_selection_loss_is_explicit() {
+    fn section_outline_selection_loss_is_explicit() {
         // 이것을 실패시키는 것: 미지원 구역 numbering 선택을 경고 없이 1로 대체.
         for id in [0u16, 1, 7, 99] {
             let mut ctrl = secd_ctrl_data(0, Some((1, 1, 1, 1)));

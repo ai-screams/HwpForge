@@ -579,7 +579,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: writer의 공통 경로 검사 삭제/옛 성분 삭제 정규화 복원.
     #[test]
-    fn zip9_fix1_writer_rejects_noncanonical_parts() {
+    fn writer_rejects_noncanonical_parts() {
         for name in ["a/../b", "a/./b", "a//b", "a\\b", "/a", "C:/a", ""] {
             let images = vec![(name.to_string(), vec![])];
             let result =
@@ -594,7 +594,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 출력 정규 키 충돌 검사 삭제(이미지/OLE, 고정/동적 파트).
     #[test]
-    fn zip9_fix1_writer_rejects_duplicate_part_keys() {
+    fn writer_rejects_duplicate_part_keys() {
         let images = vec![("asset.ole".to_string(), vec![1])];
         let oles = vec![("asset".to_string(), vec![2])];
         let result =

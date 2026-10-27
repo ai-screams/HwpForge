@@ -581,7 +581,7 @@ def test_convert_md_rejects_an_unknown_preset() -> None:
     assert caught.value.code == "PRESET_NOT_FOUND"
 
 
-def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
+def test_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
     # 이것을 실패시키는 것: OSError 포장/복원 제거, DECODE_FAILED를 INVALID_INPUT으로 치환.
     # 이것을 실패시키는 것: convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기.
     # 이것을 실패시키는 것: set_cell의 실제 bytes를 손상 입력으로 교체.

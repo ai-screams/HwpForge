@@ -26,7 +26,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 빈 이름/경로 성분·점·역슬래시·드라이브 검사 중 하나 삭제.
     #[test]
-    fn zip9_fix1_part_name_policy() {
+    fn part_name_policy() {
         for name in ["", ".", "..", "a/./b", "a/../b", "a//b", "a/", "/a", "a\\b", "C:/a", "C:a"] {
             assert!(
                 matches!(normalize_part_name(name), Err(HwpxError::InvalidStructure { .. })),

@@ -55,7 +55,7 @@ fn registry_authoring_keys_lower_to_wire_positions() {
 }
 
 #[test]
-fn fix8b_border_push_returns_body_reference_position() {
+fn border_push_returns_body_reference_position() {
     // 이것을 실패시키는 것: push/get이 label을 사용하거나 출력이 label로 참조 재결합.
     use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
     use hwpforge_smithy_hwpx::{style_store::HwpxBorderFill, HwpxStyleStore};

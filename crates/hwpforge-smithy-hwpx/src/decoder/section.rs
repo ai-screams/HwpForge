@@ -4567,7 +4567,7 @@ mod tests {
     }
 
     #[test]
-    fn fix2_cell_spans_cannot_wrap_to_one() {
+    fn cell_spans_cannot_wrap_to_one() {
         // 이것을 실패시키는 것: u32 span 65537을 u16 1로 잘라 수용.
         for (col, row) in [(65537, 1), (1, 65537)] {
             let xml = format!(

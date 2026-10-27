@@ -206,7 +206,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 단일 엔트리 상한 오류 전에 읽은 바이트의 누적을 생략하기.
     #[test]
-    fn zip9_fix4_entry_failure_exhausts_total_budget() {
+    fn entry_failure_exhausts_total_budget() {
         let bytes = make_zip(&[("a", b"ab"), ("b", b"x")]);
         let mut package =
             open_package(&bytes, PackageLimits { entry: 1, total: 1, entries: 2 }).unwrap();
@@ -220,7 +220,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 실패한 같은 엔트리의 반복 읽기를 누적하지 않거나 초과 후 다시 해제하기.
     #[test]
-    fn zip9_fix4_repeated_entry_failures_accumulate() {
+    fn repeated_entry_failures_accumulate() {
         let bytes = make_zip(&[("a", b"ab")]);
         let mut package =
             open_package(&bytes, PackageLimits { entry: 1, total: 5, entries: 1 }).unwrap();
@@ -236,7 +236,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 읽기 한도에서 남은 누적 예산을 무시하기.
     #[test]
-    fn zip9_fix4_read_is_capped_by_remaining_total() {
+    fn read_is_capped_by_remaining_total() {
         let bytes = make_zip(&[("a", b"ab"), ("b", b"0123456789")]);
         let mut package =
             open_package(&bytes, PackageLimits { entry: 32, total: 3, entries: 2 }).unwrap();
@@ -251,7 +251,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: read_to_end 오류를 누적 갱신 전에 반환하기.
     #[test]
-    fn zip9_fix4_repeated_crc_failures_accumulate() {
+    fn repeated_crc_failures_accumulate() {
         let mut bytes = make_zip(&[("a", b"ab")]);
         // Stored payload follows the 30-byte local header, filename and extra field.
         let name_len = u16::from_le_bytes(bytes[26..28].try_into().unwrap()) as usize;
@@ -273,7 +273,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 정확한 상한을 초과로 취급하거나 초과 이후 빈 엔트리를 허용하기.
     #[test]
-    fn zip9_fix4_exact_budget_and_empty_entry_boundaries() {
+    fn exact_budget_and_empty_entry_boundaries() {
         let bytes = make_zip(&[("a", b"ab"), ("empty", b"")]);
         let mut package =
             open_package(&bytes, PackageLimits { entry: 2, total: 4, entries: 2 }).unwrap();
@@ -290,7 +290,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 0바이트 예산에서 빈 엔트리를 거부하거나 초과 감지용 1바이트를 빼기.
     #[test]
-    fn zip9_fix4_zero_budget_still_checks_for_output() {
+    fn zero_budget_still_checks_for_output() {
         let bytes = make_zip(&[("a", b"ab"), ("empty", b"")]);
         let mut package =
             open_package(&bytes, PackageLimits { entry: 0, total: 0, entries: 2 }).unwrap();

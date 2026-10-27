@@ -211,7 +211,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: patch의 두 번째 ZIP 읽기가 공용 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_patch_rejects_parent_part() {
+    fn patch_rejects_parent_part() {
         let bytes = zeros_zip(&[("Contents/../unused.xml", 1)]);
         // Call the raw reread directly: the preceding decoder must not mask a bypass.
         assert!(matches!(RawPackage::read_capped(&bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE),

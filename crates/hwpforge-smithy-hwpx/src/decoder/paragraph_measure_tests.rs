@@ -31,7 +31,7 @@ fn para(xml: &str) -> HwpxParaShape {
 }
 
 #[test]
-fn w1_case_precedes_mismatched_default_and_keeps_char_zero() {
+fn case_precedes_mismatched_default_and_keeps_char_zero() {
     // 이것을 실패시키는 것: 변이 2·3·4·14 — CHAR 제거, default 우선, 단위 없는 0.
     for value in [-750, 0, 1000] {
         let xml = format!(
@@ -51,7 +51,7 @@ fn w1_case_precedes_mismatched_default_and_keeps_char_zero() {
     }
 }
 #[test]
-fn w1_direct_and_default_negative_odd_keep_arithmetic_shift() {
+fn direct_and_default_negative_odd_keep_arithmetic_shift() {
     // 이것을 실패시키는 것: 변이 1·5 — /2 절삭, direct를 0으로 반환.
     for raw in [-1499, -2000, 1, 2001, 3000] {
         let direct = para(&margin(raw, "HWPUNIT"));
@@ -62,7 +62,7 @@ fn w1_direct_and_default_negative_odd_keep_arithmetic_shift() {
     }
 }
 #[test]
-fn w1_namespace_selection_and_invalid_payloads() {
+fn namespace_selection_and_invalid_payloads() {
     // 이것을 실패시키는 것: 변이 13 — unknown-first를 선택, 접두사 없는 속성 무시.
     let unknown =
         format!(r#"<case required-namespace="urn:unknown">{}</case>"#, margin(777, "HWPUNIT"));
@@ -97,7 +97,7 @@ fn w1_namespace_selection_and_invalid_payloads() {
     }
 }
 #[test]
-fn w1_default_tabs_and_verified_unitless_direct() {
+fn default_tabs_and_verified_unitless_direct() {
     // 이것을 실패시키는 것: 변이 6 — unit 생략 default를 case 값으로 읽기.
     for (raw, ticks, unit) in [(30000, 15000, "hwpunit"), (2001, 1000, "char")] {
         for wrap in [false, true] {
@@ -114,7 +114,7 @@ fn w1_default_tabs_and_verified_unitless_direct() {
     }
 }
 #[test]
-fn w1_line_spacing_separate_scale_and_odd_output_error() {
+fn line_spacing_separate_scale_and_odd_output_error() {
     for kind in ["FIXED", "AT_LEAST", "BETWEEN_LINES", "PERCENT"] {
         let ls = |v| format!(r#"<lineSpacing type="{kind}" value="{v}" unit="HWPUNIT"/>"#);
         let p =
@@ -147,7 +147,7 @@ fn w1_line_spacing_separate_scale_and_odd_output_error() {
     .is_err());
 }
 #[test]
-fn w3_output_packs_both_units_and_numbers_positions() {
+fn output_packs_both_units_and_numbers_positions() {
     // 이것을 실패시키는 것: 변이 7 — default=case 방출.
     for (value, unit, raw) in
         [(1000, "CHAR", 2001), (-750, "CHAR", -1499), (1000, "HWPUNIT", 2000), (0, "CHAR", 1)]
@@ -164,7 +164,7 @@ fn w3_output_packs_both_units_and_numbers_positions() {
 }
 
 #[test]
-fn fix1_signed_hwpunit_tabs_keep_unsigned_char_contract() {
+fn signed_hwpunit_tabs_keep_unsigned_char_contract() {
     let tab = |payload: &str| {
         format!(
             r#"<head><refList><tabProperties><tabPr id="3">{payload}</tabPr></tabProperties></refList></head>"#
@@ -223,7 +223,7 @@ fn fix1_signed_hwpunit_tabs_keep_unsigned_char_contract() {
 }
 
 #[test]
-fn fix2_margin_xml_cannot_wrap_into_another_valid_value() {
+fn margin_xml_cannot_wrap_into_another_valid_value() {
     // 이것을 실패시키는 것: XML i64를 검사 없이 i32로 잘라 음수 여백으로 수용.
     for raw in ["4294967295", "4294967294", "4294967296", "-4294967297"] {
         for unit in ["CHAR", "HWPUNIT"] {
@@ -244,7 +244,7 @@ fn fix2_margin_xml_cannot_wrap_into_another_valid_value() {
 }
 
 #[test]
-fn fix2_case_only_tabs_warn_with_definition_and_field() {
+fn case_only_tabs_warn_with_definition_and_field() {
     // 이것을 실패시키는 것: case-only 탭 default 생성 경고 삭제.
     let xml = format!(
         r#"<head><refList><tabProperties><tabPr id="0"><switch>{}</switch></tabPr></tabProperties></refList></head>"#,
@@ -265,7 +265,7 @@ fn fix2_case_only_tabs_warn_with_definition_and_field() {
 }
 
 #[test]
-fn fix2_direct_line_spacing_warns_with_definition_and_field() {
+fn direct_line_spacing_warns_with_definition_and_field() {
     // 이것을 실패시키는 것: direct 줄 간격 switch 정규화 경고 삭제.
     let parsed =
         parse_header(&head(r#"<lineSpacing type="FIXED" value="2000" unit="HWPUNIT"/>"#)).unwrap();
@@ -276,7 +276,7 @@ fn fix2_direct_line_spacing_warns_with_definition_and_field() {
 }
 
 #[test]
-fn fix3_empty_supported_tab_case_is_authoritative() {
+fn empty_supported_tab_case_is_authoritative() {
     // 이것을 실패시키는 것: 빈 case 거부, default 우선, 개수 차이 경고 삭제.
     for default in ["", r#"<tabItem pos="2000"/>"#, r#"<tabItem pos="1" unit="INVALID"/>"#] {
         let xml = format!(
@@ -305,7 +305,7 @@ fn fix3_empty_supported_tab_case_is_authoritative() {
 // 이것을 실패시키는 것: HeaderFidelity를 원본 ID/배열 위치로 별도 조회하거나,
 // setter·Clone·JSON 중 한 경로에서 fontLineHeight를 버리는 것.
 #[test]
-fn w3_font_line_height_rust_clone_at_new_position() {
+fn font_line_height_rust_clone_at_new_position() {
     let mut store = HwpxStyleStore::new();
     let original = store.push_para_shape(HwpxParaShape::default());
     store.set_para_font_line_height(original, 1).unwrap();
@@ -323,7 +323,7 @@ fn w3_font_line_height_rust_clone_at_new_position() {
 // 이것을 실패시키는 것: 경고를 정규화 사실로 사용, case/default 일부만 비교,
 // unit·분기 유무 차이를 무시, 또는 무관한 switch 때문에 정상 입력을 정규화.
 #[test]
-fn w2fix1_measure_normalization_compares_encoder_payloads() {
+fn measure_normalization_compares_encoder_payloads() {
     use crate::schema::header::{HxHead, HxSwitch, HxSwitchCase, HxSwitchDefault};
     let mut store = HwpxStyleStore::new();
     store.push_para_shape(HwpxParaShape::default());
@@ -414,7 +414,7 @@ fn w2fix1_measure_normalization_compares_encoder_payloads() {
 // 이것을 실패시키는 것: direct/empty/case-only/default-only 탭 또는 출력과 다른
 // default 척도·단위·개수를 원본 반환 가능으로 분류하는 것.
 #[test]
-fn w2fix1_tab_normalization_compares_encoder_payloads() {
+fn tab_normalization_compares_encoder_payloads() {
     use crate::schema::header::HxHead;
     let mut store = HwpxStyleStore::new();
     store.push_tab(hwpforge_core::TabDef {

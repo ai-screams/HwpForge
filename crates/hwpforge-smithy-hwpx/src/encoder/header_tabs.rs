@@ -154,7 +154,7 @@ tabs:
     }
 
     #[test]
-    fn fix1_build_tab_properties_xml_preserves_negative_hwpunit() {
+    fn build_tab_properties_xml_preserves_negative_hwpunit() {
         let mut store = HwpxStyleStore::new();
         for tab in TabDef::defaults() {
             store.push_tab(tab);

@@ -1474,7 +1474,7 @@ impl HwpxEncoder {
         // the ORIGINAL tables, with only the font-only new-document char/para 0
         // exception in HeaderReferences::output_ids. Keep that resolver in context;
         // generated definitions cannot validate any other explicit reference.
-        // 이것을 실패시키는 것: 보충을 원본 검증 앞으로 이동(fix6_empty_definition_matrix).
+        // 이것을 실패시키는 것: 보충을 원본 검증 앞으로 이동(empty_definition_matrix).
         let mut generated;
         let style_store = if style_store.char_shape_count() == 0
             || style_store.para_shape_count() == 0
@@ -1681,7 +1681,7 @@ mod tests {
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape};
 
     #[test]
-    fn fix6_empty_definition_sentinel_matrix() {
+    fn empty_definition_sentinel_matrix() {
         // 이것을 실패시키는 것: 출력 기본 정의를 원본 검사 전에 보충하기,
         // 종류별 lookup 생략, 새 문서 char/para 0 예외 제거·확대, 내장/sentinel 거부, 시험 행 누락.
         use hwpforge_core::section::PageBorderFillEntry;
@@ -1891,7 +1891,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_memo_anchor_uses_fallible_output_ids() {
+    fn memo_anchor_uses_fallible_output_ids() {
         // 이것을 실패시키는 것: 메모 앵커의 내부 0을 출력 0으로 쓰기,
         // 없는 인덱스까지 출력해 성공시키기. 희소 단독 ID와 충돌하는 유효 ID 모두 대조.
         use hwpforge_core::Control;
@@ -1947,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn fix6_empty_definition_matrix() {
+    fn empty_definition_matrix() {
         // 이것을 실패시키는 것: 각 정의 조회 생략/출력 기본 정의 선보충, char/para 0 예외 제거, 행 누락.
         // tabPr 0·1·2는 정의 없이도 유효한 내장 값이다. 일반 tabPr 3과 별도로 확인한다.
         use hwpforge_core::{BulletDef, NumberingDef, TabDef, Table, TableCell, TableRow};
@@ -2137,7 +2137,7 @@ mod tests {
     }
 
     #[test]
-    fn fix6_empty_latin_fonts_cannot_be_repaired_by_output_cloning() {
+    fn empty_latin_fonts_cannot_be_repaired_by_output_cloning() {
         // 이것을 실패시키는 것: validate(output=true)에 복제 글꼴 합치기 또는 font 조회 생략.
         for id in [1, 2, 3] {
             for latin_ids in [vec![], vec![0], vec![id]] {
@@ -2180,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_empty_border_table_rejects_explicit_default_ids() {
+    fn empty_border_table_rejects_explicit_default_ids() {
         // 이것을 실패시키는 것: 원본 빈 표를 생성 정의 1·2·3으로 대체해 명시 참조를 통과시킴.
         use hwpforge_core::section::PageBorderFillEntry;
         use hwpforge_core::{Table, TableCell, TableRow};
@@ -2230,7 +2230,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_only_absent_values_generate_border_defaults() {
+    fn only_absent_values_generate_border_defaults() {
         // 이것을 실패시키는 것: 빈 표의 None 기본 정의 생성 누락 또는 불필요한 3 생성.
         for table_needed in [false, true] {
             let mut store = HwpxStyleStore::with_default_fonts("바탕");
@@ -2263,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_nested_body_borders_and_generated_defaults() {
+    fn nested_body_borders_and_generated_defaults() {
         // 이것을 실패시키는 것: encoder 본문 검증 삭제, 중첩 컨테이너 순회 누락,
         // 원본 오류를 출력 기본값으로 수복, sparse store의 생성 기본 정의 누락.
         use hwpforge_core::section::{HeaderFooter, MasterPage, PageBorderFillEntry};

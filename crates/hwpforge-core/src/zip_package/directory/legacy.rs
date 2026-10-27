@@ -371,7 +371,7 @@ mod tests {
     /// 이것을 실패시키는 것: 후보 상한/고정 base를 없애 zip이 겹친 확장 데이터를 반복 복사하기.
     #[test]
     // 이것을 실패시키는 것: 성공 경계의 후보 예산 초과 (실제 음성 대조 실행).
-    fn zip9_fix2_overlapping_zip64_candidates_have_linear_work() {
+    fn overlapping_zip64_candidates_have_linear_work() {
         for n in [0, 450, 480, 32_000, 64_000, 128_000] {
             let bytes = overlapping_candidates(n);
             let mut work = Work::default();
@@ -433,7 +433,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 후보/바이트 상한 삭제 또는 허용 경계에서 >=로 거부하기.
     #[test]
-    fn zip9_fix2_work_budget_boundaries() {
+    fn work_budget_boundaries() {
         let mut work = Work::default();
         for _ in 0..MAX_END_CANDIDATES {
             work.candidate().unwrap();
@@ -446,7 +446,7 @@ mod tests {
     /// 이것을 실패시키는 것: 터미널 EOCD 우선 선택 또는 archive base 대조 생략.
     #[test]
     // 이것을 실패시키는 것: 손상된 local header 복원 (실제 음성 대조 실행).
-    fn zip9_fix2_comment_eocd_cannot_redirect_to_prefix() {
+    fn comment_eocd_cannot_redirect_to_prefix() {
         let end = fixture().len() - 22;
         let start = u32_at(&fixture(), end + 16).unwrap() as usize;
         assert_eq!(
@@ -481,7 +481,7 @@ mod tests {
     /// 이것을 실패시키는 것: ZIP64/일치하는 non-sentinel 값/확장 데이터/접두부를 일괄 거부하기.
     #[test]
     // 이것을 실패시키는 것: 확장 데이터 길이 불일치 (실제 음성 대조 실행).
-    fn zip9_fix2_normal_zip64_and_matching_zip32_values() {
+    fn normal_zip64_and_matching_zip32_values() {
         for field in [8, 12, 16] {
             let mut bytes = zip64();
             let end = bytes.len() - 22;
@@ -505,7 +505,7 @@ mod tests {
     /// 이것을 실패시키는 것: 시작/소비 크기/개수/base/EOCD 위치 대조를 개별 삭제하기.
     #[test]
     // 이것을 실패시키는 것: directory start 불일치 제거 (실제 음성 대조 실행).
-    fn zip9_fix2_all_opened_directory_values_must_match() {
+    fn all_opened_directory_values_must_match() {
         let archive = ZipArchive::new(Cursor::new(fixture())).unwrap();
         let end = archive.clone().into_inner().position();
         for field in ["start", "size", "count", "base", "eocd"] {
@@ -526,7 +526,7 @@ mod tests {
     /// 이것을 실패시키는 것: zip이 무시할 sentinel 없는 locator를 별도로 신뢰하기.
     #[test]
     // 이것을 실패시키는 것: locator 제거 (실제 음성 대조 실행).
-    fn zip9_fix2_locator_requires_zip64_selection() {
+    fn locator_requires_zip64_selection() {
         let mut bytes = zip64();
         let end = bytes.len() - 22;
         let old = fixture().len() - 22;
@@ -537,7 +537,7 @@ mod tests {
     /// 이것을 실패시키는 것: 후보 선택 후 terminal 검사 삭제, 또는 ZIP64 역방향 선택.
     #[test]
     // 이것을 실패시키는 것: 후행 데이터 제거 (실제 음성 대조 실행).
-    fn zip9_fix2_selection_order_and_trailing_data() {
+    fn selection_order_and_trailing_data() {
         let mut trailing = fixture().to_vec();
         trailing.push(0);
         assert!(ZipArchive::new(Cursor::new(&trailing)).is_ok());
@@ -554,7 +554,7 @@ mod tests {
     /// 이것을 실패시키는 것: EOCD 탐색 창 축소 또는 잘린 후보를 상한 계산에서 제외하기.
     #[test]
     // 이것을 실패시키는 것: 경계 EOCD 후보 제거 (실제 음성 대조 실행).
-    fn zip9_fix2_eocd_window_and_candidate_limits() {
+    fn eocd_window_and_candidate_limits() {
         // zip's in-memory window includes signatures just BEFORE the maximum
         // on-disk comment window. A 22-byte-based scan misses this ambiguity.
         let mut edge = fixture().to_vec();
@@ -590,7 +590,7 @@ mod tests {
     /// 이것을 실패시키는 것: zip의 길이/디스크/포화 개수 판정을 생략해 잘못된 앞 후보를 선택하기.
     #[test]
     // 이것을 실패시키는 것: 앞선 ZIP64 길이 불일치 제거 (실제 음성 대조 실행).
-    fn zip9_fix2_invalid_earlier_zip64_candidates_are_skipped() {
+    fn invalid_earlier_zip64_candidates_are_skipped() {
         for reason in ["length", "disk", "count", "overflow"] {
             let mut bytes = overlapping_candidates(450);
             let p = 440 * 56;
