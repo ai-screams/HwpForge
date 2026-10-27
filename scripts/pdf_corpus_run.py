@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PDF corpus 검증 러너 (W6b — 커밋된 파라미터화 러너, 일회성 스크립트 금지).
+"""PDF corpus 검증 러너. 인자로 받은 문서 집합을 반복 측정한다.
 
 corpus 의 각 문서를 `hwpforge to-pdf` 로 **프로세스 격리** 실행하고,
 per-doc 타임아웃·RSS 실측·경고 버킷을 manifest(JSONL) 로 남긴다.
@@ -35,7 +35,7 @@ HANCOM_TTF = Path("/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Sh
 
 
 def font_inventory(extra_args: list[str]) -> dict:
-    """실행 환경 폰트 인벤토리 (§3 manifest 요구 — 성공률·축 폴백 수치의 재현 조건).
+    """실행 환경 폰트 인벤토리 (성공률·축 폴백 수치의 재현 조건).
 
     resolver 내부를 모르므로 정직한 프록시: 발견 대상 디렉터리의 폰트 파일명 집합.
     """

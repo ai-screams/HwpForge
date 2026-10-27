@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn embed_license_truth_table_from_fixtures() {
-        // W4d 진리표 (§5 H4 — OS/2 버전 × permission × bit8/9 × malformed/결측).
+        // 임베드 라이선스 진리표 (OS/2 버전 × permission × bit8/9 × malformed/결측).
         // 판정은 raw bit 가 아니라 ttf-parser 버전 인지 helper 로 한다 (C1).
         let dir = committed_fonts_dir();
         let case = |file: &str| {

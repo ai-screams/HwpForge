@@ -109,7 +109,7 @@ fn page_count(pdf: &[u8]) -> usize {
 #[test]
 fn renders_synthetic_two_page_document() {
     // p1 = 2줄 (textpos 4 에서 절단 — 줄1 "가나다 " 꼬리 공백은 렌더가 trim),
-    // p2 = v==0 재출현 → 새 쪽 (규칙 §2 쪽분할).
+    // p2 = v==0 재출현 → 새 쪽.
     let doc = doc_of(vec![
         para_with_cache("가나다 라마바", vec![seg(0, 0), seg(4, 1600)]),
         para_with_cache("A가나", vec![seg(0, 0)]),
@@ -330,7 +330,7 @@ fn whitespace_only_line_renders_without_glyphs() {
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
 }
 
-// ── W6 §5f: 무음 시각 결함의 신호화 (tofu·줄 넘침) ──────────────
+// ── 무음 시각 결함의 신호화 (tofu·줄 넘침) ──────────────
 
 #[test]
 fn missing_glyph_is_fatal_by_default() {

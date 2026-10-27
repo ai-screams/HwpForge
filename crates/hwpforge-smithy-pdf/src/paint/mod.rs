@@ -128,7 +128,7 @@ pub enum PaintItem {
     Rect(RectItem),
     /// 선분 (괘선 — 배경 뒤, 글리프 앞).
     Line(LineItem),
-    /// 래스터 이미지 (W2a — §3 D3).
+    /// 래스터 이미지.
     Image(ImageItem),
     /// 사각 클립 그룹 (W4 w2 — 글상자 클리핑, 중첩 가능).
     Clipped(ClipGroup),
@@ -137,7 +137,7 @@ pub enum PaintItem {
 /// 래스터 이미지 paint 항목 — 자기완결 (backend 가 스토어를 모른다).
 ///
 /// `data` 는 paint-build 스코프의 asset interner 가 canonical key 당
-/// 1회만 복사한 공유 바이트다 (occurrence 별 복제 금지 — §3 D3).
+/// 1회만 복사한 공유 바이트다 (occurrence 별 복제 금지).
 /// 포맷은 backend 가 magic 스니핑으로 판별한다 (Core `ImageFormat` 은
 /// 확장자 유래라 진단 힌트일 뿐).
 #[derive(Debug, Clone, PartialEq)]
@@ -167,7 +167,7 @@ pub struct ImageItem {
 ///
 /// 넘친 자식(클립 밖)은 backend 가 렌더 시점에 잘라낸다 — Paint IR 은
 /// 자식을 그대로 담고, 잘림은 클립 영역이 강제한다 (글상자 overflow
-/// 실측 = 한컴은 글자 중간을 박스 경계로 절단, 설계 §8a).
+/// 실측 = 한컴은 글자 중간을 박스 경계로 절단).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ClipGroup {

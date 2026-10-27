@@ -1,8 +1,8 @@
 //! W2b c3 — test-only PDF object/content-stream 파서.
 //!
 //! krilla 가 실제로 방출하는 PDF 바이트에서 이미지 XObject 의 배치
-//! bbox 를 **byte grep 이 아니라 진짜 좌표 산술**로 추출한다 (§4 D3,
-//! H5 disposition 수용). classic(비압축) xref 테이블 전제 — krilla 는
+//! bbox 를 **byte grep 이 아니라 진짜 좌표 산술**로 추출한다.
+//! classic(비압축) xref 테이블 전제 — krilla 는
 //! object stream/compressed xref 를 쓰지 않는다 (실측: `xref\n0 N\n...`
 //! + `trailer` — 2026-08-17 probe).
 //!

@@ -910,7 +910,7 @@ pub(crate) fn build_wire_map_over_runs(
                 K::TitleMark => zero(&mut b, 8, T::Silent),
                 K::Switch => {
                     // 알려진 chart 캐리어만 (8,0) — 미지 switch 내용은
-                    // 소비량 미상 (v4 R3#6: 차트 일괄 드롭은 퇴행).
+                    // 소비량 미상 — 소비량이 알려진 차트까지 일괄 드롭하지 않는다.
                     let is_chart = hx_run
                         .switches
                         .get(idx)

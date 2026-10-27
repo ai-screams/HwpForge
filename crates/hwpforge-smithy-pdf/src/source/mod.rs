@@ -2,14 +2,14 @@
 //!
 //! 이 층은 **계산하지 않고 재생한다**: 줄바꿈·줄 위치·쪽 배치는 전부
 //! 캐시([`hwpforge_core::layout::LayoutCache`]) 의 수치다. 이 층이 하는
-//! 일은 세 가지뿐이다 (규칙 문서 §1-§2):
+//! 일은 세 가지뿐이다:
 //!
 //! 1. **쪽분할**: 최상위 lineseg 의 `v == 0 (첫 줄 제외) ∨ v < prev` → 새 쪽
 //! 2. **줄분할**: `textpos` (UTF-16 코드유닛) 로 문단 텍스트를 줄로 절단
 //! 3. **baseline**: `body_top + v + lineseg.baseline` (전부 HWPUNIT 정수합)
 //!
 //! pt 변환은 여기서 하지 않는다 — paint 경계([`crate::paint::Pt::from_hwpunit`])
-//! 에서 1회만. admission(계획 §3 행렬)도 이 층이 수행한다: 렌더에 필요한
+//! 에서 1회만. admission 도 이 층이 수행한다: 렌더에 필요한
 //! 검사를 렌더 직전에 하는 것이 fail-closed 의 실체다.
 
 use hwpforge_core::run::RunContent;
@@ -29,7 +29,7 @@ pub struct LineRun {
     /// 문자 스타일 (폰트명·크기 조회 키).
     pub char_shape: CharShapeIndex,
 }
-/// 줄 안의 원자 하나 — 텍스트 run·인라인 이미지·인라인 글상자 (W2a §3 D4 · W4).
+/// 줄 안의 원자 하나 — 텍스트 run·인라인 이미지·인라인 글상자.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineAtom {
     /// 셰이핑 대상 텍스트 run.
@@ -62,7 +62,7 @@ pub struct LineImage {
 /// 글상자는 이미지처럼 호스트 줄에서 인라인 **폭**([`Self::width`])을
 /// 소비하는 원자다. 내부는 박스-내용 상대 좌표의 연속 줄들
 /// ([`Self::inner_lines`])이고, 테두리·채움([`Self::style`])과 세로
-/// 정렬([`Self::vert_align`])을 가진다 (설계 §8a 실측).
+/// 정렬([`Self::vert_align`])을 가진다 (한컴 저장 문서 실측).
 ///
 /// # w3 이 소비할 계약
 ///
@@ -75,16 +75,16 @@ pub struct LineImage {
 /// 3. **내부 줄 replay**: [`Self::inner_lines`] 각 줄을 **박스 원점 +
 ///    textMargin(기본 283) + vertAlign 시프트** 를 더해 절대
 ///    배치한다 (셀 replay 선례 — `crate::source::table`). 내부 캐시 v축은
-///    문단 경계를 넘어 연속이다 (§8a). 각 줄의 `seg`([`hwpforge_core::layout::LineSeg`])·
+///    문단 경계를 넘어 연속이다. 각 줄의 `seg`([`hwpforge_core::layout::LineSeg`])·
 ///    `alignment`·`is_last_line` 이 텍스트/이미지 배치와 JUSTIFY 규칙을 준다.
 /// 4. **vertAlign 시프트**: 내부 캐시는 vertAlign 을 반영하지 않는다(3종
-///    모두 내부 vertpos 0 — §8f 실측) — TOP/CENTER/BOTTOM 은 렌더가
+///    모두 내부 vertpos 0 — 실측) — TOP/CENTER/BOTTOM 은 렌더가
 ///    콘텐츠 높이 대비 박스 높이 여백으로 시프트한다 (셀 valign 선례).
 ///
 /// # 명시 제외 (W4 백로그 — admission fail-closed 유지)
 ///
 /// 내부 원자가 다시 글상자·표인 중첩은 W4 범위 밖이다. w3 의 admission 이
-/// 그런 캐시를 거부한다 (fixture 부재 — §8f ⑤). 타입 자체는
+/// 그런 캐시를 거부한다 (fixture 부재). 타입 자체는
 /// [`TextBoxLine::atoms`] 가 [`LineAtom`] 를 담아 재귀 표현이 가능하다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineTextBox {
@@ -92,7 +92,7 @@ pub struct LineTextBox {
     pub width: i32,
     /// 박스 높이 (HWPUNIT) — clip·페인트 영역 높이. `build_line_text_box`
     /// 구성 시점에 확장 높이(`max(선언 sz, content extent + 2×283)`)로
-    /// 확정된다 (§10g F1 — overflow 는 잘리지 않고 확장).
+    /// 확정된다 (overflow 는 잘리지 않고 확장).
     pub height: i32,
     /// 테두리·채움 스타일 (Core `ShapeStyle` 에서 증류 — `None` 이면 박스
     /// 페인트 없음, 내부 콘텐츠만).
@@ -100,7 +100,7 @@ pub struct LineTextBox {
     /// 내부 콘텐츠 세로 정렬 (TOP/CENTER/BOTTOM — 내부 캐시 미반영, 렌더가
     /// 시프트).
     pub vert_align: hwpforge_foundation::VerticalAlign,
-    /// 내부 줄들 (박스-내용 상대, 문단 경계를 넘어 연속하는 v축 — §8a).
+    /// 내부 줄들 (박스-내용 상대, 문단 경계를 넘어 연속하는 v축).
     pub inner_lines: Vec<TextBoxLine>,
 }
 
@@ -108,7 +108,7 @@ pub struct LineTextBox {
 /// vertAlign 시프트를 더해 절대 배치한다).
 ///
 /// `seg` 는 디코드 캐시의 [`hwpforge_core::layout::LineSeg`] 를 **그대로**
-/// 나른다 (설계 §8g "내부 lineseg replay = 그대로 재생"). `textpos` 는
+/// 나른다 (내부 lineseg replay = 그대로 재생). `textpos` 는
 /// 원자가 이미 줄별로 분할됐으므로 렌더에서 쓰이지 않지만, 캐시 실측값을
 /// 왜곡 없이 보존한다.
 #[derive(Debug, Clone, PartialEq)]
@@ -129,7 +129,7 @@ pub struct TextBoxLine {
 /// `Line`(테두리)로 낮출 원색·굵기만).
 ///
 /// `line_style`(dash/dot 등)은 담지 않는다 — Paint `Line` 이 실선만
-/// 그리므로(설계 §8g w4) 담아도 죽은 데이터다.
+/// 그리므로 담아도 죽은 데이터다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextBoxStyle {
     /// 테두리 색 (`None` = 테두리 없음).
@@ -153,7 +153,7 @@ pub struct LaidLine {
     /// baseline 세로 위치 (HWPUNIT, 쪽 상단 원점 — body_top + v + baseline).
     pub baseline_y: i32,
     /// 줄 상자 높이 (HWPUNIT — `seg.vertsize`). sub-line 인라인 이미지의 세로
-    /// 배치 공식이 쓰는 줄 높이다 (§10c-2): 이미지가 줄 높이보다 작으면
+    /// 배치 공식이 쓰는 줄 높이다: 이미지가 줄 높이보다 작으면
     /// baseline 에 얹혀 이미지 자체 descent 만큼 내려앉는다. baseline =
     /// `baseline_y − top_y` 와 함께 `crate::render` 가 이미지 top 을 유도한다.
     pub vertsize: i32,
@@ -207,7 +207,7 @@ pub struct LaidBorder {
     pub color: Color,
 }
 
-/// 합성 쪽번호 (캐시 재생이 아니라 §8c 실측 규칙으로 합성).
+/// 합성 쪽번호 (캐시 재생이 아니라 한컴 실측 규칙으로 합성).
 ///
 /// 가로 = 페이지 폭 중앙(장식 포함 자연폭 기준 — 여백 무관, 한컴 저장 문서
 /// Δ0.08pt) · 세로 = baseline 을 `anchor_bottom − hhea descent × size` 에
@@ -221,19 +221,19 @@ pub struct LaidPageNumber {
     pub text: String,
     /// 문자 스타일 (전용 "쪽 번호" 스타일의 charPr — 부재 시 문서 기본 0).
     pub char_shape: CharShapeIndex,
-    /// em 하단 앵커 (HWPUNIT — `H − margin.bottom`, §8c).
+    /// em 하단 앵커 (HWPUNIT — `H − margin.bottom`).
     pub anchor_bottom: i32,
 }
 
 /// 앵커형 이미지의 절대 배치 (HWPUNIT, 쪽 좌상단 원점 — W5 w1b).
 ///
 /// 글자취급이 아닌(`treat_as_char == false`) 이미지는 줄 흐름에 속하지 않고
-/// 문단에 **앵커**된 오버레이다 (여러 줄에 걸침 — §9d High-1). 본문 회피는
+/// 문단에 **앵커**된 오버레이다 (여러 줄에 걸침). 본문 회피는
 /// 조판 캐시(lineseg horzpos/horzsize)에 이미 구워져 있으므로 렌더는
-/// `rel_to + offset` 으로 절대 좌표만 계산한다 (§9a — wrap 재계산 불요).
+/// `rel_to + offset` 으로 절대 좌표만 계산한다 (wrap 재계산 불요).
 ///
-/// 원점([`Self::x`]·[`Self::y`])은 이미지 **좌상단**이다. 산술(§9c ①·
-/// floating fixture 실측):
+/// 원점([`Self::x`]·[`Self::y`])은 이미지 **좌상단**이다. 산술은
+/// 한컴이 저장한 떠 있는 이미지 문서의 실측에 따른다:
 ///
 /// - `y = body_top + 앵커 문단 첫 lineseg.vertpos + vert_offset`
 ///   (vertRelTo=PARA — 문단 top 기준). vertOffset 음수 = 문단 위로 돌출.
@@ -269,7 +269,7 @@ pub struct PageLayout {
     pub width: i32,
     /// 쪽 높이 (HWPUNIT).
     pub height: i32,
-    /// 앵커형 이미지들 (배경 — 본문 아래. §9e w1b: Square/Tight/Through/
+    /// 앵커형 이미지들 (배경 — 본문 아래. Square/Tight/Through/
     /// TopAndBottom 은 본문이 회피하므로 겹치지 않으나 순서로 배경 명시).
     pub anchored_images: Vec<LaidAnchoredImage>,
     /// 셀 배경 사각형들.
@@ -295,7 +295,7 @@ pub struct ReplayLayout {
 ///
 /// # Errors
 ///
-/// 계획 §3 행렬: 표 포함([`PdfError::UnsupportedContent`]) · 렌더 가능 캐시
+/// 캐시 수용 조건: 표 포함([`PdfError::UnsupportedContent`]) · 렌더 가능 캐시
 /// 0 섹션([`PdfError::NoRenderableCache`]) · Reject 정책 하 캐시 결손
 /// ([`PdfError::MissingLayoutCache`]) · textpos 정합 위반([`PdfError::InvalidCache`]).
 pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<ReplayLayout> {
@@ -307,7 +307,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     for (section_idx, section) in input.document.sections().iter().enumerate() {
         // pageStartsOn != BOTH 는 미실측 페이지네이션 속성 (한컴이 빈 쪽을
         // 삽입할 수 있음) — 머리말/꼬리말·쪽번호 유무와 무관하게 BOTH 거동으로
-        // 재생하고 무조건 표면화한다 (§9 b0).
+        // 재생하고 무조건 표면화한다.
         if section
             .begin_num
             .as_ref()
@@ -481,12 +481,12 @@ fn collect_page_events(
 /// 불일치로 fail-closed 되지만, **box-dominated**(`box.height ≥
 /// content+2×여백)에선 조용히 admitted 되어 내부 세로 offset 이 실제
 /// 여백과의 차만큼(bounded) 어긋난다. 근본 해소 = Core textMargin carry
-/// (백로그 — 에픽 문서 §8h).
+/// (향후 지원 필요).
 pub(crate) const TEXTBOX_TEXT_MARGIN: i32 = 283;
 
 /// 줄이 **원자 지배 profile**(삼중 일치: vertsize==textheight==원자 기대
 /// 높이)인지 — 인라인 이미지·글상자가 공유하는 host-줄 predicate. 경계 귀속
-/// 판별과 후검사가 이 동일 predicate 를 쓴다 (§7 r2 fold-in — 순환 아님:
+/// 판별과 후검사가 이 동일 predicate 를 쓴다 (순환 아님:
 /// 독립 입력의 방어적 중복).
 pub(crate) fn line_matches_object_height(
     seg: &hwpforge_core::layout::LineSeg,
@@ -495,7 +495,7 @@ pub(crate) fn line_matches_object_height(
     seg.vertsize == height && seg.textheight == height
 }
 
-/// 줄이 인라인 이미지를 받을 수 있는 profile 인지 (W1 sub-line 확장 — §10b).
+/// 줄이 인라인 이미지를 받을 수 있는 profile 인지 (줄보다 작은 이미지도 허용).
 ///
 /// 두 레짐을 한 조건으로 담는다:
 ///
@@ -503,7 +503,7 @@ pub(crate) fn line_matches_object_height(
 ///   특수형 — 이미지가 줄 높이를 결정).
 /// - **sub-line**: 텍스트-지배 줄(`vertsize == textheight`)에 이미지가 줄
 ///   높이를 결정하지 않는 경우(`img_h ≤ vertsize`) — 이미지는 baseline 에
-///   얹힌다 (렌더 배치 = [`crate::render`] §10c-2 공식).
+///   얹힌다 (렌더 배치 = [`crate::render`] 의 이미지 높이 기반 공식).
 ///
 /// `vertsize != textheight`(미측정 profile)이거나 `img_h > vertsize`(이미지가
 /// 줄보다 큼)면 거부한다 (fail-closed — 추측 금지).
@@ -512,16 +512,16 @@ pub(crate) fn line_admits_image(seg: &hwpforge_core::layout::LineSeg, image_heig
 }
 
 /// body admission 이 허용하는 글자취급(treat_as_char) 인라인 이미지인지
-/// (W2b §4 D1 — placement None/false 는 보수 거부, 앵커형 렌더 = W5).
+/// (placement None/false 는 보수 거부, 앵커형은 별도 렌더 경로 사용).
 pub(crate) fn is_admitted_inline_image(content: &RunContent) -> bool {
     matches!(content, RunContent::Image(img)
         if img.placement.as_ref().is_some_and(|p| p.treat_as_char))
 }
 
 /// body admission 이 허용하는 글자취급(treat_as_char) 인라인 글상자인지
-/// (W4 §8g — `placement == None` 은 레거시 인라인 기본값(treat_as_char)이라
+/// (`placement == None` 은 레거시 인라인 기본값(treat_as_char)이라
 /// 허용, `Some` 은 `treat_as_char` 일 때만. 앵커형(`treat_as_char=false`)은
-/// 보수 거부 → 앵커 렌더 = W5).
+/// 보수 거부 — 앵커형 글상자 렌더는 미지원).
 pub(crate) fn is_admitted_inline_textbox(content: &RunContent) -> bool {
     matches!(content, RunContent::Control(c)
         if matches!(&**c, hwpforge_core::control::Control::TextBox { placement, .. }
@@ -538,10 +538,10 @@ fn is_anchored_image(content: &RunContent) -> bool {
         if img.placement.as_ref().is_some_and(|p| !p.treat_as_char))
 }
 
-/// W5 w1b 가 렌더하는 **앵커 이미지 조합**인지 (§9e·§9g byte-ground 실분포).
+/// 렌더 가능한 **앵커 이미지 조합**인지 (한컴 저장 문서의 바이트 실측 분포).
 ///
 /// 캐시 재생 하에서 본문 회피는 이미 lineseg 에 구워져 있으므로 렌더 산술은
-/// `rel_to + offset` 절대 배치뿐이다 (§9a). 지원 축:
+/// `rel_to + offset` 절대 배치뿐이다. 지원 축:
 ///
 /// - `vert_rel_to == Para` (문단 top 기준 — 유일 실측 앵커 축)
 /// - `horz_rel_to ∈ {Para, Column}` (Column 은 단일 컬럼일 때만 렌더 —
@@ -551,7 +551,7 @@ fn is_anchored_image(content: &RunContent) -> bool {
 ///   z-order/겹침 의미가 달라 제외 (W5 후속).
 ///
 /// 앵커형이지만 위 조합 밖(예: `Paper`/`Page` rel)은 `false` → 호출부가
-/// 종류를 세분해 typed fail-closed (§9b).
+/// 종류를 세분해 typed fail-closed.
 fn is_admitted_anchored_image(content: &RunContent) -> bool {
     use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
     let RunContent::Image(img) = content else {
@@ -560,7 +560,7 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
     let Some(p) = img.placement.as_ref() else {
         return false;
     };
-    // §19.20 PDF-v3 (P16): 앵커 렌더러는 정렬을 계산하지 않는다 — 정렬이
+    // 앵커 렌더러는 정렬을 계산하지 않는다 — 정렬이
     // top/left 가 아니거나 두 플래그가 켜진 앵커 그림은 거부.
     // 이것을 실패시키는 것: 이 네 조건을 지우기
     // (`anchored_image_with_alignment_is_rejected`).
@@ -584,11 +584,11 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
 ///
 /// 지원 조합([`is_admitted_anchored_image`])만 수집하고, 그 밖(조합 외·다중·
 /// 글자취급 인라인과 혼합)은 미측정 profile 이라 typed [`PdfError::InvalidCache`]
-/// 로 fail-closed 한다 (§9b·§9e). 반환 `Vec` 은 0 또는 1 원소다 (다중 앵커 =
+/// 로 fail-closed 한다. 반환 `Vec` 은 0 또는 1 원소다 (다중 앵커 =
 /// fail-closed). 두 번째 반환값 = **마커 소속 lineseg 인덱스** (앵커 없으면 0)
 /// — 호출부가 그 줄이 안착한 쪽에 이미지를 귀속한다.
 ///
-/// 산술 (floating fixture 실측 §9c ① + showcase CTM 판별 §10i):
+/// 산술 (한컴 저장 앵커 이미지 문서 실측 + PDF CTM 판별):
 /// - `y = body_top + marker_v + vert_offset` — `marker_v` = **앵커 마커가
 ///   있는 줄**의 vertpos. 한컴 `vertRelTo="PARA"` 실동작은 문단 첫 줄이
 ///   아니라 마커 소속 줄 기준이다 (마커 둘째 줄 showcase 에서 정확히
@@ -598,7 +598,7 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
 ///   왼쪽 = 본문 왼쪽). 수평은 문단 좌변 기준으로 한컴과 일치 (Δ0.05pt).
 /// - 마커 가시 좌표가 줄 경계(lineseg 시작)와 정확히 일치하면 **뒤
 ///   세그먼트(새 줄)** 를 채택하고 [`PdfWarning::AnchorMarkerOnLineBoundary`]
-///   로 표면화한다 (§11b F3 — 한컴이 저장한 줄 경계 앵커 그림에서도
+///   로 표면화한다 (한컴이 저장한 줄 경계 앵커 그림에서도
 ///   아랫줄 기준임을 바이트 대조로 확인, Δ≤0.03pt).
 fn collect_anchored_images(
     para: &hwpforge_core::paragraph::Paragraph,
@@ -614,7 +614,7 @@ fn collect_anchored_images(
     if anchored_count == 0 {
         return Ok((Vec::new(), 0));
     }
-    // 다중 앵커 = 미측정 z-order (§9d Low — fail-closed).
+    // 다중 앵커 = 미측정 z-order (fail-closed).
     if anchored_count > 1 {
         return Err(PdfError::InvalidCache {
             detail: format!(
@@ -674,7 +674,7 @@ fn collect_anchored_images(
             ),
         });
     }
-    // 마커 소속 줄 (§10i): 마커 가시 좌표 = 선행 run 가시 텍스트 합
+    // 마커 소속 줄: 마커 가시 좌표 = 선행 run 가시 텍스트 합
     // (앵커 마커 자신은 0폭 — W1b 가시 좌표계와 동일 축). floor-search
     // (마지막 textpos ≤ pos)로 소속 lineseg 를 고른다 — validate_textpos
     // 가 호출 전에 오름차순을 보증한다.
@@ -695,7 +695,7 @@ fn collect_anchored_images(
     }
     let marker_idx = lines.iter().rposition(|s| s.textpos <= marker_pos).unwrap_or(0);
     // 경계 일치 (마커 == lineseg 시작): 뒤 세그먼트(새 줄) 채택 + 표면화
-    // (§11b F3 — 한컴 선택은 경계 fixture byte-ground 전, 반증 시 교체).
+    // (한컴 선택은 경계 fixture byte-ground 전, 반증 시 교체).
     if marker_idx > 0 && lines[marker_idx].textpos == marker_pos {
         warnings.push(PdfWarning::AnchorMarkerOnLineBoundary { location: location.to_string() });
     }
@@ -750,7 +750,7 @@ pub(crate) fn textbox_content_extent(
 
 /// 글상자 host 줄 기대 높이 = `max(box.height, content_extent + 상하 textMargin)`.
 ///
-/// fixture 실측(§8f ①): basic 11339(=box.height) · valign 7087(=box.height) ·
+/// fixture 실측: 기본형 11339(=box.height) · 세로 정렬 7087(=box.height) ·
 /// overflow 12766(=extent 12200 + 566 > box 4252). 불일치 = 미측정 profile →
 /// 호출부가 `InvalidCache` fail-closed.
 pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32) -> PdfResult<i32> {
@@ -765,7 +765,7 @@ pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32)
 /// 렌더 replay 가 소비하는 0폭 marker 또는 본문과 분리된 필드 경계인지.
 /// 필드 경계는 그릴 글자가 없고, 표시값은 인접한 일반 run 이 이미 담는다.
 ///
-/// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
+/// allowlist 는 **실제 consumer 와 동일한 match** —
 /// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
 /// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
 /// Positioned PageNumber is consumed by emit_page_numbers via the derived
@@ -784,7 +784,7 @@ fn is_replay_consumed_marker(content: &RunContent) -> bool {
         ))
 }
 
-/// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
+/// 쪽번호 합성 (실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
 ///
 /// 표시 문자열은 sideChar 장식을 어간 공백으로 감싼다 (`- 1 -` — 한컴 PDF
 /// 실측 어간 5.08pt = 10pt 공백 폭). 스타일은 전용 "쪽 번호"(Page Number)
@@ -848,7 +848,7 @@ fn emit_page_numbers(
     }
 }
 
-/// 머리말/꼬리말 오버레이 (규칙 §5 R6 + W5 §8 실측).
+/// 머리말/꼬리말 오버레이 (한컴 저장 문서 실측).
 ///
 /// 본문 쪽이 확정된 **뒤** 섹션의 각 쪽에 밴드-상대 캐시를 재생한다. 밴드는
 /// 앵커일 뿐이다: 클립도, 본문 리플로도 없다 (한컴 저장 문서 실측 —
@@ -869,7 +869,7 @@ fn overlay_headers_footers(
     if section.headers.is_empty() && section.footers.is_empty() {
         return Ok(());
     }
-    // §19.17 F2 (X4): 머리말/꼬리말은 앵커 문단이 놓인 쪽부터 적용된다 —
+    // 머리말/꼬리말은 앵커 문단이 놓인 쪽부터 적용된다 —
     // 앞 쪽에는 없다(x4b). 앵커 문단의 쪽을 재생이 정하지 못했으면(캐시 없는
     // 문단) 근사하지 않고 거부한다.
     let start_page = |kind: &'static str,
@@ -1081,9 +1081,9 @@ fn replay_band_item(
             warnings.push(PdfWarning::ParagraphSkipped { location });
             continue;
         };
-        // W1b admission (§1g v5 변경 1): 밴드는 대응 consumer 가 없어
+        // admission: 밴드는 대응 consumer 가 없어
         // allowlist 가 **비어 있다** — 문단 전체에서 비텍스트 run 은 전부
-        // W2(밴드 이미지 렌더) 전 InvalidCache.
+        // 밴드 이미지 렌더를 지원하기 전에는 InvalidCache.
         if para.runs.iter().any(|r| {
             r.content.plain_text().is_none() && !hwpforge_core::field_view::is_boundary(&r.content)
         }) {
@@ -1140,7 +1140,7 @@ fn replay_section(
     let ps = &section.page_settings;
     let page_width = ps.width.as_i32();
     let page_height = ps.height.as_i32();
-    // body 원점 (규칙 §0): top = margin_top + header_margin, left = margin_left.
+    // body 원점: top = margin_top + header_margin, left = margin_left.
     let body_top = ps.margin_top.as_i32() + ps.header_margin.as_i32();
     let body_left = ps.margin_left.as_i32();
     let body_height =
@@ -1213,9 +1213,9 @@ fn replay_section(
                     location,
                 });
             }
-            // 이미지 에픽 게이트 2 Critical#5 선행 수리: `[Image, Table]` 등
-            // 비텍스트 혼합 host 는 지금까지 표만 재생하고 나머지 객체를
-            // **무진단 폐기**했다 — 미지원 종류는 fail-closed 로 거부한다.
+            // `[Image, Table]` 등 비텍스트 혼합 host 는 이전에 표만 재생하고
+            // 나머지 객체를 **무진단 폐기**했다. 무음 누락을 막기 위해
+            // 미지원 종류는 fail-closed 로 거부한다.
             // (재시작/감춤 marker 는 host 쪽 이벤트로 소비되므로 예외.)
             if para.runs.iter().any(|r| {
                 !matches!(r.content, RunContent::Table(_))
@@ -1327,11 +1327,11 @@ fn replay_section(
         let first_breaks = prev_v.is_some_and(|p| first_v == 0 || first_v < p);
         check_table_anchor(&mut pending_table_anchor, first_v, first_breaks)?;
 
-        // W5 w1b (§9e): 앵커형(treat_as_char=false) 이미지는 줄 흐름 밖
-        // 오버레이다 — 줄 원자로 귀속하지 않고 문단에 앵커해 절대 배치한다
-        // (§9d High-1). 본문 회피는 lineseg(horzpos/horzsize)에 이미 구워져
-        // 있으므로 렌더 산술은 `rel_to + offset` 절대 좌표뿐(§9a). y 는
-        // **마커 소속 lineseg vertpos** 로 확정하고(§10i — PARA 의 실기준),
+        // 앵커형(treat_as_char=false) 이미지는 줄 흐름 밖
+        // 오버레이다 — 줄 원자로 귀속하지 않고 문단에 앵커해 절대 배치한다.
+        // 본문 회피는 lineseg(horzpos/horzsize)에 이미 구워져
+        // 있으므로 렌더 산술은 `rel_to + offset` 절대 좌표뿐이다. y 는
+        // **마커 소속 lineseg vertpos** 로 확정하고(PARA 의 실기준),
         // 어느 쪽에 앵커할지는 그 줄의 line_idx 처리(쪽분할 후)에서 정한다.
         // 조합 외/다중/혼합의 **구체 typed 오류가 아래 일반 admission 보다
         // 먼저** 나가도록 여기서 호출한다 — floor-search 의 textpos 오름차순
@@ -1347,18 +1347,18 @@ fn replay_section(
             warnings,
         )?;
 
-        // W1b admission (§1g v5 변경 1): 검사는 선두 prefix 가 아니라
-        // **문단 전체** — W1b 좌표 정규화로 marker 문단의 textpos 는
+        // admission: 검사는 선두 prefix 가 아니라
+        // **문단 전체** — 가시 좌표 정규화로 marker 문단의 textpos 는
         // 신뢰 가능해졌지만, 미렌더 원자(이미지·각주·수식·미지 컨트롤)는
-        // 위치 무관 W2 전 InvalidCache 다 (trailing 이미지가 0폭으로
+        // 렌더를 지원하지 않으면 위치 무관 InvalidCache 다 (trailing 이미지가 0폭으로
         // 무음 누락되는 경로 차단). 허용 = replay 가 실제 소비하는 0폭
         // marker(Page 재시작·감추기)뿐.
-        // W2b (§4 D1): body 는 **글자취급(treat_as_char) 인라인 이미지**를
-        // 추가 허용한다 — placement None/false 는 보수 거부 유지 (앵커형
-        // 렌더 = W5). 그 외 미렌더 원자는 여전히 InvalidCache.
-        // W4 (§8g): body 는 글자취급(treat_as_char) 인라인 **글상자**도
-        // 추가 허용한다 — 앵커형(treat_as_char=false)은 여전히 거부(W5).
-        // W5 w1b: 지원 조합 앵커 이미지도 제외한다 (위 collect_anchored_images
+        // body 는 **글자취급(treat_as_char) 인라인 이미지**를
+        // 추가 허용한다 — placement None/false 는 보수 거부 유지 (앵커형은
+        // 별도 렌더 경로). 그 외 미렌더 원자는 여전히 InvalidCache.
+        // body 는 글자취급(treat_as_char) 인라인 **글상자**도
+        // 추가 허용한다 — 앵커형(treat_as_char=false)은 여전히 거부.
+        // 지원 조합 앵커 이미지도 제외한다 (위 collect_anchored_images
         // 가 조합 밖·다중·혼합을 이미 typed fail-closed 로 걸렀으므로, 여기
         // 남는 앵커 이미지는 렌더 대상뿐이다).
         if para.runs.iter().any(|r| {
@@ -1380,7 +1380,7 @@ fn replay_section(
         let utf16: Vec<u16> = text.encode_utf16().collect();
         validate_textpos(cache, utf16.len(), &location)?;
 
-        // W2b/W4 (§4 D2 · §8g): 이미지·글상자 문단은 원자 지배 profile 로
+        // 이미지·글상자 문단은 원자 지배 profile 로
         // 줄별 원자를 귀속하고 host 줄 높이 삼중 일치를 검사한다. 이미지와
         // 글상자를 한 문단에 섞은 캐시는 미측정 — fail-closed.
         let has_admitted_images = para.runs.iter().any(|r| is_admitted_inline_image(&r.content));
@@ -1394,7 +1394,7 @@ fn replay_section(
             });
         }
         let line_atoms_override = if has_admitted_images {
-            // 이미지 문단 (W1 §10b): 이미지-지배(img_h==vertsize==textheight)
+            // 이미지 문단: 이미지-지배(img_h==vertsize==textheight)
             // 또는 sub-line(텍스트-지배 줄 + img_h ≤ vertsize) profile 을 받는다.
             // 경계 귀속·sub-line 경계 fail-closed 는 helper 가 이미 처리했으므로
             // 여기선 줄 profile 만 확인한다.
@@ -1418,7 +1418,7 @@ fn replay_section(
             Some(atoms)
         } else if has_admitted_textbox {
             // 글상자 문단: host 줄 vertsize == textheight ==
-            // max(box.height, content_extent + 상하 textMargin) (§8f ①).
+            // max(box.height, content_extent + 상하 textMargin).
             let atoms = build_inline_textbox_line_atoms(input, para, cache, &location)?;
             for (li, line) in atoms.iter().enumerate() {
                 for atom in line {
@@ -1457,7 +1457,7 @@ fn replay_section(
 
         let line_count = cache.lines.len();
         for (line_idx, seg) in cache.lines.iter().enumerate() {
-            // 쪽분할 (규칙 §2): 첫 줄 제외 v==0 ∨ v<prev → 새 쪽.
+            // 쪽분할: 첫 줄 제외 v==0 ∨ v<prev → 새 쪽.
             let v = seg.vertpos;
             if let Some(prev) = prev_v {
                 if v == 0 || v < prev {
@@ -1469,10 +1469,10 @@ fn replay_section(
                 para_pages[para_idx] = Some(pages.len() - 1);
             }
 
-            // W5 w1b + §10i: 앵커 이미지는 **마커 소속 줄**이 안착한 쪽에
+            // 앵커 이미지는 **마커 소속 줄**이 안착한 쪽에
             // 배경으로 붙인다 (y 는 collect_anchored_images 가 그 줄의
             // vertpos 로 확정 — vertpos 는 쪽-상대라 쪽 귀속과 짝이어야
-            // 좌표계가 맞는다, §11b F3 High).
+            // 좌표계가 맞는다).
             if line_idx == anchor_line_idx && !pending_anchored.is_empty() {
                 if let Some(page) = pages.last_mut() {
                     page.anchored_images.extend(pending_anchored.iter().cloned());
@@ -1554,7 +1554,7 @@ fn check_table_anchor(
     Ok(())
 }
 
-/// textpos 형식 정합: 단조증가 + 텍스트 길이 이내 (규칙 §3 — 스테일 방어 아님).
+/// textpos 형식 정합: 단조증가 + 텍스트 길이 이내 (스테일 방어 아님).
 fn validate_textpos(
     cache: &hwpforge_core::layout::LayoutCache,
     utf16_len: usize,
@@ -1586,8 +1586,8 @@ fn validate_textpos(
 pub(crate) struct ClassifiedObject {
     /// 이미지-지배 경계 귀속용 host 줄 기대 높이 (삼중 일치 검사값).
     pub height: i32,
-    /// sub-line 이미지처럼 **텍스트-지배 줄에 얹힐 수 있는** 객체인지
-    /// (W1 §10c-2). 참이면 줄 경계(공유 offset)에서 높이-profile 이 어느
+    /// sub-line 이미지처럼 **텍스트-지배 줄에 얹힐 수 있는** 객체인지.
+    /// 참이면 줄 경계(공유 offset)에서 높이-profile 이 어느
     /// 후보 줄에도 안 맞을 때 `InvalidCache` 대신 typed
     /// `UnsupportedContent { kind: "sub-line image on line boundary" }` 로
     /// fail-closed 한다 (집계 식별용). 글상자 등 항상 줄-지배 객체는 거짓.
@@ -1597,23 +1597,23 @@ pub(crate) struct ClassifiedObject {
 }
 
 /// 문단의 원자(텍스트 span·인라인 객체)를 캐시 줄별로 귀속하는 공용 엔진
-/// (W2b §4 D2 · W4 §8g — 인라인 이미지·글상자가 이 skeleton 을 공유한다).
+/// (인라인 이미지·글상자가 이 skeleton 을 공유한다).
 ///
 /// 단일 pass: run 순서대로 가시(UTF-16) 커서를 전진시키며 텍스트는 줄
 /// 경계로 분할한다. `classify` 가 [`ClassifiedObject`] 를 돌려준 run 은 **폭
 /// 0 인 인라인 객체**로, 커서가 속한 줄에 문서 순서 그대로 삽입한다. `None`
 /// 은 텍스트/marker 로 취급한다. 줄 구간 = non-last `[start, end)` · **last
-/// `[start, end]`** (trailing 객체·객체-only 문단 귀속 — §4 H3).
+/// `[start, end]`** (trailing 객체·객체-only 문단 귀속).
 ///
 /// fail-closed (줄 경계 = 첫 줄이 아닌 줄 시작과 offset 이 같을 때):
-/// - 높이-profile 삼중 일치가 **유일**한 후보 줄로 귀속 (이미지-지배 — §7 v2).
+/// - 높이-profile 삼중 일치가 **유일**한 후보 줄로 귀속 (이미지-지배).
 /// - two-match = `InvalidCache` (모호).
 /// - zero-match = **sub-line 이미지면**(`sub_line_capable`) typed
-///   `UnsupportedContent`("sub-line image on line boundary" — C1 §10c-2),
+///   `UnsupportedContent`("sub-line image on line boundary"),
 ///   그 외에는 `InvalidCache` (추측 금지 — W1b 영폭 축약 사각).
 ///
 /// sub-line 이미지는 **줄-중간**(offset 이 어느 줄 시작과도 다름)에서만
-/// admit 되고, 그 배치는 렌더 [`crate::render`] §10c-2 공식이 준다.
+/// admit 되고, 그 배치는 렌더 [`crate::render`] 의 이미지 높이 기반 공식이 준다.
 ///
 /// 전제: `cache.lines` 의 textpos 는 단조 (본문 경로는 `validate_textpos`
 /// 가 선행 보장).
@@ -1651,14 +1651,14 @@ pub(crate) fn build_inline_object_line_atoms(
 
     let mut cursor = 0usize;
     // 동일 boundary offset 다중 객체의 판별 결과 추적 — 서로 다른 후보
-    // 줄로 갈리면 줄 순회 방출이 문서 순서를 뒤집는다 (r2 High#1).
+    // 줄로 갈리면 줄 순회 방출이 문서 순서를 뒤집는다.
     let mut boundary_target: Option<(usize, usize)> = None;
     for run in &para.runs {
         if let Some(ClassifiedObject { height, sub_line_capable, atom }) = classify(run)? {
             let li = if let Some(i) = (1..line_count).find(|&i| starts[i] == cursor) {
                 // 경계 (offset == non-first 줄 시작): 후보 = 줄 i−1(끝)·
                 // 줄 i(시작). 높이-profile 삼중 일치가 **유일**한 쪽으로
-                // 귀속 (캐시가 기록한 실측 — §7 v2), 0/2개 매치 =
+                // 귀속 (캐시가 기록한 실측), 0/2개 매치 =
                 // fail-closed (추측 금지).
                 let prev_seg = &cache.lines[i - 1];
                 let next_seg = &cache.lines[i];
@@ -1670,7 +1670,7 @@ pub(crate) fn build_inline_object_line_atoms(
                     // 지배 profile 어디에도 안 맞음. sub-line 이미지가 경계에
                     // 정확히 얹혔고 인접 줄이 이를 sub-line 으로 받을 수 있으면
                     // (텍스트-지배 + img_h ≤ 줄높이) 귀속이 모호하다 —
-                    // C1(§10c-2): 줄-중간만 개방하고 경계는 typed fail-closed
+                    // 줄-중간만 개방하고 경계는 typed fail-closed
                     // (집계 식별용 신규 kind). 이미지가 어느 후보 줄에도 sub-line
                     // 으로도 안 맞으면(과대 이미지 등) 기존 InvalidCache 유지.
                     (false, false)
@@ -1781,7 +1781,7 @@ fn refuse_object_out_margin(
 }
 
 /// A caption that holds a caption number (`Control::AutoNumber`) is
-/// refused (§19.16 J): captions of pictures and text boxes are
+/// refused: captions of pictures and text boxes are
 /// not drawn, so the number would vanish from a successful render.
 /// 이것을 실패시키는 것: 이 거부를 지우기(`caption_number_in_a_caption_is_refused`).
 pub(crate) fn refuse_caption_number(
@@ -1818,8 +1818,8 @@ pub(crate) fn refuse_caption_number(
     Ok(())
 }
 
-/// 그림의 자르기를 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]` 로 (§19.20
-/// PDF-v3, P18). 자르기는 그림 좌표계(`image_extent`)에 있으므로 범위를
+/// 그림의 자르기를 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]` 로 변환한다.
+/// 자르기는 그림 좌표계(`image_extent`)에 있으므로 범위를
 /// 모르면 사상할 수 없어 거부한다 — 화소 크기로 대신하지 않는다(`imgDim` ≠
 /// 화소×75 가 대부분). 빈 자르기도 거부. 이것을 실패시키는 것: 범위 나눗셈을
 /// 지우기 / 범위 모름 거부를 지우기 (`picture_crop_fractions`).
@@ -1838,7 +1838,7 @@ fn picture_crop(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<
     Ok(Some([l / ew, t / eh, r / ew, b / eh]))
 }
 
-/// 인라인 이미지 문단의 원자를 캐시 줄별로 귀속한다 (W2b §4 D2).
+/// 인라인 이미지 문단의 원자를 캐시 줄별로 귀속한다.
 ///
 /// [`build_inline_object_line_atoms`] 에 이미지 classifier(기대 높이 =
 /// `image.height`)를 결선한 얇은 래퍼다.
@@ -1880,7 +1880,7 @@ pub(crate) fn build_cell_image_line_atoms(
     })
 }
 
-/// 인라인 글상자 문단의 원자를 캐시 줄별로 귀속한다 (W4 §8g).
+/// 인라인 글상자 문단의 원자를 캐시 줄별로 귀속한다.
 ///
 /// [`build_inline_object_line_atoms`] 에 글상자 classifier 를 결선한다 —
 /// 각 글상자 원자의 host 줄 기대 높이 = `max(box.height, content_extent +
@@ -1913,7 +1913,7 @@ pub(crate) fn build_inline_textbox_line_atoms(
     })
 }
 
-/// 글상자 내부 문단의 원자를 캐시 줄별로 귀속한다 (W5 w1a — §9g).
+/// 글상자 내부 문단의 원자를 캐시 줄별로 귀속한다.
 ///
 /// [`build_inline_object_line_atoms`] 에 **글상자-내부** classifier 를 결선한
 /// 얇은 래퍼다. body 의 [`build_inline_image_line_atoms`] 와 달리 텍스트/
@@ -1924,10 +1924,10 @@ pub(crate) fn build_inline_textbox_line_atoms(
 ///   — body 인라인 이미지와 동일 profile·admission 관례([`is_admitted_inline_image`]
 ///   가 body 에서, [`is_admitted_inline_textbox`] 의 `None` 허용이 글상자에서).
 /// - **앵커형** 이미지(`treat_as_char == false`)는 `"anchored object inside
-///   text box"` 로 거부한다 — W5 w1b(앵커 렌더) 대상임을 CLI cause 집계에서
-///   식별 가능하게 kind 를 분리한다 (§9b w1b).
+///   text box"` 로 거부한다 — 앵커 렌더 대상임을 CLI cause 집계에서
+///   식별 가능하게 kind 를 분리한다.
 /// - 중첩 글상자·표·기타 컨트롤은 `"nested object inside text box"` 를 유지한다
-///   (fixture 부재 — §8f ⑤).
+///   (fixture 부재).
 ///
 /// 전제: `cache.lines` 의 textpos 는 단조 (호출부 [`build_line_text_box`] 가
 /// `validate_textpos` 로 선행 보장).
@@ -1956,13 +1956,13 @@ pub(crate) fn build_textbox_inner_line_atoms(
     })
 }
 
-/// Core `Control::TextBox` 를 렌더용 [`LineTextBox`] 로 증류한다 (W4 §8g · W5 w1a).
+/// Core `Control::TextBox` 를 렌더용 [`LineTextBox`] 로 증류한다.
 ///
 /// 내부 문단들의 조판 캐시([`hwpforge_core::layout::LineSeg`])를 **그대로**
 /// 나른 [`TextBoxLine`] 로 옮기고, 테두리·채움([`TextBoxStyle`])과 세로정렬을
 /// 캐리한다. 내부 줄 원자는 body 공용 엔진([`build_textbox_inner_line_atoms`])
-/// 으로 귀속하므로 **글자취급 인라인 이미지**를 담는다 (W5 w1a — §9g). 앵커형
-/// 이미지·중첩 글상자/표·캐시 결손은 fail-closed (§8f ⑤).
+/// 으로 귀속하므로 **글자취급 인라인 이미지**를 담는다. 앵커형
+/// 이미지·중첩 글상자/표·캐시 결손은 fail-closed.
 fn build_line_text_box(
     input: &PdfInput<'_>,
     ctrl: &hwpforge_core::control::Control,
@@ -1986,7 +1986,7 @@ fn build_line_text_box(
     };
     refuse_caption_number(caption.as_ref(), location)?;
     refuse_object_out_margin(placement.as_ref(), location)?;
-    // §19.22 D4: the layout uses `TEXTBOX_TEXT_MARGIN` (283) on every side;
+    // The layout uses `TEXTBOX_TEXT_MARGIN` (283) on every side;
     // another margin would put the text in the wrong place.
     // 이것을 실패시키는 것: 이 거부를 지우기(`text_box_margin_other_than_283_is_refused`).
     if text_margin.is_some_and(|m| {
@@ -2007,14 +2007,14 @@ fn build_line_text_box(
         };
         let utf16: Vec<u16> = para.text_content().encode_utf16().collect();
         validate_textpos(cache, utf16.len(), &inner_loc)?;
-        // W5 w1a (§9g): 내부 인라인 이미지를 body 공용 엔진으로 줄별 귀속한다
+        // 내부 인라인 이미지를 body 공용 엔진으로 줄별 귀속한다
         // (visible textpos 축 — 디코더가 wire marker 유닛을 이미 정규화, 실측
         // [0, 23] = raw 31 − pic 8유닛). 앵커형/중첩은 helper 가 typed fail-closed.
         let atoms_per_line = build_textbox_inner_line_atoms(para, cache, &inner_loc)?;
         let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
         let line_count = cache.lines.len();
         for (li, (seg, line_atoms)) in cache.lines.iter().zip(atoms_per_line).enumerate() {
-            // 줄 profile 검사 (body 와 동일 계약 — W1 §10b): 이미지-지배
+            // 줄 profile 검사 (body 와 동일 계약): 이미지-지배
             // (img_h==vertsize==textheight) 또는 sub-line(텍스트-지배 줄 +
             // img_h ≤ vertsize). 불일치 = 미측정 profile → fail-closed.
             for atom in &line_atoms {
@@ -2038,7 +2038,7 @@ fn build_line_text_box(
             });
         }
     }
-    // §10g (F1): 넘침 글상자는 한컴이 **내용에 맞게 확장해** 그린다 —
+    // 넘침 글상자는 한컴이 **내용에 맞게 확장해** 그린다 —
     // overflow fixture byte 증거: 재저장 curSz h=12766 = extent 12200 +
     // 2×283 (선언 sz h=4252 아님), 한컴 PDF 는 8줄 전부 테두리 안에 표시.
     // 페인트 채움·클립·vertAlign interior·테두리가 전부 이 단일 필드를
@@ -2046,9 +2046,9 @@ fn build_line_text_box(
     // 동일 산식 `textbox_expected_host_height` 공유 — 이중 산식 금지).
     // 비넘침 박스는 max 가 선언 높이를 그대로 반환한다 (fixture 4종 무변화).
     // 확장 시 interior == extent 라 vertAlign 시프트는 단일 공식에서 0 이
-    // 자동으로 나온다 (§11b F1 — CENTER/BOTTOM 별도 분기 불요).
+    // 자동으로 나온다 (CENTER/BOTTOM 별도 분기 불요).
     let extent = textbox_content_extent(&inner_lines, location)?;
-    // §19.21 H2: 무늬·그러데이션·그림 채우기는 증류가 버린다(원색만 그림) —
+    // 무늬·그러데이션·그림 채우기는 증류가 버린다(원색만 그림) —
     // 단색으로 그리면 가짜 지원이므로 거부한다(렌더는 후속).
     // 이것을 실패시키는 것: 이 거부를 지우기(무늬 상자가 단색으로 그려짐,
     // `text_box_with_a_fill_paint_cannot_draw_is_refused`).
@@ -2061,7 +2061,7 @@ fn build_line_text_box(
             });
         }
     }
-    // §19.20 PDF-v3 (P17): 테두리·채움은 각진 사각형으로만 그린다 — 둥근
+    // 테두리·채움은 각진 사각형으로만 그린다 — 둥근
     // 모서리 글상자는 거부(렌더는 후속).
     // 이것을 실패시키는 것: 이 거부를 지우기
     // (`text_box_with_round_corners_is_refused`).
@@ -2081,7 +2081,7 @@ fn build_line_text_box(
 }
 
 /// Core `ShapeStyle` 에서 [`TextBoxStyle`] 로 원색·굵기만 증류한다
-/// (dash/rotation 등은 Paint `Line` 이 실선만 그리므로 제외 — §8g w4).
+/// (dash/rotation 등은 Paint `Line` 이 실선만 그리므로 제외).
 ///
 /// `fill` 이 `fill_color` 를 덮는다는 Core 계약대로, [`Fill::None`](hwpforge_core::control::Fill::None)
 /// (채우기 없음)이면 `fill_color` 가 있어도 채우지 않는다.
@@ -2227,7 +2227,7 @@ mod tests {
             alignment: Alignment::Left,
             is_last_line: false,
         };
-        // 내부 v축은 문단 경계를 넘어 연속 (0 → 1000, §8a) — 두 번째 줄은
+        // 내부 v축은 문단 경계를 넘어 연속 (0 → 1000) — 두 번째 줄은
         // 이미지 원자 (재귀 표현).
         let inner_image = TextBoxLine {
             seg: seg(0, 1000),
@@ -2284,7 +2284,7 @@ mod tests {
         assert_eq!(tb.inner_lines[1].alignment, Alignment::Center);
     }
 
-    // ── W2b c2: body admission·높이 profile (§4 D1/D2) ──────────
+    // ── body admission·높이 profile ──────────
 
     fn img_seg(textpos: u32, vertpos: i32) -> LineSeg {
         {
@@ -2356,7 +2356,7 @@ mod tests {
         );
     }
 
-    // ── W5 w1b: body 앵커 이미지 렌더 (§9e) ───────────────────────────
+    // ── body 앵커 이미지 렌더 ───────────────────────────
 
     use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
 
@@ -2590,7 +2590,7 @@ mod tests {
     }
 
     /// 지원 조합(Para/Para/Square) 앵커 이미지는 문단에 앵커한 배경으로
-    /// 수집된다 — 줄 원자로 새지 않고, 좌상단 = body 원점 + offset (§9c ①).
+    /// 수집된다 — 줄 원자로 새지 않고, 좌상단 = body 원점 + offset.
     #[test]
     fn body_anchored_image_collected_as_paragraph_placement() {
         // 이미지 앞에 텍스트가 흐른다 (Square wrap 정상 케이스). 캐시는
@@ -2633,7 +2633,7 @@ mod tests {
     }
 
     /// 음수 vert_offset (문단 위로 돌출) — doc 좌표 그대로 (clip 없음).
-    /// corpus 8/14 가 음수 (§9d High-2). 두 번째 문단이라 first_v>0.
+    /// corpus 8/14 가 음수. 두 번째 문단이라 first_v>0.
     #[test]
     fn body_anchored_image_negative_vert_offset_protrudes_above() {
         let mut p0 = para_with_cache("첫 문단", vec![seg(0, 0)]);
@@ -2688,7 +2688,7 @@ mod tests {
         assert_eq!(layout.pages[0].anchored_images[0].x, body_left + 1200);
     }
 
-    /// 조합 밖(Paper rel) 앵커 이미지 = typed fail-closed (§9b).
+    /// 조합 밖(Paper rel) 앵커 이미지 = typed fail-closed.
     #[test]
     fn body_anchored_image_paper_rel_is_typed_rejection() {
         let mut para = Paragraph::with_runs(
@@ -2832,7 +2832,7 @@ mod tests {
         assert_eq!(layout.pages[1].anchored_images.len(), 1, "앵커는 2쪽");
     }
 
-    /// §10i (F3): PARA 앵커 y 는 문단 첫 줄이 아니라 **마커 소속 줄** 기준
+    /// PARA 앵커 y 는 문단 첫 줄이 아니라 **마커 소속 줄** 기준
     /// — showcase CTM 판별(마커 둘째 줄, 정확히 1줄 차)의 축소판.
     #[test]
     fn body_anchored_image_y_uses_marker_line() {
@@ -2869,7 +2869,7 @@ mod tests {
         );
     }
 
-    /// §11b F3: 마커 가시 좌표 == lineseg 시작(줄 경계)이면 뒤 세그먼트
+    /// 마커 가시 좌표 == lineseg 시작(줄 경계)이면 뒤 세그먼트
     /// 채택 + typed 경고 표면화 (한컴 선택 byte-ground 전 잠정 규약).
     #[test]
     fn body_anchored_image_marker_on_line_boundary_warns_and_uses_later_line() {
@@ -2903,7 +2903,7 @@ mod tests {
         );
     }
 
-    /// §11b F3 High: 다중 쪽 문단에서 마커가 뒤쪽 줄이면 이미지는 **마커
+    /// 다중 쪽 문단에서 마커가 뒤쪽 줄이면 이미지는 **마커
     /// 줄이 안착한 쪽**에 귀속된다 (vertpos 는 쪽-상대 — 쪽 귀속과 y 가
     /// 같은 줄에서 나와야 좌표계가 맞는다).
     #[test]
@@ -2982,7 +2982,7 @@ mod tests {
         }
     }
 
-    /// §19.21 H2 (x6 F1·F3·F5): 무늬·그러데이션·그림 채우기 글상자는 거부,
+    /// 무늬·그러데이션·그림 채우기 글상자는 거부,
     /// 단색(F2)은 그린다. 이것을 실패시키는 것: 거부를 지우기(무늬가 단색으로).
     #[test]
     fn text_box_with_a_fill_paint_cannot_draw_is_refused() {
@@ -3105,7 +3105,7 @@ mod tests {
         }
     }
 
-    /// §19.22 D4: a text box whose margin is not 283 on every side is
+    /// A text box whose margin is not 283 on every side is
     /// refused (the layout uses 283); 283 on every side, carried as `Some`
     /// by the decoders, is drawn.
     ///
@@ -3281,7 +3281,7 @@ mod tests {
         assert!(with_ratio(Some(0)).is_ok());
     }
 
-    /// 순수 산술 잠금 — fixture 실측(§8f ①): basic 11339(=box.height) ·
+    /// 순수 산술 잠금 — fixture 실측: 기본형 11339(=box.height) ·
     /// valign 7087(=box.height) · overflow 12766(=extent 12200 + 566 > box 4252).
     #[test]
     fn textbox_expected_host_height_matches_fixture_measurements() {
@@ -3475,7 +3475,7 @@ mod tests {
     }
 
     /// 중첩 글상자(글상자 안 글상자)·표·기타 컨트롤은 "nested object inside
-    /// text box" 를 유지한다 (fixture 부재 — §8f ⑤, W5 w1a 무관).
+    /// text box" 를 유지한다 (fixture 부재, 내부 인라인 이미지 지원과 무관).
     #[test]
     fn textbox_nested_control_is_fail_closed() {
         use hwpforge_foundation::VerticalAlign;
@@ -3577,7 +3577,7 @@ mod tests {
         );
     }
 
-    // ── W2b c1: build_inline_image_line_atoms 귀속 edge (§4 D2) ─────────
+    // ── build_inline_image_line_atoms 귀속 edge ─────────
 
     fn inline_img(key: &str) -> Run {
         use hwpforge_core::image::{Image, ImageFormat};
@@ -3645,7 +3645,7 @@ mod tests {
     }
 
     /// 글상자-내부 helper 는 body 와 **동일 축(가시 textpos)** 으로 분할한다.
-    /// textbox_inline_image-base fixture 실측 그대로: "그림 앞 "(5) + 이미지 +
+    /// 한컴이 저장한 인라인 이미지 포함 글상자 문서 실측 그대로: "그림 앞 "(5) + 이미지 +
     /// " 그림 뒤 …" 를 줄 경계 [0,23)/[23,42] 로 자른다 (디코드 캐시 실측
     /// [0, 23] = raw wire 31 − pic 8유닛). 축이 어긋나면(원시 31 로 자르면)
     /// 이 정확 텍스트 대조가 큰 소리로 실패한다.
@@ -3678,7 +3678,7 @@ mod tests {
     #[test]
     fn atoms_trailing_image_belongs_to_last_line_inclusive() {
         // 텍스트 4유닛 + 문단 끝 이미지 (offset 4 == 마지막 줄 end) —
-        // last 줄 [start, end] inclusive 귀속 (§4 H3).
+        // last 줄 [start, end] inclusive 귀속.
         let mut para = Paragraph::with_runs(
             vec![Run::text("텍스트끝", CharShapeIndex::new(0)), inline_img("BinData/t.png")],
             ParaShapeIndex::new(0),
@@ -3716,7 +3716,7 @@ mod tests {
     #[test]
     fn atoms_image_on_non_first_line_start_is_invalid_cache() {
         // 이미지 offset 3 == 줄 2 시작 3 — W1b 영폭 축약상 앞/뒤 줄
-        // 귀속 불가 → InvalidCache (§4 H3/H4 선계약).
+        // 귀속 불가 → InvalidCache.
         let mut para = Paragraph::with_runs(
             vec![
                 Run::text("가나다", CharShapeIndex::new(0)),
@@ -3834,7 +3834,7 @@ mod tests {
     #[test]
     fn atoms_boundary_multi_image_cross_target_is_invalid_cache() {
         // 같은 경계에서 이미지 1=next(6000)·이미지 2=prev(1000) — 줄 순회
-        // 방출이 문서 순서를 뒤집으므로 거부 (r2 High#1).
+        // 방출이 문서 순서를 뒤집으므로 거부.
         let mut para = Paragraph::with_runs(
             vec![
                 Run::text("가나다", CharShapeIndex::new(0)),
@@ -3852,7 +3852,7 @@ mod tests {
         );
     }
 
-    // ── W1 sub-line 인라인 이미지 (§10) ──────────────────────────────
+    // ── sub-line 인라인 이미지 ──────────────────────────────
 
     #[test]
     fn line_admits_image_covers_dominant_and_subline() {
@@ -4040,7 +4040,7 @@ mod tests {
 
     #[test]
     fn baseline_is_body_top_plus_v_plus_baseline() {
-        // 규칙 §1: baseline = body_top + v + lineseg.baseline (전부 정수합).
+        // baseline = body_top + v + lineseg.baseline (전부 정수합).
         let doc = doc_of(vec![para_with_cache("본문", vec![seg(0, 0), seg(2, 1600)])]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         assert_eq!(layout.pages.len(), 1);
@@ -4053,7 +4053,7 @@ mod tests {
 
     #[test]
     fn v_reset_starts_new_page() {
-        // 규칙 §2: v < prev → 새 쪽 (headerfooter 42줄/쪽 실측 패턴의 최소형).
+        // v < prev → 새 쪽 (머리말·꼬리말 문서의 42줄/쪽 실측 패턴의 최소형).
         let doc = doc_of(vec![
             para_with_cache("첫쪽", vec![seg(0, 0), seg(2, 1600)]),
             para_with_cache("둘째쪽", vec![seg(0, 0)]), // v 리셋
@@ -4066,7 +4066,7 @@ mod tests {
 
     #[test]
     fn textpos_splits_line_text_by_utf16() {
-        // 규칙 §1: 줄분할 = textpos (UTF-16), 뒤따르는 공백은 앞 줄 소속.
+        // 줄분할 = textpos (UTF-16), 뒤따르는 공백은 앞 줄 소속.
         let doc = doc_of(vec![para_with_cache("가나다 라마바", vec![seg(0, 0), seg(4, 1600)])]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         let lines = &layout.pages[0].lines;
@@ -4406,7 +4406,7 @@ mod tests {
     #[test]
     fn page_starts_on_warns_even_without_headers_or_footers() {
         // PageStartsOn 은 페이지네이션 속성 — 머리말/꼬리말
-        // 유무와 무관하게 무조건 표면화돼야 한다 (§9 b0).
+        // 유무와 무관하게 무조건 표면화돼야 한다.
         let mut section = Section::with_paragraphs(body_pages(1), PageSettings::a4());
         section.begin_num =
             Some(BeginNum { page_starts_on: PageStartsOn::Even, ..BeginNum::default() });
@@ -4469,7 +4469,7 @@ mod tests {
             .iter()
             .map(|p| p.page_number.as_ref().expect("pagenum").text.as_str())
             .collect();
-        // §8c 실측: 장식은 어간 공백으로 감싼 "- n -" 형태.
+        // 실측: 장식은 어간 공백으로 감싼 "- n -" 형태.
         assert_eq!(texts, vec!["- 1 -", "- 2 -", "- 3 -"]);
         let ps = PageSettings::a4();
         let anchor = ps.height.as_i32() - ps.margin_bottom.as_i32();
@@ -4496,7 +4496,7 @@ mod tests {
 
     #[test]
     fn page_number_style_comes_from_dedicated_char_style() {
-        // §8c: 출처 = "쪽 번호" CHAR 스타일 (문서 기본 아님 — fixture 실측).
+        // 출처 = "쪽 번호" CHAR 스타일 (문서 기본 아님 — fixture 실측).
         struct PageNumStyles;
         impl StyleLookup for PageNumStyles {
             fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex> {
@@ -4638,9 +4638,9 @@ mod tests {
     #[test]
     fn non_page_new_number_is_rejected_not_silently_ignored() {
         use hwpforge_core::control::{Control, NewNumberKind};
-        // W1b (§1g v5 변경 1): replay 소비자가 없는 NewNumber kind 는
+        // replay 소비자가 없는 NewNumber kind 는
         // "무시"가 아니라 InvalidCache — 소비자와 allowlist 의 match 가
-        // 갈라지면 무음 드롭이 부활한다 (R4 Critical).
+        // 갈라지면 무음 드롭이 부활한다.
         let mut p = Paragraph::with_runs(
             vec![
                 Run::control(
@@ -4803,7 +4803,7 @@ mod tests {
 
     #[test]
     fn table_host_with_image_fails_closed_instead_of_silent_discard() {
-        // 이미지 에픽 게이트 2 Critical#5: [Image, Table] host 는 이전엔 표만
+        // [Image, Table] host 는 이전엔 표만
         // 그리고 이미지를 경고 없이 버렸다 — fail-closed 로 잠근다.
         use hwpforge_core::image::{Image, ImageFormat};
         use hwpforge_core::table::Table;
@@ -4951,7 +4951,7 @@ mod tests {
         p
     }
 
-    // ── W3 w2: 셀 인라인 이미지 admission (§7 v2 D1·replay) ─────
+    // ── 셀 인라인 이미지 admission·replay ─────
 
     fn img_cell_table(paragraphs: Vec<Paragraph>) -> Table {
         Table::new(vec![TableRow::new(vec![TableCell::new(
@@ -4963,7 +4963,7 @@ mod tests {
 
     #[test]
     fn cell_extent_uses_max_bottom_not_last_line() {
-        // W3 w3 (§7 r2 fold-in): 앞줄 큰 이미지 bottom(5000)이 마지막
+        // 앞줄 큰 이미지 bottom(5000)이 마지막
         // 줄 bottom(2600)보다 큰 캐시 — extent 는 max-bottom 이어야
         // 행높이 누락이 없다 (정상 캐시는 last==max 라 동치).
         let mut cell_para = Paragraph::with_runs(
@@ -5001,7 +5001,7 @@ mod tests {
     #[test]
     fn cell_image_only_paragraph_reaches_helper() {
         // 빈 text_content 라도 admitted 이미지 문단은 continue 전에
-        // helper 로 분기해야 한다 (r2 #4).
+        // helper 로 분기해야 한다.
         let mut cell_para =
             Paragraph::with_runs(vec![inline_img("BinData/only.png")], ParaShapeIndex::new(0));
         cell_para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
@@ -5046,7 +5046,7 @@ mod tests {
 
     #[test]
     fn cell_textbox_stays_fail_closed() {
-        // 셀 내부 글상자는 W4 범위 밖 (fixture 부재 — §8g 백로그): body 는
+        // 셀 내부 글상자는 미지원 (fixture 부재): body 는
         // 열렸어도 셀 admission(scan_cell_contents)은 닫힌 채여야 한다.
         use hwpforge_foundation::VerticalAlign;
         let mut cell_para = Paragraph::with_runs(
@@ -5098,7 +5098,7 @@ mod tests {
     #[test]
     fn cell_table_mixed_with_inline_image_rejected() {
         // `[Table+Image]` 혼합 = hosted-table replay 가 문단을 skip 해
-        // 이미지가 무음 폐기됨 — 명시 거부 (r2 #2).
+        // 이미지가 무음 폐기됨 — 명시 거부.
         let mut cell_para = Paragraph::with_runs(
             vec![
                 Run::table(one_cell_cached_table(), CharShapeIndex::new(0)),
@@ -5120,7 +5120,7 @@ mod tests {
     #[test]
     fn cell_image_height_mismatch_is_fatal_even_with_warn_and_skip() {
         // 셀 캐시 오류는 행높이·앵커가 의존하므로 표-fatal — 기본
-        // WarnAndSkip 에서도 문서 전체 Err (r2 #9, C4 계약).
+        // WarnAndSkip 에서도 문서 전체 Err.
         let mut cell_para = Paragraph::with_runs(
             vec![Run::text("셀 ", CharShapeIndex::new(0)), inline_img("BinData/tall.png")],
             ParaShapeIndex::new(0),
@@ -5325,7 +5325,7 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 표 admission 비교에서 네 필드 중 하나를 빼기(그
     /// 필드만 켠 표가 그려진다).
-    /// §19.22 D3: a cell whose lines are squeezed or kept is refused — the
+    /// A cell whose lines are squeezed or kept is refused — the
     /// renderer cannot squeeze a line, with or without the layout cache (the
     /// cells here have a valid one, and a line wider than the cell would only
     /// be warned about) — in a body table and in a nested one; a breaking
@@ -5519,7 +5519,7 @@ mod tests {
 
     #[test]
     fn missing_cache_warns_and_skips_by_default() {
-        // 계획 §3: 기본 WarnAndSkip — 에픽 "fill/set-cell 지원(경고)" 계약.
+        // 기본 WarnAndSkip — "fill/set-cell 지원(경고)" 계약.
         let mut no_cache = Paragraph::with_runs(
             vec![Run::text("편집됨", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
@@ -5549,7 +5549,7 @@ mod tests {
 
     #[test]
     fn section_without_any_renderable_cache_is_rejected() {
-        // 계획 §3 하한: layout_carry scan-실패 fail-open 산출물·순수 생성물 방어.
+        // 캐시 수용 하한: layout_carry scan-실패 fail-open 산출물·순수 생성물 방어.
         let doc = doc_of(vec![Paragraph::with_runs(
             vec![Run::text("무캐시", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
@@ -5620,7 +5620,7 @@ mod tests {
 
     #[test]
     fn trailing_non_text_run_is_rejected_before_w2() {
-        // W1b (§1g v5 변경 1): 검사는 문단 전체 — trailing 각주도 W2 전
+        // 검사는 문단 전체 — trailing 각주도 렌더를 지원하기 전에는
         // InvalidCache 다 (종전 "경고+생략"은 미렌더 원자의 무음 누락).
         let mut para = para_with_cache("본문", vec![seg(0, 0)]);
         para.add_run(Run::control(

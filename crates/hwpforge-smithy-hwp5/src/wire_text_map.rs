@@ -369,7 +369,7 @@ impl TokenLedger {
     }
 
     /// `wire` 가 필드 안(필드 시작 < `wire` < 필드 끝 컨트롤의 끝, 8 유닛)인지
-    /// (S22 설계 3.3). 그런 줄은 캐시를 버린다.
+    /// 판정한다. 그런 줄은 캐시를 버린다.
     pub(crate) fn inside_field(&self, wire: u32) -> bool {
         let index = self.field_index.get_or_init(|| {
             #[cfg(test)]

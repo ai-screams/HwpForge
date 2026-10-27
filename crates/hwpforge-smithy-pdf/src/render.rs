@@ -1,7 +1,7 @@
 //! 렌더 파이프라인 — replay(source) → shape/align(text) → Paint IR → backend.
 //!
 //! 좌표 흐름: source 는 HWPUNIT 정수, 셰이핑/배분은 분수 HWPUNIT, 이
-//! 모듈의 Paint IR 방출 시점에 pt 로 **1회** 변환한다 (계획 §2).
+//! 모듈의 Paint IR 방출 시점에 pt 로 **1회** 변환한다.
 
 use std::collections::{HashMap, HashSet};
 
@@ -116,7 +116,7 @@ fn is_assetless_picture(key: &str) -> bool {
     key.is_empty()
 }
 
-/// 이미지 원자의 바이트를 interner 경유로 해석한다 (§3 D1/D3).
+/// 이미지 원자의 바이트를 interner 경유로 해석한다.
 ///
 /// `Ok(Some)` = 자산 확보, `Ok(None)` = Degraded 생략(경고 push 완료),
 /// `Err` = Fatal.
@@ -218,10 +218,10 @@ fn resolve_char_style(
 /// admission 행렬([`crate::source::replay_layout`]) + 스타일 결손
 /// ([`PdfError::StyleUnavailable`]) + 폰트 미해결([`PdfError::FontUnresolved`],
 /// fallback 금지) + 백엔드 실패([`PdfError::Backend`]).
-/// 원자별 준비 결과 — 텍스트 셰이핑 · 이미지 자산 (W2a §3 D4) · 인라인
-/// 글상자 (W4 w3 — 폭만 소비하고 배치 단계에서 clip 그룹으로 낮춘다).
+/// 원자별 준비 결과 — 텍스트 셰이핑 · 이미지 자산 · 인라인
+/// 글상자 (폭만 소비하고 배치 단계에서 clip 그룹으로 낮춘다).
 /// 그림 한 개의 페인트 항목. 자르기가 없으면 상자에 그림 전체를, 있으면
-/// (§19.20 PDF-v3, P18) 보이는 부분 `[왼, 위, 오른, 아래]`(그림 전체에 대한
+/// 보이는 부분 `[왼, 위, 오른, 아래]`(그림 전체에 대한
 /// 비율)이 상자를 채우도록 그림 전체를 늘려 놓고 상자로 클립한다: 전체 크기 =
 /// 상자 / (오른 − 왼), 원점 = 상자 − 왼 × 전체. 좌표는 HWPUNIT.
 /// 이것을 실패시키는 것: 클립을 빼거나 늘림·이동 계산을 바꾸는 것
@@ -307,7 +307,7 @@ pub(crate) fn build_paint_pages(
     table: &mut FontTable,
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<Vec<crate::paint::Page>> {
-    // W2a §3 D3: canonical key 당 원본 바이트 1회 복사 (asset interner).
+    // canonical key 당 원본 바이트 1회 복사 (asset interner).
     let mut image_assets: std::collections::HashMap<String, std::sync::Arc<Vec<u8>>> =
         std::collections::HashMap::new();
     // 언어축 불일치 경고는 charPr 당 1회 (Degraded 모드).
@@ -316,8 +316,8 @@ pub(crate) fn build_paint_pages(
     let mut pages = Vec::with_capacity(layout_pages.len());
     for page in layout_pages {
         let mut items = Vec::new();
-        // W5 w1b: 앵커 이미지 = 배경 (본문이 회피하므로 맨 아래에 깔린다 —
-        // §9e z-order). 인라인 이미지와 같은 asset interner 를 공유한다.
+        // 앵커 이미지 = 배경 (본문이 회피하므로 맨 아래에 깔린다).
+        // 인라인 이미지와 같은 asset interner 를 공유한다.
         for ai in &page.anchored_images {
             if is_assetless_picture(&ai.canonical_key) {
                 continue;
@@ -373,7 +373,7 @@ pub(crate) fn build_paint_pages(
             items.extend(line_items);
         }
         // W5-b: 합성 쪽번호 — 전용 스타일 charPr 로 셰이핑해 페이지 폭 중앙 ·
-        // em 하단 앵커에 배치한다 (§8c 실측: baseline = 앵커 − hhea descent).
+        // em 하단 앵커에 배치한다 (실측: baseline = 앵커 − hhea descent).
         if let Some(pn) = &page.page_number {
             let (key, size_hwpunit, color) = resolve_char_style(
                 input,
@@ -469,7 +469,7 @@ const SUBLINE_IMAGE_DESCENT_RATIO_NUM: i64 = 152;
 /// [`SUBLINE_IMAGE_DESCENT_RATIO_NUM`] 의 분모 (per-mille 표현).
 const SUBLINE_IMAGE_DESCENT_RATIO_DEN: i64 = 1000;
 
-/// 인라인 이미지 원자의 세로 top(HWPUNIT)을 유도한다 (W1 §10c-2, r2 상수형).
+/// 인라인 이미지 원자의 세로 top(HWPUNIT)을 상수 비율로 유도한다.
 ///
 /// 두 레짐을 **분기**로 처리한다 — 상수 k 로는 한 공식으로 일반화되지 않으므로
 /// 이미지-지배 경로를 그대로 둔다 (r2 ②, 회귀 위험 0):
@@ -509,7 +509,7 @@ fn render_line(
         return Ok(out); // 빈 줄 — 세로 공간은 캐시가 이미 소비했다.
     }
     // 1) 원자별 준비 — 텍스트는 스타일 조회 + 셰이핑, 이미지는 바이트
-    //    해석(interner) 후 폭만 기여 (W2a §3 D4), 글상자는 폭만 기여 (W4 w3).
+    //    해석(interner) 후 폭만 기여, 글상자도 폭만 기여.
     //
     // 줄 끝 공백은 셰이핑에서 제외한다: 한컴 캐시의 줄 텍스트는 뒤따르는
     // 공백을 앞 줄에 귀속시키지만, 렌더에서 그 공백은 그리지도 JUSTIFY
@@ -569,7 +569,7 @@ fn render_line(
         )?;
         let font = &table.fonts[key.0];
         let shaped = shape_text(&font.data, font.face_index, text, size_hwpunit)?;
-        // tofu 게이트 (W6 §5f): 폰트에 없는 글리프는 조용히 □ 로 찍힌다 —
+        // tofu 게이트: 폰트에 없는 글리프는 조용히 □ 로 찍힌다 —
         // 기본 fatal, Degraded 만 경고 후 렌더.
         if shaped.missing_glyphs > 0 {
             match options.failure_mode {
@@ -621,7 +621,7 @@ fn render_line(
             })
             .sum(),
     };
-    // 줄 넘침 표면화 (W6 §5f): 자간/장평 미carry 로 우리 자연폭이 캐시 줄
+    // 줄 넘침 표면화: 자간/장평 미carry 로 우리 자연폭이 캐시 줄
     // 상자를 넘으면 우측으로 삐져나간다 — 무음 금지.
     let overflow = natural.width - f64::from(line.line_box.horzsize);
     if overflow > 10.0 {
@@ -645,7 +645,7 @@ fn render_line(
                 continue;
             }
             PreparedAtom::Image { canonical_key, data, width, height, crop } => {
-                // 세로 배치 = §10c-2 분기 (이미지-지배는 line_top, sub-line 은
+                // 세로 배치 = 이미지 높이에 따른 분기 (이미지-지배는 line_top, sub-line 은
                 // baseline + 상수 k descent). baseline = baseline_y − top_y.
                 let image_top = inline_image_top(
                     line.top_y,
@@ -771,7 +771,7 @@ fn textbox_border_lines(
 /// `LineTextBox::height`)의 clip 으로 감싼다. `height` 는
 /// `build_line_text_box` 가 이미 확장 높이(`max(선언, extent+2×283)`)로
 /// 구성한 값이다 — 한컴은 overflow 를 자르지 않고 박스를 내용에 맞게
-/// 확장한다 (§10g F1, curSz byte 증거). clip 은 그 확장 경계 밖 잉크
+/// 확장한다 (curSz byte 증거). clip 은 그 확장 경계 밖 잉크
 /// 억제용이다. 박스 채움/테두리 페인트는 호출부(atom arm)가 clip 그룹
 /// 바깥에서 감싼다 (채움 → 내용 → 테두리).
 #[allow(clippy::too_many_arguments)]
@@ -788,7 +788,7 @@ fn build_textbox_clip_group(
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<crate::paint::ClipGroup> {
     let margin = crate::source::TEXTBOX_TEXT_MARGIN;
-    // vertAlign 시프트 — 내부 캐시는 vertAlign 미반영(§8f 실측: 3종 모두
+    // vertAlign 시프트 — 내부 캐시는 vertAlign 미반영(실측: 3종 모두
     // 내부 vertpos=0), 렌더가 시프트한다. interior = box.height − 상하
     // textMargin, content = 내부 content-extent (admission 과 동일 산식).
     // Center/Bottom 은 여유가 음수(overflow)면 0 (상단 밀착).
@@ -1288,7 +1288,7 @@ mod atom_tests {
         pages.remove(0)
     }
 
-    /// clip 사각형 높이 = **확장 박스 높이** (§10g F1): 한컴은 overflow
+    /// clip 사각형 높이 = **확장 박스 높이**: 한컴은 overflow
     /// 글상자를 내용에 맞게 확장해 그린다 (overflow fixture 재저장 curSz
     /// h=12766 = extent 12200 + 2×283 byte 증거 — 선언 4252 아님, 한컴 PDF
     /// 는 8줄 전부 테두리 안에 표시). 확장은 `build_line_text_box` **단일점**
@@ -1361,10 +1361,10 @@ mod atom_tests {
     }
 }
 
-/// sub-line 이미지 세로 배치([`inline_image_top`], 상수 k=152/1000) 산술 잠금
-/// (W1 §10c-2, r2 상수형).
+/// sub-line 이미지 세로 배치([`inline_image_top`], 상수 k=152/1000) 산술 잠금.
+/// 한컴 PDF 와 대조한 상수 비율을 유지한다.
 ///
-/// 값은 subline_image_v2 fixture 의 실측 lineseg(vertsize/baseline)와 이미지
+/// 값은 한컴이 저장한 줄보다 작은 이미지 문서의 실측 lineseg(vertsize/baseline)와 이미지
 /// 높이로부터 상수 k 로 유도한 것이다 — 한컴 PDF CTM 대조 잔차 body 4측점
 /// ≤0.04pt, 글상자 E 는 border-gap 계통차로 ≤0.08pt (e2e 가 대조).
 #[cfg(test)]

@@ -26,7 +26,7 @@ SOURCE_DATE_EPOCH=0 으로 고정해 재생성이 바이트 결정적이다.
   - HwpForgeRank-{R400,R500}.ttf — 같은 (family, Regular) 후보 2개, weight
     ranking (400 최근접) 검증.
   - HwpForgeRankTie-{R350,R450}.ttf — 목표 400 에서 동거리 → ambiguous.
-- W4d fsType fixture (라이선스 게이트 진리표 — §5 H4):
+- fsType fixture (라이선스 게이트 진리표):
   - HwpForgeFsV0Restricted.ttf  (OS/2 v0, fsType=0x0002 — ENGDOS 실물 형태)
   - HwpForgeFsV2NoSubset.ttf    (v2, fsType=0x0100 — bit8 No subsetting)
   - HwpForgeFsV2BitmapOnly.ttf  (v2, fsType=0x0200 — bit9 Bitmap only)
@@ -227,7 +227,7 @@ if __name__ == "__main__":
         weight=450,
     )
 
-    # W4d fsType 진리표 fixture (§5 H4) — 분류기(W4a)는 이들을 정상 해석한다.
+    # fsType 진리표 fixture — 분류기는 이들을 정상 해석한다.
     for suffix, os2_version, fs_type, drop in (
         ("FsV0Restricted", 0, 0x0002, False),
         ("FsV2NoSubset", 2, 0x0100, False),

@@ -1352,6 +1352,7 @@ mod request_schema_tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: StampAction golden 설명을 정리 전 문구로 되돌리기.
     fn stamp_request_schema_matches_baseline() {
         let actual = server_input_schema("hwpforge_stamp");
         assert_eq!(

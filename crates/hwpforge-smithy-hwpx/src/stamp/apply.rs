@@ -20,8 +20,8 @@ use super::detect::BuiltinPattern;
 use super::plan::{plan, StampCandidate};
 use hwpforge_core::field_inventory::FieldInventory;
 
-/// Caller decision for one candidate (design §3-3: the caller map is the
-/// only source of final field names — no auto-derived names, no suffixes).
+/// Caller decision for one candidate. The caller map is the only source of
+/// final field names — no auto-derived names, no suffixes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]

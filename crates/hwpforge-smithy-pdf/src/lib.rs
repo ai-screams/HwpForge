@@ -5,7 +5,7 @@
 //! 재생해 "한컴과 같은 PDF" 를 만든다. 캐시에 없는 것만
 //! 검증된 글꼴 메트릭과 배치 규칙으로 계산한다.
 //!
-//! # 3계층 구조 (에픽 §4)
+//! # 3계층 구조
 //!
 //! ```text
 //! source/   캐시 재생 배치소스 (HWPUNIT i32 정수 산술 — 쪽분할·줄분할·baseline)
@@ -59,8 +59,8 @@ pub struct PdfInput<'a> {
 /// 부분 캐시(편집본) 처리 정책.
 ///
 /// fill/set-cell/stamp 편집본은 `layout_carry` 가 미편집 문단 캐시만 보존해
-/// 편집 문단이 캐시 결손이 된다. 에픽 §4 표는 이런 문서를 "지원(경고)" 로
-/// 명시하므로 기본값은 [`PartialCachePolicy::WarnAndSkip`] 이다.
+/// 편집 문단이 캐시 결손이 된다. 이런 문서는 경고와 함께 지원하도록
+/// 기본값은 [`PartialCachePolicy::WarnAndSkip`] 이다.
 ///
 /// 한계: `Document` 에는 편집 이력이 없어 국소 결손(fill)과 구조 편집(E4)
 /// 결손을 캐시 상태만으로 구분할 수 없다. 렌더 가능 캐시가 0 인 섹션은
@@ -234,7 +234,7 @@ pub enum PdfWarning {
     /// 일치함 — **뒤 세그먼트(새 줄) 기준**으로 배치하고 표면화한다.
     ///
     /// 한컴이 저장한 줄 경계 앵커 그림도 아랫줄 기준임을 바이트 대조로 확인
-    /// (Δ≤0.03pt — §11c). 경고는 경계 케이스 가시화용으로 유지.
+    /// (Δ≤0.03pt). 경고는 경계 케이스 가시화용으로 유지.
     AnchorMarkerOnLineBoundary {
         /// 문서 내 위치.
         location: String,
@@ -297,7 +297,7 @@ pub enum PdfWarning {
         what: &'static str,
     },
     /// "쪽 번호"(Page Number) CHAR 스타일이 스타일 테이블에 없어 문서 기본
-    /// charPr(0) 로 폴백함 — 한컴 실측 출처는 전용 스타일이다 (§8c).
+    /// charPr(0) 로 폴백함 — 한컴 실측 출처는 전용 스타일이다.
     PageNumberStyleFallback {
         /// 섹션 인덱스.
         section: usize,
@@ -313,7 +313,7 @@ pub enum PdfWarning {
         location: String,
     },
     /// 줄 자연폭이 캐시 줄 상자를 초과 — 자간/장평 미carry 갭의 표면화
-    /// (줄 시작은 캐시-정확하나 우측으로 넘칠 수 있음 — corpus 실측 §5f).
+    /// (줄 시작은 캐시-정확하나 우측으로 넘칠 수 있음 — corpus 실측).
     LineOverflow {
         /// 문서 내 위치.
         location: String,
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn partial_cache_policy_defaults_to_warn_and_skip() {
-        // 에픽 §4 표: fill/set-cell 편집본 = "지원(경고)" — 옵션 뒤에 숨기지 않는다.
+        // fill/set-cell 편집본 = "지원(경고)" — 옵션 뒤에 숨기지 않는다.
         assert_eq!(PartialCachePolicy::default(), PartialCachePolicy::WarnAndSkip);
         assert_eq!(PdfOptions::default().partial_cache, PartialCachePolicy::WarnAndSkip);
     }

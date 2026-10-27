@@ -13,7 +13,7 @@
 //! pos·cellSpacing≠0·분할 경계 교차 rowspan·본문보다 큰 행·셀 캐시 결손·
 //! 열폭 미유일)은 전부 fail-closed.
 //!
-//! 표 캡션(D, 설계 4.2.1): 위·아래 캡션을 캡션 문단 캐시대로 그린다.
+//! 표 캡션: 위·아래 캡션을 캡션 문단 캐시대로 그린다.
 //! `H_c` = 캡션 캐시의 마지막 줄 아래, 위 캡션은 표 테두리를 `H_c + gap`
 //! 만큼 내리고(첫 조각 용량도 그만큼 줄어든다) 캡션 상자 위 = host_v +
 //! om.top, 아래 캡션은 마지막 조각 아래 + gap. 상자 x = 표 테두리 왼쪽
@@ -74,7 +74,7 @@ pub(crate) struct TableReplayOutcome {
 }
 
 /// Whether the table sits in the one placement the replay supports: the
-/// default flow placement (§19.6 A — the HWPX encoder's `None`): not treated
+/// default flow placement (the HWPX encoder's `None`): not treated
 /// as a character, flowing with text, no overlap, paragraph/column anchors,
 /// zero offsets, top/left, no line-spacing effect, anchor not held,
 /// top-and-bottom wrap, both-sides flow. Read from Core's
@@ -158,7 +158,7 @@ pub(crate) fn replay_table(
     }
     let header_height: i32 = row_heights[..header_rows].iter().sum();
 
-    // ── 쪽걸침 분할 (계산 — 규칙 §3.3 + 예약 = outMargin.bottom) ──
+    // ── 쪽걸침 분할 (행 높이 계산 + 예약 = outMargin.bottom) ──
     let om = table.out_margin.unwrap_or_default();
     let (om_top, om_bottom, om_left) = (om.top.as_i32(), om.bottom.as_i32(), om.left.as_i32());
     let capacity_end = geom.body_height - om_bottom - SPLIT_BOTTOM_EXTRA;
@@ -261,7 +261,7 @@ pub(crate) fn replay_table(
     }
 
     if frags.len() > 1 {
-        // 분할 표 재저장 sz = 한컴의 **첫 조각 높이 실측치** (규칙 §3.3) —
+        // 분할 표 재저장 sz = 한컴의 **첫 조각 높이 실측치** —
         // 캐시 우선 원칙대로 첫 절단을 그 값으로 교정한다 (blank-HPC 실측
         // Δ101HU 급 미세차). 크게 어긋나면 모델 모순 = fatal.
         if let Some(sz) = tlc.saved_sz_height {
@@ -283,7 +283,7 @@ pub(crate) fn replay_table(
         }
         warnings.push(PdfWarning::TablePaginationComputed { location: location.to_string() });
     } else if let Some(sz) = tlc.saved_sz_height {
-        // 비분할: Σ행높이 == sz 검산 (규칙 §6).
+        // 비분할: Σ행높이 == sz 검산.
         if sz.as_i32() != total_height {
             return Err(PdfError::InvalidCache {
                 detail: format!(
@@ -631,7 +631,7 @@ pub(crate) fn cell_content_extent(
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             return Ok(None);
         };
-        // W3 w3 (§7 r2 fold-in): 마지막 줄 단독이 아니라 **전 줄의
+        // 마지막 줄 단독이 아니라 **전 줄의
         // checked max-bottom** — 앞줄의 큰 이미지 bottom 이 마지막 줄을
         // 넘는 stale/overlap 캐시에서 행높이 누락을 막는다 (정상 캐시는
         // last==max — 기존 fixture 정적 대조 전수 동치 확인).
@@ -668,7 +668,7 @@ pub(crate) fn cell_content_extent(
 fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     for row in &table.rows {
         for cell in &row.cells {
-            // §19.22 D3: the renderer draws line atoms at their natural width
+            // The renderer draws line atoms at their natural width
             // and does not squeeze them, with or without the layout cache;
             // what Hancom does for KEEP is not confirmed. Both are refused.
             // 이것을 실패시키는 것: 이 거부를 지우기
@@ -689,9 +689,9 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
                 }
             }
             for para in &cell.paragraphs {
-                // W3 (§7 v2 D1): 3상태 — 글자취급 인라인 이미지는 통과,
+                // 3상태 — 글자취급 인라인 이미지는 통과,
                 // `[Table+Image]` 혼합은 명시 거부 (hosted-table replay 가
-                // 문단을 통째로 skip 해 이미지가 무음 폐기되므로 — r2 #2).
+                // 문단을 통째로 skip 해 이미지가 무음 폐기되므로).
                 let mut has_table = false;
                 let mut has_text = false;
                 let mut has_inline_image = false;
@@ -1148,8 +1148,8 @@ fn emit_anchor_clipped(
             let text = para.text_content();
             let utf16: Vec<u16> = text.encode_utf16().collect();
             let para_loc = format!("{cell_loc}/p{pi}");
-            // W3 (§7 v2): admitted 이미지 보유 문단은 **빈 텍스트 continue
-            // 앞에서** helper 경로로 분기 (image-only 셀 도달 — r2 #4).
+            // admitted 이미지 보유 문단은 **빈 텍스트 continue
+            // 앞에서** helper 경로로 분기 (image-only 셀 도달).
             let has_admitted_images =
                 para.runs.iter().any(|r| crate::source::is_admitted_inline_image(&r.content));
             let line_atoms_override = if has_admitted_images {
@@ -1197,7 +1197,7 @@ fn emit_anchor_clipped(
                 if line_top < clip_from || line_top >= clip_to {
                     continue; // 절단 창 밖 줄 — 줄은 상단 기준으로 한 조각에 배정
                 }
-                // W3 w3 (§7 r2 fold-in): **내부 절단선**(from>0·to<full_h —
+                // **내부 절단선**(from>0·to<full_h —
                 // 셀 외곽은 절단선 아님)이 이미지 줄을 strict 관통하면
                 // 잘림/넘침 (이미지에 clip IR 없음 — W5/W6) → fail-closed.
                 // boundary touch 는 허용.

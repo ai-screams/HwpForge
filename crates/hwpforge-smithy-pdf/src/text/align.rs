@@ -1,4 +1,4 @@
-//! R2 정렬 배분 — W0 실측 확정 규칙 (`pdf-cache-replay-rules.md` §4).
+//! 정렬 배분 — 한컴 저장 문서에서 실측한 규칙.
 //!
 //! | 정렬 | 규칙 (실측 근거) |
 //! |---|---|
@@ -81,7 +81,7 @@ pub fn place_line(
                 };
             }
             if natural.space_count == 0 {
-                // 공백 0 JUSTIFY 줄 — 미실측 (규칙 문서 §4). 자연폭 + 경고.
+                // 공백 0 JUSTIFY 줄 — 미실측. 자연폭 + 경고.
                 return LinePlacement {
                     origin_x: horzpos,
                     extra_per_space: 0.0,
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn justify_without_spaces_warns_and_stays_natural() {
-        // 규칙 문서 §4 미실측 항목 — fail-open 아님(위치 정확), 스트레치만 포기.
+        // 미실측 정렬 — fail-open 아님(위치 정확), 스트레치만 포기.
         let p = place_line(
             Alignment::Justify,
             CELL,
