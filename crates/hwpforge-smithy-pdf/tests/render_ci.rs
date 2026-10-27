@@ -164,7 +164,6 @@ fn missing_cache_paragraph_warns_and_still_renders() {
 
 #[test]
 fn bold_run_resolves_real_bold_face_by_default() {
-    // 이것을 실패시키는 것: bold run 에서도 Regular face 를 고르게 하기(두 출력 바이트가 같아짐).
     // bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge Typographic Pair
     // Bold = Latin 실폭 0.7em vs Regular 0.6em → 출력 바이트가 달라진다).
     let doc = doc_of(vec![para_with_cache("ABC", vec![seg(0, 0)])]);
