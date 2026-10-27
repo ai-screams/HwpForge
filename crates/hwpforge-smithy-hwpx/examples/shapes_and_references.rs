@@ -916,7 +916,7 @@ fn write_single(
 }
 
 fn main() {
-    println!("=== Wave 9/11/12 Diagnostic: Individual Section Files ===\n");
+    println!("=== Shapes and References Diagnostic: Individual Section Files ===\n");
 
     let style_store = build_style_store();
     let image_store = ImageStore::new();

@@ -601,7 +601,7 @@ fn build_section3() -> Section {
 // ---------------------------------------------------------------------------
 
 fn main() {
-    println!("=== Wave 8/10/13 API 종합 테스트 ===\n");
+    println!("=== 문단·주석 API 종합 테스트 ===\n");
 
     // 1. Build style store with all features
     let store = build_style_store();
@@ -650,12 +650,12 @@ fn main() {
 
     // Verify Section 1 (Emphasis)
     let s1 = &d.sections()[0];
-    println!("    Section 1 (Wave 10 EmphasisType):");
+    println!("    Section 1 (EmphasisType):");
     println!("      Paragraphs: {}", s1.paragraphs.len());
 
     // Verify Section 2 (Heading)
     let s2 = &d.sections()[1];
-    println!("    Section 2 (Wave 8 Heading/Outline):");
+    println!("    Section 2 (Heading/Outline):");
     println!("      Paragraphs: {}", s2.paragraphs.len());
     // Check outline headings have style_id
     let styled_count = s2.paragraphs.iter().filter(|p| p.style_id.is_some()).count();
@@ -663,7 +663,7 @@ fn main() {
 
     // Verify Section 3 (Dutmal/Compose)
     let s3 = &d.sections()[2];
-    println!("    Section 3 (Wave 13 Dutmal/Compose):");
+    println!("    Section 3 (Dutmal/Compose):");
     println!("      Paragraphs: {}", s3.paragraphs.len());
     let dutmal_count = s3
         .paragraphs

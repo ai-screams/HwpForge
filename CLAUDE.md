@@ -73,7 +73,7 @@ Always: **TDD edge-first** · **atomic conventional commits** (breaking = `type(
 ## Repository Rules
 
 1. **Color is BGR** — use `Color::from_rgb()` only (`from_raw(0xFF0000)` is blue).
-2. **No manual version/tag/publish** — release-plz owns them. Merge to main only through the merge queue (squash).
+2. **No manual version/tag/publish** — release-plz owns workspace releases (`v*`); the only hand-made tag is the emergency Python `py-v*` tag in `RELEASING.md` §9.3. Merge to main only through the merge queue (squash).
 3. **`Cargo.lock` and `uv.lock` are not tracked** — they are in `.gitignore`, so `git add` refuses them. CI resolves the latest dependencies.
 4. **Do not edit sources while tests run** (it triggers a rebuild). nextest filters are **substrings** (`'a|b'` does not work).
 5. PR titles are **English conventional commits** (squash makes the PR title the main commit and the release-plz input; breaking = `type!:`).

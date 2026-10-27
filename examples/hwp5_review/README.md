@@ -52,4 +52,4 @@ hwpforge inspect output.hwpx
 
 - 이 변환은 의미(semantic) 보존이 목표이며 픽셀 단위 레이아웃 일치는 보장하지 않습니다.
 - 각주 `instId`/`number` 속성은 생략됨 (의미적으로 동일, judgement call).
-- numbering layout fidelity (`ParaHead.align`/`autoIndent`/`textOffset`)는 별도 hotfix track (잔재 R4).
+- 번호 문단의 레이아웃 속성(`ParaHead.align`/`autoIndent`/`textOffset`)은 아직 보존하지 않습니다.
