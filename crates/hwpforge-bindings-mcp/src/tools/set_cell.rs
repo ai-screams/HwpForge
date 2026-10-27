@@ -117,18 +117,19 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("hwpforge_mcp_set_cell_{}", std::process::id()))
-            .join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Fresh temp directory for one test, removed when it drops.
+    fn temp_dir(name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("hwpforge_mcp_set_cell_{name}_"))
+            .tempdir()
+            .unwrap()
     }
 
     #[test]
     fn set_cell_edits_by_label_and_reports_resolution() {
-        let dir = temp_dir("edit");
-        let input = label_form_hwpx(&dir);
+        let tmp = temp_dir("edit");
+        let dir = tmp.path();
+        let input = label_form_hwpx(dir);
         let output = dir.join("edited.hwpx").to_string_lossy().into_owned();
 
         let data = run_set_cell(
@@ -188,8 +189,9 @@ mod tests {
 
     #[test]
     fn set_cell_rejects_bad_targets_with_codes() {
-        let dir = temp_dir("reject");
-        let input = label_form_hwpx(&dir);
+        let tmp = temp_dir("reject");
+        let dir = tmp.path();
+        let input = label_form_hwpx(dir);
         let output = dir.join("never.hwpx").to_string_lossy().into_owned();
 
         let err =

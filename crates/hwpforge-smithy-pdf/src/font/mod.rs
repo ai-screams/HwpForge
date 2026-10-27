@@ -791,12 +791,34 @@ mod tests {
         resolver.resolve("HwpForge FsNoOs2").expect("no os2");
     }
 
-    /// 테스트 전용 임시 디렉터리 (재실행 멱등 — 기존 잔재 제거 후 생성).
-    fn temp_dir(name: &str) -> PathBuf {
+    /// 테스트 전용 임시 디렉터리. 값이 사라질 때 지운다(남기면 실행마다 쌓인다).
+    struct TestDir(PathBuf);
+
+    impl std::ops::Deref for TestDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TestDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> TestDir {
         let dir = std::env::temp_dir().join(format!("hwpforge-w4b-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+        TestDir(dir)
     }
 
     fn copy_font(src_name: &str, dst_dir: &Path, dst_name: &str) {
@@ -818,9 +840,11 @@ mod tests {
         // 400 이 이기지만 tier 우선이 먼저다 (명시 dirs 가 발견 경로를 가린다).
         copy_font("HwpForgeRank-R500.ttf", &explicit, "HwpForgeRank-R500.ttf");
         copy_font("HwpForgeRank-R400.ttf", &discovered, "HwpForgeRank-R400.ttf");
-        let resolver =
-            FontResolver::from_tiers(&[(vec![explicit.clone()], true), (vec![discovered], false)])
-                .expect("tiered scan");
+        let resolver = FontResolver::from_tiers(&[
+            (vec![explicit.to_path_buf()], true),
+            (vec![discovered.to_path_buf()], false),
+        ])
+        .expect("tiered scan");
         let hit = resolver.resolve("HwpForge Rank").expect("family");
         assert!(hit.path.starts_with(&explicit), "explicit tier must win: {:?}", hit.path);
     }
@@ -832,7 +856,7 @@ mod tests {
         copy_font("HwpForgeTest-Regular.ttf", &a, "Copy-A.ttf");
         copy_font("HwpForgeTest-Regular.ttf", &b, "Copy-B.ttf");
         // 같은 실물(동일 fingerprint)의 중복 배치는 충돌이 아니다 — 첫 경로 canonical.
-        let resolver = FontResolver::new(&[a.clone(), b]).expect("scan");
+        let resolver = FontResolver::new(&[a.to_path_buf(), b.to_path_buf()]).expect("scan");
         let hit = resolver.resolve("HwpForge Test").expect("deduped family");
         assert!(hit.path.starts_with(&a), "first path must be canonical: {:?}", hit.path);
     }
@@ -844,7 +868,7 @@ mod tests {
         copy_font("HwpForgeTest-Regular.ttf", &dir, "Font.ttf");
         std::os::unix::fs::symlink(&dir, dir.join("loop")).expect("create symlink cycle");
         // 디렉터리 심볼릭 링크는 따라가지 않는다 — 사이클에서도 스캔이 끝난다.
-        let resolver = FontResolver::new(&[dir]).expect("scan terminates");
+        let resolver = FontResolver::new(&[dir.to_path_buf()]).expect("scan terminates");
         resolver.resolve("HwpForge Test").expect("font still found");
     }
 

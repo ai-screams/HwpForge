@@ -7,10 +7,7 @@ use hwpforge_core::{Paragraph, RunContent};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use zip::ZipArchive;
-
-pub(super) static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // ─── Helpers ───
 
@@ -19,26 +16,30 @@ pub(super) fn hwpforge_bin() -> PathBuf {
     process::hwpforge_bin()
 }
 
-/// Create a unique temp directory for each test.
-pub(super) fn test_tmp() -> PathBuf {
-    // nextest runs every test in its own process, so `COUNTER` restarts at 0
-    // each time and the directory name used to be `hwpforge_test_0_<pid>`.
-    // Directories are never removed, and the OS recycles pids, so a later
-    // test process could inherit a directory that an earlier one had already
-    // populated (`patch_section_index_mismatch_fails_fast` saw a stale
-    // `patched.hwpx` and failed). Fold the wall clock in and start from an
-    // empty directory.
-    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let dir =
-        std::env::temp_dir().join(format!("hwpforge_test_{id}_{}_{nanos}", std::process::id()));
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).expect("clear stale temp dir");
+/// A per-test temp directory, removed when the value drops.
+///
+/// Derefs to [`Path`] so tests keep writing `tmp.join("out.hwpx")`. nextest runs
+/// every test in its own process, so a directory that outlives its test piles
+/// up by hundreds per run.
+pub(super) struct TestDir(tempfile::TempDir);
+
+impl std::ops::Deref for TestDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        self.0.path()
     }
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+}
+
+impl AsRef<Path> for TestDir {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+/// Create a fresh, empty temp directory for one test.
+pub(super) fn test_tmp() -> TestDir {
+    TestDir(tempfile::Builder::new().prefix("hwpforge_test_").tempdir().expect("create temp dir"))
 }
 
 pub(super) fn read_hwpx_entry(path: &Path, entry: &str) -> String {
