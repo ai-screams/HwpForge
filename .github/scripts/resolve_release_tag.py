@@ -5,8 +5,7 @@ Two tag languages reach this script, and they mean different things:
 
 * ``vX.Y.Z`` is a workspace release made by release-plz. ``X.Y.Z`` must equal the
   Cargo workspace version exactly; the Python wheel simply carries that version.
-* ``py-v…`` is a Python-only release. The design (epic section 2.4, row "Python
-  전용 수정 경로") allows exactly four forms: ``py-vX.Y.Z``, ``py-vX.Y.Z.postM``,
+* ``py-v…`` is a Python-only release. It allows exactly four forms: ``py-vX.Y.Z``, ``py-vX.Y.Z.postM``,
   ``py-vX.Y.Z.N`` and ``py-vX.Y.Z.N.postM``, with ``N >= 1`` and ``M >= 1``. The
   first three release components must equal the Cargo version, epoch/pre/dev/local
   segments are rejected, a fifth release component is rejected, and PEP 440

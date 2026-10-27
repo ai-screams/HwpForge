@@ -389,8 +389,8 @@ mod tests {
     }
 
     #[test]
-    fn w3_editors_share_decode_and_admission_fixtures() {
-        // 이것을 실패시키는 것: E3 structural admission 호출 목적을 Output으로 변경.
+    fn editors_share_decode_and_admission_fixtures() {
+        // 이것을 실패시키는 것: structural admission 호출 목적을 Output으로 변경.
         use crate::tools::{set_cell, stamp, structural};
         let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
         let dir = tempfile::tempdir().unwrap();
@@ -448,8 +448,8 @@ mod tests {
             check(ids[2], structural::run_delete_para(file, 0, &[0], output).err().unwrap());
             check(ids[3], stamp::run_stamp(file, &[], &[], None, output, None).err().unwrap());
         }
-        // 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
-        // 이것을 실패시키는 것: F6 MCP stamp admission 힌트를 코덱 갭 대기로 복원.
+        // 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
+        // 이것을 실패시키는 것: MCP stamp admission 힌트를 코덱 갭 대기로 복원.
         let request: hwpforge_smithy_hwpx::stamp::StampRequestV2 =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/stamp-v2-admission.json"))
                 .unwrap();
@@ -847,7 +847,7 @@ mod tests {
 
     #[test]
     fn set_cell_codec_and_admission_keep_distinct_codes() {
-        // 이것을 실패시키는 것: T8 CellEditError::Codec 매핑을 InvalidInput으로 변경.
+        // 이것을 실패시키는 것: CellEditError::Codec 매핑을 InvalidInput으로 변경.
         assert_code(
             Tool::SetCell,
             OpsError::CellEdit(CellEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {
@@ -982,7 +982,7 @@ mod tests {
             let Some(surface) = case["surfaces"].get("mcp") else { continue };
             let id = case["id"].as_str().unwrap();
             if surface["mode"] == "unreachable" {
-                assert_eq!(id, "cell.draft_depth", "unreviewed unreachable case: {id}");
+                assert_eq!(id, "cell.draft_depth", "unhandled unreachable case: {id}");
                 assert!(!surface["reason"].as_str().unwrap().is_empty());
             } else {
                 let row = baseline

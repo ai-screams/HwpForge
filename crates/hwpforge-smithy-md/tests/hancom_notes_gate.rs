@@ -6,9 +6,9 @@ use hwpforge_blueprint::builtins::builtin_default;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge, HwpxStyleLookup};
 use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 
-/// W3.5 — 우리 생성 HWPX 의 각주/미주 본문에 autoNum 번호 머리가 있어야 한다
+/// 우리 생성 HWPX 의 각주/미주 본문에 autoNum 번호 머리가 있어야 한다
 /// (시각 게이트 발견: 없으면 한컴 각주 영역에 번호가 표시되지 않음.
-///  한컴 F7 실측: num 은 종류별 실제 순번 캐시 — 1/2/3).
+///  한컴 실측: num 은 종류별 실제 순번 캐시 — 1/2/3).
 #[test]
 fn generated_notes_carry_autonum_heads() {
     let template = builtin_default().expect("builtin");
@@ -44,12 +44,12 @@ fn generated_notes_carry_autonum_heads() {
         xml.contains(r#"<hp:autoNum num="1" numType="ENDNOTE""#),
         "endnote autoNum num must be 1"
     );
-    // 한컴 정합: suffixChar=")" (F1 실측). 번호-본문 간격은 별도 spacer run —
-    // 본문 텍스트는 불변이다 (C-W3.5-1: 치환 마커 봉인 유지).
+    // 한컴 정합: suffixChar=")" (실측). 번호-본문 간격은 별도 spacer run —
+    // 본문 텍스트는 불변이다 (치환 마커 봉인 유지).
     assert!(xml.contains(r#"suffixChar=")""#), "autoNumFormat suffixChar must be ')'");
     assert!(xml.contains("<hp:t> </hp:t>"), "spacer run between number head and body");
     assert!(xml.contains("<hp:t>각주 하나</hp:t>"), "body text must stay unmodified");
-    // M-W3.5-2: 외부 note 속성도 한컴 wire 정합.
+    // 외부 note 속성도 한컴 wire 정합.
     assert!(
         xml.contains(r#"number="1""#) && xml.contains(r#"suffixChar="41""#),
         "footNote number/suffixChar attributes must be emitted"
@@ -67,7 +67,7 @@ fn autonum_injection_keeps_md_fixed_point() {
     assert!(g1.contains("[^1]: 각주 본문"), "no number-head text may leak into MD: {g1}");
 }
 
-/// C-W3.5-1 재현: 각주 첫 텍스트가 치환 마커 경로(InlineText 등)를 타면
+/// 각주 첫 텍스트가 치환 마커 경로(InlineText 등)를 타면
 /// 선행 공백 주입이 마커를 변조해 내부 `__HWP` 문자열이 최종 XML 에 남는가.
 #[test]
 fn note_head_must_not_corrupt_replacement_markers() {
@@ -131,7 +131,7 @@ fn note_head_must_not_corrupt_replacement_markers() {
     assert!(xml.contains("hp:tab"), "tab must be emitted as real wire");
 }
 
-/// M-W3.5-3 ①: 번호-본문 쌍을 구조적으로 검증 (출현 횟수가 아니라 대응).
+/// 번호-본문 쌍을 구조적으로 검증 (출현 횟수가 아니라 대응).
 #[test]
 fn autonum_numbers_pair_with_their_bodies() {
     let template = builtin_default().expect("builtin");

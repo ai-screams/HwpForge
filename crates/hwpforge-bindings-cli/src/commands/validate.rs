@@ -4,7 +4,7 @@
 //! MCP already exposes this over `hwpforge_validate`
 //! (`crates/hwpforge-bindings-mcp/src/tools/validate.rs`) and Python over
 //! `Document.validate()`, both through [`ops::validate`] — this command was
-//! the one purpose-fit gap (W5b finding). Its `(code, hint, exit)` contract
+//! the one purpose-fit gap. Its `(code, hint, exit)` contract
 //! is recorded in `tests/data/codes-0.18.txt` with a shared manifest case ID.
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;

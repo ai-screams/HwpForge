@@ -1,4 +1,4 @@
-//! Plan phase (E6 Wave 1A): enumerate class-A placeholder candidates over a
+//! Plan phase: enumerate class-A placeholder candidates over a
 //! Core document.
 //!
 //! The shared text walker includes protected field text and folded Memo
@@ -22,7 +22,7 @@ use crate::patch::collect_stamp_text_slots;
 ///
 /// Candidates are proposals only — nothing is applied until the whole plan
 /// preflights and every candidate is approved (named or ignored) by the
-/// caller's map (design decision §3-2/§3-3).
+/// caller's map.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StampCandidate {
@@ -76,7 +76,7 @@ pub fn plan<S>(document: &Document<S>) -> Vec<StampCandidate> {
         for slot in &slots {
             // Field bodies are never stamp targets; tab-bearing InlineText
             // runs still contribute guard context above, but splitting them
-            // is lossy so they produce no candidates (Wave 1A).
+            // is lossy so they produce no candidates.
             if slot.inline {
                 continue;
             }

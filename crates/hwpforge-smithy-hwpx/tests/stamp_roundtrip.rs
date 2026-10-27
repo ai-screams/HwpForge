@@ -1,4 +1,4 @@
-//! E6 Wave 1A end-to-end gate: plan → apply → encode → `fields`/`fill`.
+//! end-to-end gate: plan → apply → encode → `fields`/`fill`.
 //!
 //! Locks the invariant that a stamped document is immediately consumable by
 //! the shipped fill delta API (v0.11.1): stamped fields are discoverable via
@@ -101,7 +101,7 @@ fn stamped_document_round_trips_through_fields_and_fill() {
 
 #[test]
 fn stamped_output_decode_encode_is_a_fixed_point() {
-    // Stamp-delta gate precondition (§3-6③): the stamped artifact itself
+    // Stamp-delta gate precondition: the stamped artifact itself
     // must be stable under decode→encode.
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(
@@ -164,7 +164,7 @@ fn stamper_stamps_bytes_and_builds_manifest() {
     let result = HwpxStamper::stamp(&base, &specs).expect("stamp");
     assert_eq!(result.outcome.stamped.len(), 1);
 
-    // manifest invariants (§3-5)
+    // manifest invariants
     let m = &result.manifest;
     assert_eq!(m.schema_version, STAMP_MANIFEST_VERSION);
     assert_eq!(m.source_sha256.len(), 64);
@@ -264,7 +264,7 @@ fn stamp_error_display_names_the_rejection() {
 
 #[test]
 fn stamper_error_display_names_the_rejection() {
-    // 이것을 실패시키는 것: T7 StamperError::Codec Display의 codec failure 접두 삭제.
+    // 이것을 실패시키는 것: StamperError::Codec Display의 codec failure 접두 삭제.
     use hwpforge_smithy_hwpx::stamp::{StampError, StamperError};
     let cases: Vec<(StamperError, &str)> = vec![
         (
@@ -292,7 +292,7 @@ fn stamper_error_display_names_the_rejection() {
     }
 }
 
-// ── Wave 2B: class-B cell stamping E2E ──────────────────────────────
+// ── class-B cell stamping E2E ──────────────────────────────
 
 #[test]
 fn stamp_v2_cells_end_to_end() {

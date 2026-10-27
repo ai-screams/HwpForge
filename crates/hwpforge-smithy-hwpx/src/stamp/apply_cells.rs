@@ -1,4 +1,4 @@
-//! Class-B apply — Wave 2B: preflight + all-or-nothing cell promotion.
+//! Class-B apply — preflight + all-or-nothing cell promotion.
 //!
 //! The engine is split into [`preflight_cells`] and [`commit_cells`] so a
 //! combined text+cell stamp can preflight EVERYTHING against the pristine
@@ -9,7 +9,7 @@
 //! invalidate a cell target (markers require non-whitespace text, stampable
 //! targets are whitespace-only, and run splits never move tables).
 //!
-//! Contract (design §7.3, Codex-settled):
+//! Contract:
 //! - spec `at` must be the canonical anchor — covered coordinates are
 //!   rejected, never silently resolved (unlike set-cell's read surface).
 //! - a spec with a label claim approves a DETECTED candidate: the claim is

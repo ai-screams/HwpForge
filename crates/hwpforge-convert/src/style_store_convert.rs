@@ -253,7 +253,7 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
     shape.char_offset = raw.primary_offset();
     shape.use_kerning = raw.use_kerning();
     shape.use_font_space = raw.use_font_space();
-    // Slot 2 is an ordinary slot of the document (§19.22 A): a char shape
+    // Slot 2 is an ordinary slot of the document: a char shape
     // pointing at it keeps it. 0 means "no border"; the store conversion
     // points those char shapes at an empty border fill it appends.
     shape.border_fill_id = raw.border_fill_id.filter(|id| *id != 0).map(u32::from);
@@ -639,8 +639,6 @@ fn hwp5_tab_align_to_foundation(tab_type: u8) -> TabAlign {
 /// | 4              | `SOLID`      | Underscore  |
 /// | 5+             | `NONE`       | None (fallback) |
 ///
-/// See `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B2) for
-/// the investigation log.
 fn hwp5_fill_type_to_tab_leader(fill_type: u8) -> TabLeader {
     let leader = match fill_type {
         0 => "NONE",

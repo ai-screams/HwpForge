@@ -137,7 +137,7 @@ fn build_style_store() -> HwpxStyleStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 1: Wave 9 — Gutter + Mirror Margins
+// Section 1: Gutter + Mirror Margins
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_gutter_mirror() -> Section {
@@ -148,7 +148,7 @@ fn section_gutter_mirror() -> Section {
     };
     Section::with_paragraphs(
         vec![
-            text_para("Wave 9: Gutter + Mirror Margins", CS_TITLE, PS_CENTER),
+            text_para("Gutter + Mirror Margins", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("이 섹션은 Gutter=10mm, GutterType=LeftOnly 설정입니다.", CS_NORMAL, PS_BODY),
             text_para(
@@ -168,7 +168,7 @@ fn section_gutter_mirror() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 2: Wave 9 — Visibility + LineNumberShape
+// Section 2: Visibility + LineNumberShape
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_visibility_linenumber() -> Section {
@@ -216,7 +216,7 @@ fn section_visibility_linenumber() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 3: Wave 9 — PageBorderFill + BeginNum
+// Section 3: PageBorderFill + BeginNum
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_border_fill_begin_num() -> Section {
@@ -244,7 +244,7 @@ fn section_border_fill_begin_num() -> Section {
     let cs = CharShapeIndex::new(CS_NORMAL);
     let mut section = Section::with_paragraphs(
         vec![
-            text_para("Wave 9: PageBorderFill + BeginNum", CS_TITLE, PS_CENTER),
+            text_para("PageBorderFill + BeginNum", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("페이지 테두리(PageBorderFill)가 보여야 합니다.", CS_NORMAL, PS_BODY),
             text_para("페이지 번호가 10부터 시작합니다 (하단 확인).", CS_NORMAL, PS_BODY),
@@ -291,7 +291,7 @@ fn section_border_fill_begin_num() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 4: Wave 9 — MasterPage (배경)
+// Section 4: MasterPage (배경)
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_master_page() -> Section {
@@ -301,7 +301,7 @@ fn section_master_page() -> Section {
     );
     let mut section = Section::with_paragraphs(
         vec![
-            text_para("Wave 9: MasterPage (배경 페이지)", CS_TITLE, PS_CENTER),
+            text_para("MasterPage (배경 페이지)", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("이 섹션에는 MasterPage가 설정되어 있습니다.", CS_NORMAL, PS_BODY),
             text_para(
@@ -318,7 +318,7 @@ fn section_master_page() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 5: Wave 11 — Arc (3가지 타입)
+// Section 5: Arc (3가지 타입)
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_arcs() -> Section {
@@ -336,7 +336,7 @@ fn section_arcs() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: Arc (호) — 3가지 타입", CS_TITLE, PS_CENTER),
+            text_para("Arc (호) — 3가지 타입", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. Normal (열린 호):", CS_RED, PS_LEFT),
             ctrl_para(arc_normal, CS_NORMAL, PS_CENTER),
@@ -352,7 +352,7 @@ fn section_arcs() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 6: Wave 11 — Curve (베지어/폴리라인)
+// Section 6: Curve (베지어/폴리라인)
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_curves() -> Section {
@@ -395,7 +395,7 @@ fn section_curves() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: Curve (곡선) — 3가지 패턴", CS_TITLE, PS_CENTER),
+            text_para("Curve (곡선) — 3가지 패턴", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. 지그재그 (직선 세그먼트):", CS_RED, PS_LEFT),
             ctrl_para(zigzag, CS_NORMAL, PS_CENTER),
@@ -411,7 +411,7 @@ fn section_curves() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 7: Wave 11 — ConnectLine + 화살표
+// Section 7: ConnectLine + 화살표
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_connect_lines() -> Section {
@@ -461,7 +461,7 @@ fn section_connect_lines() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: ConnectLine + Arrow Styles", CS_TITLE, PS_CENTER),
+            text_para("ConnectLine + Arrow Styles", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. 단순 연결선:", CS_RED, PS_LEFT),
             ctrl_para(cl_simple, CS_NORMAL, PS_CENTER),
@@ -477,7 +477,7 @@ fn section_connect_lines() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 8: Wave 11 — 기존 도형 + 회전/뒤집기/채우기
+// Section 8: 기존 도형 + 회전/뒤집기/채우기
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_shape_styles() -> Section {
@@ -537,7 +537,7 @@ fn section_shape_styles() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 11: Shape Styles (회전/뒤집기/화살표)", CS_TITLE, PS_CENTER),
+            text_para("Shape Styles (회전/뒤집기/화살표)", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para("1. 타원 — 45도 회전 (파란 테두리):", CS_RED, PS_LEFT),
             ctrl_para(ell_rotated, CS_NORMAL, PS_CENTER),
@@ -556,7 +556,7 @@ fn section_shape_styles() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 9: Wave 12 — Bookmark + CrossRef + Field
+// Section 9: Bookmark + CrossRef + Field
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_bookmarks_refs_fields() -> Section {
@@ -575,7 +575,7 @@ fn section_bookmarks_refs_fields() -> Section {
         bookmark_type: BookmarkType::SpanEnd,
     };
 
-    // CrossRef (참조) — Wave 12m Phase 2: RefTarget enum 명시
+    // CrossRef (참조) — RefTarget enum 명시
     let cross_ref = Control::cross_ref(
         hwpforge_core::control::RefTarget::Name("중요위치".to_string()),
         RefType::Bookmark,
@@ -585,7 +585,7 @@ fn section_bookmarks_refs_fields() -> Section {
     // Field: ClickHere (누름틀)
     let field_click = Control::field("여기를 클릭하세요");
 
-    // Field: Date — SUMMERY $modifiedtime (Wave 12n: was FieldType::Date)
+    // Field: Date — SUMMERY $modifiedtime (was FieldType::Date)
     let field_date = Control::Field {
         field_type: FieldType::ModifiedTime,
         hint_text: Some("날짜".to_string()),
@@ -594,13 +594,13 @@ fn section_bookmarks_refs_fields() -> Section {
         display_text: String::new(),
     };
 
-    // Field: PageNumber (쪽번호) — Wave 12n: moved out of Control::Field
+    // Field: PageNumber (쪽번호) — moved out of Control::Field
     let field_page =
         Control::InlinePageNumber { kind: hwpforge_core::control::InlinePageKind::CurrentPage };
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 12: Bookmark + CrossRef + Field", CS_TITLE, PS_CENTER),
+            text_para("Bookmark + CrossRef + Field", CS_TITLE, PS_CENTER),
             empty_para(),
             // Point bookmark
             text_para("▶ 포인트 책갈피 (아래에 '중요위치' 책갈피 삽입):", CS_RED, PS_LEFT),
@@ -660,7 +660,7 @@ fn section_bookmarks_refs_fields() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 10: Wave 12 — Memo + IndexMark
+// Section 10: Memo + IndexMark
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_memo_indexmark() -> Section {
@@ -692,7 +692,7 @@ fn section_memo_indexmark() -> Section {
 
     Section::with_paragraphs(
         vec![
-            text_para("Wave 12: Memo + IndexMark", CS_TITLE, PS_CENTER),
+            text_para("Memo + IndexMark", CS_TITLE, PS_CENTER),
             empty_para(),
             // Memo 1
             text_para("▶ 간단한 메모 (김검토):", CS_RED, PS_LEFT),
@@ -761,7 +761,7 @@ fn section_memo_indexmark() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 11: 기존 API + Wave 9/11/12 복합 테스트
+// Section 11: 기존 API + 복합 테스트
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_combined() -> Section {
@@ -799,17 +799,17 @@ fn section_combined() -> Section {
 
     // Footnote
     let footnote = Control::footnote(vec![text_para(
-        "이것은 Wave 9/11/12 종합 테스트의 각주입니다.",
+        "이것은 도형·참조 종합 테스트의 각주입니다.",
         CS_NORMAL,
         PS_BODY,
     )]);
 
     let mut section = Section::with_paragraphs(
         vec![
-            text_para("종합 테스트: 모든 Wave 기능 복합", CS_TITLE, PS_CENTER),
+            text_para("종합 테스트: 도형·참조 기능 복합", CS_TITLE, PS_CENTER),
             empty_para(),
             text_para(
-                "이 섹션은 Wave 9 (페이지 레이아웃) + Wave 11 (도형) + Wave 12 (참조) 기능을 복합 사용합니다.",
+                "이 섹션은 페이지 레이아웃, 도형, 참조 기능을 함께 사용합니다.",
                 CS_NORMAL,
                 PS_BODY,
             ),
@@ -844,10 +844,7 @@ fn section_combined() -> Section {
             text_para("▶ 각주:", CS_RED, PS_LEFT),
             multi_run_para(
                 vec![
-                    Run::text(
-                        "이 문장에는 각주가 달려 있습니다",
-                        CharShapeIndex::new(CS_NORMAL),
-                    ),
+                    Run::text("이 문장에는 각주가 달려 있습니다", CharShapeIndex::new(CS_NORMAL)),
                     Run::control(footnote, CharShapeIndex::new(CS_NORMAL)),
                     Run::text(".", CharShapeIndex::new(CS_NORMAL)),
                 ],
@@ -857,22 +854,22 @@ fn section_combined() -> Section {
             // ConnectLine with arrows
             text_para("▶ 연결선 (화살표):", CS_RED, PS_LEFT),
             {
-                let mut cl = Control::connect_line(
-                    ShapePoint::new(0, 2000),
-                    ShapePoint::new(15000, 2000),
-                )
-                .unwrap();
+                let mut cl =
+                    Control::connect_line(ShapePoint::new(0, 2000), ShapePoint::new(15000, 2000))
+                        .unwrap();
                 if let Control::ConnectLine { ref mut style, .. } = cl {
                     *style = Some(ShapeStyle {
                         line_color: Some(Color::from_rgb(100, 50, 150)),
                         line_width: Some(20),
                         head_arrow: Some(ArrowStyle {
                             arrow_type: ArrowType::Arrow,
-                            size: ArrowSize::Medium, filled: true,
+                            size: ArrowSize::Medium,
+                            filled: true,
                         }),
                         tail_arrow: Some(ArrowStyle {
                             arrow_type: ArrowType::Arrow,
-                            size: ArrowSize::Medium, filled: true,
+                            size: ArrowSize::Medium,
+                            filled: true,
                         }),
                         ..ShapeStyle::default()
                     });
@@ -880,11 +877,7 @@ fn section_combined() -> Section {
                 ctrl_para(cl, CS_NORMAL, PS_CENTER)
             },
             empty_para(),
-            text_para(
-                "=== Wave 9/11/12 종합 테스트 완료 ===",
-                CS_TITLE,
-                PS_CENTER,
-            ),
+            text_para("=== 도형·참조 종합 테스트 완료 ===", CS_TITLE, PS_CENTER),
         ],
         ps,
     );
@@ -916,7 +909,7 @@ fn write_single(
 }
 
 fn main() {
-    println!("=== Wave 9/11/12 Diagnostic: Individual Section Files ===\n");
+    println!("=== Shapes and References Diagnostic: Individual Section Files ===\n");
 
     let style_store = build_style_store();
     let image_store = ImageStore::new();

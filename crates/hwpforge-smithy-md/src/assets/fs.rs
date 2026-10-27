@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn staged_route_preserves_an_image_only_paragraph() {
-        // B1 회귀: `![..](url)` 단독 문단이 드롭으로 비면 validate 가 문서
+        // 회귀: `![..](url)` 단독 문단이 드롭으로 비면 validate 가 문서
         // 전체를 거부한다. embed 쪽 테스트는 호환 진입점만 덮으므로 3단계
         // 조립 경로에서도 직접 잠근다.
         let doc = doc_with_srcs(&["https://e.test/logo.png"]);

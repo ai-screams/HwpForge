@@ -561,7 +561,7 @@ fn core_code(error: &CoreError) -> OpsCode {
 /// contract broke, so they map to [`OpsCode::AssetPlanMismatch`] and
 /// [`OpsCode::AssetIdentityConflict`].
 /// `tests/ops_error_inventory.rs::asset_contract_violations_get_dedicated_codes`
-/// pins it (W1a adversarial review F6).
+/// pins it.
 #[cfg(feature = "ops-md")]
 fn md_code(error: &MdError, stage: Stage) -> OpsCode {
     let stage_code = match stage {
@@ -1101,7 +1101,7 @@ mod tests {
         assert_eq!(others[0].code, "LAYOUT_CACHE_DROPPED");
     }
 
-    /// R1-1: a control the encoder left out blocks a fail-closed editor.
+    /// A control the encoder left out blocks a fail-closed editor.
     ///
     /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
     /// `ContentLost` 를 `false` 갈래로 옮기는 것.
@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(warnings[0].code, "CONTENT_LOST");
     }
 
-    /// C4: a manifest id two items share blocks a fail-closed editor.
+    /// a manifest id two items share blocks a fail-closed editor.
     ///
     /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
     /// `PackageIdConflict` 를 `false` 갈래로 옮기는 것.
@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!(warnings[0].code, "PACKAGE_ID_CONFLICT");
     }
 
-    /// C4: an image reference no package item resolves blocks a fail-closed
+    /// an image reference no package item resolves blocks a fail-closed
     /// editor.
     ///
     /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서

@@ -1,40 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-> **구조 원칙**: 이 파일은 매 세션 로드되는 **얇은 인덱스**다 — 상세는 아래 **로딩 맵**의
-> 파일을 필요할 때 읽는다. 여기에 이력·상세를 다시 쌓지 말 것 (추가는 로딩 맵 대상 파일에).
-
----
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. Contributor workflow (PR, release) lives in `CONTRIBUTING.md` and `RELEASING.md`.
 
 ## Project Overview
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-현재 crates.io published = **0.18.0** (2026-10-25, 원인마다 하나인 오류 코드·(명령, 코드) 종료 값, Core 깊이 32 decode 관문, 버려진 내용 `CONTENT_LOST` 보고, styled Markdown 구조·강조 보호와 내용 보존 평문 대체, 크레이트 간 caret 의존). 상태 스냅샷·에픽 이력 = `.claude/guides/status.md`.
-
----
-
-## 로딩 맵 (필요할 때 읽는다 — 해당 작업 전 필독)
-
-> `.claude/` 아래 문서는 유지관리자의 로컬 자료라 git 에 없다(공개 clone 에는 없음). 사용자용 agent 스킬은 `skills/` 에 있다.
-
-| 상황 (트리거)                          | 읽을 파일                                                                                                              |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts)                                                     |
-| **커밋·푸시·테스트 실행 전**           | `.claude/guides/tooling.md` (훅·nextest·lock·디스크 함정)                                                              |
-| 새 타입/API 설계 · 테스트 작성         | `.claude/guides/design-patterns.md` (패턴 11종·크레이트 그래프·TDD·레퍼런스)                                           |
-| **HWPX/HWP5 wire 구현·디버깅 전**      | `.claude/guides/wire-gotchas.md` (WG#1\~41; 코드 예제판 = `.docs/references/gotchas.md` (RG#, 번호 독립))              |
-| 릴리스·머지 큐·publish 검증            | `RELEASING.md` (canonical — §8 운영 함정 포함)                                                                         |
-| 에픽 정식 절차                         | `.claude/rules/epic-workflow.md` (자동 로드)                                                                           |
-| 에이전트 경계/크레이트 규칙            | root `AGENTS.md` → `crates/AGENTS.md` → 크레이트 로컬 (미추적 로컬 파일 — worktree 에서는 메인 체크아웃 경로로 읽는다) |
-| 내부 문서·계획·참조 자료 위치          | `.docs/README.md` (git 밖, 인덱스)                                                                                     |
-
----
-
 ## Architecture (Forge Metaphor)
 
-The codebase follows a **blacksmith workshop** metaphor with clear separation of concerns (canonical names: `branding/BRANDING.md` "대장간 이름 체계"):
+The codebase follows a **blacksmith workshop** metaphor with clear separation of concerns (canonical names: `branding/BRANDING.md`):
 
 ```
 Foundation = Ingot (primitives)
@@ -56,50 +30,53 @@ This enables:
 - Format-agnostic document manipulation
 - Easy addition of new formats — smithy-pdf is a real, shipped example (0.12.1+); smithy-odt remains a hypothetical one
 
+## Crate Map
+
+`crates/hwpforge-foundation` (Ingot) · `hwpforge-core` (Anvil) · `hwpforge-blueprint` · `hwpforge-smithy-hwpx` · `hwpforge-smithy-hwp5` · `hwpforge-smithy-md` · `hwpforge-smithy-pdf` · `hwpforge-convert` (cross-format operations) · `hwpforge` (facade) · `hwpforge-bindings-cli` · `hwpforge-bindings-mcp` · `hwpforge-bindings-py`.
+
+## Tests
+
+- Shared integration-test helpers live in `crates/<crate>/tests/support/<concern>.rs`, included with `#[path = "support/<concern>.rs"] mod <concern>;`. Reuse them before adding a helper.
+- CLI integration tests are one binary split by command: `crates/hwpforge-bindings-cli/tests/cli_integration/<command>.rs`.
+- Generated `.hwpx` inputs must be reproducible from `crates/*/examples` (see `crates/hwpforge-smithy-hwpx/tests/generated_inputs.rs`).
+
 ---
 
 ## Development Commands
 
 ```bash
-make ci               # push 전 필수 — ci-fast 별칭 (fmt·clippy·test·deny·lint-md, CI 플래그 일치)
-make ci-full          # 위 + coverage + MSRV (릴리스·큰 변경 전)
-make py-all           # Python 바인딩 (lint·타입·Rust/Python 테스트·coverage)
-make site-check       # 문서 사이트 빌드·후처리 (CI Docs Build 와 같은 경로, mdBook 0.4 필요)
-mdbook build          # 문서 변경 시 — mdBook 0.4 라인 필수 (`make install-tools`)
-cargo nextest run -p <crate>          # 크레이트 한정 (전 워크스페이스 cold 15분+ 금지)
-cargo clippy -p <crate> --all-targets -- -D warnings   # 커밋 전 touched 크레이트 사전 점검
-bacon / bacon test    # watch 모드
+make ci               # required before push — alias of ci-fast (fixture-policy, fmt, clippy, test, deny, lint-md; same flags as CI)
+make ci-full          # the above + coverage + MSRV (before a release or a large change)
+make py-all           # Python bindings (lint, types, Rust/Python tests, coverage)
+make site-check       # docs site build + post-processing (same path as CI Docs Build; needs mdBook 0.4)
+mdbook build          # when docs change — mdBook 0.4 line required (`make install-tools`)
+cargo nextest run -p <crate>          # one crate (a cold full-workspace run takes 15+ min)
+cargo clippy -p <crate> --all-targets -- -D warnings   # pre-check the crates you touched
+bacon / bacon test    # watch mode
 ```
 
-`make ci` 는 CI 전체가 아니라 빠른 다섯 레인이다 — CI 는 여기에 Coverage·MSRV·Docs Build·Python(release 전용 테스트 포함)·Workflow Lint 를 더 돌린다. 상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
+`make ci` is the six fast lanes, not all of CI. CI also runs Coverage, MSRV, Docs Build, Python (including release-only tests) and Workflow Lint.
 
 ---
 
-### Working Principles
+## Working Principles
 
 - **Warning-first for unknowns**: if source truth is missing or a value is unsupported, emit a warning or validation signal first.
 - **No fake support**: do not silently normalize unknown semantics into arbitrary defaults just to keep output green.
-- **Unhandled enum ≠ bug**: an unmatched enum arm is a real gap only if that value actually exists in the reference enum (hwpxlib/libhwp) or a native fixture. Verify existence first — otherwise `_ => default` is correct and a guessed mapping is fake support. (See `HWP5_WIRE_SPEC.md §22`; 번호 code 11 / 이미지 채우기 모드 = real bugs, 가나다 · 대각선 1/4/5 = false positives.)
+- **Unhandled enum ≠ bug**: an unmatched enum arm is a real gap only if that value actually exists in the reference enum (hwpxlib/libhwp) or in a document saved by Hancom Office. Verify existence first — otherwise `_ => default` is correct and a guessed mapping is fake support. (See `HWP5_WIRE_SPEC.md §22`: numbering code 11 and image fill mode were real bugs; 가나다 numbering and diagonal types 1/4/5 were false positives.)
 - **Shared-model first**: if HWP5 discovers a semantic that Core/HWPX cannot carry, extend the shared representation first and wire HWP5 after.
 - **Semver-first for public API**: if a design touches public structs, enums, or externally constructible types, surface the breakage before implementation and get approval first.
-- **편집 표면은 의미 손상 fail-closed**: stamper/cell-edit 등 preserve-first 편집기는 인코드가 의미 경고(`NoteHeadSkipped` 등)를 내면 기존 오류 타입으로 거부한다 — admission(Core 비교)은 wire 손상을 못 보므로 무경고 성공 반환 금지.
+- **Editing surfaces fail closed on semantic loss**: preserve-first editors (stamper, cell-edit) reject with their existing error type when encoding emits a semantic warning (`NoteHeadSkipped` etc.). Admission compares Core only and cannot see wire damage, so never return success silently.
 
-구현 중 상시 규칙: **TDD edge-first** · **atomic conventional commits** (breaking 은 `type(scope)!:`) · **100% rustdoc** (`#![deny(missing_docs)]`) · **zero clippy warnings**.
+Always: **TDD edge-first** · **atomic conventional commits** (breaking = `type(scope)!:`) · **100% rustdoc** (`#![deny(missing_docs)]`) · **zero clippy warnings**.
 
----
+## Repository Rules
 
-## 치명 규칙 Top (전 작업 상시 — 로딩 맵과 무관하게 항상 적용)
-
-1. **Color 는 BGR** — `Color::from_rgb()` 만 사용 (`from_raw(0xFF0000)` 은 파랑).
-2. **`.docs` 는 git 에 절대 커밋/푸시 금지** (내부 문서).
-3. **commit/push 는 `run_in_background` + 파일 리다이렉트** — 파이프(`| tail`) 연결 금지 (훅 출력이 push 를 죽임 · 실패 라인 유실). 성공 판정은 `git ls-remote` 실측.
-4. **버전/태그/publish 수동 조작 금지** — release-plz 소유. 머지는 GraphQL `enqueuePullRequest` 로만 (`gh pr merge` 거부됨), 큐 방식 = **squash**.
-5. **테스트 실행 중 소스 편집 금지** (rebuild 유발) · nextest 필터는 **substring** (`'a|b'` 무효).
-6. `examples/README.md` 미커밋 변경 = 사용자 낙서 — 보존 말고 **항상 원복**, 커밋 절대 금지.
-7. PR/이슈 생성 시 **assignee = 나** (`gh --assignee @me`) · 제목 **English conventional**(squash 라 PR 제목 = main 커밋 = release-plz 입력, breaking 은 `type!:`)·본문 **한글** · PR 생성/큐 등록은 **사용자 명시 승인 후에만**.
-8. stale `.git/index.lock`(0바이트·git 프로세스 없음 확인) 은 `rm -f` — 반복 사고.
-
----
-
-> **정식 에픽 워크플로우 = `.claude/rules/epic-workflow.md`** (자동 로드 — E3~E6·E4 로 검증된 프로세스, 그쪽이 canonical).
-> 요약: 사전 확인(ground truth) → 연구·설계(`.docs/planning/`, 실측 근거) → 적대 리뷰 → **확정 계획 보고·사용자 승인** → TDD 웨이브 → 시각 게이트(사용자 판정·PDF 대조) → 독립 리뷰 상환 → CI·merge queue → release-plz 릴리스 실측 검증 → 기록.
+1. **Color is BGR** — use `Color::from_rgb()` only (`from_raw(0xFF0000)` is blue).
+2. **No manual version/tag/publish** — release-plz owns workspace releases (`v*`); the only hand-made tag is the emergency Python `py-v*` tag in `RELEASING.md` §9.3. Merge to main only through the merge queue (squash).
+3. **`Cargo.lock` and `uv.lock` are not tracked** — they are in `.gitignore`, so `git add` refuses them. CI resolves the latest dependencies.
+4. **Do not edit sources while tests run** (it triggers a rebuild). nextest filters are **substrings** (`'a|b'` does not work).
+5. PR titles are **English conventional commits** (squash makes the PR title the main commit and the release-plz input; breaking = `type!:`).
+6. **Do not commit documents saved by other apps** — `scripts/check_fixture_policy.py` rejects `.hwp`, `.pdf` and `.hwpx` without the HwpForge encoder signature. Test inputs must be reproducible from examples or code in the repo.
+7. **Test temp paths use a drop guard** — use `tempfile::TempDir` or the CLI `test_tmp()` and bind the value to a variable (`test_tmp().join(..)` deletes the directory at the end of that statement). A directory made with `std::env::temp_dir().join(..)` and never removed piles up by hundreds per nextest run.
+8. **Tracked files carry no work-phase labels** — comments, doc text, messages, test names and file names must not cite work-phase names (Wave/W/Phase/E/S numbers such as `W4a`), review rounds, or documents outside the repo; state the reason directly and name things by what they do. Public issue/PR numbers and `HWP5_WIRE_SPEC.md §N` are fine.

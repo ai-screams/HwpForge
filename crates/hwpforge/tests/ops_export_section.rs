@@ -94,7 +94,7 @@ fn non_hwpx_input_is_a_decode_failure() {
 
 /// `export_section` reports decode warnings, exactly as `to_json` does.
 ///
-/// The phase-2 design says both exports unify their warning reporting. The
+/// Both export operations share warning reporting. The
 /// section workflow used to decode internally and drop the list, so this
 /// surface silently disagreed with `to_json` on the same document.
 #[test]

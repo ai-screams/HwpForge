@@ -27,7 +27,7 @@ struct InspectResult {
     styles: Option<InspectStyles>,
     /// Decode warnings raised while decoding (`ops::InspectOutput::warnings`,
     /// for example `LAYOUT_CACHE_DROPPED`). Omitted when empty; new key, so a
-    /// clean document's `--json` shape is unchanged (W5 follow-up — see the
+    /// clean document's `--json` shape is unchanged (follow-up — see the
     /// `run` module comment).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<WarningInfo>,
@@ -98,7 +98,7 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
             err.exit(json_mode, Command::Inspect);
         }
     };
-    // W5 follow-up: the pre-migration CLI never captured decode warnings
+    // the pre-migration CLI never captured decode warnings
     // here (there was no decode step to capture them from); now that
     // `ops::inspect` reports them (`LAYOUT_CACHE_DROPPED` etc., mirroring
     // `hwpforge_inspect`/`doc.inspect()` on the MCP/Python surfaces), they
@@ -184,7 +184,7 @@ struct RawScanCounts {
 /// for why all eight of these stay a raw scan rather than a Core-tree count.
 /// `collect_section_path_inventory` reads section XML text and matches
 /// element names by local name; it does not build a document tree, so this
-/// is not the "second decode" the W6b finding measured (135.7 ms), just a
+/// avoids the measured cost of a second decode (135.7 ms); it is a
 /// comparatively cheap text scan.
 ///
 /// Ported unchanged from the pre-migration scanner

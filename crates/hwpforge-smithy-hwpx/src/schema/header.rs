@@ -617,7 +617,7 @@ pub struct HxBorder {
 
 /// `<hp:switch>` — version-specific rendering container.
 ///
-/// Phase 3 reads only the `<hp:default>` block for maximum
+/// The decoder reads only the `<hp:default>` block for maximum
 /// compatibility across 한글 versions.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSwitch {

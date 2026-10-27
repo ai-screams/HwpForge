@@ -6,7 +6,7 @@ use serde::Serialize;
 
 /// Maximum file size: 100 MB.
 ///
-/// W6b audit follow-up: re-exported from the shared operation layer
+/// re-exported from the shared operation layer
 /// (`hwpforge::ops::fs::MAX_FILE_SIZE`) rather than declared here, so this
 /// crate, the CLI and the Python bindings all read the one constant instead
 /// of three copies of the same literal.
@@ -46,7 +46,7 @@ pub(crate) fn json_serialize_error(
 /// Uses `metadata()` for size guard (prevents OOM in the common case), then
 /// reads through [`hwpforge::ops::fs::read_bounded`] — a hard cap of
 /// [`MAX_FILE_SIZE`] bytes enforced on the read itself, not just on
-/// `metadata()` (W6b audit follow-up: this is the one bounded reader every
+/// `metadata()` (this is the one bounded reader every
 /// frontend shares) — with `ErrorKind`-based error mapping. No separate
 /// `exists()` call (TOCTOU-safe).
 pub fn read_file_bytes(file_path: &str) -> Result<Vec<u8>, ToolErrorInfo> {
@@ -149,7 +149,7 @@ fn is_sensitive_output_path(target: &Path, home: &Path) -> bool {
 /// Non-sensitive absolute paths stay allowed: callers legitimately derive
 /// output from absolute input paths (`to_md`) and agents write into e.g. the
 /// user's Documents. Full allowed-root confinement (config-driven) is a
-/// possible future tightening (see `.docs/planning` E1 audit).
+/// possible future tightening.
 pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolErrorInfo> {
     let out = Path::new(output_path);
     if out.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -287,7 +287,7 @@ impl ToolErrorInfo {
 
 /// Structured non-fatal warning for MCP tool responses.
 ///
-/// W6b audit follow-up: this is a structural (field-by-field) twin of
+/// this is a structural (field-by-field) twin of
 /// `hwpforge_foundation::diagnostics::WarningInfo` — same `{code, message,
 /// hint}` shape, `hint` omitted the same way when absent. Kept as its own
 /// type rather than replaced outright because every tool file's `warnings`
@@ -335,8 +335,8 @@ mod tests {
 
     // The Cursor-based cap-boundary tests that used to live here (a small
     // `max` against `read_capped`, this file's own private reader) moved
-    // with the reader itself to `hwpforge::ops::fs::tests` — W6b audit
-    // follow-up: one bounded reader, one set of boundary tests, shared by
+    // with the reader itself to `hwpforge::ops::fs::tests`: one bounded
+    // reader, one set of boundary tests, shared by
     // every frontend. `read_file_bytes_over_the_size_cap_reports_input_too_large`
     // below is this file's own regression: the *mapping* from the shared
     // reader's `OpsError` onto this crate's `ToolErrorInfo` shape.
@@ -546,7 +546,7 @@ mod tests {
         assert!(!real_target.exists(), "symlink target must not be written through");
     }
 
-    /// W6c audit follow-up: `to_json`/`outline`/`diff` used to each declare
+    /// `to_json`/`outline`/`diff` used to each declare
     /// their own `1024 * 1024` literal; this pins the one shared value they
     /// now all import from here instead.
     #[test]

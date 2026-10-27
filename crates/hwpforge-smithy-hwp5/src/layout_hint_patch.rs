@@ -213,7 +213,7 @@ fn collect_flow_paragraph_layout_hints(
 }
 
 /// A body table: its cells are flow paragraphs too, so a header/footer in a
-/// cell (lifted into the section by projection, §19.7 F) leaves its hints
+/// cell (lifted into the section by projection) leaves its hints
 /// in the header/footer scope rather than the body.
 ///
 /// 이것을 실패시키는 것: 칸 문단을 `collect_scope_paragraphs(.., body)` 로
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(empty.paragraphs.len(), 1);
     }
 
-    /// A-T4: the table height hint is the table `CtrlHeader` height (법무부
+    /// The table height hint is the table `CtrlHeader` height (법무부
     /// 본문 표 43643, not the cell-height derived 102508).
     /// 이것을 실패시키는 것: `CtrlHeader` 높이를 건너뛰기.
     #[test]

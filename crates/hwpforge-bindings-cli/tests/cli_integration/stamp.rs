@@ -1,7 +1,7 @@
 use super::*;
 
 // ═══════════════════════════════════════════════════════════════
-// stamp-plan / stamp — E6 템플릿 스탬핑 게이트
+// stamp-plan / stamp — 템플릿 스탬핑 게이트
 // ═══════════════════════════════════════════════════════════════
 
 /// stamp-plan candidates 에서 시험용 spec 맵을 만든다: 무가드 후보는
@@ -168,7 +168,7 @@ fn stamp_error_codes_for_bad_maps() {
 
 #[test]
 fn stamp_manifest_write_failure_removes_output() {
-    // Review L1: manifest 기록 실패 시 .hwpx 산출물도 남기지 않아야 한다.
+    // Manifest 기록 실패 시 .hwpx 산출물도 남기지 않아야 한다.
     let f = fixture("stamp/placeholder_basic.hwpx");
     let tmp = test_tmp();
     let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);
@@ -191,7 +191,7 @@ fn stamp_manifest_write_failure_removes_output() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// stamp v2 — E6 Wave 2 클래스-B 셀 스탬핑 게이트
+// stamp v2 — 클래스-B 셀 스탬핑 게이트
 // ═══════════════════════════════════════════════════════════════
 
 /// merged_grid_form 의 셀 후보 3개(성명·비고·비고-병합경계)에 대한 v2 맵.
@@ -350,7 +350,7 @@ fn stamp_v2_uncovered_cell_and_unknown_field_rejected() {
     assert_eq!(value["code"], "INVALID_STAMP_MAP");
 }
 
-/// R1 F4 회귀 잠금 (CLI stamp): 의미 손상은 typed `StamperError::SemanticLoss`
+/// 회귀 잠금 (CLI stamp): 의미 손상은 typed `StamperError::SemanticLoss`
 /// 를 canonical `ENCODE_SEMANTIC_LOSS`로 내보내며 exit 2를 유지한다.
 /// 의미 손상을 포괄 실패로 축약하면 이 계약이 깨진다.
 ///

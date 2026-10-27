@@ -24,7 +24,7 @@ fn read_rejects_conflicting_targets() {
 
 #[test]
 fn read_arg_guards_run_before_the_file_is_read() {
-    // W3 remediation: legacy checked target-count/paras-without-section
+    // legacy checked target-count/paras-without-section
     // before `check_file_size`/`fs::read`, so these reject even against a
     // file that does not exist — FILE_READ_FAILED must not shadow them.
     let (err, _, code) = run_json(&["read", "/nonexistent/file.hwpx"]);

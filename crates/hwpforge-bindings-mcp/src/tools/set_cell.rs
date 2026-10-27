@@ -1,4 +1,4 @@
-//! `hwpforge_set_cell` — 논리 격자 주소 기반 표 셀 편집 (E3).
+//! `hwpforge_set_cell` — 논리 격자 주소 기반 표 셀 편집.
 //!
 //! 셀은 표 서수(to-json export 순서) + 좌표(`at`, 피병합 좌표는 앵커로
 //! resolve) 또는 라벨 상대(`right_of`/`below`, 정규화 exact match)로

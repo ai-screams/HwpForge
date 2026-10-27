@@ -126,7 +126,7 @@ fn roundtrip(body: &str, expected: &[&str], cached: bool) {
             after.push((text, p.runs.clone(), p.layout_cache.clone()));
         }
     });
-    assert_eq!(before, after, "Core body and S22 boundary");
+    assert_eq!(before, after, "Core body and field visibility boundary");
     let second = encode(d);
     assert_eq!(section_xml(&first.bytes), section_xml(&second.bytes), "normalized XML fixed point");
     assert_eq!(first.bytes, second.bytes, "normalized package byte fixed point");
@@ -1826,7 +1826,7 @@ fn memo_cache_normalizes_core_and_token_boundaries_before_roundtrip() {
 fn memo_cache_rejects_lines_inside_folded_anchors() {
     let middle = run(&(memo_begin(7) + "<hp:t>XY</hp:t>" + &end(7)))
         + &run(&(memo_begin(8) + "<hp:t>Z</hp:t>" + &end(8)));
-    // 10 is the review's Y counterexample; also check the begin/end token
+    // 10 is the boundary counterexample; also check the begin/end token
     // boundaries and the second memo, where cumulative contraction matters.
     for wire in [10, 9, 11, 2, 20, 27, 28] {
         let decoded = HwpxDecoder::decode(&package(&memo_cache_body(&middle, &[0, wire]))).unwrap();

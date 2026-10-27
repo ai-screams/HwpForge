@@ -83,7 +83,7 @@ fn golden_full_elements_roundtrip() {
     assert!(has_table, "Expected to find at least one Table run");
 
     // Assert: MD decode captures a Hyperlink control.
-    // Note: HWPX encoder does not preserve Control::Hyperlink (Phase 4 limitation),
+    // Note: HWPX encoder does not preserve Control::Hyperlink (limitation),
     // so we only verify the MD decode result here, not the HWPX roundtrip.
     let md_has_hyperlink =
         md_result.document.sections().iter().flat_map(|s| &s.paragraphs).flat_map(|p| &p.runs).any(

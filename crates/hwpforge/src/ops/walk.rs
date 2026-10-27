@@ -59,9 +59,7 @@
 //! (via [`visit_control_for_objects`]) and `super::exchange`'s
 //! `first_layout_cache_path` build their own, genuinely different walks on
 //! top of — a table cell/caption or group-child recursion written down once
-//! instead of twice, audit follow-up W6b finding 4 ("`exchange.rs` still has
-//! its own layout-cache traversal while `walk.rs` reimplements the
-//! overlapping policy"). What differs at each call site (a counting
+//! instead of twice. What differs at each call site (a counting
 //! increment here, an [`hwpforge_smithy_hwpx::PathSeg`] tag and an
 //! encoder-mirroring group-child index there) stays local to that call
 //! site; only the "what containers exist and what do they nest" fact is

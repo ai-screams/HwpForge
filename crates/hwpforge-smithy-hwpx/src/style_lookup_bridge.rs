@@ -98,7 +98,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
 /// whole crate uses (the style lookup here, and the HWPX decoder's pixel
 /// sizes).
 ///
-/// W2a hardening (§3 disposition M5): 종전 단일 iter().find() 는 exact 와 stem
+/// Lookup precedence: 종전 단일 iter().find() 는 exact 와 stem
 /// 을 OR 로 섞어 HashMap 순서에 따라 다른 자산을 돌려줄 수 있었다 (비결정).
 /// 우선순위 고정: ① exact 일치 → ② stem 일치가 **유일**할 때만 → ③ 복수 stem
 /// = None (모호 — 추측 금지). 실측 양 경로(HWPX sanitize 키·HWP5
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn image_resolver_prefers_exact_over_stem() {
-        // W2a M5: "logo.png" 와 "logo.png.jpg" 공존 시 exact 가 항상 이긴다
+        // "logo.png" 와 "logo.png.jpg" 공존 시 exact 가 항상 이긴다
         // (종전 단일 find 는 HashMap 순서 비결정).
         let store = HwpxStyleStore::new();
         let mut images = ImageStore::new();

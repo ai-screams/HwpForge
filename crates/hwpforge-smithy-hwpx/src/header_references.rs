@@ -1,4 +1,4 @@
-//! Header references are zero/one-based list positions (Hancom W3 probes).
+//! Header references are zero/one-based list positions (Hancom probes).
 use crate::paragraph_measure::invalid;
 use crate::{HwpxResult, HwpxStyleStore};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};
@@ -321,7 +321,7 @@ mod tests {
     use super::*;
     use crate::{HwpxCharShape, HwpxParaShape, HwpxStyle};
     #[test]
-    fn fix8b_position_ranges_preserve_boundaries() {
+    fn position_ranges_preserve_boundaries() {
         // 이것을 실패시키는 것: 0/1 시작 혼동, 상한 포함/제외 뒤집기, usize 절삭.
         for count in [0, 1, 3] {
             for id in [0, 1, 2, 3, 4, usize::MAX] {
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn fix2_wide_references_cannot_alias_existing_definitions() {
+    fn wide_references_cannot_alias_existing_definitions() {
         // 이것을 실패시키는 것: font/borderFill usize 참조를 as u32로 잘라 검증.
         let wide = usize::try_from(u64::from(u32::MAX) + 1).unwrap();
         let mut store = HwpxStyleStore::with_default_fonts("바탕");
@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn w3_positions_ignore_style_labels_and_reject_out_of_range() {
+    fn positions_ignore_style_labels_and_reject_out_of_range() {
         // 이것을 실패시키는 것: 한컴 실측과 반대로 id로 조회/원본 id 출력.
         let mut store = HwpxStyleStore::new();
         for _ in 0..4 {

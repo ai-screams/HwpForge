@@ -1,7 +1,7 @@
 use super::*;
 
 // ═══════════════════════════════════════════════════════════════
-// to-md 모드 게이트 (E3 Wave 4 경고 E2E + 커버리지 공백 해소)
+// to-md 모드 게이트 (경고 E2E + 커버리지 공백 해소)
 // ═══════════════════════════════════════════════════════════════
 
 #[test]
@@ -16,7 +16,7 @@ fn to_md_styled_keeps_merges_and_lossy_warns_flattening() {
     assert!(md.contains("rowspan=\"2\""), "styled must keep merges as HTML: {md}");
     assert!(!stderr.contains("TABLE_MERGE_FLATTENED"));
 
-    // lossy: GFM 평탄화 + TABLE_MERGE_FLATTENED 경고 (Wave 4 warning-first).
+    // lossy: GFM 평탄화 + TABLE_MERGE_FLATTENED 경고 (warning-first).
     let tmp = test_tmp();
     let (_, stderr, code) =
         run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossy"]);

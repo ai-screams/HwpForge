@@ -8,7 +8,7 @@ pub(super) fn build_table(
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTable> {
-    // Diagnostic slot before the cells (document order, review W2 r1 LOW).
+    // Diagnostic slot before the cells (document order).
     let id_slot = super::super::object_ids::reserve();
 
     // Guard the lenient placement scan before it allocates per-position
@@ -38,7 +38,7 @@ pub(super) fn build_table(
 
     let table_border_fill_id = table.border_fill_id.unwrap_or(TABLE_BORDER_FILL_ID);
     // The caption is written before the cells but encoded after them: its
-    // diagnostic records go here (review S22 r1 LOW).
+    // diagnostic records go here.
     let caption_at = super::super::object_ids::mark();
     let header_rows = table.header_row_count();
     let rows = table
@@ -67,10 +67,10 @@ pub(super) fn build_table(
             .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
     });
 
-    // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
+    // HWPX `<hp:tbl id="...">` cross-ref target.
     // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
     // 없으면 sequential fallback — drawn after the cells and before the
-    // caption, the order this encoder has always drawn it in (S22 r2).
+    // caption, the order this encoder has always drawn it in.
     // 이것을 실패시키는 것: 이 줄을 캡션 인코딩 뒤로
     // (`drawn_ids_keep_the_table_before_its_caption`).
     let id = super::super::object_ids::core_or_drawn_at(id_slot, "table", table.inst_id);
@@ -84,7 +84,7 @@ pub(super) fn build_table(
     // "footnote, equation" 으로, `shared_core_id_is_kept_and_reported`).
     super::super::object_ids::move_since(caption_from, caption_at);
 
-    // §19.6 A: `None` = the placement this encoder has always written.
+    // `None` = the placement this encoder has always written.
     // 이것을 실패시키는 것: 고정값 복귀(`table_placement_round_trips`).
     let placement = table.placement.clone().unwrap_or_else(table_default_placement);
     Ok(HxTable {
@@ -116,7 +116,7 @@ pub(super) fn build_table(
             width_rel_to: "ABSOLUTE".to_string(),
             height: 0,
             height_rel_to: "ABSOLUTE".to_string(),
-            // S20: the table's size lock (`Table::frame`).
+            // the table's size lock (`Table::frame`).
             // 이것을 실패시키는 것: 상수 0 으로 되돌리기(`picture_and_table_protect_round_trip`).
             protect: u32::from(table.frame.size_protect),
         }),
@@ -133,7 +133,7 @@ pub(super) fn build_table(
             vert_offset: placement.vert_offset.as_i32(),
             horz_offset: placement.horz_offset.as_i32(),
         }),
-        // Core 승격값 우선 (W3a-2 의도된 delta) — None(우리 API 저작)은 기존
+        // Core 승격값 우선 (의도된 delta) — None(우리 API 저작)은 기존
         // 기본값 유지로 바이트 불변.
         out_margin: Some(table.out_margin.map(encode_table_margin).unwrap_or(DEFAULT_OUT_MARGIN)),
         caption,
@@ -258,7 +258,7 @@ fn build_table_cell(
                 options,
                 sink,
             )?;
-            // §19.22 D3: the cell's line wrap, not a fixed `BREAK`.
+            // The cell's line wrap, not a fixed `BREAK`.
             // 이것을 실패시키는 것: 고정 BREAK 복귀(`cell_line_wrap_round_trips`).
             sub_list.line_wrap = match cell.line_wrap {
                 hwpforge_core::table::CellLineWrap::Squeeze => "SQUEEZE",
@@ -277,7 +277,7 @@ fn build_table_cell(
             width: cell.width.as_i32(),
             height: cell.height.or(ctx.row_height).unwrap_or(HwpUnit::ZERO).as_i32(),
         }),
-        // 셀 오버라이드 → (hasMargin=0 이면) 칸이 지닌 휴면 값(S19 — 한컴은
+        // 셀 오버라이드 → (hasMargin=0 이면) 칸이 지닌 휴면 값(한컴은
         // HWP5 에서 온 칸의 자기 값을 그대로 둔다) → 표 inMargin → 기본값 순.
         // 이것을 실패시키는 것: 휴면 값을 쓰지 않기
         // (`dormant_cell_margins_round_trip`).
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn core_margins_round_trip_to_wire() {
-        // W3a-2 의도된 delta: 승격된 out/inMargin 은 고정 기본값 대신 원본값으로.
+        // 의도된 delta: 승격된 out/inMargin 은 고정 기본값 대신 원본값으로.
         let table = one_cell_table()
             .with_out_margin(margin(283, 284, 240, 241))
             .with_in_margin(margin(510, 511, 141, 142));
@@ -331,7 +331,7 @@ mod tests {
         assert_eq!((out.left, out.right, out.top, out.bottom), (283, 284, 240, 241));
         let inm = hx.in_margin.expect("inMargin");
         assert_eq!((inm.left, inm.right, inm.top, inm.bottom), (510, 511, 141, 142));
-        // 셀 오버라이드 없음(H5): hasMargin=0 + element 는 표 inMargin 실효값.
+        // 셀 오버라이드 없음: hasMargin=0 + element 는 표 inMargin 실효값.
         let cell = &hx.rows[0].cells[0];
         assert_eq!(cell.has_margin, 0);
         let cm = cell.cell_margin.as_ref().expect("cellMargin element");

@@ -88,7 +88,7 @@ pub enum Hwp5Warning {
     },
     /// A paragraph's line-layout cache was not promoted to Core because the
     /// wire→Core coordinate ledger could not be built or a lineseg `textpos`
-    /// could not be normalized (W1b fail-closed — no guessed coordinates).
+    /// could not be normalized (fail-closed — no guessed coordinates).
     LayoutCacheDropped {
         /// Concrete drop reason (ledger failure or offending textpos).
         reason: String,
@@ -129,7 +129,7 @@ pub(crate) struct DecodedHwp5Intermediate {
     /// Parsed `BodyText/Section{N}` results.
     pub sections: Vec<SectionResult>,
     /// Document metadata parsed from `\x05HwpSummaryInformation`
-    /// (Wave 12o Phase 3). Empty `Metadata::default()` when the stream
+    /// Empty `Metadata::default()` when the stream
     /// is absent or undecodable.
     pub metadata: hwpforge_core::metadata::Metadata,
     /// Non-fatal warnings collected during parsing.
@@ -171,7 +171,7 @@ pub(crate) fn decode_intermediate(bytes: &[u8]) -> Hwp5Result<DecodedHwp5Interme
     hwpforge_core::style_lookup::lookup(doc_info.para_shapes.first(), "paraPr", 0)?;
     hwpforge_core::style_lookup::lookup(doc_info.char_shapes.first(), "charPr", 0)?;
 
-    // Wave 12o Phase 3: parse \x05HwpSummaryInformation PropertySet
+    // parse \x05HwpSummaryInformation PropertySet
     // when present. Errors are demoted to warnings + empty metadata so
     // a malformed summary stream cannot break the body-text decode
     // path (the user-visible content is far more important than the
@@ -246,7 +246,7 @@ impl Hwp5Decoder {
         let mut warnings = intermediate.warnings;
         let metadata = intermediate.metadata;
 
-        // Stage 4: Projection — HWP5 IR → Core Document
+        // Projection — HWP5 IR → Core Document
         let (mut document, image_store, proj_warnings) =
             crate::projection::project_to_core_with_images(
                 intermediate.sections,
@@ -255,8 +255,7 @@ impl Hwp5Decoder {
             )?;
         warnings.extend(proj_warnings);
 
-        // Codex(architect) Wave 12o-fixup §Top-4: forward
-        // `\x05HwpSummaryInformation` derived metadata so the canonical
+        // Forward `\x05HwpSummaryInformation` derived metadata so the canonical
         // entry point honors the same wire contract as
         // `decode_hwp5_with_images` / `decode_hwp5_to_core`. Without
         // this the public API silently dropped metadata for any

@@ -1,4 +1,4 @@
-//! Targeted text reads (E5): paragraph range, table grid, or field by name.
+//! Targeted text reads: paragraph range, table grid, or field by name.
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
@@ -65,7 +65,7 @@ pub fn run(
     // `ops::read` itself, which owns the rule. `compat::cli_message` puts
     // the `--paras` spelling back into the one message that names the
     // argument.
-    // Decoder warnings (`ReadOutput::warnings`) were not surfaced pre-W5. W5
+    // Decoder warnings (`ReadOutput::warnings`) were not surfaced previously.
     // follow-up: additive — a new, omit-if-empty `warnings` key in `--json`,
     // and one `[read]`-prefixed stderr line each in text mode, for whichever
     // of the three payloads below is the requested target.

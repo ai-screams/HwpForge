@@ -90,7 +90,7 @@ const AUDITED: &[Audited] = &[
             ("Encoding", "HWP5_DECODE_FAILED"),
             ("Io", "HWP5_DECODE_FAILED"),
             // A Core error out of the decoder (a broken style or border-fill
-            // reference) is part of reading the input: decode stage (D10).
+            // reference) is part of reading the input: decode stage.
             ("Core", "HWP5_DECODE_FAILED"),
             ("Foundation", "HWP5_DECODE_FAILED"),
         ],

@@ -465,9 +465,6 @@ $RECYCLE.BIN/
 
 # End of https://www.toptal.com/developers/gitignore/api/osx,windows,linux,git,python,rust,vim,jetbrains+all,visualstudiocode,emacs,virtualenv
 
-# HwpForge internal docs (not for version control)
-.docs/
-.sisyphus/
 .scoop-version
 
 # Claude Code / AI agent config (local only, never shared). The public
@@ -485,12 +482,8 @@ $RECYCLE.BIN/
 /book/
 temp/
 .mcpregistry_*
-.docs/
 
 # Encoder output examples are tracked; keep their directories visible to packaging tools.
 
 # uv lockfile — untracked, same policy as Cargo.lock (CI resolves latest deps)
 uv.lock
-
-# Paper material lives in the private paper repository
-/papers/

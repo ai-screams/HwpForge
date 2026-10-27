@@ -210,8 +210,8 @@ pub enum Hwp5FillPatternKind {
 
 impl Hwp5FillPatternKind {
     /// The Core hatch for this kind; `None` for no hatch and an unknown kind.
-    /// Kind 2 is Hancom's `SLASH` (x6 F1) — [`PatternType`]'s display swaps
-    /// the two slashes the same way (WG#21).
+    /// Kind 2 is Hancom's `SLASH` — [`PatternType`]'s display swaps
+    /// the two slashes the same way.
     ///
     /// [`PatternType`]: hwpforge_foundation::PatternType
     pub(crate) fn pattern_type(self) -> Option<hwpforge_foundation::PatternType> {
@@ -463,7 +463,7 @@ fn checked_len(cur: &Cursor<&[u8]>, count: u64, size: u64, what: &str) -> Hwp5Re
 /// shape components (after their line information) share this layout.
 ///
 /// Every length word is checked against the bytes left before it sizes an
-/// allocation (review r1). 이것을 실패시키는 것: 이 검사를 지우기
+/// allocation. 이것을 실패시키는 것: 이 검사를 지우기
 /// (`fill_lengths_beyond_the_record_are_refused_before_allocating`).
 pub(crate) fn parse_fill_payload(
     fill_kind: u32,

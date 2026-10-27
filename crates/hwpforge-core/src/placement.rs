@@ -494,7 +494,7 @@ impl ObjectRelativeTo {
 mod tests {
     use super::*;
 
-    /// S18: no outer margin writes no `out_margin` (old JSON and its output
+    /// no outer margin writes no `out_margin` (old JSON and its output
     /// unchanged); a margin round trips.
     ///
     /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(p, back);
     }
 
-    // S1: 네 필드 없는 옛 JSON 은 Top·Left·false·false 로 읽힌다.
+    // 네 필드 없는 옛 JSON 은 Top·Left·false·false 로 읽힌다.
     // 이것을 실패시키는 것: 네 필드 중 하나에서 `#[serde(default)]` 를 빼기.
     #[test]
     fn placement_old_json_reads_the_new_fields_as_defaults() {

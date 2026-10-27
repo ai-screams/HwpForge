@@ -1,9 +1,9 @@
-//! Class-A inline marker detection (E6 Wave 1A).
+//! Class-A inline marker detection.
 //!
 //! Pure text-level scanners: given one run/paragraph text, find placeholder
 //! markers by **syntax alone**. The pattern list is closed by design — any
 //! extension must come from caller-provided rules, never from semantic-word
-//! heuristics (see `.docs/algorithms/e6-placeholder-detection.md`).
+//! heuristics.
 
 use std::ops::Range;
 
@@ -106,7 +106,7 @@ fn scan_paren(text: &str, hits: &mut Vec<MarkerHit>) {
         }
         // Whitespace-only interior up to the closing `)` on the same line.
         // The scan consumes ONLY whitespace before deciding, so total work
-        // across all `(` is linear — review M1: the previous
+        // across all `(` is linear — the previous
         // `rest.find(')')` scanned to EOF per `(`, O(n²) on adversarial
         // `(((…` input (24s at 1MB, bench-verified).
         let rest = &text[i + 1..];
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn paren_interior_newline_rejected_carriage_return_allowed() {
-        // Semantic-equivalence locks for the M1 rewrite: `\n` inside the
+        // Semantic-equivalence locks for the rewrite: `\n` inside the
         // parens breaks the blank (same-line rule), `\r` counts as blank
         // whitespace, and nesting only matches the innermost pair.
         assert!(detect_markers("(\n)").is_empty());
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn adversarial_open_paren_flood_stays_linear() {
-        // Review M1: the old scanner ran `rest.find(')')` per `(` — O(n²),
+        // The old scanner ran `rest.find(')')` per `(` — O(n²),
         // 24s on this input. The fixed scanner consumes only whitespace per
         // `(`, so total work is linear (~ms). The generous bound below only
         // trips on an algorithmic regression, not on slow CI.

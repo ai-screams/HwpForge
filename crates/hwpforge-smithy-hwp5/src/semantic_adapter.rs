@@ -1,4 +1,4 @@
-//! Decoder-output to semantic-IR adapter for the first HWP5 semantic slice.
+//! Decoder-output to semantic-IR adapter for the HWP5 semantic model.
 //!
 //! The adapter intentionally stays narrow:
 //! - package metadata
@@ -401,7 +401,7 @@ fn adapt_control(
             build,
             ids,
         ),
-        // %xrf cross-reference (Wave 12m). We classify it as `CrossRef`
+        // %xrf cross-reference. We classify it as `CrossRef`
         // through the existing shape-control adapter so the audit
         // counts match what projection emits via the FieldBegin pair.
         Hwp5Control::CrossRef(xrf) => adapt_shape_control(
@@ -490,7 +490,7 @@ fn adapt_control(
         Hwp5Control::TextBox(textbox) => {
             adapt_textbox_control(textbox, container, paragraph_id, build, support, ids)
         }
-        // Group (묶음 객체, Wave A): classify the container node, then adapt
+        // Group (묶음 객체): classify the container node, then adapt
         // each flat child so the audit counts include the wrapped shapes.
         Hwp5Control::Group(group) => {
             let node_id = adapt_shape_control(
@@ -1827,7 +1827,7 @@ mod tests {
         assert!(ole_control.notes.iter().any(|note| note == "bin_data_stream_missing"));
     }
 
-    /// §19 C: an OLE reference counts `DocInfo` `BIN_DATA` records — the
+    /// An OLE reference counts `DocInfo` `BIN_DATA` records — the
     /// record at position 1 stores id 2, and the reference 1 joins it. No
     /// record stores id 1, so the stored-id reading differs: the join is
     /// only a low-confidence interpretation, with both readings in its notes.

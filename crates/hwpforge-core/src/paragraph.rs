@@ -164,8 +164,7 @@ impl Paragraph {
     /// 묶음 그림([`crate::control::GroupChild::Picture`])의 캡션 문단은
     /// 방문한다. **run 그림([`crate::run::RunContent::Image`])의
     /// [`crate::image::Image::caption`] 안의 문단은 방문하지 않는다** —
-    /// 알려진 갭이며 `.docs/followups.md` 에 기록돼 있다. 배경과 왜 별도
-    /// 슬라이스인지는
+    /// 알려진 갭이다. 이 갭을 별도 변경으로 다루는 이유는
     /// [`crate::document::Document::for_each_paragraph_mut`] 참조.
     pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
         self.walk_paragraphs_mut(&mut f);
@@ -492,7 +491,7 @@ impl Paragraph {
     /// ```
     pub fn text_content(&self) -> String {
         // Use the unified `plain_text` accessor so `RunContent::InlineText`
-        // (Wave 4 Phase 2 carry — attribute-rich inline tabs) is folded
+        // (carry — attribute-rich inline tabs) is folded
         // back into a tab-containing plain string the way callers expect.
         self.runs.iter().filter_map(|r| r.content.plain_text()).fold(
             String::new(),
@@ -531,7 +530,7 @@ mod tests {
         Run::text(s, CharShapeIndex::new(0))
     }
 
-    /// §19.22 D5 (S17): `None` writes no `end_char_shape`, an absent field
+    /// `None` writes no `end_char_shape`, an absent field
     /// and `null` read as `None`, and `Some` round trips.
     ///
     /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.

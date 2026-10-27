@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(decode_line_spacing(1000, "FIXED", "HWPUNIT", true).unwrap().0, 2000);
     }
     #[test]
-    fn fix1_tab_signed_bits_and_char_output_boundaries() {
+    fn tab_signed_bits_and_char_output_boundaries() {
         // 이것을 실패시키는 것: HWPUNIT unsigned 해석 또는 음수 CHAR 출력 허용.
         for (raw, expected) in [(4294707008, -130144), (4294706880, -130208), (u32::MAX - 1, -1)] {
             let value = unpack_tab(raw).unwrap();

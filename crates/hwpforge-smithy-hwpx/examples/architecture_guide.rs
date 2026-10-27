@@ -488,7 +488,7 @@ fn build_section_2() -> Section {
                 ShapePoint::new(tw / 2, 0),
                 ShapePoint::new(tw, th),
                 ShapePoint::new(0, th),
-                ShapePoint::new(tw / 2, 0), // 첫 점 반복 (gotcha #17)
+                ShapePoint::new(tw / 2, 0), // 첫 점 반복 (닫힌 다각형은 시작점을 끝에 한 번 더 둔다)
             ])
             .expect("polygon with 4 vertices valid");
             // Caption::new on polygon (constructor #17)
@@ -637,7 +637,7 @@ fn build_section_3() -> Section {
     paras.push(Paragraph::with_runs(
         vec![
             Run::text(
-                "Phase 0-5와 Wave 1-6을 거쳐 텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 실무 문서 생성에 필요한 모든 기능을 구현하였습니다.",
+                "텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 실무 문서 생성에 필요한 모든 기능을 구현하였습니다.",
                 CharShapeIndex::new(CS_NORMAL),
             ),
             Run::control(
@@ -648,7 +648,7 @@ fn build_section_3() -> Section {
             ),
             Run::control(
                 Control::endnote(vec![p(
-                    "2) HWPX 포맷은 KS X 6101 표준에 기반하며, HwpForge는 이 표준의 완전한 구현을 목표로 합니다. Phase 6(Python 바인딩), Phase 7(MCP 서버), Phase 8(v1.0 릴리즈)이 남아 있습니다.",
+                    "2) HWPX 포맷은 KS X 6101 표준에 기반하며, HwpForge는 이 표준의 완전한 구현을 목표로 합니다. Python 바인딩, MCP 서버, v1.0 릴리즈가 남아 있습니다.",
                 )]),
                 CharShapeIndex::new(CS_NORMAL),
             ),

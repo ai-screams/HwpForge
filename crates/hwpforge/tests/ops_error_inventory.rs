@@ -1171,7 +1171,7 @@ fn every_wrapped_variant_has_a_mapping() {
 #[test]
 // 이것을 실패시키는 것: read 구역 범위를 InvalidInput으로 변경; 기존 inventory 시험으로 검출.
 fn constructed_errors_produce_the_mapped_code() {
-    // 이것을 실패시키는 것: O4–O6 보호 필드·stamp delta·셀 중복 매핑을 InvalidInput으로 변경.
+    // 이것을 실패시키는 것: 보호 필드·stamp delta·셀 중복 매핑을 InvalidInput으로 변경.
     let samples = wrapped_errors();
 
     for (enum_name, table) in ERROR_MAPPING {
@@ -1298,7 +1298,7 @@ fn encode_warning_samples_keep_old_output_and_never_fall_back() {
 
 #[test]
 fn asset_contract_violations_get_dedicated_codes() {
-    // W1a adversarial review F6: an asset reply that does not match the plan,
+    // An asset reply that does not match the plan,
     // or two assets claiming one identity with different bytes, is the caller
     // supplying the wrong thing — and each gets its own code so the caller can
     // tell which contract broke.
@@ -1348,7 +1348,7 @@ fn the_stage_wins_over_a_nested_core_error() {
 
 #[test]
 fn grid_addr_projection_reports_its_own_code() {
-    // Review-driven split (lane A): the CLI prints `GRID_ADDR_PROJECTION_FAILED`
+    // CLI compatibility: the CLI prints `GRID_ADDR_PROJECTION_FAILED`
     // for an annotate failure and `GRID_ADDR_INVALID` for a verify failure.
     for (variant, error) in grid_addr_errors() {
         assert_eq!(
@@ -1377,7 +1377,7 @@ fn encode_stage_reports_encode_failed() {
 
 #[test]
 fn semantic_loss_variants_become_the_uniform_envelope() {
-    // Review R2 #2: set-cell and stamp must fail closed with the same
+    // Set-cell and stamp must fail closed with the same
     // structured envelope restyle uses, not a wrapped upstream variant.
     let cell: OpsError = CellEditError::SemanticLoss {
         warnings: vec![semantic_loss()],

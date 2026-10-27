@@ -231,7 +231,8 @@ mod tests {
     // 이것을 실패시키는 것: NotFound→FileReadFailed; CLI bounded helper 시험으로 검출.
     fn read_bounded_missing_file_is_not_found() {
         let err =
-            read_bounded(std::path::Path::new("/nonexistent/hwpforge-w6a-probe.hwpx")).unwrap_err();
+            read_bounded(std::path::Path::new("/nonexistent/hwpforge-missing-input-probe.hwpx"))
+                .unwrap_err();
         assert_eq!(err.code(), OpsCode::FileNotFound);
     }
 
@@ -275,8 +276,10 @@ mod tests {
     #[test]
     // 이것을 실패시키는 것: NotFound→FileReadFailed; CLI bounded helper 시험으로 검출.
     fn read_bounded_string_missing_file_is_not_found() {
-        let err = read_bounded_string(std::path::Path::new("/nonexistent/hwpforge-w6a-probe2.txt"))
-            .unwrap_err();
+        let err = read_bounded_string(std::path::Path::new(
+            "/nonexistent/hwpforge-missing-input-probe2.txt",
+        ))
+        .unwrap_err();
         assert_eq!(err.code(), OpsCode::FileNotFound);
     }
 
@@ -295,12 +298,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod w1_tests {
+mod input_error_tests {
     use super::*;
 
     #[test]
     // 이것을 실패시키는 것: bounded reader의 초과 guard 비활성화, bounded reader의 >를 >=로 변경, reader I/O를 InputTooLarge로 오분류.
-    fn w1_stdin_cap_and_io_classification() {
+    fn stdin_cap_and_io_classification() {
         // 이것을 실패시키는 것: cap의 >를 >=로 변경, cap 제거, reader I/O를 InputTooLarge로 변경.
         assert_eq!(read_capped_string(&b"abcd"[..], 4).unwrap(), "abcd");
         assert_eq!(

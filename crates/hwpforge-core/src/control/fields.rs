@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::object_id::ObjectId;
 
-/// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
+/// Typed variant of the HWP5 `%pat` Command string.
 ///
 /// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
 /// (full path). Anything else is preserved as [`PathFieldCommand::Unknown`].
@@ -51,7 +51,7 @@ impl PathFieldCommand {
     }
 }
 
-/// Cross-reference target identifier (Wave 12m Phase 2).
+/// Cross-reference target identifier.
 ///
 /// Replaces the previous `target_name: String` field on
 /// [`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the
@@ -63,9 +63,9 @@ impl PathFieldCommand {
 ///   Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서
 ///   `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의
 ///   `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를
-///   타입 수준에서 보장한다 (ADR-010).
+///   타입 수준에서 보장한다.
 /// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
-///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
+///   silent fallback 위조 금지 원칙 — 의미를
 ///   모르면 raw 보존.
 ///
 /// 변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의
@@ -76,7 +76,7 @@ pub enum RefTarget {
     /// 사용자 지정 책갈피 이름 (Bookmark 전용).
     Name(String),
     /// 타깃 객체의 [`ObjectId`] (Footnote / Endnote / Caption / Outline).
-    /// 가리키는 타깃의 `inst_id` 와 같은 id 를 공유한다 (ADR-010).
+    /// 가리키는 타깃의 `inst_id` 와 같은 id 를 공유한다.
     Object(ObjectId),
     /// 위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.
     Raw(String),
@@ -97,8 +97,7 @@ impl RefTarget {
     }
 }
 
-/// Typed variant of the HWP5 `atno` inline page-number `flag` byte
-/// (Wave 12n).
+/// Typed variant of the HWP5 `atno` inline page-number `flag` byte.
 ///
 /// Observed values: `0x00` = current page, `0x06` = total page count.
 /// Other values surface as [`InlinePageKind::Unknown`].

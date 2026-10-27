@@ -1,4 +1,4 @@
-//! Which paragraph line caches a text change makes stale (W2, design 3.5),
+//! Which paragraph line caches a text change makes stale,
 //! shared by the two preserve-first text editors: `fill` and `patch`.
 //!
 //! A paragraph's `<hp:linesegarray>` places its lines by character position
@@ -265,7 +265,7 @@ mod tests {
         paragraph.runs[0].content = RunContent::Text(text.into());
     }
 
-    /// The review's counterexample: a body paragraph "ABCDEFGHIJKLMNOPQRST"
+    /// Counterexample: a body paragraph "ABCDEFGHIJKLMNOPQRST"
     /// with a line at 10, patched to "A", kept `textpos="10"` and no warning;
     /// the re-decode then dropped the cache as out of range.
     /// 이것을 실패시키는 것: patch 의 캐시 제거 삭제.

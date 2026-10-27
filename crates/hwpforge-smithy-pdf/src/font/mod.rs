@@ -1,8 +1,8 @@
 //! 폰트 해석 — face 축 분류 (family × style) + 정확 full-name 매칭.
 //!
 //! `header.xml` 의 fontface 이름(예: "한컴바탕")은 파일명이 아니다 —
-//! name table 을 읽어 실물 파일에 매핑해야 한다 (W0 실측: 한컴바탕 =
-//! `HBatang.TTF`). W4a 분류 계약 (Codex 적대 리뷰 H2 재설계):
+//! name table 을 읽어 실물 파일에 매핑해야 한다 (실측: 한컴바탕 =
+//! `HBatang.TTF`). 분류 계약:
 //!
 //! - **family** = nameID 16(typographic) 우선, 없으면 1 폴백. **subfamily**
 //!   = 17 우선, 없으면 2. 로캘별 레코드 전부 등록한다 (한/영 병기 이름).
@@ -15,7 +15,7 @@
 //! - 같은 (family, style) 후보 다수 = weight ranking (Bold 축 = 700,
 //!   나머지 = 400 최근접), 동률 = ambiguous.
 //!
-//! W2 부터의 불변 계약:
+//! 폰트 해석의 불변 계약:
 //! - **명시 디렉터리 우선** — 자동 발견([`FontDiscovery`])은 낮은 우선순위
 //!   tier 로만 참여하고, 명시 dirs 의 기존 해석을 바꾸지 못한다.
 //! - 미해결 = [`PdfError::FontUnresolved`] — **fallback 금지** (다른 폰트로
@@ -93,7 +93,7 @@ pub enum FontDiscovery {
     /// 명시 dirs + 한컴오피스 번들 폰트.
     ///
     /// macOS: `/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF`
-    /// (W0 실측). 타 OS 설치 경로는 미실측 — 실측 후 추가한다 (no-fake-support).
+    /// (실측). 타 OS 설치 경로는 미실측 — 실측 후 추가한다 (no-fake-support).
     HancomBundle,
     /// 명시 dirs + 한컴 번들 + 플랫폼 시스템 폰트 디렉터리.
     ///
@@ -142,7 +142,7 @@ fn platform_font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// 임베드 라이선스 판정 (W4d — OS/2 `fsType`).
+/// 임베드 라이선스 판정 (OS/2 `fsType`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbedLicense {
     /// 제약 없음 (Installable/Editable — 경고 없이 임베드).
@@ -154,7 +154,7 @@ pub enum EmbedLicense {
     Denied(String),
 }
 
-/// face 의 임베드 라이선스를 판정한다 (Codex C1·H4 — 기본 fail-closed).
+/// face 의 임베드 라이선스를 판정한다 (기본 fail-closed).
 ///
 /// 검사는 raw bit 가 아니라 ttf-parser 의 **버전 인지 helper**
 /// (`permissions`/`is_subsetting_allowed`/`is_outline_embedding_allowed`)로
@@ -243,7 +243,7 @@ struct ExactFace {
 /// ambiguous 로 남겨 resolve 시 에러로 표면화한다.
 #[derive(Debug)]
 pub struct FontResolver {
-    /// nameID 4 full name → face (정확 일치 — W2 계약 유지).
+    /// nameID 4 full name → face (정확 일치 — 계약 유지).
     exact: HashMap<String, ExactFace>,
     /// (family, style) → ranking 승자.
     styled: HashMap<(String, FaceStyle), (PathBuf, u32)>,
@@ -433,7 +433,7 @@ impl FontResolver {
 
     /// face 이름을 그대로 해석한다 (full name 정확 일치 → (이름, Regular)).
     ///
-    /// W2 계약 유지 — `header.xml` 의 fontface 이름 경로. 실패 시 fallback
+    /// 계약 유지 — `header.xml` 의 fontface 이름 경로. 실패 시 fallback
     /// 없이 에러.
     ///
     /// # Errors
@@ -453,7 +453,7 @@ impl FontResolver {
     ///
     /// full name 정확 일치는 face 플래그가 요청 스타일과 **일치할 때만**
     /// 매칭된다 (모순 face 의 조용한 강등 방지 — 예: full name 이 family
-    /// 이름과 같은 regular face 에 Bold 를 요청하면 미해결로 남겨 W4c 의
+    /// 이름과 같은 regular face 에 Bold 를 요청하면 미해결로 남겨
     /// fail-closed 처리에 넘긴다).
     ///
     /// # Errors
@@ -667,11 +667,15 @@ mod tests {
     }
 
     #[test]
-    fn w4_pair_resolves_by_typographic_family_and_style() {
+    fn pair_resolves_by_typographic_family_and_style() {
+        // 이것을 실패시키는 것: resolver 가 typographic family(nameID 16) 대신 legacy family(nameID 1)로 찾게 하기.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
-        let regular =
-            resolver.resolve_styled("HwpForge W4", FaceStyle::Regular).expect("regular face");
-        let bold = resolver.resolve_styled("HwpForge W4", FaceStyle::Bold).expect("bold face");
+        let regular = resolver
+            .resolve_styled("HwpForge Typographic Pair", FaceStyle::Regular)
+            .expect("regular face");
+        let bold = resolver
+            .resolve_styled("HwpForge Typographic Pair", FaceStyle::Bold)
+            .expect("bold face");
         assert!(
             regular.path.file_name().unwrap().to_string_lossy().contains("Regular"),
             "unexpected regular file: {:?}",
@@ -684,7 +688,7 @@ mod tests {
         );
         // nameID 16 이 있으면 nameID 1 은 family 로 등록하지 않는다 (16 우선 — 병기 아님).
         assert!(matches!(
-            resolver.resolve("HwpForgeW4 Legacy"),
+            resolver.resolve("HwpForge Typographic Pair Legacy"),
             Err(PdfError::FontUnresolved { .. })
         ));
         // Bold 는 실제 폭이 다르다 (Latin 0.7em vs 0.6em) — bbox 게이트 유효성의 근거.
@@ -710,7 +714,7 @@ mod tests {
             resolver.resolve("HwpForge Conflict"),
             Err(PdfError::FontUnresolved { .. })
         ));
-        // 레거시 W2 Bold(fsSelection 미설정)도 같은 모순 케이스로 표면화된다.
+        // 레거시 Bold(fsSelection 미설정)도 같은 모순 케이스로 표면화된다.
         assert!(matches!(
             resolver.resolve_styled("HwpForge Test", FaceStyle::Bold),
             Err(PdfError::FontFaceAmbiguous { .. })
@@ -736,24 +740,26 @@ mod tests {
 
     #[test]
     fn exact_full_name_carries_its_own_style() {
+        // 이것을 실패시키는 것: full name(nameID 4) 별칭 등록을 빼기.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         // full name 은 스타일 내재 — 요청 스타일과 face 플래그가 일치할 때만 styled 매칭.
-        let bold =
-            resolver.resolve_styled("HwpForge W4 Bold", FaceStyle::Bold).expect("bold full name");
+        let bold = resolver
+            .resolve_styled("HwpForge Typographic Pair Bold", FaceStyle::Bold)
+            .expect("bold full name");
         assert!(bold.path.file_name().unwrap().to_string_lossy().contains("Bold"));
         // 모순 face (레거시 lying Bold): full name 이라도 styled 요청은 신뢰하지 않는다.
         assert!(matches!(
             resolver.resolve_styled("HwpForge Test Bold", FaceStyle::Bold),
             Err(PdfError::FontUnresolved { .. })
         ));
-        // resolve() (이름 그대로 — W2 계약) 는 여전히 성공.
+        // resolve() (이름 그대로 — 계약) 는 여전히 성공.
         resolver.resolve("HwpForge Test Bold").expect("legacy exact name");
     }
 
     #[test]
     fn embed_license_truth_table_from_fixtures() {
-        // W4d 진리표 (§5 H4 — OS/2 버전 × permission × bit8/9 × malformed/결측).
-        // 판정은 raw bit 가 아니라 ttf-parser 버전 인지 helper 로 한다 (C1).
+        // 임베드 라이선스 진리표 (OS/2 버전 × permission × bit8/9 × malformed/결측).
+        // 판정은 raw bit 가 아니라 ttf-parser 버전 인지 helper 로 한다.
         let dir = committed_fonts_dir();
         let case = |file: &str| {
             let data = std::fs::read(dir.join(file)).expect("fixture font");
@@ -761,14 +767,14 @@ mod tests {
         };
         // 기본 fixture = installable(0x0000) → 무제약 허용.
         assert_eq!(case("HwpForgeTest-Regular.ttf"), EmbedLicense::Allowed);
-        assert_eq!(case("HwpForgeW4-Bold.ttf"), EmbedLicense::Allowed);
+        assert_eq!(case("HwpForgeTypographicPair-Bold.ttf"), EmbedLicense::Allowed);
         // v0 Restricted (ENGDOS 실물형) = 거부.
         assert!(
             matches!(case("HwpForgeFsV0Restricted.ttf"), EmbedLicense::Denied(_)),
             "{:?}",
             case("HwpForgeFsV0Restricted.ttf")
         );
-        // bit8 No-subsetting = 거부 (krilla 는 무조건 subset — C1 fatal).
+        // bit8 No-subsetting = 거부 (krilla 는 무조건 subset — fatal).
         assert!(matches!(case("HwpForgeFsV2NoSubset.ttf"), EmbedLicense::Denied(_)));
         // bit9 Bitmap-only = 거부 (outline 임베드 불가).
         assert!(matches!(case("HwpForgeFsV2BitmapOnly.ttf"), EmbedLicense::Denied(_)));
@@ -783,8 +789,8 @@ mod tests {
     }
 
     #[test]
-    fn fs_type_fixtures_classify_normally_in_w4a() {
-        // 라이선스 게이트는 W4d (임베드 시점) — 분류기는 fsType 과 무관하게 해석한다.
+    fn fs_type_fixtures_classify_normally() {
+        // 라이선스 게이트는 임베드 시점에 적용 — 분류기는 fsType 과 무관하게 해석한다.
         let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
         resolver.resolve("HwpForge FsV0Restricted").expect("v0 restricted");
         // OS/2 결측 = 플래그 없음 → Regular/weight 400 취급 (분류 실패 아님).
@@ -815,7 +821,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> TestDir {
-        let dir = std::env::temp_dir().join(format!("hwpforge-w4b-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join(format!("hwpforge-font-license-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         TestDir(dir)
@@ -913,7 +920,7 @@ mod tests {
             return; // fixture-optional (CI 에는 한컴 미설치)
         }
         let resolver = FontResolver::new(&[dir]).expect("scan bundle");
-        // W0 실측: 한컴바탕 = HBatang.TTF (Haansoft Batang)
+        // 실측: 한컴바탕 = HBatang.TTF (Haansoft Batang)
         let batang = resolver.resolve("한컴바탕").expect("한컴바탕");
         assert!(
             batang.path.file_name().unwrap().to_string_lossy().eq_ignore_ascii_case("HBatang.TTF"),
@@ -933,7 +940,7 @@ mod tests {
             hcr.path
         );
         // 함초롬바탕 = 정상 Bold 축 실물 (HANBatangB: subfamily Bold + BOLD
-        // 플래그 + weight 700) — W4a 분류기가 실제 한컴 폰트에서 Bold 를
+        // 플래그 + weight 700) — 분류기가 실제 한컴 폰트에서 Bold 를
         // 골라내는 real-world 잠금.
         let hcr_bold =
             resolver.resolve_styled("함초롬바탕", FaceStyle::Bold).expect("함초롬바탕 Bold");

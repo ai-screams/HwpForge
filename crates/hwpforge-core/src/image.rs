@@ -78,7 +78,7 @@ pub struct Image {
     /// Optional placement/presentation metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<ObjectPlacement>,
-    /// Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5
+    /// Instance ID for cross-ref target lookup. HWP5
     /// 변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX
     /// encoder 가 `<hp:pic id="...">` attribute 로 emit. `None` 이면
     /// encoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.
@@ -304,7 +304,7 @@ impl std::fmt::Display for Image {
 /// Supported image formats.
 ///
 /// Marked `#[non_exhaustive]` so new formats can be added in future
-/// phases without a breaking change.
+/// updates without a breaking change.
 ///
 /// # Examples
 ///
@@ -392,7 +392,7 @@ impl ImageFormat {
     /// Returns `None` for empty, truncated, or unrecognized bytes — callers
     /// must not guess from content. Magic table (shares the render-side
     /// sniffer's rules in `smithy-pdf`, with two deliberate divergences for
-    /// ingestion, W6 §12b·§12-r2):
+    /// ingestion):
     ///
     /// - PNG `89 50 4E 47 0D 0A 1A 0A` · JPEG `FF D8 FF` · GIF `GIF87a`/`GIF89a`
     /// - BMP `BM` **plus structural header checks** — `bfOffBits`
@@ -406,7 +406,7 @@ impl ImageFormat {
     ///   too weak and would misfire, so it stays unrecognized
     /// - WebP is **intentionally absent** (render sniffer knows it): HWPX
     ///   `BinData` carry of WebP is unverified against Hancom, so ingestion
-    ///   refuses it until a native fixture proves it (§12-r2).
+    ///   refuses it until a native fixture proves it.
     ///
     /// # Examples
     ///
@@ -863,7 +863,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // ImageFormat::sniff tests (W6 §12b — magic 판별, 추측 금지)
+    // ImageFormat::sniff tests (magic 판별, 추측 금지)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn sniff_bmp_requires_structural_header() {
-        // 2바이트 magic 만으론 임의 바이트 반입 가능 (독립 리뷰 M1) —
+        // 2바이트 magic 만으론 임의 바이트 반입 가능 —
         // bfOffBits·DIB 크기 구조 검사로 차단.
         assert_eq!(ImageFormat::sniff(b"BMsecret-credential-material-here-0123456789"), None);
         // 구 14바이트 규칙이 수용하던 제로 헤더도 거부 (DIB 0 미지).

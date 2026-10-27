@@ -5059,22 +5059,22 @@
       "surfaces": {
         "rust": {
           "mode": "fixture",
-          "operation": "w3.draft_depth"
+          "operation": "editor.draft_depth"
         },
         "cli": {
           "mode": "unreachable",
           "operation": "set-cell",
-          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+          "reason": "Input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
         },
         "mcp": {
           "mode": "unreachable",
           "operation": "set-cell",
-          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+          "reason": "Input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
         },
         "python": {
           "mode": "unreachable",
           "operation": "set_cell",
-          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+          "reason": "Input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
         }
       },
       "inventory": [
@@ -5305,7 +5305,7 @@
       "surfaces": {
         "rust": {
           "mode": "fixture",
-          "operation": "w3.byte_depth"
+          "operation": "editor.byte_depth"
         },
         "cli": {
           "mode": "fixture",
@@ -5328,7 +5328,7 @@
       "surfaces": {
         "rust": {
           "mode": "fixture",
-          "operation": "w3.byte_depth"
+          "operation": "editor.byte_depth"
         },
         "cli": {
           "mode": "fixture",
@@ -5351,7 +5351,7 @@
       "surfaces": {
         "rust": {
           "mode": "fixture",
-          "operation": "w3.byte_depth"
+          "operation": "editor.byte_depth"
         },
         "cli": {
           "mode": "fixture",
@@ -5374,7 +5374,7 @@
       "surfaces": {
         "rust": {
           "mode": "fixture",
-          "operation": "w3.byte_depth"
+          "operation": "editor.byte_depth"
         },
         "cli": {
           "mode": "fixture",
@@ -5397,7 +5397,7 @@
       "surfaces": {
         "rust": {
           "mode": "fixture",
-          "operation": "w3.stamp_v2_admission"
+          "operation": "editor.stamp_v2_admission"
         },
         "cli": {
           "mode": "fixture",

@@ -340,8 +340,8 @@ fn hwp5_image_fill_mode_to_hwpx(kind: Hwp5FillImageMode) -> Option<&'static str>
     // HWP5 raw image-fill modes 0-15 map 1:1 (same ordinal order) to the
     // KS X 6101 OWPML `ImageBrushMode` enum. Previously only TILE/TOTAL/
     // CENTER/ZOOM (0/5/6/15) were mapped and the other 12 modes silently
-    // collapsed to a transparent fill. Confirmed against native fixture
-    // `sample-cell-image-fill` (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM
+    // collapsed to a transparent fill. Confirmed against
+    // Hancom image-fill documents (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM
     // = raw 1/7/10/14) spanning every dropped family. (`Resize` → `TOTAL`,
     // `*Middle` → `*_CENTER` per the OWPML naming.)
     match kind {
@@ -386,7 +386,7 @@ fn colorref_to_hwpx_color(raw: u32) -> String {
 /// Fill (face/hatch) colors only: HWP5 encodes "no color" as the Windows
 /// COLORREF null sentinel `0xFFFF_FFFF` inside a *Color* fill record (not a
 /// None fill). 한컴 native writes `faceColor="none"` for that, so map the
-/// sentinel to `"none"` instead of the literal `"#FFFFFFFF"` (P1-5). Verified
+/// sentinel to `"none"` instead of the literal `"#FFFFFFFF"`. Verified
 /// against Hancom-saved diagonal table borders (id=2
 /// background = 0xFFFFFFFF → `faceColor="none"`). Scoped to fills — border-line
 /// colors keep the plain mapping (native uses real `#RRGGBB` there).
@@ -410,9 +410,9 @@ mod tests {
     #[test]
     fn image_fill_mode_maps_all_16_ks_x_6101_modes() {
         // HWP5 raw 0-15 ↔ OWPML ImageBrushMode, same ordinal order. Verified
-        // against native fixture sample-cell-image-fill for raw 1/7/10/14
+        // against Hancom image-fill documents for raw 1/7/10/14
         // (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM) plus the
-        // pre-existing 0/5/6/15. Before the P1-2 fix only 4 of 16 mapped;
+        // pre-existing 0/5/6/15. Before the fix only 4 of 16 mapped;
         // the rest collapsed to a transparent fill.
         let cases: [(Hwp5FillImageMode, &str); 16] = [
             (TileAll, "TILE"),
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn unknown_hatch_pattern_warns_but_known_and_none_stay_silent() {
-        // P1-3/4 warning-first: only an unknown hatch pattern warns.
+        // warning-first: only an unknown hatch pattern warns.
         assert!(has_fallback(
             &warnings_for(&color_fill(Hwp5FillPatternKind::Unknown(99))),
             "style.border_fill.fill_pattern"
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn fill_color_maps_no_color_sentinel_to_none() {
-        // P1-5: HWP5 "no color" sentinel 0xFFFFFFFF → faceColor="none"
+        // HWP5 "no color" sentinel 0xFFFFFFFF → faceColor="none"
         // (한컴 native), not the literal "#FFFFFFFF".
         assert_eq!(colorref_to_hwpx_fill_color(0xFFFF_FFFF), "none");
         // Normal opaque BGR color is unaffected (red → #FF0000).

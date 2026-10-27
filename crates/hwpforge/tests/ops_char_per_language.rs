@@ -1,5 +1,5 @@
-//! A `charPr` whose ratio differs between languages is lost content (§19.16
-//! I, review r1 of P18): the package decode reports it, and the editors that
+//! A `charPr` whose ratio differs between languages is lost content:
+//! the package decode reports it, and the editors that
 //! re-encode their input — restyle, set-cell, stamp — refuse it rather than
 //! write the hangul ratio for every language. The input is a package this
 //! codec wrote (all three editors accept it), its header edited.

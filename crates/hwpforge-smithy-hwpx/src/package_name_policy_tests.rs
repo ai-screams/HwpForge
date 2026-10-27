@@ -1,4 +1,4 @@
-//! Synthetic B1–B4 consumer matrix; no corpus inputs.
+//! Synthetic consumer matrix; no corpus inputs.
 use crate::decoder::package::PackageReader;
 use crate::patch::RawPackage;
 use crate::{EncodeOptions, HwpxDecoder, HwpxEncoder, HwpxPatcher};
@@ -266,7 +266,7 @@ fn package_name_policy_layout_carry_propagates_opaque_selection() {
     }
 }
 
-// 이것을 실패시키는 것: mimetype 의미 조회를 대문자 항목으로 바꾸기(R3는 추가하지 않음).
+// 이것을 실패시키는 것: mimetype 의미 조회를 대문자 항목으로 바꾸기.
 #[test]
 fn package_name_policy_mimetype_keeps_existing_effective_exact_selection() {
     let original = base();

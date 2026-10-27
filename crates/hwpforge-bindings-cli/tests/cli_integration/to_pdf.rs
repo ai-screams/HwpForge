@@ -1,6 +1,6 @@
 use super::*;
 
-// ─── W6a: to-pdf (조판 캐시 재생 렌더) ───
+// ─── to-pdf (조판 캐시 재생 렌더) ───
 
 #[test]
 fn to_pdf_rejects_unrecognized_container() {

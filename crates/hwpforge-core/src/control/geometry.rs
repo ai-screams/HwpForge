@@ -476,7 +476,7 @@ pub fn emission_residual(control: &Control, policy: &EmissionPolicy) -> Emission
 /// What a writer stores for one object's box: the original size, the scale
 /// between it and the displayed size, and the defining points in the stored
 /// box — decided once, so the writer and a decoder checking a source against
-/// it read the same values (§19.23.17 M2).
+/// it read the same values.
 ///
 /// [`frame_plan`] builds it in three steps:
 ///
@@ -804,7 +804,7 @@ pub type MatrixPair = ([f64; 6], [f64; 6]);
 
 const IDENTITY_M: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
-/// What a writer stores for one node under a group (§19.23.13–§19.23.17):
+/// What a writer stores for one node under a group:
 /// its original box, the `(sca, rot)` pairs of its matrix chain after the
 /// translation, its points, and where they land in the outermost group's
 /// space.
@@ -814,7 +814,7 @@ const IDENTITY_M: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 /// `L` = the node's own rotation and mirror (`ShapeStyle`) times
 /// `diag(width / O.width, height / O.height)`. When every enclosing pair is
 /// the identity only the node's own pair is written — the form groups were
-/// written in before S20. [`preserve_group_child`] adds all identity pairs for
+/// written in before original-box preservation. [`preserve_group_child`] adds all identity pairs for
 /// image-filled children: Hancom needs `groupLevel + 1` pairs for their brush.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -862,7 +862,7 @@ impl GroupNodePlan {
 /// Built with the frames first; a node the frames change — one with an
 /// original box of its own, or under a group that stores a scale — more than
 /// 2 HWPUNIT from its exact Core place (or whose own box falls back) makes
-/// the whole group fall back (§19.23.13 H3, §19.23.15 H1): every original box
+/// the whole group fall back: every original box
 /// becomes the displayed box and every enclosing pair the identity — the
 /// leaves keep their own rotation and mirror — and it is measured again.
 #[derive(Debug, Clone, PartialEq)]
@@ -1080,7 +1080,7 @@ pub fn group_plan(group: &Control, policy: &EmissionPolicy) -> Option<GroupPlan>
     );
     // The fallback is measured against the exact Core places of the group as
     // given, not against the copy whose points were rounded into the
-    // displayed boxes (§19.23.13): a point that moved more than 2 in that
+    // displayed boxes: a point that moved more than 2 in that
     // rounding, or saturated, is a loss the writer must report.
     // 이것을 실패시키는 것: 반올림한 사본을 정답으로 다시 재기
     // (`fallback_measures_against_the_original_points`).
@@ -1727,7 +1727,7 @@ fn standalone_box(
     ]);
     let core = local.then(scale);
     // Normalize using the O box, never the defining-point bounds. Translation
-    // mismatch belongs to the codec's G7 check and is not stored as placement.
+    // mismatch belongs to the codec's check and is not stored as placement.
     let minimum = |map: ShapeTransform| {
         box_corners(ow, oh)
             .iter()
@@ -2138,7 +2138,7 @@ fn fold_child(mut control: Control, input: &FoldInput, preserve_original: bool) 
 
 /// Folds a group child whose map is axis-aligned — `x' = a·x + c`,
 /// `y' = e·y + f` with `a, e > 0`: no turn, mirror or shear — keeping its
-/// defining points where they are, in its original box (§19.23.13): the
+/// defining points where they are, in its original box: the
 /// original box is the map's input box (`FoldInput`'s original size), the
 /// displayed size is that box scaled (`round(a · width)`, `round(e ·
 /// height)`), the offset is where the map puts the box's origin. A child
@@ -2183,7 +2183,7 @@ pub fn fold_aligned_child(mut control: Control, input: &FoldInput) -> Option<Fol
     let (ow, oh) = input.original_size;
     // An original box that cannot be a frame value — a negative axis (a
     // wrapped `orgSz`) or one out of the HWPUNIT range — is not this path:
-    // the caller reports it and folds the child without one (§19.23.15).
+    // the caller reports it and folds the child without one.
     // 이것을 실패시키는 것: 이 검사를 지우기(음수 원래 크기가 frame 에 남는다 —
     // `unusable_original_box_is_not_folded`).
     let (oiw, oih) = (round_i32(ow), round_i32(oh));
@@ -2213,7 +2213,7 @@ pub fn fold_aligned_child(mut control: Control, input: &FoldInput) -> Option<Fol
     if let Some(frame) = control.frame_mut() {
         frame.original_size = Some(original);
     }
-    // The kind's default is no frame value (§19.23.11 M6).
+    // The kind's default is no frame value.
     let default = match control {
         Control::TextArt { .. } => {
             (crate::frame::TEXT_ART_DESIGN_SIDE, crate::frame::TEXT_ART_DESIGN_SIDE)

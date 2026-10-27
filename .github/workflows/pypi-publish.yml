@@ -1,5 +1,5 @@
 # =============================================================================
-# HwpForge — PyPI 배포 (Python 바인딩 에픽 설계 §2.4)
+# HwpForge — PyPI 배포
 # =============================================================================
 #
 # 두 가지 이벤트로만 돈다. 둘 다 태그 ref 위에서 돌므로 태그는 `github.ref_name` 이다.
@@ -20,7 +20,7 @@
 # SHA 를 가리키는지 다시 확인한다.
 #
 # 멱등성은 오직 `uv publish --check-url` 에서 온다 — PyPI 는 파일명 재사용을
-# 절대 허용하지 않으므로, 버전 단위 사전 검사로 건너뛰지 않는다 (설계 §2.4).
+# 절대 허용하지 않으므로, 버전 단위 사전 검사로 건너뛰지 않는다.
 #
 # 사용자(관리자) 선행 작업이 없으면 이 워크플로는 **조용히 건너뛰지 않고 실패**한다:
 # GitHub environment(`pypi`·`testpypi`)와 PyPI 쪽 pending publisher 가 없으면
@@ -57,7 +57,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  MATURIN_VERSION: v1.15.0 # 태그된 릴리스 정확 버전만 허용(범위 불가, 4차 run 실측) — ci.yml 과 같은 값
+  MATURIN_VERSION: v1.15.0 # 태그된 릴리스 정확 버전만 허용(범위 불가, run 실측) — ci.yml 과 같은 값
 
 jobs:
   resolve:
@@ -149,7 +149,7 @@ jobs:
         id: lock
         # Cargo.lock 은 이 레포에서 미추적이다. 여기서 한 번 풀고 그 파일을 매트릭스
         # 전원이 내려받아 `--locked` 로 빌드해야 플랫폼별 wheel 이 서로 다른 의존성
-        # 해석으로 나오지 않는다 (설계 §2.4 wheel 매트릭스).
+        # 해석으로 나오지 않는다.
         run: |
           set -euo pipefail
           cargo generate-lockfile
@@ -308,7 +308,7 @@ jobs:
           uv run --no-project python .github/scripts/check_dist.py "${args[@]}"
       - name: Debian 12 import smoke (no pip, same architecture)
         if: matrix.smoke
-        # 계획 부록 A-1 과 같은 경로. 러너 아키텍처가 곧 컨테이너 아키텍처다.
+        # 러너 아키텍처가 곧 컨테이너 아키텍처다.
         run: |
           set -euo pipefail
           cp crates/hwpforge-bindings-py/tests/smoke_unpacked_wheel.py dist/

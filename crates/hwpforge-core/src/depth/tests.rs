@@ -143,7 +143,7 @@ fn polygon() -> Control {
 
 // 이것을 실패시키는 것: LIMIT 31/33, Object/Caption 비용 0,
 // 각 소유 간선 예약 삭제(측정/해체 각각), 형제 깊이 합산.
-// 이것을 실패시키는 것: Run의 Table 자식 떼기 삭제(W1 노드 대조).
+// 이것을 실패시키는 것: Run의 Table 자식 떼기 삭제(노드 대조).
 #[test]
 fn every_edge_boundaries_and_cleanup() {
     for &(edge, cost, nodes) in EDGES {
@@ -285,7 +285,7 @@ fn automatic_deep_drop_small_stack() {
             }
             drop(document(r));
             drop(document(boxes(text(), 100_000)));
-            // Reuse W1's exhaustive edge inventory, including both caption
+            // Reuse the exhaustive edge inventory, including both caption
             // routes and paragraph-free memo anchors. No validation/clone.
             for &(edge, _, _) in EDGES {
                 let mut r = text();
@@ -382,7 +382,7 @@ fn panic_deep_drop_small_stack() {
                 let dropped = Arc::new(AtomicBool::new(false));
                 d.set_format_source(Arc::new(DroppedDuringPanic(Arc::clone(&dropped))));
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                    // The current walker is recursive (W3). Panic at the first
+                    // The current walker is recursive. Panic at the first
                     // paragraph, before descending, while this scope owns d.
                     d.for_each_paragraph_mut(|paragraph| {
                         // Also unwind an owned run removed by a user callback:
@@ -507,7 +507,7 @@ fn walker_baseline_log() {
 fn iterative_walkers_small_stack() {
     small_stack_child(
         "depth::tests::iterative_walkers_small_stack",
-        "HWPFORGE_W3_WALK",
+        "HWPFORGE_SMALL_STACK_WALK",
         512 * 1024,
         || {
             const N: usize = 100_000;
@@ -725,7 +725,7 @@ fn walker_mutation_and_cache_contracts() {
 fn walker_callback_panic_small_stack() {
     small_stack_child(
         "depth::tests::walker_callback_panic_small_stack",
-        "HWPFORGE_W3_PANIC",
+        "HWPFORGE_SMALL_STACK_PANIC",
         512 * 1024,
         || {
             for kind in 0..3 {

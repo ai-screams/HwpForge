@@ -9,7 +9,7 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Phase 3: Decode-only golden tests
+// Decode-only golden tests
 // ════════════════════════════════════════════════════════════════
 
 // ── garden_notes.hwpx ─────────────────────────────────────────────
@@ -113,7 +113,7 @@ fn decode_page_size_margin() {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Phase 4: Encode→Decode round-trip golden tests
+// Encode→Decode round-trip golden tests
 // ════════════════════════════════════════════════════════════════
 
 /// Helper: performs a full round-trip (decode → validate → encode → decode)

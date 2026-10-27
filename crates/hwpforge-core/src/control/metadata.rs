@@ -80,8 +80,7 @@ impl MemoMetadata {
 /// model as typed fields — currently just `option`. Field is mirrored
 /// verbatim from HWP5 wire / HWPX `option=` attribute and emitted
 /// verbatim on encode so round-trips preserve the value even when the
-/// semantics aren't pinned down (see
-/// `.docs/algorithms/2026-06-01_dutmal_carry.md`).
+/// semantics aren't pinned down.
 ///
 /// `#[non_exhaustive]` — additions like `style_id_ref` or the two
 /// reserved tail words are additive and don't break existing

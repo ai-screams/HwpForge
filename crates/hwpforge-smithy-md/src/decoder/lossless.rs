@@ -628,8 +628,8 @@ fn attach_closed_node(
     }
 }
 
-/// The drawing shapes (P5b W3 `<textbox>`·`<line>`·`<ellipse>`·`<polygon>`,
-/// W4 `<rect>`·`<arc>`·`<curve>`·`<connectline>`): CS·BOX·FRAME·PLACE·STYLE,
+/// The drawing shapes (`<textbox>`·`<line>`·`<ellipse>`·`<polygon>`,
+/// `<rect>`·`<arc>`·`<curve>`·`<connectline>`): CS·BOX·FRAME·PLACE·STYLE,
 /// the defining points, VALIGN (shapes with text) and the text margin (text
 /// box). A text box's `-mm` sizes are read when its `-unit`
 /// ones are missing (an old file).
@@ -882,7 +882,7 @@ fn attach_caption(
     Ok(())
 }
 
-/// `<caption>` (P5b W2): side and gap required, width optional (missing =
+/// `<caption>`: side and gap required, width optional (missing =
 /// none, kept apart from zero), the full-size flag and saved width.
 /// 이것을 실패시키는 것: 측 기본값화 · 너비 없음과 0 혼동
 /// (`picture_caption_round_trips`, `picture_caption_grammar_errors`).
@@ -930,7 +930,7 @@ fn push_group_child(stack: &mut [OpenNode], child: GroupChild) -> MdResult<()> {
     }
 }
 
-/// The attributes of one object element, read once (P5b closed grammar): a
+/// The attributes of one object element, read once (closed grammar): a
 /// name outside `allowed` or a name met twice is refused before any value
 /// is looked at.
 struct Attrs {
@@ -1238,7 +1238,7 @@ impl Attrs {
     }
 }
 
-/// `<group>` (P5b W1): CS·BOX·FRAME·PLACE·ID.
+/// `<group>`: CS·BOX·FRAME·PLACE·ID.
 fn parse_group(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<GroupNode> {
     let attrs = Attrs::read(start, "group", &g::group_attributes())?;
     let char_shape_id = attrs.char_shape(stack)?;
@@ -1462,7 +1462,7 @@ fn unique_attr(
     Ok(found)
 }
 
-/// D (Q9): the table caption — `data-caption` (its text; `""` is an empty
+/// the table caption — `data-caption` (its text; `""` is an empty
 /// caption), `data-caption-side` (`top|bottom|left|right`, missing =
 /// bottom), `data-caption-full-size` (`"true"`/`"false"`) and
 /// `data-caption-last-width-unit` (+ readable `-mm`; `-mm` alone is
@@ -1597,7 +1597,7 @@ fn parse_image_format(raw: &str) -> ImageFormat {
     }
 }
 
-/// The FRAME attributes (S20, design §19.23.21), in a fixed order.
+/// The FRAME attributes, in a fixed order.
 const FRAME_ATTRIBUTES: [&str; 5] = [
     "data-original-width-unit",
     "data-original-height-unit",
@@ -1606,7 +1606,7 @@ const FRAME_ATTRIBUTES: [&str; 5] = [
     "data-size-protect",
 ];
 
-/// Reads an element's object frame (S20, design §19.23.21). The whole
+/// Reads an element's object frame. The whole
 /// attribute list is scanned once — without quick-xml's duplicate check, so
 /// the policy for the other attributes stays as it is — and a FRAME name met
 /// twice is refused. The original box needs both `-unit` attributes (the
@@ -1829,7 +1829,7 @@ fn parse_optional_u16_attr(
     }
 }
 
-/// §19.22 D3: `data-line-wrap` (`SQUEEZE`, `KEEP`); missing = the default
+/// `data-line-wrap` (`SQUEEZE`, `KEEP`); missing = the default
 /// break. `BREAK` itself is not a written value and is refused like any
 /// other unknown spelling; a repeated name is refused.
 /// The other `<td>` lookups stop at the first match, so only this scan
@@ -1912,7 +1912,7 @@ mod tests {
         s
     }
 
-    // ── S20 FRAME (design §19.23.21) ──
+    // ── FRAME ──
 
     const IMG: &str = r#"data-char-shape="0" src="a.png" alt="a.png" data-format="PNG" data-width-unit="3000" data-height-unit="2000""#;
 
@@ -1983,7 +1983,7 @@ mod tests {
         assert!(table(p).is_ok());
     }
 
-    /// D (Q9): caption attribute errors — a side other than the four, a
+    /// caption attribute errors — a side other than the four, a
     /// full-size flag other than `"true"`/`"false"`, `-mm` without `-unit`,
     /// caption attributes without `data-caption`, a repeated side.
     /// 이것을 실패시키는 것: 측 값 검사 · 플래그 검사 · `-mm` 단독 허용 · 캡션
@@ -2022,7 +2022,7 @@ mod tests {
         assert_eq!(t.caption.as_ref().unwrap().side, hwpforge_core::caption::CaptionSide::Top);
     }
 
-    /// §19.22 D3: an unknown or default spelling, or a repeat, of
+    /// An unknown or default spelling, or a repeat, of
     /// `data-line-wrap` is refused.
     #[test]
     fn cell_line_wrap_attribute_errors() {

@@ -73,7 +73,7 @@ fn fill_surfaces_layout_cache_dropped_decode_warning() {
         "fill",
         f.to_str().unwrap(),
         "--set",
-        "user_email=w5@example.com",
+        "user_email=fill@example.com",
         "-o",
         out.to_str().unwrap(),
     ]);
@@ -85,7 +85,7 @@ fn fill_surfaces_layout_cache_dropped_decode_warning() {
         "fill",
         f.to_str().unwrap(),
         "--set",
-        "user_email=w5@example.com",
+        "user_email=fill@example.com",
         "-o",
         out2.to_str().unwrap(),
     ]);
@@ -102,7 +102,7 @@ fn fill_has_no_warnings_key_on_a_clean_fixture() {
         "fill",
         f.to_str().unwrap(),
         "--set",
-        "user_email=w5@example.com",
+        "user_email=fill@example.com",
         "-o",
         out.to_str().unwrap(),
     ]);

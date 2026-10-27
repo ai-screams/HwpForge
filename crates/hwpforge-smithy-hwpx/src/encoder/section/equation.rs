@@ -20,7 +20,7 @@ pub(super) fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
     let h = height.as_i32();
 
     Ok(HxEquation {
-        // Wave 12p Step 4: cross-ref target id 가 있으면 사용,
+        // cross-ref target id 가 있으면 사용,
         // 없으면 fresh fallback (한컴 native 와는 id 차이만 발생).
         id: super::super::object_ids::core_or_drawn("equation", inst_id),
         z_order: 0,

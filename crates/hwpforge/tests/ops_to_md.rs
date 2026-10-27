@@ -22,7 +22,7 @@ fn styled_is_what_you_get_without_asking() {
 
 // 이것을 실패시키는 것: CHAR 0·오른쪽/위/아래 여백·CHAR 탭의 MD 손실을 숨기기.
 #[test]
-fn w2_all_modes_report_margin_units_and_char_tab_loss() {
+fn all_modes_report_margin_units_and_char_tab_loss() {
     use hwpforge::ops::{
         convert_md, from_json, to_json, ConvertMdOptions, FromJsonOptions, ToJsonOptions,
     };
@@ -86,8 +86,7 @@ fn only_styled_extracts_images() {
     for mode in [MdMode::Lossy, MdMode::Lossless] {
         assert!(export("green_swatch.hwpx", mode).images.is_empty(), "{}", mode.as_str());
     }
-    // The lossless rendering carries the picture's original box (S20,
-    // design §19.23.21: original 17664 x 5975, shown 25942 x 8775).
+    // The lossless rendering carries the picture's original box (original 17664 x 5975, shown 25942 x 8775).
     // 이것을 실패시키는 것: 그림 원래 크기를 쓰지 않거나 거부하기.
     let lossless = export("green_swatch.hwpx", MdMode::Lossless).markdown;
     assert!(

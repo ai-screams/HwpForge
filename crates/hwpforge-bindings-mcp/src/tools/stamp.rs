@@ -1,5 +1,5 @@
 //! `hwpforge_stamp_plan` / `hwpforge_stamp` — 산문 placeholder 를 이름 붙은
-//! 누름틀로 승격하는 템플릿 스탬핑 (E6, 2단계 plan/apply).
+//! 누름틀로 승격하는 템플릿 스탬핑 (2단계 plan/apply).
 //!
 //! plan 은 클래스-A 후보를 나열하고, 호출자가 후보 전량을 이름 또는 ignore
 //! 로 분류한 spec 배열을 stamp 에 전달한다. stamp 는 fail-closed admission
@@ -142,11 +142,11 @@ pub fn run_stamp(
         )
     })?;
 
-    // Review L1: serialize the manifest BEFORE writing anything, and remove
+    // Serialize the manifest BEFORE writing anything, and remove
     // the .hwpx if the manifest write fails — a failed call must leave no
     // partial artifact behind (fail-closed).
     //
-    // W6b audit follow-up: the default path is now `ops::default_manifest_path`
+    // The default path is `ops::default_manifest_path`
     // — the CLI's own pre-migration rule, shared here instead of this file's
     // separate `trim_end_matches(".hwpx")` version (see that function's doc
     // for the one input the two disagreed on and why this migrates rather
@@ -154,7 +154,7 @@ pub fn run_stamp(
     let manifest_file = manifest_path.map(str::to_string).unwrap_or_else(|| {
         ops::default_manifest_path(std::path::Path::new(output_path)).to_string_lossy().into_owned()
     });
-    // R2: identical paths would silently overwrite the stamped .hwpx with
+    // Identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if std::path::Path::new(output_path) == std::path::Path::new(&manifest_file) {
         return Err(ToolErrorInfo::new(
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn stamp_manifest_write_failure_removes_output() {
-        // Review L1: manifest 기록 실패 시 .hwpx 산출물도 제거되어야 한다
+        // Manifest 기록 실패 시 .hwpx 산출물도 제거되어야 한다
         // (fail-closed — 부분 산출물 금지).
         let dir = tempfile::tempdir().unwrap();
         let src = make_template(&dir);

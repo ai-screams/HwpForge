@@ -347,7 +347,7 @@ impl Definitions {
             if n.attrs.contains_key("id") {
                 let kind =
                     if n.name == "font" { format!("font:{language}") } else { n.name.clone() };
-                // Hancom W3: definition labels do not select the definition.
+                // Hancom: definition labels do not select the definition.
                 let id = if matches!(
                     n.name.as_str(),
                     "font"

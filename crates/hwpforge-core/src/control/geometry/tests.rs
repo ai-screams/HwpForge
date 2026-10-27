@@ -477,7 +477,7 @@ fn a_point_shape_stretched_past_the_range_is_dropped() {
     }
 }
 
-// ── S20 frame emission plan ─────────────────────────────────────
+// ── frame emission plan ─────────────────────────────────────
 
 fn framed_line(end: (i32, i32), size: (i32, i32), original: (i32, i32)) -> Control {
     let mut c = Control::Line {
@@ -495,7 +495,7 @@ fn framed_line(end: (i32, i32), size: (i32, i32), original: (i32, i32)) -> Contr
     c
 }
 
-/// The extreme ratio of §19.23.11 H3: shown 49 wide from an original box of
+/// An extreme ratio: shown 49 wide from an original box of
 /// 100,000,000 the six-decimal scale is `0.000000` — the end would land 49
 /// off. The plan falls back to the displayed box (end at 49, scale 1) and
 /// is exact again.
@@ -564,7 +564,7 @@ fn fallback_measures_against_the_original_points() {
     assert!(plan.loss().is_none(), "{plan:?}");
 }
 
-/// The plan keeps a frame the policy stores within 2: the r6 circle
+/// The plan keeps a frame the policy stores within 2: the circle
 /// (original 560, shown 850) stores its centre at 280 and the scale
 /// 850 / 560, and lands exactly where Core draws it (centre at 425).
 /// 이것을 실패시키는 것: 점을 현재 상자로 옮겨 쓰기 / 배율을 1 로.

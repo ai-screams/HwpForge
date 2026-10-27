@@ -204,7 +204,7 @@ fn preserving_edits_keep_end_mark_runs() {
 }
 
 /// An end run's char shape reference is bounded like every run's — in a
-/// table cell, whose paragraphs only the run conversion checked (review r1).
+/// table cell, whose paragraphs only the run conversion checked.
 ///
 /// 이것을 실패시키는 것: 생성 입력에서 end_char_shape 를 None 으로 바꾸기.
 #[test]

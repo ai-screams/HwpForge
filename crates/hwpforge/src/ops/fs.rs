@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn a_u64_max_bound_does_not_overflow() {
-        // Review finding: `max + 1` overflowed for `u64::MAX` (panic with
+        // `max + 1` overflowed for `u64::MAX` (panic with
         // overflow checks, wrapped to a zero cap in release). The bound must
         // saturate so the read simply behaves as unbounded.
         let path = tempfile("umax", &[7u8; 5]);

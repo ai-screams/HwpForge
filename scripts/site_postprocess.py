@@ -10,7 +10,7 @@ Usage:
     python3 scripts/site_postprocess.py --verify book   # check a processed tree
     python3 scripts/site_postprocess.py --self-check    # run scripts/test_site_postprocess.py
 
-Page classes (plan 2026-09-26-issue-190-seo §2):
+Page classes and their canonical, indexing, and footer rules:
 
     mdBook   index.html / chapters     canonical  footer
              404.html                  noindex    footer
@@ -379,7 +379,7 @@ def parse_crates_js(text: str) -> list[str]:
 
 
 def is_crate_root(page: PageScan, dirname: str) -> bool:
-    """Crate-root signature (plan §2.3-1)."""
+    """Identify a crate root by rustdoc metadata, body classes, crate name, and one main element."""
     return (
         page.generators == ["rustdoc"]
         and len(page.body_classes) == 1

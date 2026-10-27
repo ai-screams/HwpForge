@@ -34,8 +34,8 @@
 //!
 //! # Supported Content
 //!
-//! Currently supports T1 (text + styles), T2 (tables), and a narrow parser-backed
-//! image slice covering `gso ` + `ShapePicture` anchored in body/header/footer/
+//! Currently supports text + styles, tables, and a narrow parser-backed
+//! image support covering `gso ` + `ShapePicture` anchored in body/header/footer/
 //! table/textbox subtrees.
 
 #![deny(missing_docs)]
@@ -148,7 +148,7 @@ pub(crate) struct Hwp5OleAssetPlan {
     /// References whose record by position and record by stored id are not
     /// the same record, with both readings spelled out. An OLE reference is
     /// read by position like a picture's, but no Hancom file in hand tells
-    /// the two readings apart for OLE (the x7 fixture renumbers ids `1..n`),
+    /// the two readings apart for OLE (the OLE fixture renumbers ids `1..n`),
     /// so a disagreement is reported rather than settled silently.
     pub reference_ambiguities: BTreeMap<u16, String>,
 }
@@ -587,9 +587,9 @@ pub fn inspect_hwp5_file(path: impl AsRef<Path>) -> Hwp5Result<Hwp5InspectSummar
 /// Builds the current semantic HWP5 document from raw bytes.
 ///
 /// This helper exposes the parser-side semantic reconstruction before any
-/// Core or HWPX projection is involved. The current semantic slice is
+/// Core or HWPX projection is involved. The current semantic model is
 /// intentionally limited to package metadata, DocInfo references, structural
-/// subtrees, and the current narrow semantic image slice.
+/// subtrees, and the current narrow semantic image model.
 ///
 /// # Errors
 ///
@@ -619,11 +619,11 @@ pub fn build_hwp5_semantic_file(path: impl AsRef<Path>) -> Hwp5Result<Hwp5Semant
     build_hwp5_semantic(&bytes)
 }
 
-/// Decodes an HWP5 document with the current image slice enabled.
+/// Decodes an HWP5 document with the current image support enabled.
 ///
 /// Unlike [`Hwp5Decoder::decode`], this helper populates `ImageStore` from
 /// joined HWP5 `BinData` evidence and projects paragraph-local image runs in
-/// the current narrow slice.
+/// the current supported subset.
 ///
 /// # Errors
 ///
@@ -651,7 +651,7 @@ pub(crate) fn decode_hwp5_with_images_with_budget_limit(
     Ok(Hwp5Document { document, image_store, warnings })
 }
 
-/// Decodes an HWP5 file from disk with the current image slice enabled.
+/// Decodes an HWP5 file from disk with the current image support enabled.
 ///
 /// # Errors
 ///
@@ -734,7 +734,7 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
         layout_hint_patch::capture_layout_hints(&intermediate.sections, &mut warnings);
     let master_layout_hints =
         layout_hint_patch::capture_master_layout_hints(&intermediate.sections, &mut warnings);
-    // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
+    // forward HWP5 SummaryInformation metadata into
     // the projected Core Document so a downstream encoder emits a populated
     // `<opf:metadata>` block.
     let metadata = intermediate.metadata;
@@ -1048,8 +1048,8 @@ fn collect_image_geometry_hints_in_controls(
             decoder::section::Hwp5Control::TextBox(textbox) => {
                 collect_image_geometry_hints_in_paragraphs(&textbox.paragraphs, hints);
             }
-            // Group children may themselves carry image geometry (Wave A
-            // children are shapes, but the children Vec is generic).
+            // Group children may themselves carry image geometry;
+            // the children Vec can hold any control.
             decoder::section::Hwp5Control::Group(group) => {
                 for child in &group.children {
                     collect_image_geometry_hints_in_controls(
@@ -1260,8 +1260,7 @@ fn first_visible_text_in_paragraphs(
 fn first_visible_text_in_paragraph(para: &hwpforge_core::paragraph::Paragraph) -> Option<String> {
     para.runs.iter().find_map(|run| match &run.content {
         // Text + InlineText share the "first visible trimmed text"
-        // semantic via the unified `plain_text()` accessor — see
-        // debug doc §3a-A9.
+        // semantic via the unified `plain_text()` accessor.
         hwpforge_core::run::RunContent::Text(_) | hwpforge_core::run::RunContent::InlineText(_) => {
             let cow = run.content.plain_text()?;
             let trimmed = cow.trim();

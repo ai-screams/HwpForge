@@ -118,7 +118,7 @@ pub(crate) fn build_picture(
         )?,
     );
     let mut hx = HxPic {
-        // Wave 12p Step 4: HWPX `<hp:pic id="...">` cross-ref target.
+        // HWPX `<hp:pic id="...">` cross-ref target.
         // Image.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
         // 없으면 sequential fallback.
         id: super::super::object_ids::core_or_drawn("picture", img.inst_id),

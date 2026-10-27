@@ -1,4 +1,4 @@
-//! W2 (design 3.5 test 2): a set-cell edit drops the line caches it makes
+//! Cell cache invalidation: a set-cell edit drops the line caches it makes
 //! stale — the edited cell paragraph, the table's host paragraph and the
 //! body paragraph after the host — and keeps the rest.
 
@@ -173,7 +173,7 @@ fn edit_second_table(bytes: &[u8]) -> Vec<u8> {
     HwpxCellEditor::set_cells(bytes, &[spec]).expect("set_cells").bytes
 }
 
-/// Branch review A2: the input omits `colPr`, so its line start 26 is Core
+/// The input omits `colPr`, so its line start 26 is Core
 /// position 10 (section controls and the table before the text); the
 /// re-encoder writes `colPr`, and carrying the original cache XML moved that
 /// line to 2 with no warning. The carried cache now re-decodes to the
@@ -205,7 +205,7 @@ fn a_cache_the_decoder_dropped_stays_dropped() {
     assert_eq!(first_cache(&edited), None);
 }
 
-/// Branch review r2 M1: a second line starting at wire 16 — after the
+/// A second line starting at wire 16 — after the
 /// section definition and the table, before the text — is Core position 0
 /// with the boundary "after a section definition and a table". The
 /// re-encoder writes a column definition between those two; the line still

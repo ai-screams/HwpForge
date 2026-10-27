@@ -1,4 +1,4 @@
-//! 이미지 바이트 magic 스니핑 (W2a — §3 D2).
+//! 이미지 바이트 magic 스니핑.
 //!
 //! krilla 생성자는 포맷별로 분리돼 있고 auto-detect 가 없다 — 그리고
 //! 한컴 문서의 파일명/확장자는 신뢰할 수 없다 (`ImageFormat` 은 확장자
@@ -18,9 +18,9 @@ pub(crate) enum Sniffed {
     Webp,
     /// magic 은 알지만 렌더 불가 (BMP/WMF/EMF).
     ///
-    /// **W6 확정 정책 (§12a)**: strict = typed
+    /// **미지원 포맷 정책**: strict = typed
     /// `PdfError::UnsupportedImageFormat` / `--degraded` = 경고+스킵.
-    /// 포맷 변환(래스터화) 지원은 후속 슬라이스 — 그때까지 이 분기가
+    /// 포맷 변환(래스터화) 지원은 후속 작업 — 그때까지 이 분기가
     /// "무음 손실 없는 미지원" 을 소유한다.
     KnownUnsupported(&'static str),
     /// 빈/절단/미지 magic — 확장자로 추측하지 않는다.

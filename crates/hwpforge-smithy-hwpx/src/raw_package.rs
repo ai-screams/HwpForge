@@ -156,7 +156,7 @@ impl RawPackage {
         let mut zip = ZipWriter::new(cursor);
 
         for entry in &self.entries {
-            // W0: fixed entry time (the ZIP epoch), never the clock.
+            // fixed entry time (the ZIP epoch), never the clock.
             let options = SimpleFileOptions::default()
                 .compression_method(entry.compression)
                 .last_modified_time(zip::DateTime::default());
@@ -211,7 +211,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: patch의 두 번째 ZIP 읽기가 공용 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_patch_rejects_parent_part() {
+    fn patch_rejects_parent_part() {
         let bytes = zeros_zip(&[("Contents/../unused.xml", 1)]);
         // Call the raw reread directly: the preceding decoder must not mask a bypass.
         assert!(matches!(RawPackage::read_capped(&bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE),
@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    /// W0: a rewritten package keeps every entry at the fixed ZIP epoch.
+    /// a rewritten package keeps every entry at the fixed ZIP epoch.
     /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
     /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
     #[test]
@@ -328,7 +328,7 @@ mod tests {
     /// A decodable package can still hold a document Core rejects.
     ///
     /// This is the reachability question behind `ops::validate`'s `ok: false`
-    /// branch (W1b review R2, finding 10). The encoder cannot produce such a
+    /// branch. The encoder cannot produce such a
     /// package — `HwpxEncoder::encode` takes a `Document<Validated>`, so the
     /// type state makes an invalid document unencodable — but a package from
     /// another producer can carry a section with no paragraphs, and the

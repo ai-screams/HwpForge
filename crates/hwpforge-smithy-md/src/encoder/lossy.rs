@@ -444,9 +444,7 @@ fn paragraph_pieces_at<S: Sink>(
             // Markdown cannot represent inline tab attributes, so any
             // `<hp:tab width=... leader=... type=.../>` collapses back
             // to a literal `\t` via `plain_text()` — same effective
-            // output the `Text(String)` arm would produce. See
-            // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
-            // §3a-A4.
+            // output the `Text(String)` arm would produce.
             Part::Text(content) => {
                 if let Some(cow) = content.plain_text() {
                     text(&mut pieces, &cow);
@@ -518,7 +516,7 @@ fn paragraph_pieces_at<S: Sink>(
                 }
                 Control::NewNumber { .. } | Control::PageHiding { .. } => {
                     // 번호 재시작·감추기 지시 — 본문 텍스트 없음, 명시적
-                    // no-op (W2·W3).
+                    // no-op.
                 }
                 Control::AutoNumber { num, format, .. } => {
                     text(&mut pieces, &super::auto_number_text(*num, format));
@@ -593,7 +591,7 @@ fn container_pieces_at<S: Sink>(
 }
 
 /// A picture's or table's caption as a paragraph after it, empty without
-/// one — the caption numbers ("그림 3") live there (§19.16 J, review r1).
+/// one — the caption numbers ("그림 3") live there.
 /// In a cell the paragraph break is `<br><br>` (the cell's line endings).
 /// 이것을 실패시키는 것: 캡션 출력을 지우기
 /// (`f17_caption_numbers_reach_the_readable_views`).
@@ -2611,7 +2609,7 @@ mod tests {
         let expected_table = || GfmBlock::Table(vec![vec!["head".into()], vec!["cell".into()]]);
         let body = |text: &str| GfmBlock::Paragraph(text.into());
         let cases = [
-            // r1: the second child must not become a discarded excess cell.
+            // The second child must not become a discarded excess cell.
             (
                 vec![textbox(vec![table(), p(vec![t("TAIL")])])],
                 vec![expected_table(), body("TAIL")],

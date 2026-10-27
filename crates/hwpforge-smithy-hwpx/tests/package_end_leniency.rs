@@ -9,11 +9,11 @@ use hwpforge_smithy_hwpx::{style_store_for_preset, HwpxDecoder, HwpxEncoder};
 
 /// 이것을 실패시키는 것: EOF 정확 일치 복원 / 앞 payload EOCD 중복·개수 제한 복원.
 #[test]
-fn w1_generated_hwpx_tails_and_payload_have_no_loss() {
+fn generated_hwpx_tails_and_payload_have_no_loss() {
     let mut document = Document::new();
     let mut section = Section::new(PageSettings::default());
     let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
-    paragraph.runs.push(Run::text("W1 합성 문서", CharShapeIndex::new(0)));
+    paragraph.runs.push(Run::text("패키지 종료 합성 문서", CharShapeIndex::new(0)));
     section.paragraphs.push(paragraph);
     document.add_section(section);
     let bytes = HwpxEncoder::encode(
@@ -53,13 +53,13 @@ fn w1_generated_hwpx_tails_and_payload_have_no_loss() {
 /// 이것을 실패시키는 것: 다른 물리 CD 거부 삭제·꼬리로 한정 / 실패 CD 증거 삭제·앞 후보로 덮어쓰기 /
 /// `directory.rs` 의 `reference.eocd != self.eocd` 거부 삭제(zip 이 여는 B 건너뛴 입력).
 #[test]
-fn w1_last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
+fn last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
     let encode = |paragraphs| {
         let mut document = Document::new();
         let mut section = Section::new(PageSettings::default());
         for _ in 0..paragraphs {
             let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
-            paragraph.runs.push(Run::text("W1 교차 문서", CharShapeIndex::new(0)));
+            paragraph.runs.push(Run::text("패키지 종료 교차 문서", CharShapeIndex::new(0)));
             section.paragraphs.push(paragraph);
         }
         document.add_section(section);

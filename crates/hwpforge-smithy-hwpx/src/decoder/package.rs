@@ -320,7 +320,7 @@ mod tests {
     // 이것을 실패시키는 것: 원문 canonical prefix 대신 UTF-8 trim 정확 일치만 사용,
     // 또는 별칭/앞 공백/대소문자까지 prefix 허용 확대.
     #[test]
-    fn w3_mimetype_bytes() {
+    fn mimetype_bytes() {
         use std::io::Write;
         for (value, accepted) in [
             (b"application/hwp+zip;x=1".as_slice(), true),
@@ -376,7 +376,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 디코더 입구에서 공용 ZIP 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_decoder_rejects_parent_part() {
+    fn decoder_rejects_parent_part() {
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
         for (name, data) in [("mimetype", "application/hwp+zip"), ("Contents/../unused.xml", "x")] {
             zip.start_file(name, SimpleFileOptions::default()).unwrap();
@@ -642,7 +642,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 병합된 len()만 상한에 대거나 ZIP64 경로에서 검사를 생략하기.
     #[test]
-    fn zip9_fix1_physical_duplicate_count_is_capped_before_merging() {
+    fn physical_duplicate_count_is_capped_before_merging() {
         let entries = vec![(b"unused".as_slice(), b"".as_slice()); 10_001];
         let bytes = raw_names_zip(&entries, false);
         for bytes in [bytes.clone(), with_zip64_footer(bytes)] {
@@ -656,7 +656,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 원본 중복 검사 삭제(상한 이하 중복도 병합하면 안 됨).
     #[test]
-    fn zip9_fix1_rejects_original_duplicates_under_limit() {
+    fn rejects_original_duplicates_under_limit() {
         let bytes = raw_names_zip(&[(b"unused", b"first"), (b"unused", b"last")], false);
         assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::InvalidStructure { detail })
             if detail == "duplicate original ZIP entry name"));
@@ -678,7 +678,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 원본 이름 검사를 유효 이름 검사로 대체하기.
     #[test]
-    fn zip9_fix1_original_duplicates_with_distinct_unicode_names_are_rejected() {
+    fn original_duplicates_with_distinct_unicode_names_are_rejected() {
         let mut bytes = unicode_alias_zip("renamed1");
         let end = bytes.len() - 22;
         let mut eocd = bytes.split_off(end);
@@ -700,7 +700,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 물리 수와 병합 후 수의 대조 삭제.
     #[test]
-    fn zip9_fix1_unicode_extra_cannot_merge_into_mimetype() {
+    fn unicode_extra_cannot_merge_into_mimetype() {
         let bytes = unicode_alias_zip("mimetype");
         assert_eq!(ZipArchive::new(Cursor::new(&bytes)).unwrap().len(), 1);
         assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::InvalidStructure { detail })
@@ -709,7 +709,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 모든 항목 T 불변 검사에서 부모 접두부/역슬래시/절대 경로 검사를 삭제.
     #[test]
-    fn zip9_fix1_rejects_noncanonical_parts_before_payload_reads() {
+    fn rejects_noncanonical_parts_before_payload_reads() {
         for name in [
             "BinData/../a.png",
             "Contents\\section0.xml",
@@ -737,7 +737,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 빈 디렉터리까지 파트로 거부하거나 디렉터리를 뺀 인덱스로 읽기.
     #[test]
-    fn zip9_fix1_empty_directory_markers_are_not_parts() {
+    fn empty_directory_markers_are_not_parts() {
         let bytes = raw_names_zip(
             &[
                 (b"Contents/", b""),
@@ -762,7 +762,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: EOCD 선언 개수만 검사해 추가 물리 레코드를 숨기기.
     #[test]
-    fn zip9_fix1_forged_count_cannot_hide_physical_records() {
+    fn forged_count_cannot_hide_physical_records() {
         let entries = vec![(b"unused".as_slice(), b"".as_slice()); 10_001];
         let mut bytes = raw_names_zip(&entries, false);
         let end = bytes.len() - 22;
@@ -774,7 +774,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: ZIP64/주석/접두 바이트가 있으면 정상 ZIP도 일괄 거부하기.
     #[test]
-    fn zip9_fix1_accepts_zip64_comments_and_prefixes() {
+    fn accepts_zip64_comments_and_prefixes() {
         let bytes = raw_names_zip(&[(b"BinData/folder/a.png", b"image")], false);
         for mut bytes in [bytes.clone(), with_zip64_footer(bytes)] {
             let end = bytes.len() - 22;
@@ -794,7 +794,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: zip의 첫 CDFH 대신 EOCD-size로 디렉터리를 선택하기.
     #[test]
-    fn zip9_fix1_rejects_different_directory_interpretations() {
+    fn rejects_different_directory_interpretations() {
         let mut bytes = raw_names_zip(&[], false);
         let end = bytes.len() - 22;
         let eocd = bytes.split_off(end);
@@ -808,7 +808,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 경계/개수/디스크 검증을 삭제해 잘린 디렉터리나 오프셋을 신뢰하기.
     #[test]
-    fn zip9_fix1_rejects_malformed_directory_framing() {
+    fn rejects_malformed_directory_framing() {
         let bytes = raw_names_zip(&[(b"unused", b"payload")], false);
         let end = bytes.len() - 22;
         let start = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as usize;

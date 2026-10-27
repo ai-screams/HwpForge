@@ -138,7 +138,7 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 - [ ] **breaking은 반드시 `type!:` 로 표기.** 안 하면 0.x에서 patch로 잘못 bump.
 - [ ] **로컬에서 태그 기반 검증 시 `git fetch --tags` 먼저.** 로컬 클론에 최신 태그가
       없으면 잘못된 baseline으로 거짓 통과한다 (PR #78에서 겪은 함정).
-- [ ] **release 전 `make ci-full` + `make py-all` 통과 확인** (release-plz.yml 은 preflight 없이 곧바로 release job 을 돌리므로, 로컬에서 먼저 막는 게 유일한 사전 방어선 — CI 다이어트 P2). `make ci` 는 `ci-fast` 별칭이라 coverage 와 MSRV 가 빠지고, `make ci-full` 도 그 둘만 더한다 — CI 의 Docs Build 는 `make site-check`, Python 은 `make py-all` 로 로컬에서 따로 돌릴 수 있다. 로컬 타깃이 없는 것은 Workflow Lint 뿐이므로 그 레인은 머지 큐 실행 결과로 확인한다.
+- [ ] **release 전 `make ci-full` + `make py-all` 통과 확인** (release-plz.yml 은 preflight 없이 곧바로 release job 을 돌리므로, 로컬에서 먼저 막는 게 유일한 사전 방어선). `make ci` 는 `ci-fast` 별칭이라 coverage 와 MSRV 가 빠지고, `make ci-full` 도 그 둘만 더한다 — CI 의 Docs Build 는 `make site-check`, Python 은 `make py-all` 로 로컬에서 따로 돌릴 수 있다. 로컬 타깃이 없는 것은 Workflow Lint 뿐이므로 그 레인은 머지 큐 실행 결과로 확인한다.
 - [ ] umbrella만 GitHub Release를 만든다 — npm/pages는 거기에 매달려 있다. umbrella가
       bump되지 않으면 npm·문서 배포도 안 일어난다는 점을 기억.
 
@@ -264,7 +264,7 @@ TestPyPI 에 올린 것을 같은 방법으로 확인할 때는 인덱스를 둘
 | GitHub environment `pypi`     | 같은 이름으로 생성. 필요하면 reviewer 를 붙여 수동 승인 게이트로 쓴다                                    |
 | GitHub environment `testpypi` | 같은 이름으로 생성, reviewer 없이                                                                        |
 
-증빙은 `gh api repos/ai-screams/HwpForge/environments` 출력을 `.docs/prs/` 에 남긴다. 토큰은 쓰지 않는다 — OIDC 뿐이다.
+증빙은 `gh api repos/ai-screams/HwpForge/environments` 출력을 PR 기록에 남긴다. 토큰은 쓰지 않는다 — OIDC 뿐이다.
 
 ### 9.7 이용자에게 알릴 것
 

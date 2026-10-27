@@ -13,7 +13,7 @@ use std::fmt;
 /// [`RefTarget::Object`](crate::control::RefTarget::Object). Sharing one id
 /// type makes the target↔referencer link checkable at the type level instead
 /// of relying on two unrelated integer fields coincidentally agreeing on a
-/// raw value (the latent fragility this newtype replaces — see ADR-010).
+/// raw value.
 ///
 /// `ObjectId` is format-agnostic: Core only carries *identity*. The wire
 /// encoder owns id *allocation* — preserving ids imported from a source

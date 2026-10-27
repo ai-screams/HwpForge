@@ -1,11 +1,11 @@
-//! E2 `fill` 델타 API — 이름 붙은 누름틀(ClickHere)을 값 맵으로 채운다.
+//! `fill` 델타 API — 이름 붙은 누름틀(ClickHere)을 값 맵으로 채운다.
 //!
 //! 에이전트가 섹션 JSON 전체를 왕복하지 않고 `이름 → 값` 델타만으로
 //! 문서를 채우는 상위 API. 내부적으로 preserve-first 패처
 //! ([`crate::HwpxPatcher`])를 사용하므로 채워진 섹션 XML 외의 모든 ZIP
 //! 엔트리는 바이트 그대로 보존된다.
 //!
-//! # 정책 (설계 토론 확정 — `.docs/planning/2026-07-10-agent-editing-architecture.md`)
+//! # 정책
 //!
 //! - **전량 preflight 후 전량 적용** (all-or-nothing): 요청 값 중 하나라도
 //!   검증에 실패하면 아무 것도 쓰지 않는다.
@@ -404,7 +404,7 @@ impl HwpxFiller {
 
 #[cfg(test)]
 mod tests {
-    //! 채운 누름틀의 문단 캐시를 wire 에서 찾는 경로(R1-4)의 테스트.
+    //! 채운 누름틀의 문단 캐시를 wire 에서 찾는 경로의 테스트.
     //!
     //! 캐시 표지: [`add_caches`] 가 모든 `</hp:p>` 앞에 `vertpos` = 9000 + (닫히는
     //! 순서) 인 `linesegarray` 를 넣는다. 안쪽 문단이 먼저 닫히므로 번호는
@@ -610,13 +610,13 @@ mod tests {
         );
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
-        // W2: 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
-        // 낡는다 — 전에는 남겼던 것이 틀렸다(r1-3).
+        // 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
+        // 낡는다 — 전에는 남겼던 것이 틀렸다.
         assert_eq!(caches(&xml), Vec::<usize>::new());
         assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
 
-    /// W2 (design 3.5 tests 1, 3): filling a field in the middle of three
+    /// (cache invalidation): filling a field in the middle of three
     /// cell paragraphs drops that paragraph's cache, the cell paragraph after
     /// it, the table's host paragraph and the body paragraph after the host;
     /// the first cell paragraph and the body paragraph before keep theirs.
@@ -648,7 +648,7 @@ mod tests {
         }
     }
 
-    /// W2 review: per container, filling the middle of three paragraphs
+    /// Per container, filling the middle of three paragraphs
     /// drops exactly that paragraph, the one after it, the host paragraph
     /// and the body paragraph after the host — every other cache stays.
     /// 이것을 실패시키는 것: host 사슬 생략 · 꼬리 대신 문단 하나만 · 목록
@@ -772,7 +772,7 @@ mod tests {
         // 9000 = 캡션 문단, 9001 = 내부 문단, 9002 = 타원이 든 본문 문단.
         let bytes = with_section_xml(&doc, add_caches(&xml));
         let only_a = fill_xml(&bytes, &[("A", "1")]).expect("fill A");
-        // W2: 내부 문단(9001)의 host 는 타원이 든 본문 문단(9002) — 상자가 글에
+        // 내부 문단(9001)의 host 는 타원이 든 본문 문단(9002) — 상자가 글에
         // 맞춰 자랄 수 있으므로 host 사슬로 함께 지운다(전에는 남겼다). 캡션(9000)은
         // 다른 흐름이라 남는다.
         assert_eq!(caches(&only_a), vec![0]);
@@ -844,8 +844,8 @@ mod tests {
         let xml = add_caches(&section_xml(&doc));
         let bytes = with_section_xml(&doc, xml.clone());
         let filled = fill_xml(&bytes, &[("cap", "1")]).expect("fill caption field");
-        // W2: 캡션이 자라면 그림이 든 문단(9001, host)과 그 뒤 본문 문단(9002)이
-        // 밀린다 — 전에는 둘 다 남겼다(r1-3).
+        // 캡션이 자라면 그림이 든 문단(9001, host)과 그 뒤 본문 문단(9002)이
+        // 밀린다 — 전에는 둘 다 남겼다.
         assert_eq!(caches(&filled), Vec::<usize>::new());
 
         let start = xml.find("binaryItemIDRef=\"").expect("img ref") + "binaryItemIDRef=\"".len();
@@ -951,7 +951,7 @@ mod tests {
             let own = xml[..at].matches("</hp:p>").count();
             let filled = fill_xml(&bytes, &[(name.as_str(), "값")])
                 .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
-            // W2: 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
+            // 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
             // 전용 시험(`cell_fill_drops_the_flow_tail_and_the_host_chain`)이 맡고,
             // 여기서는 짝지은 문단의 캐시가 가고 첫 본문 문단(9000, `body`)은
             // 다른 필드일 때 남는지만 본다.
@@ -1028,7 +1028,7 @@ mod tests {
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
         assert_eq!(listed.len(), 2, "premise: the unnamed field is listed");
         let xml = fill_xml(&bytes, &[("b", "값")]).expect("fill");
-        // W2: 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
+        // 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
         // 이빨은 위치 불일치 오류(`expect`)가 진다.
         assert_eq!(caches(&xml), Vec::<usize>::new());
     }

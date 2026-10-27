@@ -308,7 +308,7 @@ mod lib_unit_tests {
 
     /// paragraph shape referencing a missing tab definition → ParserFallback for tab_def.ref
     #[test]
-    fn fix2_para_shape_referencing_missing_tab_def_is_error() {
+    fn para_shape_referencing_missing_tab_def_is_error() {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![minimal_para_shape_with_tab_id(99)];
@@ -376,7 +376,7 @@ mod lib_unit_tests {
 
     /// Missing paraPr references fail before outline-name handling.
     #[test]
-    fn fix3_outline_style_with_oob_para_shape_id_is_error() {
+    fn outline_style_with_oob_para_shape_id_is_error() {
         let mut store = empty_store();
         store.tab_defs = vec![simple_tab_def(0)];
         store.para_shapes = vec![outline_para_shape_with_tab_id(0)];

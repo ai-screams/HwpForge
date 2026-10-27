@@ -12,11 +12,11 @@
 //! # Design Decisions
 //!
 //! - **Typestate, not enum** -- invalid operations are compile errors
-//!   (not runtime panics). See Appendix D in the detailed plan.
+//!   (not runtime panics).
 //! - **Deserialize always to Draft** -- serialized data may be modified
 //!   externally; re-validation is mandatory.
-//! - **No `Styled` state in Phase 1** -- deferred to Phase 2 when
-//!   Blueprint (StyleRegistry) is available.
+//! - **No `Styled` state** -- styling is handled by
+//!   Blueprint (StyleRegistry).
 //!
 //! # Examples
 //!
@@ -244,8 +244,8 @@ impl Document<Draft> {
     /// [`crate::run::RunContent::Image`] 는 재귀 대상이 아니기 때문이다.
     /// 표·글상자 캡션은 방문되므로 캡션 처리가 비대칭이다 — 의도된 설계가
     /// 아니라 갭이며, 재귀 대상을 넓히면 캐시 정규화·편집 파이프라인 등
-    /// **모든 기존 호출자의 동작이 바뀌므로** 픽스처를 갖춘 별도 슬라이스로
-    /// 다룬다. `.docs/followups.md` 에 기록돼 있다.
+    /// **모든 기존 호출자의 동작이 바뀌므로** 픽스처를 갖춘 별도 작업으로
+    /// 다룬다.
     ///
     /// # Examples
     ///

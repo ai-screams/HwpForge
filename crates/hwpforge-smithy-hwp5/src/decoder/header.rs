@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_id_mappings_damage_and_every_count_are_visible() {
+    fn id_mappings_damage_and_every_count_are_visible() {
         // 이것을 실패시키는 것: 손상 선언을 None으로 대체, optional 꼬리 절단 허용,
         // 중복 선언 덮어쓰기, 어느 정의 종류든 카운터 불일치 경고 생략.
         let version = HwpVersion::new(5, 0, 3, 2);
@@ -546,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn fix2_failed_definitions_keep_slots_and_warn() {
+    fn failed_definitions_keep_slots_and_warn() {
         // 이것을 실패시키는 것: 실패 슬롯 압축 / 경고 삭제 / 뒤 정의를 빈 자리에 복사.
         let mut stream = Vec::new();
         let mut para = make_para_shape_data();

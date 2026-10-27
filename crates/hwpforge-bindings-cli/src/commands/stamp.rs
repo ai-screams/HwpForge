@@ -1,4 +1,4 @@
-//! Stamp prose placeholders into named click-here fields (E6, 2-phase).
+//! Stamp prose placeholders into named click-here fields (2-phase).
 //!
 //! `stamp-plan` discovers class-A candidates; the caller authors a spec map
 //! (every unguarded candidate named or ignored); `stamp` applies it
@@ -28,7 +28,7 @@ pub fn run_plan(file: &PathBuf, json_mode: bool) {
         Err(e) => compat::exit_ops_error(Command::StampPlan, e, json_mode),
     };
     // Decoder warnings (`StampPlanOutput::warnings`) were not surfaced
-    // pre-W5. W5 follow-up: additive — a new, omit-if-empty `warnings` key
+    // previously. This adds a new, omit-if-empty `warnings` key
     // in `--json`, and one `[stamp-plan]`-prefixed stderr line each in text
     // mode. Unrelated to `plan.skipped_tables`'s own warning print below,
     // which stays exactly as it was.
@@ -144,7 +144,7 @@ pub fn run(
 
     let manifest_file: PathBuf =
         manifest_path.map(Path::to_path_buf).unwrap_or_else(|| default_manifest_path(output));
-    // R2: identical paths would silently overwrite the stamped .hwpx with
+    // Identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if output == &manifest_file {
         CliError::new(
@@ -165,7 +165,7 @@ pub fn run(
     };
     // What decoding the input reported, then the successful encode's
     // non-semantic warnings (`StampOutput::warnings`) were not surfaced
-    // pre-W5. W5 follow-up: additive — a new, omit-if-empty `warnings` key
+    // previously. This adds a new, omit-if-empty `warnings` key
     // in `--json`, and one `[stamp]`-prefixed stderr line each in text mode,
     // for both the legacy and v2 shapes below.
     let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();
@@ -261,7 +261,7 @@ fn write_artifacts(
         .exit(json_mode, Command::Stamp);
     }
     if let Err(e) = std::fs::write(manifest_file, manifest_json) {
-        // Review L1: a stamped .hwpx without its manifest is a partial
+        // A stamped .hwpx without its manifest is a partial
         // artifact — remove it so a failed command leaves nothing behind.
         let _ = std::fs::remove_file(output);
         CliError::new(

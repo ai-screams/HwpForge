@@ -192,7 +192,7 @@ mod tests {
 
     // 이것을 실패시키는 것: UTF-16/BOM 분기 제거, 선언을 UTF-8로 정규화하지 않기.
     #[test]
-    fn w3_encoding_acceptance() {
+    fn encoding_acceptance() {
         for le in [true, false] {
             for bom in [true, false] {
                 for enc in ["UTF-16", if le { "UTF-16LE" } else { "UTF-16BE" }] {
@@ -219,7 +219,7 @@ mod tests {
 
     // 이것을 실패시키는 것: lossy 변환, 선언/BOM 일치 검사 또는 선언 필요 검사 제거.
     #[test]
-    fn w3_encoding_rejections() {
+    fn encoding_rejections() {
         let mut cases = vec![
             vec![0xff],
             vec![0xff, 0xfe, 0x3c],
@@ -254,7 +254,7 @@ mod tests {
 
     // 이것을 실패시키는 것: UTF-8 출력 예산 검사 제거 또는 >= 로 경계 축소.
     #[test]
-    fn w3_encoding_output_budget() {
+    fn encoding_output_budget() {
         for bytes in ["가가".as_bytes().to_vec(), utf16("가가", true, true)] {
             assert_eq!(decode(bytes.as_slice().into(), 6).unwrap(), "가가");
             assert!(decode(bytes.as_slice().into(), 5).unwrap_err().contains("limit"));

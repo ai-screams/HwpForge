@@ -1,11 +1,11 @@
 //! PDF renderer for HwpForge — 한컴 조판 캐시 재생 (layout-cache replay).
 //!
 //! 이 크레이트는 문서를 **조판하지 않는다**. 한컴이 저장한 줄 조판 캐시
-//! ([`hwpforge_core::layout::LayoutCache`], W1 에서 decode-only 승격)를
-//! 재생해 "한컴과 같은 PDF" 를 만든다. 캐시에 없는 것만 실측 확정 규칙
-//! (`.docs/algorithms/pdf-cache-replay-rules.md`, W0)으로 계산한다.
+//! ([`hwpforge_core::layout::LayoutCache`], decode-only 승격)를
+//! 재생해 "한컴과 같은 PDF" 를 만든다. 캐시에 없는 것만
+//! 검증된 글꼴 메트릭과 배치 규칙으로 계산한다.
 //!
-//! # 3계층 구조 (에픽 §4)
+//! # 3계층 구조
 //!
 //! ```text
 //! source/   캐시 재생 배치소스 (HWPUNIT i32 정수 산술 — 쪽분할·줄분할·baseline)
@@ -15,12 +15,12 @@
 //! backend/  krilla PDF 쓰기
 //! ```
 //!
-//! # 지원 범위 (W2~W5 출하 기준)
+//! # 지원 범위 (출하 기준)
 //!
-//! - 텍스트: 셰이핑(공백 0.5em)·정렬 배분(R2)·bold/italic face 선택·언어축 검사·
+//! - 텍스트: 셰이핑(공백 0.5em)·정렬 배분·bold/italic face 선택·언어축 검사·
 //!   임베드 라이선스 게이트(fsType fail-closed)
-//! - 표: 열폭/행높이(R1)·쪽걸침 분할·제목행 반복·셀 배경/괘선
-//! - 머리말/꼬리말: 밴드-상대 캐시 재생(R6) · ODD/EVEN parity · 무클립 overflow
+//! - 표: 열폭/행높이·쪽걸침 분할·제목행 반복·셀 배경/괘선
+//! - 머리말/꼬리말: 밴드-상대 캐시 재생 · ODD/EVEN parity · 무클립 overflow
 //! - 쪽번호: BOTTOM_CENTER+DIGIT 합성 (전용 "쪽 번호" 스타일 출처)
 //! - 미지원 (경고 or fail-closed 거부): 이미지·GSO 도형·각주/미주/메모·차트/OLE·
 //!   무캐시 문서(자체 조판 없음 — 한컴 재저장 필요)
@@ -28,7 +28,7 @@
 //! # 입력 계약
 //!
 //! 렌더 입력은 [`PdfInput`] — Core 문서만으로는 폰트명·크기·정렬을 알 수 없어
-//! [`StyleLookup`] 이 필수다 (Codex 리뷰 C1, smithy-md styled encoder 선례).
+//! [`StyleLookup`] 이 필수다 (smithy-md styled encoder 선례).
 
 #![deny(missing_docs)]
 
@@ -59,10 +59,10 @@ pub struct PdfInput<'a> {
 /// 부분 캐시(편집본) 처리 정책.
 ///
 /// fill/set-cell/stamp 편집본은 `layout_carry` 가 미편집 문단 캐시만 보존해
-/// 편집 문단이 캐시 결손이 된다. 에픽 §4 표는 이런 문서를 "지원(경고)" 로
-/// 명시하므로 기본값은 [`PartialCachePolicy::WarnAndSkip`] 이다.
+/// 편집 문단이 캐시 결손이 된다. 이런 문서는 경고와 함께 지원하도록
+/// 기본값은 [`PartialCachePolicy::WarnAndSkip`] 이다.
 ///
-/// 한계: `Document` 에는 편집 이력이 없어 국소 결손(fill)과 구조 편집(E4)
+/// 한계: `Document` 에는 편집 이력이 없어 국소 결손(fill)과 구조 편집
 /// 결손을 캐시 상태만으로 구분할 수 없다. 렌더 가능 캐시가 0 인 섹션은
 /// 정책과 무관하게 거부한다 (하한).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,7 +74,7 @@ pub enum PartialCachePolicy {
     WarnAndSkip,
 }
 
-/// 폰트 강등 정책 — 스타일 face 결손·언어축 불일치의 공통 처리 (W4c).
+/// 폰트 강등 정책 — 스타일 face 결손·언어축 불일치의 공통 처리.
 ///
 /// 실측 (blank-HPC): 한컴 문서의 charPr 언어축 불일치는 예외가 아니라
 /// 상례(렌더 run 30%)이고, bold 요청 face 미보유도 흔하다. 기본값은
@@ -84,7 +84,7 @@ pub enum PartialCachePolicy {
 #[non_exhaustive]
 pub enum RenderFailureMode {
     /// 강등 없이 에러 (기본) — 폰트: [`PdfError::FontStyleUnavailable`] /
-    /// [`PdfError::FontAxisMismatch`] · 이미지(W2a):
+    /// [`PdfError::FontAxisMismatch`] · 이미지:
     /// [`PdfError::ImageDataMissing`] / [`PdfError::UnsupportedImageFormat`] /
     /// [`PdfError::ImageDecodeFailed`] / [`PdfError::InvalidImageGeometry`].
     #[default]
@@ -147,7 +147,7 @@ pub enum PdfWarning {
     },
     /// 캐시 결손으로 스킵된 문단이 쪽번호 재시작/감춤 컨트롤을 갖고 있어
     /// 그 **페이지 이벤트가 유실**됨 — 물리 쪽을 결정할 수 없어 근사
-    /// 앵커로 날조하는 대신 유실을 특정한다 (독립 리뷰 High #3).
+    /// 앵커로 날조하는 대신 유실을 특정한다.
     PageEventLost {
         /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).
         location: String,
@@ -199,14 +199,14 @@ pub enum PdfWarning {
     /// Degraded 모드: charPr 언어축(7축)이 서로 다른 폰트를 참조하는데
     /// 한글 축 폰트 단일로 렌더함 (charPr 당 1회 — 첫 발생 위치 기록).
     ///
-    /// 축별 폰트 선택 + run 분할은 후속 슬라이스 (issue #129).
+    /// 축별 폰트 선택 + run 분할은 후속 작업 (issue #129).
     FontAxisFallback {
         /// 축별 distinct 폰트 이름 (첫 원소 = 렌더에 쓴 한글 축).
         fonts: Vec<String>,
         /// 첫 발생 위치.
         location: String,
     },
-    /// Preview & Print 전용 폰트를 임베드함 (W4d — physical face 당 1회).
+    /// Preview & Print 전용 폰트를 임베드함 (physical face 당 1회).
     ///
     /// PDF 뷰/인쇄 임베드는 관례상 허용 범위지만 라이선스 상태를
     /// 표면화한다 (권한·출처·fingerprint).
@@ -218,14 +218,14 @@ pub enum PdfWarning {
         /// 파일 바이트 fingerprint (hex — 물리 동일성 진단).
         fingerprint: String,
     },
-    /// 정렬 배분이 근사임 (배분 정렬 2종·공백 0 JUSTIFY — W0 미실측,
+    /// 정렬 배분이 근사임 (배분 정렬 2종·공백 0 JUSTIFY — 미실측,
     /// 위치는 정확하고 스트레치만 생략).
     AlignmentApproximated {
         /// 문서 내 위치.
         location: String,
     },
-    /// 문단 안의 비텍스트 run(컨트롤·이미지)을 렌더에서 생략함 (W5 전
-    /// 미지원 — 문단 자체는 렌더됨).
+    /// 문단 안의 미지원 비텍스트 run(컨트롤·이미지)을 렌더에서 생략함
+    /// (문단 자체는 렌더됨).
     NonTextRunDropped {
         /// 문서 내 위치.
         location: String,
@@ -234,7 +234,7 @@ pub enum PdfWarning {
     /// 일치함 — **뒤 세그먼트(새 줄) 기준**으로 배치하고 표면화한다.
     ///
     /// 한컴이 저장한 줄 경계 앵커 그림도 아랫줄 기준임을 바이트 대조로 확인
-    /// (Δ≤0.03pt — §11c). 경고는 경계 케이스 가시화용으로 유지.
+    /// (Δ≤0.03pt). 경고는 경계 케이스 가시화용으로 유지.
     AnchorMarkerOnLineBoundary {
         /// 문서 내 위치.
         location: String,
@@ -251,7 +251,7 @@ pub enum PdfWarning {
         expected: i32,
     },
     /// 분할 표의 중간 쪽 경계는 캐시에 신호가 없어 **계산**으로 배치함
-    /// (W3 — 캐시 앵커 이중 검산을 통과한 출력에만 딸려 나옴).
+    /// (캐시 앵커 이중 검산을 통과한 출력에만 딸려 나옴).
     TablePaginationComputed {
         /// 표 host 문단 위치.
         location: String,
@@ -297,7 +297,7 @@ pub enum PdfWarning {
         what: &'static str,
     },
     /// "쪽 번호"(Page Number) CHAR 스타일이 스타일 테이블에 없어 문서 기본
-    /// charPr(0) 로 폴백함 — 한컴 실측 출처는 전용 스타일이다 (§8c).
+    /// charPr(0) 로 폴백함 — 한컴 실측 출처는 전용 스타일이다.
     PageNumberStyleFallback {
         /// 섹션 인덱스.
         section: usize,
@@ -313,7 +313,7 @@ pub enum PdfWarning {
         location: String,
     },
     /// 줄 자연폭이 캐시 줄 상자를 초과 — 자간/장평 미carry 갭의 표면화
-    /// (줄 시작은 캐시-정확하나 우측으로 넘칠 수 있음 — corpus 실측 §5f).
+    /// (줄 시작은 캐시-정확하나 우측으로 넘칠 수 있음 — corpus 실측).
     LineOverflow {
         /// 문서 내 위치.
         location: String,
@@ -345,15 +345,15 @@ pub enum PdfError {
         /// 첫 결손 위치.
         first: String,
     },
-    /// W2 미지원 콘텐츠 (표 등 — 다쪽 표는 후속 문단 page-ordinal 을 보장할 수 없다).
-    #[error("unsupported content in W2 scope: {kind} at {location}")]
+    /// 미지원 콘텐츠 (표 등 — 다쪽 표는 후속 문단 page-ordinal 을 보장할 수 없다).
+    #[error("unsupported content: {kind} at {location}")]
     UnsupportedContent {
         /// 콘텐츠 종류 (예: `table`).
         kind: &'static str,
         /// 문서 내 위치.
         location: String,
     },
-    /// 내부 불변식 위반 — 코드 결함의 안전망 (W6-α: corpus 대량 실행에서
+    /// 내부 불변식 위반 — 코드 결함의 안전망 (corpus 대량 실행에서
     /// panic 대신 문서 단위 fail-closed 오류로 표면화한다).
     #[error("internal invariant violated: {detail}")]
     InternalInvariant {
@@ -375,7 +375,7 @@ pub enum PdfError {
         location: String,
     },
     /// 같은 쪽에 머리말/꼬리말 후보가 2개 이상 매치 (BOTH+ODD 중복 등) —
-    /// 한컴 우선순위 미실측이라 첫 항목 선택 대신 거부한다 (게이트2 H2).
+    /// 한컴 우선순위 미실측이라 첫 항목 선택 대신 거부한다.
     /// 다중 섹션 + ODD/EVEN parity 조합도 동일 사유로 거부 (물리/구역
     /// 서수 중 어느 쪽 홀짝인지 미실측).
     #[error("ambiguous {kind} selection: {detail}")]
@@ -406,7 +406,7 @@ pub enum PdfError {
         /// 문서 내 위치.
         location: String,
     },
-    /// 이미지 바이트가 스토어에 없다 (W2a — canonical key 미해결).
+    /// 이미지 바이트가 스토어에 없다 (canonical key 미해결).
     #[error(
         "image data missing for \"{key}\" at {location} (opt in to \
          RenderFailureMode::Degraded to skip with a warning)"
@@ -417,7 +417,7 @@ pub enum PdfError {
         /// 발생 위치.
         location: String,
     },
-    /// magic 스니핑 결과가 렌더 불가 포맷 (BMP/WMF/EMF 등 — W6 정책 전).
+    /// magic 스니핑 결과가 렌더 불가 포맷 (BMP/WMF/EMF 등).
     #[error("unsupported image format {format} for \"{key}\" at {location}")]
     UnsupportedImageFormat {
         /// canonical 스토어 키.
@@ -468,7 +468,7 @@ pub enum PdfError {
         /// 축별 distinct 폰트 이름 (첫 원소 = 한글 축).
         fonts: Vec<String>,
     },
-    /// 폰트 임베드 라이선스 거부 (W4d — `fsType` fail-closed).
+    /// 폰트 임베드 라이선스 거부 (`fsType` fail-closed).
     ///
     /// Restricted·No-subsetting(bit8)·Bitmap-only(bit9)·권한 검증 불가
     /// (OS/2 결측/malformed) 폰트는 임베드 전에 거부한다.
@@ -486,7 +486,7 @@ pub enum PdfError {
     /// 폰트 face 신호 충돌 — (family, style) 후보가 모순/동률이라 결정 불가.
     ///
     /// 조용한 선택 금지 (no-fake-support): 어느 실물 face 를 의미하는지
-    /// 확정할 수 없으면 에러로 표면화한다 (W4a 분류기 계약).
+    /// 확정할 수 없으면 에러로 표면화한다 (분류기 계약).
     #[error("font face {face:?} style {style:?} is ambiguous: {detail}")]
     FontFaceAmbiguous {
         /// 요청 face/family 이름.
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn partial_cache_policy_defaults_to_warn_and_skip() {
-        // 에픽 §4 표: fill/set-cell 편집본 = "지원(경고)" — 옵션 뒤에 숨기지 않는다.
+        // fill/set-cell 편집본 = "지원(경고)" — 옵션 뒤에 숨기지 않는다.
         assert_eq!(PartialCachePolicy::default(), PartialCachePolicy::WarnAndSkip);
         assert_eq!(PdfOptions::default().partial_cache, PartialCachePolicy::WarnAndSkip);
     }

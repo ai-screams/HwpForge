@@ -1,7 +1,5 @@
 //! Integration tests for the `validate` subcommand — process-based, same
-//! style as `cli_integration.rs`, kept in its own file per the W5b lane
-//! split (another lane owns `cli_integration.rs` and the rest of
-//! `src/commands/*.rs`).
+//! style as `cli_integration.rs`.
 
 #[path = "support/process.rs"]
 mod process;

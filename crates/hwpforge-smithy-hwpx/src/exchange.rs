@@ -14,7 +14,7 @@ use crate::HwpxStyleStore;
 
 /// Current version of section preservation metadata embedded in section JSON exports.
 ///
-/// v2 (Epic 1): 누름틀(ClickHere) 본문 `<hp:t>` 가 `…control.field` 텍스트
+/// v2: 누름틀(ClickHere) 본문 `<hp:t>` 가 `…control.field` 텍스트
 /// 슬롯으로 추가됐다. v1 export 는 필드 슬롯이 없어 patch 시 슬롯 개수가
 /// 어긋나므로 재-export 를 요구한다.
 pub const SECTION_PRESERVATION_VERSION: u32 = 2;
@@ -277,7 +277,7 @@ mod tests {
         );
     }
 
-    // 이것을 실패시키는 것: U3 — 옛 탭을 그대로 감싸거나 unpack하여 수용.
+    // 이것을 실패시키는 것: 옛 탭을 그대로 감싸거나 unpack하여 수용.
     #[test]
     fn legacy_tabs_report_all_paths_and_auto_tabs_are_not_stops() {
         let mut old = styles();

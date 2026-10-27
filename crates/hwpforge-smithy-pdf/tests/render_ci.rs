@@ -109,7 +109,7 @@ fn page_count(pdf: &[u8]) -> usize {
 #[test]
 fn renders_synthetic_two_page_document() {
     // p1 = 2줄 (textpos 4 에서 절단 — 줄1 "가나다 " 꼬리 공백은 렌더가 trim),
-    // p2 = v==0 재출현 → 새 쪽 (규칙 §2 쪽분할).
+    // p2 = v==0 재출현 → 새 쪽.
     let doc = doc_of(vec![
         para_with_cache("가나다 라마바", vec![seg(0, 0), seg(4, 1600)]),
         para_with_cache("A가나", vec![seg(0, 0)]),
@@ -164,15 +164,16 @@ fn missing_cache_paragraph_warns_and_still_renders() {
 
 #[test]
 fn bold_run_resolves_real_bold_face_by_default() {
-    // W4c: bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge W4
+    // bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge Typographic Pair
     // Bold = Latin 실폭 0.7em vs Regular 0.6em → 출력 바이트가 달라진다).
     let doc = doc_of(vec![para_with_cache("ABC", vec![seg(0, 0)])]);
-    let bold_styles = TestStyles { bold: true, face: "HwpForge W4", ..TestStyles::default() };
+    let bold_styles =
+        TestStyles { bold: true, face: "HwpForge Typographic Pair", ..TestStyles::default() };
     let input = PdfInput { document: &doc, styles: &bold_styles };
     let bold_out = render_document(&input, &options()).expect("bold render");
     assert!(bold_out.warnings.is_empty(), "{:?}", bold_out.warnings);
 
-    let regular_styles = TestStyles { face: "HwpForge W4", ..TestStyles::default() };
+    let regular_styles = TestStyles { face: "HwpForge Typographic Pair", ..TestStyles::default() };
     let input = PdfInput { document: &doc, styles: &regular_styles };
     let regular_out = render_document(&input, &options()).expect("regular render");
     assert_ne!(bold_out.bytes, regular_out.bytes, "Bold 는 실폭이 달라 출력이 다르다");
@@ -226,7 +227,7 @@ fn ambiguous_bold_face_errors_in_both_modes() {
 
 #[test]
 fn restricted_license_font_is_fatal_before_embed() {
-    // W4d: fsType Restricted (v0 — ENGDOS 실물형) = 임베드 전 거부.
+    // fsType Restricted (v0 — ENGDOS 실물형) = 임베드 전 거부.
     // Degraded 는 스타일/축 강등 정책이지 라이선스 우회가 아니다.
     let doc = doc_of(vec![para_with_cache("가나다", vec![seg(0, 0)])]);
     let styles = TestStyles { face: "HwpForge FsV0Restricted", ..TestStyles::default() };
@@ -269,7 +270,10 @@ fn axis_mismatch_is_fatal_by_default_and_warns_once_in_degraded() {
         para_with_cache("가나 ABC", vec![seg(0, 0)]),
         para_with_cache("다라 DEF", vec![seg(0, 1600)]),
     ]);
-    let styles = TestStyles { axes: &["HwpForge Test", "HwpForge W4"], ..TestStyles::default() };
+    let styles = TestStyles {
+        axes: &["HwpForge Test", "HwpForge Typographic Pair"],
+        ..TestStyles::default()
+    };
     let input = PdfInput { document: &doc, styles: &styles };
     let err = render_document(&input, &options()).unwrap_err();
     assert!(matches!(err, PdfError::FontAxisMismatch { .. }), "{err:?}");
@@ -330,7 +334,7 @@ fn whitespace_only_line_renders_without_glyphs() {
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
 }
 
-// ── W6 §5f: 무음 시각 결함의 신호화 (tofu·줄 넘침) ──────────────
+// ── 무음 시각 결함의 신호화 (tofu·줄 넘침) ──────────────
 
 #[test]
 fn missing_glyph_is_fatal_by_default() {

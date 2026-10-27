@@ -1,7 +1,7 @@
-//! Byte-level stamping facade (E6 Wave 1B surface): admission-gated
+//! Byte-level stamping facade (surface): admission-gated
 //! decode → apply → encode over a complete `.hwpx`, plus the manifest.
 //!
-//! Fail-closed (design §3-1/§3-6): an input is admitted only when it is
+//! Fail-closed: an input is admitted only when it is
 //! provably round-trip-safe for THIS codec — a no-op decode→encode→decode
 //! must reproduce the same Core semantics and the output package must carry
 //! every input ZIP entry. Anything else is rejected with no output; file
@@ -39,7 +39,7 @@ pub const STAMP_MANIFEST_V2_VERSION: u32 = 2;
 /// (admission-gated apply + manifest).
 pub struct HwpxStamper;
 
-/// 인코드 + **의미 손상 fail-closed** (7차 평결 High).
+/// 인코드 + **의미 손상 fail-closed**.
 ///
 /// 편집기(stamper/cell-edit)는 preserve-first 계약이다 — 인코더가
 /// [`crate::EncodeWarning::NoteHeadSkipped`] 등 의미 손상 경고를 낸 산출물을
@@ -48,11 +48,11 @@ pub struct HwpxStamper;
 /// 머리는 재인코드에서 `AlreadyPresent` 가 될 수 없다 — titleMark 각주의
 /// 가시 번호가 무음 삭제되는 실경로). public 결과형 변경 없이 기존
 /// `Codec` 오류로 거부한다 — 경고를 결과에 싣는 richer API 는 별도 승인
-/// 대상 (계획 문서 §7i).
+/// 대상.
 ///
 /// 어떤 경고가 의미 손상인지는 [`crate::EncodeWarning::is_semantic_loss`]
 /// 가 단독으로 정의한다 (편집기별 손수 목록 금지).
-/// R2 HIGH 1: 성공 시 **비의미 경고를 함께** 돌려준다 (과거엔 바이트만
+/// 성공 시 **비의미 경고를 함께** 돌려준다 (과거엔 바이트만
 /// 남기고 버렸다 — `*_with_diagnostics` 트윈이 이 목록을 싣는다).
 fn encode_fail_closed(
     validated: &hwpforge_core::Document<hwpforge_core::Validated>,
@@ -66,7 +66,7 @@ fn encode_fail_closed(
         crate::EncodeOptions::default(),
     )
     .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-    // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
+    // typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
     // 호출자가 어떤 경고였는지 알 수 없었다). Display 문자열은 불변이라
     // 프론트엔드 출력은 그대로다.
     crate::encoder::split_successful_encode(outcome)
@@ -77,7 +77,7 @@ fn encode_fail_closed(
 ///
 /// 현재 인코드 [`EncodeWarning`](crate::EncodeWarning) (각주 번호 머리
 /// 생략 등)은 이 결과에 실리지 않는다 — 경고 채널 신설은 public 필드
-/// 추가(semver) 라 별도 승인 대기 (각주 에픽 계획 문서 §7h).
+/// 추가로 공개 구조체가 바뀐다.
 #[derive(Debug)]
 pub struct StampResult {
     /// The stamped `.hwpx` bytes.
@@ -88,7 +88,7 @@ pub struct StampResult {
     pub outcome: StampOutcome,
 }
 
-/// Machine-readable inventory of the stamped output (design §3-5).
+/// Machine-readable inventory of the stamped output.
 ///
 /// Invariant: `fields[*].field` is the re-decoded OUTPUT's `list_fields`
 /// result verbatim — never a projection estimated during planning.
@@ -152,7 +152,7 @@ pub enum StamperError {
         diff_path: String,
     },
     /// The encoder does not carry these input ZIP entries — stamping would
-    /// silently drop them (closed-world admission, design §3-6②).
+    /// silently drop them (closed-world admission).
     UncarriedZipEntries {
         /// Input entry names missing from the re-encoded package.
         entries: Vec<String>,
@@ -206,10 +206,10 @@ impl std::fmt::Display for StamperError {
             Self::NotRoundTripSafe { component, diff_path } => write!(
                 f,
                 "input is not round-trip-safe: {component} differs at {diff_path} after a \
-                 no-op decode→encode→decode — refusing to stamp (E4 preserve-first path \
+                 no-op decode→encode→decode — refusing to stamp (preserve-first editing path \
                  required for this input)"
             ),
-            // Review L2: entry names come from an untrusted archive — debug
+            // Entry names come from an untrusted archive — debug
             // formatting escapes control characters (terminal injection).
             Self::UncarriedZipEntries { entries } => write!(
                 f,
@@ -348,8 +348,7 @@ impl HwpxStamper {
     /// Three other decodes run on this path and none of them is reported: the
     /// admission gate re-decodes its own no-op encode (a discarded artefact),
     /// and the manifest re-reads the **output** through
-    /// [`HwpxFiller::list_fields`]. That last one is the line the review
-    /// pointed at; it reads bytes produced from the very decode already
+    /// [`HwpxFiller::list_fields`]. It reads bytes produced from the very decode already
     /// reported, so its diagnostics can only restate a subset of them, and
     /// carrying both would report one document's losses twice.
     ///
@@ -1449,7 +1448,7 @@ mod tests {
 
     #[test]
     fn fixed_point_encode_failure_is_verification() {
-        // 이것을 실패시키는 것: F1 fixed-point 호출 목적을 Admission으로 변경.
+        // 이것을 실패시키는 것: fixed-point 호출 목적을 Admission으로 변경.
         let mut doc = doc_with_text("x");
         doc.document = Document::new();
         assert!(matches!(
@@ -1460,7 +1459,7 @@ mod tests {
 
     #[test]
     fn reference_encode_failure_is_verification() {
-        // 이것을 실패시키는 것: F2 reference 호출 목적을 Admission으로 변경.
+        // 이것을 실패시키는 것: reference 호출 목적을 Admission으로 변경.
         let mut doc = doc_with_text("x");
         doc.document = Document::new();
         assert!(matches!(
@@ -1470,8 +1469,8 @@ mod tests {
     }
 
     #[test]
-    fn w3_encode_purpose_preserves_stage_leaf_and_detail() {
-        // 이것을 실패시키는 것: H1–H6 목적별 validate/encode stage 여섯 갈래를 각각 다른 stage로 변경.
+    fn encode_purpose_preserves_stage_leaf_and_detail() {
+        // 이것을 실패시키는 것: 목적별 validate/encode stage 여섯 갈래를 각각 다른 stage로 변경.
         for (purpose, validation, encoding) in [
             (EncodePurpose::Admission, CodecStage::Admission, CodecStage::Admission),
             (EncodePurpose::Output, CodecStage::Validation, CodecStage::Encode),
@@ -1516,9 +1515,9 @@ mod tests {
     }
 
     #[test]
-    fn w3_zip_reads_keep_input_and_artifact_stages() {
-        // 이것을 실패시키는 것: Z1/Z2 원본 ZIP Decode 또는 산출물 ZIP Verification을 Admission으로 변경.
-        // 이것을 실패시키는 것: Z3 원래 Core 오류를 HwpxError로 한 번 더 감싸 detail에 접두 추가.
+    fn zip_reads_keep_input_and_artifact_stages() {
+        // 이것을 실패시키는 것: 원본 ZIP Decode 또는 산출물 ZIP Verification을 Admission으로 변경.
+        // 이것을 실패시키는 것: 원래 Core 오류를 HwpxError로 한 번 더 감싸 detail에 접두 추가.
         let good = encode_hwpx(&doc_with_text("x"), EncodePurpose::Output).unwrap();
         for (base, output, stage) in [
             (b"bad".as_slice(), good.as_slice(), CodecStage::Decode),
@@ -1542,8 +1541,8 @@ mod tests {
 
     /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_stamp_rejects_parent_part() {
-        // 이것을 실패시키는 것: T12 zip_entry_names가 이름 검사 전 빈 목록으로 조기 성공.
+    fn stamp_rejects_parent_part() {
+        // 이것을 실패시키는 것: zip_entry_names가 이름 검사 전 빈 목록으로 조기 성공.
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         zip.start_file("Contents/../unused.xml", zip::write::SimpleFileOptions::default()).unwrap();
@@ -1892,7 +1891,7 @@ mod tests {
     /// 이것을 실패시키는 것: 고정점 검증에 정확 비교(`delta_compare`)를 쓰는 것.
     #[test]
     fn fixed_point_tolerates_storage_drift() {
-        // 이것을 실패시키는 것: T15 fixed-point 검증을 허용 오차 없는 delta 비교로 변경.
+        // 이것을 실패시키는 것: fixed-point 검증을 허용 오차 없는 delta 비교로 변경.
         use hwpforge_core::control::ShapeStyle;
         let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
         let mut rect = Control::rect(unit(2_000_000), unit(10_000)).unwrap();

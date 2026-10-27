@@ -46,7 +46,7 @@ fn gradient_doc(gradient_type: GradientType) -> Vec<u8> {
         .expect("encode")
 }
 
-/// S13 `None` = what the encoder always wrote: LINEAR (0, 0), the other
+/// `None` = what the encoder always wrote: LINEAR (0, 0), the other
 /// kinds (50, 50), 255 steps, step centre 50 — old JSON and API gradients
 /// keep their bytes. 이것을 실패시키는 것: `None` 을 0 으로 쓰기(RADIAL 이 0,0).
 #[test]

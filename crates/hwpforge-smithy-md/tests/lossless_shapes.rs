@@ -1,4 +1,4 @@
-//! Lossless Markdown for text boxes, lines, ellipses and polygons (W3): the
+//! Lossless Markdown for text boxes, lines, ellipses and polygons: the
 //! style, vertical alignment, text margin and placement come back equal in
 //! the body and in groups, their text is an exact subtree, and the old
 //! `<textbox>text</textbox>` form still reads.
@@ -401,7 +401,7 @@ fn shape_grammar_errors() {
     ));
 }
 
-/// Rectangles, arcs, curves and connect lines (W4) come back equal in the
+/// Rectangles, arcs, curves and connect lines come back equal in the
 /// body and in a group: every arc point told apart, a curve whose segment
 /// list is not one shorter than its points, empty curve lists, a connect
 /// line with and without routing points and a control character in its
@@ -410,7 +410,7 @@ fn shape_grammar_errors() {
 /// 이것을 실패시키는 것: `arc` 점 하나씩 누락 · `segments` 를 점 개수에서 다시 만듦 ·
 /// `control-points` 빈 값 거부 · `connect-type` 에 `escape_attr` 대신 `escape_html`.
 #[test]
-fn w4_shapes_round_trip() {
+fn shapes_round_trip() {
     use hwpforge_foundation::{ArcType, CurveSegmentType};
     let style = Some(full_style(Some(Fill::Solid { color: Color::from_rgb(1, 1, 1) }), Some(3.0)));
     let p = |x, y| ShapePoint::new(x, y);

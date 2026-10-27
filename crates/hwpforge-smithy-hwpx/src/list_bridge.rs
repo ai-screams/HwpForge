@@ -21,7 +21,7 @@ pub(crate) struct WireListParts {
 }
 
 /// Converts shared list semantics into HWPX wire components.
-/// Hancom W3: branded indices become 1-based positions, irrespective of definition id.
+/// Hancom: branded indices become 1-based positions, irrespective of definition id.
 pub(crate) fn list_ref_to_wire_parts(
     list_ref: Option<ParagraphListRef>,
     numberings: &[NumberingDef],
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn list_ref_to_wire_parts_uses_positions_not_definition_labels() {
-        // Hancom W3: wire references select list positions, even for sparse labels.
+        // Hancom: wire references select list positions, even for sparse labels.
         let numberings = vec![NumberingDef {
             id: 42,
             start: 0,

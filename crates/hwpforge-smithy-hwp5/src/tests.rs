@@ -105,10 +105,10 @@ fn join_hwp5_image_assets_matches_fixture_bindata_inventory() {
 
 /// Direct unit coverage for `Hwp5StyleStore::border_fill_image_binary_ids`,
 /// which is `pub(crate)` and therefore unreachable from the conversion tests
-/// that moved to `hwpforge-convert` (E5). It is consumed by
+/// that moved to `hwpforge-convert`. It is consumed by
 /// `supplement_border_fill_image_assets`; this asserts it collects the binary
 /// data id of every image-fill border directly, restoring the assertion that
-/// the E5 move could only leave as a comment in the convert crate.
+/// the move could only leave as a comment in the convert crate.
 #[test]
 fn border_fill_image_binary_ids_collects_image_fill_ids() {
     use crate::decoder::header::Hwp5DocInfoBorderFillSlot;
@@ -156,7 +156,7 @@ fn border_fill_image_binary_ids_collects_image_fill_ids() {
     assert_eq!(store.border_fill_image_binary_ids().into_iter().collect::<Vec<_>>(), vec![1]);
 }
 
-// ── R0-2: chart and image decompression are bounded by the document budget ──
+// ── chart and image decompression are bounded by the document budget ──
 
 fn read_cfb_stream(bytes: &[u8], path: &str) -> Vec<u8> {
     use std::io::Read;
@@ -335,7 +335,7 @@ fn every_entry_point_charges_image_decompression_to_the_budget() {
     }
 }
 
-// ── BinData references are DocInfo positions (§19 C) ─────────────────
+// ── BinData references are DocInfo positions ─────────────────
 
 /// One level-0 `DocInfo` record: TLV header (tag, level 0, size) + payload.
 fn doc_info_record(tag: u16, payload: &[u8]) -> Vec<u8> {
@@ -373,7 +373,7 @@ fn reference_and_id(records: &[Hwp5BinDataRecordSummary]) -> Vec<(u16, u16)> {
     records.iter().map(|record| (record.reference_ordinal, record.binary_data_id)).collect()
 }
 
-/// C-T2: a `BIN_DATA` record that fails to parse still uses up its
+/// A `BIN_DATA` record that fails to parse still uses up its
 /// position, so the records after it keep the reference numbers pictures use.
 ///
 /// 이것을 실패시키는 것: 위치를 파싱 뒤에 매기는 것(`enumerate` 를
@@ -390,7 +390,7 @@ fn a_bin_data_record_that_fails_to_parse_keeps_its_position() {
     assert_eq!(reference_and_id(&records), [(1, 1), (3, 2)]);
 }
 
-/// C-T3 (record level): an external link stores two paths, not an id and
+/// At record level, an external link stores two paths, not an id and
 /// an extension. It takes its position but names no stream — before, the
 /// absolute path's length was read as its id and the path's characters as
 /// its extension.
@@ -412,7 +412,7 @@ fn an_external_link_takes_a_position_but_names_no_stream() {
     assert_eq!(records[1].storage_name, "BIN0001.png");
 }
 
-/// C-T1 (join level): image assets and the size hint taken from the
+/// At join level, image assets and the size hint taken from the
 /// pictures are both keyed by reference. The three synthetic records
 /// are re-presented as stored ids `[3, 1, 2]`, so reference 1 is
 /// `BIN0003.png`; each picture gets its own width.
@@ -474,7 +474,7 @@ fn summary(
     }
 }
 
-/// C-T5 (plan level): the OLE reading check covers every `BIN_DATA` slot,
+/// At plan level, the OLE reading check covers every `BIN_DATA` slot,
 /// external links included, and spells out both readings.
 ///
 /// 이것을 실패시키는 것: 비교를 로드된 OLE 자산으로만 좁히는 것(순번 3 의

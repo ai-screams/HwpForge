@@ -135,7 +135,7 @@ pub(crate) fn manifest_items(
         items.push(ManifestItem::xml_part(stem.to_string(), path.clone(), true));
     }
 
-    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
+    // Embedded-chart OLE blobs. 한글 expects each `BinData/{id}.ole`
     // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
     // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
     // matches Hancom's own attribute name).
@@ -157,7 +157,7 @@ pub(crate) fn manifest_items(
 /// metadata section, header + sections + settings + images in manifest,
 /// and header + sections in spine (images are NOT in spine).
 ///
-/// **Wave 12o**: The `metadata` argument populates the `<opf:metadata>`
+/// The `metadata` argument populates the `<opf:metadata>`
 /// block. All slots Hancom emits (title/language/creator/subject/
 /// description/lastsaveby/CreatedDate/ModifiedDate/date/keyword) are
 /// **always** emitted to preserve byte-parity with Hancom output —
@@ -235,7 +235,7 @@ pub(crate) fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) ->
 /// `<opf:title>value</opf:title>` / `<opf:meta name="..."
 /// content="text">value</opf:meta>` form. The `date` slot is intentionally
 /// left empty so Hancom recomputes the human-readable Korean locale string
-/// on save (Wave 12o §11.3 Q2). Keywords join with `";"` (Q3).
+/// on save. Keywords join with `";"`.
 fn build_metadata_block(meta: &Metadata) -> String {
     use std::fmt::Write as _;
 
@@ -263,8 +263,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
     //         (HWPX → HWPX round-trip) parked a non-empty value in
     //         extras["date"], honor it at the canonical 9-slot position
     //         rather than dropping it through the typed-collision guard
-    //         below (Codex(architect) Wave 12o-fixup §Top-2, Option A
-    //         수정형). `creator`/`subject`/... stay reserved for the
+    //         below. `creator`/`subject`/... stay reserved for the
     //         typed `Metadata` fields.
     push_meta(&mut out, "date", meta.extras.get("date").map(String::as_str));
 
@@ -284,7 +283,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
     // key that collides with a typed slot (defense in depth — decoder
     // promotes known names to typed fields).
     //
-    // Codex(architect) Wave 12o-fixup §Top-2: `date` is intentionally
+    // `date` is intentionally
     // NOT in the reserved list — extras["date"] is the canonical
     // carry slot for the Hancom display-date string and is already
     // emitted at the fixed 9-slot position above. Including it here
@@ -477,7 +476,7 @@ impl PackageWriter {
         let cursor = Cursor::new(buf);
         let mut zip = ZipWriter::new(cursor);
 
-        // W0: entry times are fixed (1980-01-01, the ZIP epoch). The zip
+        // entry times are fixed (1980-01-01, the ZIP epoch). The zip
         // crate stamps the current time by default once its `time` feature
         // is on, which another dependency can turn on.
         // 이것을 실패시키는 것: 시각 고정 삭제 + `time` 기능 켜기.
@@ -550,7 +549,7 @@ impl PackageWriter {
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
-        // 12. BinData/{ole_id}.ole — embedded-chart OLE blobs (Wave 4c).
+        // 12. BinData/{ole_id}.ole — embedded-chart OLE blobs.
         // Store uncompressed, matching how image binaries are written: the
         // payload is already a tightly-packed OLE2 compound file, and
         // 한글 reads it raw via `binaryItemIDRef` from content.hpf.
@@ -580,7 +579,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: writer의 공통 경로 검사 삭제/옛 성분 삭제 정규화 복원.
     #[test]
-    fn zip9_fix1_writer_rejects_noncanonical_parts() {
+    fn writer_rejects_noncanonical_parts() {
         for name in ["a/../b", "a/./b", "a//b", "a\\b", "/a", "C:/a", ""] {
             let images = vec![(name.to_string(), vec![])];
             let result =
@@ -595,7 +594,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 출력 정규 키 충돌 검사 삭제(이미지/OLE, 고정/동적 파트).
     #[test]
-    fn zip9_fix1_writer_rejects_duplicate_part_keys() {
+    fn writer_rejects_duplicate_part_keys() {
         let images = vec![("asset.ole".to_string(), vec![1])];
         let oles = vec![("asset".to_string(), vec![2])];
         let result =
@@ -940,7 +939,7 @@ mod tests {
         assert_eq!(buf, image_data);
     }
 
-    // ── Wave 12o Phase 1 — metadata emit gates ──────────────────
+    // ── metadata emit gates ──────────────────
 
     /// Default Metadata: every slot self-closes; Hancom byte parity rules
     /// (always 9 slots + always `content="text"` on `<opf:meta>`).
@@ -972,7 +971,7 @@ mod tests {
     #[test]
     fn metadata_populated_emits_typed_values() {
         let meta = Metadata::new()
-            .with_title("Wave 12o 데모")
+            .with_title("메타데이터 데모")
             .with_author("홍길동")
             .with_subject("자동 필드 진단")
             .with_description("longer description")
@@ -981,7 +980,7 @@ mod tests {
             .with_created("2026-06-04T09:00:00Z")
             .with_modified("2026-06-04T11:20:00Z");
         let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
-        assert!(hpf.contains("<opf:title>Wave 12o 데모</opf:title>"));
+        assert!(hpf.contains("<opf:title>메타데이터 데모</opf:title>"));
         assert!(hpf.contains(r#"<opf:meta name="creator" content="text">홍길동</opf:meta>"#));
         assert!(
             hpf.contains(r#"<opf:meta name="subject" content="text">자동 필드 진단</opf:meta>"#)
@@ -998,7 +997,7 @@ mod tests {
         ));
         // date is always self-closing (Hancom recomputes on save).
         assert!(hpf.contains(r#"<opf:meta name="date" content="text"/>"#));
-        // keywords semicolon-joined into a single element (Q3 architect ans).
+        // keywords semicolon-joined into a single element (architect ans).
         assert!(hpf.contains(r#"<opf:meta name="keyword" content="text">alpha;beta</opf:meta>"#));
     }
 

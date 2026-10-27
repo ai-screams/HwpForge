@@ -1,4 +1,4 @@
-//! Stamp map v2 envelope — Wave 2, P0-ⓑ.
+//! Stamp map v2 envelope.
 //!
 //! The caller-approval map grows a versioned object form carrying class-B
 //! cell specs next to the legacy class-A text specs:
@@ -15,7 +15,7 @@
 //! }
 //! ```
 //!
-//! Contract (design §7.3-5, Codex-settled):
+//! Contract:
 //!
 //! - The legacy flat `[StampSpec…]` array keeps parsing unchanged; the two
 //!   shapes are sniffed by the top-level JSON token, never guessed.

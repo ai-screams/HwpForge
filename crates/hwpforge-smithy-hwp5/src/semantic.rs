@@ -655,7 +655,7 @@ pub struct Hwp5SemanticParagraph {
     /// Ordered inline content observed inside the paragraph.
     ///
     /// This preserves `text -> control -> text` sequencing for future nested
-    /// control work while keeping the first semantic slice lightweight.
+    /// control work while keeping the semantic model lightweight.
     pub inline_items: Vec<Hwp5SemanticInlineItem>,
     /// Flattened text content currently known for the paragraph.
     pub text: String,
@@ -1123,7 +1123,7 @@ impl Hwp5SemanticContainerKind {
 
 /// Canonical semantic control kinds currently required by the parser plan.
 ///
-/// `#[non_exhaustive]` (2026-08-13, 독립 리뷰 Medium #7): HWP5 wire 에서 새
+/// `#[non_exhaustive]`: HWP5 wire 에서 새
 /// 컨트롤을 타입화할 때마다 variant 가 늘어난다 — 외부 소비자는 wildcard
 /// arm 을 유지해야 한다 (crate 는 publish=false 지만 소스 호환 계약 명시).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -1164,19 +1164,19 @@ pub enum Hwp5SemanticControlKind {
     /// ClickHere (누름틀, CLICK_HERE press-field) form control.
     ClickHere,
     /// SUMMERY auto-field (`%smr`): Author / LastSavedBy / CreatedTime /
-    /// ModifiedTime / Title (Wave 12n).
+    /// ModifiedTime / Title.
     SummaryField,
-    /// `%dte` date/time format-code field (Wave 12n).
+    /// `%dte` date/time format-code field.
     DateCodeField,
-    /// `%pat` path / file-name field (Wave 12n).
+    /// `%pat` path / file-name field.
     PathField,
-    /// `atno` inline page-number control (Wave 12n).
+    /// `atno` inline page-number control.
     InlinePageNumber,
-    /// `nwno` 새 번호 지정 control (W2, 2026-08-12).
+    /// `nwno` 새 번호 지정 control (2026-08-12).
     NewNumber,
-    /// `pghd` 감추기 control (W3, 2026-08-12).
+    /// `pghd` 감추기 control (2026-08-12).
     PageHiding,
-    /// `%xrf` cross-reference field (Wave 12m).
+    /// `%xrf` cross-reference field.
     CrossRef,
     /// Header control.
     Header,
@@ -1194,7 +1194,7 @@ pub enum Hwp5SemanticControlKind {
     Chart,
     /// OLE-backed embedded object.
     OleObject,
-    /// Group (묶음 객체) container wrapping flat shape children (Wave A).
+    /// Group (묶음 객체) container wrapping flat shape children.
     Group,
     /// Unsupported or unknown control.
     Unknown(String),

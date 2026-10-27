@@ -8,25 +8,25 @@ SOURCE_DATE_EPOCH=0 으로 고정해 재생성이 바이트 결정적이다.
 의도적 메트릭 (셰이퍼/정렬 단언이 이 값에 고정된다):
 - upem = 1000
 - space  advance = 300  (0.3em — 한컴 0.5em 오버라이드가 폰트값을 이기는지 검증용)
-- Latin/숫자/문장부호 advance = 600 (0.6em) — W4 Bold 는 **700 (0.7em)**
+- Latin/숫자/문장부호 advance = 600 (0.6em) — Bold 는 **700 (0.7em)**
   으로 실제 폭이 다르다 (outline 도 폭이 달라 bbox 검증이 유효).
 - 한글 음절 advance = 1000 (1.0em 전각)
 
 파일 그룹:
-- W2 레거시 쌍 (파라미터 불변 유지 — 기존 게이트가 이 형태에 고정):
+- 레거시 쌍 (파라미터 불변 유지 — 기존 게이트가 이 형태에 고정):
   - HwpForgeTest-Regular.ttf  (subfamily "Regular" — family 이름 등록 대상)
-  - HwpForgeTest-Bold.ttf     (subfamily "Bold" + **regular 플래그** — W4a
+  - HwpForgeTest-Bold.ttf (subfamily "Bold" + **regular 플래그** —
     분류기의 "신호 모순 = ambiguous" 레거시 케이스를 겸한다.)
-- W4a 분류기 fixture:
-  - HwpForgeW4-{Regular,Bold}.ttf — 정상 Bold 축 (nameID 16/17 typographic
+- 분류기 fixture:
+  - HwpForgeTypographicPair-{Regular,Bold}.ttf — 정상 Bold 축 (nameID 16/17 typographic
     이름 · fsSelection BOLD · macStyle · weight 700 · 실제 폭 상이).
-    nameID 1 은 의도적으로 다른 이름("HwpForgeW4 Legacy") — 16 우선 검증.
+    nameID 1 은 의도적으로 다른 이름("HwpForge Typographic Pair Legacy") — 16 우선 검증.
   - HwpForgeConflict-Bold.ttf — subfamily "Bold" + regular 플래그 + weight
     400 (모순 → ambiguous 전용 케이스).
   - HwpForgeRank-{R400,R500}.ttf — 같은 (family, Regular) 후보 2개, weight
     ranking (400 최근접) 검증.
   - HwpForgeRankTie-{R350,R450}.ttf — 목표 400 에서 동거리 → ambiguous.
-- W4d fsType fixture (라이선스 게이트 진리표 — §5 H4):
+- fsType fixture (라이선스 게이트 진리표):
   - HwpForgeFsV0Restricted.ttf  (OS/2 v0, fsType=0x0002 — ENGDOS 실물 형태)
   - HwpForgeFsV2NoSubset.ttf    (v2, fsType=0x0100 — bit8 No subsetting)
   - HwpForgeFsV2BitmapOnly.ttf  (v2, fsType=0x0200 — bit9 Bitmap only)
@@ -127,7 +127,7 @@ def build(
         "usWinDescent": 200,
         "usWeightClass": weight,
         # fontTools 기본값은 0x0004(Preview&Print) — 자체 제작 폰트는 무제약이
-        # 진실이므로 installable(0) 로 명시 (W4d 라이선스 게이트 노이즈 방지).
+        # 진실이므로 installable(0) 로 명시 (라이선스 게이트 노이즈 방지).
         "fsType": 0x0000,
     }
     if bold_flags:
@@ -149,7 +149,7 @@ def build(
 if __name__ == "__main__":
     here = Path(__file__).parent
 
-    # W2 레거시 쌍 — 파라미터 불변 (Bold 는 의도적으로 플래그 미설정 모순체).
+    # 레거시 쌍 — 파라미터 불변 (Bold 는 의도적으로 플래그 미설정 모순체).
     for style in ("Regular", "Bold"):
         build(
             here / f"HwpForgeTest-{style}.ttf",
@@ -160,23 +160,23 @@ if __name__ == "__main__":
             weight=700 if style == "Bold" else 400,
         )
 
-    # W4a 정상 Bold 축 쌍 — nameID 16/17 + 진짜 플래그 + 실제 폭 차이.
+    # 정상 Bold 축 쌍 — nameID 16/17 + 진짜 플래그 + 실제 폭 차이.
     build(
-        here / "HwpForgeW4-Regular.ttf",
-        family="HwpForgeW4 Legacy",
+        here / "HwpForgeTypographicPair-Regular.ttf",
+        family="HwpForge Typographic Pair Legacy",
         style_name="Regular",
-        full_name="HwpForge W4 Regular",
-        ps_name="HwpForgeW4-Regular",
-        typo_family="HwpForge W4",
+        full_name="HwpForge Typographic Pair Regular",
+        ps_name="HwpForgeTypographicPair-Regular",
+        typo_family="HwpForge Typographic Pair",
         typo_style="Regular",
     )
     build(
-        here / "HwpForgeW4-Bold.ttf",
-        family="HwpForgeW4 Legacy",
+        here / "HwpForgeTypographicPair-Bold.ttf",
+        family="HwpForge Typographic Pair Legacy",
         style_name="Bold",
-        full_name="HwpForge W4 Bold",
-        ps_name="HwpForgeW4-Bold",
-        typo_family="HwpForge W4",
+        full_name="HwpForge Typographic Pair Bold",
+        ps_name="HwpForgeTypographicPair-Bold",
+        typo_family="HwpForge Typographic Pair",
         typo_style="Bold",
         latin_adv=700,
         weight=700,
@@ -227,7 +227,7 @@ if __name__ == "__main__":
         weight=450,
     )
 
-    # W4d fsType 진리표 fixture (§5 H4) — 분류기(W4a)는 이들을 정상 해석한다.
+    # fsType 진리표 fixture — 분류기는 이들을 정상 해석한다.
     for suffix, os2_version, fs_type, drop in (
         ("FsV0Restricted", 0, 0x0002, False),
         ("FsV2NoSubset", 2, 0x0100, False),

@@ -325,7 +325,7 @@ fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bo
 }
 
 /// A `paraPr` border offset outside the HWPUNIT range: the style store
-/// cannot hold it and keeps 0 (review r1: it was dropped without a word).
+/// cannot hold it and keeps 0 (previously dropped without a word).
 /// 이것을 실패시키는 것: 이 보고를 지우기
 /// (`para_border_offset_out_of_range_is_reported_lost`).
 fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
@@ -356,7 +356,7 @@ fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
 /// `type`, a `color` that is neither `#RRGGBB` nor `none`, or an offset
 /// outside −100..=100. The store keeps a fallback (kind NONE, the default
 /// color, the clamped offset), so a re-encode would write a different
-/// shadow; the editors refuse the input instead (S21 r1-1).
+/// shadow; the editors refuse the input instead.
 fn char_shadow_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
     let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
     char_props
@@ -622,7 +622,7 @@ pub(crate) fn parse_number_format(s: &str) -> hwpforge_foundation::NumberFormatT
 
 /// [`parse_number_format`] 의 판정 코어 — 미지/결측 = `None`.
 ///
-/// 호출자가 폴백 사실을 표면화(디코드 경고)할 수 있게 분리했다 (W5-α M4).
+/// 호출자가 폴백 사실을 표면화(디코드 경고)할 수 있게 분리했다.
 pub(crate) fn parse_number_format_opt(s: &str) -> Option<hwpforge_foundation::NumberFormatType> {
     use hwpforge_foundation::NumberFormatType;
     match s {
@@ -875,7 +875,7 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
     // SYMBOL, USER). Therefore, fontRef group-local indices coincide with
     // flat store indices. If a future HWPX producer uses different fonts per
     // group, this mapping breaks.
-    // See: Phase 4 analysis H3, OWPML KS X 6101 §fontRef.
+    // See: OWPML KS X 6101 §fontRef.
     // TODO(v2.0): Refactor to per-group font model for full spec compliance.
     let font_ref = cp
         .font_ref
@@ -1649,7 +1649,7 @@ mod tests {
         assert_eq!(border_fill.fill_hatch_style.as_deref(), Some("HORIZONTAL"));
     }
 
-    /// Review r1 HIGH-1: an embedded font or substitute font (flag or a
+    /// An embedded font or substitute font (flag or a
     /// binary reference) is reported as lost content; a plain one is not.
     /// 이것을 실패시키는 것: 보고 삭제 · 대체 글꼴 참조 무시 · 일반 글꼴에도 보고.
     #[test]

@@ -357,7 +357,7 @@ fn meta_carries_exactly_the_documented_keys() {
 fn meta_deserializes_json_written_before_sections_and_paragraphs_existed() {
     // The exact key set hwpforge 0.16.5's `ConvertMeta` wrote — pinned by
     // `meta_carries_exactly_the_assets_and_warnings_keys` at main@350851f,
-    // before this review fix (`git show 350851f:crates/hwpforge/tests/ops_convert_md.rs`).
+    // see that main commit (PR #176): `git show 350851f:crates/hwpforge/tests/ops_convert_md.rs`.
     let old_json = r#"{"assets":[],"warnings":[]}"#;
 
     let meta: hwpforge::ops::ConvertMeta =
@@ -425,7 +425,7 @@ mod base64_shim {
 }
 
 #[test]
-fn w2_notes_lists_and_continuation_use_physical_measures() {
+fn notes_lists_and_continuation_use_physical_measures() {
     let markdown =
         "본문[^n]\n\n- [ ] 첫 항목\n\n  계속 문단\n\n  - [x] 안쪽 항목\n\n[^n]: 각주 본문\n";
     let out = convert_md(markdown, None, &ConvertMdOptions::default()).unwrap();

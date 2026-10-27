@@ -19,14 +19,14 @@ struct ConvertResult {
     sections: usize,
     paragraphs: usize,
     size_bytes: usize,
-    /// 이미지 임베드에서 제외된 참조들 (W6 §12b — typed 경고의 표시 문자열).
+    /// 이미지 임베드에서 제외된 참조들 (typed 경고의 표시 문자열).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
 
 /// Run the convert command: MD → HWPX.
 ///
-/// # W3 migration note (preset behaviour change)
+/// # Migration note (preset behaviour change)
 ///
 /// The old hand-rolled `if preset != "default"` guard is gone — every
 /// [`hwpforge::ops::convert_md`] call now names a preset from
@@ -40,7 +40,7 @@ struct ConvertResult {
 ///
 /// `convert_md` also swaps `"default"`'s own font to `builtin_presets()`'s
 /// declared value (함초롬돋움) for every preset, `"default"` included —
-/// decision I17 in the W3 report: the Markdown decoder's own `default`
+/// the Markdown decoder's own `default`
 /// template used 한컴바탕, which no longer matches what `templates show
 /// default`/`ops::convert_md` advertise, so this makes `convert`'s output
 /// agree with the preset table it already publishes.
@@ -48,8 +48,8 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     // Legacy validated `--preset` before any input I/O (5ff81af `run`'s
     // `if preset != "default"` guard ran first thing) — a bad preset name
     // must fail the same way whether the input file is missing or stdin is
-    // still open, not surface as `FILE_READ_FAILED`/a stdin block (W3
-    // remediation finding 6). `convert_md`'s own `check_preset` validates
+    // still open, not surface as `FILE_READ_FAILED`/a stdin block.
+    // `convert_md`'s own `check_preset` validates
     // against this same `builtin_presets()` table (`ops/convert.rs`), so
     // this preflight and the one inside `convert_md` can never disagree.
     if !builtin_presets().iter().any(|p| p.name == preset) {
@@ -85,11 +85,10 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
         }
     };
 
-    // 이미지 참조 해석 base_dir (W6 §12b — stdin 입력은 base_dir 없음:
+    // 이미지 참조 해석 base_dir (stdin 입력은 base_dir 없음:
     // 상대 경로는 typed 경고로 제외되고 data: URI 만 임베드된다).
     // bare 파일명(`convert a.md`)의 parent() 는 None 이 아니라 빈 경로
-    // `Some("")` — canonicalize 불가라 base 를 통째로 잃는다 (독립 리뷰
-    // B2). 빈 경로 = 현재 디렉터리로 정규화.
+    // `Some("")` — canonicalize 불가라 base 를 통째로 잃는다. 빈 경로 = 현재 디렉터리로 정규화.
     let base_dir = if input == "-" {
         None
     } else {
@@ -164,7 +163,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     }
 }
 
-/// [`EncodeWarning`] 을 레거시 CLI 의 한 줄 진단 문자열로 만든다 — W3
+/// [`EncodeWarning`] 을 레거시 CLI 의 한 줄 진단 문자열로 만든다 —
 /// 마이그레이션 전 `commands/convert.rs`(pre-`ops`)의 `encode_warning_line`
 /// 을 바이트 동일하게 복원한 것. 그 밖의(새) variant 는 인코더 접근자로
 /// `CODE at 자리: 문구` 를 만든다 — 폴백 없이 자기 코드로 보고된다.
@@ -199,7 +198,7 @@ mod tests {
     use super::*;
     use hwpforge_smithy_hwpx::{ParagraphPath, PathSeg};
 
-    /// Legacy fidelity lock (team-lead follow-up, W3): the pre-`ops` CLI's
+    /// Legacy fidelity lock: the pre-`ops` CLI's
     /// `[convert]` stderr lines and `--json` `warnings` array entries for an
     /// encode warning were machine-parsable code-prefixed strings
     /// (`LAYOUT_CACHE_DROPPED at …: …`), not `OpsWarning::info()`'s

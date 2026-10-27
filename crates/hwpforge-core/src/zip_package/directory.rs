@@ -523,7 +523,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 원시 위치에 주석·CD 적격성 추가 / 잘린 서명에서 앞 후보로 복구 / 창 경계 변경.
     #[test]
-    fn w1_reference_position_and_budget() {
+    fn reference_position_and_budget() {
         let bytes = synthetic();
         let eocd = bytes.len() - 22;
         let inspect =
@@ -562,7 +562,7 @@ mod tests {
     /// 이것을 실패시키는 것: 기존 경로에도 위치 규칙 적용 / 주석 적격성을 참조 탐색에 추가.
     #[test]
     // 이것을 실패시키는 것: 외부 EOCD comment 길이 축소 (실제 음성 대조 실행).
-    fn w1_legacy_comment_footer_cross_product() {
+    fn legacy_comment_footer_cross_product() {
         for garbage in [false, true] {
             for comment in [0u16, 1, u16::MAX] {
                 let mut bytes = fixture().to_vec();
@@ -594,7 +594,7 @@ mod tests {
     /// 이것을 실패시키는 것: 기존 성공 뒤 새 읽기 예산 적용 / 기존 경로 생략.
     #[test]
     // 이것을 실패시키는 것: 후보 수 상한을 유발하는 서명 제거 (실제 음성 대조 실행).
-    fn w1_legacy_max_comment_invalid_signatures() {
+    fn legacy_max_comment_invalid_signatures() {
         for (original, max_fakes) in [(fixture().to_vec(), 63), (zip64(), 62)] {
             for n in [0, 1, 12, 13, 62, 63, 64] {
                 let mut bytes = original.clone();
@@ -632,7 +632,7 @@ mod tests {
     /// 두 경로 실패 시 legacy 오류 대신 새 오류 반환.
     #[test]
     // 이것을 실패시키는 것: 정상 ZIP64 선택의 sentinel 제거 (실제 음성 대조 실행).
-    fn w1_zip64_sentinel_tail_cross_product() {
+    fn zip64_sentinel_tail_cross_product() {
         let old = fixture().len() - 22;
         for sentinel in [8, 12, 16] {
             let mut bytes = zip64();
@@ -659,7 +659,7 @@ mod tests {
     /// 이것을 실패시키는 것: count/size/offset sentinel 또는 locator 조기 거부 제거.
     #[test]
     // 이것을 실패시키는 것: ZIP64 sentinel 제거 (실제 음성 대조 실행).
-    fn w1_zip64_recovery_stops_before_directory_scan() {
+    fn zip64_recovery_stops_before_directory_scan() {
         for field in [8, 12, 16, 20] {
             let mut bytes = fixture().to_vec();
             let end = bytes.len() - 22;
@@ -677,7 +677,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 거부 전에 참조 디렉터리를 읽을 수 있어야 한다는 조건 추가.
     #[test]
-    fn w1_complete_comment_footer_positions() {
+    fn complete_comment_footer_positions() {
         let original = synthetic();
         let outer = original.len() - 22;
         for same_cd in [false, true] {
@@ -734,7 +734,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: EOCD 끝=EOF 강제 / 앞 payload 후보 중복·64 상한 복원.
     #[test]
-    fn w1_short_tails_and_unused_candidates() {
+    fn short_tails_and_unused_candidates() {
         let original = synthetic();
         for tail in [b"abcdefghijk".as_slice(), &[0; 11], b"PK\x06\x06", b"PK\x06\x07"] {
             let bytes = [original.as_slice(), tail].concat();
@@ -764,7 +764,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 조기 종료만 추가하고 후보 64 상한을 유지하기.
     #[test]
-    fn w1_failed_candidate_visits() {
+    fn failed_candidate_visits() {
         for n in [63, 64, 65, 128] {
             let mut bytes = synthetic();
             let end = bytes.len() - 22;
@@ -797,7 +797,7 @@ mod tests {
     /// 이것을 실패시키는 것: 꼬리에만 서명을 찾기 / 참조 창 경계를 한 바이트 늘리기 / 기존 주석에도 참조 제한 적용.
     /// 이것을 실패시키는 것: 잘린 마지막 서명을 완전한 EOCD 위치로 취급하기.
     #[test]
-    fn w1_reference_tail_boundary() {
+    fn reference_tail_boundary() {
         for n in [65_513, 65_514] {
             let bytes = [synthetic(), vec![0; n]].concat();
             assert_eq!(open(&bytes).is_ok(), n == 65_513);
@@ -815,7 +815,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 예산 >= 변이 / read·record 누적·clone 공유 삭제 / 일반 필드를 레코드로 과금.
     #[test]
-    fn w1_metadata_budget_edges_and_clones() {
+    fn metadata_budget_edges_and_clones() {
         for (bytes, records) in [(8, 0), (0, 4)] {
             let mut budget = MetadataWork { read_limit: 8, record_limit: 4, ..Default::default() };
             budget.charge(bytes, records).unwrap();
@@ -882,7 +882,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 최종 metadata 읽기 과금 / 고정 필드·레코드 방문 과금 삭제, 정상 예산 축소.
     #[test]
-    fn w1_normal_metadata_budget_and_final_charge() {
+    fn normal_metadata_budget_and_final_charge() {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for i in 0..LIMIT {
             writer
@@ -909,7 +909,7 @@ mod tests {
             assert!(budget.read > before);
             assert!(budget.read <= 8 * (bytes.len() + EOCD_WINDOW));
             eprintln!(
-                "W1_NORMAL len={} count={} read={} records={}",
+                "ZIP_BUDGET_NORMAL len={} count={} read={} records={}",
                 bytes.len(),
                 directory.count,
                 budget.read,
@@ -964,7 +964,7 @@ mod tests {
     // back after such a header fails, so 16 candidates no longer reach the
     // limit there (the input is still rejected).
     #[test]
-    fn w1_repeated_large_variable_reads_exhaust_budget() {
+    fn repeated_large_variable_reads_exhaust_budget() {
         let bytes = repeated_variable_reads(64);
         let mut work = Work::default();
         let result = preflight_with_work(&bytes, LIMIT, &mut work);
@@ -977,7 +977,7 @@ mod tests {
         // The read budget trips long before the record limit (20 records on
         // zip 9.0.5, which falls back inside one probe; 36 on 9.1.0).
         eprintln!(
-            "W1_EXHAUST read={} candidates={} records={}",
+            "ZIP_BUDGET_EXHAUST read={} candidates={} records={}",
             work.metadata.borrow().read,
             work.candidates,
             work.metadata.borrow().records
@@ -1047,7 +1047,7 @@ mod tests {
     // adds its own header reads (9.0.5 all of a chain, 9.1.0 up to the bad
     // extra), so the candidate that trips differs by version.
     #[test]
-    fn w1_record_limit_binds_before_read_budget() {
+    fn record_limit_binds_before_read_budget() {
         let bytes = interleaved_directories(5, 29, 339);
         let mut work = Work::default();
         let result = preflight_with_work(&bytes, LIMIT, &mut work);
@@ -1062,7 +1062,7 @@ mod tests {
         // The record limit is reached before the read budget.
         assert!(metadata.read <= metadata.read_limit, "{} {}", metadata.read, metadata.read_limit);
         eprintln!(
-            "W1_RECORDS len={} read={} read_limit={} records={}",
+            "ZIP_BUDGET_RECORDS len={} read={} read_limit={} records={}",
             bytes.len(),
             metadata.read,
             metadata.read_limit,
@@ -1125,7 +1125,7 @@ mod tests {
     // 45,000 inner headers: just above the 40,000 record limit so that zip
     // cannot finish them, and still a short test (2.4 MB).
     #[test]
-    fn w1_zip_fallback_directory_is_record_bounded() {
+    fn zip_fallback_directory_is_record_bounded() {
         let n = 45_000;
         let bytes = zip64_fallback_behind_bad_extra(n);
         let mut work = Work::default();
@@ -1133,7 +1133,7 @@ mod tests {
         assert!(result.is_err());
         let metadata = work.metadata.borrow();
         eprintln!(
-            "W1_FALLBACK len={} read={} read_limit={} records={} result={result:?}",
+            "ZIP_BUDGET_FALLBACK len={} read={} read_limit={} records={} result={result:?}",
             bytes.len(),
             metadata.read,
             metadata.read_limit,
@@ -1191,7 +1191,7 @@ mod tests {
     // 40,005 for N = 8,001, so the recovery path stops at 40,001 on both zip
     // versions. Without the trailing byte the legacy path opens the same file.
     #[test]
-    fn w1_signature_comments_tighten_the_record_limit() {
+    fn signature_comments_tighten_the_record_limit() {
         let n = 8_001;
         let exact = signature_comments(n);
         assert_eq!(open(&exact).unwrap().entries().len(), n);
@@ -1215,7 +1215,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: extra 파싱 전에 선택 완료 / 프로브 fallback을 현재 후보 성공으로 취급 / 정책 오류를 건너뛰기.
     #[test]
-    fn w1_extra_failure_recovers_but_policy_does_not() {
+    fn extra_failure_recovers_but_policy_does_not() {
         for prefix in [0, 6] {
             let base = [vec![0; prefix], synthetic()].concat();
             let good_end = base.len() - 22;
@@ -1247,7 +1247,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 선택 위치의 주석 길이/바이트 대조 생략 / 빈 CD 소비 위치까지 강제.
     #[test]
-    fn w1_selected_comment_and_empty_directory() {
+    fn selected_comment_and_empty_directory() {
         let mut bytes = synthetic();
         let end = bytes.len() - 22;
         bytes[end + 20..end + 22].copy_from_slice(&3u16.to_le_bytes());
@@ -1268,7 +1268,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: 빈 ZIP32 후보의 fallback 제거 / ZIP64 보류 뒤 앞 후보 복구.
     #[test]
-    fn w1_unreadable_fixed_candidates() {
+    fn unreadable_fixed_candidates() {
         for zip64 in [false, true] {
             let mut bytes = synthetic();
             let selected = bytes.len() - 22;

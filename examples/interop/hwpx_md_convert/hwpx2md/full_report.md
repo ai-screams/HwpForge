@@ -10,15 +10,13 @@
 
 ![image1](images/image1.png)
 
+<em>\[그림 1\] HwpForge 마스코트 (오리너구리)</em>
+
 HwpForge는 한국의 HWP/HWPX 문서 포맷을 프로그래밍으로 제어하는 **순수 Rust 라이브러리**입니다. 프로젝트 마스코트인 <strong>오리너구리(Platypus)</strong>는 HWPX 포맷의 독특한 특성을 상징합니다 — 포유류이면서 알을 낳고, 부리와 독침을 가진 것처럼, HWPX도 XML 기반이면서 독자적인 네임스페이스와 규격을 가진 독특한 포맷입니다.
 
-**1. HWPX 포맷 개요**
+**1\. HWPX 포맷 개요**
 
-HWPX는 한컴오피스(한글)가 사용하는 **개방형 XML 문서 포맷**으로, **KS X 6101**
-
-[^1]
-
-표준을 기반으로 합니다. 내부 구조는 ZIP 압축 아카이브 안에 XML 파일들을 계층적으로 배치한 형태입니다.
+HWPX는 한컴오피스(한글)가 사용하는 **개방형 XML 문서 포맷**으로, **KS X 6101**[^1] 표준을 기반으로 합니다. 내부 구조는 ZIP 압축 아카이브 안에 XML 파일들을 계층적으로 배치한 형태입니다.
 
 HWPX는 Microsoft Office의 OOXML과 유사한 구조를 가지며, ZIP → XML → 네임스페이스 계층으로 이루어져 있습니다. HwpForge는 이 포맷의 완전한 인코드/디코드를 순수 Rust로 구현하였습니다.
 
@@ -33,11 +31,13 @@ HWPX는 Microsoft Office의 OOXML과 유사한 구조를 가지며, ZIP → XML 
 | BinData/image\*.png    | 이미지 바이너리                   |
 | Chart/chart\*.xml      | 차트 데이터 (manifest 등록 금지!) |
 
-특히 <strong>Chart/*.xml</strong> 파일은 content.hpf에 등록하면 **한글이 크래시**합니다. ZIP에만 존재해야 합니다.
+<em>\[표 1\] HWPX ZIP 내부 파일 구조</em>
+
+특히 <strong>Chart/\*.xml</strong> 파일은 content.hpf에 등록하면 **한글이 크래시**합니다. ZIP에만 존재해야 합니다.
 
 <!-- hwpforge:section -->
 
-**2. XML 구조 및 네임스페이스 체계**
+**2\. XML 구조 및 네임스페이스 체계**
 
 HWPX의 XML은 6개의 네임스페이스 접두어로 구분됩니다. HwpForge는 serde의 rename 기능을 활용하여 각 네임스페이스를 Rust 구조체에 자동으로 매핑합니다.
 
@@ -52,9 +52,9 @@ HWPX의 XML은 6개의 네임스페이스 접두어로 구분됩니다. HwpForge
 | ha:        | urn:...hwpmlApp    | 앱 설정                  |
 | hm:        | urn:...hwpmlMaster | 마스터 페이지            |
 
-네임스페이스 선언(xmlns)은 각 XML 파일의 **루트 요소에만** 작성합니다.
+<em>\[표 2\] HWPX XML 네임스페이스 체계</em>
 
-[^2]
+네임스페이스 선언(xmlns)은 각 XML 파일의 **루트 요소에만** 작성합니다.[^2]
 
 **2.2 파일별 역할 상세**
 
@@ -66,25 +66,27 @@ HWPX의 XML은 6개의 네임스페이스 접두어로 구분됩니다. HwpForge
 | META-INF/container.xml | container     | encoder/package.rs |
 | Chart/chart\*.xml      | c:chartSpace  | encoder/chart.rs   |
 
+<em>\[표 3\] HWPX 파일별 역할 및 HwpForge 모듈</em>
+
 <strong>Dual Serde Rename 패턴:</strong>
 
-\#\[serde(rename(serialize = "hh:refList", deserialize = "refList"))\] <em>pub ref_list: HxRefList,</em>
+\#\[serde(rename(serialize = "hh:refList", deserialize = "refList"))\] <em>pub ref\_list: HxRefList,</em>
 
-<strong>2.3 Phase별 구현 규모 (코드 라인 수)</strong>
+<strong>2.3 크레이트별 구현 규모 (코드 라인 수)</strong>
 
-아래 차트는 HwpForge의 Phase 0-5에 걸친 소스 코드 증가 추이를 보여줍니다.
-
-<!-- chart -->
-
-<em>[차트 1] Phase별 소스 코드 라인 수 (Phase 0-5)</em>
+아래 차트는 HwpForge 크레이트별 소스 코드 규모를 보여줍니다.
 
 <!-- chart -->
 
-<em>[차트 2] 기능별 인코드/디코드 지원 현황</em>
+<em>\[차트 1\] 크레이트별 소스 코드 라인 수</em>
+
+<!-- chart -->
+
+<em>\[차트 2\] 기능별 인코드/디코드 지원 현황</em>
 
 <!-- hwpforge:section -->
 
-<strong>3. 구현 주의사항 (Gotchas)</strong>
+<strong>3\. 구현 주의사항 (Gotchas)</strong>
 
 HwpForge 구현 과정에서 발견한 핵심 주의사항을 정리합니다.
 
@@ -146,53 +148,53 @@ quick-xml의 serde 직렬화에서 Rust 구조체의 필드 선언 순서가 XML
 
 <!-- hwpforge:section -->
 
-**4. 구현 현황 및 결론**
+**4\. 구현 현황 및 결론**
 
-**4.1 Phase별 구현 현황**
+**4.1 크레이트별 구현 현황**
 
 HwpForge v1.0 기준 총 37,052 LOC, 988개 테스트, 8개 크레이트입니다.
 
-| **Phase** | **크레이트** | **상태**   | **테스트** | **LOC** |
-| --------- | ------------ | ---------- | ---------- | ------- |
-| 0         | foundation   | 완료 (90+) | 224        | 4,432   |
-| 1         | core         | 완료 (94)  | 331        | 5,554   |
-| 2         | blueprint    | 완료 (90)  | 200        | 4,647   |
-| 3         | decoder      | 완료 (96)  | 110        | 3,666   |
-| 4         | encoder      | 완료 (95)  | 226        | 10,349  |
-| 5         | smithy-md    | 완료 (91)  | 73         | 3,757   |
-| Wave1-6   | 확장 기능    | 완료       | —          | \~4,648 |
+| **순서** | **크레이트** | **상태**   | **테스트** | **LOC** |
+| -------- | ------------ | ---------- | ---------- | ------- |
+| 0        | foundation   | 완료 (90+) | 224        | 4,432   |
+| 1        | core         | 완료 (94)  | 331        | 5,554   |
+| 2        | blueprint    | 완료 (90)  | 200        | 4,647   |
+| 3        | decoder      | 완료 (96)  | 110        | 3,666   |
+| 4        | encoder      | 완료 (95)  | 226        | 10,349  |
+| 5        | smithy-md    | 완료 (91)  | 73         | 3,757   |
+| 6        | 확장 기능    | 완료       | —          | \~4,648 |
+
+<em>\[표 4\] HwpForge 크레이트별 구현 현황</em>
 
 **4.2 테스트 수 성장 추이**
 
-TDD 방식으로 개발되어 Phase 진행에 따라 테스트가 꾸준히 증가했습니다.
+TDD 방식으로 개발되어 크레이트가 늘어날 때마다 테스트가 꾸준히 증가했습니다.
 
 <!-- chart -->
 
-<em>[차트 3] Phase별 누적 테스트 수 추이</em>
+<em>\[차트 3\] 크레이트별 누적 테스트 수 추이</em>
 
 <!-- chart -->
 
-<em>[차트 4] 크레이트별 코드량(LOC) 비율</em>
+<em>\[차트 4\] 크레이트별 코드량(LOC) 비율</em>
 
 **4.3 향후 과제**
 
-**Phase 6**: Python 바인딩 (PyO3) 및 CLI
+**Python 바인딩**\: PyO3 기반 Python API 및 CLI
 
-**Phase 7**: MCP 서버 통합 — Claude Code 직접 연동
+**MCP 서버**\: Claude Code 직접 연동
 
-**Phase 8**: 종합 테스트 및 v1.0 릴리즈
+**v1.0 릴리즈**\: 종합 테스트
 
-**Phase 9**: HWPX 고급 기능 (OLE, 양식, 변경추적)
+**HWPX 고급 기능**\: OLE, 양식, 변경추적
 
-**Phase 10**: smithy-hwp5 — HWP5 바이너리 읽기
+**HWP5 읽기**\: smithy-hwp5 — HWP5 바이너리 읽기
 
 **4.4 결론**
 
 HwpForge는 순수 Rust로 HWPX 포맷의 완전한 인코드/디코드를 구현한 최초의 오픈소스 프로젝트입니다.
 
-Wave 1-6에서는 이미지, 머리글/바닥글, 각주/미주, 글상자, 다단, 도형, 캡션, 수식, 차트까지 확장하여 실무 문서 생성에 필요한 대부분의 기능을 갖추었습니다.
-
-[^e1]
+확장 기능으로 이미지, 머리글/바닥글, 각주/미주, 글상자, 다단, 도형, 캡션, 수식, 차트까지 확장하여 실무 문서 생성에 필요한 대부분의 기능을 갖추었습니다.[^e1]
 
 _— HwpForge 개발팀, 2026년 2월 —_
 

@@ -54,7 +54,7 @@ fn build_doc() -> Document<Draft> {
 
 #[test]
 fn default_encode_omits_linesegarray() {
-    // W0 부터 개체 id 는 인코드마다 새 할당기에서 나오므로 두 진입점의
+    // 개체 id 는 인코드마다 새 할당기에서 나오므로 두 진입점의
     // 기본 경로가 바이트까지 같다. 캐시 미방출 불변식과 함께 그것도 잠근다.
     // 이것을 실패시키는 것: 기본 옵션이 출력을 바꾸기 · 전역 id 카운터 복귀.
     let store = style_store_for_preset("default").expect("preset");
@@ -111,7 +111,7 @@ fn optin_emits_linesegarray_and_roundtrips_all_containers() {
     assert_eq!(get("머리말").lines, vec![seg(0, 800)], "머리말 캐시 보존");
 }
 
-// ── W1b 매트릭스: marker/tab/field 왕복 + 실패 의미 잠금 ────────────
+// ── 매트릭스: marker/tab/field 왕복 + 실패 의미 잠금 ────────────
 
 fn roundtrip(doc: Document<Draft>) -> hwpforge_smithy_hwpx::EncodeOutcome {
     let store = style_store_for_preset("default").expect("preset");
@@ -215,7 +215,7 @@ fn field_paragraph_roundtrips_when_lines_avoid_body() {
 
 #[test]
 fn unencodable_control_drops_cache_with_typed_warning() {
-    // §1g v5 R3#6 일반 불변식: 방출이 스킵되는 컨트롤(Unknown 등)이 있는
+    // 일반 불변식: 방출이 스킵되는 컨트롤(Unknown 등)이 있는
     // 문단은 기하가 stale — typed 경고 + 해당 문단만 linesegarray 부재.
     use hwpforge_core::control::Control;
     let mut para = Paragraph::with_runs(
@@ -247,7 +247,7 @@ fn unencodable_control_drops_cache_with_typed_warning() {
 
 #[test]
 fn legacy_strict_entrypoint_errors_on_cache_drop() {
-    // §1g v5 변경 2: emit_layout_cache 요청 중 드롭 = legacy 진입점은
+    // emit_layout_cache 요청 중 드롭 = legacy 진입점은
     // 무음 성공 대신 HwpxError::LayoutCacheDropped.
     use hwpforge_core::control::Control;
     let mut para = Paragraph::with_runs(
@@ -276,13 +276,13 @@ fn legacy_strict_entrypoint_errors_on_cache_drop() {
     );
 }
 
-// ── 독립 리뷰 Medium 상환: 대칭-버그를 잡는 절대값 oracle ──────────
+// ── 대칭-버그를 잡는 절대값 oracle ──────────
 
-/// 방출 XML 의 linesegarray textpos 절대값을 §1f 실측 상수로 대조한다.
+/// 방출 XML 의 linesegarray textpos 절대값을 실측 상수로 대조한다.
 ///
 /// roundtrip(encode∘decode) 은 **대칭 오류**(예: 양쪽 다 marker 를
 /// 7유닛으로 세는 버그)를 항등으로 통과시킨다 — 이 oracle 의 기대값은
-/// 코드가 아니라 한컴 fixture 실측(§1f: 확장 marker = 8 wire 유닛,
+/// 코드가 아니라 한컴 fixture 실측(확장 marker = 8 wire 유닛,
 /// 첫 lineseg = 0)에서 유도된 하드코딩 상수라 그 대칭을 깬다.
 #[test]
 fn emitted_wire_textpos_matches_hancom_measured_constants() {
@@ -320,7 +320,7 @@ fn emitted_wire_textpos_matches_hancom_measured_constants() {
     assert!(xml.contains(r#"textpos="28""#), "line2 wire 28 (16+3+8+1): {xml}");
 }
 
-/// 접힘 필드 본문의 tab = wire 8유닛 (독립 리뷰 Low 상환 fixture).
+/// 접힘 필드 본문의 tab = wire 8유닛.
 #[test]
 fn folded_field_body_tab_counts_eight_wire_units() {
     use hwpforge_core::control::Control;
@@ -351,31 +351,4 @@ fn folded_field_body_tab_counts_eight_wire_units() {
     assert_eq!(decoded_caches(&outcome.bytes)[0], Some(vec![0, 3]));
     let xml = section_xml(&outcome.bytes);
     assert!(xml.contains(r#"textpos="45""#), "tab=8 절대값 (16+2+26+1): {xml}");
-}
-
-/// 실물 한컴 fixture 골든 — 리뷰 영역 fixture 존재 시에만 실행 (930KB
-/// 라 커밋 금지 규칙 대상; 부재 환경(CI)에선 skip 로그 후 통과).
-#[test]
-fn real_hancom_marker_ledger_fixture_decodes_to_measured_triples() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/hwp5_review/rules-marker-ledger-base.hwpx");
-    let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("skip: {} 부재 (리뷰 영역 미보유 환경)", path.display());
-        return;
-    };
-    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
-    let caches: Vec<Vec<u32>> = decoded.document.sections()[0]
-        .paragraphs
-        .iter()
-        .filter_map(|p| p.layout_cache.as_ref())
-        .filter(|c| c.lines.len() >= 2)
-        .map(|c| c.lines.iter().map(|l| l.textpos).collect())
-        .collect();
-    // §1g 수용 기준 골든 (raw [0,76,132]/[0,64,117]/[0,62,117] 에서
-    // 선행 marker 8×n 차감 유도 — Codex 4차 산술 재검증 완료).
-    assert_eq!(
-        caches,
-        vec![vec![0, 60, 116], vec![0, 56, 109], vec![0, 54, 109]],
-        "실물 한컴 fixture 가시 좌표 골든"
-    );
 }

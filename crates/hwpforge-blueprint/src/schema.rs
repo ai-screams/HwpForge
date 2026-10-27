@@ -174,7 +174,7 @@ mod tests {
     }
 
     /// The template schema accepts every documented `shadow` shape and rejects
-    /// a null color and an out-of-range offset (S21 7.4).
+    /// a null color and an out-of-range offset.
     /// 이것을 실패시키는 것: `PartialCharShadow` 스키마를 문자열만으로 두는 것(맵 예시 실패),
     /// null 색·범위를 스키마가 막지 않는 것.
     #[test]

@@ -12,7 +12,7 @@ pub(super) fn hwpunit_to_pt(v: i32) -> f64 {
 }
 
 /// 문서의 첫 body 앵커 이미지의 기대 bbox 를 margin + placement offset +
-/// **마커 소속 lineseg vertpos** 로 독립 계산한다 (§10i F3 — floor-search;
+/// **마커 소속 lineseg vertpos** 로 독립 계산한다 (floor-search;
 /// 마커가 첫 줄이면 종전 first-lineseg 모델과 동치. 렌더 파이프라인과 무관
 /// — self-consistency; 판별 oracle 은 한컴 실측이 담당).
 pub(super) fn expected_anchored(doc: &Document<Validated>) -> Bbox {

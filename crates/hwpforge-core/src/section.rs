@@ -179,7 +179,7 @@ impl Default for PageBorderFillEntry {
 /// Which page parity a section starts on.
 ///
 /// Maps to HWPX `<hp:startNum pageStartsOn="BOTH|EVEN|ODD">`. 홀짝 강제
-/// 시작은 다중 섹션 쪽번호 연속성 계산의 입력이다 (W5-α C2 — 스키마에
+/// 시작은 다중 섹션 쪽번호 연속성 계산의 입력이다 (스키마에
 /// 있던 값을 디코더가 폐기하던 것을 승격).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub enum PageStartsOn {
@@ -392,7 +392,7 @@ pub struct HeaderFooter {
     pub paragraphs: Vec<Paragraph>,
     /// Which pages this header/footer applies to.
     pub apply_page_type: ApplyPageType,
-    /// 컨테이너(subList) 세로 정렬 (W5-α H1 — 일반 꼬리말 실측 = BOTTOM).
+    /// 컨테이너(subList) 세로 정렬 (일반 꼬리말 실측 = BOTTOM).
     ///
     /// 밴드 안에서 문단 블록을 어디에 앉히는지 결정한다 — 렌더 재생의
     /// 필수 입력. HWPX `<hp:subList vertAlign>`.
@@ -404,7 +404,7 @@ pub struct HeaderFooter {
     /// 컨테이너 텍스트 높이 (HWPX `<hp:subList textHeight>`, 0 = 위임).
     ///
     /// 밴드(margin.header/footer)와 다를 수 있다 — 초과 시 동작은 실측
-    /// 전이므로 렌더는 fail-closed 로 다룬다 (W5-a).
+    /// 전이므로 렌더는 fail-closed 로 다룬다.
     #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
     pub text_height: HwpUnit,
     /// The body paragraph this header/footer is anchored to: the index into
@@ -630,9 +630,7 @@ pub struct Section {
     /// HWPX allows multiple `<hp:header>` elements in a single section,
     /// differentiated by `applyPageType` (`BOTH` / `ODD` / `EVEN`). HWP5
     /// stores the same information as multiple `head` ctrl records.
-    /// Empty `Vec` = "no header on this section". See
-    /// [ADR-002](../../../.docs/architecture/adr/ADR-002-section-multi-header-footer-cardinality.md)
-    /// for the cardinality decision.
+    /// Empty `Vec` = "no header on this section".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<HeaderFooter>,
     /// Footers for this section, ordered as in HWPX wire (`<hp:footer>` × N).

@@ -1,4 +1,4 @@
-//! Render HWPX/HWP5 to PDF (layout-cache replay — W6a).
+//! Render HWPX/HWP5 to PDF (layout-cache replay).
 //!
 //! Format dispatch is **content sniffing**, not extension: this repo's own
 //! corpus study found 79 HWP5 binaries shipped with `.hwpx` extensions.
@@ -73,7 +73,7 @@ fn detect_format(bytes: &[u8]) -> Option<&'static str> {
 /// render 만 [`ConvertOpsWarning::info`] 로 옮겨 갔다 — `info()` 의 message
 /// 는 location 을 접두한 형태라, render 경고만 같은 값이 `message` 와
 /// `location` 두 열에 실리고 convert·decode 는 한 번만 실리는 불일치가
-/// 한 배열 안에 생겼다(감사 지적 C1). `parts()` 는 접두 전 세 열이므로
+/// 한 배열 안에 생겼다. `parts()` 는 접두 전 세 열이므로
 /// 세 단계가 다시 같은 규칙을 따른다.
 ///
 /// `input` 단계만 예외로 `run` 이 직접 만든다: `EXTENSION_MISMATCH` 는
@@ -113,7 +113,7 @@ pub fn run(
     partial_cache_reject: bool,
     json_mode: bool,
 ) {
-    // 플래그 오류는 파이프라인 진입 전에 (독립 리뷰 L1 — .hwp 변환 후 exit 방지).
+    // 플래그 오류는 파이프라인 진입 전에 (.hwp 변환 후 exit 방지).
     let discovery = parse_discovery(discovery, json_mode);
     check_file_size(input, json_mode, Command::ToPdf);
     let bytes = crate::error::read_input(input, json_mode, Command::ToPdf);
@@ -161,7 +161,7 @@ pub fn run(
     // 단계별 분기가 없다 — `stage()`/`parts()` 가 변형마다 답을 안다.
     // CLI 가 `match` 를 하면 `ConvertOpsWarning` 이 `#[non_exhaustive]` 라
     // 하류에서 `_` arm 이 강제되고, 그 arm 은 미래의 네 번째 변형에 단계를
-    // 임의로(`"render"`) 붙이게 된다 — C1 과 같은 종류의 조용한 오표기.
+    // 임의로(`"render"`) 붙이게 된다 — 접두를 중복하는 것과 같은 종류의 조용한 오표기.
     warnings.extend(rendered.warnings.iter().map(warning_dto));
 
     // 산출 경로: 미지정 = 입력의 .pdf 교체. 쓰기는 원자적 (tmp → rename) —
@@ -237,7 +237,7 @@ mod tests {
         ParagraphPath(vec![PathSeg::Section(0)])
     }
 
-    /// C1 회귀 잠금: `location` 열이 있는 DTO 의 `message` 가 그 값을 다시
+    /// 회귀 잠금: `location` 열이 있는 DTO 의 `message` 가 그 값을 다시
     /// 접두하지 않는다. `':'` 유무로 보지 않는 이유 — `DROPPED_CONTROL` ·
     /// `PROJECTION_FALLBACK` · `PARSER_FALLBACK` 의 message 는 `location`
     /// 이 없는데도 `"{subject}: "` 로 시작한다.
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(info.message, folded, "{warning:?}");
     }
 
-    /// W5(`6ef353b`)의 `convert_warning_dto` match 가 내던 `(code, message,
+    /// 커밋 `6ef353b`의 `convert_warning_dto` match 가 내던 `(code, message,
     /// location)` 을 리터럴로 고정한다. 이전 판은 `code` 5 개만 봤고
     /// `message` 는 보지 않았다.
     #[test]
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(dto.location, None);
     }
 
-    /// W5 의 `decode_warning_dto` 문구 고정 — 속성 경로는 `location` 열에만
+    /// `decode_warning_dto` 문구 고정 — 속성 경로는 `location` 열에만
     /// 실리고 message 에는 섞이지 않는다.
     #[test]
     fn decode_stage_dto_carries_attribute_location() {
@@ -456,7 +456,7 @@ mod tests {
         assert_dto_folds_into_info(&warning, &dto);
     }
 
-    /// C4 의 manifest id 겹침은 자기 코드와 `content.hpf` 자리로 실린다.
+    /// manifest id 겹침은 자기 코드와 `content.hpf` 자리로 실린다.
     ///
     /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
     /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
@@ -480,7 +480,7 @@ mod tests {
         assert_dto_folds_into_info(&warning, &dto);
     }
 
-    /// C4 의 해석되지 않은 이미지 참조는 자기 코드와 `part 요소@속성` 자리로 실린다.
+    /// 해석되지 않은 이미지 참조는 자기 코드와 `part 요소@속성` 자리로 실린다.
     ///
     /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
     /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
@@ -505,15 +505,15 @@ mod tests {
         assert_dto_folds_into_info(&warning, &dto);
     }
 
-    /// W5(`6ef353b`)의 `render_warning_dto` match(같은 파일 133–249 행)가
+    /// 커밋 `6ef353b`의 `render_warning_dto` match(같은 파일 133–249 행)가
     /// 내던 `(code, message, location)` 세 열을 **리터럴로** 고정한다.
     ///
     /// 이전 판은 `assert_eq!(dto.message, info.message)` 였다 — DTO 가
     /// `info()` 를 그대로 옮겨 담았으므로 자기 자신과 비교하는 토톨로지였고,
     /// 그 사이 `info()` 가 location 을 message 에 접두하도록 바뀌면서 CLI 의
     /// `message` 열에 접두 문구가 들어오고 `location` 열에도 같은 값이
-    /// 실리는 이중 표기가 생겼는데도 초록이었다(감사 지적 C1). 이제 기대값은
-    /// W5 문구이므로 그 회귀가 여기서 실패한다.
+    /// 실리는 이중 표기가 생겼는데도 초록이었다. 이제 기대값은
+    /// 기존 문구이므로 그 회귀가 여기서 실패한다.
     ///
     /// `variant_name` 은 망라 가드다: 프로덕션 코드에서 재사용하지 않은
     /// 독립 match 라, `cases` 가 빠뜨린 변형은 22 미만으로 조용히 보고되는
@@ -521,7 +521,7 @@ mod tests {
     /// `#[non_exhaustive]` 라 상류에 변형이 늘어도 rustc 가 컴파일을 막지
     /// 못하므로 — 런타임 가드가 그 자리를 대신한다.
     #[test]
-    fn render_stage_dto_pins_the_w5_wording_for_every_variant() {
+    fn render_stage_dto_pins_the_wording_for_every_variant() {
         let loc = || "s0/p1/l2".to_string();
         let cases: Vec<(PdfWarning, &str, &str, Option<&str>)> = vec![
             (
@@ -751,7 +751,7 @@ mod tests {
     }
 
     // `pdf_error_cause_maps_every_variant` is gone along with `pdf_error_cause`
-    // (W3): the `PDF_RENDER_FAILED` cause now comes from
+    // the `PDF_RENDER_FAILED` cause now comes from
     // `compat::convert_error`, which delegates to
     // `hwpforge_convert::ops::ConvertOpsError::cause_info` — that mapping's
     // own doc comment says it "reproduces the CLI's `pdf_error_cause`", and

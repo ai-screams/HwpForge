@@ -1,6 +1,6 @@
 //! `<hp:secPr>` / `<hp:colPr>` builders and enrichment (task #92
 //! split from `encoder/section.rs`). Covers page settings, section
-//! visibility (hideFirst* bits, Wave 5 gap B), and column layout.
+//! visibility (hideFirst* bits), and column layout.
 
 use super::*;
 
@@ -20,7 +20,7 @@ pub(super) fn build_sec_pr(ps: &PageSettings, text_direction: TextDirection) -> 
         line_number_shape: None,
         page_pr: Some(HxPagePr {
             // 한글 실제 동작: WIDELY=portrait (세로), NARROWLY=landscape (가로)
-            // KS X 6101 스펙과 반대! (gotcha #3: landscape 값 반전)
+            // KS X 6101 스펙과 반대! (landscape 값 반전)
             landscape: if ps.landscape { "NARROWLY".to_string() } else { "WIDELY".to_string() },
             width: ps.width.as_i32(),
             height: ps.height.as_i32(),
@@ -78,7 +78,7 @@ pub(super) fn build_sec_pr_pre_elements(section: &Section) -> String {
     let pic = bn.map_or(0, |b| b.pic);
     let tbl = bn.map_or(0, |b| b.tbl);
     let equation = bn.map_or(0, |b| b.equation);
-    // W5-α C2: pageStartsOn 은 "BOTH" 고정이 아니라 실값 왕복 (홀짝 강제
+    // pageStartsOn 은 "BOTH" 고정이 아니라 실값 왕복 (홀짝 강제
     // 시작 = 쪽번호 연속성 입력).
     use hwpforge_core::section::PageStartsOn;
     let page_starts_on = match bn.map_or(PageStartsOn::Both, |b| b.page_starts_on) {

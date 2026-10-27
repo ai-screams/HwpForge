@@ -1,5 +1,5 @@
 //! Header/footer, masterpage-reference, and page-number injection
-//! builders (task #92 split from `encoder/section.rs`; Wave 5
+//! builders (task #92 split from `encoder/section.rs`;
 //! per-ctrl applyPageType carry).
 
 use super::*;
@@ -167,8 +167,8 @@ pub(super) fn inject_header_footer_pagenum(
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<()> {
     // Header — emit each `<hp:header>` element preserving the HWPX
-    // multi-cardinality wire shape (ADR-002) — into the paragraph it is
-    // anchored to (§19.17 F2).
+    // multi-cardinality wire shape — into the paragraph it is
+    // anchored to.
     let mut by_paragraph: std::collections::BTreeMap<usize, String> =
         std::collections::BTreeMap::new();
     for (i, header) in section.headers.iter().enumerate() {
@@ -271,7 +271,7 @@ pub(super) fn build_header_xml(
     let mut xml = String::new();
     write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" id="{hf_id}">"#,)
         .expect("write to String is infallible");
-    // W5-α H1: 컨테이너 기하(vertAlign/textWidth/textHeight) 실값 왕복 —
+    // 컨테이너 기하(vertAlign/textWidth/textHeight) 실값 왕복 —
     // 일반 꼬리말은 vertAlign=BOTTOM 을 쓰므로 하드코딩하면 데이터 손실.
     let vert_align = match hf.vert_align {
         hwpforge_foundation::VerticalAlign::Center => "CENTER",
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn header_xml_carries_sublist_geometry() {
-        // W5-α H1: 컨테이너 기하 실값 왕복 — 일반 꼬리말 = vertAlign BOTTOM.
+        // 컨테이너 기하 실값 왕복 — 일반 꼬리말 = vertAlign BOTTOM.
         let mut entries = Vec::new();
         let mut hf = HeaderFooter::new(Vec::new(), ApplyPageType::Both);
         hf.vert_align = hwpforge_foundation::VerticalAlign::Bottom;

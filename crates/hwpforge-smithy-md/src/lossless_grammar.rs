@@ -61,7 +61,7 @@ pub(crate) const OUT_MARGIN: [&str; 4] = [
 pub(crate) const WIDTH: &str = "data-width-unit";
 pub(crate) const HEIGHT: &str = "data-height-unit";
 pub(crate) const BOX_MM: [&str; 2] = ["data-width-mm", "data-height-mm"];
-/// FRAME (S20): the original box and the size lock.
+/// FRAME: the original box and the size lock.
 pub(crate) const FRAME: [&str; 5] = [
     "data-original-width-unit",
     "data-original-height-unit",

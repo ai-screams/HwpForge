@@ -46,7 +46,7 @@ def test_open_reports_the_shared_size_limit() -> None:
 
 
 def test_open_refuses_a_file_over_the_shared_size_limit(tmp_path, monkeypatch) -> None:
-    """W6b audit follow-up: `Document.open` used to read a whole file with no
+    """`Document.open` used to read a whole file with no
     size gate at all. The real limit is 100 MB, too large to write in a
     test, so the module constant is patched down to exercise the same code
     path `Document.open` reads it through."""
@@ -530,7 +530,7 @@ def test_document_does_not_widen_a_string_into_a_sequence(
         call(Document.from_bytes(generated_bytes))
 
 
-def test_w2_legacy_json_tabs_share_code_reason_and_remedy() -> None:
+def test_legacy_json_tabs_share_code_reason_and_remedy() -> None:
     source = '{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}'
     with pytest.raises(HwpForgeError) as caught:
         hwpforge.from_json(source)

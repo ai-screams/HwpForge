@@ -57,7 +57,7 @@ mod tests {
     use serde::de::value::{Error, I64Deserializer, U64Deserializer};
 
     #[test]
-    fn fix2_raw_integer_deserializer_checks_width_before_bit_reinterpretation() {
+    fn raw_integer_deserializer_checks_width_before_bit_reinterpretation() {
         // 이것을 실패시키는 것: i64/u64 visitor의 무검사 as i32 캐스트 복귀.
         for raw in [u64::from(u32::MAX) + 1, u64::MAX] {
             assert!(deser_i32_or_u32(U64Deserializer::<Error>::new(raw)).is_err());

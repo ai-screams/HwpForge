@@ -86,10 +86,10 @@ impl FootnoteCollector {
     /// Renders all collected definitions as a markdown block.
     ///
     /// Multi-paragraph bodies follow the GFM continuation form the parser
-    /// actually accepts (probe P4/P12): a **blank line** between paragraphs
+    /// actually accepts (probe): a **blank line** between paragraphs
     /// and 4-space indentation on **every** physical line of continuation
     /// paragraphs. Line-start block markers are escaped so a body that
-    /// *looks* like a list stays plain text on re-parse (H6, probe P14).
+    /// *looks* like a list stays plain text on re-parse (probe).
     fn render_definitions(self) -> Vec<Block> {
         let labels = (1..).map(|i| i.to_string());
         let footnotes = self.footnotes.into_iter().zip(labels);
@@ -139,7 +139,7 @@ fn render_definition(label: &str, paragraphs: &[Md]) -> String {
     out
 }
 
-/// Escapes line-start block markers inside a note-definition paragraph (H6).
+/// Escapes line-start block markers inside a note-definition paragraph.
 ///
 /// A body line beginning with `- ` / `* ` / `+ ` / `1. ` / `#` / `>` would
 /// re-parse as a structural block inside the definition, which this decoder
@@ -530,9 +530,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             }
 
             // Code block detection: all text runs with code font.
-            // InlineText runs (post-Phase-3 inline-tab carry) fold to
-            // their `\t`-bearing plain string — see debug doc
-            // §3a-B13.
+            // InlineText runs (inline-tab carry) fold to
+            // their `\t`-bearing plain string.
             if is_code_paragraph(paragraph, styles) {
                 let text = paragraph
                     .runs
@@ -779,8 +778,7 @@ fn paragraph_text_styled(
             // `plain_text()` because Markdown styling has no
             // representation for `<hp:tab>` attributes. The
             // formatting group key still uses `char_shape_id`, so the
-            // run gets wrapped exactly like a plain `Text(String)` run
-            // — see debug doc §3a-A5.
+            // run gets wrapped exactly like a plain `Text(String)` run.
             Part::Text(content) => {
                 let Some(cow) = content.plain_text() else {
                     continue;
@@ -1081,7 +1079,7 @@ impl Line {
     }
 
     /// The line's Markdown, and whether its emphasis was kept. Only this
-    /// final composition is checked: a Body after G2, or a complete cell.
+    /// final composition is checked: a rendered Body, or a complete cell.
     fn finish(self, ctx: Ctx) -> (Md, bool) {
         let pieces = self.pieces(ctx);
         // Spans common to neighbouring pieces stay open, those opened at one
@@ -1581,14 +1579,14 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             md
         }
         Control::Compose { compose_text, .. } => text(compose_text, ctx),
-        // Wave 12m Phase 2 Step 4: the visible text (display_text) if any,
+        // the visible text (display_text) if any,
         // else the target's display form in brackets (Name → "bookmark1",
         // SystemId → "#5"). Markdown has no anchor link here: text only.
         // The brackets are text too: as syntax they made a link with a
-        // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
+        // following `(…)`. 이것을 실패시키는 것: 대괄호를 문법으로
         // 쓰기(`markup_safety` 의 빈 상호 참조).
         // A field: the filled value if any, else the hint — the HWPX
-        // encoder's hint fallback order (Epic 1).
+        // encoder's hint fallback order.
         Control::CrossRef { .. } | Control::Field { .. } => {
             text(&super::styled_display(control).unwrap_or_default(), ctx)
         }
@@ -1609,7 +1607,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             md
         }
         // A caption number's prefix/suffix characters are text, not
-        // Markdown (review r1: a `*` prefix and suffix turned "3" into
+        // Markdown (a `*` prefix and suffix turned "3" into
         // emphasis). 이것을 실패시키는 것: 텍스트 escape 삭제
         // (`caption_number_prefix_is_escaped`).
         Control::AutoNumber { num, format, .. } => {
@@ -1741,7 +1739,7 @@ fn math_free_text(raw: &str, ctx: Ctx) -> Md {
 
 /// A memo as `<!-- memo: … -->`, its body drawn as Markdown with `--`
 /// broken up so it cannot close the comment. Author/date are no longer
-/// carried (Wave 12e-Memo): HWPX wire never surfaced them.
+/// carried (Memo): HWPX wire never surfaced them.
 fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
     let Some(inner) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let inner = Ctx { in_comment: true, guarded: false, ..inner };
@@ -1772,7 +1770,7 @@ fn extract_note_body(
 }
 
 /// [`extract_note_body`] in HTML, for a note written inline in an HTML cell
-/// (escaped once — M2).
+/// (escaped once).
 fn extract_note_body_html(
     paragraphs: &[Paragraph],
     styles: &dyn StyleLookup,
@@ -2103,7 +2101,7 @@ fn extract_paragraph_text_html(
             current_format = InlineFormat::default();
         }
         match part {
-            // Same as the Markdown styled path (debug doc §3a-A6):
+            // Same as the Markdown styled path:
             // `InlineText` folds to its `\t`-bearing plain string via
             // `plain_text()` so HTML output stays consistent.
             Part::Text(content) => {
@@ -2194,9 +2192,9 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
 
 /// A picture's or table's caption as a paragraph after it (`\n\n` + its
 /// text) and the images it holds, empty without one. The caption's numbers
-/// ("그림 3") live here (§19.16 J, review r1: captions were not written at
-/// all; review r2: a picture inside the caption lost its bytes).
-/// 이것을 실패시키는 것: 캡션 출력을 지우기(F17 의 3·4·7 이 사라짐 —
+/// ("그림 3") live here (captions were not written at
+/// all; a picture inside the caption lost its bytes).
+/// 이것을 실패시키는 것: 캡션 출력을 지우기(캡션 번호 3·4·7 이 사라짐 —
 /// `f17_caption_numbers_reach_the_readable_views`) / 캡션 그림의 바이트를
 /// 버리기(`caption_pictures_and_html_table_captions_are_kept`).
 fn styled_caption(
@@ -2219,7 +2217,7 @@ fn styled_caption(
 }
 
 /// [`styled_caption`] inside an HTML table cell: the caption's paragraphs
-/// in HTML after a `<br>` (review r2: a picture or table in a merged or
+/// in HTML after a `<br>` (a picture or table in a merged or
 /// nested-table cell lost its caption and number).
 /// 이것을 실패시키는 것: HTML 칸의 캡션 출력을 지우기
 /// (`caption_pictures_and_html_table_captions_are_kept`).
@@ -2261,8 +2259,8 @@ const CODE_FONTS: &[&str] = &[
 fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
     // `carries_text()` matches both `Text(String)` and `InlineText(...)`
     // so a paragraph that picked up `InlineText` after the HWPX
-    // decoder Phase 3 carry is still detected as code if it would
-    // have qualified before — see debug doc §3a-B13.
+    // decoder carry is still detected as code if it would
+    // have qualified before.
     let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
     if text_runs.is_empty() {
         return false;
@@ -4251,7 +4249,7 @@ mod tests {
 
     /// In a merged (HTML) cell a group's picture is a real `<img>` element
     /// and a text box's text is HTML (`<strong>`), not escaped Markdown; the
-    /// same text in the body stays Markdown (S5).
+    /// same text in the body stays Markdown.
     ///
     /// 이것을 실패시키는 것: HTML 문맥 분기 삭제(Markdown 링크가 칸에 escape 되어 들어감) ·
     /// 묶음 출력을 다시 escape · HTML 칸 도형 글자에 Markdown 렌더러.
@@ -4309,9 +4307,9 @@ mod tests {
     }
 
     /// Notes follow the depth and memo rules: a note in a text box at depth 0
-    /// is a document definition (S4, numbered in drawing order); a note in a
-    /// text box inside a note body is inline (N2) and the output decodes; a
-    /// note in a memo is inline with no definition (M3).
+    /// is a document definition (numbered in drawing order); a note in a
+    /// text box inside a note body is inline and the output decodes; a
+    /// note in a memo is inline with no definition.
     ///
     /// 이것을 실패시키는 것: 깊이 조건 삭제 · 메모 조건 삭제 · 글상자에서 수집기를 새로 만듦 ·
     /// 각주 본문 진입 때 `note_depth` +1 삭제.
@@ -4354,7 +4352,7 @@ mod tests {
     }
 
     /// A picture in a memo is link text only — no asset — also through a
-    /// group; a picture in a note body gets its asset (N4).
+    /// group; a picture in a note body gets its asset.
     ///
     /// 이것을 실패시키는 것: 메모에서 `in_comment` 미설정(자산 등록) · 메모 본문을
     /// Markdown 렌더러가 아닌 HTML 렌더러로.
@@ -4601,9 +4599,9 @@ mod tests {
     }
 
     /// The two shapes of the earlier false positives: a group holding a text
-    /// box with only a table draws the table (S1 — lossy draws nothing, it
+    /// box with only a table draws the table (lossy draws nothing, it
     /// takes the box's plain text); a group holding a text box of spaces
-    /// draws nothing once trimmed (S2).
+    /// draws nothing once trimmed.
     ///
     /// 이것을 실패시키는 것: 도형 글자 잘라내기 삭제 · 묶음 글상자 표를 그리지 않기.
     #[test]

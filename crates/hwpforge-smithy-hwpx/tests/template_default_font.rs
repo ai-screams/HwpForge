@@ -103,8 +103,8 @@ fn assert_fonts(header: &str, expected_faces: &[&str]) -> Header {
     header
 }
 
-/// 이것을 실패시키는 것: 기본 바탕 글꼴을 다시 ID 1로 고정(M1),
-/// 또는 단일 글꼴 이름을 함초롬바탕으로 교체(M4).
+/// 이것을 실패시키는 것: 기본 바탕 글꼴을 다시 ID 1로 고정,
+/// 또는 단일 글꼴 이름을 함초롬바탕으로 교체.
 #[test]
 fn single_font_template_encodes_with_registered_font_refs() {
     let registry = registry(&["한컴바탕"]);
@@ -127,7 +127,7 @@ fn single_font_template_encodes_with_registered_font_refs() {
     }
 }
 
-/// 이것을 실패시키는 것: 글꼴이 정확히 하나일 때만 ID 0으로 해석(M2).
+/// 이것을 실패시키는 것: 글꼴이 정확히 하나일 때만 ID 0으로 해석.
 #[test]
 fn empty_registry_defaults_encode_with_hancom_font() {
     let registry = StyleRegistry::with_fonts(Vec::new());
@@ -137,7 +137,7 @@ fn empty_registry_defaults_encode_with_hancom_font() {
     }
 }
 
-/// 이것을 실패시키는 것: 글꼴이 둘일 때도 기본 바탕 글꼴을 ID 0으로 변경(M3).
+/// 이것을 실패시키는 것: 글꼴이 둘일 때도 기본 바탕 글꼴을 ID 0으로 변경.
 #[test]
 fn multiple_font_templates_keep_default_font_positions() {
     for fonts in [&["한컴바탕", "맑은 고딕"][..], &["한컴바탕", "맑은 고딕", "돋움"][..]]

@@ -13,7 +13,7 @@ use crate::image_sniff::{sniff_image_format, Sniffed};
 use crate::paint::{GlyphRun, ImageItem, Page, PaintItem};
 use crate::{PdfError, PdfResult, PdfWarning, RenderFailureMode};
 
-/// canonical key 당 1회 생성·preflight 된 krilla 이미지 (§3 D2).
+/// canonical key 당 1회 생성·preflight 된 krilla 이미지.
 struct CachedImage {
     /// 캐시 정합 검증용 원본 바이트 (같은 키 다른 바이트 = fatal).
     data: Arc<Vec<u8>>,
@@ -23,7 +23,7 @@ struct CachedImage {
 
 /// Paint IR 페이지들을 PDF 바이트로 쓴다.
 ///
-/// `failure_mode` 는 이미지 실패의 Fatal/Degraded 정책 (§3 D5 — 폰트와
+/// `failure_mode` 는 이미지 실패의 Fatal/Degraded 정책 (폰트와
 /// 공통). Degraded 실패는 `warnings` 로 표면화하고 해당 항목만 생략한다.
 /// [`PdfError::ImageAssetConflict`] 는 모드 무관 항상 에러다.
 pub(crate) fn write_pdf(
@@ -59,7 +59,7 @@ struct PdfWriter<'f> {
     fonts: &'f [ResolvedFont],
     /// [`crate::paint::FontKey`] → 지연 파싱된 krilla 폰트 (중복 임베드 방지).
     krilla_fonts: Vec<Option<krilla::text::Font>>,
-    /// canonical key → preflight 된 krilla 이미지 (§3 D2).
+    /// canonical key → preflight 된 krilla 이미지.
     image_cache: HashMap<String, CachedImage>,
     failure_mode: RenderFailureMode,
 }
@@ -134,7 +134,7 @@ impl PdfWriter<'_> {
                     surface.draw_path(&path);
                 }
                 PaintItem::Image(item) => {
-                    // 기하 검증 — 무음 생략 금지 (§3 D5).
+                    // 기하 검증 — 무음 생략 금지.
                     let w = item.size.width.0;
                     let h = item.size.height.0;
                     if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
@@ -159,7 +159,7 @@ impl PdfWriter<'_> {
                     }
                     let image = match cached_image(&mut self.image_cache, item) {
                         Ok(image) => image,
-                        // 자산 충돌은 모드 무관 fatal (§3 D2).
+                        // 자산 충돌은 모드 무관 fatal.
                         Err(e @ PdfError::ImageAssetConflict { .. }) => return Err(e),
                         Err(e) => match self.failure_mode {
                             RenderFailureMode::Fatal => return Err(e),
@@ -218,7 +218,7 @@ impl PdfWriter<'_> {
 }
 
 /// canonical key 로 캐시 조회/생성한다 — 미스 시 스니핑 → 생성자 →
-/// **preflight**(1×1 임시 문서 finish 로 deferred decode 강제, §3 D2).
+/// **preflight**(1×1 임시 문서 finish 로 deferred decode 강제).
 fn cached_image(
     cache: &mut HashMap<String, CachedImage>,
     item: &ImageItem,
@@ -275,9 +275,9 @@ fn cached_image(
 
 /// krilla 는 실제 디코드를 `Document::finish()` 까지 미룬다 (생성자는
 /// metadata 만 읽음) — valid-header/corrupt-body 를 Degraded 로 걸러내려면
-/// 임시 1×1 문서로 디코드를 강제해야 한다 (§3 disposition H1).
+/// 임시 1×1 문서로 디코드를 강제해야 한다.
 ///
-/// ⚠️ 보장 범위는 포맷 의존 (독립 리뷰 Low#2): PNG/GIF/WebP 는 재인코드
+/// ⚠️ 보장 범위는 포맷 의존: PNG/GIF/WebP 는 재인코드
 /// 경로라 본문 손상이 여기서 잡히지만, **JPEG 는 DCTDecode passthrough**
 /// (scan 데이터 미디코드 임베드)라 valid-header/corrupt-scan JPEG 는
 /// preflight·finish 모두 통과한다 — 뷰어에서야 드러난다. corrupt-JPEG
@@ -388,7 +388,7 @@ mod image_tests {
     }
 
     /// PDF parser-lite: 압축 스트림을 인플레이트해 원문과 합친 뒤 검사한다
-    /// (§3 수용 기준 — byte grep 은 krilla 의 압축/객체 스트림에 취약).
+    /// (byte grep 은 krilla 의 압축/객체 스트림에 취약).
     fn inflated_pdf_text(bytes: &[u8]) -> Vec<u8> {
         use std::io::Read as _;
         let mut all = bytes.to_vec();
@@ -460,7 +460,7 @@ mod image_tests {
         let b = ImageItem { data: Arc::new(other), ..a.clone() };
         let pages = one_page(vec![PaintItem::Image(a), PaintItem::Image(b)]);
         let mut warnings = Vec::new();
-        // Degraded 에서도 fatal (§3 D2).
+        // Degraded 에서도 fatal.
         let err = write_pdf(&pages, &[], RenderFailureMode::Degraded, &mut warnings)
             .expect_err("conflict");
         assert!(matches!(err, PdfError::ImageAssetConflict { .. }), "{err:?}");
@@ -469,7 +469,7 @@ mod image_tests {
     #[test]
     fn corrupt_body_fails_at_preflight_not_finish() {
         // valid PNG 헤더 + 손상 본문: krilla 생성자(metadata)는 통과하고
-        // deferred decode 에서 죽는다 — preflight 가 잡아야 한다 (H1).
+        // deferred decode 에서 죽는다 — preflight 가 잡아야 한다.
         let mut corrupt = TINY_PNG.to_vec();
         for b in &mut corrupt[41..53] {
             *b = 0xAA; // IDAT 본문 파괴 (헤더/IHDR 유지)
@@ -528,8 +528,8 @@ mod image_tests {
             .any(|w| matches!(w, PdfWarning::UnsupportedImageFormat { format: "bmp", .. })));
     }
 
-    /// W6 §12a 정책 확정 잠금: WMF/EMF 도 BMP 와 동열 — strict = typed
-    /// 에러, degraded = 경고+스킵 (변환 지원은 후속 슬라이스).
+    /// 미지원 포맷 정책: WMF/EMF 도 BMP 와 동열 — strict = typed
+    /// 에러, degraded = 경고+스킵 (변환 지원은 후속 작업).
     #[test]
     fn wmf_and_emf_follow_failure_mode_like_bmp() {
         let wmf: &[u8] = &[0xD7, 0xCD, 0xC6, 0x9A, 0, 0, 0, 0];
@@ -602,7 +602,7 @@ mod image_tests {
         }
     }
 
-    // ── W2b c3: krilla `q → composed cm → Do → Q` 구조 잠금 ─────────
+    // ── krilla `q → composed cm → Do → Q` 구조 잠금 ─────────
     //
     // 이 테스트는 `tests/support/mod.rs` 의 범용 bbox 추출기가 의존하는
     // 구조 가정(단일 합성 cm, 별도 Y-flip cm 없음)을 `write_pdf` 산출물
@@ -685,7 +685,7 @@ mod image_tests {
         assert!(approx(f, page_height - origin_y - h), "f(translate-y)={f}");
 
         // 실측 잠금의 본체: unit square 네 꼭짓점을 이 행렬로 변환하면
-        // top-left bbox == (10, 20, 50, 40) ±0.01pt (§4 D3 검증 방법과 동일 산술).
+        // top-left bbox == (10, 20, 50, 40) ±0.01pt (좌표 변환 산술 검산).
         let corners: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
             .map(|(x, y)| (a * x + c * y + e, b * x + d * y + f));
         let min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
@@ -706,7 +706,7 @@ mod image_tests {
         (a - b).abs() <= 0.01
     }
 
-    // ── W4 w2: PaintItem::Clipped — clip 그룹 방출·중첩·경계 잠금 ─────
+    // ── PaintItem::Clipped — clip 그룹 방출·중첩·경계 잠금 ─────
     //
     // 클립 검증은 CTM(이미지)과 달리 콘텐츠 스트림의 **clip 오퍼레이터**
     // (`W n`)와 클립 경로 좌표를 직접 읽는다. "경계 밖이 잘린다"는

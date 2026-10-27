@@ -1,9 +1,9 @@
 //! Field run builders — hyperlink, bookmark span, ClickHere (누름틀),
 //! SUMMERY auto-fields, date-code, path, autonum, and cross-reference
-//! (task #92 split from `encoder/section.rs`; Wave 12l/12m/12n carry
+//! (task #92 split from `encoder/section.rs`; carry
 //! series). Includes the date helpers the SUMMERY builders evaluate
 //! and the cross-ref wire-code mappers (8-param Hancom-canonical
-//! Command — see HWP5_WIRE_SPEC.md §14 / gotcha #23-27).
+//! Command — see HWP5_WIRE_SPEC.md §14).
 
 use super::*;
 
@@ -169,7 +169,7 @@ pub(super) fn build_field_run_xml(
             build_summary_field_xml(field_type, hint, name, display_text, char_pr_id_ref, begin_id)
         }
         // `FieldType` is `#[non_exhaustive]`. We intentionally do NOT collapse
-        // future variants into ClickHere (Wave 12n architect review): silently
+        // future variants into ClickHere: silently
         // mis-encoding a future SUMMERY/auto-field token as CLICK_HERE would
         // create a stealth corruption path. New variants must explicitly extend
         // this match.
@@ -235,8 +235,7 @@ pub(super) fn build_clickhere_field_xml(
 ///
 /// The HWP5 ctrl_id `%smr`
 /// is shared by all SUMMERY auto-fields; discrimination is via the `Command`
-/// `$token`. Token mapping verified against 한컴 native fixtures in Wave 12n
-/// (see `.docs/research/2026-06-02_auto_field_wire_dump.md`).
+/// `$token`. Token mapping follows the observed 한컴 command syntax.
 pub(super) fn build_summary_field_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
@@ -247,10 +246,10 @@ pub(super) fn build_summary_field_xml(
 ) -> String {
     use hwpforge_foundation::FieldType;
     let command = field_type.summary_token().expect("caller guards SUMMERY variants");
-    // #120/#136 (supersedes Wave 12n Step 6.6): carry the cached resolved
+    // #120/#136: carry the cached resolved
     // value in the body.
     //
-    // History: Step 6.6 emitted an EMPTY body after observing that a
+    // History: the earlier implementation emitted an EMPTY body after observing that a
     // *synthesized* ISO date (`2026-06-06`) — locale-mismatched against
     // 한컴's `2026년 6월 …` — was treated as corrupted content and
     // triggered the "낮은 보안 수준 복구" warning. But an empty body ALSO
@@ -274,7 +273,7 @@ pub(super) fn build_summary_field_xml(
             _ => String::new(),
         }
     };
-    // Wave 12p task #124: editable depends on whether Hancom recomputes
+    // task #124: editable depends on whether Hancom recomputes
     // the field value (Author/Title → "0" lock to authored value;
     // LastSavedBy/CreatedTime/ModifiedTime → "1" Hancom recomputes).
     build_summary_run_xml_raw(
@@ -290,10 +289,10 @@ pub(super) fn build_summary_field_xml(
 /// Lowest-level SUMMERY `<hp:run>` builder — emits a `type="SUMMERY"`
 /// `fieldBegin`/`fieldEnd` pair with the caller-supplied `command` token
 /// and `display` text. Used by [`build_summary_field_xml`] for typed
-/// [`hwpforge_foundation::FieldType`] variants and by Wave 12n
+/// [`hwpforge_foundation::FieldType`] variants and by
 /// `UnknownSummary` / `DateCodeField` fallback paths.
 ///
-/// Wave 12n Step 6: `Control::PathField` no longer uses this builder.
+/// `Control::PathField` no longer uses this builder.
 /// See [`build_path_field_run_xml_raw`] for the native PATH wire shape.
 pub(super) fn build_summary_run_xml_raw(
     command: &str,
@@ -324,7 +323,7 @@ pub(super) fn build_summary_run_xml_raw(
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
             r#"</hp:ctrl>"#,
-            // Wave 12n Step 6.5: trailing `<hp:t/>` matches Hancom native
+            // trailing `<hp:t/>` matches Hancom native
             // wire shape — its absence triggers the "low-security recovery"
             // warning on open (verified against Hancom-saved document-summary fields
             // wire diff). Same structural requirement as PATH runs.
@@ -342,7 +341,7 @@ pub(super) fn build_summary_run_xml_raw(
 
 /// Lowest-level PATH `<hp:run>` builder — emits a `type="PATH"`
 /// `fieldBegin`/`fieldEnd` pair carrying a `$P`/`$F`/`$P$F` format code
-/// in the `Format` parameter. Wave 12n Step 6 — replaces the prior
+/// in the `Format` parameter. This replaces the prior
 /// SUMMERY surrogate for `Control::PathField`.
 ///
 /// Native PATH field wire shape:
@@ -364,7 +363,7 @@ pub(super) fn build_path_field_run_xml_raw(
 ) -> String {
     let begin_id = super::super::object_ids::field_id(begin_id);
     let escaped_cmd = escape_field_value(command);
-    // Wave 12n Step 6.5 / #120: the body between fieldBegin/fieldEnd carries
+    // #120: the body between fieldBegin/fieldEnd carries
     // the cached resolved path (was a bare `<hp:t/>`; an empty body triggers
     // the "낮은 보안 수준 복구" warning — verified against
     // native field wire observations).
@@ -400,14 +399,12 @@ pub(super) fn build_path_field_run_xml_raw(
 /// Builds the `Clickhere:set:N:...` command string.
 ///
 /// `N` is **not** the total UTF-16 length of the command — empirically (verified
-/// against five 한컴-authored fixtures including `basic`, `with-help`,
-/// `empty-hint`, `multi`, and `named`) it equals the UTF-16 length of the
+/// against five 한컴-authored documents covering plain, help-bearing,
+/// empty-hint, multiple and named fields) it equals the UTF-16 length of the
 /// substring after `"Clickhere:set:N:"` minus one (one of the two trailing
 /// spaces is excluded from `N`). The encoder can compute this directly
 /// without iteration because the formula does not depend on `digits(N)`.
 ///
-/// See `.docs/research/2026-06-02_clickhere_wire_dump.md` for the empirical
-/// derivation.
 pub(super) fn clickhere_command_string(
     hint: &str,
     help: &str,
@@ -429,7 +426,7 @@ pub(super) fn clickhere_command_string(
 ///
 /// Returns `None` for [`hwpforge_core::control::InlinePageKind::Unknown`] —
 /// the caller is expected to skip and emit a warning rather than fabricate
-/// a `numType`. Wave 12n architect review CRITICAL: do not collapse
+/// a `numType`. Do not collapse
 /// `TotalPages`/`Unknown` to `CurrentPage`.
 pub(super) fn build_autonum_run_xml(
     char_pr_id_ref: u32,
@@ -497,7 +494,7 @@ pub(super) fn build_auto_number_run_xml(
     ))
 }
 
-/// Wave 12m Phase 2 Step 4 boundary: typed [`RefType`] → HWP5 `%xrf`
+/// boundary: typed [`RefType`] → HWP5 `%xrf`
 /// N1 wire code. Returns the canonical code for known variants and
 /// `Unknown(code)` preserves the original byte.
 pub(super) fn ref_type_wire_code(ref_type: &hwpforge_foundation::RefType) -> u8 {
@@ -518,7 +515,7 @@ pub(super) fn ref_type_wire_code(ref_type: &hwpforge_foundation::RefType) -> u8 
     }
 }
 
-/// Wave 12m Phase 2 Step 4 boundary: typed [`RefContentType`] → HWP5
+/// boundary: typed [`RefContentType`] → HWP5
 /// `%xrf` N2 wire code, RefType-relative.
 pub(super) fn ref_content_type_wire_code(
     ref_type: &hwpforge_foundation::RefType,
@@ -532,7 +529,7 @@ pub(super) fn ref_content_type_wire_code(
         Number => 1,
         // `Contents` → N2 wire code 2. Figure/Table/Eq/Outline 의 "캡션
         // 내용" 과 Bookmark 의 "책갈피 이름" 둘 다 N2=2 로 emit — 의미
-        // 구분은 동반 RefType 가 carry (gotcha #27). E6 슬라이스 B 에서
+        // 구분은 동반 RefType 가 carry.
         // `BookmarkName` variant 를 `Contents` 로 흡수. (Bookmark+N2=1 =
         // 책갈피 본문/번호 는 위 `Number => 1` arm 이 처리.)
         Contents => 2,
@@ -569,7 +566,7 @@ pub(super) fn crossref_target_for_command(
 
 /// Builds a `<hp:run>` XML string for a cross-reference (상호참조).
 ///
-/// Wave 12m Phase 2 Step 4: unified Hancom-canonical 8-parameter form
+/// unified Hancom-canonical 8-parameter form
 /// (`Fiexde`/`Prop`/`Command`/`RefPath`/`RefType`/`RefContentType`/
 /// `RefHyperLink`/`RefOpenType=HWPHYPERLINK_JUMP_CURRENTTAB`). The
 /// pre-Step-4 5-param form did not round-trip through 한컴; the 8-param
@@ -594,14 +591,14 @@ pub(super) fn build_crossref_run_xml(
     // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative
     // and the field is no longer recognized.
     let begin_id = super::super::object_ids::field_id(1_300_000_000_u64 + field_id as u64);
-    // Wave 12m Phase 2 Step 4 fixup: `fieldid` is a Hancom **type tag**,
+    // fixup: `fieldid` is a Hancom **type tag**,
     // not an instance id. Native Hancom HWPX emits the ctrl_id's ASCII
     // big-endian u32 — same convention as ClickHere (`%clk`=0x25636C6B),
     // SummaryField (`%smr`=0x25736D72), PathField (`%pat`=0x25706174).
     // For CROSSREF the constant is `%xrf` = 0x25787266 = 628_650_598.
     // All CROSSREF fields in a document share this fieldid; per-instance
     // identity is carried by `id` (begin_id) above. Verified against
-    // n=11 native Hancom-authored .hwpx samples (re-research stage 2).
+    // n=11 native Hancom-authored .hwpx samples.
     let field_uid: u64 = 0x25787266;
     let _ = field_id; // kept in signature for symmetry; not used for fieldid.
     let display_text_xml = build_text_element_xml(display_text);
@@ -645,7 +642,7 @@ pub(super) fn build_crossref_run_xml(
 
 /// Legacy Hancom-format CROSSREF builder retained for fieldid regression
 /// gates. The production encoder routes everything through
-/// [`build_crossref_run_xml`] after Wave 12m Step 4; this stays only as
+/// [`build_crossref_run_xml`]; this stays only as
 /// a stable target for guarantees about fieldid range and pairing
 /// invariants.
 #[cfg(test)]
@@ -782,7 +779,7 @@ mod bookmarkname_collapse_tests {
     use super::*;
     use hwpforge_foundation::{RefContentType, RefType};
 
-    /// E6 슬라이스 B byte-불변 게이트: `BookmarkName` 흡수 후에도 Bookmark
+    /// byte-불변 게이트: `BookmarkName` 흡수 후에도 Bookmark
     /// 의 "책갈피 이름"(`Contents`) 은 N2 wire code `2` 로 emit — 이전
     /// 분리됐던 variant 와 동일. golden 12-fixture 매트릭스는 content-type
     /// 출력을 단언하지 않으므로 이 직접 단언이 진짜 byte-중립 게이트다.
@@ -794,7 +791,7 @@ mod bookmarkname_collapse_tests {
             "Bookmark Contents (책갈피 이름) must emit N2=2"
         );
         // caption-content (Figure/Table/Eq/Outline) 도 동일 N2=2 — 의미
-        // 구분은 RefType 가 carry (gotcha #27), wire 는 동일.
+        // 구분은 RefType 가 carry, wire 는 동일.
         assert_eq!(
             ref_content_type_wire_code(&RefType::Figure, &RefContentType::Contents),
             2,

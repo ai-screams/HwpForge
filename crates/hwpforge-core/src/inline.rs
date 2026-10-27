@@ -14,8 +14,6 @@
 //! Plain text runs continue to use `Text(String)` so the 18-file
 //! `RunContent::Text` surface is undisturbed.
 //!
-//! See `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug A / Phase 2)
-//! for the underlying investigation.
 
 use hwpforge_foundation::HwpUnit;
 use schemars::JsonSchema;

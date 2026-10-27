@@ -82,7 +82,7 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
-        // §19.5 1c (review r1): the 0–50 corner ratio is checked wherever
+        // The 0–50 corner ratio is checked wherever
         // the encoder writes a shape — body, cells, text boxes, notes,
         // captions, group children, headers/footers, master pages.
         // 이것을 실패시키는 것: 중첩 순회를 지우기(칸·글상자·머리말·바탕쪽의 51
@@ -106,7 +106,7 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
-        // F (review r2 MEDIUM-2): cell zones are checked on every table —
+        // F: cell zones are checked on every table —
         // nested tables, captions (run pictures' included), headers/footers
         // and master pages — through the one table walk.
         // 이것을 실패시키는 것: 이 순회를 최상위 표로 좁히기
@@ -135,7 +135,7 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
-        // S20: an object frame is checked in the same places as the corner
+        // an object frame is checked in the same places as the corner
         // ratio. 이것을 실패시키는 것: 이 순회를 지우기(`object_frame_is_checked_in_nested_places`).
         let lists = std::iter::once(&section.paragraphs)
             .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
@@ -183,7 +183,7 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
 /// The first corner ratio above 50 in `run`: its own rectangle or text
 /// box, a group's shapes, and every paragraph nested in it — picture
 /// captions included, which the Core paragraph walk does not enter but the
-/// HWPX writer does (review r2).
+/// HWPX writer does.
 ///
 /// (A group picture's caption is already in that walk.)
 ///
@@ -256,7 +256,7 @@ fn original_size_error(
 /// Each object is checked once: nested paragraphs come from the one
 /// paragraph walk (which enters group pictures' captions), and only a run
 /// picture's caption, which that walk does not enter, is searched from its
-/// run (branch review B-H1: a group picture's caption searched from the
+/// run (a group picture's caption searched from the
 /// picture *and* by the walk doubled the work at every nesting level).
 fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
     fn image_error(
@@ -298,7 +298,7 @@ fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str,
         }
         match control {
             Control::Group { children, .. } => children.iter().find_map(|child| {
-                // S20 review r1: a group child has no size of its own to lock
+                // A group child has no size of its own to lock
                 // (no `<hp:sz>` in HWPX, no CtrlHeader in HWP 5.0); a lock
                 // there would be dropped on writing, so it is refused.
                 // 이것을 실패시키는 것: 이 검사를 지우기 / 그림 자식만 또는 도형
@@ -423,7 +423,7 @@ fn validate_cell_zones(
         zone_index,
         reason,
     };
-    // A reversed range is wrong whatever the grid (review r1 MEDIUM-3: it
+    // A reversed range is wrong whatever the grid (it
     // was skipped when the grid did not tile).
     for (zone_index, zone) in table.cell_zones.iter().enumerate() {
         if zone.start_row > zone.end_row || zone.start_col > zone.end_col {
@@ -576,18 +576,17 @@ fn validate_control_run(
         | Control::Field { .. }
         | Control::Memo { .. }
         | Control::IndexMark { .. } => Ok(()),
-        // Wave 12n: targeted invariant checks for new variants. Architect review
-        // medium: do not let new variants slide through with a blanket `Ok(())`.
+        // targeted invariant checks for new variants; do not let new variants slide through with a blanket `Ok(())`.
         Control::UnknownSummary { token, .. } => validate_unknown_summary(token, ctx),
         Control::DateCodeField { .. }
         | Control::PageNumber { .. }
         | Control::InlinePageNumber { .. }
         | Control::PathField { .. } => Ok(()),
-        // W2 (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이
-        // 유효 (Codex 결함 8: 근거 없는 clamp 금지). kind Unknown 은 인코더가
+        // (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이
+        // 유효 (근거 없는 clamp 금지). kind Unknown 은 인코더가
         // 스킵하므로 validation 통과.
         Control::AutoNumber { .. } | Control::NewNumber { .. } => Ok(()),
-        // W3 (2026-08-12): 감추기 — 6 bool 전 조합이 유효 (빈 mask 도
+        // (2026-08-12): 감추기 — 6 bool 전 조합이 유효 (빈 mask 도
         // corpus 실측 존재, 렌더 no-op).
         Control::PageHiding { .. } => Ok(()),
         // Group (묶음 객체): recursively validate each child (nested groups +
@@ -763,7 +762,7 @@ fn validate_embedded_chart_control(
     height: i32,
     ctx: RunValidationContext,
 ) -> Result<(), ValidationError> {
-    // Wave 4c passthrough: chart XML and OLE bytes are opaque blobs we
+    // passthrough: chart XML and OLE bytes are opaque blobs we
     // do not introspect. Treat empty payload as the same failure mode as
     // EmptyChartData / EmptyEquation so downstream encoders never have to
     // emit an empty <hp:chart>/<hp:ole> pair.
@@ -917,7 +916,7 @@ mod tests {
         )
     }
 
-    // === S20: object frame ===
+    // === object frame ===
 
     fn size(w: i32, h: i32) -> hwpforge_foundation::Size {
         hwpforge_foundation::Size::new(HwpUnit::new(w).unwrap(), HwpUnit::new(h).unwrap())
@@ -959,7 +958,7 @@ mod tests {
         assert!(frame_err(section_with(framed(Control::ellipse(w, w), size(560, 560)))).is_none());
     }
 
-    /// The axis rules (§19.23.11 H4): 0 under 0 is a straight line, 0 under a
+    /// The axis rules: 0 under 0 is a straight line, 0 under a
     /// displayed length cannot stretch, a positive original under a displayed
     /// 0 is the existing size rule's business.
     /// 이것을 실패시키는 것: 0 축을 한 축만 보기 / 0 × 0 을 오류로.
@@ -993,7 +992,7 @@ mod tests {
         assert!(frame_err(section_with(Run::control(tall, CharShapeIndex::new(0)))).is_some());
     }
 
-    /// A table has no original box (§19.23.11 M6); its lock is fine.
+    /// A table has no original box; its lock is fine.
     /// 이것을 실패시키는 것: 표 검사를 지우기.
     #[test]
     fn table_original_size_is_rejected() {
@@ -1080,7 +1079,7 @@ mod tests {
         assert_eq!(frame_err(section_with(in_group)).map(|e| e.0), Some("ellipse"));
     }
 
-    /// Branch review B-H1: groups nested through their pictures' captions
+    /// Groups nested through their pictures' captions
     /// are checked once per object — the count grows with the depth, not
     /// twice per level.
     /// 이것을 실패시키는 것: 묶음 그림 캡션을 그림에서도 다시 찾기(검사 수 2^깊이).
@@ -1178,8 +1177,8 @@ mod tests {
 
     /// A ratio above 50 is refused wherever the shape sits — a table cell,
     /// a text box's text, a group, a header, a footer, a master page, a
-    /// picture's caption (review r2) — and
-    /// 50 passes there too (review r1: only top-level runs were checked, so
+    /// picture's caption — and
+    /// 50 passes there too (only top-level runs were checked, so
     /// a nested 51 reached the HWPX writer).
     #[test]
     fn corner_ratio_is_checked_in_nested_places() {
@@ -1357,7 +1356,7 @@ mod tests {
 
     // === Rule 3: Every paragraph has at least 1 run ===
 
-    /// §19.22 D5: an end-mark char shape does not stand in for a run.
+    /// An end-mark char shape does not stand in for a run.
     #[test]
     fn end_char_shape_does_not_make_a_paragraph_non_empty() {
         let mut p = Paragraph::new(ParaShapeIndex::new(0));
@@ -1513,7 +1512,7 @@ mod tests {
         );
     }
 
-    /// Review r2 MEDIUM-2: a bad zone on a table nested in a cell, in a run
+    /// A bad zone on a table nested in a cell, in a run
     /// picture's caption and in a header is refused like a top-level one.
     /// 이것을 실패시키는 것: 순회를 최상위 표로 좁히기 · 그림 캡션 미방문
     /// (최상위 그림, 칸 안 그림 각각 — 불변·가변 순회 모두).
@@ -1552,7 +1551,7 @@ mod tests {
                 s.headers.push(header);
                 s
             },
-            // Review r3 M3: a table directly in a memo's anchor runs.
+            // A table directly in a memo's anchor runs.
             Section::with_paragraphs(
                 vec![host(Run::control(
                     crate::control::Control::memo_with_anchor(
@@ -1630,7 +1629,7 @@ mod tests {
             );
             assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidSpan);
         }
-        // Review r1 MEDIUM-3: a ragged table (2 cells, then 1) does not form
+        // A ragged table (2 cells, then 1) does not form
         // a grid; a reversed zone on it is still refused, and so is any zone.
         let ragged = |zone: CellZone| {
             let table = Table::new(vec![

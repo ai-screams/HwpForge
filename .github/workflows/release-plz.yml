@@ -3,7 +3,7 @@
 # =============================================================================
 #
 # On push to main (validation is owned by the merge queue — every commit
-# reaching main just passed ci.yml merge_queue mode; no preflight here, P2):
+# reaching main just passed ci.yml merge_queue mode; no preflight here):
 #   1. Publish crates / create GitHub Releases when a release PR was merged
 #   2. Create or refresh the next release PR
 #   3. Deploy Pages only when a real release was created
@@ -28,8 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Release Preflight 제거 (CI 다이어트 P2 — .docs/planning/2026-08-25-ci-
-  # diet-proposal.md): main 에 닿는 모든 커밋은 머지 큐가 직전에 전체
+  # main 에 닿는 모든 커밋은 머지 큐가 직전에 전체
   # 게이트(coverage/MSRV/deny 포함, ci.yml merge_queue 모드)를 통과시킨
   # 동일 커밋이므로 여기서의 재검증은 중복이었다 (~6분/머지). semver
   # 검사는 release-plz 자체(semver_check)가 계속 소유한다.

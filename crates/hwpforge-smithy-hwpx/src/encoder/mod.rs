@@ -182,7 +182,7 @@ mod sanitize_xml_text_tests {
 
     #[test]
     fn preserves_korean_text() {
-        assert_eq!(sanitize_xml_text("안녕하세요 Wave 12o"), "안녕하세요 Wave 12o");
+        assert_eq!(sanitize_xml_text("안녕하세요 메타데이터"), "안녕하세요 메타데이터");
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod escape_xml_tests {
     #[test]
     fn leaves_forbidden_characters_to_the_part_scan() {
         // The part scan removes and reports them; a removal here would hide
-        // them from it (R1-5).
+        // them from it.
         let input = "a\u{0}\u{0001}b\u{001F}c\u{FFFE}<\u{FFFF}>";
         assert_eq!(escape_xml(input), "a\u{0}\u{0001}b\u{001F}c\u{FFFE}&lt;\u{FFFF}&gt;");
     }
@@ -404,7 +404,7 @@ use self::package::PackageWriter;
 use self::section::encode_section_with_note_counters;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
-/// 인코드 중 표면화된 비치명 경고 (W1b — §1g v5 변경 2).
+/// 인코드 중 표면화된 비치명 경고.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
@@ -528,7 +528,7 @@ pub enum EncodeWarning {
         reference: String,
     },
     /// 개체 둘 이상이 같은 Core id(그림·표·수식·묶음·글맵시의 `inst_id`)를
-    /// 갖는다 (W0). 각주·미주는 세지 않는다 — 한컴이 여러 주석을 한 instance
+    /// 갖는다. 각주·미주는 세지 않는다 — 한컴이 여러 주석을 한 instance
     /// id 로 저장한다. 상호 참조가 어느 개체를 가리키는지 정해지지
     /// 않는다. 인코더는 재번호하지 않고 두 값을 그대로 쓴다 — 어느 쪽이 참조
     /// 대상인지는 인코더가 정할 수 없다. 새로 뽑는 id 는 이 값을 피한다.
@@ -780,7 +780,7 @@ pub fn partition_semantic_loss(
 /// 의미 손상 경고가 하나라도 있으면 `Err((의미 손상, 그 외))` — 호출자가
 /// 각자의 오류형(`StamperError::SemanticLoss` ·
 /// `CellEditError::SemanticLoss`)으로 감싼다. 없으면
-/// `Ok((바이트, 비의미 경고))` — **R2 HIGH 1**: 과거엔 이 지점에서 비의미
+/// `Ok((바이트, 비의미 경고))` — 과거엔 이 지점에서 비의미
 /// 경고를 버리고 바이트만 남겼다.
 ///
 /// 편집기마다 복제하지 않고 한 곳에 둔다 (분류의 정의는
@@ -876,7 +876,7 @@ mod is_semantic_loss_tests {
         );
     }
 
-    /// W0: a shared Core id is not a semantic loss — the encoder writes the
+    /// a shared Core id is not a semantic loss — the encoder writes the
     /// input's ids unchanged, so an editor does not refuse the document.
     /// 이것을 실패시키는 것: `ObjectIdConflict` 를 `true` 갈래로 옮기기.
     #[test]
@@ -1010,7 +1010,7 @@ pub struct EncodeOptions {
     /// "이미 있으면 스킵" 안전장치가 fail-open 이 된다. 영-core 토큰 사이에서
     /// 시작하는 줄은 줄 경계([`hwpforge_core::layout::LineBoundary`])로 그
     /// 토큰 앞에 놓고, 정확히 놓을 수 없거나 줄 시작이 늘지 않는 문단은
-    /// 캐시를 버린다(경고) — 접힌 `[0,0]` 캐시는 쓰지 않는다(S22).
+    /// 캐시를 버린다(경고) — 접힌 `[0,0]` 캐시는 쓰지 않는다.
     ///
     /// 좌표 주의: HWPX 디코더가 승격한 캐시의 `textpos` 는 **보이는-텍스트
     /// 좌표로 정규화**돼 있다 (선행 컨트롤 8유닛 차감) — 방출값도 원본
@@ -1018,7 +1018,7 @@ pub struct EncodeOptions {
     pub emit_layout_cache: bool,
     /// 작성 시각(`CreateDateTime`)이 비어 있는 메모에 쓸 시각, Unix 초.
     /// `None`(기본)이면 epoch(`1970-01-01T00:00:00Z`). 인코더는 시계를 읽지
-    /// 않는다 — 같은 문서는 늘 같은 바이트(W0). 사용자가 새로 쓰는 문서의
+    /// 않는다 — 같은 문서는 늘 같은 바이트. 사용자가 새로 쓰는 문서의
     /// 진입점(`from-json` 등)이 현재 시각을 넣는다.
     pub memo_create_time: Option<u64>,
     /// Crate-internal (the carry's cache source, `layout_carry`): with
@@ -1060,10 +1060,10 @@ impl EncodeOptions {
     }
 }
 
-/// Review r1 HIGH-2: a table cell zone must name a border fill the package
+/// A table cell zone must name a border fill the package
 /// writes (looked up by id) — JSON or Markdown can author any number, and
 /// the package would point at nothing. Every written table is checked
-/// ([`Document::for_each_table`] — picture captions too, review r2 HIGH).
+/// ([`Document::for_each_table`] — picture captions too).
 /// 이것을 실패시키는 것: 이 검사 삭제(`unknown_cell_zone_fill_is_refused`).
 fn refuse_unknown_cell_zone_fills(
     document: &Document<Validated>,
@@ -1072,8 +1072,7 @@ fn refuse_unknown_cell_zone_fills(
     let written =
         |id: u32| crate::header_references::HeaderReferences::border_fill(style_store, id).is_ok();
     // Tables in a memo's anchor runs are not written (the anchor keeps its
-    // text only, `build_memo_anchor_xml`), so they are not checked (review r3
-    // M3). 이것을 실패시키는 것: 앵커 표 제외 삭제(`unknown_cell_zone_fill_is_refused`
+    // text only, `build_memo_anchor_xml`), so they are not checked. 이것을 실패시키는 것: 앵커 표 제외 삭제(`unknown_cell_zone_fill_is_refused`
     // 의 메모 앵커 안 999 성공).
     let mut dropped: std::collections::HashSet<*const hwpforge_core::table::Table> =
         std::collections::HashSet::new();
@@ -1354,11 +1353,11 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<Vec<u8>> {
         let outcome = Self::encode_with_diagnostics(document, style_store, image_store, options)?;
-        // W1b (§1g v5 변경 2): emit_layout_cache 요청 중 캐시 드롭은 무음
+        // emit_layout_cache 요청 중 캐시 드롭은 무음
         // 성공 금지 — 데이터 손실을 진단 없이 넘기지 않는다 (breaking,
         // 0.14.0). 경고 보존 경로는 `encode_with_diagnostics`.
         if options.emit_layout_cache {
-            // 독립 리뷰 Low: first() 는 미래 variant 가 앞에 끼는 순간
+            // `first()` 는 미래 variant 가 앞에 끼는 순간
             // 데이터-손실 신호를 삼킨다 — find 로 전수 검색.
             if let Some(EncodeWarning::LayoutCacheDropped { path, reason }) = outcome
                 .warnings
@@ -1412,7 +1411,7 @@ impl HwpxEncoder {
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         crate::HwpxDecoder::verify_document_source(document)?;
         refuse_unknown_cell_zone_fills(document, style_store)?;
-        // W0: ids drawn for objects without a Core id come from this encode's
+        // ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
         let references = crate::header_references::HeaderReferences::build(style_store)?;
@@ -1449,7 +1448,7 @@ impl HwpxEncoder {
         // All parts share one document asset/diagnostic context.
         let mut section_results = Vec::with_capacity(sections.len());
         // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
-        // F7 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
+        // 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
         // <hh:beginNum> 병합 실값)만 문서 시작에서 1회 반영한다. 후속
         // 섹션의 begin_num 은 **무시**되고 (합성 1 — 비기본 실값이면
         // NoteRestartIgnored 경고), 본문 NewNumber 재시작은 walk 가 처리.
@@ -1475,7 +1474,7 @@ impl HwpxEncoder {
         // the ORIGINAL tables, with only the font-only new-document char/para 0
         // exception in HeaderReferences::output_ids. Keep that resolver in context;
         // generated definitions cannot validate any other explicit reference.
-        // 이것을 실패시키는 것: 보충을 원본 검증 앞으로 이동(fix6_empty_definition_matrix).
+        // 이것을 실패시키는 것: 보충을 원본 검증 앞으로 이동(empty_definition_matrix).
         let mut generated;
         let style_store = if style_store.char_shape_count() == 0
             || style_store.para_shape_count() == 0
@@ -1561,8 +1560,8 @@ impl HwpxEncoder {
 
         let dropped_caches: Vec<Vec<EncodeWarning>> =
             section_results.iter_mut().map(|r| std::mem::take(&mut r.dropped_caches)).collect();
-        // W0: two written objects with one Core id keep it, and are reported
-        // — counted from the ids the encoder actually wrote (review W0 r3).
+        // two written objects with one Core id keep it, and are reported
+        // — counted from the ids the encoder actually wrote.
         // 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
         for (id, kinds) in object_ids::conflicts(&object_ids::written()) {
             context.warnings.push(EncodeWarning::ObjectIdConflict {
@@ -1580,14 +1579,14 @@ impl HwpxEncoder {
 
         // Step 4: Package into ZIP with images, charts, master pages, and
         // embedded-chart OLE blobs. Document.metadata flows into content.hpf
-        // <opf:metadata> (Wave 12o Phase 1).
+        // <opf:metadata>.
         let manifest = package::manifest_items(
             section_xmls.len(),
             &images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
         );
-        // C4: the manifest the writer is about to write, and the parts it
+        // the manifest the writer is about to write, and the parts it
         // writes, checked as they are (the manifest read back from its text).
         // #198: `content.hpf` is scanned for characters XML 1.0 forbids
         // before it is read back, so the checks read the text that is written.
@@ -1682,7 +1681,7 @@ mod tests {
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape};
 
     #[test]
-    fn fix6_empty_definition_sentinel_matrix() {
+    fn empty_definition_sentinel_matrix() {
         // 이것을 실패시키는 것: 출력 기본 정의를 원본 검사 전에 보충하기,
         // 종류별 lookup 생략, 새 문서 char/para 0 예외 제거·확대, 내장/sentinel 거부, 시험 행 누락.
         use hwpforge_core::section::PageBorderFillEntry;
@@ -1801,7 +1800,7 @@ mod tests {
                     table.border_fill_id = Some(id);
                 }
                 if kind == "border-zone" {
-                    // The r5 counterexample must not generate table border 3.
+                    // This counterexample must not generate table border 3.
                     table.border_fill_id = Some(0);
                     table.cell_zones = vec![CellZone::new(0, 0, 0, 0, id)];
                 }
@@ -1892,7 +1891,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_memo_anchor_uses_fallible_output_ids() {
+    fn memo_anchor_uses_fallible_output_ids() {
         // 이것을 실패시키는 것: 메모 앵커의 내부 0을 출력 0으로 쓰기,
         // 없는 인덱스까지 출력해 성공시키기. 희소 단독 ID와 충돌하는 유효 ID 모두 대조.
         use hwpforge_core::Control;
@@ -1948,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn fix6_empty_definition_matrix() {
+    fn empty_definition_matrix() {
         // 이것을 실패시키는 것: 각 정의 조회 생략/출력 기본 정의 선보충, char/para 0 예외 제거, 행 누락.
         // tabPr 0·1·2는 정의 없이도 유효한 내장 값이다. 일반 tabPr 3과 별도로 확인한다.
         use hwpforge_core::{BulletDef, NumberingDef, TabDef, Table, TableCell, TableRow};
@@ -2138,7 +2137,7 @@ mod tests {
     }
 
     #[test]
-    fn fix6_empty_latin_fonts_cannot_be_repaired_by_output_cloning() {
+    fn empty_latin_fonts_cannot_be_repaired_by_output_cloning() {
         // 이것을 실패시키는 것: validate(output=true)에 복제 글꼴 합치기 또는 font 조회 생략.
         for id in [1, 2, 3] {
             for latin_ids in [vec![], vec![0], vec![id]] {
@@ -2181,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_empty_border_table_rejects_explicit_default_ids() {
+    fn empty_border_table_rejects_explicit_default_ids() {
         // 이것을 실패시키는 것: 원본 빈 표를 생성 정의 1·2·3으로 대체해 명시 참조를 통과시킴.
         use hwpforge_core::section::PageBorderFillEntry;
         use hwpforge_core::{Table, TableCell, TableRow};
@@ -2231,7 +2230,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_only_absent_values_generate_border_defaults() {
+    fn only_absent_values_generate_border_defaults() {
         // 이것을 실패시키는 것: 빈 표의 None 기본 정의 생성 누락 또는 불필요한 3 생성.
         for table_needed in [false, true] {
             let mut store = HwpxStyleStore::with_default_fonts("바탕");
@@ -2264,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_nested_body_borders_and_generated_defaults() {
+    fn nested_body_borders_and_generated_defaults() {
         // 이것을 실패시키는 것: encoder 본문 검증 삭제, 중첩 컨테이너 순회 누락,
         // 원본 오류를 출력 기본값으로 수복, sparse store의 생성 기본 정의 누락.
         use hwpforge_core::section::{HeaderFooter, MasterPage, PageBorderFillEntry};
@@ -2375,7 +2374,7 @@ mod tests {
         }
     }
 
-    /// Review r1 HIGH-2: encoding refuses a cell zone whose border fill the
+    /// Encoding refuses a cell zone whose border fill the
     /// store does not have; a known one encodes.
     /// 이것을 실패시키는 것: 사전 검사 삭제.
     #[test]
@@ -2434,7 +2433,7 @@ mod tests {
         let refused = |r: HwpxResult<Vec<u8>>| matches!(r, Err(crate::error::HwpxError::InvalidStructure { ref detail }) if detail.contains("cell zone"));
         assert!(encode(true, false, 1, None).is_ok());
         assert!(refused(encode(true, false, 999, None)));
-        // Review r2 HIGH: a table in a picture caption is checked too.
+        // A table in a picture caption is checked too.
         assert!(encode(true, true, 1, None).is_ok());
         assert!(refused(encode(true, true, 999, None)));
         // 이것을 실패시키는 것: 빈 표 zone 1·2·3 허용 또는 표 Some(0)일 때 zone 검사 생략.
@@ -2443,7 +2442,7 @@ mod tests {
         }
         assert!(refused(encode(false, false, 3, Some(0))));
         assert!(refused(encode(false, false, 4, None)));
-        // Review r3 M3: a table in a memo anchor is not written, so its zone
+        // A table in a memo anchor is not written, so its zone
         // is not checked; the same table in the memo body is.
         let memo = |in_anchor: bool| {
             let table = Table::new(vec![TableRow::new(vec![TableCell::new(
@@ -2457,7 +2456,7 @@ mod tests {
             let holder = Run::table(table, CharShapeIndex::new(0));
             let text = || Run::text("a", CharShapeIndex::new(0));
             let (content, anchor) = if in_anchor {
-                // The reviewed case: the table sits in a text box in the anchor.
+                // Nested case: the table sits in a text box in the anchor.
                 let text_box = hwpforge_core::control::Control::text_box(
                     vec![Paragraph::with_runs(vec![holder], ParaShapeIndex::new(0))],
                     HwpUnit::new(1000).unwrap(),
@@ -2491,7 +2490,7 @@ mod tests {
         assert!(refused(memo(false)));
     }
 
-    /// R2 HIGH 1 — the defect was that a *successful* encode kept only the
+    /// the defect was that a *successful* encode kept only the
     /// bytes. These four cases pin the split both editors now share.
     ///
     /// The encoder cannot be driven to emit a non-semantic warning through

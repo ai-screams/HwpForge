@@ -1,4 +1,4 @@
-# cargo-fuzz targets for HwpForge's untrusted-input parsers (E3).
+# cargo-fuzz targets for HwpForge's untrusted-input parsers.
 #
 # Standalone workspace (empty `[workspace]` below) so libfuzzer-sys never
 # enters the main build/CI. Build with:  cargo +nightly fuzz build

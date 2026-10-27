@@ -78,23 +78,23 @@ use self::text::{
     char_shape_id_at_position, hwp_unit_from_u32, shape_of_previous_char, shape_starting_at,
     split_text_by_runs, utf16_boundaries, utf16_offset_to_byte,
 };
-/// Wire code for the Bookmark `RefType` variant (Wave 12m Phase 2). The
+/// Wire code for the Bookmark `RefType` variant. The
 /// HWP5 `%xrf` Command's N1 slot uses these codes; boundary functions
 /// in this file map them to typed [`RefType`].
 const HWP5_CROSSREF_REF_TYPE_TABLE: u8 = 0;
-/// Wire code for the Figure `RefType` variant (Wave 12m).
+/// Wire code for the Figure `RefType` variant.
 const HWP5_CROSSREF_REF_TYPE_FIGURE: u8 = 1;
-/// Wire code for the Equation `RefType` variant (Wave 12m).
+/// Wire code for the Equation `RefType` variant.
 const HWP5_CROSSREF_REF_TYPE_EQUATION: u8 = 2;
-/// Wire code for the Footnote `RefType` variant (Wave 12m).
+/// Wire code for the Footnote `RefType` variant.
 const HWP5_CROSSREF_REF_TYPE_FOOTNOTE: u8 = 3;
-/// Wire code for the Endnote `RefType` variant (Wave 12m).
+/// Wire code for the Endnote `RefType` variant.
 const HWP5_CROSSREF_REF_TYPE_ENDNOTE: u8 = 4;
-/// Wire code for the Outline `RefType` variant (Wave 12m).
+/// Wire code for the Outline `RefType` variant.
 const HWP5_CROSSREF_REF_TYPE_OUTLINE: u8 = 5;
-/// Wire code for the Bookmark `RefType` variant (Wave 12m).
+/// Wire code for the Bookmark `RefType` variant.
 const HWP5_CROSSREF_REF_TYPE_BOOKMARK: u8 = 6;
-// CTRL_ID constants moved to `crate::ctrl_ids` (#94 Step B1).
+// CTRL_ID constants moved to `crate::ctrl_ids` (#94).
 
 #[derive(Debug)]
 struct ProjectedParagraph {
@@ -116,17 +116,17 @@ struct ParagraphProjectionQueues<'a> {
     /// `FieldBegin %unk MEMO` inline segments via `start_active_field`;
     /// any leftovers are drained at end-of-paragraph as a safety net.
     memo_controls: VecDeque<Hwp5MemoControl>,
-    /// Pending SUMMERY (`%smr`) auto-fields in document order (Wave 12n).
+    /// Pending SUMMERY (`%smr`) auto-fields in document order.
     /// Consumed by `FieldBegin %smr` inline segments via `start_active_field`.
     summary_fields: VecDeque<crate::schema::section::Hwp5SummaryControl>,
     /// Pending `%dte` date/time format-code fields in document order
-    /// (Wave 12n). Consumed by `FieldBegin %dte` inline segments.
+    /// Consumed by `FieldBegin %dte` inline segments.
     datecode_fields: VecDeque<crate::schema::section::Hwp5DateCodeControl>,
-    /// Pending `%pat` path/file-name fields in document order (Wave 12n).
+    /// Pending `%pat` path/file-name fields in document order.
     /// Consumed by `FieldBegin %pat` inline segments.
     pathfield_controls: VecDeque<crate::schema::section::Hwp5PathFieldControl>,
     /// Pending `%xrf` cross-reference controls in document order
-    /// (Wave 12m Phase 2 Step 4). Consumed by `FieldBegin %xrf` inline
+    /// Consumed by `FieldBegin %xrf` inline
     /// segments via `start_active_field`. Same lifecycle as the other
     /// CtrlHeader-backed field queues above.
     crossref_controls: VecDeque<crate::schema::section::Hwp5CrossRefControl>,
@@ -144,7 +144,7 @@ enum ActiveField {
         name: String,
         start_utf16: u32,
     },
-    /// `%xrf` cross-reference field span (Wave 12m Phase 2 Step 4).
+    /// `%xrf` cross-reference field span.
     /// Carries the structured wire payload parsed at the decoder
     /// boundary. `display_text` accumulates body chars between
     /// `FieldBegin` and `FieldEnd` so the HWPX encoder can embed it
@@ -166,7 +166,7 @@ enum ActiveField {
         start_utf16: u32,
         memo: Hwp5MemoControl,
     },
-    /// ClickHere (누름틀, CLICK_HERE press-field) — Wave 12l. The
+    /// ClickHere (누름틀, CLICK_HERE press-field) —. The
     /// inline `FieldBegin %clk` to `FieldEnd` span is rendered as a
     /// single `Control::Field { field_type: ClickHere, hint_text,
     /// help_text, name, display_text }` Run emitted at `FieldEnd`. The
@@ -180,7 +180,7 @@ enum ActiveField {
         help_text: Option<String>,
         name: Option<String>,
     },
-    /// SUMMERY auto-field (Wave 12n). `command_token` carries the wire
+    /// SUMMERY auto-field. `command_token` carries the wire
     /// `$X` token (e.g. `$author`, `$modifiedtime`). On `FieldEnd` the
     /// token is mapped to a typed [`hwpforge_foundation::FieldType`] or,
     /// for unknown tokens, surfaced as `Control::UnknownSummary { token }`.
@@ -193,7 +193,7 @@ enum ActiveField {
         command_token: String,
         display_text: String,
     },
-    /// `%dte` date/time format-code field (Wave 12n). Carries the raw
+    /// `%dte` date/time format-code field. Carries the raw
     /// Command pattern (smithy-internal) used only to derive `is_time_mode`.
     /// On `FieldEnd` the projection emits `Control::DateCodeField` with
     /// `is_time_mode` derived from the `T` prefix. `display_text`
@@ -203,7 +203,7 @@ enum ActiveField {
         raw_command: String,
         display_text: String,
     },
-    /// `%pat` path/file-name field (Wave 12n). On `FieldEnd` the
+    /// `%pat` path/file-name field. On `FieldEnd` the
     /// projection maps the raw Command to a typed `PathFieldCommand`
     /// (or `Unknown` for forward compatibility) and emits
     /// `Control::PathField`. `display_text` accumulates the cached resolved
@@ -234,7 +234,7 @@ pub(crate) fn project_to_core(
     Ok((document, warnings))
 }
 
-/// Project decoded HWP5 sections into Core with the current image slice enabled.
+/// Project decoded HWP5 sections into Core with the current image support enabled.
 ///
 /// `budget` is the document decompression budget left by the image join.
 pub(crate) fn project_to_core_with_images(
@@ -249,7 +249,7 @@ pub(crate) fn project_to_core_with_images(
 ///
 /// Used by [`crate::decode_hwp5_to_core`] so the projection layer can attempt
 /// chart payload extraction from `/BinData/BIN*.OLE` entries and emit
-/// [`hwpforge_core::Control::EmbeddedChart`] runs (Wave 4c carry).
+/// [`hwpforge_core::Control::EmbeddedChart`] runs (carry).
 ///
 /// `budget` is the document decompression budget left by the OLE join; every
 /// chart extraction is charged to it, and exhausting it fails the document.
@@ -285,21 +285,19 @@ fn project_to_core_internal(
             .unwrap_or_else(PageSettings::a4);
 
         let mut section = Section::new(page_settings);
-        // Gap B: decode the `secd` ctrl property word (HWP 5.0 spec
+        // decode the `secd` ctrl property word (HWP 5.0 spec
         // §4.3.10.1 표 130) into Core's `Visibility`. Bits 0~5 + 8/9 +
         // 19 map 1:1 to the HWPX `<hp:visibility>` element. `None` →
-        // don't override the Core default (matches pre-Wave-5
-        // behavior). See
-        // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
+        // don't override the existing Core default.
         if let Some(properties) = section_result.section_def_properties {
             section.visibility = Some(hwp5_section_properties_to_visibility(properties));
-            // W1 fail-safe (계획 §1.2·§1.4): secd 속성 bits 20-21 의 의미는
+            // 시작번호 fail-safe: secd 속성 bits 20-21 의 의미는
             // 레퍼런스 3사가 서로 다르게 주장해 미확정 (corpus 0.12% 꼬리).
-            // F1 실측 — bits==0 + 시작번호 필드 1 을 한컴 자신이
+            // 실측 — bits==0 + 시작번호 필드 1 을 한컴 자신이
             // `<hp:startNum page="0">`(이어서) 로 변환하므로 begin_num 은
             // 만들지 않는다. bits≠0 은 재시작으로 날조하는 대신 raw 값과
             // 함께 경고로 표면화하고 이어서 처리한다.
-            // 독립 리뷰 Low #9: `[20..28]` 절단은 bits 값과 무관하게 계획의
+            // `[20..28]` 절단은 bits 값과 무관하게
             // all-or-none 규약 위반 신호 — 표면화한다 (corpus 전수에서 관측
             // 0건이라 flood 위험 없음).
             if section_result.section_def_start_numbers.is_none() {
@@ -329,12 +327,12 @@ fn project_to_core_internal(
                 });
             }
         }
-        // Wave 7: carry the section's page border/fill references
+        // carry the section's page border/fill references
         // (HWPTAG_PAGE_BORDER_FILL, 0x4B). The borderFill *definitions*
         // already reach the HWPX style store; without this the encoder
         // fabricates a default `borderFillIDRef="1"` (an invisible
         // border). 한글 emits exactly three records in [BOTH, EVEN, ODD]
-        // order. See `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.
+        // order.
         if !section_result.page_border_fills.is_empty() {
             section.page_border_fills = Some(hwp5_page_border_fills_to_entries(
                 &section_result.page_border_fills,
@@ -429,7 +427,7 @@ fn project_to_core_internal(
         doc.add_section(section);
     }
 
-    // W4 무음 드롭 종결: 미지원 ctrl 드롭을 문서별 (ctrl_id → count) 집계
+    // 무음 드롭 종결: 미지원 ctrl 드롭을 문서별 (ctrl_id → count) 집계
     // 경고로 방출. per-occurrence 폭탄 방지 — distinct id 상한 + "N more".
     const MAX_DISTINCT_DROP_WARNINGS: usize = 16;
     let dropped = std::mem::take(&mut projection_images.dropped_unknown);
@@ -490,7 +488,7 @@ struct ProjectionImageState<'a> {
     ole_assets: Option<&'a Hwp5OleAssetPlan>,
     image_store: ImageStore,
     warnings: Vec<Hwp5Warning>,
-    /// W4 무음 드롭 종결: `project_control_run` 의 Unknown arm 에서 죽는
+    /// 무음 드롭 종결: `project_control_run` 의 Unknown arm 에서 죽는
     /// ctrl_id 별 카운트. 문서 끝에서 **집계 경고**로 방출된다 (per-occurrence
     /// 폭탄도 무경고도 금지 — corpus 실측: `%fmu` 531회·`pghd` 1,013회가
     /// 이 지점에서 소리 없이 사라졌었다).
@@ -510,8 +508,8 @@ struct ProjectionImageState<'a> {
     field_seq: usize,
     /// Pixel size of each image asset read so far (by storage name), a
     /// header that does not parse included — read once per asset, however
-    /// many pictures use it (branch review r2 H3: a JPEG header scan per
-    /// reference, twice for a group picture).
+    /// many pictures use it (previously, a JPEG header scan per reference,
+    /// twice for a group picture).
     pixel_sizes: std::cell::RefCell<std::collections::HashMap<String, Option<(u32, u32)>>>,
 }
 
@@ -613,7 +611,7 @@ impl<'a> ProjectionImageState<'a> {
             core_image_format(&asset.payload.format),
         )
         .with_placement(placement);
-        // Wave 12p Step 3: HWP5 GSO CtrlHeader trailer instance ID 통과.
+        // HWP5 GSO CtrlHeader trailer instance ID 통과.
         // 한컴 native `<hp:pic id="...">` cross-ref target 과 매칭.
         if image.instance_id != 0 {
             core_image.inst_id = Some(ObjectId::new(u64::from(image.instance_id)));
@@ -629,7 +627,7 @@ impl<'a> ProjectionImageState<'a> {
             core_image.frame.original_size =
                 units(original).map(|(w, h)| hwpforge_foundation::Size::new(w, h));
         }
-        // S20: the size lock (object common property bit 20).
+        // the size lock (object common property bit 20).
         // 이것을 실패시키는 것: 읽지 않기(`size_lock_is_carried`).
         core_image.frame.size_protect =
             image.ctrl_properties & shapes::CTRL_PROPERTY_SIZE_PROTECT_BIT != 0;
@@ -674,8 +672,8 @@ impl<'a> ProjectionImageState<'a> {
         }
     }
 
-    /// A single shape's outline and fill as a Core [`ShapeStyle`] (§19.5
-    /// 1b). `fillable` = the shape has an interior (not a line).
+    /// A single shape's outline and fill as a Core [`ShapeStyle`].
+    /// `fillable` = the shape has an interior (not a line).
     ///
     /// Line types 0 (none), 1 (solid), 2 (dot), 3 (dash) are confirmed
     /// against Hancom's HWPX twins; another type is reported and drawn
@@ -724,7 +722,7 @@ impl<'a> ProjectionImageState<'a> {
         match &look.fill {
             Ok(Hwp5RawBorderFillFill::None) => style.fill = Some(Fill::None),
             Ok(Hwp5RawBorderFillFill::Color(c)) => {
-                // Core's colour and pattern fills are opaque (review r1).
+                // Core's colour and pattern fills are opaque.
                 // 이것을 실패시키는 것: 이 보고를 지우기
                 // (`colour_fill_transparency_is_reported`).
                 if c.alpha != 0 {
@@ -781,9 +779,9 @@ impl<'a> ProjectionImageState<'a> {
                     );
                     return;
                 }
-                // 1 LINEAR·3 CONICAL (x6), 2 RADIAL (Hancom twins, 4 shapes);
+                // 1 LINEAR·3 CONICAL, 2 RADIAL (Hancom twins, 4 shapes);
                 // 4 is read in the border-fill table's order but unconfirmed.
-                // 이것을 실패시키는 것: 형 표 한 줄 교체(x6 F3·F4).
+                // 이것을 실패시키는 것: 형 표 한 줄 교체.
                 let gradient_type = match g.gradation_type {
                     Hwp5GradationType::Linear => GradientType::Linear,
                     Hwp5GradationType::Circular => GradientType::Radial,
@@ -866,9 +864,8 @@ impl<'a> ProjectionImageState<'a> {
     }
 
     /// Puts `asset` in the image store unless it is already there — one copy
-    /// per asset, however many pictures and fills reference it (branch
-    /// review B-H3: each reference copied the bytes, twice for a group
-    /// picture).
+    /// per asset, however many pictures and fills reference it. Previously,
+    /// each reference copied the bytes, twice for a group picture.
     /// 이것을 실패시키는 것: 이미 있어도 복사하기(`an_asset_is_copied_once`).
     fn store_asset(&mut self, asset: &Hwp5JoinedImageAsset) {
         if self.image_store.get(&asset.payload.storage_name).is_none() {
@@ -1053,12 +1050,12 @@ fn resolve_image_dimensions(
 /// HWP 5.0 표 70 공통 개체 속성 DWORD 의 bit0 (글자처럼 취급) 마스크.
 const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 
-/// 표 70 공통 개체 속성 DWORD 을 Core [`ObjectPlacement`] 로 디코드한다 (W5 w0 —
+/// 표 70 공통 개체 속성 DWORD 을 Core [`ObjectPlacement`] 로 디코드한다 (
 /// projection 관례를 바이트-그라운드 실측으로 승격).
 ///
 /// bit0(글자처럼 취급)=1 이면 나머지 축 비트는 의미가 없으므로
 /// [`ObjectPlacement::legacy_inline_defaults`] 를 반환한다 (도형은 `None` 으로
-/// collapse, 이미지는 인라인 유지 — W2p 계약 보존). bit0=0(부유)일 때만 축을
+/// collapse, 이미지는 인라인 유지 — 계약 보존). bit0=0(부유)일 때만 축을
 /// 디코드한다 (비트 배치는 hwp-rs `common_properties.rs` 대조 및
 /// 한컴이 저장한 떠 있는 글상자·그림의 속성 word 와 HWPX `<hp:pos>`
 /// 바이트 대조로 검증):
@@ -1071,8 +1068,7 @@ const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 ///   `3`=InFrontOfText — **한컴 저장본의 4값**이다. 공식 스펙 rev1.3 표 70·
 ///   hwp-rs·hwp.js 의 6값(Square·Tight·Through·TopAndBottom·BehindText·
 ///   InFrontOfText)은 한컴이 쓰는 값과 다르다: 배치 방식 실측
-///   4/4·한컴 짝의 떠 있는 개체 457/457 이 이 4값과 일치, `wire-gotchas.md`
-///   #38)
+///   결과는 이 4값과 일치한다)
 /// - `textFlow` bits 24-25 (`0`=BothSides `1`=LeftOnly `2`=RightOnly
 ///   `3`=LargestOnly — `textWrap`=Square 일 때만 유의)
 ///
@@ -1096,7 +1092,7 @@ fn object_placement_from_ctrl_properties(
     effective_placement(&parse_object_placement_wire(ctrl_properties, offset_x, offset_y), warnings)
 }
 
-/// 표 70 개체 속성 word 의 placement 비트를 정규화 없이 읽은 것 (§19.16 A-v2).
+/// 표 70 개체 속성 word 의 placement 비트를 정규화 없이 읽은 것.
 /// 표는 이 wire 값을 그대로 Core 에 싣고([`table_placement_from_wire`]), 도형·
 /// 그림은 렌더 의미로 정규화한다([`effective_placement`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1141,7 +1137,7 @@ fn parse_object_placement_wire(ctrl_properties: u32, x: i32, y: i32) -> WirePlac
     }
 }
 
-/// 도형·그림의 렌더 의미 placement (W5 w0 규칙 그대로): 글자처럼 취급이면
+/// 도형·그림의 렌더 의미 placement (규칙 그대로): 글자처럼 취급이면
 /// inline 기본값, 아니면 flowWithText 는 vertRelTo=Para 일 때만, overlap 은
 /// flow 가 거짓일 때만 읽는다. 정렬(bits 5-7·10-12)은 떠 있는 개체에 싣는다.
 fn effective_placement(wire: &WirePlacement, warnings: &mut Vec<Hwp5Warning>) -> ObjectPlacement {
@@ -1176,7 +1172,7 @@ fn effective_placement(wire: &WirePlacement, warnings: &mut Vec<Hwp5Warning>) ->
         .with_horz_align(horz_align_from_bits(wire.horz_align_bits, warnings))
 }
 
-/// 표의 placement: wire 값을 정규화 없이 싣는다 (§19.16 A-v2 — 글자처럼
+/// 표의 placement: wire 값을 정규화 없이 싣는다 (글자처럼
 /// 취급 표의 기준·정렬·flow 도 보존). HWPX 인코더가 `None` 에 쓰는 기본 flow
 /// 와 모든 필드가 같을 때만 `None`. `holdAnchorAndSO` 는 HWP5 비트가 확인되지
 /// 않아 기본값(false).
@@ -1238,7 +1234,7 @@ fn checked_text_wrap(bits: u32, warnings: &mut Vec<Hwp5Warning>) -> ObjectTextWr
 
 /// 표 70 세로 정렬(bits 5-7). 한컴 짝으로 확인된 값은 0 = Top 뿐이다 —
 /// 1–4 는 스펙 순서(Center·Bottom·Inside·Outside)로 읽되 확인 전이라 경고하고
-/// 값은 보존한다(warn-and-preserve, §19.19 S1). 5–7 은 정의 밖 → 경고 + Top.
+/// 값은 보존한다(warn-and-preserve). 5–7 은 정의 밖 → 경고 + Top.
 ///
 /// 이것을 실패시키는 것: 1–4 의 경고를 지우기 / 5–7 을 경고 없이 읽기.
 fn vert_align_from_bits(bits: u32, warnings: &mut Vec<Hwp5Warning>) -> VertAlign {
@@ -1313,7 +1309,7 @@ fn horz_relative_to_from_bits(bits: u32) -> ObjectRelativeTo {
 /// 표 70 `textWrap`(bits 21-23)을 Core [`ObjectTextWrap`] 로 매핑한다.
 ///
 /// 한컴이 쓰는 값은 `0` 어울림·`1` 자리 차지·`2` 글 뒤로·`3` 글 앞으로의
-/// 4값이다(스펙·hwp-rs·hwp.js 의 6값 순서가 아니다 — X2 fixture 4/4, 한컴 짝
+/// 4값이다(스펙·hwp-rs·hwp.js 의 6값 순서가 아니다 — fixture 4/4, 한컴 짝
 /// 457/457). `4`–`7` 은 기본 `Square` 로 폴백한다 (경고 방출은 호출부
 /// [`object_placement_from_ctrl_properties`] 담당).
 fn object_text_wrap_from_bits(bits: u32) -> ObjectTextWrap {
@@ -1340,14 +1336,14 @@ fn object_text_flow_from_bits(bits: u32) -> ObjectTextFlow {
 }
 
 /// body/텍스트박스 이미지의 [`ObjectPlacement`] 를 `gso ` CtrlHeader 속성 word
-/// 에서 바이트-그라운드로 판정한다 (W5 w0).
+/// 에서 바이트-그라운드로 판정한다.
 ///
 /// 축(relTo·wrap·flow·overlap)은 전부
 /// [`object_placement_from_ctrl_properties`] 가 속성 word 실비트로 디코드하며,
 /// 이전의 projection-context 별 관례(Flow=Paper/InFrontOfText,
 /// TextBox=Para/Square)는 폐기됐다. 따라서 `context` 는 더 이상 배치에 영향을
-/// 주지 않는다 — 인자는 호출부 대칭과 향후 W1 앵커 렌더의 좌표 원점 프레임
-/// (body vs 글상자 내부) 판정 후보로 남겨둔다. W1 이 원점 프레임을 문서 구조
+/// 주지 않는다 — 인자는 호출부 대칭과 향후 앵커 렌더의 좌표 원점 프레임
+/// (body vs 글상자 내부) 판정 후보로 남겨둔다. 앵커 렌더가 원점 프레임을 문서 구조
 /// 에서 유도한다면 이 인자와 [`ImageProjectionContext`] 스레딩을 제거할 것.
 fn image_placement_from_wire(
     geometry: &Hwp5ShapeComponentGeometry,
@@ -1401,11 +1397,11 @@ fn project_paragraph_with_masters(
     // tab character was consumed by a hyperlink display or field
     // begin/end pair) still falls through to the warning below, so the
     // audit baseline keeps a foothold on the silent loss.
-    // §19.22 D5 (S17): the paragraph-end mark's char shape, kept only when
+    // The paragraph-end mark's char shape, kept only when
     // it differs from the last run written — Hancom writes an end run only
     // then (3,385/3,385 and 6/6 in the twin pairs). Compared with the run,
     // not the last wire boundary, which may belong to something that writes
-    // no run (a field end; review r1).
+    // no run (a field end).
     // 이것을 실패시키는 것: 이 줄을 지우기 / 비교를 지우기 / 마지막 wire 경계와
     // 비교(`end_char_shape_reaches_core`, `end_shape_after_a_field_end_is_kept`).
     projected.paragraph.end_char_shape = hwp_para
@@ -1524,8 +1520,6 @@ fn project_paragraph_with_images_flat(
     // controls and so mis-aligned the FFFC↔control pairing for first
     // section paragraphs (which always carry `secd`/`cold`). Filter
     // them out here so the FFFC iterator only sees object controls.
-    // See `.docs/algorithms/2026-06-01_dutmal_carry.md` (companion-fix
-    // section) for the full root-cause + rationale.
     let mut control_iter = projection_controls(hwp_para, masters).filter(|entry| {
         !matches!(
             entry,
@@ -1591,7 +1585,7 @@ fn project_paragraph_with_images_flat(
     }
 
     // An empty paragraph keeps the char shape of its position 0 (the last
-    // entry there — §19.22 B), not char shape 0: its height sets the blank
+    // entry there), not char shape 0: its height sets the blank
     // line's height. 이것을 실패시키는 것: 0 으로 되돌리기
     // (`empty_paragraph_keeps_its_char_shape`).
     if runs.is_empty() {
@@ -1608,7 +1602,7 @@ fn project_paragraph_with_images_flat(
         check_ledger_against_emission(build_flat_ledger(hwp_para), &paragraph.runs),
         &mut projection_images.warnings,
     );
-    // W3: ParaHeader divide_sort 쪽/단 나누기 carry (F2 실측 — 한컴은 쪽나눔
+    // ParaHeader divide_sort 쪽/단 나누기 carry (실측 — 한컴은 쪽나눔
     // 문단의 lineseg v 를 리셋하지 않아 이 플래그가 유일한 쪽분할 신호).
     paragraph.page_break = hwp_para.page_break;
     paragraph.column_break = hwp_para.column_break;
@@ -1632,9 +1626,9 @@ fn promote_line_segments(
     if segs.is_empty() {
         return None;
     }
-    // W1b: raw wire textpos → Core 가시(text_content) 좌표 정규화.
+    // raw wire textpos → Core 가시(text_content) 좌표 정규화.
     // ledger 구축 실패·좌표 변환 실패 = fail-closed (캐시 미승격 + 경고) —
-    // 추측 좌표를 Core 에 싣지 않는다 (§1g v5).
+    // 추측 좌표를 Core 에 싣지 않는다.
     let (map, tokens) = match ledger {
         Ok(ledger) => ledger,
         Err(reason) => {
@@ -1647,7 +1641,7 @@ fn promote_line_segments(
     let mut lines = Vec::with_capacity(segs.len());
     let mut skipped = 0usize;
     for s in segs {
-        // S22: a line that starts inside a field drops the cache (design 3.3).
+        // a line that starts inside a field drops the cache.
         // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
         if tokens.inside_field(s.text_start_position) {
             warnings.push(crate::decoder::Hwp5Warning::LayoutCacheDropped {
@@ -1674,12 +1668,12 @@ fn promote_line_segments(
         line.horzpos = s.column_start_position;
         line.horzsize = s.segment_width;
         line.flags = s.tag;
-        // S22: a line that starts after some of the zero-length tokens at its
+        // a line that starts after some of the zero-length tokens at its
         // Core position records which ones (`None` = before them all).
         // 이것을 실패시키는 것: 경계 기록 삭제(붕괴 문단이 한 자리로 접힌다,
         // `collapsed_lines_keep_their_token_boundary`).
         line.boundary = tokens.boundary_at(textpos, s.text_start_position);
-        // S22 r1: the boundaries' skipped tokens stay within a bound, so N
+        // The boundaries' skipped tokens stay within a bound, so N
         // tokens at one place cannot grow N²/2 kinds.
         // 이것을 실패시키는 것: 이 검사 삭제, 또는 `>` 를 `>=` 로
         // (`boundary_skip_cap_keeps_the_limit_and_drops_past_it`).
@@ -1699,7 +1693,7 @@ fn promote_line_segments(
 }
 
 /// ledger 가 예측한 Core 총길이와 실제 방출된 run 들의 텍스트 총길이를
-/// 대조한다 — 불일치 = ledger/방출 분기 (fail-closed, §1g v5 choke).
+/// 대조한다 — 불일치 = ledger/방출 분기 (fail-closed).
 fn check_ledger_against_emission(
     ledger_result: Result<
         (crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger),
@@ -1720,7 +1714,7 @@ fn check_ledger_against_emission(
 }
 
 /// FieldBegin~FieldEnd 방출 결과 — ledger 의 field 구간 core 폭을
-/// 방출부가 결정한다 (단일 진실원, §1g v5 R3#1).
+/// 방출부가 결정한다 (단일 진실원).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FieldEmissionOutcome {
     /// 본문이 Control 내부로 접힘 (ClickHere/Hyperlink/CrossRef/Memo/
@@ -1732,7 +1726,7 @@ enum FieldEmissionOutcome {
     ReEmitted,
 }
 
-/// 문단 하나의 wire→Core 좌표 ledger 를 방출과 나란히 구축한다 (W1b).
+/// 문단 하나의 wire→Core 좌표 ledger 를 방출과 나란히 구축한다.
 ///
 /// wire 소비는 세그먼트 종류에서 유도하고 (Text=UTF-16 len ·
 /// Tab/컨트롤=8 · 단일 제어=1), segment 없는 무음 소비는
@@ -1742,7 +1736,7 @@ enum FieldEmissionOutcome {
 /// fail-closed (캐시 미승격).
 struct ParaLedger<'a> {
     builder: crate::wire_text_map::WireMapBuilder,
-    /// S22: the zero-length tokens, with their kinds, in wire order.
+    /// the zero-length tokens, with their kinds, in wire order.
     tokens: crate::wire_text_map::TokenLedger,
     silent: &'a [SilentWire],
     silent_idx: usize,
@@ -1755,7 +1749,7 @@ struct ParaLedger<'a> {
     failed: Option<&'static str>,
 }
 
-/// The kind of a zero-length control marker (S22), from its control id.
+/// The kind of a zero-length control marker, from its control id.
 /// `gso` objects take their kind in order from `gso_kinds` (a picture or a
 /// shape — what the projection makes of them).
 fn marker_kind(ctrl_id: u32, gso_kinds: &mut std::vec::IntoIter<WireTokenKind>) -> WireTokenKind {
@@ -1841,7 +1835,7 @@ impl<'a> ParaLedger<'a> {
                 continue;
             }
             self.silent_idx += 1;
-            // S22: a silently consumed control keeps its control's kind (a
+            // a silently consumed control keeps its control's kind (a
             // page number position `pgnp`, say); anything else is `Silent`.
             let kind = match s.ctrl_id {
                 0 => WireTokenKind::Silent,
@@ -1859,7 +1853,7 @@ impl<'a> ParaLedger<'a> {
 
     /// 소비 하나를 기록한다. `core_folded`/`core_reemitted` 는 각각
     /// field 밖(즉시 반영)·재방출 body 조각일 때의 Core 폭. `kind` 는 그
-    /// 폭이 0 일 때 적는 토큰 종류 (S22).
+    /// 폭이 0 일 때 적는 토큰 종류.
     fn consume(&mut self, wire: u32, core_outside: u32, core_reemitted: u32, kind: WireTokenKind) {
         let start = self.wire_cursor;
         match self.wire_cursor.checked_add(wire) {
@@ -1899,7 +1893,7 @@ impl<'a> ParaLedger<'a> {
         self.consume(1, 1, 1, WireTokenKind::Text);
     }
 
-    /// ParaBreak — wire 1 · Core 0 (S22: 종류 `End`).
+    /// ParaBreak — wire 1 · Core 0 (종류 `End`).
     fn observe_para_break(&mut self) {
         self.drain_silent();
         self.consume(1, 0, 0, WireTokenKind::End);
@@ -1965,7 +1959,7 @@ impl<'a> ParaLedger<'a> {
                         }
                     }
                 }
-                // S22: begin, the folded body, end — at one Core position.
+                // begin, the folded body, end — at one Core position.
                 self.record(begin, WireTokenKind::FieldBegin);
                 if total > 16 {
                     self.record(begin + 8, WireTokenKind::Text);
@@ -2279,7 +2273,7 @@ fn project_paragraph_with_images_structural(
         image_context,
     );
 
-    // As in the flat path (§19.22 B). 이것을 실패시키는 것: 0 으로 되돌리기
+    // As in the flat path. 이것을 실패시키는 것: 0 으로 되돌리기
     // (`empty_paragraph_keeps_its_char_shape`, structural case).
     if runs.is_empty() {
         runs.push(Run::text("", shape_starting_at(hwp_para, 0)));
@@ -2295,7 +2289,7 @@ fn project_paragraph_with_images_structural(
         check_ledger_against_emission(ledger.finish(), &paragraph.runs),
         &mut projection_images.warnings,
     );
-    // W3: ParaHeader divide_sort 쪽/단 나누기 carry (F2 실측 — 한컴은 쪽나눔
+    // ParaHeader divide_sort 쪽/단 나누기 carry (실측 — 한컴은 쪽나눔
     // 문단의 lineseg v 를 리셋하지 않아 이 플래그가 유일한 쪽분할 신호).
     paragraph.page_break = hwp_para.page_break;
     paragraph.column_break = hwp_para.column_break;
@@ -2500,7 +2494,7 @@ fn project_visible_text_segment(
         match active {
             ActiveField::Hyperlink { display_text, .. }
             | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
-            // Wave 12n cached-value carry (#120/#136): SUMMERY/%dte/%pat
+            // cached-value carry (#120/#136): SUMMERY/%dte/%pat
             // accumulate the FieldBegin..FieldEnd body as the field's cached
             // resolved value (capped — see `push_field_display_text`).
             ActiveField::SummaryField { display_text, .. }
@@ -2610,7 +2604,7 @@ fn drain_unconsumed_paragraph_queues(
         }
     }
 
-    // 독립 리뷰 Medium #5: 소비되지 않고 남은 marker_headers(secd/cold/
+    // 소비되지 않고 남은 marker_headers(secd/cold/
     // bookmark/hyperlink CtrlHeader 가 inline marker 없이 남은 wire 이상
     // 케이스)도 무음 소멸 대신 드롭 집계에 합산한다.
     for leftover in queues.marker_headers {
@@ -2805,24 +2799,24 @@ fn build_paragraph_projection_queues<'a>(
         if matches!(control, Hwp5Control::ClickHere(_)) {
             continue;
         }
-        // SUMMERY auto-fields (Wave 12n) — same pattern. The Command
+        // SUMMERY auto-fields — same pattern. The Command
         // token lives in the parsed control; `FieldBegin %smr` pulls the
         // next entry off this queue.
         if let Hwp5Control::SummaryField(summary) = control {
             summary_fields.push_back(summary.clone());
             continue;
         }
-        // `%dte` date/time format-code fields (Wave 12n) — same pattern.
+        // `%dte` date/time format-code fields — same pattern.
         if let Hwp5Control::DateCodeField(date_code) = control {
             datecode_fields.push_back(date_code.clone());
             continue;
         }
-        // `%pat` path fields (Wave 12n) — same pattern.
+        // `%pat` path fields — same pattern.
         if let Hwp5Control::PathField(pat) = control {
             pathfield_controls.push_back(pat.clone());
             continue;
         }
-        // `%xrf` cross-reference fields (Wave 12m Phase 2 Step 4) — same
+        // `%xrf` cross-reference fields — same
         // dedicated-queue pattern. The structured Command (RefType /
         // ContentType / hyperlink / target) lives in the parsed control;
         // `FieldBegin %xrf` pulls the next entry off this queue.
@@ -2830,8 +2824,8 @@ fn build_paragraph_projection_queues<'a>(
             crossref_controls.push_back(xrf.clone());
             continue;
         }
-        // `atno` inline page-number controls (Wave 12n) intentionally
-        // fall through to `object_controls`. Codex 4차 review: atno's
+        // `atno` inline page-number controls intentionally
+        // fall through to `object_controls`. atno's
         // ParaText marker is `0x12 ControlRef`, not `0x03 FieldBegin`,
         // and atno has no `FieldEnd`. The TextSegment::ControlRef arm
         // in `project_paragraph_with_images_structural` pops the next
@@ -2873,7 +2867,7 @@ fn build_paragraph_projection_queues<'a>(
     }
 }
 
-// Wave 12n added 3 more optional carriers (summary/datecode/pathfield) on
+// The optional carriers include 3 fields (summary/datecode/pathfield) on
 // top of the existing memo/clickhere set. Refactoring into a struct here
 // would add boilerplate without solving anything — each carrier is
 // independently `None` for every other CTRL_ID. Tracked as follow-up
@@ -2932,7 +2926,7 @@ fn start_active_field(
             }
         }
         CTRL_ID_FIELD_CROSSREF => {
-            // Wave 12m Phase 2 Step 4: %xrf now flows through the typed
+            // %xrf now flows through the typed
             // `Hwp5Control::CrossRef` schema, not `Unknown`. The structured
             // Command (target / N1..N4) lives in `crossref`; legacy
             // `header` (UnknownControlHeader) never arrives anymore for
@@ -3081,7 +3075,7 @@ fn finish_active_field(
             FieldEmissionOutcome::ReEmitted
         }
         ActiveField::CrossRef { control, start_utf16, display_text } => {
-            // Wave 12m Phase 2 Step 4: emit native `Control::CrossRef`.
+            // emit native `Control::CrossRef`.
             // Boundary functions decode the wire codes into typed
             // `RefType` / `RefContentType` / `RefTarget`. The HWPX
             // encoder embeds `display_text` between fieldBegin/fieldEnd.
@@ -3114,7 +3108,7 @@ fn finish_active_field(
             // `<hp:fieldBegin>` and `<hp:fieldEnd>` in the same `<hp:run>` —
             // the layout 한컴 uses for `[메모 시작]anchor[메모 끝]`. Emitting
             // anchor text as a separate Run *outside* the memo, as we did in
-            // Wave 12e/12f-pre-fix, made 한컴 mis-render the end marker as
+            // the earlier implementation, made 한컴 mis-render the end marker as
             // generic `[필드 끝]` because the field span was effectively
             // empty.
             let anchor_runs = project_field_text(field_text, start_utf16, end_utf16);
@@ -3193,7 +3187,7 @@ fn finish_active_field(
         ActiveField::DateCodeField { start_utf16, raw_command, display_text } => {
             // Emit Control::DateCodeField with `is_time_mode` derived
             // from the `T` prefix convention. The raw HWP5 command pattern
-            // is smithy-internal and not carried into the core IR (E6 slice C).
+            // is smithy-internal and not carried into the core IR.
             // `display_text` is the cached resolved date/time (#120/#136).
             let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             let _ = end_utf16;
@@ -3206,7 +3200,7 @@ fn finish_active_field(
         }
         ActiveField::PathField { start_utf16, raw_command, display_text } => {
             // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
-            // (Unknown for forward compatibility). Wave 12n. `display_text`
+            // (Unknown for forward compatibility). `display_text`
             // is the cached resolved path accumulated from the span (#120).
             let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             let _ = end_utf16;
@@ -3218,7 +3212,7 @@ fn finish_active_field(
     }
 }
 
-/// Q8 (W0): the HWP5 wire keeps no time per memo, so every memo without
+/// the HWP5 wire keeps no time per memo, so every memo without
 /// one takes the document's last-saved time (summary information), else the
 /// epoch. A conversion never reads the clock: the same file converts to the
 /// same bytes. Memos in run pictures' captions are reached too.
@@ -3278,7 +3272,7 @@ fn project_memo_run(
     // Map the parsed wire command onto the format-agnostic
     // `MemoMetadata`. `id` is left empty so the HWPX encoder derives
     // `"memo{number}"`; `create_datetime` is filled after projection from
-    // the document's last-saved time ([`fill_memo_create_times`], Q8) —
+    // the document's last-saved time ([`fill_memo_create_times`]) —
     // the wire carries neither field per memo. We go
     // through `Default::default()` because `MemoMetadata` is
     // `#[non_exhaustive]` and can't be constructed positionally outside
@@ -3296,7 +3290,7 @@ fn project_memo_run(
 }
 
 #[test]
-fn fix4_nondefault_memo_shape_loss_is_explicit() {
+fn nondefault_memo_shape_loss_is_explicit() {
     // 이것을 실패시키는 것: 메모 모양 참조/파싱 대체값의 무음 방출.
     for id in [0, 7, 99, 65535] {
         let memo = Hwp5MemoControl {
@@ -3367,7 +3361,7 @@ fn project_dutmal_run(
     )
 }
 
-/// Anchors a header/footer to Core paragraph `index` (§19.17 F2); paragraph
+/// Anchors a header/footer to Core paragraph `index`; paragraph
 /// 0 is `None`, the same meaning, so a converted document's first-paragraph
 /// headers keep their JSON and compare equal to API-built ones.
 trait WithAnchor {
@@ -3413,7 +3407,7 @@ fn hwp5_header_property_to_apply_page_type(
 ///
 /// `border` / `fill` themselves stay at their `ShowMode::ShowAll`
 /// default — these are full-section visibility, not first-page-only,
-/// and a separate slice promotes them.
+/// and a separate projection path promotes them.
 fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::section::Visibility {
     hwpforge_core::section::Visibility {
         hide_first_header: (properties & 1) != 0,
@@ -3432,8 +3426,7 @@ fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::sect
 /// record — it is purely positional. 한글 writes exactly three records in
 /// `[BOTH, EVEN, ODD]` order, so the index selects `apply_type`. (The
 /// EVEN/ODD records are byte-identical in the common "no border" case, so
-/// only the leading `BOTH` slot has been empirically confirmed; see the
-/// backlog note in `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.)
+/// only the leading `BOTH` slot has been empirically confirmed.)
 ///
 /// Per the project's "warning-first for unknowns" rule, a record count
 /// other than three is surfaced as a `ProjectionFallback` warning and the
@@ -3565,7 +3558,7 @@ fn parse_hyperlink_url(header_data: &[u8]) -> Option<String> {
     Some(raw_url.replace("\\:", ":"))
 }
 
-/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` N1 (RefType) wire code
+/// boundary: HWP5 `%xrf` N1 (RefType) wire code
 /// → typed [`RefType`]. Unknown codes are preserved as
 /// `RefType::Unknown(u8)`. Keeps the projection layer free from raw
 /// `u8`-vs-enum knowledge.
@@ -3582,7 +3575,7 @@ fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
     }
 }
 
-/// Wave 12p pre-fix boundary: HWP5 `%xrf` N2 (ContentType) is
+/// pre-fix boundary: HWP5 `%xrf` N2 (ContentType) is
 /// RefType-relative. 한컴 native wire 분석 결과:
 ///
 /// | RefType        | N2=0 | N2=1   | N2=2       | N2=3      |
@@ -3630,17 +3623,17 @@ fn colorref_to_color(c: u32) -> Color {
     Color::from_rgb((c & 0xFF) as u8, ((c >> 8) & 0xFF) as u8, ((c >> 16) & 0xFF) as u8)
 }
 
-/// ¹ E6 슬라이스 B (2026-06-28): Bookmark N2=2 = "책갈피 이름" 은
+/// ¹ (2026-06-28): Bookmark N2=2 = "책갈피 이름" 은
 /// `Contents` variant 로 carry (이전 분리됐던 `BookmarkName` 흡수).
 /// wire(N2=2)·Display(`OBJECT_TYPE_CONTENTS`) 가 caption-content 와
-/// 동일하고, 구분은 동반 RefType 가 보유 (gotcha #27).
+/// 동일하고, 구분은 동반 RefType 가 보유.
 fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentType {
     match (ref_type_code, code) {
         (_, 0) => RefContentType::Page,
         (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Number,
         // (Bookmark, 2) = "책갈피 이름" → `Contents` (OBJECT_TYPE_CONTENTS,
-        // N2=2). E6 슬라이스 B: 이전 `BookmarkName` variant 를 흡수 — wire/
-        // Display 가 동일하고 RefType 컨텍스트가 의미를 carry (gotcha #27)
+        // N2=2). 이전 `BookmarkName` variant 를 흡수 — wire/
+        // Display 가 동일하고 RefType 컨텍스트가 의미를 carry
         // 하므로 아래 `(_, 2) => Contents` 와 동일. 명시 arm 불필요.
         (_, 1) => RefContentType::Number,
         (_, 2) => RefContentType::Contents,
@@ -3649,7 +3642,7 @@ fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentT
     }
 }
 
-/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` Command's target slot
+/// boundary: HWP5 `%xrf` Command's target slot
 /// → typed [`RefTarget`]. Bookmark refs (`ref_type_code == 6`) carry a
 /// raw bookmark NAME; other refs carry a `#<u64>` SystemId. Anything
 /// else lands in `RefTarget::Raw` (no fabrication).
@@ -3674,7 +3667,7 @@ fn page_number_from_pgnp_header(header_data: &[u8], warnings: &mut Vec<Hwp5Warni
             subject: "field.page_number",
             reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
         });
-        // 장식 없는 맨 숫자 폴백 — F1 실측 (한컴 기본 재저장 = sideChar="")
+        // 장식 없는 맨 숫자 폴백 — 실측 (한컴 기본 재저장 = sideChar="")
         // 과 정합. 장식을 날조하지 않는다.
         PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
     })
@@ -3702,7 +3695,7 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     // 1=CircledDigit, 2=RomanCapital, 3=RomanSmall, …), verified against the
     // Roman page numbering saved by Hancom (ROMAN_CAPITAL = shape 2). Before
     // this the format byte was never read and every page number emitted
-    // `Digit`, silently dropping Roman/Hangul/Latin page numbering (P0-3).
+    // `Digit`, silently dropping Roman/Hangul/Latin page numbering.
     let number_format = header_data
         .get(4)
         .and_then(|&shape| NumberFormatType::try_from(shape).ok())
@@ -3711,10 +3704,10 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     // `is_ascii_graphic` (not `is_ascii`): the property word's number-shape byte
     // [4] and position byte [5] are small non-graphic values (e.g. 9 = InsideTop)
     // that would otherwise be mis-read as a decoration glyph like `\t`.
-    // 장식 바이트가 전부 0 = **장식 없음** — F1 native fixture 실측
+    // 장식 바이트가 전부 0 = **장식 없음** — native fixture 실측
     // (2026-08-12): wire 전부 0 인 pgnp 를 한컴 자신이 `sideChar=""` 로
     // 재저장하고 PDF 에도 맨 숫자로 찍는다. 과거의 `"-"` 기본값은 근거 없는
-    // 날조였다 (W2 에서 실측으로 교정).
+    // 날조였다 (실측으로 교정).
     let decoration = header_data
         .iter()
         .rev()
@@ -3841,9 +3834,9 @@ fn project_control_run(
             warn_unpaired_field(projection_images, "memo");
             None
         }
-        // W4 무음 드롭 종결: 미지원 ctrl 은 여전히 드롭되지만 **집계 카운트**
+        // 무음 드롭 종결: 미지원 ctrl 은 여전히 드롭되지만 **집계 카운트**
         // 를 남겨 문서 끝에서 경고로 방출된다 (nwno/pghd 가 여기서 소리 없이
-        // 죽던 것이 corpus 18% 문서의 fake output 원인이었다 — 계획 §0).
+        // 죽던 것이 corpus 18% 문서의 fake output 원인이었다).
         Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER, header_data } => Some(Run::control(
             Control::PageNumber {
                 number: page_number_from_pgnp_header(header_data, &mut projection_images.warnings),
@@ -3866,37 +3859,37 @@ fn project_control_run(
             warn_unpaired_field(projection_images, "clickhere");
             None
         }
-        // SUMMERY auto-fields (Wave 12n) follow the same structural-pairing
+        // SUMMERY auto-fields follow the same structural-pairing
         // pattern as ClickHere. Free-floating SummaryField means the inline
         // FieldBegin marker did not pair with this CtrlHeader; drop.
         Hwp5Control::SummaryField(_) => {
             warn_unpaired_field(projection_images, "summary");
             None
         }
-        // %dte date/time format-code fields (Wave 12n) — same pattern.
+        // %dte date/time format-code fields — same pattern.
         Hwp5Control::DateCodeField(_) => {
             warn_unpaired_field(projection_images, "datecode");
             None
         }
-        // %pat path fields (Wave 12n) — same pattern.
+        // %pat path fields — same pattern.
         Hwp5Control::PathField(_) => {
             warn_unpaired_field(projection_images, "path");
             None
         }
-        // atno inline page-number controls (Wave 12n) emit immediately.
+        // atno inline page-number controls emit immediately.
         // The 0x12 inline marker is a ControlRef (no FieldEnd), so the
         // emission flows through the object-control queue, not an
         // ActiveField/FieldBegin pair.
         Hwp5Control::InlinePageNumber(atno) => {
             use hwpforge_core::control::InlinePageKind;
-            // Inline the wire-flag → kind mapping (E6 slice C: the raw flag
+            // Inline the wire-flag → kind mapping (the raw flag
             // is smithy-internal and no longer carried into the core IR).
             let kind = match atno.raw_flag {
                 0x00 => InlinePageKind::CurrentPage,
                 0x06 => InlinePageKind::TotalPages,
                 _ => InlinePageKind::Unknown,
             };
-            // §19.16 J (P19): bits 0–3 = 3·4·5 are a picture, table or
+            // Bits 0–3 = 3·4·5 are a picture, table or
             // equation number (HWPX `numType` PICTURE·TABLE·EQUATION). The
             // corpus has none (`scan_atno.py`), so the record layout of its
             // format is unmeasured: reported, not guessed. 이것을 실패시키는
@@ -3914,7 +3907,7 @@ fn project_control_run(
         }
         Hwp5Control::NewNumber(nwno) => {
             use hwpforge_core::control::NewNumberKind;
-            // 속성 bits 0-3 → kind (F1 실측: 0 = 쪽). 미지 raw(6-15)는
+            // 속성 bits 0-3 → kind (실측: 0 = 쪽). 미지 raw(6-15)는
             // Unknown 으로 carry + 경고 — 타입을 지어내지 않는다.
             let kind = match nwno.kind_raw {
                 0 => NewNumberKind::Page,
@@ -3939,7 +3932,7 @@ fn project_control_run(
             ))
         }
         Hwp5Control::PageHiding(pghd) => {
-            // 속성 bits 0-5 → 6 bool (F2 실측: 0x20 쪽번호 / 0x10 배경 /
+            // 속성 bits 0-5 → 6 bool (실측: 0x20 쪽번호 / 0x10 배경 /
             // 0x3F 전부 — secd word 동일 배열). bits 6+ 잔여는 실측 밖 —
             // 무음 무시 대신 경고로 표면화하고 정의된 6비트만 carry.
             if pghd.mask & !0x3F != 0 {
@@ -3965,7 +3958,7 @@ fn project_control_run(
             ))
         }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
-        // %xrf cross-reference fields (Wave 12m) flow through the
+        // %xrf cross-reference fields flow through the
         // `FieldBegin`/`ActiveField::CrossRef` machinery in
         // `project_paragraph_with_images_structural` — same pattern as
         // ClickHere / SummaryField / DateCodeField / PathField. A
@@ -3994,9 +3987,7 @@ fn project_control_run(
 /// `Run` carrying `Control::IndexMark`. The wire's `secondary_units_len
 /// == 0` case is decoded as `None` rather than `Some("")` — 한컴
 /// HWP5 cannot distinguish the two on save, so the decode matches
-/// 한컴's intent. See
-/// `.docs/algorithms/2026-06-02_indexmark_carry.md` for the
-/// Codex-reviewed empty-secondary discussion.
+/// 한컴's intent.
 fn project_indexmark_run(indexmark: &crate::schema::section::Hwp5IndexMarkControl) -> Run {
     Run::control(
         Control::IndexMark {
@@ -4012,8 +4003,6 @@ fn project_indexmark_run(indexmark: &crate::schema::section::Hwp5IndexMarkContro
 /// bytes are mapped to the OWPML enum strings 한컴 expects on the
 /// HWPX side; unknown values fall back to the spec defaults so the
 /// HWPX encoder always emits a well-formed `<hp:compose>` element.
-/// See `.docs/algorithms/2026-06-01_compose_carry.md` for the layout
-/// rationale and enum-mapping tables.
 fn project_compose_run(compose: &crate::schema::section::Hwp5ComposeControl) -> Run {
     let circle_type = compose_circle_type_label(compose.circle_type_raw);
     let compose_type = compose_compose_type_label(compose.compose_type_raw);
@@ -4029,9 +4018,8 @@ fn project_compose_run(compose: &crate::schema::section::Hwp5ComposeControl) -> 
     )
 }
 
-/// Maps the OWPML `SHAPECIRCLETYPE` enum (defined in
-/// `.docs/references/hwpx-owpml-model/OWPML/Class/enumdef.h` lines
-/// 623-639) from the raw wire byte to the HWPX attribute string.
+/// Maps the OWPML `SHAPECIRCLETYPE` enum from the raw wire byte
+/// to the HWPX attribute string.
 fn compose_circle_type_label(raw: u8) -> &'static str {
     match raw {
         0 => "CHAR",
@@ -4071,7 +4059,7 @@ fn compose_compose_type_label(raw: u8) -> &'static str {
 /// HWP5 represents charts as OLE-backed BinData blobs (DEFLATE-compressed
 /// `.OLE` streams whose inner OLE2 carries `/OOXMLChartContents`). When the
 /// payload is recognizable as a chart we carry it as
-/// [`Control::EmbeddedChart`] (Wave 4c); otherwise we fall back to a
+/// [`Control::EmbeddedChart`]; otherwise we fall back to a
 /// `DroppedControl:ole_object` warning whose reason explains why.
 ///
 /// Requires a populated [`Hwp5OleAssetPlan`] in `projection_images`; if no
@@ -4204,7 +4192,7 @@ fn chart_dimension(value: i32) -> Option<HwpUnit> {
 /// captured) and any unmapped value default to [`VerticalAlign::Top`], which
 /// matches 한컴's default and keeps default shapes byte-unchanged downstream.
 ///
-/// Value 3 has no meaning and is reported (§19.22 D4).
+/// Value 3 has no meaning and is reported.
 /// 이것을 실패시키는 것: 3 의 보고를 지우기(`shape_vertical_align_3_is_reported`).
 fn shape_vertical_align_from_list_header(
     list_header_properties: Option<u32>,
@@ -4401,7 +4389,7 @@ pub(crate) fn written_shape_text(control: &Hwp5Control) -> &[Hwp5Paragraph] {
     }
 }
 
-/// An ellipse's or polygon's text (§19.5 1a, review r1): its paragraphs and
+/// An ellipse's or polygon's text: its paragraphs and
 /// text vertical alignment, projected like a text box's. Before, the shape
 /// was written without its text.
 ///
@@ -4433,7 +4421,7 @@ fn attach_shape_text(
     }
 }
 
-/// A text box's inner margin from its text list header (§19.22 D4; Hancom
+/// A text box's inner margin from its text list header (Hancom
 /// twins match `textMargin` in all 348 text boxes), carried also when it is
 /// 283 on every side.
 pub(super) fn text_box_margin(
@@ -4443,7 +4431,7 @@ pub(super) fn text_box_margin(
 }
 
 /// An ellipse's or polygon's text margin other than 283 on every side: Core
-/// carries a text margin for text boxes only (S16), so the output writes
+/// carries a text margin for text boxes only, so the output writes
 /// 283 — reported, not refused (the text stays; only its inset changes).
 /// 이것을 실패시키는 것: 이 보고를 지우기(`text_margins_are_read`).
 pub(super) fn report_shape_text_margin(
@@ -4480,10 +4468,10 @@ fn project_footnote_run(
         projection_images,
         ImageProjectionContext::Flow,
     );
-    // Wave 12p Step 3: HWP5 CtrlHeader trailer instance ID 통과.
+    // HWP5 CtrlHeader trailer instance ID 통과.
     // 한컴 native `<hp:footNote instId="...">` 와 매칭되어 HWPX
     // cross-ref Command `?#<id>` lookup 이 동작. 0 은 unset 의미
-    // (Step 1b 의 fallback 값) — None 으로 맵핑.
+    // (기존 fallback 값) — None 으로 맵핑.
     let inst_id =
         (subtree.instance_id != 0).then_some(ObjectId::new(u64::from(subtree.instance_id)));
     Run::control(Control::Footnote { inst_id, paragraphs }, CharShapeIndex::new(0))
@@ -4502,7 +4490,7 @@ fn project_endnote_run(
         projection_images,
         ImageProjectionContext::Flow,
     );
-    // Wave 12p Step 3: 동일 패턴 (`<hp:endNote instId="...">`).
+    // 동일 패턴 (`<hp:endNote instId="...">`).
     let inst_id =
         (subtree.instance_id != 0).then_some(ObjectId::new(u64::from(subtree.instance_id)));
     Run::control(Control::Endnote { inst_id, paragraphs }, CharShapeIndex::new(0))
@@ -4536,7 +4524,7 @@ fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Wa
     let height = hwp_unit_from_u32(text_art.geometry.height);
     let inst_id =
         (text_art.instance_id != 0).then_some(ObjectId::new(u64::from(text_art.instance_id)));
-    // S20 review r1: the initial box and size lock, folded against the
+    // The initial box and size lock, folded against the
     // TextArt's own default (the 14173 design box).
     // 이것을 실패시키는 것: frame 을 두지 않기 / 표시 크기와 비교해 접기
     // (`text_art_keeps_its_frame`).
@@ -4586,7 +4574,7 @@ fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
         {
             *height = h;
         }
-        // Wave 12p Step 3: `<hp:equation id="...">` cross-ref target.
+        // `<hp:equation id="...">` cross-ref target.
         if equation.instance_id != 0 {
             *inst_id = Some(ObjectId::new(u64::from(equation.instance_id)));
         }
@@ -4966,11 +4954,11 @@ fn apply_table_projection_metadata(
         .transpose()
         .unwrap_or(None);
     core_table.border_fill_id = table.border_fill_id.map(u32::from);
-    // §19.22 D1: the table's own margins, carried even when they equal the
+    // The table's own margins, carried even when they equal the
     // encoder's defaults (as the HWPX decoder carries the wire values).
     core_table.in_margin = table.inner_margin.map(core_margin);
     core_table.out_margin = table.ctrl.as_ref().and_then(|ctrl| ctrl.outer_margin).map(core_margin);
-    // S19: a dormant cell margin equal to the table's padding is what the
+    // a dormant cell margin equal to the table's padding is what the
     // encoder writes anyway; only distinct values are carried.
     // 이것을 실패시키는 것: 이 정리를 지우기(`dormant_cell_margin_is_kept`).
     let padding = core_table.in_margin.unwrap_or(TableMargin {
@@ -4986,18 +4974,18 @@ fn apply_table_projection_metadata(
             }
         }
     }
-    // §19.6 A: 표 자신의 CtrlHeader 속성 word·오프셋 → `Table::placement`.
+    // 표 자신의 CtrlHeader 속성 word·오프셋 → `Table::placement`.
     if let Some(ctrl) = &table.ctrl {
         let wire = parse_object_placement_wire(ctrl.properties, ctrl.geometry.x, ctrl.geometry.y);
         core_table.placement = table_placement_from_wire(&wire, warnings);
-        // S20: the size lock (bit 20). 이것을 실패시키는 것: 읽지 않기
+        // the size lock (bit 20). 이것을 실패시키는 것: 읽지 않기
         // (`size_lock_is_carried`).
         core_table.frame.size_protect =
             ctrl.properties & shapes::CTRL_PROPERTY_SIZE_PROTECT_BIT != 0;
     }
-    // Wave 12p Step 3: HWP5 Table CtrlHeader trailer instance ID 통과.
+    // HWP5 Table CtrlHeader trailer instance ID 통과.
     // 한컴 native `<hp:tbl id="...">` cross-ref target 과 매칭. 0 은
-    // unset (Step 1c-1 fallback).
+    // unset (fallback).
     if table.instance_id != 0 {
         core_table.inst_id = Some(ObjectId::new(u64::from(table.instance_id)));
     }
@@ -5033,16 +5021,16 @@ fn project_table_cell_with_images(
     core_cell.height =
         (cell.height > 0).then(|| HwpUnit::new(cell.height)).transpose().unwrap_or(None);
     core_cell.border_fill_id = cell.border_fill_id.map(u32::from);
-    // §19.22 D2: a cell without its own margin (property bit 16 clear)
+    // A cell without its own margin (property bit 16 clear)
     // uses the table's default padding. 이것을 실패시키는 것: 판정 반전 /
     // 비트 번호 15·17(`table_margins_and_cell_margin_flag_are_read`).
     core_cell.margin = cell.has_margin.then(|| core_margin(cell.margin));
-    // S19: a cell using the table's padding keeps its own values (Hancom
+    // a cell using the table's padding keeps its own values (Hancom
     // keeps them in `<hp:cellMargin>`); the table pass drops those equal to
     // the padding. 이것을 실패시키는 것: 이 값을 싣지 않기
     // (`dormant_cell_margin_is_kept`).
     core_cell.dormant_margin = (!cell.has_margin).then(|| core_margin(cell.margin));
-    // §19.22 D3: line wrap. 2 (keep) has no Hancom twin to confirm it and
+    // Line wrap. 2 (keep) has no Hancom twin to confirm it and
     // is reported; 3 has no meaning and is read as break.
     // 이것을 실패시키는 것: 비트 3–4 를 5–6 으로 / 2 의 경고 삭제 / 3 을
     // squeeze 로(`cell_line_wrap_is_read_from_bits_3_and_4`).
@@ -5152,9 +5140,9 @@ mod tests {
 
     #[test]
     fn bookmark_n2_2_collapses_to_contents_not_separate_variant() {
-        // E6 슬라이스 B 회귀 잠금: (Bookmark, 2) = "책갈피 이름" 은 이전
+        // 회귀 잠금: (Bookmark, 2) = "책갈피 이름" 은 이전
         // `BookmarkName` variant 가 아니라 `Contents` 로 carry — wire/Display
-        // 가 caption-content 와 동일하고 구분은 동반 RefType 가 보유 (gotcha #27).
+        // 가 caption-content 와 동일하고 구분은 동반 RefType 가 보유.
         assert_eq!(
             decode_hwp5_crossref_content_type(HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2),
             RefContentType::Contents,
@@ -5190,7 +5178,7 @@ mod tests {
         );
     }
 
-    /// §19.22 D4: value 3 has no meaning — read as top and reported.
+    /// Value 3 has no meaning — read as top and reported.
     #[test]
     fn shape_vertical_align_3_is_reported() {
         let mut warnings = Vec::new();
@@ -5265,7 +5253,7 @@ mod tests {
         }
     }
 
-    /// S20 review r1: a top-level TextArt keeps its initial box against its
+    /// A top-level TextArt keeps its initial box against its
     /// own default, the 14173 design box — 7000 x 8000 is kept, the design
     /// box itself is no frame value, the displayed size (5000 x 3000) as the
     /// initial box is kept — and its size lock.
@@ -5308,7 +5296,7 @@ mod tests {
         assert!(!frame(&art(None, 0)).size_protect);
     }
 
-    /// S20: a text box keeps its initial box (4,000 × 3,000, shown 8,000 ×
+    /// a text box keeps its initial box (4,000 × 3,000, shown 8,000 ×
     /// 6,000) and its size lock as its frame.
     /// 이것을 실패시키는 것: 글상자 frame 을 두지 않기.
     #[test]
@@ -5391,14 +5379,14 @@ mod tests {
         let pn = parse_page_number_control(&header).expect("pgnp should parse");
         assert_eq!(pn.number_format, NumberFormatType::Digit);
 
-        // Q1 regression + W2 실측 교정: 장식 바이트 없는 pgnp 는 비그래픽
+        // regression + 실측 교정: 장식 바이트 없는 pgnp 는 비그래픽
         // 속성 바이트(9 = '\t')를 장식으로 오독하지 않아야 하고, 장식은
-        // **빈 문자열**이어야 한다 — F1 fixture 실측: 전부 0 인 wire 를
+        // **빈 문자열**이어야 한다 — fixture 실측: 전부 0 인 wire 를
         // 한컴이 `sideChar=""` + 맨 숫자 PDF 로 확정 (과거 "-" 기본값은 날조).
         let no_deco = vec![b'p', b'n', b'g', b'p', 0, 9, 0, 0, 0, 0];
         let pn = parse_page_number_control(&no_deco).expect("pgnp should parse");
         assert_eq!(pn.position, PageNumberPosition::InsideTop);
-        assert_eq!(pn.decoration, "", "zero wire = no decoration (F1 byte-verified)");
+        assert_eq!(pn.decoration, "", "zero wire = no decoration (byte-verified)");
     }
 
     use std::collections::BTreeMap;
@@ -5521,7 +5509,7 @@ mod tests {
         }
     }
 
-    /// §19.22 D5: the decoder's end-mark char shape reaches Core.
+    /// The decoder's end-mark char shape reaches Core.
     ///
     /// 이것을 실패시키는 것: 투영에서 이 칸을 옮기지 않기.
     #[test]
@@ -5540,7 +5528,7 @@ mod tests {
         assert_eq!(project(1), None);
     }
 
-    /// §19.22 B: an empty paragraph keeps the char shape of position 0 —
+    /// An empty paragraph keeps the char shape of position 0 —
     /// the last entry there — on the flat path and on the structural path
     /// (a page-number control sends it there and yields no run).
     ///
@@ -5716,11 +5704,11 @@ mod tests {
         assert_eq!(p.text_content(), "Hello");
     }
 
-    // ── W1: secd 시작번호 fail-safe (계획 §1.2 F1 실측·§1.4 corpus) ────────
+    // ── secd 시작번호 fail-safe ────────
 
     #[test]
     fn secd_restart_bits_zero_is_silent_and_begin_num_stays_none() {
-        // F1 실측: bits==0 + 시작번호 필드 1 → 한컴도 `<hp:startNum page="0">`
+        // 실측: bits==0 + 시작번호 필드 1 → 한컴도 `<hp:startNum page="0">`
         // (이어서). begin_num None 이 byte-정합 — 경고도 없어야 한다.
         let mut section = make_section(vec![], None);
         section.section_def_properties = Some(0);
@@ -5762,7 +5750,7 @@ mod tests {
     #[test]
     fn secd_restart_bits_nonzero_with_truncated_payload_reports_truncation() {
         // all-or-none: [20..28] 이 없으면 부분값 대신 truncation 을 알린다
-        // (Codex 결함 8 — 읽지 않은 값을 기본값 1 로 날조 금지).
+        // (읽지 않은 값을 기본값 1 로 날조 금지).
         let mut section = make_section(vec![], None);
         section.section_def_properties = Some(3 << 20);
         let (doc, warnings) = project_to_core(vec![section]).unwrap();
@@ -5823,7 +5811,7 @@ mod tests {
 
     #[test]
     fn unknown_control_drops_are_aggregated_into_one_warning_per_id() {
-        // W4 무음 드롭 종결: 같은 미지원 ctrl 이 몇 번 죽든 경고는 id 당
+        // 무음 드롭 종결: 같은 미지원 ctrl 이 몇 번 죽든 경고는 id 당
         // 1건 + count (per-occurrence 폭탄 금지 — corpus `%fmu` 531회).
         let form_id = u32::from_be_bytes(*b"form"); // 기지 deferred ctrl
         let mk = || Hwp5Control::Unknown { ctrl_id: form_id, header_data: vec![] };
@@ -5920,7 +5908,7 @@ mod tests {
             binary_data_id: 1,
             original_size: None,
             instance_id: 0,
-            // W2p: treat_as_char 는 이제 raw bit0 이 유일한 진실 — 좌표
+            // treat_as_char 는 이제 raw bit0 이 유일한 진실 — 좌표
             // (0,0) 만으로는 더 이상 inline 판정이 되지 않는다.
             ctrl_properties: 0x1,
             picture: Default::default(),
@@ -5977,7 +5965,7 @@ mod tests {
         assert_eq!(document.sections()[0].content_counts().images, 1);
     }
 
-    /// D-T7: an object takes the char shape that starts at its own
+    /// An object takes the char shape that starts at its own
     /// position — here a boundary right at the object, after "A" (a
     /// boundary sits at a control's start 3,724 times in 1,163 corpus
     /// documents, `scan_cs_interior.py`) — not the shape of the character
@@ -6038,7 +6026,7 @@ mod tests {
         assert_eq!(runs[1].char_shape_id, CharShapeIndex::new(2));
     }
 
-    /// D-T7 on the structured path (the one that walks `text_segments`; a
+    /// On the structured path (the one that walks `text_segments`; a
     /// bookmark point in the paragraph selects it): the object takes the
     /// shape that starts at it, the character after it the next one.
     ///
@@ -6205,7 +6193,7 @@ mod tests {
             binary_data_id: 3,
             original_size: None,
             instance_id: 0,
-            // W5 w0: 배치가 이제 속성 word 실비트로 결정되므로, 실측 anchored
+            // 배치가 이제 속성 word 실비트로 결정되므로, 실측 anchored
             // 이미지 word(한컴이 저장한 개체, 0x040a2310 →
             // Para/Para/Square, flowWithText=1)를 싣는다 (이전엔 TextBox 관례가
             // 이 값을 합성했다).
@@ -6542,7 +6530,7 @@ mod tests {
         )));
     }
 
-    // ── image_placement_from_wire (W5 w0 — byte-ground axes) ────────────────
+    // ── image_placement_from_wire (byte-ground axes) ────────────────
 
     #[test]
     fn image_placement_from_wire_byte_grounds_floating_axes() {
@@ -6607,7 +6595,7 @@ mod tests {
 
     #[test]
     fn image_placement_from_wire_bit0_inline_collapses_to_legacy_default() {
-        // bit0=1 → 좌표·다른 비트 무관 인라인 (legacy default). W2p 계약 보존.
+        // bit0=1 → 좌표·다른 비트 무관 인라인 (legacy default). 계약 보존.
         let non_zero = crate::schema::section::Hwp5ShapeComponentGeometry {
             outer_margin: [0; 4],
             x: 1_234,
@@ -6636,7 +6624,7 @@ mod tests {
 
     #[test]
     fn image_placement_from_wire_is_context_independent() {
-        // W5 w0: 배치는 속성 word 로만 결정된다 — Flow/TextBox context 는 더
+        // 배치는 속성 word 로만 결정된다 — Flow/TextBox context 는 더
         // 이상 축을 바꾸지 않는다 (이전 TextBox 관례 Para/Square 폐기).
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
             outer_margin: [0; 4],
@@ -6670,7 +6658,7 @@ mod tests {
 
     #[test]
     fn image_placement_from_wire_textbox_context_respects_bit0_inline() {
-        // W5 w0 선재 결함 수정 잠금: TextBox 컨텍스트가 bit0 을 무시하고
+        // 선재 결함 수정 잠금: TextBox 컨텍스트가 bit0 을 무시하고
         // treat_as_char=false 로 강제하던 구거동을 제거했다 — 글상자 안 진짜
         // 인라인 이미지(bit0=1)는 이제 TextBox 컨텍스트에서도 inline 으로
         // 판정된다 (구 테스트 `..._textbox_context_ignores_bit` 대체).
@@ -6691,7 +6679,7 @@ mod tests {
         assert_eq!(placement, ObjectPlacement::legacy_inline_defaults());
     }
 
-    /// E-T1: bits 21–23 are Hancom's four-value table (X2 fixture and the
+    /// Bits 21–23 are Hancom's four-value table (fixture and the
     /// 457 floating objects of the Hancom pairs), not the spec's six.
     ///
     /// 이것을 실패시키는 것: 6값 스펙 표로 되돌리는 것, 1·2·3 중 둘을
@@ -6711,7 +6699,7 @@ mod tests {
         }
     }
 
-    /// E-T2: 4–7 are outside what Hancom writes: a canary warning and the
+    /// 4–7 are outside what Hancom writes: a canary warning and the
     /// most conservative wrap.
     ///
     /// 이것을 실패시키는 것: 경고 조건을 `>= 6` 으로 되돌리는 것(4·5 가
@@ -6733,7 +6721,7 @@ mod tests {
     }
 
     /// 떠 있는 도형·그림은 정렬 비트를 싣고, 글자처럼 취급이면 그대로 inline
-    /// 기본값이다(P1b·P5 예측 집합 보호). 이것을 실패시키는 것: 도형 경로에서
+    /// 기본값이다(예측 집합 보호). 이것을 실패시키는 것: 도형 경로에서
     /// 정렬을 빼기 / 글자처럼 취급에도 정렬을 싣기.
     #[test]
     fn floating_object_gets_alignment_and_inline_object_does_not() {
@@ -6748,7 +6736,7 @@ mod tests {
 
     #[test]
     fn object_placement_from_ctrl_properties_fails_closed_on_out_of_range_bits() {
-        // W5 w0 fail-closed: 레퍼런스 범위 밖 relTo/wrap 값은 임의 known 값으로
+        // fail-closed: 레퍼런스 범위 밖 relTo/wrap 값은 임의 known 값으로
         // 정규화하지 않고 typed 경고 + 보수 fallback(Paper/Square)으로 처리한다.
         // vertRelTo=3(미정의)·textWrap=6(미정의), bit0=0(부유).
         let word = (3u32 << 3) | (6u32 << 21);
@@ -6775,7 +6763,7 @@ mod tests {
     // ── page_def_to_settings ─────────────────────────────────────────────────
 
     #[test]
-    fn fix2_page_dimensions_reject_unsigned_wrap_and_out_of_range() {
+    fn page_dimensions_reject_unsigned_wrap_and_out_of_range() {
         // 이것을 실패시키는 것: PageDef u32를 as i32로 잘라 음수로 수용 / 범위 오류를 0으로.
         for value in [u32::MAX, 100_000_001] {
             let pd = Hwp5PageDef {
@@ -6949,7 +6937,7 @@ mod tests {
         (table, warnings)
     }
 
-    /// Q8 (W0): every memo without a time takes the document's last-saved
+    /// every memo without a time takes the document's last-saved
     /// time — a body memo and one in a run picture's caption — and a memo
     /// with a time keeps it; with no saved time, the epoch.
     /// 이것을 실패시키는 것: 채우기 삭제 · 생성 시각 사용 · 그림 캡션 미방문 ·
@@ -7015,7 +7003,7 @@ mod tests {
         assert_eq!(doc(None), [epoch, "2001-02-03T04:05:06Z", epoch]);
     }
 
-    /// S22: lines that start after some of the zero-length tokens at one
+    /// lines that start after some of the zero-length tokens at one
     /// Core position record which ones — section and column definitions, a
     /// silently consumed page number position, tables, the paragraph end —
     /// and a line before them all records none.
@@ -7115,7 +7103,7 @@ mod tests {
         assert_eq!(cache.lines[1].boundary, b(&[Table], Some(End)));
     }
 
-    /// S22 (design 3.3): a line that starts inside a field — here inside a
+    ///: a line that starts inside a field — here inside a
     /// re-emitted field's visible text — drops the cache with a warning; a
     /// line at the field's edge does not.
     /// 이것을 실패시키는 것: 필드 안쪽 검사 삭제.
@@ -7152,7 +7140,7 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 
-    /// S22 r1: a paragraph's line boundaries pass at most
+    /// A paragraph's line boundaries pass at most
     /// `MAX_PARAGRAPH_BOUNDARY_SKIP` tokens in total — 64 bookmarks at one
     /// place, lines after k of them for k in a set summing to exactly the
     /// limit, keep the cache; one more drops it with a warning.
@@ -7199,7 +7187,7 @@ mod tests {
         assert!(format!("{warnings:?}").contains("pass 1025 zero-width tokens"), "{warnings:?}");
     }
 
-    /// D review r1 (HIGH-2, MEDIUM-4): a caption without paragraphs is
+    /// A caption without paragraphs is
     /// dropped and reported (the layout hints count none for it), and a width
     /// or last width Core cannot hold is dropped and reported rather than
     /// read as "equal to the table width".
@@ -7387,7 +7375,7 @@ mod tests {
         (table.placement, warnings.iter().map(|w| format!("{w:?}")).collect())
     }
 
-    /// S20: object common property bit 20 is the size lock of a picture and
+    /// object common property bit 20 is the size lock of a picture and
     /// of a table (HWP5 ↔ Hancom twins 1,806/1,806).
     /// 이것을 실패시키는 것: 그림·표 잠금을 읽지 않기.
     #[test]
@@ -7472,7 +7460,7 @@ mod tests {
         assert!(!lock(0x082a_4310));
     }
 
-    /// A-T3 (법무부 실측 속성 word): 본문 표 `0x082a4310` = 떠 있음·PARA/PARA·
+    /// 법무부 실측 속성 word: 본문 표 `0x082a4310` = 떠 있음·PARA/PARA·
     /// overlap·offset (13, 27415); 머리 표 `0x082a2311` = 글자처럼 취급·PARA/PARA·
     /// flowWithText — 글자처럼 취급 표도 wire 기준·flow 를 그대로 싣는다(한컴
     /// 짝 5,131/5,131). 기본 flow word 는 `None`.
@@ -7505,7 +7493,7 @@ mod tests {
         assert_eq!(projected_table_placement(table_with_ctrl(default_word, 0, 0)).0, None);
     }
 
-    /// S1 HWP5 정렬: 가로 2 = Right 는 확인값(경고 없음), 세로 1 = Center 는
+    /// HWP5 정렬: 가로 2 = Right 는 확인값(경고 없음), 세로 1 = Center 는
     /// 스펙 순서로 읽되 미확인 경고, 가로 7 은 범위 밖 → 경고 + Left.
     /// 이것을 실패시키는 것: 정렬 비트를 읽지 않기 / 미확인 경고 삭제 / 확인값
     /// 2 에 경고.
@@ -8182,7 +8170,7 @@ mod tests {
 
     #[test]
     fn inline_footnote_stays_in_one_paragraph_between_text_runs() {
-        // Regression (CLAUDE.md gotcha #12): an inline footnote reference
+        // Regression: an inline footnote reference
         // (HWP5 ParaText control char 0x11 → `\u{FFFC}` after the schema
         // promotion) must project as a `Control::Footnote` run *between* the
         // surrounding text runs, inside a single Core paragraph — never on
@@ -8551,7 +8539,7 @@ mod tests {
         )));
     }
 
-    // E6 slice C: the HWP5 wire bytes (`raw_command`/`raw_trailer`/`raw_flag`)
+    // the HWP5 wire bytes (`raw_command`/`raw_trailer`/`raw_flag`)
     // were removed from the core IR. These tests lock that the *derivation*
     // (DateCodeField.is_time_mode, InlinePageNumber.kind) survives that
     // removal by re-running the exact projection logic.
@@ -8641,8 +8629,8 @@ mod tests {
         );
     }
 
-    /// W2: `project_control_run` maps `nwno` 속성 bits 0-3 to the right
-    /// `NewNumberKind` (F1 실측: 0 = 쪽) and carries the u16 number as u32.
+    /// `project_control_run` maps `nwno` 속성 bits 0-3 to the right
+    /// `NewNumberKind` (실측: 0 = 쪽) and carries the u16 number as u32.
     /// Unmapped raw values surface as Unknown + warning (no fabrication).
     #[test]
     fn project_new_number_maps_kind_and_number() {
@@ -8674,7 +8662,7 @@ mod tests {
             (control, images.warnings)
         };
 
-        // F1 실측: 00 00 00 00 07 00 → 쪽 번호 7.
+        // 실측: 00 00 00 00 07 00 → 쪽 번호 7.
         let (control, warnings) = project(0, 7);
         assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Page, number: 7 });
         assert!(warnings.is_empty(), "정상 kind 는 경고 없음: {warnings:?}");
@@ -8691,8 +8679,8 @@ mod tests {
         )));
     }
 
-    /// W3: `project_control_run` maps pghd 속성 bits 0-5 to six bools
-    /// (F2 실측: 0x20 쪽번호 / 0x10 배경 / 0x3F 전부 — secd word 동일 배열).
+    /// `project_control_run` maps pghd 속성 bits 0-5 to six bools
+    /// (실측: 0x20 쪽번호 / 0x10 배경 / 0x3F 전부 — secd word 동일 배열).
     /// 검증 밖 비트(6+)는 경고 + 하위 6비트만 carry.
     #[test]
     fn project_page_hiding_maps_mask_bits() {
@@ -8721,7 +8709,7 @@ mod tests {
             (control, images.warnings)
         };
 
-        // F2-①: 쪽번호만.
+        // 쪽번호만.
         let (control, warnings) = project(0x20);
         assert_eq!(
             control,
@@ -8736,7 +8724,7 @@ mod tests {
         );
         assert!(warnings.is_empty(), "정의 비트만 = 경고 없음: {warnings:?}");
 
-        // F2-③: 전부.
+        // 전부.
         let (control, _) = project(0x3F);
         assert!(matches!(
             control,
@@ -8787,7 +8775,7 @@ mod tests {
         );
     }
 
-    // ── R0-2: chart extraction is charged to the document budget ─────────
+    // ── chart extraction is charged to the document budget ─────────
 
     fn chart_ole_control(binary_data_id: u16) -> Hwp5Control {
         Hwp5Control::OleObject(Hwp5OleObjectControl {
@@ -9062,7 +9050,7 @@ mod shape_style_tests {
         assert_eq!(opaque, 0);
     }
 
-    /// 1b-T2 + r6 안쪽 제목 상자: 종류 0 = 선 없음 — 색·굵기는 있어도
+    /// 안쪽 제목 상자: 종류 0 = 선 없음 — 색·굵기는 있어도
     /// 종류가 이긴다(굵기로 판정하지 않음); 색은 COLORREF(BGR) 그대로
     /// (`0x00179EDE` → `#DE9E17`). 이것을 실패시키는 것: 종류 판정을 굵기로 /
     /// `0 => None` 갈래를 실선으로 / BGR 변환 누락.
@@ -9083,7 +9071,7 @@ mod shape_style_tests {
         assert_eq!((s.line_style, w), (Some(LineStyle::Solid), 1), "unconfirmed type reported");
     }
 
-    /// 1b-T6: 채우기 없음은 빈 상자(흰 칠과 구별), 선 도형에는 채우기가
+    /// 채우기 없음은 빈 상자(흰 칠과 구별), 선 도형에는 채우기가
     /// 없다. 이것을 실패시키는 것: 종류 0 을 기본(흰 칠)으로 두기 / 선 도형에
     /// 채우기를 쓰기.
     #[test]
@@ -9119,7 +9107,7 @@ mod shape_style_tests {
             );
             let s = images.shape_style(&l, true);
             assert_eq!(s.corner_ratio, want, "{ratio}");
-            // The cap is reported under its own subject (review r1: a count
+            // The cap is reported under its own subject (a count
             // alone passed a wrong subject).
             let capped = images
                 .warnings
@@ -9135,7 +9123,7 @@ mod shape_style_tests {
         }
     }
 
-    /// A text box gets its outline and fill too (r6: the boxes around the
+    /// A text box gets its outline and fill too (the boxes around the
     /// Ministry of Justice text). 이것을 실패시키는 것: 글상자 투영에서
     /// 스타일을 빼기.
     #[test]
@@ -9167,7 +9155,7 @@ mod shape_style_tests {
         assert_eq!(s.fill_color.unwrap().to_hex_rgb(), "#86AFDC");
     }
 
-    /// 1b-T3 (x6 F1·F2): 무늬 −1 = 없음(단색만), 무늬 2 = Hancom `SLASH`.
+    /// 한컴이 저장한 무늬 채우기 실측: 무늬 −1 = 없음(단색만), 무늬 2 = Hancom `SLASH`.
     /// 이것을 실패시키는 것: 무늬 −1 을 0(가로줄)으로 / 무늬 표 한 줄 교체.
     #[test]
     fn hatch_none_and_slash() {
@@ -9231,7 +9219,7 @@ mod shape_style_tests {
     /// crop within one pixel of pixels × 75 is the whole image and any other
     /// is kept without extent, noted; an empty or out-of-range crop is
     /// noted and not carried. The crop (0, 0, 7474, 15000) of 22500 x 15000
-    /// is Hancom's F3c.
+    /// is measured from a Hancom-saved picture.
     ///
     /// 이것을 실패시키는 것: 전체 비교를 지우는 것 / 자르기에서 범위를 버리는 것 /
     /// 픽셀 허용 폭을 0 으로 / 크기 모름 자르기를 버리거나 경고를 지우는 것 /

@@ -12,7 +12,7 @@ fn from_json_invalid_json() {
 
 #[test]
 fn from_json_syntax_error_reports_no_hint() {
-    // W3 remediation: the pre-`ops` classification of JSON_PARSE_FAILED —
+    // the pre-`ops` classification of JSON_PARSE_FAILED —
     // a raw syntax error never carried a hint, only the schema-mismatch
     // case did (`from_json_schema_mismatch_reports_the_legacy_hint`).
     let tmp = test_tmp();
@@ -73,7 +73,7 @@ fn from_json_complex_roundtrip() {
 }
 
 #[test]
-fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
+fn legacy_json_tabs_share_code_reason_and_remedy() {
     let dir = test_tmp();
     let input = dir.join("legacy.json");
     let output = dir.join("out.hwpx");

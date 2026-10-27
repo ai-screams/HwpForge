@@ -1,6 +1,6 @@
-//! T0 Spike: Validate quick-xml 0.36 namespace serialization.
+//! Spike: Validate quick-xml 0.36 namespace serialization.
 //!
-//! GO/NO-GO gate for Phase 4 dual serde rename approach.
+//! GO/NO-GO gate for the dual serde rename approach.
 //! All tests must pass before proceeding with encoder implementation.
 
 // Spike tests exercise quick-xml directly, without the decoder limits.

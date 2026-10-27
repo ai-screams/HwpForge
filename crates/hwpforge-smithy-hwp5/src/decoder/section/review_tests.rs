@@ -1,4 +1,4 @@
-// Review r1: the same wire controls must mean the same thing in every host.
+// The same wire controls must mean the same thing in every host.
 const R1_GROUP: u32 = u32::MAX;
 const R1_NESTED_GROUP: u32 = u32::MAX - 1;
 const R1_CAPTION: u32 = u32::MAX - 2;
@@ -472,7 +472,7 @@ fn r2_in_path(payload: &[u8], path: &[u32]) -> Vec<u8> {
         } else {
             let mut wire = r1_wrap(kind, &inner);
             if kind == R1_CAPTION {
-                // A supported caption needs a real cell; r1's parser-only
+                // A supported caption needs a real cell; the earlier parser-only
                 // fixture deliberately ended before the table's cell list.
                 let mut table = Vec::new();
                 one_cell_table(&mut table, 1);
@@ -1791,7 +1791,7 @@ fn partial_look_preserves_lines_and_reports_each_loss_in_every_host() {
 
 /// 이것을 실패시키는 것: 내부 끝에서 외부 범위를 닫기 / 필드 ID 재사용 /
 /// 한 문단 필드까지 경계 표현으로 바꾸기 / 미종료 fallback 누락 / 고아 끝 panic.
-/// 실제 변이 M06–M09·M13이 이 시험에서 실패한다.
+/// 위 변이를 실제로 적용하면 이 시험에서 실패한다.
 #[test]
 fn fspan_pairing_keeps_siblings_nested_markers_and_unclosed_fallback() {
     use hwpforge_core::field_inventory::FieldInventory;
@@ -1837,7 +1837,7 @@ fn fspan_pairing_keeps_siblings_nested_markers_and_unclosed_fallback() {
     );
 }
 
-/// 이것을 실패시키는 것: M10·M15 — 접힌 외부 필드 안의 경계만 승격하거나 다른 종류를 누름틀로 오인.
+/// 이것을 실패시키는 것: 접힌 외부 필드 안의 경계만 승격하거나 다른 종류를 누름틀로 오인.
 #[test]
 fn fspan_folded_outer_keeps_nested_cross_paragraph_fallback() {
     use crate::ctrl_ids::CTRL_ID_HYPERLINK;
@@ -1866,7 +1866,7 @@ fn fspan_folded_outer_keeps_nested_cross_paragraph_fallback() {
     assert_eq!(boundaries, 0);
 }
 
-/// 이것을 실패시키는 것: M14 — 빈 시작 문단에 접힌 필드처럼 안내문을 본문으로 합성.
+/// 이것을 실패시키는 것: 빈 시작 문단에 접힌 필드처럼 안내문을 본문으로 합성.
 #[test]
 fn fspan_empty_start_does_not_invent_hint_text() {
     use hwpforge_core::field_inventory::FieldInventory;
@@ -1890,8 +1890,8 @@ fn fspan_empty_start_does_not_invent_hint_text() {
     }
 }
 
-/// 이것을 실패시키는 것: R01 부모가 경계여도 중첩 여러 문단 누름틀을 승격에서 제외,
-/// R15 FIFO 짝짓기, R17 ID 중복, R18 끝 경계 방출 누락, R19 끝 문단 flat 처리.
+/// 이것을 실패시키는 것: 부모가 경계여도 중첩 여러 문단 누름틀을 승격에서 제외,
+/// FIFO 짝짓기, ID 중복, 끝 경계 방출 누락, 끝 문단 flat 처리.
 #[test]
 fn fspan_nested_cross_paragraph_clicks_keep_both_ranges() {
     use hwpforge_core::field_inventory::FieldInventory;
@@ -1929,8 +1929,8 @@ fn fspan_nested_cross_paragraph_clicks_keep_both_ranges() {
     )));
 }
 
-/// 이것을 실패시키는 것: R09 미종료 경고 누락, R10 미소비 메타데이터 경고 누락,
-/// R11 고아 끝에서 뒤의 시작을 잘못 짝짓기, R12 메타데이터 없는 시작을 승격.
+/// 이것을 실패시키는 것: 미종료 경고 누락, 미소비 메타데이터 경고 누락,
+/// 고아 끝에서 뒤의 시작을 잘못 짝짓기, 메타데이터 없는 시작을 승격.
 #[test]
 fn fspan_unmatched_markers_and_metadata_keep_fallbacks() {
     use hwpforge_core::field_inventory::FieldInventory;
@@ -1976,8 +1976,8 @@ fn fspan_unmatched_markers_and_metadata_keep_fallbacks() {
         .any(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: "field.clickhere", .. })));
 }
 
-/// 이것을 실패시키는 것: R13 이전 문단의 접힌 부모를 현재 문단의 accumulator로 취급,
-/// R14 이전 문단에서 이미 닫은 fallback을 실제 끝에서 다시 종료.
+/// 이것을 실패시키는 것: 이전 문단의 접힌 부모를 현재 문단의 accumulator로 취급,
+/// 이전 문단에서 이미 닫은 fallback을 실제 끝에서 다시 종료.
 #[test]
 fn fspan_folded_parent_from_previous_paragraph_has_no_local_accumulator() {
     use crate::ctrl_ids::CTRL_ID_HYPERLINK;

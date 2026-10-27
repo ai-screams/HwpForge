@@ -1,8 +1,8 @@
-//! W2b c3 — test-only PDF object/content-stream 파서.
+//! Test-only PDF object/content-stream 파서.
 //!
 //! krilla 가 실제로 방출하는 PDF 바이트에서 이미지 XObject 의 배치
-//! bbox 를 **byte grep 이 아니라 진짜 좌표 산술**로 추출한다 (§4 D3,
-//! H5 disposition 수용). classic(비압축) xref 테이블 전제 — krilla 는
+//! bbox 를 **byte grep 이 아니라 진짜 좌표 산술**로 추출한다.
+//! classic(비압축) xref 테이블 전제 — krilla 는
 //! object stream/compressed xref 를 쓰지 않는다 (실측: `xref\n0 N\n...`
 //! + `trailer` — 2026-08-17 probe).
 //!
@@ -110,7 +110,7 @@ pub fn extract_pages(pdf_bytes: &[u8]) -> Vec<ExtractedPage> {
 }
 
 /// 모든 쪽 콘텐츠 스트림에서 지정 색의 채움(`rg`)/스트로크(`RG`) 연산
-/// 횟수를 센다 (글상자 채움·테두리 색 게이트 — W4 w4). 색 성분은
+/// 횟수를 센다 (글상자 채움·테두리 색 게이트). 색 성분은
 /// 0–255 입력을 PDF 0–1 스케일로 환산해 ±0.002 로 비교한다.
 pub fn count_color_ops(pdf_bytes: &[u8], rgb: (u8, u8, u8), stroke: bool) -> usize {
     let want = [f64::from(rgb.0) / 255.0, f64::from(rgb.1) / 255.0, f64::from(rgb.2) / 255.0];
@@ -150,7 +150,7 @@ pub fn count_color_ops(pdf_bytes: &[u8], rgb: (u8, u8, u8), stroke: bool) -> usi
 }
 
 /// 모든 쪽의 콘텐츠 스트림에서 clip 연산자(`W`/`W*`) 개수를 센다
-/// (글상자 클리핑 존재 게이트 — W4 w3). krilla `push_clip_path` 는
+/// (글상자 클리핑 존재 게이트). krilla `push_clip_path` 는
 /// path 방출 뒤 `W n` 을 찍는다.
 pub fn count_clip_ops(pdf_bytes: &[u8]) -> usize {
     let doc = PdfDoc::load(pdf_bytes);

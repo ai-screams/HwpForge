@@ -1,4 +1,4 @@
-//! `hwpforge_read` — 표적 텍스트 읽기 (E5 읽기 표면).
+//! `hwpforge_read` — 표적 텍스트 읽기 (읽기 표면).
 
 use serde::Serialize;
 

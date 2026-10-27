@@ -1,4 +1,4 @@
-//! Logical grid addresses on JSON exports (E3 Wave 2).
+//! Logical grid addresses on JSON exports.
 //!
 //! Export side ([`annotate_document_addresses`] / [`annotate_section_addresses`]):
 //! walks the exported `serde_json::Value` in lockstep with the typed document
@@ -426,11 +426,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "perf probe (E3 L5): run manually — numbers recorded in the planning doc"]
+    #[ignore = "performance measurement: run manually on a 100 x 100 table"]
     fn perf_probe_annotate_and_verify_on_large_table() {
         // 100×100 = 10,000 cells — well above the largest corpus table
-        // (414 logical positions). Probes the per-cell root-`nav` cost that
-        // the E3 review flagged; refactor only if these numbers matter.
+        // (414 logical positions). Measures the per-cell root-`nav` cost
+        // in annotation; refactor only if these numbers matter.
         let big = Table::new(
             (0..100).map(|_| TableRow::new((0..100).map(|_| cell(1, 1)).collect())).collect(),
         );

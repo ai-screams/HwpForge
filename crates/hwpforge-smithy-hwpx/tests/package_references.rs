@@ -255,7 +255,7 @@ fn an_item_whose_href_is_not_the_written_entry_is_unresolved() {
 /// A key that used to be cleaned to another asset's href is now rejected.
 /// 이것을 실패시키는 것: 빈 성분/절대 자산 경로를 다시 허용하거나 삭제식 정규화 복원.
 #[test]
-fn zip9_fix1_picture_with_absolute_asset_key_is_rejected() {
+fn picture_with_absolute_asset_key_is_rejected() {
     let mut images = ImageStore::new();
     images.insert("a\u{0}.png", vec![0x89, b'P', b'N', b'G', 1]);
     images.insert("/a.png", vec![0x89, b'P', b'N', b'G', 2]);
@@ -267,7 +267,7 @@ fn zip9_fix1_picture_with_absolute_asset_key_is_rejected() {
 
 /// 이것을 실패시키는 것: 그룹 그림 경로에서 공통 파트 이름 거부를 우회하기.
 #[test]
-fn zip9_fix1_group_picture_with_absolute_asset_key_is_rejected() {
+fn group_picture_with_absolute_asset_key_is_rejected() {
     use hwpforge_core::control::{GroupChild, ShapeStyle};
     let mut images = ImageStore::new();
     images.insert("a\u{0}.png", vec![0x89, b'P', b'N', b'G', 1]);
@@ -290,7 +290,7 @@ fn zip9_fix1_group_picture_with_absolute_asset_key_is_rejected() {
     assert!(matches!(result, Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure { .. })));
 }
 
-/// F6: a picture whose reference names no item (`image2`, written by an
+/// a picture whose reference names no item (`image2`, written by an
 /// older encoder). The reference is reported and kept: Hancom opens such a
 /// file without a warning and draws an empty picture box at the picture's
 /// size. Keep the nonempty reference as the key for a later asset repair.

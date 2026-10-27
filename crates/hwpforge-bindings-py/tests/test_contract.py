@@ -581,10 +581,10 @@ def test_convert_md_rejects_an_unknown_preset() -> None:
     assert caught.value.code == "PRESET_NOT_FOUND"
 
 
-def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
+def test_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
     # 이것을 실패시키는 것: OSError 포장/복원 제거, DECODE_FAILED를 INVALID_INPUT으로 치환.
-    # 이것을 실패시키는 것(W4): convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기.
-    # 이것을 실패시키는 것(W3): PY1 set_cell의 실제 bytes를 손상 입력으로 교체.
+    # 이것을 실패시키는 것: convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기.
+    # 이것을 실패시키는 것: set_cell의 실제 bytes를 손상 입력으로 교체.
     # PY2 unreachable 건너뛰기 제거.
     import copy
     import errno
@@ -624,7 +624,7 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
         "fill.input_decode": partial(
             Document((data / "corrupt-input.hwpx").read_bytes()).fill, {"a": "b"}
         ),
-        # W4: a decoder Core error (broken table borderFill reference) is a decode failure.
+        # a decoder Core error (broken table borderFill reference) is a decode failure.
         "hwp5.decode_core": partial(
             convert_hwp5, (data / "hwp5-dangling-table-border-fill.hwp").read_bytes()
         ),
@@ -646,7 +646,7 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
                 f"stamp.{suffix}": partial(doc.stamp, []),
             }
         )
-    # 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+    # 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
     calls["stamp.v2_admission"] = partial(
         Document((data / "edit-empty-section.hwpx").read_bytes()).stamp,
         json.loads((data / "stamp-v2-admission.json").read_text()),
@@ -685,7 +685,7 @@ def test_w1_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
         assert error.code == case["expected_code"]
         consumed.add(case["id"])
         if operation.startswith("cell.depth-"):
-            # 이것을 실패시키는 것: F7 깊이 fixture의 decode 오류에 bug 힌트 추가.
+            # 이것을 실패시키는 것: 깊이 fixture의 decode 오류에 bug 힌트 추가.
             assert "Report this as a bug." not in (error.hint or "")
         if operation.startswith("io."):
             assert isinstance(error, HwpForgeIOError)

@@ -7,11 +7,11 @@
 #   - Reusable preflight for release workflow
 #   - Manual full validation when requested
 #
-# Modes (CI 다이어트 P1 — PR 은 빠른 피드백, 큐가 최종 전체 게이트)
+# Modes (CI 다이어트 — PR 은 빠른 피드백, 큐가 최종 전체 게이트)
 #   pr          → fast feedback (fmt/clippy/test/audit/lint — coverage,
 #                 deny, msrv, docs build 는 머지 큐로 이동)
 #   merge_queue → final full gate (coverage + deny + msrv + docs build)
-#   release     → pr 과 동일 플래그 (자동 트리거 경로 없음 — P2 로
+#   release     → pr 과 동일 플래그 (자동 트리거 경로 없음 —
 #                 release-plz Preflight 호출 제거됨, dispatch 라벨용 존치)
 #   full        → manual full validation
 # =============================================================================
@@ -94,7 +94,7 @@ jobs:
             esac
           fi
 
-          # CI 다이어트 (.docs/planning/2026-08-25-ci-diet-proposal.md P1):
+          # 실행 모드별 검증 범위:
           # PR = 빠른 피드백(fmt/clippy/test/audit/lint), 머지 큐 = 최종
           # 전체 게이트(coverage/MSRV/deny/docs build). skip 된 required
           # check 는 GitHub 가 충족으로 취급하므로 PR 의 MSRV/deny skip 은
@@ -113,7 +113,7 @@ jobs:
               run_msrv=true
               ;;
             release)
-              # P2: 큐가 방금 게이트한 커밋 — Preflight 는 release-plz.yml
+              # 큐가 방금 게이트한 커밋 — Preflight 는 release-plz.yml
               # 에서 호출 자체를 제거했고, 이 모드는 수동 dispatch 용 최소만.
               run_coverage=false
               run_deny=false
@@ -324,9 +324,9 @@ jobs:
       - name: cargo +1.89 check
         # 1.92 를 선언한 크레이트는 넷이고, 전부 publish=false 라 MSRV 소비자
         # 계약이 없다 — 1.89 레인에서 제외하고 아래 1.92 스텝이 커버한다.
-        #   smithy-pdf     krilla 0.8 가 1.92 요구 (W2 계획 §6-7)
-        #   bindings-cli   W6a 부터 smithy-pdf 소비
-        #   convert        ops::to_pdf 가 smithy-pdf 소비 (Python 바인딩 에픽 §2.2)
+        #   smithy-pdf     krilla 0.8 가 1.92 요구
+        #   bindings-cli   smithy-pdf 소비
+        #   convert        ops::to_pdf 가 smithy-pdf 소비
         #   bindings-py    convert 소비
         run: >-
           cargo +1.89 check --workspace --all-features
@@ -347,25 +347,25 @@ jobs:
       - name: cargo check (standalone fuzz workspace)
         # fuzz 는 루트 워크스페이스에서 제외된 별도 워크스페이스라 위 명령들이
         # 건드리지 않는다. convert 를 path 로 의존하므로 convert 의 MSRV 상향이
-        # 여기서만 조용히 깨질 수 있다 — 스모크로 잡는다 (계획 §2.3 R3 #5).
+        # 여기서만 조용히 깨질 수 있다 — 스모크로 잡는다.
         run: cargo +1.92 check --manifest-path fuzz/Cargo.toml
 
   python:
     name: "Verify › Python"
     # 경로 필터도 `if:` 도 없이 PR·머지 큐 양쪽에서 무조건 실행한다. skip 된
-    # 체크런은 GitHub 가 required 를 "충족" 으로 취급하므로(CI 다이어트 P1 과
+    # 체크런은 GitHub 가 required 를 "충족" 으로 취급하므로(CI 모드 분리와
     # 같은 메커니즘) 이 잡에 조건을 걸면 실패가 통과로 둔갑한다 — `plan` 과
     # 같은 무조건 실행 모양을 쓰고, 다른 잡 결과에도 의존하지 않는다.
     #
     # required checks 등록은 관리자(사용자) 작업이다: 이 체크 컨텍스트가 PR 에
     # 처음 나타난 뒤 큐 등록 전에 `Verify › Python` 을 브랜치 보호에 추가하고
-    # `gh api` 출력을 `.docs/prs/` 에 기록한다 (Python 바인딩 계획 W1d 행).
+    # `gh api` 출력을 PR 기록에 남긴다.
     #
     # ubuntu-22.04 고정 = glibc 2.35. 인터프리터 테스트와 sdist 는 러너에서 바로
     # 돌고, 후보 wheel 만 manylinux_2_28 컨테이너에서 만든다 — 그래야 PR 에서
-    # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다(계획 부록 A-1).
+    # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다.
     runs-on: ubuntu-22.04
-    # W0 (h): CI 시간은 이 첫 run 이 실측이다. 계획의 초기값은 20 분이지만 이 잡은
+    # CI 시간은 이 첫 run 이 실측이다. 이 잡은
     # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + manylinux 컨테이너
     # 안의 또 한 벌 cold release 빌드까지 한 잡에서 치른다 — required 가 될 잡을
     # 타임아웃으로 빨갛게 만드는 비용이 넉넉한 상한보다 크므로 40 에서 시작하고
@@ -389,7 +389,7 @@ jobs:
       - name: Install CPython 3.9 / 3.11 / 3.14
         # 최소·중간·최신 표준 빌드. wheel 은 abi3-py39 하나뿐이라 인터프리터가
         # 늘어도 산출물은 하나다. free-threaded 빌드는 stable ABI 가 없어
-        # 미지원(패키지 사양 §2) — 여기서도 표준 빌드만 설치한다.
+        # 미지원 — 여기서도 표준 빌드만 설치한다.
         run: uv python install 3.9 3.11 3.14
       - name: Install Rust toolchain
         run: rustup show
@@ -484,7 +484,7 @@ jobs:
           working-directory: crates/hwpforge-bindings-py
           args: --release --out ${{ github.workspace }}/dist
       - name: Build sdist
-        # 사양 §7 이 약속한 sdist. maturin 은 워크스페이스 path 의존성을 sdist 안에
+        # 배포할 sdist. maturin 은 워크스페이스 path 의존성을 sdist 안에
         # 함께 넣고 members 목록을 줄여 다시 쓴다 (로컬 실측: 10 크레이트 + 루트
         # Cargo.toml + Cargo.lock 이 들어간다).
         working-directory: crates/hwpforge-bindings-py
@@ -516,7 +516,7 @@ jobs:
       - name: Verify sdist is self-contained
         # 체크아웃 **밖**에 풀어서, 남아 있는 path 의존성이 원본 트리로 새는 것을
         # 구조적으로 막는다. `pip install` 로 검증하지 않는다 — cold release 컴파일
-        # 이라 이 잡의 예산을 넘는다. 실제 설치 리허설은 W1e 의 TestPyPI 단계다.
+        # 이라 이 잡의 예산을 넘는다. 실제 설치 리허설은 TestPyPI 단계다.
         run: |
           set -euo pipefail
           sd="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
@@ -553,7 +553,7 @@ jobs:
             cargo check --manifest-path "$ext/Cargo.toml" -p hwpforge-bindings-py
       - name: Bundle smoke script + fixture
         # 아티팩트 하나로 "wheel + 재현 스크립트 + fixture" 가 되게 한다
-        # (계획 §8 결정 8 — 미배포 후보를 상대에게 전달해 검증 피드백을 받는다).
+        # (미배포 후보를 상대에게 전달해 검증 피드백을 받는다).
         run: |
           set -euo pipefail
           cp crates/hwpforge-bindings-py/tests/smoke_unpacked_wheel.py dist/
@@ -566,7 +566,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
       - name: Debian 12 unpack smoke (no pip)
-        # 계획 부록 A-1: pip 를 부르지 않고 wheel 을 풀어 PYTHONPATH 로만
+        # pip 를 부르지 않고 wheel 을 풀어 PYTHONPATH 로만
         # import → open → outline → fill → save → to_json. 컨테이너 페이로드는
         # 파일로 써서 넘긴다 — YAML 안의 중첩 따옴표 한 줄짜리는 actionlint 의
         # shellcheck 를 깨뜨린다.
@@ -607,7 +607,7 @@ jobs:
           fi
       - name: Verify Python-toolchain actions are SHA-pinned
         # 파이썬 빌드·배포 경로의 서드파티 액션은 태그가 아니라 40자리 커밋 SHA
-        # 로만 참조한다 (설계 §2.4 — 태그는 옮겨 붙을 수 있고, 이 액션들은 wheel
+        # 로만 참조한다 (태그는 옮겨 붙을 수 있고, 이 액션들은 wheel
         # 을 만들어 PyPI 로 보내는 경로에 있다). 태그는 뒤에 주석으로 남긴다.
         run: |
           set -euo pipefail

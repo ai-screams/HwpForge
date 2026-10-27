@@ -47,6 +47,7 @@ fn produced(kind: SchemaKind) -> serde_json::Value {
 const ALL: [SchemaKind; 3] =
     [SchemaKind::Document, SchemaKind::ExportedDocument, SchemaKind::ExportedSection];
 
+// 이것을 실패시키는 것: schema golden의 설명 한 곳을 정리 전 단계 이름으로 되돌리기.
 #[test]
 fn each_schema_matches_the_snapshot_taken_from_the_cli() {
     for kind in ALL {
@@ -131,7 +132,7 @@ fn an_unknown_kind_name_is_rejected_with_the_valid_ones_listed() {
     assert!(err.to_string().contains("exported-section"), "{err}");
 }
 
-/// Group JSON as 0.16.10 wrote it (`to-json` of Hancom's F1 g4, a nested
+/// Group JSON as 0.16.10 wrote it (`to-json` of Hancom's group, a nested
 /// group, converted from HWP5 by that release; its children are plain shape
 /// controls) validates against the schema this release publishes and reads
 /// into the same groups, every child a shape.

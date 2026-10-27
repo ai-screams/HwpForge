@@ -1,9 +1,8 @@
-//! Wire↔Core 텍스트 좌표 맵 (W1b) — 이 crate 내부 전용.
+//! Wire↔Core 텍스트 좌표 맵 — 이 crate 내부 전용.
 //!
 //! wire 좌표(HWP5 raw 스트림 = 한컴 HWPX linesegarray textpos 규약)와
 //! Core 정준 좌표(`Paragraph::text_content()` UTF-16 축) 사이의 변환을
-//! 담당한다. 설계 정본: `.docs/planning/2026-08-13-image-textbox-epic.md`
-//! §1g v5 (Codex 4라운드 확정 수학 법칙).
+//! 담당한다. 각 경계에서 누적된 wire/Core 길이 차이를 적용한다.
 //!
 //! ## 모델
 //!
@@ -24,8 +23,7 @@
 //!   (단 core 0 은 canonicalization 으로 항상 wire 0).
 //!
 //! ⚠️ smithy-hwp5 의 동명 모듈과 **동형** — conformance vector 테스트를
-//! 양쪽에 복제해 drift 를 방지한다 (Core 로의 승격은 계층 누수라 기각,
-//! §1g v2 disposition #2).
+//! 양쪽에 복제해 drift 를 방지한다 (Core 로의 승격은 계층 누수라 기각).
 
 use std::fmt;
 
@@ -109,7 +107,7 @@ pub(crate) struct WireTextMap {
     /// Core 축 총길이.
     core_end: u32,
     /// 각 span 시작의 Core 위치(span 순서, 비감소) — 좌표 변환은 이것과
-    /// `spans` 의 wire 시작을 이진 탐색한다(S22 r2: 줄마다 span 을 앞에서부터
+    /// `spans` 의 wire 시작을 이진 탐색한다(줄마다 span 을 앞에서부터
     /// 훑지 않는다).
     core_start: Vec<u32>,
 }
@@ -130,12 +128,12 @@ impl WireTextMap {
     /// **문단부호 sentinel (wire끝+1)**: Square 어울림 앵커가 행을 좌/우로
     /// 쪼갠 문단에서, 텍스트 소진 후의 오른쪽 빈 세그먼트 lineseg 를
     /// 한컴이 문단부호 좌표(= wire끝+1)로 방출한다 — byte 확정 실측 2건
-    /// (에픽 문서 §10h: 52/[0,51] · 267/[0,266]). Core 끝으로 수용한다.
+    /// (52/[0,51] · 267/[0,266]). Core 끝으로 수용한다.
     /// 그 외 초과는 기존대로 [`CacheMapError::OutOfRange`] (임의 클램프
     /// 금지). **HWPX 실측 한정** — HWP5 동형 사본에는 native 실측 전
     /// 이식 금지. 왕복 비대칭: 재인코드([`Self::to_wire`])는 축약점
     /// 규약(earliest preimage)대로 방출하므로 이 sentinel 은 byte
-    /// 복제되지 않는다 (known 정규화 — §11b F2).
+    /// 복제되지 않는다 (known 정규화).
     pub(crate) fn to_core(&self, wire: u32) -> Result<u32, CacheMapError> {
         if self.wire_end.checked_add(1) == Some(wire) {
             return Ok(self.core_end);
@@ -166,9 +164,9 @@ impl WireTextMap {
     /// Core 좌표 → wire 좌표.
     ///
     /// **축약점(영-core span 경계, preimage ≥ 2)은 earliest preimage**
-    /// (marker 시작) — W3 실측 개정 (에픽 문서 §7): native 셀 fixture
+    /// (marker 시작) — 한컴 실측: native 셀 fixture
     /// 2건의 raw tp 가 모두 marker 시작이고, 첫 lineseg tp=0 전수
-    /// 불변식(13,598건)도 동일 규약이다 (W1b 의 Err 는 미측정 시점의
+    /// 불변식(13,598건)도 동일 규약이다 (Err 는 미측정 시점의
     /// fail-closed — 측정이 규약을 확정함). `AmbiguousPreimage` 는
     /// 다중-core span 내부(현 span 종류엔 없음 — 방어)에만 남는다.
     pub(crate) fn to_wire(&self, core: u32) -> Result<u32, CacheMapError> {
@@ -178,8 +176,8 @@ impl WireTextMap {
         if core == 0 {
             return Ok(0);
         }
-        // The first span that starts at or after `core` decides (S22 r2:
-        // binary search, not a walk from the front).
+        // The first span that starts at or after `core` decides (binary search,
+        // not a walk from the front).
         // 이것을 실패시키는 것: span 을 앞에서부터 훑기
         // (`conversions_after_many_spans_stay_logarithmic`).
         let at = self.core_start.partition_point(|&start| {
@@ -319,7 +317,7 @@ impl WireMapBuilder {
     }
 }
 
-/// 영-core wire 토큰 하나 (S22) — 줄 경계의 종류 열을 적는다.
+/// 영-core wire 토큰 하나 — 줄 경계의 종류 열을 적는다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZeroToken {
     /// 토큰이 놓인 Core 위치.
@@ -332,7 +330,7 @@ pub(crate) struct ZeroToken {
     pub kind: hwpforge_core::layout::WireTokenKind,
 }
 
-/// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵([`WireTextMap`])과
+/// 문단의 영-core 토큰 목록, wire 순서. 좌표 맵([`WireTextMap`])과
 /// 나란히 기록하고 맵 자체는 바꾸지 않는다 — 경계 없는 줄은 지금처럼
 /// 변환된다.
 ///
@@ -397,7 +395,7 @@ impl TokenLedger {
     /// 시작과 끝이 이 문단에 다 있는 필드만 본다. 문단을 가로지르는 필드(한컴
     /// 보도자료 서식의 "본문" 누름틀 — 한컴 저장 HWPX 3,517 문서 중 858)는
     /// 시작·끝 토큰만 영-core 이고 본문 글자가 1:1 이라 줄 자리가 Core 글자와
-    /// 맞는다(S22 r1 실측: 시작·끝이 든 문단 1,719 개의 둘째 줄부터 3,199 줄 중
+    /// 맞는다(실측: 시작·끝이 든 문단 1,719 개의 둘째 줄부터 3,199 줄 중
     /// 불일치 10, 모두 필드와 무관 — 보조 평면 글자 8, `<hp:fwSpace/>` 뒤
     /// 공백뿐인 꼬리 2). 시작과 같은 run 에서 접힌 본문 안의 줄은 좌표 맵이
     /// 수축 안쪽으로 거부한다.
@@ -429,7 +427,7 @@ impl TokenLedger {
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
         let here = self.at(core);
-        // S22 r2: binary search for the tokens before `wire`, then read only
+        // Binary search for the tokens before `wire`, then read only
         // that prefix and the token after it.
         let k = here.partition_point(|&i| self.tokens[i].wire_start < wire);
         (k > 0).then(|| {
@@ -488,7 +486,7 @@ impl TokenLedger {
                 }
             }
         }
-        // S22 r2: only the skipped prefix and the token after it are read.
+        // Only the skipped prefix and the token after it are read.
         self.count_visits(k.min(here.len()) + 1);
         if !matches {
             return Err(format!(
@@ -533,7 +531,7 @@ impl TokenLedger {
 mod tests {
     use super::*;
 
-    /// The walk from the front `to_core` used before (S22 r2), as the oracle.
+    /// The walk from the front `to_core` used before, as the oracle.
     fn walked_to_core(map: &WireTextMap, wire: u32) -> Result<u32, CacheMapError> {
         if map.wire_end.checked_add(1) == Some(wire) {
             return Ok(map.core_end);
@@ -556,7 +554,7 @@ mod tests {
         Ok(core_cursor + (wire - wire_cursor))
     }
 
-    /// The walk from the front `to_wire` used before (S22 r2), as the oracle.
+    /// The walk from the front `to_wire` used before, as the oracle.
     fn walked_to_wire(map: &WireTextMap, core: u32) -> Result<u32, CacheMapError> {
         if core > map.core_end {
             return Err(CacheMapError::OutOfRange { pos: core, end: map.core_end });
@@ -583,7 +581,7 @@ mod tests {
         Ok(wire_cursor + (core - core_cursor))
     }
 
-    /// S22 r2: the binary searches give the walk's answer at every position,
+    /// The binary searches give the walk's answer at every position,
     /// over maps that mix zero-width tokens, tabs, runs of tokens, and text.
     /// 이것을 실패시키는 것: 탐색 경계를 한 칸 어긋나게(`<` 를 `<=` 로) 하는 것.
     #[test]
@@ -622,7 +620,7 @@ mod tests {
         }
     }
 
-    /// S22 r2: 16,000 zero-width tokens, one character, then 16,000 lines
+    /// 16,000 zero-width tokens, one character, then 16,000 lines
     /// after it — each conversion searches the spans, it does not walk them.
     /// 이것을 실패시키는 것: 좌표 변환을 앞에서부터 span 을 훑는 것으로
     /// 되돌리기(검사한 span 수가 N² 로 는다).
@@ -644,11 +642,11 @@ mod tests {
         assert!(visits <= 40 * u64::from(n), "{visits} spans checked for {n} lines");
     }
 
-    /// S22 r1: the per-line lookups use the ledger's index — N lines over
+    /// The per-line lookups use the ledger's index — N lines over
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
     /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
     /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
-    /// S22 r2: N tokens and N lines at one Core position (bookmarks with no
+    /// N tokens and N lines at one Core position (bookmarks with no
     /// text, every line at 0) — each lookup reads only the prefix it needs,
     /// not the whole position.
     /// 이것을 실패시키는 것: 조회마다 그 위치의 토큰 전체를 복제·순회하는 것
@@ -700,7 +698,7 @@ mod tests {
     /// conformance vector — smithy-hwp5 의 동명 모듈 테스트와 동일하게
     /// 유지할 것 (동형성 게이트).
     fn marker_ledger_p1() -> WireTextMap {
-        // rules-marker-ledger p1: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
+        // 한컴 새 번호 문단 실측: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
         // raw lineseg [0, 76, 132] → core [0, 60, 116].
         let mut b = WireMapBuilder::new();
         b.advance_identity(17);
@@ -719,7 +717,7 @@ mod tests {
         assert_eq!(map.core_end(), 0);
         assert_eq!(map.to_core(0), Ok(0));
         assert_eq!(map.to_wire(0), Ok(0));
-        // wire끝+1 = 문단부호 sentinel (§10h) — 빈 문단에도 문단부호는
+        // wire끝+1 = 문단부호 sentinel — 빈 문단에도 문단부호는
         // 존재하므로 수용된다. +2 부터 거부.
         assert_eq!(map.to_core(1), Ok(0));
         assert_eq!(map.to_core(2), Err(CacheMapError::OutOfRange { pos: 2, end: 0 }));
@@ -801,7 +799,7 @@ mod tests {
     fn mid_paragraph_collapse_point_resolves_to_earliest_preimage() {
         let map = marker_ledger_p1();
         // core 17 의 preimage = {17, 25, 33} (연속 영-core span) —
-        // earliest(marker 시작) 확정 (W3 실측 개정).
+        // earliest(marker 시작) 확정 (실측 개정).
         assert_eq!(map.to_wire(17), Ok(17));
         // 왕복: earliest 로 되돌려도 core 는 동일.
         assert_eq!(map.to_core(17), Ok(17));
@@ -821,7 +819,7 @@ mod tests {
         assert_eq!(map.to_wire(3), Ok(3));
     }
 
-    // ── 문단부호(+1) sentinel (§10h — Square 앵커 분할 행) ─────────
+    // ── 문단부호(+1) sentinel (Square 앵커 분할 행) ─────────
 
     #[test]
     fn paragraph_mark_sentinel_maps_to_core_end() {
@@ -854,7 +852,7 @@ mod tests {
 
     #[test]
     fn paragraph_mark_sentinel_roundtrip_normalizes_to_contraction_point() {
-        // 왕복 비대칭 잠금 (§11b F2 Critical): sentinel 로 디코드한
+        // 왕복 비대칭 잠금: sentinel 로 디코드한
         // core_end 를 재인코드하면 축약점 규약(earliest preimage = marker
         // 시작 = 43)대로 방출된다 — 원본 byte(+1 sentinel = 52)는 복제되지
         // 않는다 (known 정규화, 인코드 방향 byte 복제는 스코프 아님).
@@ -916,7 +914,7 @@ mod tests {
         // (1,0) span 은 strict interior 가 없음 — 경계만 존재.
         assert_eq!(map.to_core(1), Ok(1));
         assert_eq!(map.to_core(2), Ok(1));
-        // 축약점 {1,2} — earliest preimage (W3 실측 개정).
+        // 축약점 {1,2} — earliest preimage (실측 개정).
         assert_eq!(map.to_wire(1), Ok(1));
     }
 

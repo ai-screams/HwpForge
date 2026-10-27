@@ -196,7 +196,7 @@ pub(crate) fn summarize_hwpx_section(
         .iter()
         .filter(|paragraph| paragraph_has_visible_text_deep(paragraph))
         .count();
-    // ADR-002: sum across every `<hp:header>` / `<hp:footer>` in the Vec.
+    // Sum across every `<hp:header>` / `<hp:footer>` in the Vec.
     let deep_paragraphs: usize = count_paragraphs_recursive(&section.paragraphs)
         + section.headers.iter().map(|h| count_paragraphs_recursive(&h.paragraphs)).sum::<usize>()
         + section.footers.iter().map(|f| count_paragraphs_recursive(&f.paragraphs)).sum::<usize>();
@@ -474,9 +474,7 @@ fn count_non_empty_paragraphs_recursive(paragraphs: &[Paragraph]) -> usize {
 
 fn count_runs_paragraphs(run: &hwpforge_core::run::Run) -> usize {
     match &run.content {
-        // Text-bearing variants have no nested paragraph children — see
-        // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
-        // §3a-A for the per-site classification.
+        // Text-bearing variants have no nested paragraph children.
         RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => 0,
         RunContent::Table(table) => table
             .rows
@@ -545,7 +543,7 @@ fn first_visible_text_in_run_deep(run: &hwpforge_core::run::Run) -> Option<Strin
         // semantic — `plain_text()` returns the tab-equivalent string
         // for `InlineText` so the visible-text count stays accurate
         // when a paragraph carries `RunContent::InlineText` after the
-        // HWPX decoder InlineText carry (Phase 3 of Wave 4 tab fixes).
+        // HWPX decoder InlineText carry (tab fixes).
         RunContent::Text(_) | RunContent::InlineText(_) => {
             let cow = run.content.plain_text()?;
             let trimmed = cow.trim();

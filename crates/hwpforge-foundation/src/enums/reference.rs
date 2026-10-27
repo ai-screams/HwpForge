@@ -90,7 +90,7 @@ impl schemars::JsonSchema for BookmarkType {
 /// SUMMERY-family auto-fields (HWPX `<hp:fieldBegin type="SUMMERY">`,
 /// HWP5 `%smr` ctrl_id) that resolve to document metadata at render time.
 ///
-/// Wave 12n (2026-06-02) breaking: legacy `Date`/`Time`/`DocSummary`/`UserInfo`
+/// (2026-06-02) breaking: legacy `Date`/`Time`/`DocSummary`/`UserInfo`
 /// variants were renamed to match the actual HWPX `Command` token and 한컴
 /// menu item, and `PageNum` was moved out to `Control::InlinePageNumber`
 /// because the wire family is `atno`, not SUMMERY/fieldBegin.
@@ -109,7 +109,7 @@ pub enum FieldType {
     CreatedTime = 3,
     /// SUMMERY `$modifiedtime` — 마지막 저장한 날짜 (was `FieldType::Date`).
     ModifiedTime = 4,
-    /// SUMMERY `$title` — 문서 제목 (NEW in Wave 12n).
+    /// SUMMERY `$title` — 문서 제목.
     Title = 5,
 }
 
@@ -144,7 +144,7 @@ impl FieldType {
     }
 
     /// Returns the HWPX `<hp:fieldBegin editable="…">` value for this
-    /// field type (Wave 12p task #124).
+    /// field type (task #124).
     ///
     /// Native document-summary field behavior:
     /// - `Author`, `Title` → `false` (stable user metadata; Hancom keeps
@@ -186,7 +186,7 @@ impl std::str::FromStr for FieldType {
         match s {
             "CLICK_HERE" | "ClickHere" | "click_here" => Ok(Self::ClickHere),
             "AUTHOR" | "Author" | "author"
-            // legacy Wave 12l alias: DocSummary used to emit $author
+            // legacy alias: DocSummary used to emit $author
             | "DOC_SUMMARY" | "DocSummary" | "doc_summary" => Ok(Self::Author),
             "LAST_SAVED_BY" | "LastSavedBy" | "last_saved_by"
             // legacy alias: UserInfo used to emit $lastsaveby
@@ -245,11 +245,11 @@ impl schemars::JsonSchema for FieldType {
 
 /// Target type of a cross-reference (상호참조).
 ///
-/// Wave 12m Phase 2 (Codex(architect+critic) review 반영):
+///
 /// - `#[repr(u8)]` 제거 — HWP5 wire 코드는 boundary 에서 매핑 (Core/foundation
 ///   은 wire-agnostic 의미 모델만 유지).
 /// - `Footnote` / `Endnote` / `Outline` 추가 (한컴 native dropdown 7 종 완비).
-/// - `Unknown(u8)` tuple variant 추가 — silent fallback 위조 방지 (Codex HIGH).
+/// - `Unknown(u8)` tuple variant 추가 — silent fallback 위조 방지.
 ///
 /// HWP5 `%xrf` Command N1 코드 → `RefType` 변환은
 /// `smithy-hwp5/src/projection.rs::decode_hwp5_ref_type` 에서 수행.
@@ -332,14 +332,14 @@ impl schemars::JsonSchema for RefType {
 
 /// Content display type for a cross-reference (what to show at the reference site).
 ///
-/// Wave 12m Phase 2 (Codex(architect+critic) review 반영):
+///
 /// - `#[repr(u8)]` 제거 — N2 wire 코드는 boundary 에서 매핑.
 /// - `Unknown(u8)` 추가 — silent fallback 위조 방지.
 ///
-/// Wave 12p pre-fix (Wave 12m fixup regression revert + 한컴 native
+/// pre-fix (fixup regression revert + 한컴 native
 /// wire 일치 보정, 2026-06-08):
 ///
-/// Wave 12m fixup 에서 `BookmarkName` 폐기 + Bookmark+Contents 를 N2=2
+/// fixup 에서 `BookmarkName` 폐기 + Bookmark+Contents 를 N2=2
 /// 로 통일했으나, native wire 분석 결과 정반대였음:
 ///
 /// | HWP5 N2 (Bookmark) | 한컴 의미     | HWPX RefContentType 문자열 |
@@ -352,10 +352,10 @@ impl schemars::JsonSchema for RefType {
 /// (책갈피의 wire 는 OWPML spec 표 156 의 직관과 어긋남 — `CONTENTS`
 /// 가 "책갈피 이름", `NUMBER` 가 "책갈피 내용" 의미.)
 ///
-/// E6 슬라이스 B (2026-06-28): 한때 분리됐던 `BookmarkName` variant 를
+/// (2026-06-28): 한때 분리됐던 `BookmarkName` variant 를
 /// `Contents` 로 흡수 — wire(N2=2)·Display(`OBJECT_TYPE_CONTENTS`) 가
 /// 동일하고, Bookmark vs caption 구분은 동반 [`RefType`] 가 carry
-/// (gotcha #27 — wire 모호성을 content variant 에 prebake 하지 않음).
+/// (wire 모호성을 content variant 에 prebake 하지 않음).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum RefContentType {
@@ -366,11 +366,11 @@ pub enum RefContentType {
     /// - Footnote/Endnote/Caption/Outline: "주 번호" / "표 번호" / "그림 번호" / "개요 번호" (N2=1)
     /// - Bookmark: **책갈피 본문 / 번호 텍스트** (N2=1, 한컴 wire 특이성)
     Number,
-    /// Show the target's content. 의미는 RefType-상대적 (gotcha #27 —
-    /// disambiguation 은 동반 [`RefType`] 가 carry, content variant 가 아님):
+    /// Show the target's content. 의미는 RefType-상대적이다.
+    /// 동반 [`RefType`] 가 의미를 구분하며 content variant 는 이를 구분하지 않는다:
     /// - Figure/Table/Equation: "캡션 내용" (N2=2)
     /// - Outline: "개요 내용" (N2=2)
-    /// - Bookmark: **책갈피 이름** "bookmark name" (N2=2). E6 슬라이스 B 에서
+    /// - Bookmark: **책갈피 이름** "bookmark name" (N2=2).
     ///   이전 `BookmarkName` variant 를 흡수 — wire(N2=2)·Display
     ///   (`OBJECT_TYPE_CONTENTS`) 가 동일하므로 별도 variant 불필요.
     ///   (책갈피의 "본문/번호" 의미는 [`RefContentType::Number`] 가 carry, N2=1.)
@@ -389,7 +389,7 @@ impl fmt::Display for RefContentType {
             Self::Number => f.write_str("OBJECT_TYPE_NUMBER"),
             // `Contents` → `OBJECT_TYPE_CONTENTS`. 의미 구분(Bookmark N2=2
             // = 책갈피 이름 vs Figure/Table/Eq/Outline N2=2 = 캡션 내용)은
-            // 동반 RefType 가 carry (gotcha #27). E6 슬라이스 B 에서
+            // 동반 RefType 가 carry.
             // `BookmarkName` variant 를 `Contents` 로 흡수 (wire 동일).
             Self::Contents => f.write_str("OBJECT_TYPE_CONTENTS"),
             Self::UpDownPos => f.write_str("OBJECT_TYPE_UPDOWNPOS"),
@@ -407,7 +407,7 @@ impl std::str::FromStr for RefContentType {
             "OBJECT_TYPE_NUMBER" | "Number" | "number" => Ok(Self::Number),
             // `OBJECT_TYPE_CONTENTS` → `Contents`. Bookmark N2=2(책갈피
             // 이름) vs caption-content 구분은 동반 RefType 가 carry
-            // (gotcha #27) — content variant 는 단일 `Contents`.
+            // — content variant 는 단일 `Contents`.
             "OBJECT_TYPE_CONTENTS" | "Contents" | "contents" => Ok(Self::Contents),
             "OBJECT_TYPE_UPDOWNPOS" | "UpDownPos" | "updownpos" => Ok(Self::UpDownPos),
             _ => Err(FoundationError::ParseError {

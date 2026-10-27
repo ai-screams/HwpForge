@@ -19,7 +19,7 @@ use super::{
     Hwp5Warning, CTRL_ID_GSO, GSO_GROUP_MAX_DEPTH, SHAPE_COMPONENT_TYPE_GROUP,
 };
 
-/// The property word of a shape's text `LIST_HEADER` (§19.22 D4): a u32
+/// The property word of a shape's text `LIST_HEADER`: a u32
 /// paragraph count, then the property word at bytes 4..8 — not the cell
 /// layout (u16 count) the three readers used before, which put the vertical
 /// align two bytes off. Every shape text list in the corpus is 20, 28, 33 or
@@ -31,7 +31,7 @@ pub(super) fn shape_text_list_properties(data: &[u8]) -> Option<u32> {
     data.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// The inner margin of a shape's text `LIST_HEADER` (§19.22 D4): bytes
+/// The inner margin of a shape's text `LIST_HEADER`: bytes
 /// 8..16, left, right, top, bottom (Hancom twins match `textMargin` in all
 /// 348 text boxes). `None` when shorter than 16 bytes.
 ///
@@ -66,11 +66,11 @@ pub(super) struct GsoClassificationInput {
     pub(super) text_art: Option<Hwp5ShapeTextArt>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
     pub(super) shape_component_kind: Option<[u8; 4]>,
-    /// Wave 12p Step 1c-3: `gso ` CtrlHeader trailer instance ID,
+    /// `gso ` CtrlHeader trailer instance ID,
     /// passed through to `Hwp5ImageControl` (and other typed GSO
     /// variants in the future).
     pub(super) instance_id: u32,
-    /// W2p: GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
+    /// GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
     /// bit0 = 글자처럼 취급 — `Hwp5ImageControl::ctrl_properties` 로 carry.
     pub(super) ctrl_properties: u32,
     /// The shape's hyperlink (a picture keeps it).
@@ -166,7 +166,7 @@ impl GsoChildBuilder {
     /// `drawText` paragraphs ride alongside so the projection layer can build
     /// a text-bearing `Control::TextBox` (rects) or `ellipse_with_text`
     /// (ellipses). A nested `$con` (group inside a group) is normally recursed
-    /// through [`GsoActiveChild::Nested`] (Wave B); this leaf path only sees a
+    /// through [`GsoActiveChild::Nested`]; this leaf path only sees a
     /// `$con` kind when the [`GSO_GROUP_MAX_DEPTH`] cap forced the nested group
     /// to degrade to a leaf, in which case it becomes `Unknown` with a warning.
     fn into_child(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
@@ -221,8 +221,8 @@ impl GsoChildBuilder {
             text_art: self.text_art,
             shape_component_kind: self.shape_component_kind,
             instance_id: 0,
-            // 그룹 자식의 개체 속성은 그룹 배치(W5)가 지배 — 자식 단독
-            // treat_as_char 는 W5 에서 해석.
+            // 그룹 자식의 개체 속성은 그룹 배치가 지배 — 자식 단독
+            // treat_as_char 는 그룹 배치에서 해석.
             ctrl_properties: 0,
             link: self.link,
             look: self.look,
@@ -247,9 +247,8 @@ impl GsoChildBuilder {
 ///
 /// Models the scope-stack discipline of [`TableContext`]: a child opens on a
 /// deeper `ShapeComponent` and closes when a record at or above its depth
-/// arrives. Wave A keeps a single live child at a time (flat children only);
-/// the [`GSO_GROUP_MAX_DEPTH`] cap is wired so Wave B's recursive `$con`
-/// handling is a small lift.
+/// arrives. A single live child is kept at a time; nested `$con` groups
+/// recurse within the [`GSO_GROUP_MAX_DEPTH`] cap.
 pub(super) struct GsoGroupBuilder {
     pub(super) wire_sequence: std::rc::Rc<std::cell::Cell<usize>>,
     /// Level of the `$con` `ShapeComponent` (`0x4C`) that opened this group.
@@ -272,7 +271,7 @@ pub(super) struct GsoGroupBuilder {
 }
 
 /// The live child of a [`GsoGroupBuilder`]: either a flat leaf shape or a
-/// nested group (`$con`-in-`$con`, Wave B). Boxed on the `Nested` arm to
+/// nested group (`$con`-in-`$con`). Boxed on the `Nested` arm to
 /// break the `GsoGroupBuilder` → `GsoActiveChild` → `GsoGroupBuilder` type
 /// cycle.
 pub(super) enum GsoActiveChild {
@@ -373,8 +372,8 @@ impl GsoGroupBuilder {
         }
 
         // A `ShapeComponent` (`0x4C`) one level below the `$con` opens a new
-        // child. A nested `$con` child opens a recursive `GsoGroupBuilder`
-        // (Wave B); any other shape opens a flat leaf builder.
+        // child. A nested `$con` child opens a recursive `GsoGroupBuilder`;
+        // any other shape opens a flat leaf builder.
         if matches!(tag, TagId::CtrlData) && level == self.comp_depth.saturating_add(1) {
             self.has_link = true;
             return;

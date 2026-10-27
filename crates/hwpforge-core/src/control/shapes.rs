@@ -298,7 +298,7 @@ pub struct ShapeStyle {
 mod gradient_json_tests {
     use super::*;
 
-    // S13: 필드 없는 옛 JSON 은 `None` 으로 읽고, `None` 은 쓰지 않는다.
+    // 필드 없는 옛 JSON 은 `None` 으로 읽고, `None` 은 쓰지 않는다.
     // 이것을 실패시키는 것: `skip_serializing_if` 를 빼기(옛 그러데이션 JSON 에
     // `null` 넷이 생김).
     #[test]

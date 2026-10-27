@@ -1,4 +1,4 @@
-//! Structural paragraph editing (E4): insert / delete top-level paragraphs.
+//! Structural paragraph editing: insert / delete top-level paragraphs.
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
@@ -13,7 +13,7 @@ use hwpforge::ops::OpsWarning;
 /// Renders one warning into this file's `Vec<String>` shape: a
 /// [`OpsWarning::Structural`] advisory keeps its own `Display` (unchanged,
 /// pre-migration behaviour); every other kind — chiefly `Decode`, for
-/// example `LAYOUT_CACHE_DROPPED` (W5 follow-up: previously dropped here,
+/// example `LAYOUT_CACHE_DROPPED` (previously dropped here,
 /// see the `run_delete`/`run_insert` comments) — renders as `"{code}:
 /// {message}"` via [`OpsWarning::info`].
 fn render_warning(warning: &OpsWarning) -> String {
@@ -45,10 +45,10 @@ pub fn run_delete(
     let opts = DeleteParaOptions::default().with_section(section).with_indexes(indices.to_vec());
     match ops_delete_para(&bytes, &opts) {
         Ok(out) => {
-            // Pre-W5, only the advisory scan's own warnings were ever
+            // Previously, only the advisory scan's own warnings were ever
             // printed here — the decode warnings `ops::edit::delete_para`
             // also carries stayed unsurfaced (the legacy command never
-            // reported decode warnings either). W5 follow-up: additive —
+            // reported decode warnings either). additive —
             // every warning now renders via `render_warning`, so a decode
             // warning (for example `LAYOUT_CACHE_DROPPED`) joins the same
             // `warnings` array/stderr lines an `INDEX_MARK_REMOVED` advisory
@@ -100,7 +100,7 @@ pub fn run_insert(
             // `insert_para` has no advisory scan (module docs,
             // `hwpforge/src/ops/edit.rs`), so every entry here is a decode
             // warning (for example `LAYOUT_CACHE_DROPPED`) — unsurfaced
-            // pre-W5 (this command printed no warnings at all). W5
+            // previously (this command printed no warnings at all).
             // follow-up: additive — mirrors `run_delete`'s shape (`warnings`
             // key always present, one `warning: {…}` stderr line each).
             let warnings: Vec<String> = out.warnings.iter().map(render_warning).collect();

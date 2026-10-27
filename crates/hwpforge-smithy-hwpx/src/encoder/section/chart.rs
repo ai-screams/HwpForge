@@ -6,7 +6,7 @@
 
 use super::*;
 
-/// Builds the full `<hp:run>` XML for a [`Control::EmbeddedChart`] (Wave 4c).
+/// Builds the full `<hp:run>` XML for a [`Control::EmbeddedChart`].
 ///
 /// Emits the marker-replaced run that 한컴 expects for a HWP5-sourced
 /// chart carry:

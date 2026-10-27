@@ -1,4 +1,4 @@
-//! Two-document diff (E5): verify what an edit actually changed.
+//! Two-document diff: verify what an edit actually changed.
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
@@ -18,7 +18,7 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     let revised_bytes = read_input(revised, json_mode, Command::Diff);
 
     // Decoder warnings from both inputs (`DiffOutput::warnings`) were not
-    // surfaced pre-W5 (the pre-migration CLI never captured them either). W5
+    // surfaced previously (the pre-migration CLI never captured them either).
     // follow-up: additive — a new, omit-if-empty `warnings` key in `--json`,
     // and one `[diff]`-prefixed stderr line each in text mode.
     let out = match ops::diff(&base_bytes, &revised_bytes) {

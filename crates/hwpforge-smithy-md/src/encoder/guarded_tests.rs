@@ -1,4 +1,4 @@
-//! The styled view's guarantee for document text (design 018 G): in a Body
+//! The styled view's guarantee for document text: in a Body
 //! block — a top-level body paragraph that is not a continuation — and in a
 //! guarded cell, document text makes no block structure and comes back as
 //! the same characters; what a rule cannot close is written as plain text
@@ -213,9 +213,8 @@ mod cases {
         doc.validate().expect("valid")
     }
 
-    /// The fixture `fixture-md-lookalike` in the shape Hancom saved it (no
-    /// copy of the file): `auto` with the list paragraphs and the line
-    /// shape Hancom's auto-format made, else the literal text.
+    /// List-like text in the shape Hancom saved it: `auto` selects the list
+    /// paragraphs and line shape made by auto-format; otherwise, literal text.
     pub fn lookalike(auto: bool) -> Document<Validated> {
         let first = if auto {
             vec![p(BULLET, vec![t("항목처럼 보이는 글")]), p(NUMBER, vec![t("번호처럼 보이는 글")])]
@@ -441,12 +440,12 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g10_memo_body", "z<!-- memo: - x -->", "z"),
     ("g10_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |"),
     ("g10_image_caption", "![p](images/p.png)\n\n- x", "![p](BinData/p.png)"),
-    // g11: written by fa04fabf (G merged); continuations are drawn as at
+    // written by fa04fabf; continuations are drawn as at
     // 496371cf there.
     ("g11_cont_memo_list", "- a\n\n  <!-- memo: m -->- x", "a\n\n- x"),
     ("g11_cont_chart_number", "- a\n\n  <!-- chart -->1. x", "a\n\n1. x"),
     ("g11_cont1_memo_list", "  - a\n\n    <!-- memo: m -->- x", "a\n\n- x"),
-    // g12: written by 61d3631d (G2, before this writer).
+    // Written by commit 61d3631d, before this writer.
     ("g12_table_memo", "a\n| v |\n| --- |\n\n<!-- memo: m -->\n\\*x\\*", "a\n\n| v |\n| --- |\n\n*x*"),
     ("g12_caption_memo", "a\n| v |\n| --- |\n\ncap<!-- memo: m -->\\*x\\*", "a\n\n| v |\n| --- |\n\n\n\ncap\n\n*x*"),
     ("g12_picture_caption_memo", "a ![p](images/p.png)\n\n<!-- memo: m -->\n\\*x\\*", "a ![p](BinData/p.png)*x*"),
@@ -1005,7 +1004,7 @@ fn entity_split_is_closed_where_guarded() {
 }
 
 // ---------------------------------------------------------------------------
-// Memo anchors (review 1, HIGH): a memo inside another memo's anchor
+// Memo anchors: a memo inside another memo's anchor
 // ---------------------------------------------------------------------------
 
 /// A memo left standing in another memo's anchor is drawn the way an
@@ -1223,7 +1222,7 @@ fn nests(pieces: &[(bool, bool, bool)]) -> bool {
 /// character is read with its own emphasis, with no HTML and no warning,
 /// and the decoder reads it; where it crosses, the same, or the paragraph
 /// is written as plain text with one warning and every character kept. The
-/// review's four failing cases are among them.
+/// four delimiter-boundary cases are among them.
 /// 이것을 실패시키는 것: 구성 되돌리기(조각마다 표지) · 평문 대체 끄기 · 빈 조각 건너뛰기 삭제.
 #[test]
 fn three_emphasized_pieces_keep_their_emphasis() {
@@ -1270,7 +1269,7 @@ fn three_emphasized_pieces_keep_their_emphasis() {
         }
     }
     assert!(problems.is_empty(), "{}:\n{}", problems.len(), problems.join("\n"));
-    // The review's four cases (bold → bold italic → italic and back, with
+    // Four delimiter-boundary cases (bold → bold italic → italic and back, with
     // and without strikeout over all three) are crossing. Some crossing
     // placements this writer does not handle and writes as plain text
     // (with a warning, every character kept, as checked above); a better
@@ -1400,7 +1399,7 @@ fn captions_are_checked_in_the_final_body() {
 /// becomes <br>. A failed caption boundary stays in that cell, including
 /// in a standalone table with an out-of-scope caption.
 /// 이것을 실패시키는 것: 칸 실패시 대체 생략 · 실패를 표 전체로 전파. (칸 문맥 제거는
-/// 여기서 죽지 않는다: `fix6_devices_are_pinned` 의 MB 사례.)
+/// 여기서 죽지 않는다: `devices_are_pinned` 의 MB 사례.)
 #[test]
 fn joined_cell_emphasis_stays_local() {
     use hwpforge_core::{Table, TableCell, TableRow};
@@ -1476,7 +1475,7 @@ fn backslash_links_are_linear() {
 /// every emphasis (7³): the check reads the text after the comment as it is
 /// written (on its own line), so nested emphasis is exact and crossing is
 /// exact or plain text with one warning — never markers shown as text. The
-/// review's case is a memo, then bold `a`, bold italic `b`, italic `c`.
+/// boundary case is a memo, then bold `a`, bold italic `b`, italic `c`.
 /// 이것을 실패시키는 것: 주석 뒤 줄 끝내기를 검사 뒤로 미루기 · 읽지 않은 글을 통과시키기.
 #[test]
 fn hidden_emphasis_is_not_passed() {
@@ -1544,7 +1543,7 @@ fn many_fallbacks_are_linear() {
 
 const N_FALLBACKS: usize = 250_000;
 
-/// The time bound of the linearity tests here (G3, G4), for a debug build on
+/// The time bound of the linearity tests here, for a debug build on
 /// a CI runner: five times the slowest linear case and a third of the
 /// fastest quadratic one, both measured locally in a debug build
 /// (`cargo nextest run -p hwpforge-smithy-md --all-features`, three runs,
@@ -1583,7 +1582,7 @@ fn empty_pieces_after_text_are_linear() {
 /// A comment that comes to a line start through the block's own bytes —
 /// after a table's blank line, at a caption's end, in a picture's caption,
 /// in a text box — or two comments with a line ending or a space between:
-/// the bytes G2 wrote before this writer (no warning).
+/// the bytes the previous writer produced (no warning).
 /// 이것을 실패시키는 것: 줄 끝내기를 완성 블록이 아닌 작성기 안에서 하기 · 줄 끝내기 삭제.
 #[test]
 fn line_start_comments_are_g2_bytes() {
@@ -1604,7 +1603,7 @@ fn line_start_comments_are_g2_bytes() {
 /// cannot close next to it (after Unicode punctuation, `**a。**b**z**`) or
 /// that would run over it (`~~**p**~~q~~r~~`) are caught. Each here cannot
 /// be written with markers and is plain text with one warning, every
-/// character kept (fix5 did the same; fix6 let them through).
+/// character kept.
 /// 이것을 실패시키는 것: 평문을 검사에서 빼기 · 글 컨트롤을 검사에서 빼기 · 코드 스팬을
 /// 글로 읽지 않기.
 #[test]
@@ -1631,7 +1630,7 @@ fn plain_text_keeps_no_emphasis() {
     assert_eq!((out.as_str(), fallbacks), ("**a**`[x]`", 0));
 }
 
-/// fix6's devices, pinned by bytes and warnings.
+/// Caption ranges and table-cell context, pinned by bytes and warnings.
 /// - MA, a caption's text ranges carried into the Body's check: caption
 ///   plain `a`, bold strikeout `b`, plain `c`, then strikeout `p`, plain
 ///   `q`, `r` cannot be written (plain text, one warning); without the
@@ -1644,7 +1643,7 @@ fn plain_text_keeps_no_emphasis() {
 /// 이것을 실패시키는 것: MA 자식 범위 전달 삭제 · MB 칸을 Body 문맥으로 검사 ·
 /// MC 합류 앞 닫기 삭제.
 #[test]
-fn fix6_devices_are_pinned() {
+fn devices_are_pinned() {
     let cell = |ps: Vec<hwpforge_core::Paragraph>| {
         let mut table = one_cell(ps[0].clone());
         table.rows[0].cells[0].paragraphs = ps;
@@ -2018,7 +2017,7 @@ fn tab_after_a_marker_makes_no_block() {
 /// output did not read back. The same texts in a note body (styled): no
 /// warning, and read back the earlier output's text or the document's own;
 /// only six named texts do not read back, as before.
-/// 이것을 실패시키는 것: 줄 첫 표지 뒤 탭을 구분자로 받기(fix4 의 예외, 코드 안 `[` 에 `\`) ·
+/// 이것을 실패시키는 것: 줄 첫 표지 뒤 탭을 구분자로 받기(코드 안 `[` 에 `\`) ·
 /// 최종 검사의 각주 정의 갈래 삭제 · 각주 본문 탭 뒤 숫자 앞에 `\` · 각주 본문 탭 표지
 /// 이스케이프 삭제(디코드 실패) · 각주 본문 글자 바꾸기(`[r]` → `[s]`).
 #[test]
@@ -2127,7 +2126,7 @@ fn lossy_definition_shapes() {
     assert_eq!(warnings.len(), 1);
 }
 
-/// The regression rows of the G4 reviews, lossy: the document text, the
+/// Lossy regression cases: the document text, the
 /// output and warnings of 0.17.1 (`a5e33451`; bd3f6e67 wrote the same),
 /// this view's, and the text this view's output reads back as. Each row
 /// writes the earlier bytes, or falls back with a warning where the earlier

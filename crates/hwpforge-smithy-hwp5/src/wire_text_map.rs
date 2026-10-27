@@ -1,9 +1,8 @@
-//! Wire↔Core 텍스트 좌표 맵 (W1b) — 이 crate 내부 전용.
+//! Wire↔Core 텍스트 좌표 맵 — 이 crate 내부 전용.
 //!
 //! wire 좌표(HWP5 raw 스트림 = 한컴 HWPX linesegarray textpos 규약)와
 //! Core 정준 좌표(`Paragraph::text_content()` UTF-16 축) 사이의 변환을
-//! 담당한다. 설계 정본: `.docs/planning/2026-08-13-image-textbox-epic.md`
-//! §1g v5 (Codex 4라운드 확정 수학 법칙).
+//! 담당한다. 각 경계에서 누적된 wire/Core 길이 차이를 적용한다.
 //!
 //! ## 모델
 //!
@@ -25,7 +24,7 @@
 //!
 //! ⚠️ smithy-hwpx 의 동명 모듈과 **to_core 방향 동형** — conformance
 //! vector 테스트를 양쪽에 복제해 drift 를 방지한다 (Core 승격은 계층
-//! 누수라 기각, §1g v2 disposition #2). **`to_wire` 는 이 crate 에
+//! 누수라 기각). **`to_wire` 는 이 crate 에
 //! 없다**: HWP5 writer 가 없어 역변환 수요가 없음 (v4 disposition #10
 //! YAGNI — 필요해지는 시점에 hwpx 모듈에서 conformance 와 함께 복제).
 
@@ -103,7 +102,7 @@ pub(crate) struct WireTextMap {
     /// Core 축 총길이.
     core_end: u32,
     /// 각 span 시작의 Core 위치(span 순서, 비감소) — 좌표 변환은 이것과
-    /// `spans` 의 wire 시작을 이진 탐색한다(S22 r2: 줄마다 span 을 앞에서부터
+    /// `spans` 의 wire 시작을 이진 탐색한다(줄마다 span 을 앞에서부터
     /// 훑지 않는다).
     core_start: Vec<u32>,
 }
@@ -317,7 +316,7 @@ impl WireMapBuilder {
     }
 }
 
-/// 영-core wire 토큰 하나 (S22) — 줄 경계의 종류 열을 적는다.
+/// 영-core wire 토큰 하나 — 줄 경계의 종류 열을 적는다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZeroToken {
     /// 토큰이 놓인 Core 위치.
@@ -328,7 +327,7 @@ pub(crate) struct ZeroToken {
     pub kind: hwpforge_core::layout::WireTokenKind,
 }
 
-/// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵과 나란히 기록하고 맵은
+/// 문단의 영-core 토큰 목록, wire 순서. 좌표 맵과 나란히 기록하고 맵은
 /// 바꾸지 않는다.
 ///
 /// 줄마다 하는 조회(같은 Core 위치의 토큰, 필드 안인지)는 색인으로 한다 —
@@ -370,7 +369,7 @@ impl TokenLedger {
     }
 
     /// `wire` 가 필드 안(필드 시작 < `wire` < 필드 끝 컨트롤의 끝, 8 유닛)인지
-    /// (S22 설계 3.3). 그런 줄은 캐시를 버린다.
+    /// 판정한다. 그런 줄은 캐시를 버린다.
     pub(crate) fn inside_field(&self, wire: u32) -> bool {
         let index = self.field_index.get_or_init(|| {
             #[cfg(test)]
@@ -399,7 +398,7 @@ impl TokenLedger {
         core: u32,
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
-        // S22 r2: borrow the position's index and binary search for the
+        // Borrow the position's index and binary search for the
         // tokens before `wire`; read only that prefix and the token after it.
         let here = self.by_core.get(&core).map_or(&[][..], Vec::as_slice);
         let k = here.partition_point(|&i| self.tokens[i].wire_start < wire);
@@ -418,7 +417,7 @@ impl TokenLedger {
 mod tests {
     use super::*;
 
-    /// The walk from the front `to_core` used before (S22 r2), as the oracle.
+    /// The walk from the front `to_core` used before, as the oracle.
     fn walked_to_core(map: &WireTextMap, wire: u32) -> Result<u32, CacheMapError> {
         if wire > map.wire_end {
             return Err(CacheMapError::OutOfRange { pos: wire, end: map.wire_end });
@@ -438,7 +437,7 @@ mod tests {
         Ok(core_cursor + (wire - wire_cursor))
     }
 
-    /// S22 r2: the binary searches give the walk's answer at every position,
+    /// The binary searches give the walk's answer at every position,
     /// over maps that mix zero-width tokens, tabs, runs of tokens, and text.
     /// 이것을 실패시키는 것: 탐색 경계를 한 칸 어긋나게(`<` 를 `<=` 로) 하는 것.
     #[test]
@@ -474,7 +473,7 @@ mod tests {
         }
     }
 
-    /// S22 r2: 16,000 zero-width tokens, one character, then 16,000 lines
+    /// 16,000 zero-width tokens, one character, then 16,000 lines
     /// after it — each conversion searches the spans, it does not walk them.
     /// 이것을 실패시키는 것: 좌표 변환을 앞에서부터 span 을 훑는 것으로
     /// 되돌리기(검사한 span 수가 N² 로 는다).
@@ -495,11 +494,11 @@ mod tests {
         assert!(visits <= 40 * u64::from(n), "{visits} spans checked for {n} lines");
     }
 
-    /// S22 r1: the per-line lookups use the ledger's index — N lines over
+    /// The per-line lookups use the ledger's index — N lines over
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
     /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
     /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
-    /// S22 r2: N tokens and N lines at one Core position (bookmarks with no
+    /// N tokens and N lines at one Core position (bookmarks with no
     /// text, every line at 0) — each lookup reads only the prefix it needs,
     /// not the whole position.
     /// 이것을 실패시키는 것: 조회마다 그 위치의 토큰 전체를 복제·순회하는 것
@@ -547,7 +546,7 @@ mod tests {
     /// conformance vector — smithy-hwpx 의 동명 모듈 테스트와 to_core
     /// 방향에서 동일하게 유지할 것 (동형성 게이트).
     fn marker_ledger_p1() -> WireTextMap {
-        // rules-marker-ledger p1: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
+        // 한컴 새 번호 문단 실측: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
         // raw lineseg [0, 76, 132] → core [0, 60, 116].
         let mut b = WireMapBuilder::new();
         b.advance_identity(17);

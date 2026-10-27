@@ -133,7 +133,7 @@ pub struct HwpxDocument {
     pub style_store: HwpxStyleStore,
     /// Binary image data extracted from `BinData/` ZIP entries.
     pub image_store: ImageStore,
-    /// 디코드 중 표면화된 비치명 경고 (W5-α M4 — warning-first).
+    /// 디코드 중 표면화된 비치명 경고 (warning-first).
     pub warnings: Vec<DecodeWarning>,
 }
 
@@ -207,7 +207,7 @@ impl HwpxDocument {
 /// 디코드 중 표면화된 비치명 경고.
 ///
 /// 디코더가 미지 wire 값을 기본값으로 **조용히** 폴백하면 하류(렌더러
-/// 등)의 warning-first 는 증거가 세탁된 뒤라 무력해진다 (W5-α M4) —
+/// 등)의 warning-first 는 증거가 세탁된 뒤라 무력해진다 —
 /// 폴백은 유지하되 사실을 표면화한다. 속성 결측(빈 문자열)은 기본값
 /// 적용이 정상이므로 경고 대상이 아니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,7 +260,7 @@ pub enum DecodeWarning {
         fallback: &'static str,
     },
     /// 문단의 linesegarray 캐시가 Core 로 승격되지 않음 — wire→Core
-    /// 좌표 ledger 구축 실패 또는 textpos 정규화 실패 (W1b fail-closed,
+    /// 좌표 ledger 구축 실패 또는 textpos 정규화 실패 (fail-closed,
     /// 추측 좌표 승격 금지).
     LayoutCacheDropped {
         /// 경고가 난 문단의 중첩 경로.
@@ -655,7 +655,7 @@ pub mod warning_samples {
     }
 }
 
-/// 디코드 경고가 가리키는 문단의 중첩 경로 (§1g v5 변경 5).
+/// 디코드 경고가 가리키는 문단의 중첩 경로.
 ///
 /// `(section, paragraph)` 튜플로는 셀/머리말/각주 내부 문단을 표현할 수
 /// 없어 ordered segment vector 로 기록한다. `Section` 으로 시작해 최종
@@ -826,7 +826,7 @@ impl HwpxDecoder {
         references.validate(&style_store, false)?;
         let begin_num = header_result.begin_num;
 
-        // Step 2b (Wave 12o): Parse Contents/content.hpf metadata.
+        // Parse Contents/content.hpf metadata.
         // Missing or malformed metadata downgrades to default rather
         // than failing the whole decode — Hancom-emitted XML always
         // has a metadata block, but third-party authoring tools may not.
@@ -840,7 +840,7 @@ impl HwpxDecoder {
 
         // Step 4: Extract masterpage XMLs from ZIP, by file number, and the
         // manifest ids that name them (`secPr/masterPage@idRef` resolves
-        // through `content.hpf`, branch review C2).
+        // through `content.hpf`).
         // Ordered by file number, so the unreferenced-part warnings come in a
         // fixed order.
         let masterpage_xmls = pkg.read_masterpage_parts()?;
@@ -893,7 +893,7 @@ impl HwpxDecoder {
 
             // The master pages this section owns are the parts its
             // `masterPage@idRef`s name — not the next ones in file order
-            // (branch review C2: two sections whose references were swapped
+            // (two sections whose references were swapped
             // read each other's master page, and a re-encode made it
             // permanent). A reference that names no master page part is lost
             // content; `masterPageCnt` only checks the count.
@@ -928,13 +928,12 @@ impl HwpxDecoder {
                 // a master page, first and copies alike charged the part's XML
                 // size against one budget (`MASTER_PAGE_BUDGET`), checked
                 // before parsing or copying; only an admitted reference is
-                // charged, one past the budget is lost content (branch review
-                // r2 H1, r3 H2, r4 H2, r5 H1). Copies come from the first kept
+                // charged, one past the budget is lost content. Copies come from the first kept
                 // master page, so nothing else is held.
                 // 이것을 실패시키는 것: 공유를 손실로 보기(`shared_master_pages_are_kept`),
                 // 예산 없이 복제하기 · Core 일부만 세기(`a_master_page_part_is_read_once`),
                 // 거절도 과금하기(`copy_budget_charges_admitted_copies_only`).
-                // Named by a section, kept or not (r6 L1: a part refused by
+                // Named by a section, kept or not (a part refused by
                 // the budget is not also "referenced by no section").
                 // 이것을 실패시키는 것: 보관 맵으로 무참조를 판정하기
                 // (`a_refused_master_page_is_not_reported_unreferenced`).
@@ -985,8 +984,8 @@ impl HwpxDecoder {
             let section = Section {
                 paragraphs: result.paragraphs,
                 page_settings,
-                // ADR-002 cardinality — 파서가 wire 순서 그대로의 Vec 을
-                // 돌려준다 (W5-α C1: ODD/EVEN 다중 머리말 보존).
+                // Header/footer cardinality — 파서가 wire 순서 그대로의 Vec 을
+                // 돌려준다 (ODD/EVEN 다중 머리말 보존).
                 headers: result.headers,
                 footers: result.footers,
                 page_number: result.page_number,
@@ -1205,7 +1204,7 @@ impl HwpxDecoder {
     }
 }
 
-/// Review r1 HIGH-2: a table cell zone whose `borderFillIDRef` names no
+/// A table cell zone whose `borderFillIDRef` names no
 /// border fill of the header (looked up by id, not by count) is dropped and
 /// reported as lost content — a renderer would draw nothing for it.
 /// 이것을 실패시키는 것: 이 검사 삭제(`cell_zone_with_an_unknown_border_fill_is_lost`).
@@ -1391,7 +1390,6 @@ fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, Option<String>
                 if let (Some(id), Some(href)) = (attr("id"), attr("href")) {
                     // An id given to two different parts names neither: keep
                     // that as `None` rather than letting the last item win
-                    // (branch review r2 H2).
                     // 이것을 실패시키는 것: 마지막 항목으로 덮어쓰기
                     // (`an_ambiguous_manifest_id_is_lost_content`).
                     out.entry(id)
@@ -1573,7 +1571,7 @@ mod tests {
             .collect()
     }
 
-    /// Branch review C2: each section owns the master page its `idRef`
+    /// Each section owns the master page its `idRef`
     /// names. With the two references swapped, section 0 owns B and section
     /// 1 owns A — and a re-encode keeps it that way.
     /// 이것을 실패시키는 것: 파일 순서로 배정(A·B 로 읽힌다).
@@ -1610,7 +1608,7 @@ mod tests {
         doc.warnings.iter().filter(|w| w.is_content_loss()).map(|w| w.message()).collect()
     }
 
-    /// Branch review r2 H2: an id the manifest gives two parts names
+    /// An id the manifest gives two parts names
     /// neither. Both parts are also used by unambiguous ids, so no
     /// unreferenced-part report hides the case.
     /// 이것을 실패시키는 것: 마지막 항목으로 덮어쓰기(구역 1 이 B 를 하나 더 받는다).
@@ -1636,7 +1634,7 @@ mod tests {
         assert!(lost[0].contains("more than one manifest item"), "{lost:?}");
     }
 
-    /// Branch review r2 H1 / r4 H2: references to one large part are
+    /// References to one large part are
     /// admitted while their decoded size fits the master page budget; the
     /// rest are each reported, so repeated references cannot multiply it.
     /// 이것을 실패시키는 것: 예산 없이 참조마다 복제하기(31 개 모두 들어간다).
@@ -1671,7 +1669,7 @@ mod tests {
             .len()
     }
 
-    /// Branch review r5 H1: the charge does not depend on the Core form the
+    /// The charge does not depend on the Core form the
     /// part becomes — a 3 MiB text with a tab (tab-mixed text) and a 3 MiB
     /// picture caption are charged their XML like plain text, so 30 more
     /// references are cut at the budget.
@@ -1761,7 +1759,7 @@ mod tests {
         }
     }
 
-    /// Branch review r6 L1: a part its section names but the budget refuses
+    /// A part its section names but the budget refuses
     /// is reported once, as over the budget — not also as named by no
     /// section.
     /// 이것을 실패시키는 것: 무참조를 보관 맵으로 판정하기.
@@ -1783,7 +1781,7 @@ mod tests {
         assert!(lost[0].contains("does not fit the master page budget"), "{lost:?}");
     }
 
-    /// Branch review r3 H2 / r4 H2: a part named by three or five sections,
+    /// A part named by three or five sections,
     /// once each, is kept by all — the schema gives a part no owner — and
     /// whether the package also holds a part nobody names changes nothing.
     /// 이것을 실패시키는 것: 공유를 손실로 보기 · 예산을 part 크기 합으로 잡기.
@@ -1829,7 +1827,7 @@ mod tests {
     /// references, are lost content (editors refuse the input).
     /// 이것을 실패시키는 것: 미해결 참조 무시 · 참조 없는 바탕쪽 무시.
     #[test]
-    fn fix6_master_page_count_uses_deserialized_value() {
+    fn master_page_count_uses_deserialized_value() {
         // 이것을 실패시키는 것: 원시 masterPageCnt 문자열 검색 복원, count 전달/경고 생략.
         let base = master_pages_doc(&[None]);
         for attribute in [
@@ -1898,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn fix6_later_section_master_page_count_uses_deserialized_value() {
+    fn later_section_master_page_count_uses_deserialized_value() {
         // 이것을 실패시키는 것: masterPageCnt 원시 문자열 검색 복원,
         // 구역 결과의 count 전달 누락, 0에도 누락 경고 생성.
         for attribute in [
@@ -1929,7 +1927,7 @@ mod tests {
         }
     }
 
-    /// Review r2 HIGH: a package whose picture-caption table names a border
+    /// A package whose picture-caption table names a border
     /// fill the header lacks decodes with that zone dropped and reported.
     /// The package is encoded with border fill 7, then its header renames 7.
     /// 이것을 실패시키는 것: 디코드 순회가 그림 캡션에 들어가지 않기.
@@ -2024,7 +2022,7 @@ mod tests {
         assert_eq!(caption_zones(&package.write().unwrap()), (0, 1));
     }
 
-    /// Review r1 HIGH-2: a cell zone naming a border fill the header does
+    /// A cell zone naming a border fill the header does
     /// not have (by id — the store holds 1 and 5, the zone names 3) is
     /// dropped and reported; known ids stay, in nested tables too.
     /// 이것을 실패시키는 것: 검사 삭제 · 개수 비교로 바꾸기(3 ≤ 2 개라 통과) ·
@@ -2152,7 +2150,7 @@ mod tests {
     // ── Full pipeline tests ──────────────────────────────────────
 
     #[test]
-    fn fix5_memo_loss_is_active_in_body_and_image_caption() {
+    fn memo_loss_is_active_in_body_and_image_caption() {
         // 이것을 실패시키는 것: Core for_each_paragraph로 메모를 판정해 그림 캡션 누락,
         // 디코딩 관측/구역 집계 누락, 뒤의 메모 없는 구역으로 존재 사실 덮어쓰기.
         let header = HEADER.replace(
@@ -2204,7 +2202,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_master_page_memo_observation_reaches_document() {
+    fn master_page_memo_observation_reaches_document() {
         // 이것을 실패시키는 것: 바탕쪽의 메모 관측을 반환/문서 집계에서 누락.
         let mut package = crate::patch::RawPackage::read(&two_master_pages()).unwrap();
         let header = package.read_text_entry("Contents/header.xml").unwrap().replace(
@@ -2221,7 +2219,7 @@ mod tests {
     }
 
     #[test]
-    fn fix5_memo_parameter_entities_share_deserialized_validation() {
+    fn memo_parameter_entities_share_deserialized_validation() {
         // 이것을 실패시키는 것: name 원시 바이트 비교로 &#82;/&#x52; 우회,
         // 파라미터 조회/손실 경고 생략, 65535 상속 오거부, 속성 오류 무시.
         for name in ["MemoShapeIDRef", "MemoShapeID&#82;ef", "MemoShapeID&#x52;ef"] {
@@ -2279,7 +2277,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_original_border_ids_and_dutmal_are_checked_in_packages() {
+    fn original_border_ids_and_dutmal_are_checked_in_packages() {
         // 이것을 실패시키는 것: 문자 2→None, 표/셀/쪽 검증 누락,
         // 덧말 styleIDRef를 조회 전에 0으로 폐기, 첫 위치 1의 오거부(한컴 실측).
         for id in [2, 4, 99] {
@@ -2333,7 +2331,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_unsupported_definitions_and_dutmal_loss_are_explicit() {
+    fn unsupported_definitions_and_dutmal_loss_are_explicit() {
         // 이것을 실패시키는 것: 미지원 정의/덧말 스타일의 무음 삭제.
         for kind in ["memoPr", "trackChange", "trackChangeAuthor"] {
             let header = HEADER.replace("</refList>", &format!("<{kind} id=\"7\"/></refList>"));
@@ -2354,7 +2352,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_schema_omitted_references_are_resolved_before_loss() {
+    fn schema_omitted_references_are_resolved_before_loss() {
         // 이것을 실패시키는 것: 스키마가 무시하는 secPr/inline/form/메모 참조 조회 및 경고 생략.
         let validate = |refs: &crate::header_references::HeaderReferences, xml: &str| {
             if xml.starts_with("<stringParam") {
@@ -2434,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_change_tracking_references_are_checked_before_loss() {
+    fn change_tracking_references_are_checked_before_loss() {
         // 이것을 실패시키는 것: IDRef가 아닌 charTcId/paraTcId/authorID/
         // charshapeID/parashapeID 조회를 생략하거나 header 교차 조회를 빼기.
         for (owner, field, valid) in [
@@ -2481,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn fix4_unused_memo_definitions_do_not_block_content_edits() {
+    fn unused_memo_definitions_do_not_block_content_edits() {
         // 이것을 실패시키는 것: 미사용 기본 정의를 content loss로 취급하거나,
         // 실제 메모가 있는 문서의 손실까지 비활성 경고로 낮추기.
         let header = HEADER.replace(
@@ -2519,7 +2517,7 @@ mod tests {
     }
 
     #[test]
-    fn fix3_unused_empty_tab_case_survives_package_roundtrip() {
+    fn unused_empty_tab_case_survives_package_roundtrip() {
         // 이것을 실패시키는 것: 미사용 빈 case를 default 내용에 따라 거부/대체하거나 경고 누락.
         for default in ["", r#"<tabItem pos="2000"/>"#] {
             let tab = format!(

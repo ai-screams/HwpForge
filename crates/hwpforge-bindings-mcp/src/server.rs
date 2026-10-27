@@ -401,7 +401,6 @@ impl HwpForgeServer {
             Ok(data) => {
                 // 임베드 제외 경고는 summary 에도 실어야 한다 — 에이전트가
                 // summary 만 읽고 이미지 누락을 성공으로 오독하지 않도록
-                // (독립 리뷰 M4, W6 §12b).
                 let mut summary = format!(
                     "Generated {} ({} bytes, {} sections, {} paragraphs)",
                     data.output_path, data.size_bytes, data.sections, data.paragraphs,
@@ -860,7 +859,7 @@ impl HwpForgeServer {
         }
     }
 
-    /// Discover prose placeholder candidates for template stamping (E6).
+    /// Discover prose placeholder candidates for template stamping.
     #[tool(
         name = "hwpforge_stamp_plan",
         description = "Discover class-A placeholder candidates (checkbox/paren-blank/date-blank/standalone-@/seal tokens) in an HWPX for template stamping. Author one spec per candidate (field name or ignore) and pass them to hwpforge_stamp. Guarded candidates (instruction context) are never auto-applied."
@@ -898,7 +897,7 @@ impl HwpForgeServer {
         }
     }
 
-    /// Promote placeholders to named click-here fields (E6 stamping).
+    /// Promote placeholders to named click-here fields (stamping).
     #[tool(
         name = "hwpforge_stamp",
         description = "Promote prose placeholders to named click-here fields (누름틀) using the approved spec list from hwpforge_stamp_plan. Fail-closed admission gate (lossless round-trip + ZIP closed-world) + all-or-nothing preflight; writes the stamped HWPX and a manifest. The gate refuses a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. The output is immediately usable with hwpforge_fields/hwpforge_fill."
@@ -948,7 +947,7 @@ impl HwpForgeServer {
         }
     }
 
-    /// Edit table cells by logical grid address (E3).
+    /// Edit table cells by logical grid address.
     #[tool(
         name = "hwpforge_set_cell",
         description = "Edit table cells by logical grid address in an HWPX file. Address a cell with a table ordinal (to-json export order) plus at {row,col} (covered positions resolve to their merge anchor), right_of LABEL, or below LABEL (normalized exact match). Empty text clears the cell. All-or-nothing behind the fail-closed admission gate; cells containing tables/images/controls are rejected. The gate also refuses a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it."
@@ -1299,7 +1298,7 @@ mod next_step_tests {
 
 #[cfg(test)]
 mod request_schema_tests {
-    //! W6b audit follow-up: `StampRequest.{specs,cells}` and
+    //! `StampRequest.{specs,cells}` and
     //! `SetCellRequest.specs` are `hwpforge::ops` re-exports of
     //! `smithy-hwpx`'s own serde types (see `ops::stamp` / `ops::edit` doc
     //! comments for why a re-export and not a mirror struct), so the
@@ -1311,7 +1310,7 @@ mod request_schema_tests {
     //! or reshape fails loudly here instead of silently changing the wire
     //! contract.
     //!
-    //! W6c audit follow-up: these tests used to compare against
+    //! These tests used to compare against
     //! `schemars::schema_for!(StampRequest)` directly — the schemars type's
     //! own raw output, complete with a top-level `title`/`description` for
     //! the wrapper type. But that is not what the server actually sends: the
@@ -1352,6 +1351,7 @@ mod request_schema_tests {
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing tests/data/{rel}: {e}"))
     }
 
+    // 이것을 실패시키는 것: StampAction golden 설명을 정리 전 문구로 되돌리기.
     #[test]
     fn stamp_request_schema_matches_baseline() {
         let actual = server_input_schema("hwpforge_stamp");

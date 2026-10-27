@@ -3,7 +3,7 @@
 //! Symmetric to [`crate::encoder::package::build_metadata_block`] —
 //! consumes Hancom-style metadata XML and produces a Core [`Metadata`].
 //!
-//! # Security model (Wave 12o §11.1 B3 / §11.4 S1-S3)
+//! # Security model
 //!
 //! quick-xml's defaults do **not** reject DTD declarations or entity
 //! expansion. This parser hardens the boundary explicitly:
@@ -12,9 +12,9 @@
 //! - **Depth** capped at [`MAX_DEPTH`].
 //! - **`<opf:meta>` element count** capped at [`MAX_META_ELEMENTS`].
 //! - **Per-text allocation** capped at [`MAX_TEXT_BYTES`].
-//! - **S3 namespace confusion**: only `opf:*` children allowed inside
+//! - **Namespace confusion**: only `opf:*` children allowed inside
 //!   `<opf:metadata>`.
-//! - **S1 XML 1.0 illegal char strip** via
+//! - **XML 1.0 illegal char strip** via
 //!   [`crate::encoder::sanitize_xml_text`].
 
 use hwpforge_core::metadata::Metadata;
@@ -148,7 +148,7 @@ impl ParserState {
                 )));
             }
             // Self-closing `<opf:meta name="X"/>` → typed slot pinned
-            // to `None` (Wave 12o §11.2 M5 canonical form).
+            // to `None`.
             if let Some(meta_name) = parse_meta_name_attr(e)? {
                 promote_meta(&mut self.metadata, &meta_name, None);
             }
@@ -157,11 +157,10 @@ impl ParserState {
         Ok(())
     }
 
-    /// S3 — namespace confusion: any element inside `<opf:metadata>`
+    /// namespace confusion: any element inside `<opf:metadata>`
     /// must use the `opf` prefix.
     ///
-    /// Codex(architect) Wave 12o-fixup §S3-namespace-guard: the prior
-    /// implementation used `if let Some(p) = name.prefix()` which only
+    /// The prior implementation used `if let Some(p) = name.prefix()` which only
     /// triggered when a prefix was present. Bare `<title>` / `<meta>`
     /// elements (no prefix) bypassed the gate entirely, so a hostile
     /// `content.hpf` could shadow the `<opf:title>` slot with an
@@ -333,8 +332,8 @@ mod tests {
 
     #[test]
     fn populated_title_decodes() {
-        let m = parse("<opf:title>Wave 12o 데모</opf:title>");
-        assert_eq!(m.title.as_deref(), Some("Wave 12o 데모"));
+        let m = parse("<opf:title>메타데이터 데모</opf:title>");
+        assert_eq!(m.title.as_deref(), Some("메타데이터 데모"));
     }
 
     #[test]
@@ -451,8 +450,7 @@ mod tests {
         assert!(format!("{err}").contains("namespace prefix"));
     }
 
-    /// Codex(architect) Wave 12o-fixup §S3-namespace-guard: unprefixed
-    /// elements inside `<opf:metadata>` (e.g. `<title>` without the
+    /// Unprefixed elements inside `<opf:metadata>` (e.g. `<title>` without the
     /// `opf:` prefix) used to bypass the typed-name router. Reject
     /// them so a hostile / malformed `content.hpf` cannot shadow the
     /// typed slots.
@@ -468,8 +466,7 @@ mod tests {
         );
     }
 
-    /// Codex(architect) Wave 12o-fixup §Top-2: a Hancom-authored
-    /// `content.hpf` that emits a populated `<opf:meta name="date">`
+    /// A Hancom-authored `content.hpf` that emits a populated `<opf:meta name="date">`
     /// must round-trip through the encoder without the value being
     /// dropped at the typed-collision guard. The encoder now emits
     /// `extras["date"]` at the canonical 9-slot position rather than
@@ -510,7 +507,7 @@ mod tests {
     fn roundtrip_with_encoder_lossless() {
         use crate::encoder::package as enc;
         let original = Metadata::new()
-            .with_title("Wave 12o")
+            .with_title("메타데이터")
             .with_author("저자")
             .with_subject("subj")
             .with_description("desc")

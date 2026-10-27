@@ -209,7 +209,7 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Delete top-level paragraphs (structural edit, E4).
+    /// Delete top-level paragraphs (structural edit).
     #[command(
         long_about = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
@@ -230,7 +230,7 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Insert a new paragraph relative to an anchor (structural edit, E4).
+    /// Insert a new paragraph relative to an anchor (structural edit).
     #[command(
         long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, preserving every other byte.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
@@ -302,7 +302,7 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Edit table cells by logical grid address (E3).
+    /// Edit table cells by logical grid address.
     #[command(
         name = "set-cell",
         long_about = "Edit table cells by logical grid address, all-or-nothing behind the fail-closed admission gate.\n\nAddress a cell with --table N (to-json export order) plus one of --at \"r,c\" (covered positions resolve to their merge anchor), --right-of LABEL, or --below LABEL (normalized exact match). --text \"\" clears the cell. Batch edits go through --map (JSON array of CellSpec)."
@@ -340,7 +340,7 @@ enum Commands {
         map: Option<PathBuf>,
     },
 
-    /// Discover prose placeholder candidates for stamping (E6, phase 1).
+    /// Discover prose placeholder candidates for stamping (plan).
     #[command(
         name = "stamp-plan",
         long_about = "Discover class-A placeholder candidates (checkbox/paren-blank/date-blank/standalone-@/seal tokens) for template stamping.\n\nAuthor a spec map from the output: every unguarded candidate must get an action — {\"field\":{\"name\":\"…\"}} or \"ignore\" — then run `stamp --map`."
@@ -350,7 +350,7 @@ enum Commands {
         file: PathBuf,
     },
 
-    /// Promote placeholders to named click-here fields (E6, phase 2).
+    /// Promote placeholders to named click-here fields (apply).
     #[command(
         long_about = "Apply a stamp spec map all-or-nothing behind a fail-closed admission gate (no-op round-trip + ZIP closed-world), then write the stamped HWPX and a manifest.\n\nThe map is a JSON array of StampSpec (from `stamp-plan --json` candidates plus an action per candidate). The stamped output is immediately usable with `fields`/`fill`."
     )]

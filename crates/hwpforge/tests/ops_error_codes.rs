@@ -15,8 +15,8 @@ fn patch_err(error: PatchError) -> OpsError {
     OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(error))
 }
 
-/// Every `rust` surface of the W2 cases (patch, fill, section workflow).
-fn w2_rust_cases() -> Vec<(&'static str, OpsError)> {
+/// Every `rust` surface of the cases (patch, fill, section workflow).
+fn patch_and_fill_rust_cases() -> Vec<(&'static str, OpsError)> {
     let inner = include_bytes!("data/patch-inner-decode.hwpx");
     let section = include_str!("data/patch-inner-decode.section.json");
     let no_metadata = include_str!("data/patch-no-metadata.section.json");
@@ -109,7 +109,7 @@ fn w2_rust_cases() -> Vec<(&'static str, OpsError)> {
     ]
 }
 
-fn w3_rust_cases() -> Vec<(&'static str, OpsError)> {
+fn editor_rust_cases() -> Vec<(&'static str, OpsError)> {
     use hwpforge::hwpx::stamp::StamperError;
     use hwpforge::hwpx::{CellEditError, StructuralEditError};
     let mut cases = Vec::new();
@@ -229,11 +229,12 @@ fn w3_rust_cases() -> Vec<(&'static str, OpsError)> {
 
 #[test]
 // 이것을 실패시키는 것: OpsError::Io(NotFound)를 FileReadFailed로 변경, 기타 OpsError::Io를 FileNotFound로 변경, read 구역 범위를 InvalidInput으로 변경, read 표 부재를 InvalidInput으로 변경, read 필드 부재를 InvalidInput으로 변경, manifest에 미소비 Rust surface 추가.
-// 이것을 실패시키는 것(W2): stage→코드 매핑 한 갈래 교체, PreservingPatch 위임을 PATCH_FAILED 로 고정,
+// 이것을 실패시키는 것: stage→코드 매핑 한 갈래 교체, PreservingPatch 위임을 PATCH_FAILED 로 고정,
 // FillError::Patch 위임을 FILL_FAILED 로 고정, patch 원본 decode 를 Rejected 로 감싸기,
 // metadata 검사를 원본 decode 뒤로 옮기기, 구역 범위 검사를 Rejected 로, fill 입력 decode 를 Workflow 로.
-fn w1_read_and_io_causes_are_canonical() {
-    // 이것을 실패시키는 것: O1–O3/I1–I3 W3 Codec·Invariant 매핑을 InvalidInput으로 변경, B4 Draft 전용 Rust case 제외 제거.
+fn read_and_io_causes_are_canonical() {
+    // 이것을 실패시키는 것: 제외 필터 접두사를 `editor.` 가 아닌 값으로 바꾸기.
+    // 이것을 실패시키는 것: Codec·Invariant 매핑을 InvalidInput으로 변경, Draft 전용 Rust case 제외 제거.
     // 이것을 실패시키는 것: read 매핑을 InvalidInput으로 치환하거나 NotFound/기타 I/O 매핑을 뒤바꿈.
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("data/error_contract_018.json")).unwrap();
@@ -253,8 +254,8 @@ fn w1_read_and_io_causes_are_canonical() {
         ("io.read", OpsError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied))),
     ]
     .into_iter()
-    .chain(w2_rust_cases())
-    .chain(w3_rust_cases())
+    .chain(patch_and_fill_rust_cases())
+    .chain(editor_rust_cases())
     {
         consumed.insert(id);
         let case = manifest["cases"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();
@@ -266,12 +267,12 @@ fn w1_read_and_io_causes_are_canonical() {
         .iter()
         .filter(|case| case["surfaces"].get("rust").is_some())
         // `convert.*` operations live in hwpforge-convert, which this crate
-        // cannot depend on; `hwpforge-convert/tests/w4_errors.rs` consumes them.
-        // `w3.*` operations are consumed by `w3_errors.rs`.
-        // 이것을 실패시키는 것: 이 거르기 삭제(convert·w3 몫 case 를 이 harness 가 소비하지 못해 집합 불일치).
+        // cannot depend on; `hwpforge-convert/tests/conversion_stage_errors.rs` consumes them.
+        // `editor.*` operations are consumed by `editor_errors.rs`.
+        // 이것을 실패시키는 것: 이 거르기 삭제(convert·편집기 몫 case 를 이 harness 가 소비하지 못해 집합 불일치).
         .filter(|case| {
             let operation = case["surfaces"]["rust"]["operation"].as_str().unwrap();
-            !operation.starts_with("convert.") && !operation.starts_with("w3.")
+            !operation.starts_with("convert.") && !operation.starts_with("editor.")
         })
         .map(|case| case["id"].as_str().unwrap())
         .collect();
@@ -280,8 +281,8 @@ fn w1_read_and_io_causes_are_canonical() {
 
 #[test]
 // 이것을 실패시키는 것: 퇴역 variant 7개와 lookup을 복원.
-fn w1_retired_codes_are_not_lookup_aliases() {
-    // 이것을 실패시키는 것: R1 SetCellCodecFailed variant와 lookup 복원.
+fn retired_codes_are_not_lookup_aliases() {
+    // 이것을 실패시키는 것: SetCellCodecFailed variant와 lookup 복원.
     // 이것을 실패시키는 것: 퇴역 OpsCode variant와 lookup을 복원.
     for code in [
         "SET_CELL_CODEC_FAILED",

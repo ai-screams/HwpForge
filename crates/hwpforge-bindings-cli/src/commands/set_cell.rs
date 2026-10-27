@@ -1,4 +1,4 @@
-//! Edit table cells by logical grid address (E3, admission-gated).
+//! Edit table cells by logical grid address (admission-gated).
 //!
 //! A cell is addressed by table ordinal (`--table`, matching `to-json`
 //! export order) plus either a grid coordinate (`--at r,c` — covered
@@ -52,7 +52,7 @@ pub fn run(
         Err(e) => compat::exit_ops_error(Command::SetCell, e, json_mode),
     };
     // Decoder warnings, then the successful encode's non-semantic warnings
-    // (`SetCellOutput::warnings`) were not surfaced pre-W5. W5 follow-up:
+    // (`SetCellOutput::warnings`) were not surfaced previously.
     // additive — a new, omit-if-empty `warnings` key in `--json`, and one
     // `[set-cell]`-prefixed stderr line each in text mode.
     let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();
@@ -103,8 +103,8 @@ pub fn run(
 /// Builds the options `ops::edit::set_cell` itself validates and interprets:
 /// "table/text required" and "exactly one direction", and the `--map`
 /// batch's own empty-list rejection, now live in `SetCellOptions`'s
-/// consumer (see the W3 report). The `--map`/single-target mutual-exclusion
-/// guard is restored here instead (W3 remediation) — legacy checked it
+/// consumer. The `--map`/single-target mutual-exclusion
+/// guard is restored here instead — legacy checked it
 /// before ever reading the `--map` file, and `ops::edit::set_cell` cannot
 /// reproduce that ordering since it only sees the already-built options,
 /// not the raw flags.

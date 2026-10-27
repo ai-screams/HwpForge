@@ -206,11 +206,11 @@ mod tests {
 }
 
 #[cfg(test)]
-mod w2_tests {
+mod opaque_input_tests {
     use super::*;
     // 이것을 실패시키는 것: opaque unknown payload를 해시에서 누락하거나 XML로 정준화하기.
     #[test]
-    fn w2_opaque_unknown_inputs_use_exact_bytes() {
+    fn opaque_unknown_inputs_use_exact_bytes() {
         use std::io::Write;
         let input = |payload: &[u8]| {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

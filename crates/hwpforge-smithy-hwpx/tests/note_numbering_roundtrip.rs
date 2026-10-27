@@ -1,4 +1,4 @@
-//! 공개 encode→decode→encode 왕복에서 각주 번호 연속성 검증 (H-N2 반례 잠금).
+//! 공개 encode→decode→encode 왕복에서 각주 번호 연속성 검증 (반례 잠금).
 //!
 //! `<hp:startNum>` 에는 각주/미주 속성이 없어 디코더가 `BeginNum{footnote:1}`
 //! 을 **합성**한다 — 이 합성값을 카운터 재시작 신호로 읽으면 재인코드에서
@@ -82,11 +82,11 @@ fn public_roundtrip_keeps_note_numbers_across_sections() {
     assert_eq!(
         footnote_autonum_sequence(&section_xml(&second, 1)),
         vec![3],
-        "재인코드에서 s2 가 1 로 리셋되면 H-N2 회귀"
+        "재인코드에서 s2 가 1 로 리셋되면 번호 연속성 회귀"
     );
 }
 
-/// 3차 평결 High(신규): 첫 섹션의 **명시적** `begin_num`(= header
+/// 첫 섹션의 **명시적** `begin_num`(= header
 /// `<hh:beginNum>` 실값)은 문서 시작에서 반영돼야 하며 공개 왕복에서
 /// 유지돼야 한다 — 전부 무시하면 사용자/한컴의 시작번호 7 이 손실된다.
 #[test]
@@ -116,11 +116,11 @@ fn public_roundtrip_keeps_explicit_document_begin_num() {
     assert_eq!(
         footnote_autonum_sequence(&section_xml(&second, 1)),
         vec![9],
-        "명시적 시작번호가 왕복에서 손실되면 3차 평결 High 회귀"
+        "명시적 시작번호가 왕복에서 손실되면 시작번호 회귀"
     );
 }
 
-/// 4차 평결 Critical (pre-existing, 재현 확정): heading 문단의 첫 run 이
+/// 기존 입력에서도 재현됨: heading 문단의 첫 run 이
 /// 하이퍼링크(전체-run 치환 placeholder)이면 titleMark 후주입이 치환 키를
 /// 어긋내 내부 마커(`__HWPHL_*`)가 최종 XML 로 유출됐다. titleMark 부착을
 /// 보류(경고)하고 마커는 절대 유출되지 않아야 한다.
@@ -148,11 +148,11 @@ fn heading_hyperlink_first_run_must_not_leak_markers() {
 
     let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
     let xml = section_xml(&bytes, 0);
-    assert!(!xml.contains("__HWP"), "내부 치환 마커 유출 (4차 평결 Critical): {xml}");
+    assert!(!xml.contains("__HWP"), "내부 치환 마커 유출: {xml}");
     assert!(xml.contains("fieldBegin"), "하이퍼링크 치환 자체는 실행돼야 함: {xml}");
 }
 
-/// 5차 평결 Critical 잔여: 가드는 Hyperlink 만이 아니라 전체-run 치환 키를
+/// 가드는 Hyperlink 만이 아니라 전체-run 치환 키를
 /// 쓰는 **모든** 마커를 덮어야 한다 (등록 키 대조 방식) — Bookmark(Span)
 /// 생성처는 Hyperlink 와 다른 코드 경로다.
 #[test]
@@ -188,8 +188,8 @@ fn heading_bookmark_first_run_must_not_leak_markers() {
 
     let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
     let xml = section_xml(&bytes, 0);
-    assert!(!xml.contains("__HWP"), "Bookmark 마커 유출 (5차 평결 Critical 잔여): {xml}");
-    // 마커 부재만으로는 치환 run 이 통째 사라져도 통과한다 (6차 Low) —
+    assert!(!xml.contains("__HWP"), "Bookmark 마커 유출: {xml}");
+    // 마커 부재만으로는 치환 run 이 통째 사라져도 통과한다 —
     // 실제 bookmark 필드 전개까지 확인.
     assert!(
         xml.contains("bookmark") || xml.contains("BOOKMARK"),
@@ -197,7 +197,7 @@ fn heading_bookmark_first_run_must_not_leak_markers() {
     );
 }
 
-/// 6차 평결 Medium 잠금: 정상 heading 텍스트 `"0"`·`"hp"` 는 치환 키 XML 과
+/// 정상 heading 텍스트 `"0"`·`"hp"` 는 치환 키 XML 과
 /// substring 이 겹치더라도 marker run 이 아니다 — titleMark 를 오삭제하면
 /// TOC 의미 손실 (정확 일치 가드가 이를 막는다).
 #[test]
@@ -231,13 +231,13 @@ fn short_heading_text_keeps_title_mark() {
         let xml = section_xml(&bytes, 0);
         assert!(
             xml.contains("<hp:titleMark"),
-            "정상 heading `{text}` 의 titleMark 가 오삭제됨 (6차 Medium): {xml}"
+            "정상 heading `{text}` 의 titleMark 가 오삭제됨: {xml}"
         );
         assert!(!xml.contains("__HWP"), "마커 유출: {xml}");
     }
 }
 
-/// 7차 평결 High 잠금: titleMark 각주 문서는 재인코드에서 번호 머리가
+/// titleMark 각주 문서는 재인코드에서 번호 머리가
 /// 생략된다(`NoteHeadSkipped`) — 편집기(stamper)는 이 의미 손상을 무음
 /// 반환하지 않고 **fail-closed** 해야 한다 (admission 은 Core 비교라 이
 /// 손상을 못 본다: 디코더가 FOOTNOTE autoNum 을 Core 로 올리지 않음).
@@ -266,9 +266,9 @@ fn stamper_fails_closed_on_note_head_skip() {
     let base = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
 
     let err = HwpxStamper::stamp(&base, &[])
-        .expect_err("titleMark 각주의 번호 머리 생략을 무음 반환하면 안 됨 (7차 평결 High)");
+        .expect_err("titleMark 각주의 번호 머리 생략을 무음 반환하면 안 됨");
 
-    // R1 F4: `Codec(String)` 이 아니라 typed 경고를 실은 변형이어야 한다.
+    // `Codec(String)` 이 아니라 typed 경고를 실은 변형이어야 한다.
     let StamperError::SemanticLoss { warnings, others } = &err else {
         panic!("다른 오류: {err:?}");
     };

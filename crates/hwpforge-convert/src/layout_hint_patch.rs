@@ -142,7 +142,7 @@ impl RawPackage {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut zip = ZipWriter::new(cursor);
         for entry in &self.entries {
-            // W0: fixed entry time (the ZIP epoch), never the clock.
+            // fixed entry time (the ZIP epoch), never the clock.
             let options = SimpleFileOptions::default()
                 .compression_method(entry.compression)
                 .last_modified_time(zip::DateTime::default());
@@ -521,7 +521,7 @@ mod tests {
 
     /// 이것을 실패시키는 것: layout-hint 읽기가 공용 ZIP 이름 검사를 우회하기.
     #[test]
-    fn zip9_fix3_layout_rejects_parent_part() {
+    fn layout_rejects_parent_part() {
         let bytes = make_zip(&[("Contents/../unused.xml", b"x")]);
         assert!(matches!(patch_hwpx_layout_hints(&bytes, &[]),
             Err(LayoutPatchError::Package { detail })
@@ -532,7 +532,7 @@ mod tests {
     // 이것을 실패시키는 것: convert 복사 목록에서 빈 opaque 폴더를 제외하기.
     // 이번 보강을 실패시키는 것: opaque payload 대신 빈 바이트를 저장하기.
     #[test]
-    fn w2_convert_raw_opaque_semantic_gate_and_copy() {
+    fn convert_raw_opaque_semantic_gate_and_copy() {
         for names in
             [vec!["Unused/./a.bin"], vec!["Unused/./"], vec!["Unused", "Unused/"], vec!["Unused/"]]
         {
@@ -577,7 +577,7 @@ mod tests {
         assert!(err.to_string().contains("total decompressed data"), "got: {err}");
     }
 
-    /// W0: a rewritten package keeps every entry at the fixed ZIP epoch.
+    /// a rewritten package keeps every entry at the fixed ZIP epoch.
     /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
     /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
     #[test]

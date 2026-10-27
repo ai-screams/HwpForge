@@ -1,4 +1,4 @@
-//! Read-only document projections (E5): `outline`.
+//! Read-only document projections: `outline`.
 //!
 //! `outline` is the navigation map an agent fetches once to learn "what is
 //! where" — headings, tables, named fields, bookmarks — before targeted
@@ -6,7 +6,7 @@
 //! exhaustive content export stays with `to-json`, and targeted text
 //! extraction with `read`.
 //!
-//! Address contract (agent-editing architecture §2.2 — indexes are the last
+//! Address contract (indexes are the last
 //! resort): every entry leads with its **name anchor** (heading text, field
 //! name, bookmark name, table ordinal) as the primary key; the `{section,
 //! para}` locator is a secondary convenience that goes stale after
@@ -853,7 +853,7 @@ mod tests {
         assert!(HwpxReader::outline(b"not a zip").is_err());
     }
 
-    // -- fixture: read projections (W2) ---------------------------------
+    // -- fixture: read projections ---------------------------------
 
     #[test]
     fn read_table_anchors_tile_grid_exactly_once() {

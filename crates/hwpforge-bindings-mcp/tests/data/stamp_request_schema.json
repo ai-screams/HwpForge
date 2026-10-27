@@ -101,7 +101,7 @@
       ]
     },
     "StampAction": {
-      "description": "Caller decision for one candidate (design §3-3: the caller map is the\nonly source of final field names — no auto-derived names, no suffixes).",
+      "description": "Caller decision for one candidate. The caller map is the only source of\nfinal field names — no auto-derived names, no suffixes.",
       "oneOf": [
         {
           "description": "Promote to a named ClickHere field.",

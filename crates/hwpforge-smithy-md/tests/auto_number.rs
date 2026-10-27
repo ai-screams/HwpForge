@@ -69,7 +69,7 @@ fn doc_of(paragraphs: Vec<Paragraph>) -> Document<Validated> {
 }
 
 /// A picture alone in its paragraph and a table after text — the two
-/// placements F17 does not have — write their caption numbers in both
+/// placements the measured fixture does not have — write their caption numbers in both
 /// readable views; a picture caption's number alone makes lossless refuse,
 /// and the same picture without a caption does not.
 ///
@@ -125,7 +125,7 @@ struct PictureStyles;
 
 /// In a merged-cell table (the HTML path) a picture's and a nested table's
 /// caption numbers are written; and a picture inside a caption keeps its
-/// bytes next to its link (review r2: the HTML path wrote no captions, and
+/// bytes next to its link (the HTML path wrote no captions, and
 /// caption pictures were linked without their bytes).
 ///
 /// 이것을 실패시키는 것: HTML 칸의 그림 캡션 / 표 캡션 출력을 지우기 / 캡션
@@ -211,7 +211,7 @@ fn caption_pictures_and_html_table_captions_are_kept() {
     }
 }
 
-/// §19.22 D5: a table paragraph with an end-mark char shape is still a
+/// A table paragraph with an end-mark char shape is still a
 /// table block in both readable views (the end mark is not a run).
 #[test]
 fn table_paragraph_with_an_end_mark_stays_a_table_block() {

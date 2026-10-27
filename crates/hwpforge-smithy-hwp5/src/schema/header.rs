@@ -894,7 +894,7 @@ impl Hwp5RawCharShape {
 
     /// Returns the strikethrough shape encoded in bits 26-29.
     ///
-    /// After Wave 1c the shared IR mirrors the full OWPML strike-shape
+    /// the shared IR mirrors the full OWPML strike-shape
     /// vocabulary, so HWP5 raw values 0..=12 carry directly. Out-of-range
     /// values still fall back to `Solid` so the "struck through" semantic
     /// survives.
@@ -1083,12 +1083,12 @@ impl Hwp5RawParaShape {
     /// Both ends are zero-based, so this helper returns the wire value
     /// verbatim.
     ///
-    /// Task #121 (Wave 12p): an earlier implementation applied
+    /// Task #121: an earlier implementation applied
     /// `.saturating_sub(1)` under the (incorrect) assumption that the wire
     /// was 1-based, which produced an off-by-1 emit (level 1~6 became 0~5).
-    /// Verified against the Codex-architect review of Hancom HWP5 PDF spec
+    /// Verified against the Hancom HWP5 PDF spec
     /// (bit 23-24 = list family, bit 25-27 = level, bit 28 = border-connect)
-    /// and the user-authored `sample-outline-9levels.hwpx` native fixture.
+    /// and a user-authored Hancom document with nine outline levels.
     pub fn heading_level(&self) -> u8 {
         ((self.property1 >> 25) & 0b111) as u8
     }
@@ -2071,7 +2071,7 @@ mod tests {
     }
 
     #[test]
-    fn fix1_bullet_base_and_optional_wchar_lengths() {
+    fn bullet_base_and_optional_wchar_lengths() {
         let full = make_bullet_def_bytes_full(false, 0x2611, 0x08);
         // 이것을 실패시키는 것: 23바이트 기본형 거부 또는 체크 글리프 합성.
         let base = Hwp5RawBulletDef::parse(&full[..23]).unwrap();
@@ -2149,7 +2149,7 @@ mod tests {
         // The 5-bit numbering code lives in bits 5-9 of the attribute word.
         let attr = |code: u32| code << 5;
         // Codes 0-10 are verified 1:1 against native HWPX
-        // (Hancom-saved numbering). Codes 6/11/12/13/14 are the P0-1 fix:
+        // (Hancom-saved numbering). Codes 6/11/12/13/14 are the fix:
         // 6 was missing, 11 was the invalid string "HANJA_DIGIT", and
         // 12/13/14 were silently collapsing to DIGIT.
         assert_eq!(numbering_attr_num_format(attr(0)), "DIGIT");

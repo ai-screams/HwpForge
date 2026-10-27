@@ -238,8 +238,7 @@ where `N-1` is the HWPX level.
 Implementation: `style_store.rs::apply_outline_style_level_overrides` runs
 silently after the base ParaShape conversion. Pattern match against
 `"개요 N"` / `"Outline N"` style names; if `heading_type == Outline`,
-override the paraPr's `heading_level` to `N - 1`. Codex(architect) §5
-"순차 ID 신앙 금지" 호환: paraPr id 자체에 의존하지 않고
+override the paraPr's `heading_level` to `N - 1`. paraPr id 자체에 의존하지 않고
 `heading_type == Outline` 인 paraPr 만 override.
 
 HWPX-side: no `hp10` namespace switch wrapping needed — 한컴 reads
@@ -553,7 +552,7 @@ encoding is used by Compose (`tcps`), Dutmal (`tdut`), and IndexMark
 After the split-leader `main_text` + length-prefixed `sub_text`, the
 `tdut` payload carries five u32 LE tail words. Offsets pinned by the
 one-knob-per-paragraph phonetic-guide document saved by Hancom
-(`probe_dutmal_tail` diff vs baseline):
+(payload differences against a baseline):
 
 | tail offset | field      | values observed                                             |
 | ----------- | ---------- | ----------------------------------------------------------- |
@@ -569,7 +568,7 @@ warning. Source: `schema/section.rs::Hwp5DutmalControl`.
 ### Compose (`tcps`) layouts + decoration glyph (task #74)
 
 The full 14-circleType × 2-composeType matrix
-(overlapping-character shapes saved by Hancom, `probe_compose_variants`) observed
+(overlapping-character shapes saved by Hancom) observed
 two layouts with two-character inputs:
 
 - `0x0003` (unpacked) — text fully in body; `properties.high` holds a
@@ -594,7 +593,7 @@ Source: `schema/section.rs::Hwp5ComposeControl`.
 The split-leader packing **does split surrogate pairs**: an
 emoji-leading primary stores the high surrogate alone in
 `properties.high` and the low surrogate as the first body unit
-(index-mark document with surrogate characters, `probe_indexmark_surrogate`:
+(index-mark document with surrogate characters:
 `emoji-first` → header `U+D83D`, body starts `00 DE`).
 `parse_split_leader_utf16` collects all units before UTF-16
 validation, so the pair reassembles correctly — verified end-to-end

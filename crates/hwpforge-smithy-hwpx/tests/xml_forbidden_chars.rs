@@ -316,7 +316,7 @@ fn a_header_fragment_reports_its_removal() {
 
 #[test]
 fn a_click_here_field_reports_controls_in_its_name_and_hint() {
-    // The P8 edit surfaces keep U+001F (it is a fixed-width space in text), so
+    // The edit surfaces keep U+001F (it is a fixed-width space in text), so
     // it reaches the field's attribute and parameters, where XML cannot hold it.
     // 이것을 실패시키는 것: `escape_xml` 에 U+0001–U+001F 를 지우는 갈래를 되살리는 것.
     let mut para = Paragraph::new(ParaShapeIndex::new(0));

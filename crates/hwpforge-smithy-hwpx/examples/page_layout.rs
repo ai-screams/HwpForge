@@ -213,7 +213,7 @@ fn build_section_facing_pages() -> Section {
     let mut section = Section::with_paragraphs(
         vec![
             text_para("Section 6: Facing Pages", CS_TITLE, PS_CENTER),
-            text_para("All Wave 9 features combined", CS_NORMAL, PS_BODY),
+            text_para("All page layout features combined", CS_NORMAL, PS_BODY),
         ],
         ps,
     );
@@ -225,7 +225,7 @@ fn build_section_facing_pages() -> Section {
 }
 
 fn main() {
-    println!("=== Wave 9: Page Layout Completion Test ===\n");
+    println!("=== Page Layout Test ===\n");
 
     let style_store = build_style_store();
     let image_store = ImageStore::new();
@@ -269,5 +269,5 @@ fn main() {
         s6.page_settings.mirror_margins, s6.page_settings.gutter_type
     );
 
-    println!("\n=== All Wave 9 tests passed! ===");
+    println!("\n=== All page layout tests passed! ===");
 }

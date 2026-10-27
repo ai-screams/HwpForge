@@ -482,7 +482,7 @@ impl schemars::JsonSchema for CurveSegmentType {
 ///
 /// This is a neutral enum shared by shape text. Table cells keep their own
 /// [`crate`]-external `TableVerticalAlign` for now; unifying the two is a
-/// follow-up concern (see ADR-008).
+/// follow-up concern.
 ///
 /// `Display`/`FromStr` use the HWPX wire tokens (`TOP`/`CENTER`/`BOTTOM`).
 ///

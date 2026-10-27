@@ -76,7 +76,7 @@ pub enum CoreError {
 /// Every variant carries enough information to pinpoint the
 /// exact location of the problem (section index, paragraph index, etc.).
 ///
-/// Marked `#[non_exhaustive]` so future phases can add variants
+/// Marked `#[non_exhaustive]` so variants can be added
 /// without a breaking change.
 ///
 /// # Examples
@@ -316,7 +316,7 @@ pub enum ValidationError {
     },
 
     /// A SUMMERY token (`UnknownSummary.token`) is empty or does not start with `$`.
-    /// HWPX SUMMERY `Command` strings always have the `$word` shape (Wave 12n).
+    /// HWPX SUMMERY `Command` strings always have the `$word` shape.
     #[error("Invalid SUMMERY token {token:?} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
     InvalidSummaryToken {
         /// Zero-based section index.
@@ -472,10 +472,10 @@ pub enum CoreErrorCode {
     MismatchedSeriesLengths = 2015,
     /// Non-leading table header row.
     NonLeadingTableHeaderRow = 2016,
-    /// Invalid SUMMERY `$token` (Wave 12n).
+    /// Invalid SUMMERY `$token`.
     InvalidSummaryToken = 2017,
     // 2018 (was DateCodeFieldMismatch) and 2019 (was InlinePageNumberMismatch)
-    // are retired (E6 slice C); the gap is intentional — do NOT renumber.
+    // are retired; the gap is intentional — do NOT renumber.
     /// A Group control has a non-shape child.
     InvalidGroupChild = 2020,
     /// A master page combines a special scope with an even/odd restriction.
@@ -518,7 +518,7 @@ impl ValidationError {
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
             Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
             // A shape geometry value out of range: the existing shape code
-            // (review r1 — a new `CoreErrorCode` variant is a breaking
+            // (a new `CoreErrorCode` variant is a breaking
             // change outside the approved API).
             Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidShapeDimension,
             // Same reason: no new `CoreErrorCode` variant.

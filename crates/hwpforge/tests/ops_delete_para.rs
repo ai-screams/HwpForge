@@ -1,4 +1,4 @@
-//! `ops::edit::delete_para` — the preserving structural delete (E4).
+//! `ops::edit::delete_para` — the preserving structural delete.
 #![cfg(feature = "ops-hwpx")]
 
 #[path = "support/document.rs"]
@@ -143,7 +143,7 @@ fn a_target_outside_the_document_is_reported_precisely() {
 
 #[test]
 fn a_non_document_input_is_a_structural_codec_failure() {
-    // 이것을 실패시키는 것: T2 해당 입력 decode stage를 Encode로 변경.
+    // 이것을 실패시키는 것: 해당 입력 decode stage를 Encode로 변경.
     let err = delete_para(b"not a zip at all", &DeleteParaOptions::default().with_indexes(vec![0]))
         .expect_err("must reject");
 

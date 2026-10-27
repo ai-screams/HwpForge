@@ -108,7 +108,7 @@ pub struct SectionParseResult {
     pub page_settings: Option<PageSettings>,
     /// Headers extracted from `<hp:ctrl><hp:header>`, in wire order.
     ///
-    /// W5-α (Codex C1): HWPX 는 `applyPageType`(BOTH/ODD/EVEN) 별로 복수의
+    /// HWPX 는 `applyPageType`(BOTH/ODD/EVEN) 별로 복수의
     /// `<hp:header>` 를 허용한다 — 단수 first-wins 는 무음 데이터 손실이었다.
     pub headers: Vec<HeaderFooter>,
     /// Footers extracted from `<hp:ctrl><hp:footer>`, in wire order.
@@ -131,7 +131,7 @@ pub struct SectionParseResult {
     pub text_direction: TextDirection,
     /// Starting numbers extracted from `<hp:startNum>` in secPr.
     pub begin_num: Option<hwpforge_core::section::BeginNum>,
-    /// 디코드 중 표면화된 비치명 경고 (W5-α M4 — 미지 enum 폴백 등).
+    /// 디코드 중 표면화된 비치명 경고 (미지 enum 폴백 등).
     pub warnings: Vec<super::DecodeWarning>,
 }
 
@@ -262,10 +262,10 @@ pub(crate) fn parse_section_with_references(
                 }
             }
 
-            // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (W5-α C1:
+            // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (
             // first-wins 는 ODD/EVEN 문서에서 무음 데이터 손실). 표 칸·글상자
             // 안의 것도 구역 목록으로 올리고, 앵커는 이 최상위 문단이다
-            // (§19.17 X4: 한컴은 칸 안 머리말·꼬리말을 표를 품은 문단에
+            // (한컴은 칸 안 머리말·꼬리말을 표를 품은 문단에
             // 놓인 것처럼 적용한다).
             lift_header_footers(&hx_para.runs, para_idx, &mut headers, &mut footers, &mut ctx)?;
 
@@ -337,7 +337,7 @@ pub(crate) fn parse_section_with_references(
     })
 }
 
-/// 디코드 경고 sink + 현재 문단의 중첩 경로 (W1b — §1g v5 변경 5).
+/// 디코드 경고 sink + 현재 문단의 중첩 경로.
 ///
 /// 중첩 컨테이너(셀/각주/글상자/묶음)로 들어갈 때 [`enter`]/[`leave`] 로
 /// 경로를 유지한다. 캐시 드롭 경고는 이 경로를 payload 로 갖는다.
@@ -371,11 +371,11 @@ pub(crate) struct DecodeCtx {
     /// ([`lift_header_footers`]). run 변환이 이 밖의 머리말·꼬리말을 만나면
     /// 손실로 보고한다.
     lifted_header_footers: std::collections::HashSet<usize>,
-    /// S20: whether a group's axis-aligned leaves keep their original box
+    /// whether a group's axis-aligned leaves keep their original box
     /// (the first decode of a group); `false` decodes the group as before
-    /// S20, when its original boxes do not re-encode near the source.
+    /// when its original boxes do not re-encode near the source.
     pub(crate) group_frames: bool,
-    /// S20: the source positions (outermost group space) of each node of
+    /// the source positions (outermost group space) of each node of
     /// the group being decoded, in the preorder of its Core nodes — `None`
     /// for a node the frame check does not judge (a nested group, a leaf
     /// without an original box).
@@ -547,9 +547,9 @@ impl DecodeCtx {
     }
 }
 
-/// 문단 전체 자식을 문서 순서로 걷어 wire→Core 좌표 맵을 구축한다 (W1b).
+/// 문단 전체 자식을 문서 순서로 걷어 wire→Core 좌표 맵을 구축한다.
 ///
-/// 소비폭은 **디코더가 실제 방출하는 것**에서 유도한다 (§1g v5 R3#1):
+/// 소비폭은 **디코더가 실제 방출하는 것**에서 유도한다:
 /// run-내 field 접힘(begin..end 같은 run — `convert_run` pairing 미러)은
 /// 사이 텍스트가 (n,0), cross-run field 는 begin/end 만 (8,0) 이고 사이
 /// 텍스트는 일반 방출이라 1:1. 소비량을 알 수 없는 자식(미지 Switch·
@@ -753,7 +753,7 @@ pub(crate) fn build_wire_map_over_runs(
     let mut folded_end = None;
     let mut b = crate::wire_text_map::WireMapBuilder::new();
     let mut tokens = crate::wire_text_map::TokenLedger::default();
-    // S22: a zero-length token of `kind` — recorded with its kind, then
+    // a zero-length token of `kind` — recorded with its kind, then
     // pushed as the (wire, 0) span it always was.
     let mut zero = |b: &mut crate::wire_text_map::WireMapBuilder, wire: u32, kind: T| {
         let (wire_start, core) = b.cursors();
@@ -820,7 +820,7 @@ pub(crate) fn build_wire_map_over_runs(
                             }
                             // markpen 은 HWP5 range-tag (스트림 유닛 0) —
                             // corpus 프로브: native 327본 중 markpen 1본,
-                            // 전부 한 줄 (§1g v3).
+                            // 전부 한 줄.
                             HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} => {}
                             HxTextPart::Other => {
                                 return Err("unknown inline element in <hp:t>".into());
@@ -910,7 +910,7 @@ pub(crate) fn build_wire_map_over_runs(
                 K::TitleMark => zero(&mut b, 8, T::Silent),
                 K::Switch => {
                     // 알려진 chart 캐리어만 (8,0) — 미지 switch 내용은
-                    // 소비량 미상 (v4 R3#6: 차트 일괄 드롭은 퇴행).
+                    // 소비량 미상 — 소비량이 알려진 차트까지 일괄 드롭하지 않는다.
                     let is_chart = hx_run
                         .switches
                         .get(idx)
@@ -979,14 +979,14 @@ fn convert_paragraph_from(
     let para_shape_id = ctx.para_index(hx.para_pr_id_ref)?;
     let mut page_settings = None;
 
-    // §19.22 D5 (S17): the last run of a paragraph with two or more runs
+    // The last run of a paragraph with two or more runs
     // that holds nothing — no child, or one empty `<hp:t/>` — carries the
     // paragraph-end mark's char shape; it is that, not a run.
     // 이것을 실패시키는 것: 이 읽기를 지우기(`end_mark_run_round_trips`).
     let end_mark =
         (hx_runs.len() >= 2).then(|| hx_runs.last()).flatten().filter(|r| is_end_mark_run(r));
     // The end run's reference is checked like every run's (`convert_run`),
-    // which it does not go through (review r1). 이것을 실패시키는 것: 이 검사를
+    // which it does not go through. 이것을 실패시키는 것: 이 검사를
     // 지우기(`end_run_reference_is_bounded`).
     if let Some(run) =
         end_mark.filter(|r| ctx.references.is_none() && r.char_pr_id_ref > MAX_STYLE_INDEX)
@@ -1031,7 +1031,7 @@ fn convert_paragraph_from(
         origins.append(&mut ctx.last_origins);
     }
     fold_closed_memos(&mut runs, &mut origins);
-    // Branch review A1: the dropped field body is lost content whether or
+    // The dropped field body is lost content whether or
     // not the paragraph carries a line cache — editors that re-encode the
     // decode refuse it (`DecodeWarning::is_content_loss`), readers report it.
     // 이것을 실패시키는 것: 이 보고 삭제, 또는 캐시가 있을 때만 보고
@@ -1088,13 +1088,13 @@ fn convert_paragraph_from(
 
     // 줄 조판 캐시 승격 (decode-only). 인코더는 기본적으로 재방출하지 않는다.
     //
-    // W1b: 한컴 textpos = HWP5 raw 스트림 좌표 (확장 marker 종류 무관
-    // 8유닛 — §1f 보편 규칙). 문단 전체 자식을 걷는 wire ledger 로 Core
+    // 한컴 textpos = HWP5 raw 스트림 좌표 (확장 marker 종류 무관
+    // 8유닛 — 보편 규칙). 문단 전체 자식을 걷는 wire ledger 로 Core
     // `text_content()` 가시 좌표로 정규화한다 (종전 선두-균일 차감은 중간
     // marker 문단을 무음 오절단 — 철폐). 실패 = fail-closed: 캐시 미승격
     // + `DecodeWarning::LayoutCacheDropped` (추측 좌표 승격 금지).
     let layout_cache = hx.linesegarray.as_ref().and_then(|array| {
-        // S22 r2: the cached lines were laid out with text Core does not hold
+        // The cached lines were laid out with text Core does not hold
         // — wherever a line starts, replaying them would place other text.
         // Checked on the loss itself: once a later change carries a dropped
         // body, the Core control that then holds it must be added to the
@@ -1126,7 +1126,7 @@ fn convert_paragraph_from(
             }
         };
         // ledger↔방출 정합 자가검증: 예측 Core 총길이 == 실제 방출 텍스트
-        // 총길이 (불일치 = ledger/방출 분기 — choke, §1g v5 변경 4).
+        // 총길이 (불일치 = ledger/방출 분기 — choke).
         // Both sides consume the parsed tree: this cannot detect characters
         // lost before deserialization. Raw mixed-text fixtures independently
         // assert wire lengths, Core text and cache boundaries below; comparing
@@ -1145,7 +1145,7 @@ fn convert_paragraph_from(
         let mut lines = Vec::with_capacity(array.items.len());
         let mut skipped = 0usize;
         for s in &array.items {
-            // S22: a line that starts inside a field drops the cache.
+            // a line that starts inside a field drops the cache.
             // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
             if tokens.inside_field(s.textpos) {
                 ctx.cache_dropped(format!("lineseg textpos {} is inside a field", s.textpos));
@@ -1163,11 +1163,11 @@ fn convert_paragraph_from(
                     line.horzpos = s.horzpos;
                     line.horzsize = s.horzsize;
                     line.flags = s.flags;
-                    // S22: where among the zero-length tokens at its Core
+                    // where among the zero-length tokens at its Core
                     // position the line starts (`None` = before them all).
                     // 이것을 실패시키는 것: 경계 기록 삭제(`hancom_boundary_round_trips`).
                     line.boundary = tokens.boundary_at(textpos, s.textpos);
-                    // S22 r1: the boundaries' skipped tokens stay within a
+                    // The boundaries' skipped tokens stay within a
                     // bound, so N tokens at one place cannot grow N²/2 kinds.
                     // 이것을 실패시키는 것: 이 검사 삭제, 또는 `>` 를 `>=` 로
                     // (`boundary_skip_cap_keeps_the_limit_and_drops_past_it`).
@@ -1206,7 +1206,7 @@ fn convert_paragraph_from(
 
 /// A run that holds nothing a Core run carries: no child, or a single
 /// `<hp:t>` without content. As a paragraph's last run (of two or more) it
-/// is the paragraph-end mark's char shape (§19.22 D5). Shared by the
+/// is the paragraph-end mark's char shape. Shared by the
 /// decoder and the preservation walk so both skip the same run.
 pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
     use crate::schema::section::{HxRunChildKind, HxTextPart};
@@ -1219,8 +1219,8 @@ pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
         [] => true,
         // Truly empty on the wire: no text and no inline element. A `<hp:t>`
         // holding only a marker (highlight end, track change, title mark)
-        // is not an end mark, though the decoder drops the marker
-        // (review r1). 이것을 실패시키는 것: 내용 없는 표지 `<hp:t>` 를 끝 run
+        // is not an end mark, though the decoder drops the marker.
+        // 이것을 실패시키는 것: 내용 없는 표지 `<hp:t>` 를 끝 run
         // 으로 보기(`marker_runs_are_not_end_marks`).
         [(HxRunChildKind::Text, idx)] => hx.texts.get(idx).is_some_and(|t| {
             t.parts.iter().all(|part| matches!(part, HxTextPart::Text(s) if s.as_str().is_empty()))
@@ -1260,19 +1260,18 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
     let mut body_sources = Vec::new();
     let mut folded_begin = 0usize;
 
-    // W1a (이미지/글상자 에픽): 자식을 **문서 순서**(child_order 사이드카)로
+    // (이미지/글상자 기능): 자식을 **문서 순서**(child_order 사이드카)로
     // 평탄화한다 — 종전 by-kind 고정 순서는 `<t>a</t><pic/><t>b</t>` 를
     // Core `[a, b, pic]` 으로 재배열해 인라인 객체의 앵커 위치를 왜곡했다.
     //
     // field pairing 도 순서 기반: fieldBegin 과 fieldEnd **사이**의 텍스트
     // 자식이 곧 필드 본문이다 — 종전의 `texts.len()==1` 모호성 다운그레이드
-    // (gotcha #30)는 순서 보존으로 철폐. begin 앞/end 뒤 텍스트는 정상
+    // 는 순서 보존으로 철폐. begin 앞/end 뒤 텍스트는 정상
     // 방출된다 (종전엔 pair 존재 시 run 의 전 텍스트가 드롭 — 한컴 병합
     // run 의 충실도 개선).
     //
     // `HxText::to_run_content` preserves any `<hp:tab>` attribute payload
-    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText` —
-    // see `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
+    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText`.
     let order = if hx.child_order.is_empty() {
         // 수동 생성 HxRun(테스트·내부 도구) 폴백 — 종전 by-kind 순서 재현.
         legacy_child_order(hx)
@@ -1516,7 +1515,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
     Ok((runs, lost_body))
 }
 
-/// `<hp:ctrl>` 자식 하나를 문서 순서 위치에서 변환한다 (W1a 분리 헬퍼).
+/// `<hp:ctrl>` 자식 하나를 문서 순서 위치에서 변환한다 (분리 헬퍼).
 ///
 /// footnote/endnote/bookmark/indexmark/autoNum/newNum/pageHiding 은 즉시
 /// run 으로, fieldBegin/fieldEnd 는 순서 기반 pairing 상태를 갱신한다.
@@ -1542,7 +1541,7 @@ fn convert_ctrl_child<'a>(
                 "text or an element inside <hp:ctrl> the reader does not know is not read",
             );
         }
-        // §19.7 F (review r1): a header/footer is carried only where
+        // A header/footer is carried only where
         // [`lift_header_footers`] reaches — a body paragraph, its table cells
         // and text boxes, Hancom applying it from the top-level paragraph.
         // Anywhere else (a group's text box, a note, a caption, a master
@@ -1573,7 +1572,7 @@ fn convert_ctrl_child<'a>(
             runs.push(run);
         }
         // Field begin: remember for pairing with fieldEnd — 사이드카 순서
-        // 덕에 이후 마주치는 텍스트는 정확히 마커 사이 본문이다 (W1a).
+        // 덕에 이후 마주치는 텍스트는 정확히 마커 사이 본문이다.
         if let Some(fb) = &ctrl.field_begin {
             // 미지원 시작을 덮는 경우도 앞 본문의 소실을 보고한다.
             // 이것을 실패시키는 것: 이 누적 삭제.
@@ -1589,7 +1588,7 @@ fn convert_ctrl_child<'a>(
         }
         // Field end: pair with remembered fieldBegin and emit control.
         // 본문 = begin 이후 누적된 field_body — 문서 순서라 무모호하므로
-        // 종전의 `texts.len()==1` 다운그레이드(gotcha #30)는 철폐한다.
+        // 종전의 `texts.len()==1` 다운그레이드는 철폐한다.
         if let Some(end) = &ctrl.field_end {
             if let Some(fb) = field_begin.take() {
                 let run = decode_field_control(fb, field_body, *field_begin_char_shape, true);
@@ -1625,8 +1624,8 @@ fn convert_ctrl_child<'a>(
                 ));
             }
         }
-        // AutoNum (inline page number) — Wave 12n: routed to
-        // Control::InlinePageNumber. Architect review CRITICAL: keep
+        // AutoNum (inline page number) — routed to
+        // Control::InlinePageNumber. Keep
         // current-page (`PAGE`) and total-page (`TOTAL_PAGE`) distinct;
         // collapsing them would lose user-visible semantics.
         if let Some(an) = &ctrl.auto_num {
@@ -1644,7 +1643,7 @@ fn convert_ctrl_child<'a>(
                 runs.push(Run { content: RunContent::Control(Box::new(control)), char_shape_id });
             }
         }
-        // NewNum (새 번호 지정) — W2: `<hp:newNum num numType/>` →
+        // NewNum (새 번호 지정) — `<hp:newNum num numType/>` →
         // Control::NewNumber. 미지 numType 문자열은 타입을 지어내는 대신
         // Unknown 으로 carry (인코더가 스킵 — atno Unknown 대칭).
         if let Some(nn) = &ctrl.new_num {
@@ -1663,8 +1662,8 @@ fn convert_ctrl_child<'a>(
                 char_shape_id,
             });
         }
-        // PageHiding (감추기) — W3: `<hp:pageHiding 6속성/>` →
-        // Control::PageHiding (F2 한컴 실측: "0"/"1" 병기).
+        // PageHiding (감추기) — `<hp:pageHiding 6속성/>` →
+        // Control::PageHiding (한컴 실측: "0"/"1" 병기).
         if let Some(ph) = &ctrl.page_hiding {
             runs.push(Run {
                 content: RunContent::Control(Box::new(Control::PageHiding {
@@ -1782,7 +1781,7 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     if let Some(placement) = decode_table_placement(hx, ctx) {
         table = table.with_placement(placement);
     }
-    // S20: the size lock. 이것을 실패시키는 것: 읽지 않기
+    // the size lock. 이것을 실패시키는 것: 읽지 않기
     // (`picture_and_table_protect_round_trip`).
     table.frame.size_protect = hx.sz.as_ref().is_some_and(|sz| sz.protect != 0);
     // E: fixed cell sizes. 이것을 실패시키는 것: 읽지 않기
@@ -1832,8 +1831,8 @@ fn decode_cell_zones(hx: &HxTable, table: &Table, ctx: &mut DecodeCtx) -> Vec<Ce
     zones
 }
 
-/// The table's `<hp:pos>` and `textWrap`/`textFlow` as a Core placement
-/// (§19.6 A), `None` when every field is the placement the encoder writes
+/// The table's `<hp:pos>` and `textWrap`/`textFlow` as a Core placement,
+/// `None` when every field is the placement the encoder writes
 /// for `None` ([`crate::encoder::table_default_placement`]) — so a table this
 /// codec wrote decodes back to `None`. Missing attributes read as that
 /// default.
@@ -1844,7 +1843,7 @@ fn decode_cell_zones(hx: &HxTable, table: &Table, ctx: &mut DecodeCtx) -> Vec<Ce
 fn decode_table_placement(hx: &HxTable, ctx: &mut DecodeCtx) -> Option<ObjectPlacement> {
     let default = crate::encoder::table_default_placement();
     // Without `<hp:pos>` the position reads as the default, but the table's
-    // own `textWrap`/`textFlow` still count (review r1: they were dropped).
+    // own `textWrap`/`textFlow` still count (previously dropped).
     // 이것을 실패시키는 것: pos 없을 때 조기 반환으로 되돌리기
     // (`table_without_pos_keeps_its_wrap`).
     let Some(pos) = hx.pos.as_ref() else {
@@ -1901,7 +1900,7 @@ fn table_pos_is_default_flow(pos: Option<&crate::schema::section::HxTablePos>) -
         && pos.horz_offset == 0
 }
 
-/// Drops a cell's dormant margin (S19) that equals the table's padding — the
+/// Drops a cell's dormant margin that equals the table's padding — the
 /// value the encoder writes for such a cell anyway — so only values that
 /// would otherwise be lost are carried.
 /// 이것을 실패시키는 것: 이 정리를 지우기(같은 값도 실림 —
@@ -1960,12 +1959,12 @@ fn convert_table_cell(
         Some(sz) => decode_optional_hwp_unit(sz.height, "table cell height")?,
         None => None,
     };
-    // H5: 한컴은 hasMargin="0" 이어도 `<hp:cellMargin>` 에 실효값을 쓴다 —
+    // 한컴은 hasMargin="0" 이어도 `<hp:cellMargin>` 에 실효값을 쓴다 —
     // 셀 오버라이드 여부의 진실은 `tc@hasMargin` 이다. element 존재만 보고
     // 승격하면 표 inMargin fallback 이 영원히 죽는다.
     let margin: Option<TableMargin> =
         if hx.has_margin != 0 { decode_table_margin(hx.cell_margin.as_ref())? } else { None };
-    // S19: without its own margin the cell still keeps the values Hancom
+    // without its own margin the cell still keeps the values Hancom
     // wrote; the table pass drops them when they are the table's padding.
     let dormant_margin: Option<TableMargin> =
         if hx.has_margin == 0 { decode_table_margin(hx.cell_margin.as_ref())? } else { None };
@@ -1974,7 +1973,7 @@ fn convert_table_cell(
         None => None,
     };
 
-    // §19.22 D3: `subList@lineWrap`; an unknown value is reported and read
+    // `subList@lineWrap`; an unknown value is reported and read
     // as BREAK. 이것을 실패시키는 것: 읽지 않기(`cell_line_wrap_round_trips`) /
     // 미지 값 경고 삭제(`unknown_cell_line_wrap_is_reported`).
     let line_wrap = match hx.sub_list.as_ref().map(|s| s.line_wrap.as_str()) {
@@ -2029,7 +2028,7 @@ pub(crate) fn convert_picture(
     };
     let format = guess_image_format(&img.binary_item_id_ref);
 
-    // 표시 크기 선택 (W2b fixture 실측 — 에픽 문서 §4): `<hp:sz>` 가
+    // 표시 크기 선택 (한컴 실측): `<hp:sz>` 가
     // 항상 실표시 크기다 (한컴-authored 3소스 전수: crop/resize 포함
     // curSz==sz 이거나, 재저장 산출물처럼 curSz=(0,0) 미설정). 0 은
     // "미설정" 이므로 0 이 아닌 첫 후보를 sz → curSz → orgSz 순으로
@@ -2083,8 +2082,8 @@ const HWPUNIT_PER_PIXEL: i64 = 75;
 /// bytes.
 ///
 /// With `imgDim` the clip attributes are read by name. Without it Hancom
-/// has written two orders (named, and `right`/`top` exchanged — §19.21
-/// H-v4): the one valid reading (`right > left`, `bottom > top`) is taken;
+/// has written two orders (named, and `right`/`top` exchanged):
+/// the one valid reading (`right > left`, `bottom > top`) is taken;
 /// when both are valid and differ the order cannot be told and the crop is
 /// reported lost; a reading within one pixel of the image's pixel size × 75
 /// is the whole image. The pixel size never stands in for the extent.
@@ -2191,7 +2190,7 @@ fn decode_picture_frame(hx: &HxPic, image: &mut Image, ctx: &mut DecodeCtx) {
 }
 
 /// A caption number (`<hp:autoNum numType="PICTURE|TABLE|EQUATION">`) →
-/// [`Control::AutoNumber`] (§19.16 J, S12). A format Core cannot hold — an
+/// [`Control::AutoNumber`]. A format Core cannot hold — an
 /// unknown `type`, a character attribute longer than one character, a
 /// `supscript` other than `0`/`1` — and a `numType` nothing reads are
 /// reported lost rather than written as the default. Page numbers are
@@ -2392,9 +2391,9 @@ fn decode_note_paragraphs(
 ) -> HwpxResult<Vec<Paragraph>> {
     // 인코더가 주입한 `[autoNum head run, " " spacer run]` 쌍(번호 머리)은
     // 표현 산물이라 Core 로 올리지 않는다 — 대칭 드롭으로 `decode∘encode` 가
-    // Core 고정점을 유지한다 (E4 구조 편집기의 NotRoundTripSafe 게이트가
+    // Core 고정점을 유지한다 (구조 편집기의 NotRoundTripSafe 게이트가
     // 이 계약을 집행: spacer 만 살아남으면 사이클마다 " " run 이 누적된다).
-    // 한컴 wire 는 autoNum 과 본문 텍스트를 **같은 run** 에 넣으므로(F1 실측)
+    // 한컴 wire 는 autoNum 과 본문 텍스트를 **같은 run** 에 넣으므로(실측)
     // 이 시그니처에 걸리지 않는다 — 한컴 본문은 있는 그대로 보존.
     let strip = injected_head_range(&hx.sub_list).unwrap_or(0);
     decode_sublist_paragraphs_skipping(&hx.sub_list, strip, depth, ctx)
@@ -2406,7 +2405,7 @@ fn decode_note_paragraphs(
 /// run[0] = autoNum(FOOTNOTE/ENDNOTE)-전용 ctrl 만 담은 run (텍스트·개체 없음),
 /// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
 /// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로 (NoteHeadSkipped
-/// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다 (4차 평결 L-N1).
+/// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다.
 /// Returns how many leading runs of the first paragraph the pair takes.
 pub(crate) fn injected_head_range(sub_list: &HxSubList) -> Option<usize> {
     let first = sub_list.paragraphs.first()?;
@@ -2440,7 +2439,7 @@ fn is_injected_note_head_run(run: &HxRun) -> bool {
 /// 방출 형태와 정확 일치 — 그 외 ws-only run 은 내용으로 보존).
 ///
 /// Known markers inside `<hp:t>` (`markpenBegin`·`markpenEnd`·`titleMark`)
-/// project to empty text and are dropped with the pair as before (U-D5);
+/// project to empty text and are dropped with the pair as before;
 /// an unknown element or a sibling the reader drops keeps the pair.
 /// 이것을 실패시키는 것: `has_unknown_part` 생략(c), 종류 비교 생략(b·e),
 /// parts 정확 일치로 좁히기(f·g 가 떼어지지 않음)
@@ -2465,9 +2464,8 @@ fn run_child_kinds_are(run: &HxRun, kinds: &[HxRunChildKind]) -> bool {
 /// run 에 텍스트/ctrl 외 개체 payload 가 전혀 없는지 (head/spacer 공용 검사).
 ///
 /// 구조 분해로 전 필드를 강제 나열한다 — `HxRun` 에 payload 필드가 추가되면
-/// 여기서 컴파일이 깨져, 새 payload 를 조용히 삼키는 오인 드롭(H-N3 —
-/// `textarts` 누락으로 TextArt 가 head 쌍과 함께 삭제될 뻔한 실사고)을
-/// 구조적으로 방지한다.
+/// 여기서 컴파일이 깨져 새 payload 를 조용히 삼키는 오인 드롭을 방지한다.
+/// `textarts` 누락으로 TextArt 가 head 쌍과 함께 삭제될 뻔한 사례도 막는다.
 fn hx_run_has_no_objects(run: &HxRun) -> bool {
     let HxRun {
         origin: _,
@@ -2604,7 +2602,7 @@ fn decode_field_control(
         }
         "SUMMERY" => {
             // 한글 uses type="SUMMERY" (typo for Summary) for SUMMERY auto-fields.
-            // Map Command $token to semantic FieldType (Wave 12n). Unknown tokens
+            // Map Command $token to semantic FieldType. Unknown tokens
             // are preserved verbatim as Control::UnknownSummary. #120/#136: the
             // run's body text is the cached resolved value — round-trip it.
             let cmd = get_field_param(fb, "Command").unwrap_or_default();
@@ -2620,7 +2618,7 @@ fn decode_field_control(
             }
         }
         "PATH" => {
-            // Wave 12n Step 6 — Hancom-native `<hp:fieldBegin type="PATH">` carries
+            // Hancom-native `<hp:fieldBegin type="PATH">` carries
             // the path/file-name format code in the `Format` parameter (NOT
             // `Property` like SUMMERY). Round-trips back to `Control::PathField`.
             // Falls back to the raw Command string via
@@ -2635,7 +2633,7 @@ fn decode_field_control(
             }
         }
         "CROSSREF" => {
-            // E6 Wave 0 fix: RefPath wire is wrapped in a `?…;` envelope
+            // fix: RefPath wire is wrapped in a `?…;` envelope
             // (`?#<instId>;` / `?<name>;` — the same form the encoder
             // emits). Unwrap exactly one leading `?` and one trailing `;`
             // (tolerant when absent) BEFORE boundary-decoding. The old
@@ -2643,7 +2641,7 @@ fn decode_field_control(
             // prefix and never the `;` terminator, so Object lifting never
             // fired and every decode→encode cycle accumulated `?`/`;`.
             //
-            // Known normalizations (review L3, Core semantics preserved):
+            // Known normalizations (Core semantics preserved):
             // - a bookmark NAME that itself starts with `#` or ends with
             //   `;` is indistinguishable from envelope/anchor decoration
             //   and re-encodes without it (`?#foo;` → `?foo;`);
@@ -2665,7 +2663,7 @@ fn decode_field_control(
                 .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
                 .unwrap_or_default();
             let hl = get_field_param(fb, "RefHyperLink").map(|s| s == "true").unwrap_or(false);
-            // Wave 12m Phase 2 Step 4: boundary-decode the parsed target.
+            // boundary-decode the parsed target.
             // For Bookmark refs (ref_type == Bookmark) treat the path as
             // a name; otherwise look for `#<u64>` and lift to SystemId.
             // Failure preserves Raw so caller still sees the wire value.
@@ -2684,7 +2682,7 @@ fn decode_field_control(
             } else {
                 hwpforge_core::control::RefTarget::Raw(target_str.clone())
             };
-            // Branch review r2 M2: the field body is the text the reference
+            // The field body is the text the reference
             // displays — kept, so the encoder writes it back (before, it was
             // dropped and the encoder wrote the target's name instead). Only
             // a body read whole (its begin and end in one run) is kept.
@@ -2859,7 +2857,7 @@ pub(crate) fn decode_sublist_paragraphs(
 /// [`decode_sublist_paragraphs`] + 첫 문단의 run 구간 `(offset, count)` 생략.
 ///
 /// 주입 번호-머리 쌍 드롭 전용 — subtree 전체 clone(중첩 note 에서 중첩
-/// clone, M-N4 메모리 증폭) 대신 첫 문단만 재구성한다.
+/// clone, 메모리 증폭) 대신 첫 문단만 재구성한다.
 fn decode_sublist_paragraphs_skipping(
     sub_list: &HxSubList,
     strip_first: usize,
@@ -2881,7 +2879,7 @@ fn decode_sublist_paragraphs_skipping(
     for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
         ctx.enter(super::PathSeg::NestedParagraph(i));
         // The number head is skipped by reading the paragraph from its
-        // third run on — no copy of the paragraph (r4 M1: copying it copied
+        // third run on — no copy of the paragraph (copying it copied
         // every object in it, at every nesting level).
         // 이것을 실패시키는 것: 번호 머리를 건너뛰지 않기(`footnote_roundtrip_via_decoder`).
         let skip = if i == 0 { strip_first } else { 0 };
@@ -2939,8 +2937,8 @@ pub(crate) fn convert_hx_caption(
 
     // D: `fullSz` and `lastWidth` (31/31 HWP5 twins). 이것을 실패시키는 것:
     // `fullSz` 무시 · `lastWidth` 정규화 생략/반전(`caption_full_size_and_last_width_round_trip`).
-    // A value Core cannot hold is a loss, not "equal to the object width"
-    // (D review r1 MEDIUM-4). 이것을 실패시키는 것: 이 손실 진단 삭제
+    // A value Core cannot hold is a loss, not "equal to the object width".
+    // 이것을 실패시키는 것: 이 손실 진단 삭제
     // (`caption_last_width_out_of_range_is_lost`).
     let last_width = if Some(i64::from(hx.last_width)) == object_width.map(i64::from) {
         None
@@ -3017,7 +3015,7 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
     let mirror_margins = false;
 
     // 한글 실제 동작: WIDELY=portrait (세로), NARROWLY=landscape (가로)
-    // KS X 6101 스펙과 반대! (gotcha #3: landscape 값 반전)
+    // KS X 6101 스펙과 반대! (landscape 값 반전)
     let landscape = page_pr.landscape == "NARROWLY";
 
     Some(PageSettings {
@@ -3090,7 +3088,7 @@ fn extract_line_number_shape(
 ///
 /// 인코더는 `<hp:footNotePr>/<hp:endNotePr>` 를 한컴 기본
 /// (`type="CONTINUOUS"`) 고정값으로 재생성한다 — Core 에 정책을 나를 자리가
-/// 아직 없기 때문 (typed 승격 = public surface, 계획 문서 §7d HITL). 그
+/// 아직 없기 때문 (typed 승격은 공개 API 변경). 그
 /// 사이 `ON_SECTION` 등 비기본 정책 문서는 재인코드에서 정책이 바뀌므로,
 /// 디코드 시점에 warning-first 로 표면화한다.
 fn warn_unsupported_note_policy(
@@ -3103,7 +3101,7 @@ fn warn_unsupported_note_policy(
     ] {
         let Some(policy) = pr.as_ref().and_then(|p| p.numbering.as_ref()) else { continue };
         // 결측(None) = 기본 적용·정상. 명시된 값은 빈 문자열 포함 전부
-        // 대조한다 — explicit `type=""` 로 경고를 우회할 수 없다 (4차 Low).
+        // 대조한다 — explicit `type=""` 로 경고를 우회할 수 없다.
         if let Some(t) = policy.policy_type.as_deref() {
             if t != "CONTINUOUS" {
                 warnings.push(super::DecodeWarning::UnknownEnumValue {
@@ -3136,7 +3134,7 @@ fn extract_begin_num(
 /// Parses an HWPX `pageStartsOn` string into [`PageStartsOn`].
 ///
 /// 빈 문자열(속성 결측) = `Both` (스펙 기본, 경고 없음). 미지 값은
-/// `Both` 폴백 + 경고 표면화 (W5-α M4).
+/// `Both` 폴백 + 경고 표면화.
 fn parse_page_starts_on(
     s: &str,
     warnings: &mut Vec<super::DecodeWarning>,
@@ -3286,7 +3284,7 @@ fn parse_mm_width(s: &str) -> HwpUnit {
 /// (recursively), and anchors each to that paragraph (`para_idx`).
 ///
 /// Only table cells and text boxes (`<hp:rect>` with `<hp:drawText>`) are
-/// searched: those are where Hancom documents put them (§19.7 — 84 nested
+/// searched: those are where Hancom documents put them (84 nested
 /// ones in the corpus, all in table cells). Header/footer controls in other
 /// nested places (footnotes, captions, group children) are still dropped by
 /// run conversion. The patch preservation walker (`patch.rs`) must search
@@ -3321,7 +3319,7 @@ fn lift_header_footers(
 
 /// Every `<hp:ctrl>` whose header/footer is carried from a top-level
 /// paragraph's `runs`: the paragraph's own, and those in its table cells
-/// and text boxes, recursively (§19.17 X4: Hancom applies a header/footer in
+/// and text boxes, recursively (Hancom applies a header/footer in
 /// a cell as if it sat in the paragraph holding the table).
 fn for_each_liftable_ctrl<'a>(
     runs: &'a [HxRun],
@@ -3377,7 +3375,7 @@ fn anchored(mut hf: HeaderFooter, index: usize) -> HeaderFooter {
 ///
 /// # Errors
 ///
-/// 머리말 내부 문단 변환 실패를 전파한다 (W5-α C1 — `filter_map` 무음
+/// 머리말 내부 문단 변환 실패를 전파한다 (`filter_map` 무음
 /// 삼킴은 캐시·본문 소실을 숨겼다).
 fn convert_ctrl_header(ctrl: &HxCtrl, ctx: &mut DecodeCtx) -> HwpxResult<Option<HeaderFooter>> {
     ctrl.header
@@ -3422,7 +3420,7 @@ fn convert_header_footer(
             paragraphs.push(para);
         }
         let mut hf = HeaderFooter::new(paragraphs, apply_page_type);
-        // W5-α H1: 컨테이너 기하 승격 — 밴드 재생(R6)의 필수 입력.
+        // 컨테이너 기하 승격 — 밴드 재생의 필수 입력.
         hf.vert_align = parse_vert_align(&sub_list.vert_align, &mut ctx.warnings);
         hf.text_width =
             HwpUnit::new(i32::try_from(sub_list.text_width).unwrap_or(0)).unwrap_or(HwpUnit::ZERO);
@@ -3661,7 +3659,7 @@ fn parse_apply_page_type(
         "EVEN" | "Even" | "even" => ApplyPageType::Even,
         "ODD" | "Odd" | "odd" => ApplyPageType::Odd,
         _ => {
-            // W5-α M4: 미지 값 폴백은 유지하되 표면화한다 (증거 세탁 금지).
+            // 미지 값 폴백은 유지하되 표면화한다 (증거 세탁 금지).
             warnings.push(super::DecodeWarning::UnknownEnumValue {
                 attribute,
                 raw: s.to_string(),
@@ -3691,7 +3689,7 @@ fn parse_page_number_position(
         "INSIDE_TOP" => PageNumberPosition::InsideTop,
         "INSIDE_BOTTOM" => PageNumberPosition::InsideBottom,
         _ => {
-            // W5-α M4: 미지 값 폴백 표면화.
+            // 미지 값 폴백 표면화.
             warnings.push(super::DecodeWarning::UnknownEnumValue {
                 attribute: "hp:pageNum@pos",
                 raw: s.to_string(),
@@ -3704,7 +3702,7 @@ fn parse_page_number_position(
 
 #[cfg(test)]
 mod tests {
-    /// H-N3 잠금: autoNum-전용처럼 보여도 TextArt 등 다른 payload 가 실린
+    /// autoNum-전용처럼 보여도 TextArt 등 다른 payload 가 실린
     /// run 은 주입 head 로 오인 드롭하면 안 된다 (내용 무음 삭제 방지).
     #[test]
     fn injected_head_predicate_rejects_run_with_textart() {
@@ -3724,11 +3722,11 @@ mod tests {
         run.textarts.push(HxTextArt::default());
         assert!(
             !super::is_injected_note_head_run(&run),
-            "TextArt 가 실린 run 을 head 로 오인하면 통째 드롭된다 (H-N3)"
+            "TextArt 가 실린 run 을 head 로 오인하면 통째 드롭된다"
         );
     }
 
-    /// 4차 평결 반영: titleMark 첫 run 문단에는 인코더가 주입하지 않으므로
+    /// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로
     /// (`NoteHeadSkipped`) 디코더도 offset 변형 없이 선두 쌍만 드롭한다 —
     /// titleMark 문단의 후속 run 들은 오탐 없이 그대로 보존돼야 한다.
     #[test]
@@ -3760,7 +3758,7 @@ mod tests {
             super::injected_head_range(&make(vec![title, head, spacer, body])),
             None,
             "titleMark 첫 run 문단은 인코더가 주입하지 않으므로 쌍 미탐지 — \
-             후속 run 을 오탐 삭제하면 저작 내용 손실 (L-N1 오탐 확대 방지)"
+             후속 run 을 오탐 삭제하면 저작 내용 손실 (오탐 확대 방지)"
         );
     }
 
@@ -3839,8 +3837,8 @@ mod tests {
 
     #[test]
     fn table_out_in_margin_and_sz_height_are_promoted() {
-        // W3a: outMargin/inMargin 은 구조 필드로, 재저장 sz height 는
-        // decode-only 캐시로 승격된다 (분할 표에선 첫 조각 높이 — W0 실측).
+        // outMargin/inMargin 은 구조 필드로, 재저장 sz height 는
+        // decode-only 캐시로 승격된다 (분할 표에선 첫 조각 높이 — 실측).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -3925,7 +3923,7 @@ mod tests {
 
     #[test]
     fn linesegarray_is_promoted_to_layout_cache() {
-        // W1b: textpos 는 wire 스트림 좌표 — 텍스트 총길이(8유닛)를 넘지
+        // textpos 는 wire 스트림 좌표 — 텍스트 총길이(8유닛)를 넘지
         // 않는 정합 fixture 여야 승격된다 (범위 밖 = fail-closed 거부).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
@@ -3950,7 +3948,7 @@ mod tests {
         assert!(result.warnings.is_empty(), "no drop warning: {:?}", result.warnings);
     }
 
-    /// S22 r1: a paragraph's line boundaries pass at most
+    /// A paragraph's line boundaries pass at most
     /// `MAX_PARAGRAPH_BOUNDARY_SKIP` tokens in total — 64 bookmarks at one
     /// place, lines after k of them for k in a set summing to exactly the
     /// limit, keep the cache; one more drops it with a warning.
@@ -4187,7 +4185,7 @@ mod tests {
         }
     }
 
-    /// Branch review r2 M2: a cross reference closed in its run keeps its
+    /// A cross reference closed in its run keeps its
     /// field body as its display text, and the encoder writes that text —
     /// even where it differs from the target's name — so nothing is lost.
     /// 이것을 실패시키는 것: 본문을 버리기(표시가 대상 이름 `anchor` 로 바뀐다).
@@ -4231,7 +4229,7 @@ mod tests {
     #[test]
     fn out_of_range_textpos_drops_cache_with_warning() {
         // 텍스트 2유닛인데 textpos=70 — wire 총길이와 모순되는 조작 캐시는
-        // 승격하지 않고 경고한다 (W1b fail-closed).
+        // 승격하지 않고 경고한다 (fail-closed).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0"><t>본문</t></run>
@@ -4257,7 +4255,7 @@ mod tests {
     #[test]
     fn mid_paragraph_marker_normalizes_following_lines() {
         // 중간 각주 marker(8유닛) 뒤 줄 시작 — 종전 선두-균일 차감은 이
-        // 문단을 무음 오절단했다 (§1f 따름정리). wire: 가나다=0..3,
+        // 문단을 무음 오절단했다. wire: 가나다=0..3,
         // ctrl=3..11, 라마바=11..14 → 줄2 시작 raw 12 = Core 4.
         let xml = r#"<sec>
             <p paraPrIDRef="0">
@@ -4308,7 +4306,7 @@ mod tests {
 
     #[test]
     fn textpos_normalization_subtracts_leading_section_controls() {
-        // W2 실측 불변식 (규칙 문서 §1): 첫 문단의 secPr(8) + colPr ctrl(8)
+        // 한컴 실측 불변식: 첫 문단의 secPr(8) + colPr ctrl(8)
         // = 16 스트림 유닛 → 승격된 textpos 는 보이는-텍스트 좌표 (70−16=54).
         // 한컴의 "선행 무텍스트 run" 형태.
         let xml = r#"<sec>
@@ -4569,7 +4567,7 @@ mod tests {
     }
 
     #[test]
-    fn fix2_cell_spans_cannot_wrap_to_one() {
+    fn cell_spans_cannot_wrap_to_one() {
         // 이것을 실패시키는 것: u32 span 65537을 u16 1로 잘라 수용.
         for (col, row) in [(65537, 1), (1, 65537)] {
             let xml = format!(
@@ -4756,7 +4754,7 @@ mod tests {
             .collect()
     }
 
-    /// F-T2: 칸 안 header → 최상위 header → (다음 문단) 칸 안 footer 가 교차해도
+    /// 칸 안 header → 최상위 header → (다음 문단) 칸 안 footer 가 교차해도
     /// Core 순서 = wire 순서, 앵커 = 최상위 문단.
     /// 이것을 실패시키는 것: 칸 안 것을 최상위 것 뒤에 붙이기(첫 두 순서가
     /// 바뀜) / 표 갈래 삭제(칸 안 둘 소실) / 앵커를 0 으로 고정.
@@ -5905,17 +5903,14 @@ mod tests {
         let controls = find_controls(&result);
         let page_num =
             controls.iter().find(|c| matches!(c, hwpforge_core::Control::InlinePageNumber { .. }));
-        assert!(
-            page_num.is_some(),
-            "autoNum PAGE must produce InlinePageNumber control (Wave 12n)"
-        );
+        assert!(page_num.is_some(), "autoNum PAGE must produce InlinePageNumber control");
     }
 
     #[test]
     fn interleaved_children_preserve_document_order_in_core() {
-        // W1a 핵심 잠금: `<t>a</t><pic/><t>b</t>` 는 Core `[a, Image, b]` —
+        // 핵심 잠금: `<t>a</t><pic/><t>b</t>` 는 Core `[a, Image, b]` —
         // 종전 by-kind 평탄화는 `[a, b, Image]` 로 재배열해 인라인 앵커를
-        // 왜곡했다 (이미지/글상자 에픽의 관문 결함).
+        // 왜곡했다 (이미지/글상자 기능의 관문 결함).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -5943,7 +5938,7 @@ mod tests {
 
     #[test]
     fn serde_ctrl_newnum_page_produces_new_number() {
-        // F1b 한컴 실측 (rules-newnum2 section1.xml): 새 번호 지정은 run 안
+        // 한컴이 저장한 둘째 구역 실측: 새 번호 지정은 run 안
         // `<hp:ctrl><hp:newNum num="7" numType="PAGE"/></hp:ctrl>` 자기닫힘.
         let xml = r#"<sec>
             <p paraPrIDRef="0">
@@ -5989,7 +5984,7 @@ mod tests {
 
     #[test]
     fn serde_ctrl_pagehiding_produces_page_hiding() {
-        // F2-① 한컴 실측 (rules-pagehide section0.xml): 쪽번호만 감춤.
+        // 한컴 쪽 감춤 문서의 section0.xml 실측: 쪽번호만 감춤.
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -6129,11 +6124,11 @@ mod tests {
         assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::LastSavedBy");
     }
 
-    // ── Wave 12n Phase 2 Step 7 — decoder fallback / Title gates ────
+    // ── decoder fallback / Title gates ────
 
     #[test]
     fn serde_field_summary_title() {
-        // Wave 12n new token: $title → FieldType::Title. Without this
+        // new token: $title → FieldType::Title. Without this
         // gate, a future decoder refactor could silently drop the
         // mapping and downgrade titles to UnknownSummary.
         let xml = r#"<sec>
@@ -6196,7 +6191,7 @@ mod tests {
 
     #[test]
     fn serde_field_autonum_total_page() {
-        // Wave 12n architect review CRITICAL gate: numType="TOTAL_PAGE"
+        // numType="TOTAL_PAGE"
         // must NOT collapse to CurrentPage. The decoder maps it back to
         // InlinePageKind::TotalPages so encoder→decoder lossless tests
         // can pin equality.
@@ -6289,7 +6284,7 @@ mod tests {
 
     #[test]
     fn crossref_refpath_object_envelope_lifts_object_id() {
-        // E6 Wave 0 audit fix: Hancom-canonical RefPath wire is wrapped in a
+        // audit fix: Hancom-canonical RefPath wire is wrapped in a
         // `?…;` envelope (`?#<instId>;` for object targets — exactly what our
         // encoder emits). The decoder must unwrap the envelope before the
         // `#<u64>` boundary lift; the old `trim_start_matches("?#")` left the
@@ -6569,9 +6564,9 @@ mod tests {
         assert_eq!(lns.start_number, 3);
     }
 
-    // ── 미지 enum 경고 표면화 (W5-α M4 — 증거 세탁 방지) ─────────
+    // ── 미지 enum 경고 표면화 (증거 세탁 방지) ─────────
 
-    /// 3차 평결(ON_SECTION 무음 정규화): 비기본 note 번호 정책은 인코더가
+    /// ON_SECTION 무음 정규화: 비기본 note 번호 정책은 인코더가
     /// `CONTINUOUS` 고정값으로 재생성한다 — 디코드 시점에 경고를 내야
     /// 무음 정책 변경이 아니다 (warning-first).
     #[test]
@@ -6604,7 +6599,7 @@ mod tests {
         );
     }
 
-    /// 4차 평결 Medium: `numbering@newNum` 은 `xs:positiveInteger` 라 u32
+    /// `numbering@newNum` 은 `xs:positiveInteger` 라 u32
     /// 상한을 넘는 schema-valid 값이 올 수 있다 — typed 파싱으로 섹션
     /// 디코드가 통째로 실패하면 신규 호환성 회귀다 (newNum 은 파싱하지
     /// 않는 게 계약).
@@ -6626,7 +6621,7 @@ mod tests {
         assert!(result.is_ok(), "u32 초과 newNum 으로 디코드가 죽으면 안 됨: {result:?}");
     }
 
-    /// 4차 평결 Low: 명시적 `type=""` 는 결측과 달리 비정상 명시값 — 경고를
+    /// 명시적 `type=""` 는 결측과 달리 비정상 명시값 — 경고를
     /// 우회하면 안 된다.
     #[test]
     fn explicit_empty_note_policy_type_warns() {
@@ -6716,7 +6711,7 @@ mod tests {
     fn absent_enum_attributes_do_not_warn() {
         // 속성 결측(빈 문자열) = 기본값 적용은 정상 — 경고 없음.
         // applyPageType·subList vertAlign·startNum pageStartsOn 전부 결측인
-        // 구성 (독립 리뷰 Low 4 상환 — applyPageType 단독 커버리지 확장).
+        // 구성 (applyPageType 단독 커버리지 확장).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -6777,12 +6772,12 @@ mod tests {
         assert!(unknowns.contains(&"hp:pageNum@formatType"), "{unknowns:?}");
     }
 
-    // ── 머리말 subList 기하 승격 (W5-α H1) ───────────────────────
+    // ── 머리말 subList 기하 승격 ───────────────────────
 
     #[test]
     fn header_sublist_geometry_survives_decode() {
         use hwpforge_foundation::VerticalAlign;
-        // R6 밴드 재생의 입력: 일반 꼬리말은 vertAlign=BOTTOM + 빈 간격
+        // 밴드 재생의 입력: 일반 꼬리말은 vertAlign=BOTTOM + 빈 간격
         // 문단을 쓴다 (연구 실측 09-HEADER_FOOTER_PAGENUM_RESEARCH.md) —
         // 디코더가 컨테이너 기하를 버리면 렌더가 재현할 수 없다.
         let xml = r#"<sec>
@@ -6808,13 +6803,13 @@ mod tests {
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
-    // ── startNum pageStartsOn decoding (W5-α C2) ─────────────────
+    // ── startNum pageStartsOn decoding ─────────────────
 
     #[test]
     fn start_num_page_starts_on_survives_decode() {
         use hwpforge_core::section::PageStartsOn;
         // pageStartsOn 은 스키마가 이미 파싱하는데 디코더가 폐기했다
-        // (Codex C2) — 쪽번호 홀짝 강제 시작은 W5-b PageIdentity 의 입력.
+        // 쪽번호 홀짝 강제 시작은 PageIdentity 의 입력.
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">

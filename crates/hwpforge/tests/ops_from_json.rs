@@ -238,7 +238,7 @@ fn a_semantic_loss_warning_comes_back_with_the_bytes_instead_of_replacing_them()
 }
 
 /// `to_json` promotes each paragraph's wire `linesegarray` into
-/// `Paragraph::layout_cache` (W1d), but `from_json` always encodes with
+/// `Paragraph::layout_cache`, but `from_json` always encodes with
 /// `EncodeOptions::default`, whose `emit_layout_cache` stays off — a cache an
 /// edited document no longer matches would be worse than none. Without a
 /// warning that drop is silent: the round trip decodes fine, but `hwpforge`'s
@@ -692,7 +692,7 @@ fn from_json_finds_a_cache_in_a_group_picture_caption() {
     assert!(warning.message.contains("group[0].caption"), "{}", warning.message);
 }
 
-/// R1-1: a JSON `Unknown` control has no HWPX form. `from_json` still writes
+/// A JSON `Unknown` control has no HWPX form. `from_json` still writes
 /// the document (generation is not fail-closed) but says what it left out,
 /// under its own code, where it was.
 ///
@@ -849,7 +849,7 @@ fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
     assert!(dropped[0].contains("section[1].masterpage[1].npara[0]"), "{}", dropped[0]);
 }
 
-/// W0: `from-json` authors documents, so a memo whose JSON has no time gets
+/// `from-json` authors documents, so a memo whose JSON has no time gets
 /// the current time (the encoder alone would write the epoch); a memo with
 /// a time keeps it.
 /// 이것을 실패시키는 것: `from_json` 의 현재 시각 주입 삭제(epoch 가 나온다).

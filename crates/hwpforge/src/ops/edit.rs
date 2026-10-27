@@ -65,7 +65,7 @@ use super::{OpsError, OpsWarning};
 /// One requested cell edit — the request DTO `set_cell` takes and every
 /// frontend's wire schema is built from.
 ///
-/// W6b audit follow-up: this is a re-export of `smithy-hwpx`'s own type, not
+/// this is a re-export of `smithy-hwpx`'s own type, not
 /// an `ops`-owned mirror. `ops::set_cell` consumes it as a plain Rust value
 /// (`SetCellOptions::with_specs`) rather than deserializing it from JSON
 /// itself, so there is no ops-side parsing step for a mirror struct to

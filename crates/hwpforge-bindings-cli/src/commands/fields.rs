@@ -13,9 +13,9 @@ pub fn run(file: &PathBuf, json_mode: bool) {
     check_file_size(file, json_mode, Command::Fields);
     let bytes = read_input(file, json_mode, Command::Fields);
 
-    // Decoder warnings (`FieldsOutput::warnings`) were not surfaced pre-W5
+    // Decoder warnings (`FieldsOutput::warnings`) were not surfaced previously
     // (matches the pre-migration behaviour, which never captured them
-    // either). W5 follow-up: additive — a new, omit-if-empty `warnings` key
+    // either). This adds a new, omit-if-empty `warnings` key
     // in `--json`, and one `[fields]`-prefixed stderr line each in text mode.
     let out = match ops::fields(&bytes) {
         Ok(out) => out,

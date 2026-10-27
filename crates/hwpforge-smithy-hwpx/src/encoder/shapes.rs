@@ -323,7 +323,7 @@ pub(crate) fn build_shape_common(
                     // xs:choice: fillBrush has exactly ONE child (winBrush|gradation|imgBrush).
                     // When using gradation, winBrush must be absent (hwpxlib reference confirms).
                     fill_brush.win_brush = None;
-                    // Absent values (S13 `None`) keep what this encoder always
+                    // Absent values (`None`) keep what this encoder always
                     // wrote, so old JSON and API gradients encode unchanged:
                     // LINEAR: center=0,0 for one-directional gradient.
                     // RADIAL/SQUARE/CONICAL: center=50,50 for center-outward gradient.
@@ -456,7 +456,7 @@ pub(crate) fn build_shape_common(
             e6: format!("{:.6}", m[5]),
         }
     };
-    // S20: the original box and the scale to the displayed one.
+    // the original box and the scale to the displayed one.
     // 이것을 실패시키는 것: `orgSz` 를 현재 크기로 되돌리기(`r6_circle_keeps_its_original_box`).
     let sca_matrix = scale_matrix(plan.scale());
     let trans_matrix = HxMatrix::identity();
@@ -499,7 +499,7 @@ pub(crate) fn build_shape_common(
 
 /// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
 ///
-/// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
+/// MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
 pub(crate) fn encode_textbox_to_rect(
     ctrl: &Control,
     as_group_child: bool,
@@ -598,7 +598,7 @@ pub(crate) fn encode_textbox_to_rect(
             name: String::new(),
             editable: 0,
             sub_list,
-            // §19.22 D4: the box's own margin; `None` = 283 on every side.
+            // The box's own margin; `None` = 283 on every side.
             // 이것을 실패시키는 것: 상수 복귀 / 왼·오, 위·아래 맞바꿈
             // (`shape_text_margins_round_trip`).
             text_margin: Some(match text_margin {
@@ -1437,7 +1437,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     let font_style_esc = escape_xml(font_style);
     let align_esc = escape_xml(align);
     // Hancom writes a group child TextArt as `NONE` / `TOP_AND_BOTTOM`
-    // (F14); a free one keeps the writer's `PICTURE` / `SQUARE`.
+    // ; a free one keeps the writer's `PICTURE` / `SQUARE`.
     let (numbering, wrap) =
         if as_group_child { ("NONE", "TOP_AND_BOTTOM") } else { ("PICTURE", "SQUARE") };
     let placement = if as_group_child {
@@ -1483,8 +1483,8 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
 /// `<hc:transMatrix>` translation (`e3` = x, `e6` = y).
 ///
 /// 한컴 positions a `<hp:container>` child by the translation components of
-/// its transform matrix, NOT by `<hp:offset>` (verified against native
-/// `sample-gso-group.hwpx`: a child at offset (17360, 0) carries
+/// its transform matrix, NOT by `<hp:offset>` (verified against
+/// a Hancom-saved group document: a child at offset (17360, 0) carries
 /// `transMatrix e3="17360" e6="0"`; an identity matrix renders every child at
 /// the group origin → overlap). `build_shape_common` emits an identity
 /// transMatrix for non-rotated shapes, so we rewrite that exact string. The
@@ -1601,7 +1601,7 @@ fn encode_group_child_xml(
     }
     let (dx, dy) = group_child_offset(child);
     let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
-    // Nested group (Wave B): recurse into a full `<hp:container>` fragment.
+    // Nested group: recurse into a full `<hp:container>` fragment.
     // `encode_group_to_xml` bakes the correct `groupLevel` into the opening
     // tag directly, so we must NOT run `set_group_level` afterward (it patches
     // a `groupLevel="0"` placeholder that a container never has). The other
@@ -1745,7 +1745,7 @@ fn coefficient(v: f64) -> String {
 
 /// `xml` with its own (first) `<hp:renderingInfo>` replaced by the group
 /// plan's chain for this node — the translation, then every enclosing
-/// group's pair and its own (§19.23.13) — when an enclosing group stores a
+/// group's pair and its own — when an enclosing group stores a
 /// scale or an image-filled child needs its identity ancestor pairs. With
 /// one pair the per-shape writer's block already is the plan.
 /// 이것을 실패시키는 것: 이 교체를 지우기(묶음 배율이 있는 잎이 자기 쌍 하나만
@@ -1817,7 +1817,7 @@ fn encode_group_picture_xml(
 /// block (`offset`/`orgSz`/`curSz`/`flip`/`rotationInfo`/`renderingInfo`),
 /// the child shapes in z-order (each with `groupLevel` = parent + 1), then
 /// `sz`/`pos`/`outMargin`/`shapeComment`. Children carry absolute geometry —
-/// no rescaling (gotcha #3: geometry stays in the `hc:` namespace, which the
+/// no rescaling (geometry stays in the `hc:` namespace, which the
 /// per-shape encoders already honor).
 pub(crate) fn encode_group_to_xml(
     ctrl: &Control,
@@ -1881,7 +1881,7 @@ fn encode_group_at(
         }
         _ => unreachable!("encode_group_to_xml called with non-Group"),
     };
-    // Diagnostic slot before the children (document order, review W2 r1 LOW).
+    // Diagnostic slot before the children (document order).
     let id_slot = super::object_ids::reserve();
 
     let plan = shape_frame_plan(ctrl, as_child)?;
@@ -1947,7 +1947,7 @@ fn encode_group_at(
     let pos = serialize_with_root(&shape_position(placement), "hp:pos")?;
     let (sz, pos) = if as_child { (String::new(), String::new()) } else { (sz, pos) };
     // A group child is placed by its parent; only the outer group carries a
-    // margin (S18).
+    // margin.
     let out_margin = serialize_with_root(
         &object_out_margin(if as_child { None } else { placement }),
         "hp:outMargin",
@@ -1968,7 +1968,7 @@ fn encode_group_at(
 }
 
 /// The `<hp:outMargin>` of a drawn object or picture: its placement's outer
-/// margin (S18), 0 on every side without one — what every object wrote
+/// margin, 0 on every side without one — what every object wrote
 /// before.
 /// 이것을 실패시키는 것: 개체 종류 하나라도 0 상수로 되돌리기
 /// (`object_out_margins_round_trip`).
@@ -2104,7 +2104,7 @@ mod tests {
 
     #[test]
     fn arrow_type_diamond_maps_to_empty_diamond() {
-        // Gotcha #14: 한글 only recognises EMPTY_* form for geometric shapes
+        // 한글 only recognises EMPTY_* form for geometric shapes
         assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond), "EMPTY_DIAMOND");
     }
 
@@ -2164,7 +2164,7 @@ mod tests {
         use hwpforge_foundation::HwpUnit;
         let hu = |v: i32| HwpUnit::new(v).unwrap();
         // A group with two rects at distinct offsets (0,1365) + (17360,0),
-        // mirroring the placement in native `sample-gso-group`.
+        // mirroring the placement in a Hancom-saved group document.
         let child = |w, h, hx, vy| Control::Rect {
             frame: hwpforge_core::ObjectFrame::new(),
             width: hu(w),
@@ -2316,7 +2316,7 @@ mod tests {
         use hwpforge_foundation::HwpUnit;
         let hu = |v: i32| HwpUnit::new(v).unwrap();
         // outer group = { inner group { rect, ellipse }, line }, mirroring the
-        // native `sample-gso-group-nested` layout: a $con nested inside a $con.
+        // Hancom-saved nested group layout: a $con nested inside a $con.
         let rect = Control::Rect {
             frame: hwpforge_core::ObjectFrame::new(),
             width: hu(12_440),
@@ -2494,7 +2494,7 @@ mod tests {
         }
     }
 
-    /// S20 review r1 (HIGH): in a group a sibling sends to its fallback, a
+    /// In a group a sibling sends to its fallback, a
     /// framed line turned 0.15° (stored as 0°) whose end moves from 1499 in
     /// its original box 1500 to 999 in its shown box 1000 lands 2.099 from
     /// where Core draws it — the writer reports it.
@@ -2527,7 +2527,7 @@ mod tests {
 
     /// A table and an equation in a grouped text box keep their own `<hp:sz>`
     /// and `<hp:pos>`; only the text box itself, a direct group child, has
-    /// none (Hancom's F2 keeps the inner table's `<hp:sz width="19842">`).
+    /// none (Hancom keeps the inner table's `<hp:sz width="19842">`).
     ///
     /// 이것을 실패시키는 것: 직속 자식 구조체의 `sz`/`pos` 를 `None` 으로 두지
     /// 않는 것(rect 에 남음), fragment 전체에서 지우는 것(tbl·equation 에서
@@ -2688,7 +2688,7 @@ mod tests {
     }
 
     /// An equation or a chart in a group has no HWPX group form (Hancom will
-    /// not group an equation — F4), so it is left out and reported as a
+    /// not group an equation), so it is left out and reported as a
     /// semantic loss at the place it would take; the other children stay.
     ///
     /// 이것을 실패시키는 것: 버리는 갈래의 `content_lost` 호출을 지우는 것, 경로를
@@ -2767,7 +2767,7 @@ mod tests {
         )
     }
 
-    /// A TextArt in a group is placed at its own offset (M9): the offset and
+    /// A TextArt in a group is placed at its own offset: the offset and
     /// the transMatrix translation both carry it, and no `sz`/`pos` is written.
     ///
     /// 이것을 실패시키는 것: `group_child_offset` 의 TextArt 갈래를 지우는 것
@@ -2780,7 +2780,7 @@ mod tests {
         assert_eq!(trans, r#"<hc:transMatrix e1="1" e2="0" e3="1200" e4="0" e5="1" e6="800"/>"#);
         assert!(!placement_paths(&xml).iter().any(|p| p.contains("hp:textart/")), "{xml}");
         assert!(xml.contains(r##"faceColor="#FF0000""##), "{xml}");
-        // Written as Hancom writes a group child TextArt (F14).
+        // Written as Hancom writes a group child TextArt.
         // 이것을 실패시키는 것: 묶음 자식 글맵시도 `PICTURE`/`SQUARE` 로 쓰는 것.
         let art = &xml[xml.find("<hp:textart ").unwrap()..];
         let head = &art[..art.find('>').unwrap()];
@@ -2961,7 +2961,7 @@ mod tests {
             ..Default::default()
         };
         let sc = common(1000, 500, Some(&style));
-        // Per gotcha #25: Diamond always maps to EMPTY_DIAMOND; headfill controls fill
+        // Diamond always maps to EMPTY_DIAMOND; headfill controls fill
         assert_eq!(sc.line_shape.tail_style, "EMPTY_DIAMOND");
         assert_eq!(sc.line_shape.tail_fill, 0);
         assert_eq!(sc.line_shape.tail_sz, "SMALL_SMALL");

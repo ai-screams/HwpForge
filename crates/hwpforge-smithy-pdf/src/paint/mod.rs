@@ -2,8 +2,8 @@
 //!
 //! 배치소스(source)가 캐시 재생을 끝낸 결과다. 이 층부터는 조판 정보가
 //! 없다 — 좌표는 전부 **top-left 원점 pt(f64)** 로 확정돼 있고, 백엔드는
-//! 그리기만 한다. W3(괘선)·W5(이미지) variant 확장을 위해 타입 계약을
-//! 지금 고정한다 (Codex 리뷰 M1):
+//! 그리기만 한다. 괘선·이미지 variant 확장을 위해 타입 계약을
+//! 지금 고정한다:
 //!
 //! - 백엔드 타입(krilla 등)을 **이 모듈로 새지 않게 한다** — 폰트는
 //!   중립 [`FontKey`], 색은 foundation [`Color`].
@@ -53,7 +53,7 @@ pub struct Size {
 ///
 /// 실제 폰트 데이터([`crate::font::ResolvedFont`])는 렌더 컨텍스트가
 /// 소유하고, Paint IR 은 인덱스만 나른다 — krilla 폰트 객체나 파일 경로가
-/// 이 층에 유입되면 W4(resolver 확장)에서 재설계가 필요해진다.
+/// 이 층에 유입되면 resolver 확장 시 재설계가 필요해진다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FontKey(pub usize);
 
@@ -88,7 +88,7 @@ pub struct GlyphRun {
     pub glyphs: Vec<PositionedGlyph>,
 }
 
-/// 채운 사각형 (W3 — 셀 배경).
+/// 채운 사각형 (셀 배경).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct RectItem {
@@ -104,7 +104,7 @@ pub struct RectItem {
     pub color: hwpforge_foundation::Color,
 }
 
-/// 선분 (W3 — 괘선, 경계선 중앙 기준 stroke).
+/// 선분 (괘선, 경계선 중앙 기준 stroke).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct LineItem {
@@ -118,7 +118,7 @@ pub struct LineItem {
     pub color: hwpforge_foundation::Color,
 }
 
-/// 페인트 항목. `#[non_exhaustive]` — W5 `Image` 확장 예정.
+/// 페인트 항목. `#[non_exhaustive]` — `Image` 확장 예정.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum PaintItem {
@@ -128,16 +128,16 @@ pub enum PaintItem {
     Rect(RectItem),
     /// 선분 (괘선 — 배경 뒤, 글리프 앞).
     Line(LineItem),
-    /// 래스터 이미지 (W2a — §3 D3).
+    /// 래스터 이미지.
     Image(ImageItem),
-    /// 사각 클립 그룹 (W4 w2 — 글상자 클리핑, 중첩 가능).
+    /// 사각 클립 그룹 (글상자 클리핑, 중첩 가능).
     Clipped(ClipGroup),
 }
 
 /// 래스터 이미지 paint 항목 — 자기완결 (backend 가 스토어를 모른다).
 ///
 /// `data` 는 paint-build 스코프의 asset interner 가 canonical key 당
-/// 1회만 복사한 공유 바이트다 (occurrence 별 복제 금지 — §3 D3).
+/// 1회만 복사한 공유 바이트다 (occurrence 별 복제 금지).
 /// 포맷은 backend 가 magic 스니핑으로 판별한다 (Core `ImageFormat` 은
 /// 확장자 유래라 진단 힌트일 뿐).
 #[derive(Debug, Clone, PartialEq)]
@@ -156,7 +156,7 @@ pub struct ImageItem {
     pub location: String,
 }
 
-/// 사각 클립 그룹 (W4 w2 — 글상자 렌더의 클리핑 기반).
+/// 사각 클립 그룹 (글상자 렌더의 클리핑 기반).
 ///
 /// `origin`+`size` 사각형으로 클립 영역을 세운 뒤 `items` 를 그리고 클립을
 /// 되돌린다 (backend: krilla `push_clip_path` → 자식 그리기 → `pop`).
@@ -167,7 +167,7 @@ pub struct ImageItem {
 ///
 /// 넘친 자식(클립 밖)은 backend 가 렌더 시점에 잘라낸다 — Paint IR 은
 /// 자식을 그대로 담고, 잘림은 클립 영역이 강제한다 (글상자 overflow
-/// 실측 = 한컴은 글자 중간을 박스 경계로 절단, 설계 §8a).
+/// 실측 = 한컴은 글자 중간을 박스 경계로 절단).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ClipGroup {
