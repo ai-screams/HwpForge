@@ -2,7 +2,7 @@
 definition-shaped texts `lossy_definition_shapes` (src/encoder/guarded_tests.rs)
 generates, in its order.
 
-Baseline: commit bd3f6e67 (the commit before G4 touched the fallback and the
+Baseline: commit bd3f6e67 (the commit before the changes to the fallback and the
 escapers). Build its CLI (`cargo build --release -p hwpforge-bindings-cli` in a
 worktree of that commit; the file was written with the CLI of 643313cc, whose
 smithy-md and core sources are the same), then from this directory:

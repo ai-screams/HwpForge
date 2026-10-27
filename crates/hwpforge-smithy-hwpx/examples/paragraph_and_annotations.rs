@@ -81,7 +81,7 @@ fn build_style_store() -> HwpxStyleStore {
         store.push_font(HwpxFont::new(1, "함초롬바탕", lang));
     }
 
-    // ── Wave 8: Numbering + Tab ────────────────────────────────
+    // ── Numbering + Tab ────────────────────────────────
     store.push_numbering(NumberingDef::default_outline());
     for tab in TabDef::defaults() {
         store.push_tab(tab);
@@ -98,7 +98,7 @@ fn build_style_store() -> HwpxStyleStore {
     cs_title.bold = true;
     store.push_char_shape(cs_title);
 
-    // CS 2: DotAbove emphasis (Wave 10)
+    // CS 2: DotAbove emphasis
     let mut cs_dot = HwpxCharShape::default();
     cs_dot.emphasis = EmphasisType::DotAbove;
     store.push_char_shape(cs_dot);
@@ -157,7 +157,7 @@ fn build_style_store() -> HwpxStyleStore {
     ps_center.alignment = Alignment::Center;
     store.push_para_shape(ps_center);
 
-    // PS 2: Outline heading level 1 (Wave 8: HeadingType)
+    // PS 2: Outline heading level 1 (HeadingType)
     let mut ps_ol1 = HwpxParaShape::default();
     ps_ol1.alignment = Alignment::Left;
     ps_ol1.heading_type = HeadingType::Outline;
@@ -230,7 +230,7 @@ fn build_style_store() -> HwpxStyleStore {
 }
 
 // ---------------------------------------------------------------------------
-// Section 1: Wave 10 — EmphasisType 및 CharShape 확장 필드 테스트
+// Section 1: EmphasisType 및 CharShape 확장 필드 테스트
 // ---------------------------------------------------------------------------
 
 fn build_section1() -> Section {
@@ -340,7 +340,7 @@ fn build_section1() -> Section {
 }
 
 // ---------------------------------------------------------------------------
-// Section 2: Wave 8 — HeadingType, Outline, Numbering, Tab 테스트
+// Section 2: HeadingType, Outline, Numbering, Tab 테스트
 // ---------------------------------------------------------------------------
 
 fn build_section2() -> Section {
@@ -396,7 +396,7 @@ fn build_section2() -> Section {
 }
 
 // ---------------------------------------------------------------------------
-// Section 3: Wave 13 — Dutmal (덧말) 및 Compose (글자겹침) 테스트
+// Section 3: Dutmal (덧말) 및 Compose (글자겹침) 테스트
 // ---------------------------------------------------------------------------
 
 fn build_section3() -> Section {
@@ -603,7 +603,7 @@ fn build_section3() -> Section {
 fn main() {
     println!("=== Wave 8/10/13 API 종합 테스트 ===\n");
 
-    // 1. Build style store with all Wave 8/10/13 features
+    // 1. Build style store with all features
     let store = build_style_store();
     println!("[1] 스타일 스토어 구성 완료:");
     println!(
@@ -622,9 +622,9 @@ fn main() {
     // 2. Build document with 3 sections
     let image_store = ImageStore::new();
     let mut doc = Document::new();
-    doc.add_section(build_section1()); // Wave 10: Emphasis + CharShape fields
-    doc.add_section(build_section2()); // Wave 8: Heading/Outline/Numbering/Tab
-    doc.add_section(build_section3()); // Wave 13: Dutmal + Compose
+    doc.add_section(build_section1()); // Emphasis + CharShape fields
+    doc.add_section(build_section2()); // Heading/Outline/Numbering/Tab
+    doc.add_section(build_section3()); // Dutmal + Compose
 
     println!("[2] 문서 구성: {} sections", doc.sections().len());
     for (i, sec) in doc.sections().iter().enumerate() {
@@ -648,12 +648,12 @@ fn main() {
     println!("[5] 라운드트립 디코딩 완료:");
     println!("    Sections: {}", d.sections().len());
 
-    // Verify Section 1 (Wave 10 - Emphasis)
+    // Verify Section 1 (Emphasis)
     let s1 = &d.sections()[0];
     println!("    Section 1 (Wave 10 EmphasisType):");
     println!("      Paragraphs: {}", s1.paragraphs.len());
 
-    // Verify Section 2 (Wave 8 - Heading)
+    // Verify Section 2 (Heading)
     let s2 = &d.sections()[1];
     println!("    Section 2 (Wave 8 Heading/Outline):");
     println!("      Paragraphs: {}", s2.paragraphs.len());
@@ -661,7 +661,7 @@ fn main() {
     let styled_count = s2.paragraphs.iter().filter(|p| p.style_id.is_some()).count();
     println!("      Paragraphs with styleIDRef: {styled_count}");
 
-    // Verify Section 3 (Wave 13 - Dutmal/Compose)
+    // Verify Section 3 (Dutmal/Compose)
     let s3 = &d.sections()[2];
     println!("    Section 3 (Wave 13 Dutmal/Compose):");
     println!("      Paragraphs: {}", s3.paragraphs.len());

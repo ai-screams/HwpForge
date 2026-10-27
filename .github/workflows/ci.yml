@@ -7,11 +7,11 @@
 #   - Reusable preflight for release workflow
 #   - Manual full validation when requested
 #
-# Modes (CI 다이어트 P1 — PR 은 빠른 피드백, 큐가 최종 전체 게이트)
+# Modes (CI 다이어트 — PR 은 빠른 피드백, 큐가 최종 전체 게이트)
 #   pr          → fast feedback (fmt/clippy/test/audit/lint — coverage,
 #                 deny, msrv, docs build 는 머지 큐로 이동)
 #   merge_queue → final full gate (coverage + deny + msrv + docs build)
-#   release     → pr 과 동일 플래그 (자동 트리거 경로 없음 — P2 로
+#     release     → pr 과 동일 플래그 (자동 트리거 경로 없음 —
 #                 release-plz Preflight 호출 제거됨, dispatch 라벨용 존치)
 #   full        → manual full validation
 # =============================================================================
@@ -113,7 +113,7 @@ jobs:
               run_msrv=true
               ;;
             release)
-              # P2: 큐가 방금 게이트한 커밋 — Preflight 는 release-plz.yml
+              # 큐가 방금 게이트한 커밋 — Preflight 는 release-plz.yml
               # 에서 호출 자체를 제거했고, 이 모드는 수동 dispatch 용 최소만.
               run_coverage=false
               run_deny=false
@@ -325,7 +325,7 @@ jobs:
         # 1.92 를 선언한 크레이트는 넷이고, 전부 publish=false 라 MSRV 소비자
         # 계약이 없다 — 1.89 레인에서 제외하고 아래 1.92 스텝이 커버한다.
         #   smithy-pdf     krilla 0.8 가 1.92 요구
-        #   bindings-cli   W6a 부터 smithy-pdf 소비
+        # bindings-cli smithy-pdf 소비
         #   convert        ops::to_pdf 가 smithy-pdf 소비
         #   bindings-py    convert 소비
         run: >-
@@ -353,7 +353,7 @@ jobs:
   python:
     name: "Verify › Python"
     # 경로 필터도 `if:` 도 없이 PR·머지 큐 양쪽에서 무조건 실행한다. skip 된
-    # 체크런은 GitHub 가 required 를 "충족" 으로 취급하므로(CI 다이어트 P1 과
+    # 체크런은 GitHub 가 required 를 "충족" 으로 취급하므로(CI 모드 분리와
     # 같은 메커니즘) 이 잡에 조건을 걸면 실패가 통과로 둔갑한다 — `plan` 과
     # 같은 무조건 실행 모양을 쓰고, 다른 잡 결과에도 의존하지 않는다.
     #
@@ -365,7 +365,7 @@ jobs:
     # 돌고, 후보 wheel 만 manylinux_2_28 컨테이너에서 만든다 — 그래야 PR 에서
     # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다.
     runs-on: ubuntu-22.04
-    # W0 (h): CI 시간은 이 첫 run 이 실측이다. 이 잡은
+    # CI 시간은 이 첫 run 이 실측이다. 이 잡은
     # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + manylinux 컨테이너
     # 안의 또 한 벌 cold release 빌드까지 한 잡에서 치른다 — required 가 될 잡을
     # 타임아웃으로 빨갛게 만드는 비용이 넉넉한 상한보다 크므로 40 에서 시작하고
@@ -516,7 +516,7 @@ jobs:
       - name: Verify sdist is self-contained
         # 체크아웃 **밖**에 풀어서, 남아 있는 path 의존성이 원본 트리로 새는 것을
         # 구조적으로 막는다. `pip install` 로 검증하지 않는다 — cold release 컴파일
-        # 이라 이 잡의 예산을 넘는다. 실제 설치 리허설은 W1e 의 TestPyPI 단계다.
+        # 이라 이 잡의 예산을 넘는다. 실제 설치 리허설은 TestPyPI 단계다.
         run: |
           set -euo pipefail
           sd="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"

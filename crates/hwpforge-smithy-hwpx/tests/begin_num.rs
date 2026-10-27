@@ -12,7 +12,7 @@ use hwpforge_smithy_hwpx::HwpxEncoder;
 
 /// A document built through the API or `from-json`, whose first
 /// section continues (`page 0`), gets Hancom's header of ones — the
-/// generated files (x2-base, f14-base) used to start at page 0.
+/// generated files used to start at page 0.
 ///
 /// 이것을 실패시키는 것: header 를 다시 첫 구역 `begin_num` 에서 만드는 것.
 #[test]

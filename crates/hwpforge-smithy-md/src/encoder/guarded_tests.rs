@@ -1,4 +1,4 @@
-//! The styled view's guarantee for document text (design 018 G): in a Body
+//! The styled view's guarantee for document text: in a Body
 //! block — a top-level body paragraph that is not a continuation — and in a
 //! guarded cell, document text makes no block structure and comes back as
 //! the same characters; what a rule cannot close is written as plain text
@@ -440,12 +440,12 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g10_memo_body", "z<!-- memo: - x -->", "z"),
     ("g10_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |"),
     ("g10_image_caption", "![p](images/p.png)\n\n- x", "![p](BinData/p.png)"),
-    // g11: written by fa04fabf (G merged); continuations are drawn as at
+    // written by fa04fabf; continuations are drawn as at
     // 496371cf there.
     ("g11_cont_memo_list", "- a\n\n  <!-- memo: m -->- x", "a\n\n- x"),
     ("g11_cont_chart_number", "- a\n\n  <!-- chart -->1. x", "a\n\n1. x"),
     ("g11_cont1_memo_list", "  - a\n\n    <!-- memo: m -->- x", "a\n\n- x"),
-    // g12: written by 61d3631d (G2, before this writer).
+    // Written by commit 61d3631d, before this writer.
     ("g12_table_memo", "a\n| v |\n| --- |\n\n<!-- memo: m -->\n\\*x\\*", "a\n\n| v |\n| --- |\n\n*x*"),
     ("g12_caption_memo", "a\n| v |\n| --- |\n\ncap<!-- memo: m -->\\*x\\*", "a\n\n| v |\n| --- |\n\n\n\ncap\n\n*x*"),
     ("g12_picture_caption_memo", "a ![p](images/p.png)\n\n<!-- memo: m -->\n\\*x\\*", "a ![p](BinData/p.png)*x*"),
@@ -1543,7 +1543,7 @@ fn many_fallbacks_are_linear() {
 
 const N_FALLBACKS: usize = 250_000;
 
-/// The time bound of the linearity tests here (G3, G4), for a debug build on
+/// The time bound of the linearity tests here, for a debug build on
 /// a CI runner: five times the slowest linear case and a third of the
 /// fastest quadratic one, both measured locally in a debug build
 /// (`cargo nextest run -p hwpforge-smithy-md --all-features`, three runs,
@@ -1582,7 +1582,7 @@ fn empty_pieces_after_text_are_linear() {
 /// A comment that comes to a line start through the block's own bytes —
 /// after a table's blank line, at a caption's end, in a picture's caption,
 /// in a text box — or two comments with a line ending or a space between:
-/// the bytes G2 wrote before this writer (no warning).
+/// the bytes the previous writer produced (no warning).
 /// 이것을 실패시키는 것: 줄 끝내기를 완성 블록이 아닌 작성기 안에서 하기 · 줄 끝내기 삭제.
 #[test]
 fn line_start_comments_are_g2_bytes() {

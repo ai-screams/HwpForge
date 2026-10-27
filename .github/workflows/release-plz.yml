@@ -3,7 +3,7 @@
 # =============================================================================
 #
 # On push to main (validation is owned by the merge queue — every commit
-# reaching main just passed ci.yml merge_queue mode; no preflight here, P2):
+# reaching main just passed ci.yml merge_queue mode; no preflight here):
 #   1. Publish crates / create GitHub Releases when a release PR was merged
 #   2. Create or refresh the next release PR
 #   3. Deploy Pages only when a real release was created

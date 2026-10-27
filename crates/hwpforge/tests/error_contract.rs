@@ -23,7 +23,7 @@ mod error_inventory;
 use error_contract::{Manifest, STAGES};
 use error_inventory::{Inventory, SiteKey};
 
-/// Enums whose every variant the manifest must register. A wave adds an
+/// Enums whose every variant the manifest must register. A change adds an
 /// enum here in the change that registers its cases; until then the
 /// inventory comparison only checks that registered variants exist.
 const CONTRACT_INVENTORY_SCOPE: &[&str] = &[
@@ -138,7 +138,7 @@ fn compare_inventory(
 /// otherwise keep its real constructor out of the site scan unnoticed. The
 /// list therefore holds only variants that exist; the expected 0.18 list
 /// (five `Invariant`, two `ProtectedFieldRange`, `CellEditError::NestingTooDeep`)
-/// is added entry by entry by the wave that introduces each variant.
+/// is added entry by entry when introducing each variant.
 fn missing_audited_variants(audited: &[String], inventory: &Inventory) -> Vec<String> {
     audited
         .iter()
@@ -169,7 +169,7 @@ fn is_audit_target(enum_name: &str, variant: &str) -> bool {
 
 /// Audit-scope variants that exist in the inventory but are missing from
 /// the audited list — the reverse of [`missing_audited_variants`]. Without
-/// it, a wave that adds a variant but forgets to list it would leave its
+/// it, a change that adds a variant but forgets to list it would leave its
 /// constructors out of the site scan unnoticed. Variants that do not exist
 /// yet are not required.
 fn unlisted_audit_targets(audited: &[String], inventory: &Inventory) -> Vec<String> {
@@ -195,7 +195,7 @@ fn manifest_is_consistent() {
 
 #[test]
 fn manifest_sites_match_the_production_generation_sites() {
-    // 이것을 실패시키는 것: A5 layout carry의 최종 ZIP 작성 stage를 Verification으로 변경.
+    // 이것을 실패시키는 것: layout carry의 최종 ZIP 작성 stage를 Verification으로 변경.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let scan = error_inventory::collect_sites(&manifest.audited_variants);
 
@@ -219,7 +219,7 @@ fn manifest_sites_match_the_production_generation_sites() {
 
 #[test]
 fn manifest_inventory_refs_match_the_enum_inventory() {
-    // 이것을 실패시키는 것: A4 audited_variants에서 CellEditError::NestingTooDeep 삭제.
+    // 이것을 실패시키는 것: audited_variants에서 CellEditError::NestingTooDeep 삭제.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let refs: Vec<(String, String, Option<String>)> = manifest
         .cases
@@ -263,7 +263,7 @@ fn deleting_a_w2_workflow_reference_is_reported() {
 
 #[test]
 fn deleting_w3_inventory_references_is_reported() {
-    // 이것을 실패시키는 것: A1–A3 scope에서 각 W3 enum 삭제, A6 삭제 필터의 &&를 ||로 변경.
+    // 이것을 실패시키는 것: scope에서 각 편집 오류 enum 삭제, 삭제 필터의 &&를 ||로 변경.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let inventory = error_inventory::collect();
     for (name, variant) in [

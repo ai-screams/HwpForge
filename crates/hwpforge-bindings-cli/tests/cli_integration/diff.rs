@@ -28,7 +28,7 @@ fn diff_verifies_fill_delta_end_to_end() {
     assert_eq!(semantic["field_values"][0]["name"], "user_email");
     assert_eq!(semantic["field_values"][0]["after"], "diff@cli.io");
     assert!(semantic["paragraphs"].as_array().unwrap().is_empty());
-    // W1b: fill 은 stale linesegarray 도 제거 — raw 축에 `$.layout_cache`
+    // fill 은 stale linesegarray 도 제거 — raw 축에 `$.layout_cache`
     // 변경 하나가 정직하게 보고된다.
     let raw = semantic["raw"].as_array().unwrap();
     assert_eq!(raw.len(), 1, "raw: {raw:?}");

@@ -1,4 +1,4 @@
-//! Plan phase (E6 Wave 1A): enumerate class-A placeholder candidates over a
+//! Plan phase: enumerate class-A placeholder candidates over a
 //! Core document.
 //!
 //! The shared text walker includes protected field text and folded Memo
@@ -76,7 +76,7 @@ pub fn plan<S>(document: &Document<S>) -> Vec<StampCandidate> {
         for slot in &slots {
             // Field bodies are never stamp targets; tab-bearing InlineText
             // runs still contribute guard context above, but splitting them
-            // is lossy so they produce no candidates (Wave 1A).
+            // is lossy so they produce no candidates.
             if slot.inline {
                 continue;
             }

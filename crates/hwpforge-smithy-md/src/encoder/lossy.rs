@@ -516,7 +516,7 @@ fn paragraph_pieces_at<S: Sink>(
                 }
                 Control::NewNumber { .. } | Control::PageHiding { .. } => {
                     // 번호 재시작·감추기 지시 — 본문 텍스트 없음, 명시적
-                    // no-op (W2·W3).
+                    // no-op.
                 }
                 Control::AutoNumber { num, format, .. } => {
                     text(&mut pieces, &super::auto_number_text(*num, format));

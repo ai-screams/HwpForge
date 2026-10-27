@@ -108,7 +108,7 @@ pub(crate) fn section2_text_formatting() -> Section {
         PS_BODY,
     ));
 
-    // ModifiedTime 필드 (Wave 12n: was FieldType::Date → $modifiedtime)
+    // ModifiedTime 필드 (was FieldType::Date → $modifiedtime)
     paras.push(runs_p(
         vec![
             Run::text("날짜 필드(ModifiedTime): ", csi(CS_NORMAL)),
@@ -126,7 +126,7 @@ pub(crate) fn section2_text_formatting() -> Section {
         PS_BODY,
     ));
 
-    // InlinePageNumber (Wave 12n: was FieldType::PageNum → autoNum)
+    // InlinePageNumber (was FieldType::PageNum → autoNum)
     paras.push(runs_p(
         vec![
             Run::text("쪽 번호 필드(autoNum): 현재 ", csi(CS_NORMAL)),

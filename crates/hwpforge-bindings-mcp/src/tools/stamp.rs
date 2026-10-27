@@ -1,5 +1,5 @@
 //! `hwpforge_stamp_plan` / `hwpforge_stamp` — 산문 placeholder 를 이름 붙은
-//! 누름틀로 승격하는 템플릿 스탬핑 (E6, 2단계 plan/apply).
+//! 누름틀로 승격하는 템플릿 스탬핑 (2단계 plan/apply).
 //!
 //! plan 은 클래스-A 후보를 나열하고, 호출자가 후보 전량을 이름 또는 ignore
 //! 로 분류한 spec 배열을 stamp 에 전달한다. stamp 는 fail-closed admission

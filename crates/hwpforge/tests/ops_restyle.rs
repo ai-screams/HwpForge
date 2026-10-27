@@ -130,7 +130,7 @@ fn semantic_loss_returns_no_bytes_at_all() {
     );
 }
 
-/// A picture whose `binaryItemIDRef` names no package item (fixture F6:
+/// A picture whose `binaryItemIDRef` names no package item (fixture:
 /// `image2` with neither a manifest item nor a BinData entry). Restyling
 /// re-encodes the whole package, which would carry the broken picture over
 /// without a word, so it is refused.
@@ -351,7 +351,7 @@ fn grouped_text_box_table_is_restyled() {
     restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
 }
 
-/// S19: a restyle keeps a cell's dormant margin (its own values while it
+/// a restyle keeps a cell's dormant margin (its own values while it
 /// uses the table's padding).
 ///
 /// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기 / 인코더가 쓰지 않기.
@@ -408,7 +408,7 @@ fn restyle_keeps_dormant_cell_margins() {
     assert_eq!(dormant(&out.bytes), before);
 }
 
-/// S19: a restyle writes a dormant margin Hancom left unset (`4294967295`
+/// a restyle writes a dormant margin Hancom left unset (`4294967295`
 /// on every side, read as -1) back as `4294967295`, not `-1` — the margin
 /// attributes are `xs:nonNegativeInteger`.
 ///

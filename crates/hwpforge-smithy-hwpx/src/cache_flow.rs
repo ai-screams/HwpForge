@@ -1,4 +1,4 @@
-//! Which paragraph line caches a text change makes stale (W2, design 3.5),
+//! Which paragraph line caches a text change makes stale,
 //! shared by the two preserve-first text editors: `fill` and `patch`.
 //!
 //! A paragraph's `<hp:linesegarray>` places its lines by character position

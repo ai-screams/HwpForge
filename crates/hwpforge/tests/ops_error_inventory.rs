@@ -1171,7 +1171,7 @@ fn every_wrapped_variant_has_a_mapping() {
 #[test]
 // 이것을 실패시키는 것: read 구역 범위를 InvalidInput으로 변경; 기존 inventory 시험으로 검출.
 fn constructed_errors_produce_the_mapped_code() {
-    // 이것을 실패시키는 것: O4–O6 보호 필드·stamp delta·셀 중복 매핑을 InvalidInput으로 변경.
+    // 이것을 실패시키는 것: 보호 필드·stamp delta·셀 중복 매핑을 InvalidInput으로 변경.
     let samples = wrapped_errors();
 
     for (enum_name, table) in ERROR_MAPPING {

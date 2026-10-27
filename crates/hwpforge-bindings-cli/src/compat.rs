@@ -680,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    // 이것을 실패시키는 것(W4): convert-hwp5·to-pdf 의 VALIDATION_FAILED·ENCODE_FAILED 표 행 삭제(힌트 소실),
+    // 이것을 실패시키는 것: convert-hwp5·to-pdf 의 VALIDATION_FAILED·ENCODE_FAILED 표 행 삭제(힌트 소실),
     // 행의 종료 값을 1 로, ops 분류를 HWP5_CONVERT_FAILED 로 되돌리기.
     fn hwp5_validate_and_encode_stages_keep_hint_and_exit() {
         use hwpforge_convert::ConvertError;

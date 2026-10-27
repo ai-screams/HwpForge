@@ -26,7 +26,7 @@ struct ConvertResult {
 
 /// Run the convert command: MD → HWPX.
 ///
-/// # W3 migration note (preset behaviour change)
+/// # Migration note (preset behaviour change)
 ///
 /// The old hand-rolled `if preset != "default"` guard is gone — every
 /// [`hwpforge::ops::convert_md`] call now names a preset from
@@ -163,7 +163,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     }
 }
 
-/// [`EncodeWarning`] 을 레거시 CLI 의 한 줄 진단 문자열로 만든다 — W3
+/// [`EncodeWarning`] 을 레거시 CLI 의 한 줄 진단 문자열로 만든다 —
 /// 마이그레이션 전 `commands/convert.rs`(pre-`ops`)의 `encode_warning_line`
 /// 을 바이트 동일하게 복원한 것. 그 밖의(새) variant 는 인코더 접근자로
 /// `CODE at 자리: 문구` 를 만든다 — 폴백 없이 자기 코드로 보고된다.

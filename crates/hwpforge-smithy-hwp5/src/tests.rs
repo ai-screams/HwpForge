@@ -105,10 +105,10 @@ fn join_hwp5_image_assets_matches_fixture_bindata_inventory() {
 
 /// Direct unit coverage for `Hwp5StyleStore::border_fill_image_binary_ids`,
 /// which is `pub(crate)` and therefore unreachable from the conversion tests
-/// that moved to `hwpforge-convert` (E5). It is consumed by
+/// that moved to `hwpforge-convert`. It is consumed by
 /// `supplement_border_fill_image_assets`; this asserts it collects the binary
 /// data id of every image-fill border directly, restoring the assertion that
-/// the E5 move could only leave as a comment in the convert crate.
+/// the move could only leave as a comment in the convert crate.
 #[test]
 fn border_fill_image_binary_ids_collects_image_fill_ids() {
     use crate::decoder::header::Hwp5DocInfoBorderFillSlot;

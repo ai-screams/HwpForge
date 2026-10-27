@@ -1,4 +1,4 @@
-//! Lossless Markdown for text boxes, lines, ellipses and polygons (W3): the
+//! Lossless Markdown for text boxes, lines, ellipses and polygons: the
 //! style, vertical alignment, text margin and placement come back equal in
 //! the body and in groups, their text is an exact subtree, and the old
 //! `<textbox>text</textbox>` form still reads.
@@ -401,7 +401,7 @@ fn shape_grammar_errors() {
     ));
 }
 
-/// Rectangles, arcs, curves and connect lines (W4) come back equal in the
+/// Rectangles, arcs, curves and connect lines come back equal in the
 /// body and in a group: every arc point told apart, a curve whose segment
 /// list is not one shorter than its points, empty curve lists, a connect
 /// line with and without routing points and a control character in its

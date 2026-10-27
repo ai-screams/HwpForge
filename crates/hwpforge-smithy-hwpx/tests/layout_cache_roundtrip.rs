@@ -54,7 +54,7 @@ fn build_doc() -> Document<Draft> {
 
 #[test]
 fn default_encode_omits_linesegarray() {
-    // W0 부터 개체 id 는 인코드마다 새 할당기에서 나오므로 두 진입점의
+    // 개체 id 는 인코드마다 새 할당기에서 나오므로 두 진입점의
     // 기본 경로가 바이트까지 같다. 캐시 미방출 불변식과 함께 그것도 잠근다.
     // 이것을 실패시키는 것: 기본 옵션이 출력을 바꾸기 · 전역 id 카운터 복귀.
     let store = style_store_for_preset("default").expect("preset");
@@ -111,7 +111,7 @@ fn optin_emits_linesegarray_and_roundtrips_all_containers() {
     assert_eq!(get("머리말").lines, vec![seg(0, 800)], "머리말 캐시 보존");
 }
 
-// ── W1b 매트릭스: marker/tab/field 왕복 + 실패 의미 잠금 ────────────
+// ── 매트릭스: marker/tab/field 왕복 + 실패 의미 잠금 ────────────
 
 fn roundtrip(doc: Document<Draft>) -> hwpforge_smithy_hwpx::EncodeOutcome {
     let store = style_store_for_preset("default").expect("preset");

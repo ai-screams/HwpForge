@@ -112,7 +112,7 @@ fn wrap_header_xml(
 /// numbers (`<hp:startNum>`, `0` = continue), not the document's, and Core
 /// has no document layer, so those are written as Hancom always writes them:
 /// `1` (XSD `positiveInteger`; Hancom keeps the header at 1 when a start
-/// number changes — F16, F17 — and a header page of 0 starts the document at
+/// number changes, and a header page of 0 starts the document at
 /// page 0 and swaps odd and even master pages).
 fn build_begin_num_xml(begin_num: Option<&hwpforge_core::section::BeginNum>) -> String {
     let (footnote, endnote) = begin_num.map_or((1, 1), |bn| (bn.footnote, bn.endnote));
@@ -1819,7 +1819,7 @@ mod tests {
 
     #[test]
     fn test_char_pr_strike_line_family_roundtrip() {
-        // Every Wave 1c strike variant must roundtrip through encode/decode.
+        // Every strike variant must roundtrip through encode/decode.
         let variants = [
             StrikeoutShape::Solid,
             StrikeoutShape::Dash,

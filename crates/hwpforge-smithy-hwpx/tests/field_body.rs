@@ -126,7 +126,7 @@ fn roundtrip(body: &str, expected: &[&str], cached: bool) {
             after.push((text, p.runs.clone(), p.layout_cache.clone()));
         }
     });
-    assert_eq!(before, after, "Core body and S22 boundary");
+    assert_eq!(before, after, "Core body and field visibility boundary");
     let second = encode(d);
     assert_eq!(section_xml(&first.bytes), section_xml(&second.bytes), "normalized XML fixed point");
     assert_eq!(first.bytes, second.bytes, "normalized package byte fixed point");

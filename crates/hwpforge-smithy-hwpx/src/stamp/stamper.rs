@@ -1,4 +1,4 @@
-//! Byte-level stamping facade (E6 Wave 1B surface): admission-gated
+//! Byte-level stamping facade (surface): admission-gated
 //! decode → apply → encode over a complete `.hwpx`, plus the manifest.
 //!
 //! Fail-closed: an input is admitted only when it is
@@ -206,7 +206,7 @@ impl std::fmt::Display for StamperError {
             Self::NotRoundTripSafe { component, diff_path } => write!(
                 f,
                 "input is not round-trip-safe: {component} differs at {diff_path} after a \
-                 no-op decode→encode→decode — refusing to stamp (E4 preserve-first path \
+                 no-op decode→encode→decode — refusing to stamp (preserve-first editing path \
                  required for this input)"
             ),
             // Entry names come from an untrusted archive — debug
@@ -1470,7 +1470,7 @@ mod tests {
 
     #[test]
     fn w3_encode_purpose_preserves_stage_leaf_and_detail() {
-        // 이것을 실패시키는 것: H1–H6 목적별 validate/encode stage 여섯 갈래를 각각 다른 stage로 변경.
+        // 이것을 실패시키는 것: 목적별 validate/encode stage 여섯 갈래를 각각 다른 stage로 변경.
         for (purpose, validation, encoding) in [
             (EncodePurpose::Admission, CodecStage::Admission, CodecStage::Admission),
             (EncodePurpose::Output, CodecStage::Validation, CodecStage::Encode),
@@ -1516,8 +1516,8 @@ mod tests {
 
     #[test]
     fn w3_zip_reads_keep_input_and_artifact_stages() {
-        // 이것을 실패시키는 것: Z1/Z2 원본 ZIP Decode 또는 산출물 ZIP Verification을 Admission으로 변경.
-        // 이것을 실패시키는 것: Z3 원래 Core 오류를 HwpxError로 한 번 더 감싸 detail에 접두 추가.
+        // 이것을 실패시키는 것: 원본 ZIP Decode 또는 산출물 ZIP Verification을 Admission으로 변경.
+        // 이것을 실패시키는 것: 원래 Core 오류를 HwpxError로 한 번 더 감싸 detail에 접두 추가.
         let good = encode_hwpx(&doc_with_text("x"), EncodePurpose::Output).unwrap();
         for (base, output, stage) in [
             (b"bad".as_slice(), good.as_slice(), CodecStage::Decode),
@@ -1542,7 +1542,7 @@ mod tests {
     /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.
     #[test]
     fn zip9_fix3_stamp_rejects_parent_part() {
-        // 이것을 실패시키는 것: T12 zip_entry_names가 이름 검사 전 빈 목록으로 조기 성공.
+        // 이것을 실패시키는 것: zip_entry_names가 이름 검사 전 빈 목록으로 조기 성공.
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         zip.start_file("Contents/../unused.xml", zip::write::SimpleFileOptions::default()).unwrap();
@@ -1891,7 +1891,7 @@ mod tests {
     /// 이것을 실패시키는 것: 고정점 검증에 정확 비교(`delta_compare`)를 쓰는 것.
     #[test]
     fn fixed_point_tolerates_storage_drift() {
-        // 이것을 실패시키는 것: T15 fixed-point 검증을 허용 오차 없는 delta 비교로 변경.
+        // 이것을 실패시키는 것: fixed-point 검증을 허용 오차 없는 delta 비교로 변경.
         use hwpforge_core::control::ShapeStyle;
         let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
         let mut rect = Control::rect(unit(2_000_000), unit(10_000)).unwrap();

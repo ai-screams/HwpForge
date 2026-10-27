@@ -1,4 +1,4 @@
-//! Grid-addressed table cell editing (E3 Wave 3).
+//! Grid-addressed table cell editing.
 //!
 //! The delta surface symmetric to `fill` (name-addressed) for tables: a cell
 //! is addressed by its table ordinal (shared inventory order) plus either a
@@ -765,7 +765,7 @@ mod tests {
 
     #[test]
     fn w3_mapper_preserves_typed_failures() {
-        // 이것을 실패시키는 것: P1/P1i typed Codec·Invariant detail 삭제, P4 예상 밖 helper 오류 detail 삭제.
+        // 이것을 실패시키는 것: typed Codec·Invariant detail 삭제, 예상 밖 helper 오류 detail 삭제.
         for stage in [
             CodecStage::Decode,
             CodecStage::Admission,

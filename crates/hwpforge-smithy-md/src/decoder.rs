@@ -421,10 +421,10 @@ impl TableBuilder {
     }
 }
 
-/// 전개된 각주/미주 본문의 총량 상한 (H5 — 다중 참조 복제 증폭 방어).
+/// 전개된 각주/미주 본문의 총량 상한 (다중 참조 복제 증폭 방어).
 const MAX_EXPANDED_NOTE_BYTES: usize = 8 * 1024 * 1024;
 
-/// 각주/미주 정의의 해석 상태 (H4 — 소비하지 않고 참조 수만 센다).
+/// 각주/미주 정의의 해석 상태 (소비하지 않고 참조 수만 센다).
 #[derive(Debug)]
 struct NoteDefinition {
     /// 원문 라벨 (에러 메시지용 — canonical 은 맵 키).
@@ -438,7 +438,7 @@ struct NoteDefinition {
 /// 정의 수집 모드 — 본문 빌더와 **격리**된 캡처.
 ///
 /// 전역 리스트/인용/표 상태를 읽지도 쓰지도 않는다. 화이트리스트:
-/// 문단 · 텍스트 · 인라인 서식(W0 스택 재사용) · soft/hard break ·
+/// 문단 · 텍스트 · 인라인 서식(스택 재사용) · soft/hard break ·
 /// 인라인 코드(리터럴). 그 외 블록/링크/이미지는 typed 거부.
 #[derive(Debug)]
 struct DefinitionCapture {
@@ -456,7 +456,7 @@ struct DefinitionCapture {
 struct DecoderState<'a> {
     mapping: &'a MdMapping,
     /// Style registry the decoder may extend with derived inline-format
-    /// character shapes (W0 — bold/italic/strikethrough runs).
+    /// character shapes (bold/italic/strikethrough runs).
     registry: &'a mut StyleRegistry,
     /// Inline-format nesting counters (pulldown-cmark guarantees balanced
     /// start/end tags; counters keep same-tag nesting safe).
@@ -465,15 +465,15 @@ struct DecoderState<'a> {
     fmt_strike: u32,
     /// Cache of derived char shapes: (base shape index, format flags) → index.
     derived_shapes: std::collections::HashMap<(usize, u8), CharShapeIndex>,
-    /// 각주/미주 정의 — 키는 파서(UniCase)와 동일한 case-fold canonical (H3).
+    /// 각주/미주 정의 — 키는 파서(UniCase)와 동일한 case-fold canonical.
     note_definitions: std::collections::HashMap<UniCase<String>, NoteDefinition>,
-    /// 참조를 만난 순서 (resolve 가 이 순서로 빈 컨트롤을 채운다 — D1).
+    /// 참조를 만난 순서 (resolve 가 이 순서로 빈 컨트롤을 채운다).
     pending_notes: Vec<UniCase<String>>,
     /// 정의 수집 모드 (Some 이면 활성).
     definition_capture: Option<DefinitionCapture>,
-    /// builtin "각주" 스타일 (없으면 body 폴백 — D6).
+    /// builtin "각주" 스타일 (없으면 body 폴백).
     footnote_style: MdStyleRef,
-    /// builtin "미주" 스타일 (없으면 body 폴백 — D6).
+    /// builtin "미주" 스타일 (없으면 body 폴백).
     endnote_style: MdStyleRef,
     paragraphs: Vec<Paragraph>,
     current: Option<ParagraphBuilder>,
@@ -565,12 +565,12 @@ impl<'a> DecoderState<'a> {
 
     /// A안 resolve — 빈 각주/미주 컨트롤을 참조 순서대로 정의 본문으로 채운다.
     ///
-    /// 순회는 **소스 순서 보장 전용 in-order run walk** 다 (D1): run 을 순서대로
+    /// 순회는 **소스 순서 보장 전용 in-order run walk** 다: run 을 순서대로
     /// 걷고 `Table` run 을 만나면 그 자리에서 셀 문단을 재귀한다. 기존
     /// `walk_paragraphs_mut` 는 문단을 먼저 방문(`f(self)` 후 run 재귀)해
     /// `[표, 컨트롤]` 순서 문단에서 소스 순서와 어긋날 수 있어 쓰지 않는다.
     /// 이 보장의 계약 범위는 MD 디코더가 생성 가능한 형상(본문 문단 +
-    /// 비병합 GFM 표 셀)뿐이다 (M1).
+    /// 비병합 GFM 표 셀)뿐이다.
     fn resolve_notes(&mut self) -> MdResult<()> {
         let mut queue = std::mem::take(&mut self.pending_notes).into_iter();
         let mut expanded_bytes = 0usize;
@@ -602,7 +602,7 @@ impl<'a> DecoderState<'a> {
                                 });
                             };
                             let Some(def) = definitions.get_mut(&canonical) else {
-                                // P2: 정의 없는 참조는 파서가 이벤트를 만들지 않으므로
+                                // 정의 없는 참조는 파서가 이벤트를 만들지 않으므로
                                 // 여기 도달 = 내부 불변식 위반.
                                 return Err(MdError::UnsupportedStructure {
                                     detail: format!(
@@ -804,7 +804,7 @@ impl<'a> DecoderState<'a> {
         Ok(())
     }
 
-    /// 정의 수집 모드의 이벤트 처리 — 본문 빌더와 격리 (H1).
+    /// 정의 수집 모드의 이벤트 처리 — 본문 빌더와 격리.
     fn handle_definition_event(&mut self, event: Event<'_>) -> MdResult<()> {
         match event {
             Event::Start(Tag::Paragraph) => {
@@ -862,7 +862,7 @@ impl<'a> DecoderState<'a> {
         }
     }
 
-    /// 정의 본문 텍스트 — 각주 스타일 base 에서 W0 서식 파생을 적용한다.
+    /// 정의 본문 텍스트 — 각주 스타일 base 에서 서식 파생을 적용한다.
     fn push_definition_text(&mut self, text: &str) -> MdResult<()> {
         let base = self.definition_capture.as_ref().expect("capture active").style.char_shape_id;
         let char_shape_id = self.derived_char_shape(base);
@@ -1378,9 +1378,9 @@ fn default_empty_section() -> Section {
     Section::with_paragraphs(vec![paragraph], hwpforge_core::PageSettings::a4())
 }
 
-/// 미주 라벨 판별 — canonical(case-fold) 기준 `e` + 숫자 1개 이상 (D3).
+/// 미주 라벨 판별 — canonical(case-fold) 기준 `e` + 숫자 1개 이상.
 ///
-/// `e[0-9]+` 는 HwpForge dialect 의 **미주 예약 이름공간**이다 (H2):
+/// `e[0-9]+` 는 HwpForge dialect 의 **미주 예약 이름공간**이다:
 /// `to-md` 가 미주를 `[^eN]` 으로 방출하는 규약의 역방향. 사용자가 각주
 /// 의도로 `[^e1]` 을 쓰면 미주로 정규화된다 (lossy — CHANGELOG 명시).
 fn is_endnote_label(canonical: &UniCase<String>) -> bool {
@@ -2004,7 +2004,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // W0: inline formatting stack (bold/italic/strikethrough)
+    // inline formatting stack (bold/italic/strikethrough)
     // -----------------------------------------------------------------------
 
     /// Finds the body-style section paragraph containing `needle`.
@@ -2113,7 +2113,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // W1: footnote / endnote decoding
+    // footnote / endnote decoding
     // -----------------------------------------------------------------------
 
     use hwpforge_core::control::Control;
@@ -2175,7 +2175,7 @@ mod tests {
 
     #[test]
     fn w1_undefined_reference_stays_literal_text() {
-        // P2 파서 동작: 정의 없는 참조는 이벤트가 아니라 평문으로 강등된다.
+        // 파서 동작: 정의 없는 참조는 이벤트가 아니라 평문으로 강등된다.
         let template = default_template();
         let result = MdDecoder::decode("본문[^nodef] 끝\n", &template).unwrap();
         let text = result.document.sections()[0].paragraphs[0].text_content();
@@ -2326,7 +2326,7 @@ mod tests {
 
     #[test]
     fn w1_case_folded_labels_link_and_classify_together() {
-        // 파서는 라벨을 UniCase 로 연결한다 (P13) — 분류·매칭도 동일 기준.
+        // 파서는 라벨을 UniCase 로 연결한다 — 분류·매칭도 동일 기준.
         let template = default_template();
         let result = MdDecoder::decode("본문[^E1]\n\n[^e1]: 미주 본문\n", &template).unwrap();
         let notes = collect_notes(&result.document);
@@ -2335,7 +2335,7 @@ mod tests {
 
     #[test]
     fn w1_note_body_style_uses_footnote_style_slot() {
-        // D6: 본문 스타일 재사용이 아니라 기존 "각주"(14)/"미주"(15) 스타일 참조.
+        // 본문 스타일 재사용이 아니라 기존 "각주"(14)/"미주"(15) 스타일 참조.
         let template = default_template();
         let result = MdDecoder::decode("본문[^1]\n\n[^1]: 각주 본문\n", &template).unwrap();
         let notes_style = result

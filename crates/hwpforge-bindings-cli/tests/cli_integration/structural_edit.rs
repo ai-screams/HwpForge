@@ -20,7 +20,7 @@ fn insert_para_adds_paragraph_and_diff_confirms_delta() {
     assert_eq!(code, 0);
     assert_eq!(value["status"], "ok");
 
-    // The E5 diff verifies exactly one paragraph was added.
+    // The diff verifies exactly one paragraph was added.
     let (d, _, dc) = run_json(&["diff", f.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(dc, 0);
     let added: Vec<_> = d["diff"]["semantic"]["paragraphs"]
@@ -36,7 +36,7 @@ fn insert_para_adds_paragraph_and_diff_confirms_delta() {
 #[test]
 fn insert_para_batch_adds_block_and_diff_confirms_delta() {
     // Repeated --text inserts a contiguous block in one verified edit; the
-    // E5 diff must report exactly the declared block, in order.
+    // diff must report exactly the declared block, in order.
     let f = fixture("plain_paragraphs.hwpx");
     let tmp = test_tmp();
     let out = tmp.join("inserted-batch.hwpx");
@@ -159,7 +159,7 @@ fn structural_edit_text_mode_and_error_codes() {
 
 #[test]
 fn structural_edit_batch_and_structural_rejections() {
-    // 이것을 실패시키는 것: T10 StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
+    // 이것을 실패시키는 것: StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
     let f = fixture("plain_paragraphs.hwpx"); // 4 paragraphs, index 0 = secPr
     let tmp = test_tmp();
     let out = tmp.join("o.hwpx");

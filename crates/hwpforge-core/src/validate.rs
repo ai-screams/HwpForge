@@ -135,7 +135,7 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
-        // S20: an object frame is checked in the same places as the corner
+        // an object frame is checked in the same places as the corner
         // ratio. 이것을 실패시키는 것: 이 순회를 지우기(`object_frame_is_checked_in_nested_places`).
         let lists = std::iter::once(&section.paragraphs)
             .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
@@ -576,17 +576,17 @@ fn validate_control_run(
         | Control::Field { .. }
         | Control::Memo { .. }
         | Control::IndexMark { .. } => Ok(()),
-        // Wave 12n: targeted invariant checks for new variants; do not let new variants slide through with a blanket `Ok(())`.
+        // targeted invariant checks for new variants; do not let new variants slide through with a blanket `Ok(())`.
         Control::UnknownSummary { token, .. } => validate_unknown_summary(token, ctx),
         Control::DateCodeField { .. }
         | Control::PageNumber { .. }
         | Control::InlinePageNumber { .. }
         | Control::PathField { .. } => Ok(()),
-        // W2 (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이
+        // (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이
         // 유효 (근거 없는 clamp 금지). kind Unknown 은 인코더가
         // 스킵하므로 validation 통과.
         Control::AutoNumber { .. } | Control::NewNumber { .. } => Ok(()),
-        // W3 (2026-08-12): 감추기 — 6 bool 전 조합이 유효 (빈 mask 도
+        // (2026-08-12): 감추기 — 6 bool 전 조합이 유효 (빈 mask 도
         // corpus 실측 존재, 렌더 no-op).
         Control::PageHiding { .. } => Ok(()),
         // Group (묶음 객체): recursively validate each child (nested groups +
@@ -762,7 +762,7 @@ fn validate_embedded_chart_control(
     height: i32,
     ctx: RunValidationContext,
 ) -> Result<(), ValidationError> {
-    // Wave 4c passthrough: chart XML and OLE bytes are opaque blobs we
+    // passthrough: chart XML and OLE bytes are opaque blobs we
     // do not introspect. Treat empty payload as the same failure mode as
     // EmptyChartData / EmptyEquation so downstream encoders never have to
     // emit an empty <hp:chart>/<hp:ole> pair.
@@ -916,7 +916,7 @@ mod tests {
         )
     }
 
-    // === S20: object frame ===
+    // === object frame ===
 
     fn size(w: i32, h: i32) -> hwpforge_foundation::Size {
         hwpforge_foundation::Size::new(HwpUnit::new(w).unwrap(), HwpUnit::new(h).unwrap())

@@ -19,7 +19,7 @@
 //!    slice was not touched by the edit → take its cache from the SOURCE
 //!    and insert it before its `</hp:p>` — unless it comes after a changed
 //!    paragraph in the same flow, or after a changed paragraph's host in
-//!    the host's flow (its position moved; W2). Anything else (edited
+//!    the host's flow (its position moved). Anything else (edited
 //!    paragraphs, paragraphs containing edited nested paragraphs,
 //!    id-shifted elements) stays cache-less and the renderer reflows just
 //!    those.
@@ -197,7 +197,7 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String,
         return None;
     }
 
-    // W2 (design 3.5): a changed paragraph moves everything after it in its
+    //: a changed paragraph moves everything after it in its
     // flow, so the paragraphs after it in its list keep no cache even when
     // their bytes are the same. Its host is changed too (its bytes hold the
     // edit), so the same holds one level up, to the section body.
@@ -456,7 +456,7 @@ mod tests {
     use super::*;
     #[test]
     fn w3_carry_read_failure_keeps_verification_payload() {
-        // 이것을 실패시키는 것: L1 carry의 원본 package 읽기 stage를 Decode로 변경.
+        // 이것을 실패시키는 것: carry의 원본 package 읽기 stage를 Decode로 변경.
         let source = CacheSource { bytes: vec![], dropped: vec![], warnings: vec![] };
         let original = RawPackage::read(b"bad").err().unwrap();
         let error = carry_line_segs(b"bad", b"bad", b"bad", &source).unwrap_err();
@@ -727,7 +727,7 @@ mod tests {
         assert!(splice_section(&output, &output, &source).is_none());
     }
 
-    /// W2 (design 3.5 test 2): editing the second of three cell paragraphs
+    /// Cell cache invalidation: editing the second of three cell paragraphs
     /// drops the caches of that paragraph, the cell paragraph after it, the
     /// table's host paragraph and the body paragraph after the host; the
     /// first cell paragraph and the body paragraph before keep theirs.

@@ -2,7 +2,7 @@
 //!
 //! [`Control`] represents non-text inline elements within a document.
 //! The enum is `#[non_exhaustive]` so new control types can be added
-//! in future phases without a breaking change.
+//! without a breaking change.
 //!
 //! TextBox, Footnote, and Endnote contain `Vec<Paragraph>` (recursive
 //! reference through the document tree). This is how HWP models inline
@@ -238,7 +238,7 @@ pub enum Control {
     /// block with full OOXML chart inside `<hp:case>` and an OLE fallback
     /// inside `<hp:default>`.
     ///
-    /// Wave 4c passthrough: the chart XML and OLE bytes are carried as-is
+    /// Passthrough: the chart XML and OLE bytes are carried as-is
     /// from the source HWP5 file. The encoder writes:
     /// - `Chart/chartN.xml` (NOT registered in manifest)
     /// - `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)
@@ -342,7 +342,7 @@ pub enum Control {
         text_color: Color,
         /// Font name (typically `"HancomEQN"`).
         font: String,
-        /// Wave 12p Step 2c: instance ID for cross-ref target lookup.
+        /// Instance ID for cross-ref target lookup.
         /// HWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가
         /// 채워지고, HWPX encoder 가 `<hp:equation id="...">` attribute
         /// 로 emit. `None` 이면 encoder fallback 허용.
@@ -637,11 +637,11 @@ pub enum Control {
     ///
     /// Maps to HWPX `fieldBegin type="CROSSREF"` with parameters.
     ///
-    /// Wave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로
+    /// `target_name: String` 가 `target: RefTarget` 로
     /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로
     /// 구분되어 caller 가 의미를 정확히 알 수 있음.
     ///
-    /// Wave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.
+    /// (breaking): `display_text: String` 추가.
     /// HWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run
     /// 으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display
     /// text 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection
@@ -702,10 +702,10 @@ pub enum Control {
     /// the `[메모 시작]…[메모 끝]` UI labels instead of generic
     /// `[메모 시작]…[필드 끝]`.
     ///
-    /// Wave 12e: `author`/`date` fields removed (no wire path populated
+    /// `author`/`date` fields removed (no wire path populated
     /// them).
     ///
-    /// Wave 12f: `anchor_runs` added. Without it, the encoder produced an
+    /// `anchor_runs` added. Without it, the encoder produced an
     /// empty `<hp:t/>` between `fieldBegin` and `fieldEnd`, which 한컴 reads
     /// as an unpaired field — visible bug.
     Memo {
@@ -737,9 +737,9 @@ pub enum Control {
     },
 
     /// An unknown SUMMERY (`%smr`) `$token` carried verbatim for forward
-    /// compatibility (Wave 12n).
+    /// compatibility.
     ///
-    /// Wave 12n only models the five HwpForge-observed tokens (`$author`,
+    /// HwpForge only models the five HwpForge-observed tokens (`$author`,
     /// `$lastsaveby`, `$createtime`, `$modifiedtime`, `$title`) as typed
     /// [`FieldType`] variants. Any other `%smr` Command (e.g. additional
     /// 한컴 metadata tokens not yet measured) is preserved here instead of
@@ -752,7 +752,7 @@ pub enum Control {
         display_text: String,
     },
 
-    /// A `%dte` date/time **format-pattern** field (Wave 12n).
+    /// A `%dte` date/time **format-pattern** field.
     ///
     /// HWP5 family `%dte` (ctrl_id `0x2564_7465`) used by 한컴
     /// `입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY
@@ -771,7 +771,7 @@ pub enum Control {
         display_text: String,
     },
 
-    /// A `%pat` path / file-name field (Wave 12n).
+    /// A `%pat` path / file-name field.
     ///
     /// HWP5 family `%pat` (ctrl_id `0x2570_6174`) emitted by 한컴
     /// `상용구 → 파일 이름 / 파일 이름과 경로`. Uses `$P` (path) and
@@ -795,7 +795,7 @@ pub enum Control {
         number: crate::section::PageNumber,
     },
 
-    /// An `atno` **inline** page number control (Wave 12n).
+    /// An `atno` **inline** page number control.
     ///
     /// HWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴
     /// `상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct
@@ -1327,7 +1327,7 @@ impl Control {
 
     /// Creates a cross-reference to a bookmark target (convenience helper).
     ///
-    /// Wave 12m Phase 2: 인자 타입이 `&str` 에서 `RefTarget` 로 변경
+    /// 인자 타입이 `&str` 에서 `RefTarget` 로 변경
     /// (breaking). 책갈피 이름이라면 `RefTarget::Name(...)`, 한컴 시스템
     /// ID 라면 `RefTarget::SystemId(...)` 를 명시.
     ///
@@ -2173,7 +2173,7 @@ impl std::fmt::Display for Control {
 mod tests {
     use super::*;
 
-    /// S16: a text box without a margin writes no `text_margin` (old JSON
+    /// a text box without a margin writes no `text_margin` (old JSON
     /// and its output unchanged) and reads back as `None`; a margin round
     /// trips.
     ///
@@ -2387,7 +2387,7 @@ mod tests {
 
     #[test]
     fn display_and_kind_name_for_page_control_variants() {
-        // W2/W3 variant 의 Display·kind_name·traversal no-op 커버 (커버리지
+        // 컨트롤 variant 의 Display·kind_name·traversal no-op 커버 (커버리지
         // 게이트 — 리눅스는 폰트 의존 테스트 스킵으로 마진이 얇다).
         let nn = Control::NewNumber { kind: NewNumberKind::Page, number: 7 };
         assert_eq!(nn.to_string(), "NewNumber(Page, 7)");
@@ -3291,7 +3291,7 @@ mod tests {
     }
 
     // ===================================================================
-    // H2: saturating i64→i32 conversion in shape constructors
+    // saturating i64→i32 conversion in shape constructors
     // ===================================================================
 
     #[test]

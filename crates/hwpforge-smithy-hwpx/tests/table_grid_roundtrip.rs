@@ -1,4 +1,4 @@
-//! Wave 0 gates for covered empty table rows (E3 table grid addressing).
+//! gates for covered empty table rows (table grid addressing).
 //!
 //! Native wire keeps a row element with no cells when row spans from earlier
 //! rows cover the row completely. These gates lock the truthful Core shape

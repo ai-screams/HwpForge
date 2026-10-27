@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(warnings[0].code, "CONTENT_LOST");
     }
 
-    /// C4: a manifest id two items share blocks a fail-closed editor.
+    /// a manifest id two items share blocks a fail-closed editor.
     ///
     /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
     /// `PackageIdConflict` 를 `false` 갈래로 옮기는 것.
@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!(warnings[0].code, "PACKAGE_ID_CONFLICT");
     }
 
-    /// C4: an image reference no package item resolves blocks a fail-closed
+    /// an image reference no package item resolves blocks a fail-closed
     /// editor.
     ///
     /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서

@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn w3_editors_share_decode_and_admission_fixtures() {
-        // 이것을 실패시키는 것: E3 structural admission 호출 목적을 Output으로 변경.
+        // 이것을 실패시키는 것: structural admission 호출 목적을 Output으로 변경.
         use crate::tools::{set_cell, stamp, structural};
         let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
         let dir = tempfile::tempdir().unwrap();
@@ -847,7 +847,7 @@ mod tests {
 
     #[test]
     fn set_cell_codec_and_admission_keep_distinct_codes() {
-        // 이것을 실패시키는 것: T8 CellEditError::Codec 매핑을 InvalidInput으로 변경.
+        // 이것을 실패시키는 것: CellEditError::Codec 매핑을 InvalidInput으로 변경.
         assert_code(
             Tool::SetCell,
             OpsError::CellEdit(CellEditError::Codec(hwpforge_smithy_hwpx::CodecFailure {

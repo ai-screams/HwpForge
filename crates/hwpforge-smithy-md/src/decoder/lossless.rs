@@ -628,8 +628,8 @@ fn attach_closed_node(
     }
 }
 
-/// The drawing shapes (P5b W3 `<textbox>`·`<line>`·`<ellipse>`·`<polygon>`,
-/// W4 `<rect>`·`<arc>`·`<curve>`·`<connectline>`): CS·BOX·FRAME·PLACE·STYLE,
+/// The drawing shapes (`<textbox>`·`<line>`·`<ellipse>`·`<polygon>`,
+/// `<rect>`·`<arc>`·`<curve>`·`<connectline>`): CS·BOX·FRAME·PLACE·STYLE,
 /// the defining points, VALIGN (shapes with text) and the text margin (text
 /// box). A text box's `-mm` sizes are read when its `-unit`
 /// ones are missing (an old file).
@@ -882,7 +882,7 @@ fn attach_caption(
     Ok(())
 }
 
-/// `<caption>` (P5b W2): side and gap required, width optional (missing =
+/// `<caption>`: side and gap required, width optional (missing =
 /// none, kept apart from zero), the full-size flag and saved width.
 /// 이것을 실패시키는 것: 측 기본값화 · 너비 없음과 0 혼동
 /// (`picture_caption_round_trips`, `picture_caption_grammar_errors`).
@@ -930,7 +930,7 @@ fn push_group_child(stack: &mut [OpenNode], child: GroupChild) -> MdResult<()> {
     }
 }
 
-/// The attributes of one object element, read once (P5b closed grammar): a
+/// The attributes of one object element, read once (closed grammar): a
 /// name outside `allowed` or a name met twice is refused before any value
 /// is looked at.
 struct Attrs {
@@ -1238,7 +1238,7 @@ impl Attrs {
     }
 }
 
-/// `<group>` (P5b W1): CS·BOX·FRAME·PLACE·ID.
+/// `<group>`: CS·BOX·FRAME·PLACE·ID.
 fn parse_group(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<GroupNode> {
     let attrs = Attrs::read(start, "group", &g::group_attributes())?;
     let char_shape_id = attrs.char_shape(stack)?;
@@ -1462,7 +1462,7 @@ fn unique_attr(
     Ok(found)
 }
 
-/// D (Q9): the table caption — `data-caption` (its text; `""` is an empty
+/// the table caption — `data-caption` (its text; `""` is an empty
 /// caption), `data-caption-side` (`top|bottom|left|right`, missing =
 /// bottom), `data-caption-full-size` (`"true"`/`"false"`) and
 /// `data-caption-last-width-unit` (+ readable `-mm`; `-mm` alone is
@@ -1912,7 +1912,7 @@ mod tests {
         s
     }
 
-    // ── S20 FRAME ──
+    // ── FRAME ──
 
     const IMG: &str = r#"data-char-shape="0" src="a.png" alt="a.png" data-format="PNG" data-width-unit="3000" data-height-unit="2000""#;
 
@@ -1983,7 +1983,7 @@ mod tests {
         assert!(table(p).is_ok());
     }
 
-    /// D (Q9): caption attribute errors — a side other than the four, a
+    /// caption attribute errors — a side other than the four, a
     /// full-size flag other than `"true"`/`"false"`, `-mm` without `-unit`,
     /// caption attributes without `data-caption`, a repeated side.
     /// 이것을 실패시키는 것: 측 값 검사 · 플래그 검사 · `-mm` 단독 허용 · 캡션

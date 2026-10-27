@@ -373,7 +373,7 @@ pub struct HwpxParaShape {
     /// Whether the paragraph snaps to the document line grid.
     pub snap_to_grid: bool,
 
-    // Advanced paragraph controls (NEW - Phase 6.2)
+    // Advanced paragraph controls
     /// Page/column break type before paragraph.
     pub break_type: BreakType,
     /// Keep paragraph with next (prevent page break between).
@@ -1432,7 +1432,7 @@ impl HwpxStyleStore {
 
     /// Returns a mutable reference to the para shape at `index`.
     ///
-    /// Used by Wave 12q HWP5 → HWPX style projection to apply outline-level
+    /// Used by HWP5 → HWPX style projection to apply outline-level
     /// overrides derived from Style records ("개요 N") whose true level
     /// exceeds what HWP5 wire bits (3 bits, cap 6) can represent.
     pub fn para_shape_mut(&mut self, index: ParaShapeIndex) -> HwpxResult<&mut HwpxParaShape> {
@@ -2122,13 +2122,13 @@ impl StyleLookup for HwpxStyleStore {
         }
         match parse_hex_color_raw(trimmed) {
             Some(color) => Some(FillKind::Solid(color)),
-            // 등록은 됐지만 파싱 불능 — "없음"으로 뭉개지 않는다 (M2).
+            // 등록은 됐지만 파싱 불능 — "없음"으로 뭉개지 않는다.
             None => Some(FillKind::Unsupported),
         }
     }
 }
 
-// ── borderFill → 렌더 표면 변환 (W3b) ───────────────────────────
+// ── borderFill → 렌더 표면 변환 ───────────────────────────
 
 /// `HwpxBorderLine`(미파싱 문자열)을 렌더 가능한 [`BorderLine`] 으로 바꾼다.
 ///
@@ -2361,7 +2361,7 @@ mod tests {
 
     #[test]
     fn axis_names_distinct_across_language_groups() {
-        // W4c: fontRef 는 그룹-로컬 인덱스 — (lang, id) 로 조회해 distinct
+        // fontRef 는 그룹-로컬 인덱스 — (lang, id) 로 조회해 distinct
         // 이름을 hangul-우선으로 돌려준다 (blank-HPC 실측: 한글=휴먼명조 +
         // 영문=별도 폰트 구성이 국룰).
         let mut store = HwpxStyleStore::new();
@@ -3078,7 +3078,7 @@ mod tests {
         assert!(bf.fill.is_none());
     }
 
-    // ── W3b: borderFill → StyleLookup 렌더 표면 ──────────────────
+    // ── borderFill → StyleLookup 렌더 표면 ──────────────────
 
     fn render_border_fill(id: u32, left: HwpxBorderLine, fill: Option<HwpxFill>) -> HwpxBorderFill {
         HwpxBorderFill::new(

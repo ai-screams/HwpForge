@@ -1,11 +1,11 @@
-//! Structural paragraph editing (E4): preserve-first byte-splice insert/delete
+//! Structural paragraph editing: preserve-first byte-splice insert/delete
 //! of top-level `<hp:p>` paragraphs.
 //!
-//! Scope (E4 = paragraphs only; table-row editing is the separate E4b epic):
+//! Scope (paragraphs only; table-row editing is a separate feature):
 //! insert-after / insert-before / delete of **top-level body-flow**
 //! paragraphs. Paragraphs nested inside table cells, text boxes, footnotes,
 //! or other containers are an explicit non-goal — they are addressed by
-//! neither this module nor E5 `read`/`outline` (which are top-level too).
+//! neither this module nor `read`/`outline` (which are top-level too).
 //!
 //! Safety is a **closed set of fail-closed rejections** (warning-first): a
 //! delete that would strand a reference, or lose a hard page/column break,
@@ -29,10 +29,10 @@ use crate::stamp::{admission_compare, check_zip_carry, delta_compare, encode_hwp
 ///
 /// Index-based: paragraph `index` within section `section`, counting only the
 /// section's direct-child `<hp:p>` elements. Paragraphs nested inside table
-/// cells / text boxes / footnotes are not addressable (E4 non-goal). The
+/// cells / text boxes / footnotes are not addressable (non-goal). The
 /// index is a positional locator — it goes stale after a structural edit, so
 /// a batch is resolved against one pristine snapshot. Name-anchor resolution
-/// (bookmark / heading) is layered on at the CLI/MCP surface via E5.
+/// (bookmark / heading) is layered on at the CLI/MCP surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParagraphLocator {
     /// Zero-based section index.
@@ -151,7 +151,7 @@ pub enum StructuralEditError {
     /// The target paragraph carries the section properties (`<hp:secPr>` — page
     /// setup, start numbers). In HWPX these live inside the section's first
     /// paragraph; deleting it would silently reset the section layout. Deleting
-    /// such a paragraph is a Wave 1 non-goal (moving `secPr` to the next
+    /// such a paragraph is a non-goal (moving `secPr` to the next
     /// paragraph is a follow-up).
     SectionPropertiesParagraph {
         /// Section index.
@@ -1127,7 +1127,7 @@ mod tests {
 
     #[test]
     fn w3_generated_fragment_and_output_decode_are_verification() {
-        // 이것을 실패시키는 것: S1/S2 생성 fragment·출력 decode stage를 Decode로 변경.
+        // 이것을 실패시키는 것: 생성 fragment·출력 decode stage를 Decode로 변경.
         let error = encoded_paragraph_spans("<hs:sec><hp:p>").unwrap_err();
         assert!(matches!(
             error,
@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn w3_mapper_preserves_typed_failures() {
-        // 이것을 실패시키는 것: P2/P2i typed Codec·Invariant detail 삭제, P5 예상 밖 helper 오류 detail 삭제.
+        // 이것을 실패시키는 것: typed Codec·Invariant detail 삭제, 예상 밖 helper 오류 detail 삭제.
         for stage in [
             CodecStage::Decode,
             CodecStage::Admission,
@@ -1314,7 +1314,7 @@ mod tests {
         assert!(scan.has_reference_material());
     }
 
-    // -- W2: delete_paragraphs (byte-splice) ------------------------------
+    // --: delete_paragraphs (byte-splice) ------------------------------
 
     fn fixture(rel: &str) -> Vec<u8> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1471,7 +1471,7 @@ mod tests {
         }
     }
 
-    // -- W3: insert_paragraph (byte-splice) -------------------------------
+    // --: insert_paragraph (byte-splice) -------------------------------
 
     fn insertion(section: usize, index: usize, pos: InsertPosition, text: &str) -> Insertion {
         Insertion { anchor: loc(section, index), position: pos, text: text.to_string() }
@@ -1706,7 +1706,7 @@ mod tests {
 
     #[test]
     fn paragraph_spans_errors_without_a_section_root() {
-        // 이것을 실패시키는 것: T11 확정 section root 부재를 Invariant 대신 Codec으로 반환.
+        // 이것을 실패시키는 것: 확정 section root 부재를 Invariant 대신 Codec으로 반환.
         assert!(matches!(
             encoded_paragraph_spans("<other/>"),
             Err(StructuralEditError::Invariant { .. })
@@ -1798,7 +1798,7 @@ mod tests {
 
     #[test]
     fn every_error_variant_renders_a_message() {
-        // 이것을 실패시키는 것: T13 StructuralEditError::Codec Display를 빈 문자열로 변경.
+        // 이것을 실패시키는 것: StructuralEditError::Codec Display를 빈 문자열로 변경.
         // Exercises the Display impl for the whole closed rejection set — each
         // fail-closed reason must produce a human-readable diagnostic.
         let variants = [
@@ -1829,7 +1829,7 @@ mod tests {
         }
     }
 
-    // -- followups W2: batch insert + delete warnings ---------------------
+    // -- followups: batch insert + delete warnings ---------------------
 
     #[test]
     fn insert_batch_matches_sequential_single_inserts() {
@@ -1939,7 +1939,7 @@ mod tests {
 
     #[test]
     fn scan_delete_warnings_flags_index_mark_paragraphs() {
-        // 이것을 실패시키는 것: T14 scan_delete_warnings가 빈 목록으로 조기 성공.
+        // 이것을 실패시키는 것: scan_delete_warnings가 빈 목록으로 조기 성공.
         // Build a package whose paragraph 2 carries an index mark, then scan
         // a mixed target set: only the index-mark paragraph warns; the plain
         // paragraph and the out-of-range target stay silent (best-effort).

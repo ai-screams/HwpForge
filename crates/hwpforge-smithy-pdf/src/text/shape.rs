@@ -1,8 +1,8 @@
-//! 셰이핑 — rustybuzz + **한컴 공백 0.5em 오버라이드** (W0 R4).
+//! 셰이핑 — rustybuzz + **한컴 공백 0.5em 오버라이드**.
 //!
 //! 한컴의 공백 어드밴스는 폰트 space 글리프 폭(예: HBatang 0.333em)이 아니라
 //! **정확히 0.5em** 이다 — 3폰트 × 3크기 실측 일반 확증 (`HBatang OS/2
-//! xAvgCharWidth = 512/1024` 부합). PoC 3차에서 이 교체 하나로 줄 끝
+//! xAvgCharWidth = 512/1024` 부합). PoC 에서 이 교체 하나로 줄 끝
 //! 오차가 0px 로 소멸했다.
 //!
 //! 산출 단위: **HWPUNIT (f64)** — `advance_em × size_hwpunit`. paint 경계
@@ -10,7 +10,7 @@
 
 use crate::{PdfError, PdfResult};
 
-/// 한컴 공백 어드밴스 (em 비율 — W0 R4 실측).
+/// 한컴 공백 어드밴스 (em 비율 — 실측).
 pub const HANCOM_SPACE_ADVANCE_EM: f64 = 0.5;
 
 /// 셰이핑된 글리프 하나.
@@ -33,7 +33,7 @@ pub struct ShapedText {
     pub glyphs: Vec<ShapedGlyph>,
     /// baseline 아래 하강분 (HWPUNIT — `|hhea descender| × size / upem`).
     ///
-    /// W5-b 쪽번호 세로 앵커에 사용: baseline = em 하단 앵커 − descent
+    /// 쪽번호 세로 앵커에 사용: baseline = em 하단 앵커 − descent
     /// (한컴이 저장한 문서의 콘텐트 스트림 실측, 모델 오차 ≤0.16pt).
     pub descent: f64,
     /// 폰트에 글리프가 없는(notdef, glyph_id 0) 입력 문자 수.
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn space_advance_is_half_em_regardless_of_font_metrics() {
-        // W0 R4: 공백 = 0.5em (폰트 space 글리프 0.333em 아님).
+        // 공백 = 0.5em (폰트 space 글리프 0.333em 아님).
         let Some(data) = hbatang() else { return }; // fixture-optional
         let shaped = shape_text(&data, 0, "가 나", 1000).expect("shape");
         let spaces: Vec<_> = shaped.glyphs.iter().filter(|g| g.is_space).collect();
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn natural_width_scales_linearly_with_size() {
-        // W0 R4 일반성: 10pt→5.04pt gap, 20pt→9.96pt gap (선형).
+        // 일반성: 10pt→5.04pt gap, 20pt→9.96pt gap (선형).
         let Some(data) = hbatang() else { return };
         let at10 = shape_text(&data, 0, "가나 다라", 1000).expect("shape@10");
         let at20 = shape_text(&data, 0, "가나 다라", 2000).expect("shape@20");
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn hangul_glyph_advance_comes_from_font_not_assumption() {
-        // 글리프 폭은 폰트 실측값 (PoC 2차: 단어폭 Δ≤0.08pt) — 1em 가정 금지.
+        // 글리프 폭은 폰트 실측값 (PoC: 단어폭 Δ≤0.08pt) — 1em 가정 금지.
         let Some(data) = hbatang() else { return };
         let shaped = shape_text(&data, 0, "가", 1000).expect("shape");
         assert_eq!(shaped.glyphs.len(), 1);

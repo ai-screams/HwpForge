@@ -135,7 +135,7 @@ pub(crate) fn manifest_items(
         items.push(ManifestItem::xml_part(stem.to_string(), path.clone(), true));
     }
 
-    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
+    // Embedded-chart OLE blobs. 한글 expects each `BinData/{id}.ole`
     // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
     // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
     // matches Hancom's own attribute name).
@@ -157,7 +157,7 @@ pub(crate) fn manifest_items(
 /// metadata section, header + sections + settings + images in manifest,
 /// and header + sections in spine (images are NOT in spine).
 ///
-/// **Wave 12o**: The `metadata` argument populates the `<opf:metadata>`
+/// The `metadata` argument populates the `<opf:metadata>`
 /// block. All slots Hancom emits (title/language/creator/subject/
 /// description/lastsaveby/CreatedDate/ModifiedDate/date/keyword) are
 /// **always** emitted to preserve byte-parity with Hancom output —
@@ -476,7 +476,7 @@ impl PackageWriter {
         let cursor = Cursor::new(buf);
         let mut zip = ZipWriter::new(cursor);
 
-        // W0: entry times are fixed (1980-01-01, the ZIP epoch). The zip
+        // entry times are fixed (1980-01-01, the ZIP epoch). The zip
         // crate stamps the current time by default once its `time` feature
         // is on, which another dependency can turn on.
         // 이것을 실패시키는 것: 시각 고정 삭제 + `time` 기능 켜기.
@@ -549,7 +549,7 @@ impl PackageWriter {
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
-        // 12. BinData/{ole_id}.ole — embedded-chart OLE blobs (Wave 4c).
+        // 12. BinData/{ole_id}.ole — embedded-chart OLE blobs.
         // Store uncompressed, matching how image binaries are written: the
         // payload is already a tightly-packed OLE2 compound file, and
         // 한글 reads it raw via `binaryItemIDRef` from content.hpf.
@@ -939,7 +939,7 @@ mod tests {
         assert_eq!(buf, image_data);
     }
 
-    // ── Wave 12o Phase 1 — metadata emit gates ──────────────────
+    // ── metadata emit gates ──────────────────
 
     /// Default Metadata: every slot self-closes; Hancom byte parity rules
     /// (always 9 slots + always `content="text"` on `<opf:meta>`).
@@ -997,7 +997,7 @@ mod tests {
         ));
         // date is always self-closing (Hancom recomputes on save).
         assert!(hpf.contains(r#"<opf:meta name="date" content="text"/>"#));
-        // keywords semicolon-joined into a single element (Q3 architect ans).
+        // keywords semicolon-joined into a single element (architect ans).
         assert!(hpf.contains(r#"<opf:meta name="keyword" content="text">alpha;beta</opf:meta>"#));
     }
 

@@ -525,7 +525,7 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         None => &empty_images,
     };
 
-    // W0: `from-json` writes documents the caller authors, so a memo the
+    // `from-json` writes documents the caller authors, so a memo the
     // JSON gives no time gets the current time — the encoder itself never
     // reads the clock (conversions and edits stay byte-stable).
     // 이것을 실패시키는 것: 현재 시각 주입 삭제(`a_memo_without_a_time_gets_the_current_time`).
@@ -795,7 +795,7 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
 /// emits `child` as a container child at all — the exact set its match
 /// covers, including the nested-`Group` branch it checks ahead of that
 /// match. Anything outside this set (`Equation`, `EmbeddedChart`, `Footnote`,
-/// `Memo`, …) is dropped rather than fabricated (Wave A group support), so
+/// `Memo`, …) is dropped rather than fabricated (group support), so
 /// it never advances the encoder's own `emitted_idx` counter — see
 /// [`first_in_control`]'s `Control::Group` arm above.
 fn group_child_is_emitted(child: &GroupChild) -> bool {

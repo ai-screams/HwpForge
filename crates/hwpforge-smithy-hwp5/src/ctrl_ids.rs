@@ -16,12 +16,12 @@
 //! sometimes with the *same* value defined twice under different names
 //! (drift hazard). This module is the single source of truth.
 //!
-//! # Naming (#94 Step B2 canonicalised)
+//! # Naming (#94 canonicalised)
 //!
 //! Wire names (`SECD`, `FIELD_CROSSREF`, `ATNO`, …) are the canonical
-//! identifiers. Step B1 aliases (`SECTION_DEF`, `CROSSREF`,
+//! identifiers. Legacy aliases (`SECTION_DEF`, `CROSSREF`,
 //! `FIELD_INLINE_PAGE`, `INDEXMARK_INLINE`, `INLINE_AUTONUM`) were
-//! removed in Step B2 — see HWP5_WIRE_SPEC.md §9 for naming rationale.
+//! removed — see HWP5_WIRE_SPEC.md §9 for naming rationale.
 //!
 //! All values are `pub(crate)` — HWP5 wire detail, not part of the
 //! external API surface.
@@ -67,13 +67,13 @@ pub(crate) const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64;
 pub(crate) const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70;
 
 /// ctrl_id for the 새 번호 지정 (new number) control: ASCII `"nwno"` as
-/// big-endian u32. 번호 카운터를 컨트롤 위치부터 재시작한다 — F1 native
+/// big-endian u32. 번호 카운터를 컨트롤 위치부터 재시작한다 — native
 /// fixture 실측 (2026-08-12): 10바이트 payload + `0x15` inline 앵커.
 pub(crate) const CTRL_ID_NEW_NUMBER: u32 = 0x6E77_6E6F;
 
 /// ctrl_id for the 감추기 (page hiding) control: ASCII `"pghd"` as
 /// big-endian u32. 컨트롤이 놓인 쪽의 머리말/꼬리말/바탕쪽/테두리/배경/
-/// 쪽번호를 감춘다 — F2 native fixture 실측 (2026-08-12): 8바이트 payload
+/// 쪽번호를 감춘다 — native fixture 실측 (2026-08-12): 8바이트 payload
 /// (속성 u32 bits 0-5, secd word 와 동일 배열) + `0x15` inline 앵커.
 pub(crate) const CTRL_ID_PAGE_HIDING: u32 = 0x7067_6864;
 
@@ -124,7 +124,7 @@ pub(crate) const CTRL_ID_INDEXMARK: u32 = 0x6964_786D;
 // ---------------------------------------------------------------------------
 
 /// ctrl_id for the ClickHere (누름틀) press-field: ASCII `"%clk"` as
-/// big-endian u32. Wave 12l.
+/// big-endian u32.
 ///
 /// Wire: inline `FieldBegin` carries this id; the CtrlHeader carries
 /// the `Hwp5ClickHereControl` payload (hint/help BSTRs). A `0x57 lvl=2`
@@ -133,23 +133,23 @@ pub(crate) const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B;
 
 /// ctrl_id for the SUMMERY auto-field family (`$author`, `$lastsaveby`,
 /// `$createtime`, `$modifiedtime`, `$title`, …): ASCII `"%smr"` as
-/// big-endian u32. Wave 12n. Payload layout lives on
+/// big-endian u32. Payload layout lives on
 /// `crate::schema::section::Hwp5SummaryControl`.
 pub(crate) const CTRL_ID_FIELD_SUMMERY: u32 = 0x2573_6D72;
 
 /// ctrl_id for the `%dte` date/time format-code field: ASCII `"%dte"` as
-/// big-endian u32. Wave 12n. Payload layout lives on
+/// big-endian u32. Payload layout lives on
 /// `crate::schema::section::Hwp5DateCodeControl`.
 pub(crate) const CTRL_ID_FIELD_DATE_CODE: u32 = 0x2564_7465;
 
 /// ctrl_id for the `%pat` path/file-name field: ASCII `"%pat"` as
-/// big-endian u32. Wave 12n. Payload layout lives on
+/// big-endian u32. Payload layout lives on
 /// `crate::schema::section::Hwp5PathFieldControl`.
 pub(crate) const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174;
 
 /// ctrl_id for the `%xrf` cross-reference field: ASCII `"%xrf"` as
 /// big-endian bytes (`0x25 0x78 0x72 0x66`). See
-/// `crate::schema::section::Hwp5CrossRefControl`. (Wave 12m Phase 2.)
+/// `crate::schema::section::Hwp5CrossRefControl`.
 pub(crate) const CTRL_ID_FIELD_CROSSREF: u32 = 0x2578_7266;
 
 /// ctrl_id for the `%bmk` bookmark span field: ASCII `"%bmk"` as
@@ -171,12 +171,12 @@ pub(crate) const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D;
 // ---------------------------------------------------------------------------
 
 /// ctrl_id for the `atno` inline page-number control: ASCII `"atno"` as
-/// big-endian u32. Wave 12n. Payload layout lives on
+/// big-endian u32. Payload layout lives on
 /// `crate::schema::section::Hwp5InlinePageNumberControl`.
 ///
 /// `atno` reaches the projection layer through a `0x12` inline marker
 /// (`TextSegment::ControlRef`), not a `0x03` `FieldBegin` path — so
-/// despite the Wave 12n family naming, this is **not** in the `%`-class
+/// despite the auto-field family naming, this is **not** in the `%`-class
 /// `FIELD_*` family. The constant lives in §4 (inline-marker controls)
 /// for that reason.
 pub(crate) const CTRL_ID_ATNO: u32 = 0x6174_6E6F;

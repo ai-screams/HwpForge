@@ -1,5 +1,5 @@
 //! Memo (annotation) run/sublist builders (task #92 split from
-//! `encoder/section.rs`; Wave 12e/f/g/h carry series).
+//! `encoder/section.rs`; carry series).
 
 use super::*;
 
@@ -29,7 +29,7 @@ pub(super) fn build_memo_run_xml(
     } else {
         metadata.command.clone()
     };
-    // W0: no clock read — the caller's time or the epoch.
+    // no clock read — the caller's time or the epoch.
     let create_datetime = if metadata.create_datetime.is_empty() && !metadata.preserve_empty {
         memo_default_datetime(memo_create_time)
     } else {

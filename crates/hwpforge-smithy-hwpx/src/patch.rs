@@ -581,8 +581,8 @@ pub(crate) struct SemanticTextSlot {
     pub(crate) text: String,
     /// True when the payload is a tab-bearing `RunContent::InlineText`
     /// (plain-string projection). Patch editing downgrades such runs to
-    /// `Text` on apply; E6 stamping excludes them instead — splitting a
-    /// tab-bearing run is lossy (Wave 1A).
+    /// `Text` on apply; stamping excludes them instead — splitting a
+    /// tab-bearing run is lossy.
     pub(crate) inline: bool,
 }
 
@@ -667,7 +667,7 @@ fn build_section_preservation(
     preservation_from_map(xml, part, section, &map, 0)
 }
 
-// pub(crate): E6 stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
+// pub(crate): stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
 // (컨테이너 순회와 필드 정책은 Core의 FieldInventory가 소유한다).
 pub(crate) fn collect_semantic_text_slots(
     section: &Section,
@@ -870,7 +870,7 @@ fn encode_text_inner(text: &str) -> HwpxResult<String> {
     Ok(encoded)
 }
 
-// pub(crate): E6 stamp manifest 가 source/output 해시에 재사용.
+// pub(crate): stamp manifest 가 source/output 해시에 재사용.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);

@@ -44,10 +44,10 @@ pub struct LinePlacement {
 /// 정렬 배분을 계산한다.
 ///
 /// - `is_last_line`: 문단의 마지막 lineseg 여부 — JUSTIFY 는 마지막 줄을
-///   자연폭(LEFT)으로 둔다 (W0 실측: 한컴 저장 문서 4째 줄 459.50 < 538.44).
+///   자연폭(LEFT)으로 둔다 (실측: 한컴 저장 문서 4째 줄 459.50 < 538.44).
 /// - 자연폭이 `horzsize` 를 넘으면 늘이지 않는다 (extra 0, LEFT 기점) —
 ///   음수 배분은 발명이며 실측 근거가 없다.
-/// - [`Alignment::Distribute`]/[`Alignment::DistributeFlush`] 는 W0 미실측 —
+/// - [`Alignment::Distribute`]/[`Alignment::DistributeFlush`] 는 미실측 —
 ///   자연폭 + 경고 (위치는 정확, 스트레치만 포기 — no-fake-support).
 pub fn place_line(
     alignment: Alignment,
@@ -94,7 +94,7 @@ pub fn place_line(
                 needs_warning: false,
             }
         }
-        // 배분 정렬 2종 — W0 미실측: 자연폭 + 경고 (위치 정확, 스트레치 포기).
+        // 배분 정렬 2종 — 미실측: 자연폭 + 경고 (위치 정확, 스트레치 포기).
         _ => LinePlacement { origin_x: horzpos, extra_per_space: 0.0, needs_warning: true },
     }
 }
@@ -103,7 +103,7 @@ pub fn place_line(
 mod tests {
     use super::*;
 
-    // W0 실측 (한컴 저장 문서 표B): 셀 내부폭 hsize=94.68pt=9468HU,
+    // 실측 (한컴 저장 문서 표B): 셀 내부폭 hsize=94.68pt=9468HU,
     // '가운데 정렬 텍스트' 자연폭 90pt=9000HU (8자×10pt + 공백2×5pt).
     const CELL: LineBox = LineBox { horzpos: 0, horzsize: 9468 };
 
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn right_is_flush_to_right_edge() {
-        // W0: 오른쪽 = 콘텐츠 우변 밀착 (실측 Δ0.12pt = 베어링)
+        // 오른쪽 = 콘텐츠 우변 밀착 (실측 Δ0.12pt = 베어링)
         let p = place_line(
             Alignment::Right,
             CELL,
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn center_takes_half_excess() {
-        // W0: 가운데 = 잉여 절반 (9468−9000)/2 = 234HU = 2.34pt
+        // 가운데 = 잉여 절반 (9468−9000)/2 = 234HU = 2.34pt
         let p = place_line(
             Alignment::Center,
             CELL,
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn justify_distributes_excess_equally_over_spaces_only() {
-        // W0 (한컴 저장 문서): 본문 hsize 48188HU, 잉여를 공백 수로 균등 나눔.
+        // (한컴 저장 문서): 본문 hsize 48188HU, 잉여를 공백 수로 균등 나눔.
         // '분배 규칙을' — 공백 1개에 몰빵 46.14pt-5pt=잉여 전량 실측.
         let p = place_line(
             Alignment::Justify,
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn justify_last_line_stays_natural() {
-        // W0: 마지막 줄 = 자연폭 (한컴 저장 문서 4째 줄 끝 459.50 < 538.44)
+        // 마지막 줄 = 자연폭 (한컴 저장 문서 4째 줄 끝 459.50 < 538.44)
         let p = place_line(
             Alignment::Justify,
             CELL,
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn distribute_alignments_warn_and_stay_natural() {
-        // W0 미실측 — 자연폭 + 경고 (no-fake-support).
+        // 미실측 — 자연폭 + 경고 (no-fake-support).
         let p = place_line(
             Alignment::Distribute,
             CELL,

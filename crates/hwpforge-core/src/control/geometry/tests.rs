@@ -477,7 +477,7 @@ fn a_point_shape_stretched_past_the_range_is_dropped() {
     }
 }
 
-// ── S20 frame emission plan ─────────────────────────────────────
+// ── frame emission plan ─────────────────────────────────────
 
 fn framed_line(end: (i32, i32), size: (i32, i32), original: (i32, i32)) -> Control {
     let mut c = Control::Line {

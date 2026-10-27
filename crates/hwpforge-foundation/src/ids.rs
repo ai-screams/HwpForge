@@ -4,7 +4,7 @@
 //! newtype for compile-time safety. You cannot accidentally pass a
 //! [`FontId`] where a [`StyleName`] is expected.
 //!
-//! # Phase 1 Migration
+//! # Migration
 //!
 //! The internal `String` will migrate to an interned representation
 //! (e.g. `lasso::Spur` or `string_cache::Atom`) for O(1) equality

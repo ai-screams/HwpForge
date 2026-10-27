@@ -2,7 +2,7 @@
 //!
 //! Maps the `<hs:sec>` element tree into Rust structs via serde.
 //! Unknown elements (shapes, controls, line segments) are silently
-//! ignored for Phase 3 — we extract text, tables, images only.
+//! ignored — we extract text, tables, images only.
 //!
 //! Fields are used by serde deserialization even if not directly accessed.
 #![allow(dead_code)]
@@ -118,7 +118,7 @@ fn stray_paragraph_content<'de, D: serde::Deserializer<'de>>(d: D) -> Result<boo
 /// `<hp:secPr>`, `<hp:ctrl>`, `<hp:t>`, `<hp:tbl>`, `<hp:pic>`,
 /// `<hp:rect>`, `<hp:ellipse>`, etc.
 ///
-/// W1a (이미지/글상자 에픽): 역직렬화는 수동 구현 — `$value` 혼합 파싱으로
+/// (이미지/글상자 기능): 역직렬화는 수동 구현 — `$value` 혼합 파싱으로
 /// 종류별 Vec 을 채우면서 **문서 순서 사이드카** [`HxRun::child_order`] 를
 /// 함께 기록한다 (한컴 인터리브 `<t>a</t><pic/><t>b</t>` 의 순서 보존 —
 /// 스파이크 `tests/hxrun_read_spike.rs` 로 quick-xml 0.41 지원 확증).
@@ -282,14 +282,14 @@ pub struct HxRun {
     pub textarts: Vec<HxTextArt>,
 
     /// 자식의 **문서 순서** 사이드카: `(종류, 해당 종류 Vec 내 인덱스)` 를
-    /// 파싱 순서대로 기록한다 (W1a). 종류별 Vec 은 기존 소비자 호환을 위해
+    /// 파싱 순서대로 기록한다. 종류별 Vec 은 기존 소비자 호환을 위해
     /// 유지되고, 순서가 필요한 소비자(디코더 평탄화·patch raw walker)만
     /// 이 사이드카를 걷는다. 인코더 생성 run 은 빈 Vec (직렬화 제외).
     #[serde(skip)]
     pub child_order: Vec<(HxRunChildKind, usize)>,
 }
 
-/// [`HxRun::child_order`] 의 자식 종류 태그 (W1a).
+/// [`HxRun::child_order`] 의 자식 종류 태그.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HxRunChildKind {
     /// `<hp:secPr>` (Option 필드 — 인덱스는 항상 0).
@@ -364,7 +364,7 @@ pub(crate) fn legacy_child_order(hx: &HxRun) -> Vec<(HxRunChildKind, usize)> {
     order
 }
 
-/// `$value` 혼합 파싱용 중간 enum (W1a — 역직렬화 전용).
+/// `$value` 혼합 파싱용 중간 enum (역직렬화 전용).
 #[derive(Deserialize)]
 enum HxRunChildDe {
     #[serde(rename = "secPr")]
@@ -537,7 +537,7 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                 }
                 HxRunChildDe::StrayText(_) => {
                     // run 직속 텍스트는 스키마상 없음 — 내용은 버리되
-                    // 위치는 사이드카에 기록한다 (W1b fail-closed 관측).
+                    // 위치는 사이드카에 기록한다 (fail-closed 관측).
                     run.child_order.push((K::StrayText, 0));
                 }
                 HxRunChildDe::Ole(_) => {
@@ -706,7 +706,7 @@ pub struct HxContainer {
     pub pos: Option<HxTablePos>,
     /// Group display size (`<hp:sz>`).
     pub sz: Option<HxTableSz>,
-    /// The group's outer margin (`<hp:outMargin>`, S18).
+    /// The group's outer margin (`<hp:outMargin>`).
     pub out_margin: Option<HxTableMargin>,
 
     /// `<hp:rect>` children (textboxes / pure rects).
@@ -1091,7 +1091,7 @@ pub enum HxTextPart {
     #[serde(rename(serialize = "hp:nbSpace", deserialize = "nbSpace"))]
     NbSpace {},
     /// `<hp:titleMark ignore="..."/>` — 한컴은 titleMark 를 `<t>` 내부에
-    /// 쓴다 (XSD 위치). HWP5 `0x08` 미러 = **wire 8유닛·가시 0** (W1b
+    /// 쓴다 (XSD 위치). HWP5 `0x08` 미러 = **wire 8유닛·가시 0** (
     /// ledger — Other 로 떨어지면 소비량 미상 fail-closed 가 되므로 typed
     /// 로 승격).
     #[serde(rename(serialize = "hp:titleMark", deserialize = "titleMark"))]
@@ -1463,7 +1463,7 @@ pub struct HxCtrl {
 
 /// `<hp:pageHiding hideHeader="0" … hidePageNum="1"/>` — 감추기 (표 177).
 ///
-/// 한컴 F2 실측 (2026-08-12): run 안 `<hp:ctrl>` 자식, 자기닫힘, 6속성이
+/// 한컴 실측 (2026-08-12): run 안 `<hp:ctrl>` 자식, 자기닫힘, 6속성이
 /// 항상 `"0"`/`"1"` 로 병기된다.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxPageHiding {
@@ -1489,7 +1489,7 @@ pub struct HxPageHiding {
 
 /// `<hp:newNum num="7" numType="PAGE"/>` — 새 번호 지정 (번호 재시작).
 ///
-/// 한컴 F1b 실측 (2026-08-12): run 안 `<hp:ctrl>` 자식, 자기닫힘, 텍스트
+/// 한컴 실측 (2026-08-12): run 안 `<hp:ctrl>` 자식, 자기닫힘, 텍스트
 /// 위치를 소비하지 않는다 (linesegarray textpos 무영향).
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxNewNum {
@@ -1632,16 +1632,16 @@ pub struct HxPageNum {
 /// `<hp:footNote>` — footnote element (NoteType in XSD).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNote {
-    /// 종류별 순번 캐시 (한컴 F1/F4 실측: `number="1"` — 항상 존재).
+    /// 종류별 순번 캐시 (한컴 실측: `number="1"` — 항상 존재).
     /// 종전엔 스키마에 없어 한컴 wire 를 **무음 드롭**했다.
     #[serde(rename = "@number", default, skip_serializing_if = "Option::is_none")]
     pub number: Option<u32>,
-    /// 접미 문자(십진 문자코드 — 한컴 F1: `suffixChar="41"` = `)`).
+    /// 접미 문자(십진 문자코드 — 한컴: `suffixChar="41"` = `)`).
     #[serde(rename = "@suffixChar", default, skip_serializing_if = "Option::is_none")]
     pub suffix_char: Option<String>,
     /// Instance identifier (optional, for linking references).
     ///
-    /// Widened to `u64` in E6/M2 to mirror Core's `Option<ObjectId>` without
+    /// Widened to `u64` to mirror Core's `Option<ObjectId>` without
     /// truncation (footnote/endnote ids share the unified id space). In-range
     /// values serialize byte-identically to the former `u32`.
     #[serde(rename = "@instId", default, skip_serializing_if = "Option::is_none")]
@@ -1681,7 +1681,7 @@ pub struct HxNoteNumberingPolicy {
     pub policy_type: Option<String>,
 }
 
-/// `<hp:endNotePr>` — section-level endnote formatting (decoder-only for Phase 4.5).
+/// `<hp:endNotePr>` — section-level endnote formatting (decoder-only).
 pub type HxEndNotePr = HxFootNotePr;
 
 // ── Caption ──────────────────────────────────────────────────────

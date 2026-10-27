@@ -1,5 +1,5 @@
 //! Integration tests for the `validate` subcommand — process-based, same
-//! style as `cli_integration.rs`, kept in its own file per the W5b lane
+//! style as `cli_integration.rs`, kept in its own file per the lane
 //! split (another lane owns `cli_integration.rs` and the rest of
 //! `src/commands/*.rs`).
 

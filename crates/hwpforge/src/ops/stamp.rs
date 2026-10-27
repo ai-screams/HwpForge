@@ -81,7 +81,7 @@ use super::{OpsError, OpsWarning};
 /// (inside a [`StampMap::Legacy`] array, or `text` of its v2 envelope) and
 /// every frontend's wire schema is built from.
 ///
-/// W6b audit follow-up: a re-export of `smithy-hwpx`'s own type, not an
+/// a re-export of `smithy-hwpx`'s own type, not an
 /// `ops`-owned mirror. `ops::stamp` consumes a whole [`StampMap`] as a plain
 /// Rust value rather than parsing JSON into this type itself, so there is no
 /// ops-side parsing step for a mirror struct to front — the frontends'
@@ -97,7 +97,7 @@ pub use hwpforge_smithy_hwpx::stamp::StampSpec;
 /// (inside the `cells` batch of a [`StampMap::V2`] envelope) and every
 /// frontend's wire schema is built from.
 ///
-/// W6b audit follow-up: same re-export rationale as [`StampSpec`] above —
+/// same re-export rationale as [`StampSpec`] above —
 /// see that doc comment.
 pub use hwpforge_smithy_hwpx::stamp::CellStampSpec;
 
@@ -108,7 +108,7 @@ pub use hwpforge_smithy_hwpx::stamp::CellStampSpec;
 /// path with no extension at all gets one appended (`form` also becomes
 /// `form.manifest.json`).
 ///
-/// W6b audit follow-up: this is the CLI's pre-migration rule, now shared with
+/// this is the CLI's pre-migration rule, now shared with
 /// MCP. The two frontends disagreed on a doubly-suffixed path —
 /// `Path::with_extension` only strips the *last* extension, so `form.hwpx.hwpx`
 /// becomes `form.hwpx.manifest.json` here, while MCP's own pre-migration

@@ -363,9 +363,9 @@ fn push_task_list_para_shapes(
     })
 }
 
-/// 각주/미주 본문 스타일을 파생 등록한다 (D6 — 한컴 default 스타일 정합).
+/// 각주/미주 본문 스타일을 파생 등록한다 (한컴 default 스타일 정합).
 ///
-/// 한컴 native 실측(F1, 2026-08-27): 각주 본문 = 9pt(charPr height 900),
+/// 한컴 native 실측(2026-08-27): 각주 본문 = 9pt(charPr height 900),
 /// 첫 줄 내어쓰기 −655 (−6.55 pt), 줄간격 130%. 템플릿이 같은 이름을 이미 제공하면
 /// (향후 커스텀) 그것을 존중하고 파생을 건너뛴다.
 fn install_note_styles(registry: &mut StyleRegistry, body: MdStyleRef) -> MdResult<()> {

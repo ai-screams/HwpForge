@@ -2,7 +2,7 @@ use super::*;
 use std::io::Write as _;
 
 // ═══════════════════════════════════════════════════════════════
-// E3 Wave 3: set-cell (격자 주소 셀 편집)
+// set-cell (격자 주소 셀 편집)
 // ═══════════════════════════════════════════════════════════════
 
 #[test]
@@ -210,7 +210,7 @@ fn set_cell_map_arg_conflicts_rejected() {
 
 #[test]
 fn set_cell_map_arg_conflict_rejected_before_map_file_is_read() {
-    // W3 remediation: the --map/single-target mutual-exclusion guard must
+    // the --map/single-target mutual-exclusion guard must
     // run before the (possibly nonexistent) --map file is read — a
     // combined-flags misuse should never surface as FILE_READ_FAILED just
     // because the map path happens not to exist.

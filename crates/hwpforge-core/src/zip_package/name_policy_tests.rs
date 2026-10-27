@@ -551,7 +551,7 @@ fn name_policy_name_work_is_bounded_for_long_prefixes() {
         let total_name_bytes: usize = names.iter().chain(&effective).map(String::len).sum();
         assert!(compared < total_name_bytes * 64);
         eprintln!(
-            "W2 name work N={count}, B={total_name_bytes}, keys={keys}, compared_bytes={compared}"
+            "name work N={count}, B={total_name_bytes}, keys={keys}, compared_bytes={compared}"
         );
         let upper = effective[count - 1].to_ascii_uppercase();
         let mut attack = specs;

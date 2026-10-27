@@ -133,7 +133,7 @@ pub struct HwpxDocument {
     pub style_store: HwpxStyleStore,
     /// Binary image data extracted from `BinData/` ZIP entries.
     pub image_store: ImageStore,
-    /// 디코드 중 표면화된 비치명 경고 (W5-α M4 — warning-first).
+    /// 디코드 중 표면화된 비치명 경고 (warning-first).
     pub warnings: Vec<DecodeWarning>,
 }
 
@@ -207,7 +207,7 @@ impl HwpxDocument {
 /// 디코드 중 표면화된 비치명 경고.
 ///
 /// 디코더가 미지 wire 값을 기본값으로 **조용히** 폴백하면 하류(렌더러
-/// 등)의 warning-first 는 증거가 세탁된 뒤라 무력해진다 (W5-α M4) —
+/// 등)의 warning-first 는 증거가 세탁된 뒤라 무력해진다 —
 /// 폴백은 유지하되 사실을 표면화한다. 속성 결측(빈 문자열)은 기본값
 /// 적용이 정상이므로 경고 대상이 아니다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,7 +260,7 @@ pub enum DecodeWarning {
         fallback: &'static str,
     },
     /// 문단의 linesegarray 캐시가 Core 로 승격되지 않음 — wire→Core
-    /// 좌표 ledger 구축 실패 또는 textpos 정규화 실패 (W1b fail-closed,
+    /// 좌표 ledger 구축 실패 또는 textpos 정규화 실패 (fail-closed,
     /// 추측 좌표 승격 금지).
     LayoutCacheDropped {
         /// 경고가 난 문단의 중첩 경로.
@@ -826,7 +826,7 @@ impl HwpxDecoder {
         references.validate(&style_store, false)?;
         let begin_num = header_result.begin_num;
 
-        // Step 2b (Wave 12o): Parse Contents/content.hpf metadata.
+        // Parse Contents/content.hpf metadata.
         // Missing or malformed metadata downgrades to default rather
         // than failing the whole decode — Hancom-emitted XML always
         // has a metadata block, but third-party authoring tools may not.
@@ -985,7 +985,7 @@ impl HwpxDecoder {
                 paragraphs: result.paragraphs,
                 page_settings,
                 // ADR-002 cardinality — 파서가 wire 순서 그대로의 Vec 을
-                // 돌려준다 (W5-α C1: ODD/EVEN 다중 머리말 보존).
+                // 돌려준다 (ODD/EVEN 다중 머리말 보존).
                 headers: result.headers,
                 footers: result.footers,
                 page_number: result.page_number,

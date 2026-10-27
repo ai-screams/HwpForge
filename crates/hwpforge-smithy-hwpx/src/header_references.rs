@@ -1,4 +1,4 @@
-//! Header references are zero/one-based list positions (Hancom W3 probes).
+//! Header references are zero/one-based list positions (Hancom probes).
 use crate::paragraph_measure::invalid;
 use crate::{HwpxResult, HwpxStyleStore};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};

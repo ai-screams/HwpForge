@@ -19,7 +19,7 @@
 //! - 실패(부재·탈출·원격·미지 바이트 등)는 **이미지 run 을 드롭 + typed
 //!   경고** — dangling 참조를 남기지 않는다 (no-fake-support).
 //!
-//! # 이 모듈의 위치 (W1a 이후)
+//! # 이 모듈의 위치
 //!
 //! 위 동작의 구현은 [`crate::assets`] 의 3단계 계약(계획 → 파일 읽기 →
 //! 완성)으로 옮겼다. 파일시스템이 없는 호출자(Python 바인딩 등)가 2단계만
@@ -56,7 +56,7 @@ pub enum ImageEmbedSkipReason {
     MissingFile,
     /// 파일 읽기 실패 (권한 등 I/O 오류).
     Unreadable,
-    /// 정규화 결과가 base_dir 밖 — 경로 탈출 차단 (C1).
+    /// 정규화 결과가 base_dir 밖 — 경로 탈출 차단.
     PathEscapes,
     /// `http(s)`/프로토콜-상대 원격 URL — 네트워크 접근 금지.
     RemoteUrl,
@@ -64,7 +64,7 @@ pub enum ImageEmbedSkipReason {
     /// stdin 입력, 또는 base 정규화 실패).
     NoBaseDir,
     /// 읽은 바이트의 magic 이 알려진 이미지 포맷이 아님 — 임의 바이트
-    /// 반입 차단 (C1).
+    /// 반입 차단.
     UnsupportedBytes,
     /// `data:` URI 파싱/base64 디코드 실패 (base64 아닌 payload 포함).
     InvalidDataUri,
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn subdirectory_src_never_leaks_into_key() {
-        // H2: 서브디렉터리 src 가 그대로 키가 되면 binaryItemIDRef 가 깨짐.
+        // 서브디렉터리 src 가 그대로 키가 되면 binaryItemIDRef 가 깨짐.
         let dir = TempDir::new("subdir");
         dir.write("images/a.png", PNG);
         let mut doc = doc_with_srcs(&["images/a.png"]);
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn path_escape_is_dropped_with_typed_warning() {
-        // C1: `..` 탈출 — 실제 존재하는 밖 파일이어도 차단.
+        // `..` 탈출 — 실제 존재하는 밖 파일이어도 차단.
         let outer = TempDir::new("outer");
         outer.write("secret.png", PNG);
         let inner = outer.path().join("inner");
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn non_image_bytes_are_rejected() {
-        // C1: 임의 파일 반입 차단 — magic 미달 바이트는 적재 금지.
+        // 임의 파일 반입 차단 — magic 미달 바이트는 적재 금지.
         let dir = TempDir::new("bytes");
         dir.write("fake.png", b"ssh-rsa AAAA fake key material");
         let mut doc = doc_with_srcs(&["fake.png"]);
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn image_only_paragraph_survives_failed_embed() {
-        // B1: `![..](url)` 단독 문단은 md 표준 형태 —
+        // `![..](url)` 단독 문단은 md 표준 형태 —
         // 드롭 후 빈 문단이 남아 validate 가 문서 전체를 거부하면 회귀.
         let mut doc = doc_with_srcs(&["https://example.com/logo.png"]);
         let out = load_referenced_images(&mut doc, None);
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn data_uri_embeds_without_base_dir() {
-        // H1: 인라인 입력의 유일한 임베드 경로 — 네트워크 없이 로컬 디코드.
+        // 인라인 입력의 유일한 임베드 경로 — 네트워크 없이 로컬 디코드.
         let b64 = base64::engine::general_purpose::STANDARD.encode(PNG);
         let src = format!("data:image/png;base64,{b64}");
         let mut doc = doc_with_srcs(&[&src]);

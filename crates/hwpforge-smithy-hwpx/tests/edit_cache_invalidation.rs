@@ -1,4 +1,4 @@
-//! W2 (design 3.5 test 2): a set-cell edit drops the line caches it makes
+//! Cell cache invalidation: a set-cell edit drops the line caches it makes
 //! stale — the edited cell paragraph, the table's host paragraph and the
 //! body paragraph after the host — and keeps the rest.
 

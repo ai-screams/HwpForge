@@ -6,9 +6,9 @@ use hwpforge_blueprint::builtins::builtin_default;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge, HwpxStyleLookup};
 use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 
-/// W3.5 — 우리 생성 HWPX 의 각주/미주 본문에 autoNum 번호 머리가 있어야 한다
+/// 우리 생성 HWPX 의 각주/미주 본문에 autoNum 번호 머리가 있어야 한다
 /// (시각 게이트 발견: 없으면 한컴 각주 영역에 번호가 표시되지 않음.
-///  한컴 F7 실측: num 은 종류별 실제 순번 캐시 — 1/2/3).
+///  한컴 실측: num 은 종류별 실제 순번 캐시 — 1/2/3).
 #[test]
 fn generated_notes_carry_autonum_heads() {
     let template = builtin_default().expect("builtin");
@@ -44,7 +44,7 @@ fn generated_notes_carry_autonum_heads() {
         xml.contains(r#"<hp:autoNum num="1" numType="ENDNOTE""#),
         "endnote autoNum num must be 1"
     );
-    // 한컴 정합: suffixChar=")" (F1 실측). 번호-본문 간격은 별도 spacer run —
+    // 한컴 정합: suffixChar=")" (실측). 번호-본문 간격은 별도 spacer run —
     // 본문 텍스트는 불변이다 (치환 마커 봉인 유지).
     assert!(xml.contains(r#"suffixChar=")""#), "autoNumFormat suffixChar must be ')'");
     assert!(xml.contains("<hp:t> </hp:t>"), "spacer run between number head and body");

@@ -1,4 +1,4 @@
-//! Two-document diff (E5): semantic (Core) + package (ZIP entry) channels.
+//! Two-document diff: semantic (Core) + package (ZIP entry) channels.
 //!
 //! `diff` compares two HWPX files so an agent can verify that an edit
 //! changed exactly what it intended — the verification half of the editing
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(change.name, "user_email");
         assert_eq!(change.kind, FieldChangeKind::ValueChanged);
         assert_eq!(change.after.as_deref(), Some("diff@gate.io"));
-        // The field axis owns the value change; W1b 이후 fill 은 해당
+        // The field axis owns the value change; fill 은 해당
         // 문단의 stale linesegarray 도 제거하므로 raw 축에 `$.layout_cache`
         // 변경 하나가 **정직하게** 함께 보고된다.
         assert!(diff.semantic.cells.is_empty(), "cells: {:?}", diff.semantic.cells);

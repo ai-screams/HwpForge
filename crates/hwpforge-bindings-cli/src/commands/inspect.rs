@@ -27,7 +27,7 @@ struct InspectResult {
     styles: Option<InspectStyles>,
     /// Decode warnings raised while decoding (`ops::InspectOutput::warnings`,
     /// for example `LAYOUT_CACHE_DROPPED`). Omitted when empty; new key, so a
-    /// clean document's `--json` shape is unchanged (W5 follow-up — see the
+    /// clean document's `--json` shape is unchanged (follow-up — see the
     /// `run` module comment).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<WarningInfo>,
@@ -98,7 +98,7 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
             err.exit(json_mode, Command::Inspect);
         }
     };
-    // W5 follow-up: the pre-migration CLI never captured decode warnings
+    // the pre-migration CLI never captured decode warnings
     // here (there was no decode step to capture them from); now that
     // `ops::inspect` reports them (`LAYOUT_CACHE_DROPPED` etc., mirroring
     // `hwpforge_inspect`/`doc.inspect()` on the MCP/Python surfaces), they

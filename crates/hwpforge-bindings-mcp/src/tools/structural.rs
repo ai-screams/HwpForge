@@ -1,4 +1,4 @@
-//! `hwpforge_insert_para` / `hwpforge_delete_para` — structural paragraph edits (E4).
+//! `hwpforge_insert_para` / `hwpforge_delete_para` — structural paragraph edits.
 
 use serde::Serialize;
 
@@ -21,7 +21,7 @@ pub struct StructuralData {
 }
 
 /// Keeps the advisory scan's own warnings (`INDEX_MARK_REMOVED`, …) and,
-/// additively (W5 follow-up), the admission decode's warnings that
+/// additively (follow-up), the admission decode's warnings that
 /// `ops::insert_para`/`ops::delete_para` also report (for example
 /// `LAYOUT_CACHE_DROPPED`) — before this follow-up the filter kept only
 /// `Structural`, dropping decode warnings entirely (`insert_para`'s
@@ -179,7 +179,7 @@ mod tests {
         assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
     }
 
-    /// W5 follow-up: `insert_para` has no advisory scan of its own, so
+    /// `insert_para` has no advisory scan of its own, so
     /// before this fix its `warnings` was always empty — the admission
     /// decode's `LAYOUT_CACHE_DROPPED` never reached this tool's output.
     #[test]
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn error_code_mapping_covers_common_rejections() {
-        // 이것을 실패시키는 것: T9 StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
+        // 이것을 실패시키는 것: StructuralEditError::Codec 매핑을 InvalidInput으로 변경.
         let dir = tempfile::tempdir().unwrap();
         let base = base_doc(&dir);
         let out = dir.path().join("out.hwpx");

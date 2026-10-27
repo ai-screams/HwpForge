@@ -1,4 +1,4 @@
-//! Apply phase (E6 Wave 1A): promote approved candidates to named ClickHere
+//! Apply phase: promote approved candidates to named ClickHere
 //! fields.
 //!
 //! All-or-nothing: the whole spec set preflights against a fresh plan of the

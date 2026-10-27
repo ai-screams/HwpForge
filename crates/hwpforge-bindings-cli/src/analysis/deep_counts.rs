@@ -543,7 +543,7 @@ fn first_visible_text_in_run_deep(run: &hwpforge_core::run::Run) -> Option<Strin
         // semantic — `plain_text()` returns the tab-equivalent string
         // for `InlineText` so the visible-text count stays accurate
         // when a paragraph carries `RunContent::InlineText` after the
-        // HWPX decoder InlineText carry (Phase 3 of Wave 4 tab fixes).
+        // HWPX decoder InlineText carry (tab fixes).
         RunContent::Text(_) | RunContent::InlineText(_) => {
             let cow = run.content.plain_text()?;
             let trimmed = cow.trim();

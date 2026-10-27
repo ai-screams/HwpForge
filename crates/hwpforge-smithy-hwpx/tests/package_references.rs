@@ -290,7 +290,7 @@ fn zip9_fix1_group_picture_with_absolute_asset_key_is_rejected() {
     assert!(matches!(result, Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure { .. })));
 }
 
-/// F6: a picture whose reference names no item (`image2`, written by an
+/// a picture whose reference names no item (`image2`, written by an
 /// older encoder). The reference is reported and kept: Hancom opens such a
 /// file without a warning and draws an empty picture box at the picture's
 /// size. Keep the nonempty reference as the key for a later asset repair.

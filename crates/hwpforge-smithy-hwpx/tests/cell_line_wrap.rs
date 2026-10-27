@@ -7,7 +7,7 @@ fn fixture(path: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 
-/// S19: set-cell re-encodes the package and keeps another cell's dormant
+/// set-cell re-encodes the package and keeps another cell's dormant
 /// margin.
 ///
 /// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기 / 인코더가 쓰지 않기.

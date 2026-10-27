@@ -480,7 +480,7 @@ mod tests {
         assert_ne!(field_id(object), object);
     }
 
-    /// W0: an object with Core id 1 in each place an object is written, next
+    /// an object with Core id 1 in each place an object is written, next
     /// to an id-less table in the body — the allocator never draws 1, so 1
     /// is written once (by its holder).
     /// 이것을 실패시키는 것: 예약 생략 · 예약 순회가 그 자리에 들어가지 않기
@@ -532,7 +532,7 @@ mod tests {
         }
     }
 
-    /// W0: the same document encodes to the same bytes again, and after
+    /// the same document encodes to the same bytes again, and after
     /// another document, in one process (nextest runs each test in its own
     /// process, so the repeats are inside this test).
     /// 이것을 실패시키는 것: 프로세스 전역 카운터로 되돌리기.
@@ -619,7 +619,7 @@ mod tests {
         assert_eq!((id_of("<hp:tbl "), id_of("<hp:equation ")), (1, 2));
     }
 
-    /// W0: two tables with Core id 7 keep it (both written as 7) and give
+    /// two tables with Core id 7 keep it (both written as 7) and give
     /// one warning naming both; a third object with another id adds none,
     /// and neither does a footnote and an endnote sharing 9 — but a note
     /// sharing with a table (10) or a picture (11) does. A table in a memo
@@ -808,7 +808,7 @@ mod tests {
         );
     }
 
-    /// W0: every package entry carries the fixed ZIP epoch time.
+    /// every package entry carries the fixed ZIP epoch time.
     /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
     /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
     #[test]
@@ -826,7 +826,7 @@ mod tests {
         }
     }
 
-    /// W0: a memo without a time gets the epoch, or the time the caller
+    /// a memo without a time gets the epoch, or the time the caller
     /// passes — never the clock, so two encodes match.
     /// 이것을 실패시키는 것: 인코더가 현재 시각을 읽기 · 주입 시각 무시.
     #[test]

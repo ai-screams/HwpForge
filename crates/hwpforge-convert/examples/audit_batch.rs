@@ -136,7 +136,7 @@ fn collect_hwp_files(root: &Path, out: &mut Vec<PathBuf>) {
 fn category_key(warning: &hwpforge_convert::ConvertWarning) -> String {
     let warning = match warning {
         hwpforge_convert::ConvertWarning::Hwp5(w) => w,
-        // W1b: HWPX 인코드 경고 (캐시 드롭 등) — 자체 카테고리.
+        // HWPX 인코드 경고 (캐시 드롭 등) — 자체 카테고리.
         hwpforge_convert::ConvertWarning::HwpxEncode(w) => {
             return format!("HwpxEncode:{w:?}")
                 .split('{')
@@ -163,14 +163,14 @@ fn category_key(warning: &hwpforge_convert::ConvertWarning) -> String {
         Hwp5Warning::ParserFallback { subject, .. } => {
             format!("ParserFallback:{subject}")
         }
-        // W1b: 캐시 fail-closed 드롭 — 사유의 가변부(좌표 숫자)는 제거해
+        // 캐시 fail-closed 드롭 — 사유의 가변부(좌표 숫자)는 제거해
         // baseline 카테고리를 안정화한다.
         Hwp5Warning::LayoutCacheDropped { reason } => {
             let stable: String =
                 reason.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect();
             format!("LayoutCacheDropped:{stable}")
         }
-        // P1b: 묶음 내용 손실 — 종류(kind)로 묶는다(사유·위치는 가변).
+        // 묶음 내용 손실 — 종류(kind)로 묶는다(사유·위치는 가변).
         Hwp5Warning::ContentLost { kind, .. } => format!("ContentLost:{kind}"),
         _ => "Other:unknown".to_string(),
     }

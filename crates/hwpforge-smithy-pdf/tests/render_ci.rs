@@ -164,7 +164,7 @@ fn missing_cache_paragraph_warns_and_still_renders() {
 
 #[test]
 fn bold_run_resolves_real_bold_face_by_default() {
-    // W4c: bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge W4
+    // bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge W4
     // Bold = Latin 실폭 0.7em vs Regular 0.6em → 출력 바이트가 달라진다).
     let doc = doc_of(vec![para_with_cache("ABC", vec![seg(0, 0)])]);
     let bold_styles = TestStyles { bold: true, face: "HwpForge W4", ..TestStyles::default() };
@@ -226,7 +226,7 @@ fn ambiguous_bold_face_errors_in_both_modes() {
 
 #[test]
 fn restricted_license_font_is_fatal_before_embed() {
-    // W4d: fsType Restricted (v0 — ENGDOS 실물형) = 임베드 전 거부.
+    // fsType Restricted (v0 — ENGDOS 실물형) = 임베드 전 거부.
     // Degraded 는 스타일/축 강등 정책이지 라이선스 우회가 아니다.
     let doc = doc_of(vec![para_with_cache("가나다", vec![seg(0, 0)])]);
     let styles = TestStyles { face: "HwpForge FsV0Restricted", ..TestStyles::default() };

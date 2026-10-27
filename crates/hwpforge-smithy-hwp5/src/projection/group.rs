@@ -93,7 +93,7 @@ pub(super) fn chain(render: &Hwp5ShapeRender) -> ShapeTransform {
     render.map()
 }
 
-/// S20: a chain with no turn, mirror or shear —
+/// a chain with no turn, mirror or shear —
 /// `x' = a·x + c`, `y' = e·y + f`, `a, e > 0`.
 fn aligned(render: &Hwp5ShapeRender) -> bool {
     let m = chain(render).matrix();
@@ -249,7 +249,7 @@ enum Outcome<'a> {
         size: (i32, i32),
         offset: (i32, i32),
         hyperlink: Option<String>,
-        /// The picture's initial box (S20: its original box).
+        /// The picture's initial box (its original box).
         original: (u32, u32),
     },
     Dropped,
@@ -358,7 +358,7 @@ fn plan_child<'a>(
             turns = true;
         }
     }
-    // S20: an axis-aligned leaf keeps its stored points, in its
+    // an axis-aligned leaf keeps its stored points, in its
     // initial box. A line or connector takes its stored ends as they are.
     // 이것을 실패시키는 것: 이 갈래를 지우기(`hwp5_group_keeps_its_original_box`).
     if aligned(render) {
@@ -984,7 +984,7 @@ fn emit(
             }
             Outcome::Picture { image, size, offset, hyperlink, original } => {
                 let mut picture = state.build_group_picture(image, size, offset, hyperlink);
-                // S20: the initial box against the folded size, as the HWPX
+                // the initial box against the folded size, as the HWPX
                 // decoder judges a group picture's `orgSz`.
                 // 이것을 실패시키는 것: 이 대입을 지우기(`hwp5_group_keeps_its_original_box`).
                 if let Some(p) = picture.as_mut() {
@@ -1488,7 +1488,7 @@ mod tests {
             shape,
         });
         let half = [0.5, 0.0, 0.0, 0.0, 0.5, 0.0];
-        // Turned 180° about the scaled box (S20: a turned leaf folds by the
+        // Turned 180° about the scaled box (a turned leaf folds by the
         // box rule; an axis-aligned one keeps its points in its initial box).
         let half_turn = [-1.0, 0.0, 500.0, 0.0, -1.0, 300.0];
         let top = group(
@@ -1510,7 +1510,7 @@ mod tests {
         assert_eq!((axis2.x, axis2.y), (150, 300));
     }
 
-    /// S20: an axis-aligned leaf (a rect stored 100 × 50, scaled
+    /// an axis-aligned leaf (a rect stored 100 × 50, scaled
     /// ×4) keeps its stored box as its original box, shown 400 × 200; the
     /// group (initial 500 × 300, shown 1000 × 600) keeps its own. A turned
     /// leaf in a nested group makes the outer group keep none.
@@ -1571,7 +1571,7 @@ mod tests {
 
     /// Polygon points are taken as stored — outside the stored box and inside
     /// it — not rescaled onto the box. The polygon is axis-aligned (moved by
-    /// (1000, 2000) only), so S20 keeps them in its 4000 × 3000 initial box:
+    /// (1000, 2000) only), so the projection keeps them in its 4000 × 3000 initial box:
     /// the box at (1000, 2000), the points as stored.
     ///
     /// 이것을 실패시키는 것: 묶음 경로에서 점을 상자에 맞춰 늘리는 것
@@ -1853,7 +1853,7 @@ mod tests {
     /// scale inside a pair applies before the turn.
     ///
     /// 이것을 실패시키는 것: 한 쌍 안에서 sca 를 rot 뒤에 곱하는 것(`S·R`).
-    /// (바깥 쌍이 항등이라 쌍 순서 변이는 잡지 않는다 — F1 고정 테스트가 잡음.)
+    /// (바깥 쌍이 항등이라 쌍 순서 변이는 잡지 않는다 — 고정 테스트가 잡음.)
     #[test]
     fn shared_chain_vectors_compose_as_expected() {
         let path = concat!(
@@ -1997,7 +1997,7 @@ mod tests {
             at(1000, 1000, 2000.0, 0.0),
             vec![child(
                 polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
-                // Mirrored left-right (S20: an axis-aligned polygon keeps its
+                // Mirrored left-right (an axis-aligned polygon keeps its
                 // initial box; a mirrored one takes the map onto its points).
                 Ok(render((1000, 1000), tr(2000.0, 0.0), (ID, [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0]))),
             )],
@@ -2014,7 +2014,7 @@ mod tests {
             at(1000, 1000, 2000.0, 0.0),
             vec![child(
                 polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
-                // Mirrored left-right (S20: an axis-aligned polygon keeps its
+                // Mirrored left-right (an axis-aligned polygon keeps its
                 // initial box; a mirrored one takes the map onto its points).
                 Ok(render((1000, 1000), tr(2000.0, 0.0), (ID, [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0]))),
             )],
@@ -2170,7 +2170,7 @@ mod tests {
         assert_eq!(picture_crop(&g), None);
     }
 
-    /// NONE can retain a positive width and non-type bits (Hancom F3).
+    /// NONE can retain a positive width and non-type bits (Hancom).
     /// A non-NONE type remains a loss even at zero width or for an unknown type,
     /// consistent with the standalone shape line projection.
     /// 이것을 실패시키는 것: 두께만 검사 / 속성 전체를 선 종류로 사용 /

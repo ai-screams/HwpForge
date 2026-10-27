@@ -814,7 +814,7 @@ const IDENTITY_M: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 /// `L` = the node's own rotation and mirror (`ShapeStyle`) times
 /// `diag(width / O.width, height / O.height)`. When every enclosing pair is
 /// the identity only the node's own pair is written — the form groups were
-/// written in before S20. [`preserve_group_child`] adds all identity pairs for
+/// written in before original-box preservation. [`preserve_group_child`] adds all identity pairs for
 /// image-filled children: Hancom needs `groupLevel + 1` pairs for their brush.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -1727,7 +1727,7 @@ fn standalone_box(
     ]);
     let core = local.then(scale);
     // Normalize using the O box, never the defining-point bounds. Translation
-    // mismatch belongs to the codec's G7 check and is not stored as placement.
+    // mismatch belongs to the codec's check and is not stored as placement.
     let minimum = |map: ShapeTransform| {
         box_corners(ow, oh)
             .iter()

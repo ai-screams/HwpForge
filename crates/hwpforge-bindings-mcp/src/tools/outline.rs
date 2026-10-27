@@ -1,4 +1,4 @@
-//! `hwpforge_outline` — 문서 항법 지도 (E5 읽기 표면).
+//! `hwpforge_outline` — 문서 항법 지도 (읽기 표면).
 
 use serde::Serialize;
 

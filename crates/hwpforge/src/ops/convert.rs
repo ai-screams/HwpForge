@@ -93,8 +93,8 @@ impl ConvertMdOptions {
 /// already-encoded package's style store rather than a pre-encode
 /// [`StyleRegistry`]. There is no `StyleRegistry` equivalent today, so this
 /// duplicates the *behaviour* privately here instead of adding a public
-/// method to `hwpforge-blueprint` — out of this lane's scope; see the W2
-/// report.
+/// method to `hwpforge-blueprint`.
+///
 fn apply_preset_font(registry: &mut StyleRegistry, new_font: &str) -> Result<(), OpsError> {
     let Some(original_base) = registry.fonts.first().map(|font| font.as_str().to_owned()) else {
         return Ok(());

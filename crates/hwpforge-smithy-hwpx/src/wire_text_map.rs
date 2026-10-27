@@ -1,4 +1,4 @@
-//! Wire↔Core 텍스트 좌표 맵 (W1b) — 이 crate 내부 전용.
+//! Wire↔Core 텍스트 좌표 맵 — 이 crate 내부 전용.
 //!
 //! wire 좌표(HWP5 raw 스트림 = 한컴 HWPX linesegarray textpos 규약)와
 //! Core 정준 좌표(`Paragraph::text_content()` UTF-16 축) 사이의 변환을
@@ -166,7 +166,7 @@ impl WireTextMap {
     /// **축약점(영-core span 경계, preimage ≥ 2)은 earliest preimage**
     /// (marker 시작) — 한컴 실측: native 셀 fixture
     /// 2건의 raw tp 가 모두 marker 시작이고, 첫 lineseg tp=0 전수
-    /// 불변식(13,598건)도 동일 규약이다 (W1b 의 Err 는 미측정 시점의
+    /// 불변식(13,598건)도 동일 규약이다 (Err 는 미측정 시점의
     /// fail-closed — 측정이 규약을 확정함). `AmbiguousPreimage` 는
     /// 다중-core span 내부(현 span 종류엔 없음 — 방어)에만 남는다.
     pub(crate) fn to_wire(&self, core: u32) -> Result<u32, CacheMapError> {
@@ -317,7 +317,7 @@ impl WireMapBuilder {
     }
 }
 
-/// 영-core wire 토큰 하나 (S22) — 줄 경계의 종류 열을 적는다.
+/// 영-core wire 토큰 하나 — 줄 경계의 종류 열을 적는다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZeroToken {
     /// 토큰이 놓인 Core 위치.
@@ -330,7 +330,7 @@ pub(crate) struct ZeroToken {
     pub kind: hwpforge_core::layout::WireTokenKind,
 }
 
-/// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵([`WireTextMap`])과
+/// 문단의 영-core 토큰 목록, wire 순서. 좌표 맵([`WireTextMap`])과
 /// 나란히 기록하고 맵 자체는 바꾸지 않는다 — 경계 없는 줄은 지금처럼
 /// 변환된다.
 ///
@@ -799,7 +799,7 @@ mod tests {
     fn mid_paragraph_collapse_point_resolves_to_earliest_preimage() {
         let map = marker_ledger_p1();
         // core 17 의 preimage = {17, 25, 33} (연속 영-core span) —
-        // earliest(marker 시작) 확정 (W3 실측 개정).
+        // earliest(marker 시작) 확정 (실측 개정).
         assert_eq!(map.to_wire(17), Ok(17));
         // 왕복: earliest 로 되돌려도 core 는 동일.
         assert_eq!(map.to_core(17), Ok(17));
@@ -914,7 +914,7 @@ mod tests {
         // (1,0) span 은 strict interior 가 없음 — 경계만 존재.
         assert_eq!(map.to_core(1), Ok(1));
         assert_eq!(map.to_core(2), Ok(1));
-        // 축약점 {1,2} — earliest preimage (W3 실측 개정).
+        // 축약점 {1,2} — earliest preimage (실측 개정).
         assert_eq!(map.to_wire(1), Ok(1));
     }
 

@@ -1,6 +1,6 @@
-//! W0b 스파이크 (이미지/글상자 에픽 게이트 2 재설계): quick-xml 0.41 의
+//! 스파이크 (이미지/글상자 기능 게이트 2 재설계): quick-xml 0.41 의
 //! `@attr + $value` 혼합 자식 **순서 보존** 역직렬화 지원을 잠근다 —
-//! W1a `HxRunRead`(decode 전용 ordered DTO) 전환의 전제 조건.
+//! `HxRunRead`(decode 전용 ordered DTO) 전환의 전제 조건.
 //!
 //! 검증 항목:
 //! 1. `<run charPrIDRef>` 속성과 `$value` enum 병용 (in-tree 선례 없음)

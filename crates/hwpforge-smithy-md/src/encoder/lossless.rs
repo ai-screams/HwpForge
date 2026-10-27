@@ -15,7 +15,7 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
     // and captions are written as plain text (tables) or not at all
     // (pictures) — so a number anywhere, captions included, is refused
     // here rather than dropped. 이것을 실패시키는 것: 이 검사를 지우기
-    // (`caption_number_is_written_or_refused` — F17 의 캡션 번호가 사라진 채 성공).
+    // (`caption_number_is_written_or_refused` — 캡션 번호가 사라진 채 성공).
     if holds_auto_number(document) {
         return Err(MdError::UnsupportedStructure {
             detail: "caption number (auto number) is not carried by the lossless encoder"
@@ -345,7 +345,7 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
             .filter_map(|r| r.content.as_text())
             .collect::<Vec<_>>()
             .join("");
-        // D (Q9): an empty caption keeps its place (`data-caption=""`); the
+        // an empty caption keeps its place (`data-caption=""`); the
         // side is written unless it is bottom (the reading default), the
         // full-size flag and a saved box width only when set — a bottom text
         // caption's markup is the one written before.
@@ -588,8 +588,8 @@ fn encode_group(group: &Control, char_shape: Option<usize>) -> MdResult<String> 
 /// child. Every field of the picture is written; its caption follows as a
 /// `<caption>` child.
 fn encode_picture(image: &Image, char_shape: Option<usize>) -> MdResult<String> {
-    // A group picture's caption has no place yet (W5 places captions in
-    // groups along with shapes). 이것을 실패시키는 것: 이 거부를 지우기
+    // A group picture's caption has no supported place yet.
+    // 이것을 실패시키는 것: 이 거부를 지우기
     // (`group_with_what_it_cannot_hold_is_refused`).
     if char_shape.is_none() && image.caption.is_some() {
         return Err(MdError::UnsupportedStructure {
@@ -916,7 +916,7 @@ fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> 
 }
 
 /// A caption (`<caption>`): side, gap, width, full-size flag and saved
-/// width, then its paragraphs — an exact subtree, so what this wave cannot
+/// width, then its paragraphs — an exact subtree, so what the encoder cannot
 /// write exactly inside it refuses the document.
 fn encode_caption(caption: &hwpforge_core::caption::Caption) -> MdResult<String> {
     admit_exact(&caption.paragraphs)?;
@@ -1081,14 +1081,14 @@ mod tests {
             d.add_section(Section::with_paragraphs(vec![para], hwpforge_core::PageSettings::a4()));
             d.validate().unwrap()
         };
-        // Carried since W3 (STYLE `data-corner-ratio`).
+        // Carried (STYLE `data-corner-ratio`).
         for ratio in [Some(20), Some(0), None] {
             let d = doc(ratio);
             let back = round_trip(&d);
             assert_eq!(back.sections()[0].paragraphs[0].runs, d.sections()[0].paragraphs[0].runs);
         }
     }
-    /// S18: a picture's (W2) and a text box's (W3) outer margin round-trip,
+    /// a picture's and a text box's outer margin round-trip,
     /// zero or not.
     ///
     /// 이것을 실패시키는 것: 바깥 여백 방출 삭제.
@@ -1113,7 +1113,7 @@ mod tests {
         };
         for bottom in [140, 0] {
             let unit = HwpUnit::new(3000).unwrap();
-            // A picture's outer margin is carried since W2.
+            // A picture's outer margin is carried.
             let image = Image::new("BinData/a.png", unit, unit, ImageFormat::Png)
                 .with_placement(with_margin(bottom));
             let run = Run::image(image, CharShapeIndex::new(0));
@@ -1133,7 +1133,7 @@ mod tests {
         }
     }
 
-    // ── S20 FRAME ──
+    // ── FRAME ──
 
     fn frame_doc(runs: Vec<Run>) -> Document<Validated> {
         let mut d = Document::new();
@@ -1411,7 +1411,7 @@ mod tests {
         assert_eq!((&inner.cell_zones, inner.no_adjust), (&inner_zones, true));
     }
 
-    /// D (Q9): a caption's presence (an empty one too), side, `full_size`
+    /// a caption's presence (an empty one too), side, `full_size`
     /// and `last_width` round-trip at the top level and in a nested table;
     /// a bottom caption writes no side.
     /// 이것을 실패시키는 것: 빈 캡션 생략 · 측·`full_size`·`last_width` 방출 삭제 ·
@@ -1482,7 +1482,7 @@ mod tests {
     }
 
     /// A default frame writes nothing: the picture's markup is the one
-    /// written before S20.
+    /// written before original-box preservation.
     #[test]
     fn default_frame_writes_nothing() {
         let image = Image::new("BinData/a.png", hu(3000), hu(2000), ImageFormat::Png);
@@ -1495,7 +1495,7 @@ mod tests {
     }
 
     /// Lines, ellipses and polygons carry their frame and read it back
-    /// (W3). A line shown flat with a flat original box is a valid frame
+    /// A line shown flat with a flat original box is a valid frame
     /// (Core, built directly).
     #[test]
     fn shapes_carry_the_frame() {
@@ -1567,7 +1567,7 @@ mod tests {
             d.add_section(Section::with_paragraphs(vec![para], hwpforge_core::PageSettings::a4()));
             d.validate().unwrap()
         };
-        // Carried since W3 (TEXTMARGIN).
+        // Carried (TEXTMARGIN).
         for v in [400, 283, 0] {
             let d = doc(v);
             let back = round_trip(&d);
@@ -1922,7 +1922,7 @@ mod tests {
         assert!(out.contains("<ellipse"));
         assert!(out.contains("data-cx=\"500\""));
         assert!(out.contains("data-cy=\"300\""));
-        // Without text it is an empty element (W3).
+        // Without text it is an empty element.
         assert!(out.contains(" />") && !out.contains("</ellipse>"));
     }
 
@@ -1983,7 +1983,7 @@ mod tests {
         let out = encode_lossless(&doc).unwrap();
         assert!(out.contains("<polygon"));
         assert!(out.contains("data-points=\"0,1000;500,0;1000,1000\""));
-        // Without text it is an empty element (W3).
+        // Without text it is an empty element.
         assert!(out.contains(" />") && !out.contains("</polygon>"));
     }
 
@@ -2109,7 +2109,7 @@ mod tests {
 
     #[test]
     fn lossless_unsupported_control_returns_error() {
-        // An equation has no lossless grammar (an arc has one since W4).
+        // An equation has no lossless grammar (an arc has one).
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(Control::equation("a over b"), CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),

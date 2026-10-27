@@ -63,10 +63,10 @@ fn md_image_embeds_into_bindata_and_roundtrips() {
     }
     // 디코더는 참조를 binaryItemIDRef 유래 canonical 형태(`BinData/<stem>`)로
     // 복원한다 — 렌더 쪽 resolver 가 store 키(`image1.png`)와 결정적으로
-    // 잇는 기존 계약 (W2a). 여기선 stem 이 합성 키에서 왔음을 잠근다.
+    // 잇는 기존 계약. 여기선 stem 이 합성 키에서 왔음을 잠근다.
     assert_eq!(image_paths, vec!["BinData/image1"], "합성 키 stem 이 참조로 왕복");
 
-    // 패키지 실물: BinData/ 엔트리 + manifest 등재 (H2 — id 정합).
+    // 패키지 실물: BinData/ 엔트리 + manifest 등재 (id 정합).
     let reader = std::io::Cursor::new(&bytes);
     let mut zip = zip::ZipArchive::new(reader).expect("zip");
     let names: Vec<String> = (0..zip.len())

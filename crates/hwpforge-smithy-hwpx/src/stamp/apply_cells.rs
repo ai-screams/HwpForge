@@ -1,4 +1,4 @@
-//! Class-B apply — Wave 2B: preflight + all-or-nothing cell promotion.
+//! Class-B apply — preflight + all-or-nothing cell promotion.
 //!
 //! The engine is split into [`preflight_cells`] and [`commit_cells`] so a
 //! combined text+cell stamp can preflight EVERYTHING against the pristine

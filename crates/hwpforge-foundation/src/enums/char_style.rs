@@ -346,7 +346,7 @@ impl schemars::JsonSchema for UnderlineShape {
 
 /// Strikeout line shape.
 ///
-/// This selects the line *family* used by a strikeout. After Wave 1c the
+/// This selects the line *family* used by a strikeout. The
 /// shared IR mirrors the full OWPML strike-shape vocabulary so the HWP5
 /// projection can carry the entire line family rather than collapsing to
 /// `Solid`. The naming aligns with [`UnderlineShape`] so both axes share

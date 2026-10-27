@@ -212,7 +212,7 @@ impl DeepTablePropertiesSummary {
             width_hwp: (raw_width > 0).then_some(raw_width),
             // 실효 margin 으로 비교한다: HWP5 는 셀마다 값을 쓰고, HWPX 는
             // hasMargin=0 + 표 inMargin 으로 같은 의미를 쓴다 — wire 표현
-            // 차이는 parity 대상이 아니다 (W3a H5).
+            // 차이는 parity 대상이 아니다.
             margin_hwp: cell.margin.or(table_in_margin).map(deep_table_margin_from_core),
             vertical_align: cell.vertical_align.map(deep_table_vertical_align_from_core),
         });

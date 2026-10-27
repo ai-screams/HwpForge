@@ -86,10 +86,10 @@ impl FootnoteCollector {
     /// Renders all collected definitions as a markdown block.
     ///
     /// Multi-paragraph bodies follow the GFM continuation form the parser
-    /// actually accepts (probe P4/P12): a **blank line** between paragraphs
+    /// actually accepts (probe): a **blank line** between paragraphs
     /// and 4-space indentation on **every** physical line of continuation
     /// paragraphs. Line-start block markers are escaped so a body that
-    /// *looks* like a list stays plain text on re-parse (H6, probe P14).
+    /// *looks* like a list stays plain text on re-parse (probe).
     fn render_definitions(self) -> Vec<Block> {
         let labels = (1..).map(|i| i.to_string());
         let footnotes = self.footnotes.into_iter().zip(labels);
@@ -139,7 +139,7 @@ fn render_definition(label: &str, paragraphs: &[Md]) -> String {
     out
 }
 
-/// Escapes line-start block markers inside a note-definition paragraph (H6).
+/// Escapes line-start block markers inside a note-definition paragraph.
 ///
 /// A body line beginning with `- ` / `* ` / `+ ` / `1. ` / `#` / `>` would
 /// re-parse as a structural block inside the definition, which this decoder
@@ -530,7 +530,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             }
 
             // Code block detection: all text runs with code font.
-            // InlineText runs (post-Phase-3 inline-tab carry) fold to
+            // InlineText runs (inline-tab carry) fold to
             // their `\t`-bearing plain string.
             if is_code_paragraph(paragraph, styles) {
                 let text = paragraph
@@ -1079,7 +1079,7 @@ impl Line {
     }
 
     /// The line's Markdown, and whether its emphasis was kept. Only this
-    /// final composition is checked: a Body after G2, or a complete cell.
+    /// final composition is checked: a rendered Body, or a complete cell.
     fn finish(self, ctx: Ctx) -> (Md, bool) {
         let pieces = self.pieces(ctx);
         // Spans common to neighbouring pieces stay open, those opened at one
@@ -1579,14 +1579,14 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             md
         }
         Control::Compose { compose_text, .. } => text(compose_text, ctx),
-        // Wave 12m Phase 2 Step 4: the visible text (display_text) if any,
+        // the visible text (display_text) if any,
         // else the target's display form in brackets (Name → "bookmark1",
         // SystemId → "#5"). Markdown has no anchor link here: text only.
         // The brackets are text too: as syntax they made a link with a
         // following `(…)`. 이것을 실패시키는 것: 대괄호를 문법으로
         // 쓰기(`markup_safety` 의 빈 상호 참조).
         // A field: the filled value if any, else the hint — the HWPX
-        // encoder's hint fallback order (Epic 1).
+        // encoder's hint fallback order.
         Control::CrossRef { .. } | Control::Field { .. } => {
             text(&super::styled_display(control).unwrap_or_default(), ctx)
         }
@@ -1739,7 +1739,7 @@ fn math_free_text(raw: &str, ctx: Ctx) -> Md {
 
 /// A memo as `<!-- memo: … -->`, its body drawn as Markdown with `--`
 /// broken up so it cannot close the comment. Author/date are no longer
-/// carried (Wave 12e-Memo): HWPX wire never surfaced them.
+/// carried (Memo): HWPX wire never surfaced them.
 fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
     let Some(inner) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let inner = Ctx { in_comment: true, guarded: false, ..inner };
@@ -1770,7 +1770,7 @@ fn extract_note_body(
 }
 
 /// [`extract_note_body`] in HTML, for a note written inline in an HTML cell
-/// (escaped once — M2).
+/// (escaped once).
 fn extract_note_body_html(
     paragraphs: &[Paragraph],
     styles: &dyn StyleLookup,
@@ -2259,7 +2259,7 @@ const CODE_FONTS: &[&str] = &[
 fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
     // `carries_text()` matches both `Text(String)` and `InlineText(...)`
     // so a paragraph that picked up `InlineText` after the HWPX
-    // decoder Phase 3 carry is still detected as code if it would
+    // decoder carry is still detected as code if it would
     // have qualified before.
     let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
     if text_runs.is_empty() {
@@ -4249,7 +4249,7 @@ mod tests {
 
     /// In a merged (HTML) cell a group's picture is a real `<img>` element
     /// and a text box's text is HTML (`<strong>`), not escaped Markdown; the
-    /// same text in the body stays Markdown (S5).
+    /// same text in the body stays Markdown.
     ///
     /// 이것을 실패시키는 것: HTML 문맥 분기 삭제(Markdown 링크가 칸에 escape 되어 들어감) ·
     /// 묶음 출력을 다시 escape · HTML 칸 도형 글자에 Markdown 렌더러.
@@ -4307,9 +4307,9 @@ mod tests {
     }
 
     /// Notes follow the depth and memo rules: a note in a text box at depth 0
-    /// is a document definition (S4, numbered in drawing order); a note in a
-    /// text box inside a note body is inline (N2) and the output decodes; a
-    /// note in a memo is inline with no definition (M3).
+    /// is a document definition (numbered in drawing order); a note in a
+    /// text box inside a note body is inline and the output decodes; a
+    /// note in a memo is inline with no definition.
     ///
     /// 이것을 실패시키는 것: 깊이 조건 삭제 · 메모 조건 삭제 · 글상자에서 수집기를 새로 만듦 ·
     /// 각주 본문 진입 때 `note_depth` +1 삭제.
@@ -4352,7 +4352,7 @@ mod tests {
     }
 
     /// A picture in a memo is link text only — no asset — also through a
-    /// group; a picture in a note body gets its asset (N4).
+    /// group; a picture in a note body gets its asset.
     ///
     /// 이것을 실패시키는 것: 메모에서 `in_comment` 미설정(자산 등록) · 메모 본문을
     /// Markdown 렌더러가 아닌 HTML 렌더러로.
@@ -4599,9 +4599,9 @@ mod tests {
     }
 
     /// The two shapes of the earlier false positives: a group holding a text
-    /// box with only a table draws the table (S1 — lossy draws nothing, it
+    /// box with only a table draws the table (lossy draws nothing, it
     /// takes the box's plain text); a group holding a text box of spaces
-    /// draws nothing once trimmed (S2).
+    /// draws nothing once trimmed.
     ///
     /// 이것을 실패시키는 것: 도형 글자 잘라내기 삭제 · 묶음 글상자 표를 그리지 않기.
     #[test]

@@ -67,7 +67,7 @@ const _: () = assert!(std::mem::size_of::<CurveSegmentType>() == 1);
 const _: () = assert!(std::mem::size_of::<VerticalAlign>() == 1);
 const _: () = assert!(std::mem::size_of::<BookmarkType>() == 1);
 const _: () = assert!(std::mem::size_of::<FieldType>() == 1);
-// Wave 12m Phase 2: RefType / RefContentType 의 `#[repr(u8)]` 제거 + Unknown(u8)
+// RefType / RefContentType 의 `#[repr(u8)]` 제거 + Unknown(u8)
 // tuple variant 추가로 size 가 1 byte 에서 2 bytes (discriminant + u8 payload) 로
 // 증가. trade-off: type-safe forward-compat carry > 1 byte memory.
 const _: () = assert!(std::mem::size_of::<RefType>() == 2);
@@ -502,7 +502,7 @@ mod tests {
     fn strikeout_shape_from_str() {
         assert_eq!(StrikeoutShape::from_str("NONE").unwrap(), StrikeoutShape::None);
         assert_eq!(StrikeoutShape::from_str("SOLID").unwrap(), StrikeoutShape::Solid);
-        // Backward-compatible alias for the pre-Wave-1c name.
+        // Backward-compatible alias for the previous name.
         assert_eq!(StrikeoutShape::from_str("Continuous").unwrap(), StrikeoutShape::Solid);
         assert_eq!(StrikeoutShape::from_str("dash_dot").unwrap(), StrikeoutShape::DashDot);
         assert_eq!(StrikeoutShape::from_str("DOUBLE_SLIM").unwrap(), StrikeoutShape::DoubleSlim);

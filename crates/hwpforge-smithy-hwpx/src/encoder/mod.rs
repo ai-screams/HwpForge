@@ -528,7 +528,7 @@ pub enum EncodeWarning {
         reference: String,
     },
     /// 개체 둘 이상이 같은 Core id(그림·표·수식·묶음·글맵시의 `inst_id`)를
-    /// 갖는다 (W0). 각주·미주는 세지 않는다 — 한컴이 여러 주석을 한 instance
+    /// 갖는다. 각주·미주는 세지 않는다 — 한컴이 여러 주석을 한 instance
     /// id 로 저장한다. 상호 참조가 어느 개체를 가리키는지 정해지지
     /// 않는다. 인코더는 재번호하지 않고 두 값을 그대로 쓴다 — 어느 쪽이 참조
     /// 대상인지는 인코더가 정할 수 없다. 새로 뽑는 id 는 이 값을 피한다.
@@ -876,7 +876,7 @@ mod is_semantic_loss_tests {
         );
     }
 
-    /// W0: a shared Core id is not a semantic loss — the encoder writes the
+    /// a shared Core id is not a semantic loss — the encoder writes the
     /// input's ids unchanged, so an editor does not refuse the document.
     /// 이것을 실패시키는 것: `ObjectIdConflict` 를 `true` 갈래로 옮기기.
     #[test]
@@ -1010,7 +1010,7 @@ pub struct EncodeOptions {
     /// "이미 있으면 스킵" 안전장치가 fail-open 이 된다. 영-core 토큰 사이에서
     /// 시작하는 줄은 줄 경계([`hwpforge_core::layout::LineBoundary`])로 그
     /// 토큰 앞에 놓고, 정확히 놓을 수 없거나 줄 시작이 늘지 않는 문단은
-    /// 캐시를 버린다(경고) — 접힌 `[0,0]` 캐시는 쓰지 않는다(S22).
+    /// 캐시를 버린다(경고) — 접힌 `[0,0]` 캐시는 쓰지 않는다.
     ///
     /// 좌표 주의: HWPX 디코더가 승격한 캐시의 `textpos` 는 **보이는-텍스트
     /// 좌표로 정규화**돼 있다 (선행 컨트롤 8유닛 차감) — 방출값도 원본
@@ -1018,7 +1018,7 @@ pub struct EncodeOptions {
     pub emit_layout_cache: bool,
     /// 작성 시각(`CreateDateTime`)이 비어 있는 메모에 쓸 시각, Unix 초.
     /// `None`(기본)이면 epoch(`1970-01-01T00:00:00Z`). 인코더는 시계를 읽지
-    /// 않는다 — 같은 문서는 늘 같은 바이트(W0). 사용자가 새로 쓰는 문서의
+    /// 않는다 — 같은 문서는 늘 같은 바이트. 사용자가 새로 쓰는 문서의
     /// 진입점(`from-json` 등)이 현재 시각을 넣는다.
     pub memo_create_time: Option<u64>,
     /// Crate-internal (the carry's cache source, `layout_carry`): with
@@ -1353,7 +1353,7 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<Vec<u8>> {
         let outcome = Self::encode_with_diagnostics(document, style_store, image_store, options)?;
-        // W1b: emit_layout_cache 요청 중 캐시 드롭은 무음
+        // emit_layout_cache 요청 중 캐시 드롭은 무음
         // 성공 금지 — 데이터 손실을 진단 없이 넘기지 않는다 (breaking,
         // 0.14.0). 경고 보존 경로는 `encode_with_diagnostics`.
         if options.emit_layout_cache {
@@ -1411,7 +1411,7 @@ impl HwpxEncoder {
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         crate::HwpxDecoder::verify_document_source(document)?;
         refuse_unknown_cell_zone_fills(document, style_store)?;
-        // W0: ids drawn for objects without a Core id come from this encode's
+        // ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
         let references = crate::header_references::HeaderReferences::build(style_store)?;
@@ -1448,7 +1448,7 @@ impl HwpxEncoder {
         // All parts share one document asset/diagnostic context.
         let mut section_results = Vec::with_capacity(sections.len());
         // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
-        // F7 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
+        // 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
         // <hh:beginNum> 병합 실값)만 문서 시작에서 1회 반영한다. 후속
         // 섹션의 begin_num 은 **무시**되고 (합성 1 — 비기본 실값이면
         // NoteRestartIgnored 경고), 본문 NewNumber 재시작은 walk 가 처리.
@@ -1560,7 +1560,7 @@ impl HwpxEncoder {
 
         let dropped_caches: Vec<Vec<EncodeWarning>> =
             section_results.iter_mut().map(|r| std::mem::take(&mut r.dropped_caches)).collect();
-        // W0: two written objects with one Core id keep it, and are reported
+        // two written objects with one Core id keep it, and are reported
         // — counted from the ids the encoder actually wrote.
         // 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
         for (id, kinds) in object_ids::conflicts(&object_ids::written()) {
@@ -1579,14 +1579,14 @@ impl HwpxEncoder {
 
         // Step 4: Package into ZIP with images, charts, master pages, and
         // embedded-chart OLE blobs. Document.metadata flows into content.hpf
-        // <opf:metadata> (Wave 12o Phase 1).
+        // <opf:metadata>.
         let manifest = package::manifest_items(
             section_xmls.len(),
             &images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
         );
-        // C4: the manifest the writer is about to write, and the parts it
+        // the manifest the writer is about to write, and the parts it
         // writes, checked as they are (the manifest read back from its text).
         // #198: `content.hpf` is scanned for characters XML 1.0 forbids
         // before it is read back, so the checks read the text that is written.

@@ -150,7 +150,7 @@ pub struct TableLayoutCache {
     /// omitted it — natively authored split tables do).
     ///
     /// ⚠️ For a page-spanning (split) table this is the **first fragment's
-    /// height**, not the total table height (W0 measurement).
+    /// height**, not the total table height (measurement).
     pub saved_sz_height: Option<HwpUnit>,
     /// Whether the wire `<hp:pos>` was the default inline-flow combination
     /// (`treatAsChar=0`, `flowWithText=1`, PARA/COLUMN relative, zero
@@ -175,8 +175,8 @@ fn default_repeat_header() -> bool {
 ///
 /// # Design Decision
 ///
-/// No `border: Option<BorderStyle>` in Phase 1. Border styling is a
-/// Blueprint concern (Phase 2). Core tables are purely structural.
+/// No `border: Option<BorderStyle>`. Border styling is a
+/// Blueprint concern. Core tables are purely structural.
 ///
 /// # Examples
 ///
@@ -214,14 +214,14 @@ pub struct Table {
     /// Optional table-level border/fill reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<u32>,
-    /// Wave 12p Step 2b: instance ID for cross-ref target lookup. HWP5
+    /// instance ID for cross-ref target lookup. HWP5
     /// 변환 시 Table CtrlHeader trailer 의 instance ID 가 채워지고,
     /// HWPX encoder 가 `<hp:tbl id="...">` attribute 로 emit. `None`
     /// 이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inst_id: Option<ObjectId>,
     /// Outer margins around the table (`<hp:outMargin>`) — the wire source
-    /// for table placement (PDF replay rule R5).
+    /// for table placement (PDF replay rule).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub out_margin: Option<TableMargin>,
     /// Table-level default cell padding (`<hp:inMargin>`) — the fallback when
@@ -780,7 +780,7 @@ mod tests {
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
-    /// S19: no dormant margin writes no `dormant_margin`; one round trips.
+    /// no dormant margin writes no `dormant_margin`; one round trips.
     ///
     /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
     #[test]

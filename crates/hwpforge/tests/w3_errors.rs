@@ -1,4 +1,4 @@
-//! W3 editor boundaries, with synthetic inputs only.
+//! editor boundaries, with synthetic inputs only.
 #![cfg(feature = "hwpx")]
 #[path = "support/document.rs"]
 mod document;
@@ -21,7 +21,7 @@ fn table(run: Run) -> Run {
 
 #[test]
 fn draft_depth_reports_the_later_section_before_any_edit() {
-    // 이것을 실패시키는 것: D1 section을 0으로 고정, D2 reason 구역 보정 제거, D3 Display 접두 삭제, D4 깊이 검사를 편집 뒤로 이동, D5 ops를 InvalidInput으로 변경.
+    // 이것을 실패시키는 것: section을 0으로 고정, reason 구역 보정 제거, Display 접두 삭제, 깊이 검사를 편집 뒤로 이동, ops를 InvalidInput으로 변경.
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(
         vec![paragraph(table(Run::text("before", CharShapeIndex::new(0))))],
@@ -65,7 +65,7 @@ fn draft_depth_reports_the_later_section_before_any_edit() {
 #[cfg(feature = "ops-hwpx")]
 #[test]
 fn byte_editor_decode_boundaries_are_canonical() {
-    // 이것을 실패시키는 것: P3 CodecFailure::hwpx의 원본 leaf를 XmlSerialize로 덮어쓰기.
+    // 이것을 실패시키는 것: CodecFailure::hwpx의 원본 leaf를 XmlSerialize로 덮어쓰기.
     use hwpforge::ops;
     let bytes = include_bytes!("data/corrupt-input.hwpx");
     let errors = [
@@ -110,7 +110,7 @@ fn byte_editor_decode_boundaries_are_canonical() {
 
 #[test]
 fn shallow_draft_keeps_table_not_found() {
-    // 이것을 실패시키는 것: D6 TableNotFound의 tables를 실제 개수 + 1로 반환.
+    // 이것을 실패시키는 것: TableNotFound의 tables를 실제 개수 + 1로 반환.
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(
         vec![paragraph(Run::text("plain", CharShapeIndex::new(0)))],
@@ -132,7 +132,7 @@ fn shallow_draft_keeps_table_not_found() {
 #[cfg(feature = "ops-hwpx")]
 #[test]
 fn four_byte_depth_inputs_fail_at_decode() {
-    // 이것을 실패시키는 것: E1 셀 입력 decode stage를 Encode로 변경.
+    // 이것을 실패시키는 것: 셀 입력 decode stage를 Encode로 변경.
     use hwpforge::hwpx::HwpxDecoder;
     use hwpforge::ops;
     std::thread::Builder::new()
@@ -163,7 +163,7 @@ fn four_byte_depth_inputs_fail_at_decode() {
 
 #[test]
 fn invariant_and_protected_messages_keep_the_detail() {
-    // 이것을 실패시키는 것: M1–M4 세 Invariant 또는 ProtectedFieldRange Display에서 detail 삭제.
+    // 이것을 실패시키는 것: 세 Invariant 또는 ProtectedFieldRange Display에서 detail 삭제.
     use hwpforge::hwpx::{stamp::StamperError, CellEditError, StructuralEditError};
     assert_eq!(
         CellEditError::Invariant { detail: "cell source".into() }.to_string(),

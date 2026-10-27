@@ -1,4 +1,4 @@
-//! W4: HWP5 conversion failures report the code of the stage that failed.
+//! HWP5 conversion failures report the code of the stage that failed.
 //!
 //! Consumes the shared error contract's Rust cases whose operation is
 //! `convert.*` (the umbrella harness, `hwpforge/tests/w1_errors.rs`, skips

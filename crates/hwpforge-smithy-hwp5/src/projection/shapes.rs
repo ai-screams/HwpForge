@@ -22,13 +22,13 @@ use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapePoint};
 
 /// Derives a GSO shape's Core [`ObjectPlacement`] from the owning `gso `
 /// `CtrlHeader` 속성 word via [`super::image_placement_from_wire`], which now
-/// byte-grounds the full placement (W5 w0).
+/// byte-grounds the full placement.
 ///
 /// An inline (`treat_as_char`, bit0=1) shape collapses to `None` so the encoder
 /// emits the legacy inline placement. A floating shape (bit0=0) carries the
 /// axes decoded from the shared `gso ` CtrlHeader word (표 70):
 /// `vertRelTo`/`horzRelTo`/`textWrap`/`textFlow`/`flowWithText`/`allowOverlap`
-/// plus the signed `(x, y)` offset — no longer the pre-W5 anchor/wrap
+/// plus the signed `(x, y)` offset — no longer the previous anchor/wrap
 /// convention. A Hancom-saved HWP5/HWPX pair containing a floating
 /// `<hp:rect>` 글상자 (`vertRelTo=PARA`, `horzRelTo=PAGE`, `textWrap=SQUARE`)
 /// is the byte-comparison gate.
@@ -49,7 +49,7 @@ pub(super) fn shape_placement(
     (placement != ObjectPlacement::legacy_inline_defaults()).then_some(placement)
 }
 
-/// The object's outer margin from its `CtrlHeader` bytes 28–36 (S18): `None`
+/// The object's outer margin from its `CtrlHeader` bytes 28–36: `None`
 /// when 0 on every side (so an inline default still collapses), and for a
 /// negative side — the corpus has `-1` on all four in a few old documents,
 /// whose meaning is unknown — which is reported and read as 0.
@@ -107,7 +107,7 @@ pub(super) fn offset_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
 /// `<hp:sz protect>`; HWP5 ↔ Hancom twins 1,806/1,806).
 pub(super) const CTRL_PROPERTY_SIZE_PROTECT_BIT: u32 = 1 << 20;
 
-/// S20: an HWP 5.0 object's original box from its `ShapeComponent` initial
+/// an HWP 5.0 object's original box from its `ShapeComponent` initial
 /// size (bytes 20–28, HWPX `orgSz` — twins 1,806/1,806), `None` when it is
 /// the displayed size or cannot be one: out of the signed range (reported),
 /// or an axis of 0 under a nonzero displayed axis (reported).
@@ -176,11 +176,11 @@ fn displayed(geometry: &Hwp5ShapeComponentGeometry) -> Option<(i32, i32)> {
     (HwpUnit::new(w).is_ok() && HwpUnit::new(h).is_ok()).then_some((w, h))
 }
 
-/// S20: a shape whose initial box is known keeps its stored
+/// a shape whose initial box is known keeps its stored
 /// points (they are coordinates in that box) and is shown at its layout size
 /// with that box as its original box. `control` holds the wire points; this
 /// sets its size and frame. `false` when the initial box is unknown or the
-/// layout size does not fit — the caller keeps the pre-S20 projection.
+/// layout size does not fit — the caller keeps the fallback projection.
 fn frame_wire_shape(
     control: &mut Control,
     geometry: &Hwp5ShapeComponentGeometry,
@@ -191,7 +191,7 @@ fn frame_wire_shape(
     let (Some(shown), Some((iw, ih))) = (displayed(geometry), initial) else { return false };
     let frame = object_frame(initial, shown, ctrl_properties, warnings);
     // An initial box that cannot be the frame (reported by `original_box`)
-    // leaves the points in a box Core cannot hold: the pre-S20 projection.
+    // leaves the points in a box Core cannot hold: the fallback projection.
     let same = i64::from(iw) == i64::from(shown.0) && i64::from(ih) == i64::from(shown.1);
     if frame.original_size.is_none() && !same {
         return false;
@@ -251,7 +251,7 @@ pub(super) fn project_line_run(
     line: &Hwp5LineControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
-    // S20: the stored ends in the initial box.
+    // the stored ends in the initial box.
     // 이것을 실패시키는 것: 이 갈래를 지우기(끝점이 표시 상자로 맞춰지고 원래 상자를 잃는다).
     let mut control = wire_line(line.start, line.end, false);
     if line.start != line.end
@@ -335,7 +335,7 @@ pub(super) fn project_polygon_run(
     polygon: &Hwp5PolygonControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
-    // S20: the stored points in the initial box; without one, fitted into
+    // the stored points in the initial box; without one, fitted into
     // the displayed box as before.
     let wire = hwpforge_core::control::Control::polygon(
         polygon.points.iter().copied().map(wire_point).collect(),
@@ -373,7 +373,7 @@ pub(super) fn project_ellipse_run(
     let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::ellipse(width, height);
-    // S20: with a known initial box the stored centre and axes are kept
+    // with a known initial box the stored centre and axes are kept
     // (they are in that box — the ministry's bullet: centre 280 in 560).
     let mut framed = control.clone();
     if let Control::Ellipse { center, axis1, axis2, .. } = &mut framed {
@@ -878,7 +878,7 @@ mod tests {
         );
     }
 
-    // ── placement derivation (W4 w1) ─────────────────────────────────
+    // ── placement derivation ─────────────────────────────────
 
     #[test]
     fn shape_placement_collapses_inline_and_byte_grounds_floating_axes() {
@@ -893,7 +893,7 @@ mod tests {
         // dropped for an inline shape).
         assert!(shape_placement(&geometry, 0x1, &mut Vec::new()).is_none());
         // bit0=0, 나머지 축 비트 전부 0 → 부유 배치가 Paper/Paper/Square 로
-        // 디코드되고 CtrlHeader 오프셋을 싣는다 (W5 w0 바이트-그라운드).
+        // 디코드되고 CtrlHeader 오프셋을 싣는다 (바이트-그라운드).
         let zeroed = shape_placement(&geometry, 0x0, &mut Vec::new()).expect("floating placement");
         assert!(!zeroed.treat_as_char);
         assert_eq!(zeroed.horz_offset.as_i32(), 1_234);

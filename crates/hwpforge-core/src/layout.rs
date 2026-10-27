@@ -58,14 +58,14 @@ pub struct LineSeg {
     pub flags: u32,
     /// 줄 시작이 Core 위치 `textpos` 의 영-core wire 토큰 열(표·그림·컨트롤·
     /// 필드 경계처럼 Core 텍스트 길이가 0 인 것) 한가운데에 놓일 때, 그 열의
-    /// 몇 번째 토큰 앞인지 (S22). `None` = 그 위치의 토큰을 하나도 지나지
+    /// 몇 번째 토큰 앞인지. `None` = 그 위치의 토큰을 하나도 지나지
     /// 않는다 — 토큰이 없거나 첫 토큰 앞(줄 대부분). 문단 내용을 바꾸면
     /// `layout_cache` 를 `None` 으로 — 경계는 그 내용의 토큰 열을 가리킨다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary: Option<LineBoundary>,
 }
 
-/// 한 문단의 줄 경계가 지나는 토큰 수의 합(`skip.len()` 의 합) 상한 (S22).
+/// 한 문단의 줄 경계가 지나는 토큰 수의 합(`skip.len()` 의 합) 상한.
 ///
 /// 같은 Core 위치에 토큰 N 개가 이어지고 줄마다 하나씩 더 지나면 합이
 /// N(N−1)/2 로 커진다 — 작은 입력이 제곱 크기의 경계를 만들지 않도록, 두
@@ -107,7 +107,7 @@ impl LineBoundary {
     }
 }
 
-/// Core 텍스트 길이가 0 인 wire 토큰의 종류 (S22) — 줄 경계를 적는 데만
+/// Core 텍스트 길이가 0 인 wire 토큰의 종류 — 줄 경계를 적는 데만
 /// 쓴다. `#[non_exhaustive]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(s, back);
     }
 
-    /// S22: a line without a boundary serializes exactly as before (no
+    /// a line without a boundary serializes exactly as before (no
     /// `boundary` key), and one with a boundary round-trips.
     /// 이것을 실패시키는 것: `skip_serializing_if` 삭제(옛 JSON 바이트가 바뀜).
     /// (`boundary` 가 없는 옛 JSON 은 serde 가 `Option` 을 `None` 으로 읽는다.)
@@ -467,7 +467,7 @@ mod tests {
             // 이것은 의도된 계약이 아니라 **현 동작의 기록**이다: 표·글상자
             // 캡션은 방문되는데 이미지 캡션만 빠진다. 재귀 대상을 넓히면
             // 캐시 정규화·편집 파이프라인 등 기존 호출자 전부의 동작이
-            // 바뀌므로 픽스처를 갖춘 별도 슬라이스로 다룬다.
+            // 바뀌므로 픽스처를 갖춘 별도 작업으로 다룬다.
             // 그때 이 테스트는 갱신 대상이다.
             //
             // 지금 잠그는 것: 두 순회가 **같은 선택**을 한다는 점 — 한쪽만

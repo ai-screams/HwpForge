@@ -5064,17 +5064,17 @@
         "cli": {
           "mode": "unreachable",
           "operation": "set-cell",
-          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+          "reason": "Input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
         },
         "mcp": {
           "mode": "unreachable",
           "operation": "set-cell",
-          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+          "reason": "Input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
         },
         "python": {
           "mode": "unreachable",
           "operation": "set_cell",
-          "reason": "D4 input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
+          "reason": "Input decode rejects deep bytes before admission and apply_set_cells; cell text edits cannot increase nesting."
         }
       },
       "inventory": [

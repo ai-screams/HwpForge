@@ -1,4 +1,4 @@
-//! `hwpforge_diff` — 두 문서 비교 (E5 검증 표면).
+//! `hwpforge_diff` — 두 문서 비교 (검증 표면).
 
 use serde::Serialize;
 

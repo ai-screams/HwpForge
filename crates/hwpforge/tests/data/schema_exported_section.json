@@ -410,7 +410,7 @@
       "maximum": 100000000
     },
     "Table": {
-      "description": "A table: a sequence of rows, with optional width and caption.\n\n# Design Decision\n\nNo `border: Option<BorderStyle>` in Phase 1. Border styling is a\nBlueprint concern (Phase 2). Core tables are purely structural.\n\n# Examples\n\n```\nuse hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet table = Table::new(vec![TableRow::new(vec![TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(100.0).unwrap(),\n)])])\n.with_page_break(TablePageBreak::Cell);\nassert_eq!(table.row_count(), 1);\n```",
+      "description": "A table: a sequence of rows, with optional width and caption.\n\n# Design Decision\n\nNo `border: Option<BorderStyle>`. Border styling is a\nBlueprint concern. Core tables are purely structural.\n\n# Examples\n\n```\nuse hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet table = Table::new(vec![TableRow::new(vec![TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(100.0).unwrap(),\n)])])\n.with_page_break(TablePageBreak::Cell);\nassert_eq!(table.row_count(), 1);\n```",
       "type": "object",
       "properties": {
         "rows": {
@@ -473,7 +473,7 @@
           "minimum": 0
         },
         "inst_id": {
-          "description": "Wave 12p Step 2b: instance ID for cross-ref target lookup. HWP5\n변환 시 Table CtrlHeader trailer 의 instance ID 가 채워지고,\nHWPX encoder 가 `<hp:tbl id=\"...\">` attribute 로 emit. `None`\n이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.",
+          "description": "instance ID for cross-ref target lookup. HWP5\n변환 시 Table CtrlHeader trailer 의 instance ID 가 채워지고,\nHWPX encoder 가 `<hp:tbl id=\"...\">` attribute 로 emit. `None`\n이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.",
           "anyOf": [
             {
               "$ref": "#/$defs/ObjectId"
@@ -484,7 +484,7 @@
           ]
         },
         "out_margin": {
-          "description": "Outer margins around the table (`<hp:outMargin>`) — the wire source\nfor table placement (PDF replay rule R5).",
+          "description": "Outer margins around the table (`<hp:outMargin>`) — the wire source\nfor table placement (PDF replay rule).",
           "anyOf": [
             {
               "$ref": "#/$defs/TableMargin"
@@ -892,7 +892,7 @@
       "type": "object",
       "properties": {
         "saved_sz_height": {
-          "description": "Hancom-saved `<hp:sz height>` ([`None`] when the wire stored `0` or\nomitted it — natively authored split tables do).\n\n⚠️ For a page-spanning (split) table this is the **first fragment's\nheight**, not the total table height (W0 measurement).",
+          "description": "Hancom-saved `<hp:sz height>` ([`None`] when the wire stored `0` or\nomitted it — natively authored split tables do).\n\n⚠️ For a page-spanning (split) table this is the **first fragment's\nheight**, not the total table height (measurement).",
           "anyOf": [
             {
               "$ref": "#/$defs/HwpUnit"
@@ -1349,7 +1349,7 @@
           ]
         },
         "inst_id": {
-          "description": "Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5\n변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX\nencoder 가 `<hp:pic id=\"...\">` attribute 로 emit. `None` 이면\nencoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.",
+          "description": "instance ID for cross-ref target lookup. HWP5\n변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX\nencoder 가 `<hp:pic id=\"...\">` attribute 로 emit. `None` 이면\nencoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.",
           "anyOf": [
             {
               "$ref": "#/$defs/ObjectId"
@@ -1410,7 +1410,7 @@
       "type": "string"
     },
     "ImageFormat": {
-      "description": "Supported image formats.\n\nMarked `#[non_exhaustive]` so new formats can be added in future\nphases without a breaking change.\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageFormat;\n\nlet fmt = ImageFormat::Png;\nassert_eq!(fmt.to_string(), \"PNG\");\n\nlet unknown = ImageFormat::Unknown(\"SVG\".to_string());\nassert_eq!(unknown.to_string(), \"svg\");\n```",
+      "description": "Supported image formats.\n\nMarked `#[non_exhaustive]` so new formats can be added in future\nupdates without a breaking change.\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageFormat;\n\nlet fmt = ImageFormat::Png;\nassert_eq!(fmt.to_string(), \"PNG\");\n\nlet unknown = ImageFormat::Unknown(\"SVG\".to_string());\nassert_eq!(unknown.to_string(), \"svg\");\n```",
       "oneOf": [
         {
           "description": "Portable Network Graphics.",
@@ -1864,7 +1864,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A HWP5 chart carried as opaque OOXML + OLE blob passthrough.\n\nUsed when chart data is extracted from a HWP5 BinData OLE container\nand emitted to HWPX without round-tripping through the structured\n[`Control::Chart`] data model. Renders in 한컴 via the `<hp:switch>`\nblock with full OOXML chart inside `<hp:case>` and an OLE fallback\ninside `<hp:default>`.\n\nWave 4c passthrough: the chart XML and OLE bytes are carried as-is\nfrom the source HWP5 file. The encoder writes:\n- `Chart/chartN.xml` (NOT registered in manifest)\n- `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)\n- section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole",
+          "description": "A HWP5 chart carried as opaque OOXML + OLE blob passthrough.\n\nUsed when chart data is extracted from a HWP5 BinData OLE container\nand emitted to HWPX without round-tripping through the structured\n[`Control::Chart`] data model. Renders in 한컴 via the `<hp:switch>`\nblock with full OOXML chart inside `<hp:case>` and an OLE fallback\ninside `<hp:default>`.\n\nPassthrough: the chart XML and OLE bytes are carried as-is\nfrom the source HWP5 file. The encoder writes:\n- `Chart/chartN.xml` (NOT registered in manifest)\n- `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)\n- section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole",
           "type": "object",
           "properties": {
             "EmbeddedChart": {
@@ -2100,7 +2100,7 @@
                   "type": "string"
                 },
                 "inst_id": {
-                  "description": "Wave 12p Step 2c: instance ID for cross-ref target lookup.\nHWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가\n채워지고, HWPX encoder 가 `<hp:equation id=\"...\">` attribute\n로 emit. `None` 이면 encoder fallback 허용.",
+                  "description": "Instance ID for cross-ref target lookup.\nHWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가\n채워지고, HWPX encoder 가 `<hp:equation id=\"...\">` attribute\n로 emit. `None` 이면 encoder fallback 허용.",
                   "anyOf": [
                     {
                       "$ref": "#/$defs/ObjectId"
@@ -2830,7 +2830,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A cross-reference (상호참조) to a bookmark, footnote, endnote,\noutline heading, table/figure/equation caption.\n\nMaps to HWPX `fieldBegin type=\"CROSSREF\"` with parameters.\n\nWave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로\n변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로\n구분되어 caller 가 의미를 정확히 알 수 있음.\n\nWave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.\nHWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run\n으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display\ntext 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection\n이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.\n빈 문자열은 \"display text 없음\" 의미 (Hyperlink::text 와 동일).",
+          "description": "A cross-reference (상호참조) to a bookmark, footnote, endnote,\noutline heading, table/figure/equation caption.\n\nMaps to HWPX `fieldBegin type=\"CROSSREF\"` with parameters.\n\n`target_name: String` 가 `target: RefTarget` 로\n변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로\n구분되어 caller 가 의미를 정확히 알 수 있음.\n\n(breaking): `display_text: String` 추가.\nHWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run\n으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display\ntext 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection\n이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.\n빈 문자열은 \"display text 없음\" 의미 (Hyperlink::text 와 동일).",
           "type": "object",
           "properties": {
             "CrossRef": {
@@ -2920,7 +2920,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A memo (메모) annotation attached to text.\n\nMaps to HWPX `fieldBegin type=\"MEMO\"` + anchor body runs +\n`fieldEnd` flat inside one `<hp:run>`. The memo's body lives inside\n`fieldBegin`'s `<hp:subList>`; the *anchor* runs sit between\n`fieldBegin` and `fieldEnd` so 한컴 can pair the markers and render\nthe `[메모 시작]…[메모 끝]` UI labels instead of generic\n`[메모 시작]…[필드 끝]`.\n\nWave 12e: `author`/`date` fields removed (no wire path populated\nthem).\n\nWave 12f: `anchor_runs` added. Without it, the encoder produced an\nempty `<hp:t/>` between `fieldBegin` and `fieldEnd`, which 한컴 reads\nas an unpaired field — visible bug.",
+          "description": "A memo (메모) annotation attached to text.\n\nMaps to HWPX `fieldBegin type=\"MEMO\"` + anchor body runs +\n`fieldEnd` flat inside one `<hp:run>`. The memo's body lives inside\n`fieldBegin`'s `<hp:subList>`; the *anchor* runs sit between\n`fieldBegin` and `fieldEnd` so 한컴 can pair the markers and render\nthe `[메모 시작]…[메모 끝]` UI labels instead of generic\n`[메모 시작]…[필드 끝]`.\n\n`author`/`date` fields removed (no wire path populated\nthem).\n\n`anchor_runs` added. Without it, the encoder produced an\nempty `<hp:t/>` between `fieldBegin` and `fieldEnd`, which 한컴 reads\nas an unpaired field — visible bug.",
           "type": "object",
           "properties": {
             "Memo": {
@@ -2987,7 +2987,7 @@
           "additionalProperties": false
         },
         {
-          "description": "An unknown SUMMERY (`%smr`) `$token` carried verbatim for forward\ncompatibility (Wave 12n).\n\nWave 12n only models the five HwpForge-observed tokens (`$author`,\n`$lastsaveby`, `$createtime`, `$modifiedtime`, `$title`) as typed\n[`FieldType`] variants. Any other `%smr` Command (e.g. additional\n한컴 metadata tokens not yet measured) is preserved here instead of\nbeing silently coerced to `ClickHere`.",
+          "description": "An unknown SUMMERY (`%smr`) `$token` carried verbatim for forward\ncompatibility.\n\nHwpForge only models the five HwpForge-observed tokens (`$author`,\n`$lastsaveby`, `$createtime`, `$modifiedtime`, `$title`) as typed\n[`FieldType`] variants. Any other `%smr` Command (e.g. additional\n한컴 metadata tokens not yet measured) is preserved here instead of\nbeing silently coerced to `ClickHere`.",
           "type": "object",
           "properties": {
             "UnknownSummary": {
@@ -3014,7 +3014,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A `%dte` date/time **format-pattern** field (Wave 12n).\n\nHWP5 family `%dte` (ctrl_id `0x2564_7465`) used by 한컴\n`입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY\n(which carries semantic tokens like `$createtime`), `%dte` carries\na raw format pattern string (e.g. `\"\\:1년 2월 3일 (6);0;\"` for date,\n`\"T\\:;0;\"` for time-only). The HWP5 wire format pattern is\nsmithy-internal; the format-agnostic core retains only the derived\n`is_time_mode` helper (was based on the `T` prefix at projection time).",
+          "description": "A `%dte` date/time **format-pattern** field.\n\nHWP5 family `%dte` (ctrl_id `0x2564_7465`) used by 한컴\n`입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY\n(which carries semantic tokens like `$createtime`), `%dte` carries\na raw format pattern string (e.g. `\"\\:1년 2월 3일 (6);0;\"` for date,\n`\"T\\:;0;\"` for time-only). The HWP5 wire format pattern is\nsmithy-internal; the format-agnostic core retains only the derived\n`is_time_mode` helper (was based on the `T` prefix at projection time).",
           "type": "object",
           "properties": {
             "DateCodeField": {
@@ -3041,7 +3041,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A `%pat` path / file-name field (Wave 12n).\n\nHWP5 family `%pat` (ctrl_id `0x2570_6174`) emitted by 한컴\n`상용구 → 파일 이름 / 파일 이름과 경로`. Uses `$P` (path) and\n`$F` (file name) format codes.",
+          "description": "A `%pat` path / file-name field.\n\nHWP5 family `%pat` (ctrl_id `0x2570_6174`) emitted by 한컴\n`상용구 → 파일 이름 / 파일 이름과 경로`. Uses `$P` (path) and\n`$F` (file name) format codes.",
           "type": "object",
           "properties": {
             "PathField": {
@@ -3090,7 +3090,7 @@
           "additionalProperties": false
         },
         {
-          "description": "An `atno` **inline** page number control (Wave 12n).\n\nHWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴\n`상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct\nfrom `pgnp` (section-level page numbering control already modeled\nas `Section.page_number`). Inline `atno` renders to HWPX\n`<hp:autoNum>` inside a `<hp:run>`.\n\nThe 16-byte wire envelope carries a single 4-byte flag that\ndistinguishes current-page from total-pages; the HWP5 projection\nmaps it to [`InlinePageKind`].",
+          "description": "An `atno` **inline** page number control.\n\nHWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴\n`상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct\nfrom `pgnp` (section-level page numbering control already modeled\nas `Section.page_number`). Inline `atno` renders to HWPX\n`<hp:autoNum>` inside a `<hp:run>`.\n\nThe 16-byte wire envelope carries a single 4-byte flag that\ndistinguishes current-page from total-pages; the HWP5 projection\nmaps it to [`InlinePageKind`].",
           "type": "object",
           "properties": {
             "InlinePageNumber": {
@@ -4341,7 +4341,7 @@
       "type": "string"
     },
     "RefTarget": {
-      "description": "Cross-reference target identifier (Wave 12m Phase 2).\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
+      "description": "Cross-reference target identifier.\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
       "oneOf": [
         {
           "description": "사용자 지정 책갈피 이름 (Bookmark 전용).",
@@ -4441,7 +4441,7 @@
       ]
     },
     "PathFieldCommand": {
-      "description": "Typed variant of the HWP5 `%pat` Command string (Wave 12n).\n\nObserved forms are `$F` (file name only), `$P` (path only), and `$P$F`\n(full path). Anything else is preserved as [`PathFieldCommand::Unknown`].",
+      "description": "Typed variant of the HWP5 `%pat` Command string.\n\nObserved forms are `$F` (file name only), `$P` (path only), and `$P$F`\n(full path). Anything else is preserved as [`PathFieldCommand::Unknown`].",
       "oneOf": [
         {
           "description": "`$F` — file name only.",
@@ -4503,7 +4503,7 @@
       "type": "string"
     },
     "InlinePageKind": {
-      "description": "Typed variant of the HWP5 `atno` inline page-number `flag` byte\n(Wave 12n).\n\nObserved values: `0x00` = current page, `0x06` = total page count.\nOther values surface as [`InlinePageKind::Unknown`].",
+      "description": "Typed variant of the HWP5 `atno` inline page-number `flag` byte\n\n\nObserved values: `0x00` = current page, `0x06` = total page count.\nOther values surface as [`InlinePageKind::Unknown`].",
       "oneOf": [
         {
           "description": "Flag `0x00` — current page number.",
@@ -4700,7 +4700,7 @@
           "minimum": 0
         },
         "boundary": {
-          "description": "줄 시작이 Core 위치 `textpos` 의 영-core wire 토큰 열(표·그림·컨트롤·\n필드 경계처럼 Core 텍스트 길이가 0 인 것) 한가운데에 놓일 때, 그 열의\n몇 번째 토큰 앞인지 (S22). `None` = 그 위치의 토큰을 하나도 지나지\n않는다 — 토큰이 없거나 첫 토큰 앞(줄 대부분). 문단 내용을 바꾸면\n`layout_cache` 를 `None` 으로 — 경계는 그 내용의 토큰 열을 가리킨다.",
+          "description": "줄 시작이 Core 위치 `textpos` 의 영-core wire 토큰 열(표·그림·컨트롤·\n필드 경계처럼 Core 텍스트 길이가 0 인 것) 한가운데에 놓일 때, 그 열의\n몇 번째 토큰 앞인지. `None` = 그 위치의 토큰을 하나도 지나지\n않는다 — 토큰이 없거나 첫 토큰 앞(줄 대부분). 문단 내용을 바꾸면\n`layout_cache` 를 `None` 으로 — 경계는 그 내용의 토큰 열을 가리킨다.",
           "anyOf": [
             {
               "$ref": "#/$defs/LineBoundary"
@@ -4751,7 +4751,7 @@
       ]
     },
     "WireTokenKind": {
-      "description": "Core 텍스트 길이가 0 인 wire 토큰의 종류 (S22) — 줄 경계를 적는 데만\n쓴다. `#[non_exhaustive]`.",
+      "description": "Core 텍스트 길이가 0 인 wire 토큰의 종류 — 줄 경계를 적는 데만\n쓴다. `#[non_exhaustive]`.",
       "oneOf": [
         {
           "description": "표.",
@@ -4946,7 +4946,7 @@
           "$ref": "#/$defs/ApplyPageType"
         },
         "vert_align": {
-          "description": "컨테이너(subList) 세로 정렬 (W5-α H1 — 일반 꼬리말 실측 = BOTTOM).\n\n밴드 안에서 문단 블록을 어디에 앉히는지 결정한다 — 렌더 재생의\n필수 입력. HWPX `<hp:subList vertAlign>`.",
+          "description": "컨테이너(subList) 세로 정렬 (일반 꼬리말 실측 = BOTTOM).\n\n밴드 안에서 문단 블록을 어디에 앉히는지 결정한다 — 렌더 재생의\n필수 입력. HWPX `<hp:subList vertAlign>`.",
           "$ref": "#/$defs/VerticalAlign",
           "default": "Top"
         },
@@ -4955,7 +4955,7 @@
           "$ref": "#/$defs/HwpUnit"
         },
         "text_height": {
-          "description": "컨테이너 텍스트 높이 (HWPX `<hp:subList textHeight>`, 0 = 위임).\n\n밴드(margin.header/footer)와 다를 수 있다 — 초과 시 동작은 실측\n전이므로 렌더는 fail-closed 로 다룬다 (W5-a).",
+          "description": "컨테이너 텍스트 높이 (HWPX `<hp:subList textHeight>`, 0 = 위임).\n\n밴드(margin.header/footer)와 다를 수 있다 — 초과 시 동작은 실측\n전이므로 렌더는 fail-closed 로 다룬다.",
           "$ref": "#/$defs/HwpUnit"
         },
         "anchor_paragraph": {
@@ -5372,7 +5372,7 @@
       }
     },
     "PageStartsOn": {
-      "description": "Which page parity a section starts on.\n\nMaps to HWPX `<hp:startNum pageStartsOn=\"BOTH|EVEN|ODD\">`. 홀짝 강제\n시작은 다중 섹션 쪽번호 연속성 계산의 입력이다 (W5-α C2 — 스키마에\n있던 값을 디코더가 폐기하던 것을 승격).",
+      "description": "Which page parity a section starts on.\n\nMaps to HWPX `<hp:startNum pageStartsOn=\"BOTH|EVEN|ODD\">`. 홀짝 강제\n시작은 다중 섹션 쪽번호 연속성 계산의 입력이다 (스키마에\n있던 값을 디코더가 폐기하던 것을 승격).",
       "oneOf": [
         {
           "description": "아무 쪽성에서나 시작한다 (기본).",

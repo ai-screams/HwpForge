@@ -200,7 +200,7 @@ fn check_standalone_source(
     // 이것을 실패시키는 것: offset을 검사 / transMatrix 이동을 버리기 / 2.0 임계값.
     if error > 2.5 {
         ctx.content_lost("shape_transform",format!(
-            "G7; {kind}; source sz={}x{}, composite bounds={b:?}, max boundary error={error}; recomputed sz={:?}, transMatrix=({},{}); normalized source matrix placement mismatch",
+            "standalone placement; {kind}; source sz={}x{}, composite bounds={b:?}, max boundary error={error}; recomputed sz={:?}, transMatrix=({},{}); normalized source matrix placement mismatch",
             declared.0,declared.1,output,plan.rendering.trans_matrix.e3,plan.rendering.trans_matrix.e6));
     }
     let ps = corners.into_iter().chain(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))));
@@ -329,7 +329,7 @@ fn settle_standalone_shape(
     true
 }
 
-/// S20: a top-level shape's original box and size lock from the wire
+/// a top-level shape's original box and size lock from the wire
 /// (`<hp:orgSz>`, `<hp:sz protect>`), checked against what the writer will
 /// store ([`FrameCheck`]). Its defining points stay as read: they are
 /// coordinates in the original box. A group's direct children take their
@@ -495,7 +495,7 @@ fn text_bytes_of(control: &Control) -> usize {
     bytes
 }
 
-/// S20: a top-level picture's size lock, and its original box checked
+/// a top-level picture's size lock, and its original box checked
 /// against what the writer will store, as [`settle_shape_frame`] does for a
 /// shape (a picture has no points, no rotation or mirror Core can hold: the
 /// source is judged on its scale's size). `convert_picture` has set the
@@ -728,7 +728,7 @@ fn decode_object_placement(
 }
 
 /// `placement` with the `<hp:pos>` alignment and the two flags Core carries
-/// since S1 (`vertAlign`, `horzAlign`, `affectLSpacing`, `holdAnchorAndSO`).
+/// (`vertAlign`, `horzAlign`, `affectLSpacing`, `holdAnchorAndSO`).
 /// An alignment this codec does not know is reported
 /// ([`UnknownEnumValue`](super::DecodeWarning::UnknownEnumValue)) and read as
 /// top/left; an empty attribute is the default without a report.
@@ -825,7 +825,7 @@ pub(crate) fn decode_textbox(
         &rect.dropcap_style,
         ctx,
     );
-    // S4: 모서리 곡률. 0 = 각진 모서리(`None`), 51 이상은 Core
+    // 모서리 곡률. 0 = 각진 모서리(`None`), 51 이상은 Core
     // 범위 밖이라 보고하고 50 으로 자른다.
     // 이것을 실패시키는 것: 이 읽기를 지우기(`corner_ratio_round_trips`) /
     // 범위 밖 경고 삭제.
@@ -1304,7 +1304,7 @@ pub(crate) fn decode_shape_style_full(
                         (color, 0)
                     })
                     .collect(),
-                // S13: wire 값을 그대로 `Some` — 인코더 기본값과 같아도 접지
+                // wire 값을 그대로 `Some` — 인코더 기본값과 같아도 접지
                 // 않는다(다시 읽은 Core 가 같아야 왕복이 정확하다).
                 // 이것을 실패시키는 것: 기본값과 같으면 `None` 으로 접기
                 // (`gradient_center_and_steps_round_trip`).
@@ -2176,11 +2176,11 @@ thread_local! {
     pub(crate) static CONTAINER_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// S20: a group decoded with its original boxes is
+/// a group decoded with its original boxes is
 /// checked as one — the writer's [`group_plan`] against the source, for every
 /// node that keeps an original box and the group's own box. Preservation
 /// has not touched this tree. Over 2 HWPUNIT anywhere: decoded again without
-/// original boxes (as before S20); if that
+/// original boxes (as before original-box preservation); if that
 /// plan lands within 2 of the source, the boxes are dropped and reported
 /// (`object_original_size`). Otherwise the source draws a size its layout
 /// does not hold: `shape_drawn_extent`, and the boxes are kept (the drawn
@@ -2455,7 +2455,7 @@ struct WireChild {
     /// The wire shape has a picture fill (`<hc:imgBrush>`), so even an
     /// unsupported brush participates in the existing turning-content rule.
     picture_fill: bool,
-    /// `<hp:flip>` sets a mirror (S20: such a leaf is not axis-aligned).
+    /// `<hp:flip>` sets a mirror (such a leaf is not axis-aligned).
     flipped: bool,
 }
 
@@ -2464,7 +2464,7 @@ fn flipped(flip: Option<&crate::schema::section::HxFlip>) -> bool {
     flip.is_some_and(|f| f.horizontal != 0 || f.vertical != 0)
 }
 
-/// S20: a group leaf is axis-aligned when its whole chain is
+/// a group leaf is axis-aligned when its whole chain is
 /// `x' = a·x + c`, `y' = e·y + f` with `a, e > 0` and `<hp:flip>` mirrors
 /// nothing — the leaves that keep their original box.
 fn wire_aligned(map: Option<super::group_geometry::Affine>, flipped: bool) -> bool {
@@ -2772,7 +2772,7 @@ fn decode_group_picture(
     image.width = HwpUnit::new(fold.width()).unwrap_or(HwpUnit::ZERO);
     image.height = HwpUnit::new(fold.height()).unwrap_or(HwpUnit::ZERO);
     image.placement = group_child_placement(fold.offset().0, fold.offset().1);
-    // S20: the original box is judged against the FINAL
+    // the original box is judged against the FINAL
     // displayed size, once the chain has scaled the picture. `convert_picture`
     // judged it against a provisional size (`orgSz` itself when there is no
     // `sz` and `curSz` is 0) and folded it away. (A picture has no points,
@@ -2789,7 +2789,7 @@ fn decode_group_picture(
         .and_then(|(w, h)| {
             Some(hwpforge_foundation::Size::new(HwpUnit::new(w).ok()?, HwpUnit::new(h).ok()?))
         });
-    // The frame check judges a picture with an original box (S20).
+    // The frame check judges a picture with an original box.
     ctx.group_sources.push(image.frame.original_size.map(|_| {
         [(0.0, 0.0), (org.0, 0.0), (org.0, org.1), (0.0, org.1)]
             .into_iter()
@@ -2911,7 +2911,7 @@ fn decode_nested_container(
     }))
 }
 
-/// S20: a group's original box — its `orgSz` (or `curSz`) when
+/// a group's original box — its `orgSz` (or `curSz`) when
 /// every non-image-filled leaf is axis-aligned ([`all_aligned`]) and the box can be a
 /// frame value — and, for a top-level group, its size lock. A group that is
 /// not all aligned keeps no original box (its turned leaves are folded into
@@ -3140,7 +3140,7 @@ fn normalize_group_child(
         ),
         _ => false,
     };
-    // S20: an axis-aligned leaf keeps its points in its original
+    // an axis-aligned leaf keeps its points in its original
     // box. Non-aligned picture geometry is saved separately for the later trial.
     // 이것을 실패시키는 것: 이 갈래를 지우기(`aligned_leaves_keep_their_original_box`).
     // An aligned leaf whose `orgSz` cannot be a frame value is reported as
@@ -3278,7 +3278,7 @@ fn report_shape_text_margin(
     }
 }
 
-/// `placement` with the object's outer margin (`<hp:outMargin>`, S18). A
+/// `placement` with the object's outer margin (`<hp:outMargin>`). A
 /// margin that is 0 everywhere (or absent) leaves the placement as it is, so
 /// an inline default still collapses to `None`; any other margin is carried,
 /// on the inline default when there was no placement. A side outside the
@@ -4647,7 +4647,7 @@ mod tests {
         }
     }
 
-    // ── ObjectPlacement decode (W4 w1) ───────────────────────────────
+    // ── ObjectPlacement decode ───────────────────────────────
 
     #[test]
     fn decode_object_placement_collapses_inline_default_to_none() {
@@ -4718,7 +4718,7 @@ mod tests {
     #[test]
     fn floating_rect_placement_round_trips_decode_then_encode() {
         // decode → Core → encode: a floating rect keeps its full pos across the
-        // round-trip (the `<hp:pos>` silent-loss this slice removes).
+        // round-trip (the `<hp:pos>` silent-loss regression).
         let mut rect = default_rect(10_000, 6_000);
         rect.text_wrap = "SQUARE".to_string();
         rect.text_flow = "RIGHT_ONLY".to_string();
@@ -5210,7 +5210,7 @@ mod group_tests {
     #[test]
     fn ellipse_points_scale_with_the_box() {
         let half = [0.5, 0.0, 0.0, 0.0, 0.5, 0.0];
-        // Turned 180° about its own box (S20: a turned leaf folds by the box
+        // Turned 180° about its own box (a turned leaf folds by the box
         // rule; an axis-aligned one keeps its points — next test).
         let half_turn = [-1.0, 0.0, 2000.0, 0.0, -1.0, 1000.0];
         let (g, w) = decode(&container(
@@ -5496,7 +5496,7 @@ mod group_tests {
         const HALF_QUARTER: [f64; 6] = [0.5, 0.0, 0.0, 0.0, 0.25, 0.0];
         let three = |sca: [f64; 6]| [(sca, ID), (ID, ID), (ID, ID)];
         // Turned 90° in its own box (x' = 1000 − y, y' = x): a turned point
-        // shape takes the map onto its points (S20 keeps the points of an
+        // shape takes the map onto its points (the projection keeps the points of an
         // axis-aligned one), so the box is the points' extent (200..800).
         let turned = [(ID, ID), (ID, ID), (ID, [0.0, -1.0, 1000.0, 1.0, 0.0, 0.0])];
         let poly =
@@ -5583,7 +5583,7 @@ mod group_tests {
     /// defaults Hancom writes (`style="NONE"`, `type="NONE"`) are not.
     ///
     /// 이것을 실패시키는 것: 외곽선 검사·도형 그림자 검사·글자 그림자 검사를
-    /// 지우는 것(각각), `NONE` 판정을 뒤집는 것(기본값에도 경고 — F14 테스트가
+    /// 지우는 것(각각), `NONE` 판정을 뒤집는 것(기본값에도 경고 — 테스트가
     /// 잡는다).
     #[test]
     fn text_art_outline_and_shadow_are_reported() {
@@ -5754,7 +5754,7 @@ mod group_tests {
         // A text box that is not in a group: no group warning, the switch is
         // reported as `switch`. (This one is written without `<hp:sz>`, so its
         // `orgSz` 1000 × 400 cannot be drawn at the 0 × 0 it decodes to —
-        // reported as `shape_drawn_extent`, S20.)
+        // reported as `shape_drawn_extent`.)
         let free = text_box(SWITCH, 0);
         let (_, w) = decode(&free);
         assert_eq!(lost_kinds(&w), ["switch", "shape_drawn_extent"], "{w:?}");
@@ -5864,7 +5864,7 @@ mod group_tests {
         let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID)]));
         let own = ri(ID, &[(ID, ID)]);
         // (`orgSz` = `sz`, as Hancom writes a group with an identity own
-        // matrix — otherwise the group's own box is judged too, S20.)
+        // matrix — otherwise the group's own box is judged too.)
         let (g, w) = decode(&container_with((800, 1000), (800, 1000), &own, &leaf));
         let (width, height, _) = size_and_offset(&g.unwrap());
         assert_eq!((width, height), (800, 1000), "displayed size is `sz`");
@@ -5927,7 +5927,7 @@ mod group_tests {
     /// 정하는 것 (재디코드 때마다 상자가 8씩 줄어든다).
     #[test]
     fn nested_group_box_is_stable_across_round_trips() {
-        // Turned 180° in its own box (S20: a turned point shape takes the
+        // Turned 180° in its own box (a turned point shape takes the
         // map onto its points; an axis-aligned one keeps its original box).
         let inset = polygon(
             (1000, 600),
@@ -6311,7 +6311,7 @@ mod group_tests {
         }
     }
 
-    // ── pictures in a group (P5) ─────────────────────────────────────
+    // ── pictures in a group ─────────────────────────────────────
 
     /// A group picture as Hancom writes one: no `<hp:sz>`/`<hp:pos>`, its
     /// whole image clipped (`imgClip` = `imgDim`).
@@ -6536,7 +6536,7 @@ mod group_tests {
 
     /// The crop of a picture with `<hp:imgDim>`: the clip read by name;
     /// the whole extent is no crop, anything else — one pixel off included —
-    /// is carried exactly with its extent. Hancom's F3c (cropped before
+    /// is carried exactly with its extent. Hancom's cropped picture (cropped before
     /// grouping) keeps its crop (0, 0, 7474, 15000) of 22500 x 15000 with
     /// no loss.
     ///
@@ -6770,7 +6770,7 @@ mod group_tests {
         assert_eq!(lost(bare_pic((min, max, min, max), None)), ["picture_crop"]);
     }
 
-    // ── S20: original boxes in groups ─────────
+    // ── original boxes in groups ─────────
 
     fn s20_size(w: i32, h: i32) -> hwpforge_foundation::Size {
         let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
@@ -7477,7 +7477,7 @@ mod group_tests {
     }
 }
 
-/// S20: an object's original box and size lock through HWPX decode and
+/// an object's original box and size lock through HWPX decode and
 /// encode.
 #[cfg(test)]
 mod frame_tests {

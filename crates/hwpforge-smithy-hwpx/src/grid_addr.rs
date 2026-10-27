@@ -1,4 +1,4 @@
-//! Logical grid addresses on JSON exports (E3 Wave 2).
+//! Logical grid addresses on JSON exports.
 //!
 //! Export side ([`annotate_document_addresses`] / [`annotate_section_addresses`]):
 //! walks the exported `serde_json::Value` in lockstep with the typed document

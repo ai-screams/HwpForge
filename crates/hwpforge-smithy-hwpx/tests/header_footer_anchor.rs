@@ -46,7 +46,7 @@ fn unanchored_header_is_written_into_the_first_paragraph() {
         "paragraph 0 headers follow the column control, as before"
     );
     assert_eq!(strip_ids(&none), strip_ids(&zero));
-    // The bytes the encoder wrote before anchors existed (P13, `ccffa8bc`,
+    // The bytes the encoder wrote before anchors existed (`ccffa8bc`,
     // the same document): an unanchored header changes nothing.
     // 이것을 실패시키는 것: 두 경로를 함께 바꾸는 직렬화 회귀(예: 앵커 없는
     // 머리말에도 자리표시 run).

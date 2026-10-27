@@ -469,7 +469,7 @@ mod image_tests {
     #[test]
     fn corrupt_body_fails_at_preflight_not_finish() {
         // valid PNG 헤더 + 손상 본문: krilla 생성자(metadata)는 통과하고
-        // deferred decode 에서 죽는다 — preflight 가 잡아야 한다 (H1).
+        // deferred decode 에서 죽는다 — preflight 가 잡아야 한다.
         let mut corrupt = TINY_PNG.to_vec();
         for b in &mut corrupt[41..53] {
             *b = 0xAA; // IDAT 본문 파괴 (헤더/IHDR 유지)
@@ -529,7 +529,7 @@ mod image_tests {
     }
 
     /// 미지원 포맷 정책: WMF/EMF 도 BMP 와 동열 — strict = typed
-    /// 에러, degraded = 경고+스킵 (변환 지원은 후속 슬라이스).
+    /// 에러, degraded = 경고+스킵 (변환 지원은 후속 작업).
     #[test]
     fn wmf_and_emf_follow_failure_mode_like_bmp() {
         let wmf: &[u8] = &[0xD7, 0xCD, 0xC6, 0x9A, 0, 0, 0, 0];
@@ -602,7 +602,7 @@ mod image_tests {
         }
     }
 
-    // ── W2b c3: krilla `q → composed cm → Do → Q` 구조 잠금 ─────────
+    // ── krilla `q → composed cm → Do → Q` 구조 잠금 ─────────
     //
     // 이 테스트는 `tests/support/mod.rs` 의 범용 bbox 추출기가 의존하는
     // 구조 가정(단일 합성 cm, 별도 Y-flip cm 없음)을 `write_pdf` 산출물
@@ -706,7 +706,7 @@ mod image_tests {
         (a - b).abs() <= 0.01
     }
 
-    // ── W4 w2: PaintItem::Clipped — clip 그룹 방출·중첩·경계 잠금 ─────
+    // ── PaintItem::Clipped — clip 그룹 방출·중첩·경계 잠금 ─────
     //
     // 클립 검증은 CTM(이미지)과 달리 콘텐츠 스트림의 **clip 오퍼레이터**
     // (`W n`)와 클립 경로 좌표를 직접 읽는다. "경계 밖이 잘린다"는

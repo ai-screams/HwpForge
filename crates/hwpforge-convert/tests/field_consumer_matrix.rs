@@ -163,7 +163,7 @@ fn rows() -> Vec<(&'static str, String)> {
 
 #[test]
 fn decoder_representations_by_consumer_matrix() {
-    // 이것을 실패시키는 것: T5 보호 필드 ops 코드를 EncodeFailed로 변경.
+    // 이것을 실패시키는 것: 보호 필드 ops 코드를 EncodeFailed로 변경.
     use ops::exchange::{from_json, to_json, FromJsonOptions, ToJsonOptions};
     use ops::markdown::{to_md, MdExportOptions, MdMode};
     let mut result_rows = Vec::new();

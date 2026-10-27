@@ -96,7 +96,7 @@ pub fn hwp5_to_hwpx(
     hwp5_to_hwpx_with_options(input, output, ConvertOptions::default())
 }
 
-/// [`hwp5_to_hwpx`] 에 동작 옵션([`ConvertOptions`])을 더한 변형 (W4 —
+/// [`hwp5_to_hwpx`] 에 동작 옵션([`ConvertOptions`])을 더한 변형 (
 /// CLI `convert-hwp5` 가 사용, `--no-layout-cache` 면 carry 끔).
 ///
 /// # Errors
@@ -152,7 +152,7 @@ pub struct ConvertOptions {
     /// 정확히 놓을 수 없는 문단만 캐시를 버린다(경고). `false` 면 캐시 없이
     /// 쓰고, 줄 나눔은 여는 쪽이 다시 계산한다.
     ///
-    /// W1b (이미지 에픽): HWP5 승격 경로가 wire→Core 좌표 ledger 로
+    /// (이미지 기능): HWP5 승격 경로가 wire→Core 좌표 ledger 로
     /// textpos 를 가시 좌표로 정규화하고, 인코더가 방출-통합 역변환으로
     /// wire 좌표로 되돌린다. 정규화/역변환이 불가능한 문단(차트 재배치·
     /// 미지 컨트롤·축약점 모호 등)은 캐시를 **드롭**하고
@@ -234,7 +234,7 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
             .map_err(ConvertError::Encode)?;
     // Warning order: decode-phase warnings (intermediate + projection +
     // border-fill supplement) first, then HWPX style-mapping warnings. This
-    // differs from the pre-E5 monolith (which interleaved style warnings
+    // differs from the previous monolith (which interleaved style warnings
     // before projection) — an unavoidable, intentional consequence of moving
     // style mapping above the decoder. The HWPX *output bytes* are unaffected
     // (warnings never feed encoding); only the diagnostic Vec order changed.
@@ -244,7 +244,7 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
     let validated = decoded.document.validate().map_err(ConvertError::Validate)?;
     let encode_options =
         EncodeOptions::default().with_emit_layout_cache(options.carry_layout_cache);
-    // W1b: 진단 보존 경로 — 캐시 드롭이 있어도 변환은 성공하되 경고를
+    // 진단 보존 경로 — 캐시 드롭이 있어도 변환은 성공하되 경고를
     // `ConvertWarning::HwpxEncode` 로 전파한다 (legacy strict 진입점의
     // LayoutCacheDropped 에러와 달리 carry 파이프라인은 부분 carry 허용).
     let outcome = HwpxEncoder::encode_with_diagnostics(
@@ -535,7 +535,7 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
             }
         }
     }
-    // Wave 12q task #122: HWP5 wire 의 outline level 은 3 bits (cap 6) 만
+    // task #122: HWP5 wire 의 outline level 은 3 bits (cap 6) 만
     // 표현 가능하지만 한컴 native 는 paragraph Style ("개요 N") 의 N-1 을
     // 진정한 outline level 로 사용합니다. ParaShape 변환이 끝난 후 Style
     // 테이블의 "개요 N" / "Outline N" 패턴을 찾아 그 Style 의 para_shape_id
@@ -634,7 +634,7 @@ fn empty_placeholder_tab_def(id: u32) -> hwpforge_core::TabDef {
     hwpforge_core::TabDef { id, auto_tab_left: false, auto_tab_right: false, stops: Vec::new() }
 }
 
-/// Wave 12q task #122: apply outline-level overrides from Style records.
+/// task #122: apply outline-level overrides from Style records.
 ///
 /// HWP5 `ParaShape.property1` bit 25-27 only carries 3 bits (cap 6), but
 /// Hancom HWP5 의 native outline 정의는 Style record 의 한국어 이름 "개요 N"

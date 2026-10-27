@@ -210,7 +210,7 @@ pub enum Hwp5FillPatternKind {
 
 impl Hwp5FillPatternKind {
     /// The Core hatch for this kind; `None` for no hatch and an unknown kind.
-    /// Kind 2 is Hancom's `SLASH` (x6 F1) — [`PatternType`]'s display swaps
+    /// Kind 2 is Hancom's `SLASH` — [`PatternType`]'s display swaps
     /// the two slashes the same way.
     ///
     /// [`PatternType`]: hwpforge_foundation::PatternType

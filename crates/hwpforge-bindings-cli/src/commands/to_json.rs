@@ -19,9 +19,9 @@ pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
 /// (`TABLE_GRID_UNADDRESSABLE`, same `format!` as the old `finish_annotation`)
 /// and `SectionWorkflow` (`warning.code()`/`warning.message()`, same as the
 /// old inline `outcome.warning` print). Decoder warnings (`OpsWarning::Decode`,
-/// for example `LAYOUT_CACHE_DROPPED`) were not surfaced pre-W5 — the
+/// for example `LAYOUT_CACHE_DROPPED`) were not surfaced previously — the
 /// pre-migration CLI never captured them either — and are now printed
-/// through this same shape (W5 follow-up, additive).
+/// through this same shape (follow-up, additive).
 fn print_warning(warning: &OpsWarning, json_mode: bool) {
     let info = warning.info();
     if json_mode {

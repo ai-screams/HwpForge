@@ -1,4 +1,4 @@
-//! Class-B (cell-position) stamping primitives — Wave 2, P0-ⓒ.
+//! Class-B (cell-position) stamping primitives.
 //!
 //! Two definitions everything downstream (detect/plan/apply) builds on:
 //!

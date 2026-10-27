@@ -161,7 +161,7 @@ pub(super) fn settle(
             i64::from(layout.0) + i64::from(margin[0]) + i64::from(margin[1]),
             i64::from(layout.1) + i64::from(margin[2]) + i64::from(margin[3]),
         );
-        lost(format!("G7; {kind} id={}; source sz={}x{}, composite bounds={bounds:?}, max boundary error={error}; recomputed sz={output:?}, transMatrix=({},{}); normalized source matrix placement mismatch",render.source_id,geometry.width,geometry.height,translation.0,translation.1));
+        lost(format!("standalone placement; {kind} id={}; source sz={}x{}, composite bounds={bounds:?}, max boundary error={error}; recomputed sz={output:?}, transMatrix=({},{}); normalized source matrix placement mismatch",render.source_id,geometry.width,geometry.height,translation.0,translation.1));
     }
 }
 
@@ -290,7 +290,7 @@ mod tests {
         assert!(message.contains("discarded rotation/flip metadata"));
     }
 
-    /// 이것을 실패시키는 것: HWP5 G7 판정/진단에서 안쪽 여백을 빼거나 두 번 가산.
+    /// 이것을 실패시키는 것: HWP5 판정/진단에서 안쪽 여백을 빼거나 두 번 가산.
     #[test]
     fn picture_g7_uses_content_bounds_but_reports_declared_and_output_sizes() {
         use crate::decoder::section::Hwp5ImageControl;
@@ -340,7 +340,8 @@ mod tests {
             } else {
                 assert_eq!(warnings.len(), 1);
                 let message = format!("{:?}", warnings[0]);
-                assert!(message.contains("G7; picture id=19; source sz=70x120"));
+                // 이것을 실패시키는 것: 경고 접두를 정리 전 작업 번호로 되돌리기.
+                assert!(message.contains("standalone placement; picture id=19; source sz=70x120"));
                 assert!(message.contains("recomputed sz=(70, 120)"));
                 assert!(message.contains("transMatrix=(-25,25)"), "{message}");
             }

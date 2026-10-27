@@ -630,7 +630,7 @@ pub struct PartialParaShape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indent: Option<Indent>,
 
-    // Advanced paragraph controls (NEW in Phase 5.3)
+    // Advanced paragraph controls
     /// Page/column break before paragraph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub break_type: Option<BreakType>,
@@ -953,7 +953,7 @@ pub struct ParaShape {
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub indent_first_line: HwpUnit,
 
-    // Advanced paragraph controls (NEW in Phase 5.3)
+    // Advanced paragraph controls
     /// Page/column break type.
     pub break_type: BreakType,
     /// Keep paragraph with next.

@@ -69,7 +69,7 @@ fn doc_of(paragraphs: Vec<Paragraph>) -> Document<Validated> {
 }
 
 /// A picture alone in its paragraph and a table after text — the two
-/// placements F17 does not have — write their caption numbers in both
+/// placements the measured fixture does not have — write their caption numbers in both
 /// readable views; a picture caption's number alone makes lossless refuse,
 /// and the same picture without a caption does not.
 ///

@@ -189,7 +189,7 @@ fn heading_bookmark_first_run_must_not_leak_markers() {
     let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
     let xml = section_xml(&bytes, 0);
     assert!(!xml.contains("__HWP"), "Bookmark 마커 유출: {xml}");
-    // 마커 부재만으로는 치환 run 이 통째 사라져도 통과한다 (6차 Low) —
+    // 마커 부재만으로는 치환 run 이 통째 사라져도 통과한다 —
     // 실제 bookmark 필드 전개까지 확인.
     assert!(
         xml.contains("bookmark") || xml.contains("BOOKMARK"),
@@ -231,7 +231,7 @@ fn short_heading_text_keeps_title_mark() {
         let xml = section_xml(&bytes, 0);
         assert!(
             xml.contains("<hp:titleMark"),
-            "정상 heading `{text}` 의 titleMark 가 오삭제됨 (6차 Medium): {xml}"
+            "정상 heading `{text}` 의 titleMark 가 오삭제됨: {xml}"
         );
         assert!(!xml.contains("__HWP"), "마커 유출: {xml}");
     }

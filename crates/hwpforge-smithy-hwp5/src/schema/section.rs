@@ -29,9 +29,9 @@ pub(crate) struct Hwp5ParaHeader {
     /// Style ID (index into the DocInfo `Style` table).
     pub style_id: u8,
     /// 나누기 종류 (`[11]`, hwp-rs `break_options` 확증): bit0 구역 /
-    /// bit1 다단 / **bit2 쪽** / bit3 단. F2 실측 (2026-08-12): 한컴은
+    /// bit1 다단 / **bit2 쪽** / bit3 단. 실측 (2026-08-12): 한컴은
     /// 쪽나눔 문단의 lineseg v 를 리셋하지 않아 (전부 600) 이 비트가
-    /// 쪽분할의 유일한 신호다 — W3 에서 carry 시작.
+    /// 쪽분할의 유일한 신호다 — carry 시작.
     pub divide_sort: u8,
     /// Number of line segment entries in the companion `ParaLineSeg` record.
     pub line_seg_count: u16,
@@ -40,7 +40,7 @@ pub(crate) struct Hwp5ParaHeader {
     /// Paragraph instance ID — 한컴 wire 의 unique per-paragraph
     /// identifier carried in HWP5 `ParaHeader[18..22]` (u32 LE). HWPX
     /// cross-ref Command 의 `?#<id>` target lookup (Outline / 다른
-    /// paragraph 대상 참조) 이 이 값을 매칭. Wave 12p Step 1: 이전엔
+    /// paragraph 대상 참조) 이 이 값을 매칭. 이전엔
     /// `parse()` 가 skip 했던 필드를 carry 시작.
     pub instance_id: u32,
 }
@@ -91,7 +91,7 @@ impl Hwp5ParaHeader {
         // [14..16] range_tag_count — skip
         cur.set_position(16);
         let line_seg_count = cur.read_u16::<LittleEndian>()?;
-        // [18..22] instance_id (u32 LE) — Wave 12p Step 1: HWPX cross-ref
+        // [18..22] instance_id (u32 LE) — HWPX cross-ref
         // target ID for outline-style references. ParaHeader MIN_SIZE
         // already guarantees >= 22 bytes so the read is bounds-safe.
         let instance_id = cur.read_u32::<LittleEndian>()?;
@@ -109,7 +109,7 @@ impl Hwp5ParaHeader {
 }
 
 // ---------------------------------------------------------------------------
-// IndexMark inline-marker discriminator (Wave 12k)
+// IndexMark inline-marker discriminator
 // ---------------------------------------------------------------------------
 
 use crate::ctrl_ids::{
@@ -119,7 +119,7 @@ use crate::ctrl_ids::{
 
 /// Reads the LE-stored ctrl_id from the first four bytes of an
 /// inline-marker's `extra` block and returns it as the BE-ascii u32
-/// HWP5 uses for CtrlHeader matching. Wave 12k's `0x16` arm calls
+/// HWP5 uses for CtrlHeader matching. The `0x16` arm calls
 /// this to decide whether to promote a marker to `TextSegment::
 /// ControlRef`.
 fn ctrl_id_from_inline_extra_bytes(extra: &[u8; 14]) -> u32 {
@@ -150,8 +150,8 @@ pub(crate) enum TextSegment {
     Tab {
         /// Fourteen bytes of inline tab metadata. All-zero for the
         /// "default" tab — non-zero values are silently lost on emit
-        /// until the Core inline-tab carry slice (Phase 2 in the issue
-        /// doc) lands.
+        /// until the Core inline-tab model carries these attributes.
+        ///
         extra: [u8; 14],
     },
     /// Soft line break (U+000A).
@@ -200,7 +200,7 @@ pub(crate) enum TextSegment {
 
 /// segment 를 방출하지 않고 무음 소비된 wire 구간 (문단 시작 기준 u16 단위).
 ///
-/// W1b ledger 의 유일한 추가 진실원 — segment 가 있는 소비는 종류에서
+/// ledger 의 유일한 추가 진실원 — segment 가 있는 소비는 종류에서
 /// wire 길이가 유도되지만 (Text=UTF-16 len · Tab/컨트롤=8 · 단일=1),
 /// 무음 소비 (`0x00`·`0x01`·`0x05~0x08`·`0x13/0x14`·비승격
 /// `0x11/0x12/0x15/0x16`·`0x0E~0x10`·`0x1E`) 는 여기 기록하지 않으면
@@ -212,7 +212,7 @@ pub(crate) struct SilentWire {
     /// wire 소비 유닛 수 (확장/인라인 컨트롤=8, 단일 제어문자=1).
     pub len: u32,
     /// 8 유닛 컨트롤의 ctrl id (`extra[0..4]`), 단일 제어문자는 0 — 줄 경계의
-    /// 토큰 종류(S22, 예: 승격하지 않는 쪽 번호 위치 `pgnp`).
+    /// 토큰 종류(예: 승격하지 않는 쪽 번호 위치 `pgnp`).
     pub ctrl_id: u32,
 }
 
@@ -225,7 +225,7 @@ pub(crate) struct SilentWire {
 pub(crate) struct Hwp5ParaText {
     /// Decoded text segments in paragraph order.
     pub segments: Vec<TextSegment>,
-    /// segment 없이 무음 소비된 wire 구간들 (start 오름차순 — W1b ledger).
+    /// segment 없이 무음 소비된 wire 구간들 (start 오름차순 — ledger).
     pub silent_wires: Vec<SilentWire>,
 }
 
@@ -305,7 +305,7 @@ impl Hwp5ParaText {
             match cp {
                 // Reserved single-wchar control.
                 //
-                // W1b: 무음 1유닛 소비 — 텍스트 버퍼를 쪼개 flush 해야
+                // 무음 1유닛 소비 — 텍스트 버퍼를 쪼개 flush 해야
                 // ledger 의 wire 구간이 연속 텍스트와 섞이지 않는다
                 // (segments_to_string 결과는 동일).
                 0x00 => {
@@ -365,7 +365,7 @@ impl Hwp5ParaText {
                     let extra = read_extra!(i - 1);
                     segments.push(TextSegment::ControlRef { extra });
                 }
-                // 0x16: IndexMark (찾아보기) inline marker (Wave 12k).
+                // 0x16: IndexMark (찾아보기) inline marker.
                 // `extra[0..4]` carries the LE-stored ctrl_id `idxm`.
                 // `idxm` and named point bookmark `bokm` markers are promoted to a
                 // `ControlRef`; other 0x16 owners (unknown extended
@@ -389,7 +389,7 @@ impl Hwp5ParaText {
                         });
                     }
                 }
-                // 0x12: extended control — Wave 12n discovered that
+                // 0x12: extended control — native fixtures show that
                 // `atno` inline page-number markers ride this control
                 // code (extra[0..4] = LE-stored `atno`). Promote only
                 // `atno`-tagged 0x12 to a `ControlRef`; other 0x12 owners
@@ -465,7 +465,7 @@ impl Hwp5ParaText {
                 // 0x0E-0x10: extended controls (bookmarks, change tracking,
                 // etc. — 0x11/0x12/0x13/0x14/0x15 는 위의 전용 arm). All
                 // consume 7 extra u16 values. Still silently consumed until
-                // a future slice promotes them to a typed variant.
+                // a typed projection can promote them to a typed variant.
                 0x0E..=0x10 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
@@ -681,7 +681,7 @@ pub(crate) struct Hwp5ShapeComponentGeometry {
     /// Object height in HWPUNIT.
     pub height: u32,
     /// Outer margin (left, right, top, bottom) from bytes 28–36 of the
-    /// object's `CtrlHeader` (S18); zeros when the header is shorter or the
+    /// object's `CtrlHeader`; zeros when the header is shorter or the
     /// geometry comes from elsewhere (a group child's component).
     pub outer_margin: [i16; 4],
 }
@@ -733,7 +733,7 @@ impl Hwp5ShapeComponentGeometry {
     ///
     /// Derived by correlating a Hancom-saved group document's child bytes with
     /// the 한컴-emitted `<hp:offset>` / `<hp:orgSz>` in the `.hwpx` pair
-    /// (Wave A group carry).
+    /// (group carry).
     pub(crate) fn parse_from_shape_component(data: &[u8]) -> Hwp5Result<Self> {
         if data.len() < Self::MIN_SHAPE_COMPONENT_SIZE {
             return Err(Hwp5Error::RecordParse {
@@ -1696,7 +1696,7 @@ pub(crate) struct Hwp5MemoCommand {
 }
 
 // ---------------------------------------------------------------------------
-// UTF-16 BSTR helpers (Wave 12i/12k shared — task #95)
+// UTF-16 BSTR helpers (shared — task #95)
 // ---------------------------------------------------------------------------
 
 /// Decodes a "split-leader" UTF-16 string: the first code unit lives in
@@ -1708,17 +1708,17 @@ pub(crate) struct Hwp5MemoCommand {
 /// the tail bytes — callers chain that into the next field's offset.
 ///
 /// `None` on:
-/// - `total_units == 0` (caller-validated invariant; both Wave 12i/12k
+/// - `total_units == 0` (caller-validated invariant; both
 ///   parsers reject zero up-front)
 /// - `total_units > max_units` (defence-in-depth allocation cap)
 /// - tail truncation
 /// - UTF-16 validation failure
 ///
-/// Wire users (Wave 12i/12k):
+/// Wire users:
 /// - `Hwp5DutmalControl::parse` — `main_text`
 /// - `Hwp5IndexMarkControl::parse` — `primary`
 ///
-/// **Not used by Compose (Wave 12j)** — `Hwp5ComposeControl` has no
+/// **Not used by Compose** — `Hwp5ComposeControl` has no
 /// length prefix (text region size is inferred from `body_len -
 /// FIXED_TRAILER`), so its packed-first-char path stays inline.
 fn parse_split_leader_utf16(
@@ -1756,7 +1756,7 @@ fn parse_split_leader_utf16(
 /// `None` on length-prefix truncation, allocation cap overrun, payload
 /// truncation, or UTF-16 validation failure.
 ///
-/// Wire users (Wave 12i/12k):
+/// Wire users:
 /// - `Hwp5DutmalControl::parse` — `sub_text` (empty when wire `sub_len == 0`)
 /// - `Hwp5IndexMarkControl::parse` — `secondary` (wrapper maps empty
 ///   to `None` per Hancom's "no secondary" semantic)
@@ -2002,7 +2002,7 @@ impl Hwp5ComposeControl {
         }
 
         // Legacy two-character layouts, plus a length-checked longer
-        // unpacked layout (f2: 4 = decoration glyph + e/f/g).
+        // unpacked layout (4 = decoration glyph + e/f/g).
         let packed_first_char: Option<u16> = match props_low {
             0x0003 => None,
             0x0002 => Some(props_high),
@@ -2059,7 +2059,7 @@ impl Hwp5ComposeControl {
 /// CtrlHeader (`0x6964_786D` BE-ascii).
 ///
 /// Wire layout observed across 10 한컴-authored entries (2 native +
-/// 8 from an HWPX → HWP5 round-trip). The layout mirrors Wave 12i's
+/// 8 from an HWPX → HWP5 round-trip). The layout mirrors
 /// `Hwp5DutmalControl` — the first `primary` char is packed into
 /// the `properties` word, then the rest of the body follows.
 ///
@@ -2081,7 +2081,7 @@ impl Hwp5ComposeControl {
 /// returning `Option<String>` and treating `0` as `None`.
 ///
 /// The trailing 4 bytes are deliberately discarded — HWPX has no
-/// corresponding `<hp:indexmark>` field and Wave 12k is HWP5 →
+/// corresponding `<hp:indexmark>` field and the conversion is HWP5 →
 /// HWPX carry only. Their presence is still required (a truncated
 /// trailer means we no longer know the record boundary).
 ///
@@ -2152,7 +2152,7 @@ impl Hwp5IndexMarkControl {
 }
 
 // ---------------------------------------------------------------------------
-// Hwp5ClickHereControl (Wave 12l)
+// Hwp5ClickHereControl
 // ---------------------------------------------------------------------------
 
 /// HWP5 representation of the `%clk` (CLICK_HERE / 누름틀) press-field.
@@ -2201,7 +2201,7 @@ pub(crate) struct Hwp5ClickHereControl {
 
 /// Defence-in-depth allocation cap for the `%clk` Command UTF-16
 /// payload. The largest observed
-/// command across the five Wave 12l fixtures is 107 UTF-16 units; 32 K
+/// command across the five fixtures is 107 UTF-16 units; 32 K
 /// is roughly two orders of magnitude over the realistic ceiling
 /// while keeping a single hostile record under 64 KB. The cap is
 /// applied **before** any `Vec::with_capacity`, so the decoder cannot
@@ -2450,12 +2450,12 @@ fn parse_clickhere_command(units: &[u16]) -> Option<(Option<String>, Option<Stri
 }
 
 // ---------------------------------------------------------------------------
-// Hwp5SummaryControl (Wave 12n)
+// Hwp5SummaryControl
 // ---------------------------------------------------------------------------
 
 /// Defence-in-depth allocation cap for the `%smr` Command UTF-16 payload.
 /// The longest observed SUMMERY token across
-/// the Wave 12n native fixtures is 13 UTF-16 units (`$modifiedtime`). A
+/// the native fixtures is 13 UTF-16 units (`$modifiedtime`). A
 /// 1024-unit cap is roughly two orders of magnitude over the realistic
 /// ceiling while keeping a single hostile record well under 4 KB.
 const MAX_SUMMERY_COMMAND_UNITS: usize = 1024;
@@ -2495,13 +2495,13 @@ pub(crate) struct Hwp5SummaryControl {
 }
 
 /// Defence-in-depth allocation cap for the `%dte` Command UTF-16 payload
-/// (Wave 12n). The longest observed `%dte` Command across the Wave 12n
+/// The longest observed `%dte` Command across the
 /// native fixtures is 17 code units (`"\:1년 2월 3일 (6);0;"`). A 1024-unit
 /// cap matches `MAX_SUMMERY_COMMAND_UNITS` (same family of CtrlHeader).
 const MAX_DATECODE_COMMAND_UNITS: usize = 1024;
 
 /// HWP5 representation of a `%dte` date/time format-code field
-/// (Wave 12n).
+///
 ///
 /// Wire envelope is identical to [`Hwp5SummaryControl`] / [`Hwp5ClickHereControl`]:
 ///
@@ -2526,7 +2526,7 @@ pub(crate) struct Hwp5DateCodeControl {
     pub raw_command: String,
     /// 8-byte trailer carried verbatim for round-trip fidelity. Parsed from
     /// the wire and asserted by the `datecode_parse_*_preserves_raw` tests;
-    /// no longer consumed by projection (E6 slice C dropped it from the IR).
+    /// no longer consumed by projection (the IR omits it).
     #[allow(dead_code)]
     pub raw_trailer: [u8; 8],
 }
@@ -2562,12 +2562,12 @@ impl Hwp5DateCodeControl {
 }
 
 /// Defence-in-depth allocation cap for the `%pat` Command UTF-16
-/// payload (Wave 12n). Observed Command strings are `$P`, `$F`, `$P$F` —
+/// payload. Observed Command strings are `$P`, `$F`, `$P$F` —
 /// well under the cap. 256 units leaves ample headroom for future path
 /// format codes without inviting allocator abuse.
 const MAX_PATHFIELD_COMMAND_UNITS: usize = 256;
 
-/// HWP5 representation of a `%pat` path / file-name field (Wave 12n).
+/// HWP5 representation of a `%pat` path / file-name field.
 ///
 /// Wire envelope is identical to [`Hwp5SummaryControl`] / [`Hwp5DateCodeControl`]:
 /// the 1-byte flag + u16 LE command count + UTF-16LE Command + 8-byte
@@ -2612,7 +2612,7 @@ impl Hwp5PathFieldControl {
 }
 
 /// HWP5 representation of an `atno` inline page-number control
-/// (Wave 12n).
+///
 ///
 /// Unlike the SUMMERY-family controls, `atno` is a fixed 16-byte record
 /// with no Command string and no 8-byte trailer. The single 4-byte flag
@@ -2639,7 +2639,7 @@ impl Hwp5InlinePageNumberControl {
     /// Decodes an `atno` CtrlHeader payload. Returns `None` if the
     /// envelope is truncated.
     ///
-    /// Wire layout (from Wave 12n native fixture analysis):
+    /// Wire layout (native fixture analysis):
     ///
     /// | offset | bytes | meaning |
     /// |---|---|---|
@@ -2745,7 +2745,7 @@ impl Hwp5SummaryControl {
         }
         // Skip the 8-byte CtrlHeader prefix (ctrl_id + properties).
         let body = &data[8..];
-        // body[0] is the 0x08 flag (validated softly — Wave 12l pattern).
+        // body[0] is the 0x08 flag (validated softly).
         let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
         if command_units > MAX_SUMMERY_COMMAND_UNITS {
             return None;
@@ -2771,28 +2771,28 @@ impl Hwp5SummaryControl {
             body[command_end + 3],
         ]);
         // body[command_end+4..command_end+8] is the 4-byte zero pad —
-        // intentionally not validated (Wave 12l convention).
+        // intentionally not validated (convention).
 
         Some(Self { ctrl_id, command_token, field_unique_id })
     }
 }
 
 // ---------------------------------------------------------------------------
-// Hwp5CrossRefControl (Wave 12m Phase 2)
+// Hwp5CrossRefControl
 // ---------------------------------------------------------------------------
 
 /// Defence-in-depth allocation cap for the `%xrf` cross-reference Command
-/// UTF-16 payload (Wave 12m). Observed Command strings range from 17 to 21
+/// UTF-16 payload. Observed Command strings range from 17 to 21
 /// units (`?<target>;N1;N2;N3;N4;`); 1024 leaves ample headroom for
 /// pathological inputs without inviting allocator abuse.
 ///
 /// Cap is applied **immediately after reading the length-prefix**, before
 /// any allocation occurs.
-#[allow(dead_code)] // Step 4 (decoder/projection wire-up) will reference this.
+#[allow(dead_code)] // (decoder/projection wire-up) will reference this.
 const MAX_CROSSREF_COMMAND_UNITS: usize = 1024;
 
-/// HWP5 representation of a `%xrf` cross-reference control (Wave 12m
-/// Phase 2).
+/// HWP5 representation of a `%xrf` cross-reference control.
+///
 ///
 /// Wire envelope (verified against 12 Hancom-saved cross-reference documents):
 ///
@@ -2810,7 +2810,7 @@ const MAX_CROSSREF_COMMAND_UNITS: usize = 1024;
 ///   Endnote=4, Outline=5, Bookmark=6)
 /// - `N2` = ContentType (RefType-relative; Page=0, Number=1,
 ///   Contents=2, UpDownPos=3 — Bookmark N2=2 "책갈피 이름" 도 Contents,
-///   E6 슬라이스 B 에서 BookmarkName variant 흡수)
+///   BookmarkName variant 흡수)
 /// - `N3` = as_hyperlink (0 / 1)
 /// - `N4` = currently unidentified (all observed = 0)
 ///
@@ -2818,7 +2818,7 @@ const MAX_CROSSREF_COMMAND_UNITS: usize = 1024;
 /// (RefType / RefContentType enums, RefTarget normalization) happens at
 /// the projection boundary in `smithy-hwp5/src/projection.rs`.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // Step 4 (decoder + projection) will construct + read these.
+#[allow(dead_code)] // (decoder + projection) will construct + read these.
 pub(crate) struct Hwp5CrossRefControl {
     /// Owning control identifier, always `0x2578_7266` (`"%xrf"` LE-ascii).
     #[allow(dead_code)]
@@ -2847,7 +2847,7 @@ pub(crate) struct Hwp5CrossRefControl {
 }
 
 impl Hwp5CrossRefControl {
-    #[allow(dead_code)] // Step 4 (decoder dispatch) will call this.
+    #[allow(dead_code)] // (decoder dispatch) will call this.
     /// Decodes a `%xrf` CtrlHeader payload. Returns `None` on:
     /// - truncated envelope (< 19 bytes minimum)
     /// - oversized command (> `MAX_CROSSREF_COMMAND_UNITS`)
@@ -3002,7 +3002,7 @@ impl Hwp5EqEdit {
 /// `ShapePicture` payload: the `DocInfo/BinData` entry it shows, and what
 /// a group picture is judged by (border, crop, effects, image size).
 ///
-/// Layout (HWP 5.0 표 107, checked against Hancom's HWPX twins of the F3
+/// Layout (HWP 5.0 표 107, checked against Hancom's HWPX twins of the
 /// group-picture fixtures): border colour `[0..4]`, border thickness
 /// `[4..8]`, border properties `[8..12]`, image rectangle `[12..44]`, crop
 /// left/top/right/bottom `[44..60]` (= HWPX `imgClip`), inner margins
@@ -3019,7 +3019,7 @@ pub(crate) struct Hwp5ShapePicture {
     pub in_margin: [u16; 4],
     /// 1-based binary item identifier.
     pub binary_data_id: u16,
-    /// Border line; type 0 = NONE even with positive thickness (Hancom F3).
+    /// Border line; type 0 = NONE even with positive thickness (Hancom).
     pub border: Hwp5ShapeLine,
     /// Crop rectangle: left, top, right, bottom.
     pub crop: [i32; 4],
@@ -4388,8 +4388,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// The picture fields a group picture is judged by, at the offsets the
-    /// F3 twins show (F3c crop (0, 0, 7474, 15000) of a 22500 x 15000 image,
-    /// F3e effect 1 = HWPX GRAY_SCALE); the image size is read only when no
+    /// Hancom-saved twins show (crop (0, 0, 7474, 15000) of a 22500 x 15000 image,
+    /// effect 1 = HWPX GRAY_SCALE); the image size is read only when no
     /// picture effect comes before it.
     ///
     /// 이것을 실패시키는 것: 오프셋을 하나씩 바꾸는 것 / 효과 플래그가 있어도 크기를
@@ -4560,7 +4560,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Hwp5IndexMarkControl (Wave 12k)
+    // Hwp5IndexMarkControl
     // -----------------------------------------------------------------------
 
     const IDXM_CTRL_ID: u32 = 0x6964_786D;
@@ -4598,7 +4598,7 @@ mod tests {
 
     #[test]
     fn indexmark_parse_primary_units_len_eq_one_edge_case() {
-        // Wave 12k: 한컴 단일-char primary는 fixture로 관찰되지 않았지만,
+        // 한컴 단일-char primary는 fixture로 관찰되지 않았지만,
         // 파서 산수는 char[0]을 properties에 두고 body[0..0]을 비우는
         // 형태로 그대로 통과한다. 회귀를 막으려면 명시적 단위 테스트가
         // 필요하다.
@@ -4681,7 +4681,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Hwp5ClickHereControl (Wave 12l)
+    // Hwp5ClickHereControl
     // -----------------------------------------------------------------------
 
     const CLK_CTRL_ID: u32 = 0x2563_6C6B;
@@ -4854,7 +4854,7 @@ mod tests {
         );
     }
 
-    // ── Wave 12n — auto-field parsers ────────────────────────────────
+    // ── auto-field parsers ────────────────────────────────
 
     /// Builds a `%smr` / `%dte` / `%pat` CtrlHeader payload — they share
     /// the same outer envelope (8 prefix + flag + u16 cmd-len + UTF-16LE
@@ -4948,7 +4948,7 @@ mod tests {
         assert!(Hwp5DateCodeControl::parse(DTE_CTRL_ID, &data).is_none());
     }
 
-    // ── Wave 12m Phase 2 Step 2 — Hwp5CrossRefControl tests ──────────
+    // ── Hwp5CrossRefControl tests ──────────
 
     const XRF_CTRL_ID: u32 = 0x2578_7266; // "%xrf"
 
@@ -4990,7 +4990,7 @@ mod tests {
 
     #[test]
     fn crossref_parse_all_ref_types_carry_n1() {
-        // Wave 12m Phase 1 — all 7 RefType codes observed in 한컴 native
+        // all 7 RefType codes observed in 한컴 native
         // fixtures. Parser is RefType-agnostic; semantics applied at
         // projection boundary in smithy-hwp5/src/projection.rs.
         for (label, n1) in [
@@ -5014,7 +5014,7 @@ mod tests {
 
     #[test]
     fn crossref_parse_all_content_types_carry_n2() {
-        // ContentType is RefType-relative (Wave 12m Phase 1). Parser
+        // ContentType is RefType-relative. Parser
         // only carries the raw u8 — projection interprets.
         for n2 in 0..=3u8 {
             let command = format!("?target1;6;{n2};0;0;");

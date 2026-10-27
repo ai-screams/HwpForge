@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn image_resolver_prefers_exact_over_stem() {
-        // W2a M5: "logo.png" 와 "logo.png.jpg" 공존 시 exact 가 항상 이긴다
+        // "logo.png" 와 "logo.png.jpg" 공존 시 exact 가 항상 이긴다
         // (종전 단일 find 는 HashMap 순서 비결정).
         let store = HwpxStyleStore::new();
         let mut images = ImageStore::new();

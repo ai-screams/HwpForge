@@ -1,4 +1,4 @@
-//! W1 branch and wire-contract regression tests.
+//! branch and wire-contract regression tests.
 use super::header::parse_header;
 use crate::{HwpxParaShape, HwpxStyleStore};
 use hwpforge_core::{CharCount, ParagraphMeasure};
@@ -431,7 +431,7 @@ fn w2fix1_tab_normalization_compares_encoder_payloads() {
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
     for change in ["direct", "empty", "case-only", "default-only", "value", "unit", "count"] {
         let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
-        // W3: the sole explicit definition occupies position 0, irrespective of id=3.
+        // the sole explicit definition occupies position 0, irrespective of id=3.
         let tab = &mut head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items[0];
         let sw = &mut tab.switches[0];
         match change {

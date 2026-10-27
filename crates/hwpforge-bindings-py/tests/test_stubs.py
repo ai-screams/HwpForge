@@ -41,7 +41,7 @@ def test_every_report_type_is_declared(name: str) -> None:
 
 
 def test_the_public_surface_is_what_init_advertises() -> None:
-    # 이것을 실패시키는 것: __all__에서 HwpForgeIOError 제거 (P10-exports).
+    # 이것을 실패시키는 것: __all__에서 HwpForgeIOError 제거 (exports).
     import hwpforge
 
     assert set(hwpforge.__all__) == {

@@ -707,7 +707,7 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.shadow_kind"
     )));
-    // Wave 1c: the strike line family is now carried, so the fallback warning
+    // the strike line family is now carried, so the fallback warning
     // must not fire.
     assert!(!warnings.iter().any(|warning| matches!(
         warning,
@@ -932,9 +932,9 @@ fn hwp5_para_shape_maps_break_flags_condense_and_border_fill() {
 #[test]
 fn hwp5_para_shape_rejects_unsupported_line_spacing_and_carries_latin_hyphenation() {
     let mut raw = default_para_shape();
-    // bits 5-6 = 1 → HYPHENATION (Wave 1d carry).
+    // bits 5-6 = 1 → HYPHENATION (carry).
     // property3 = 4 → an unknown line-spacing kind (raw > 3) so the
-    // projection fallback warning still fires (Wave 2a moved raw=3
+    // projection fallback warning still fires (raw=3 was moved
     // out of "unsupported" into AtLeast — see the AtLeast carry test
     // below).
     raw.property1 = 1 << 5;
@@ -955,14 +955,14 @@ fn hwp5_para_shape_rejects_unsupported_line_spacing_and_carries_latin_hyphenatio
     assert!(crate::hwp5_style_store_to_hwpx(&store).is_err());
     store.para_shapes[0].property3 = Some(0);
     let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
-    // After Wave 1d the HYPHENATION case is carried, not warned.
+    // the HYPHENATION case is carried, not warned.
     assert!(
         !warnings.iter().any(|warning| matches!(
             warning,
             Hwp5Warning::ProjectionFallback { subject, .. }
                 if *subject == "style.para_shape.break_latin_word"
         )),
-        "break_latin_word projection fallback must not fire for raw=1 (HYPHENATION) after Wave 1d"
+        "break_latin_word projection fallback must not fire for raw=1 (HYPHENATION)"
     );
     let hwpx = hwpx_store
         .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
@@ -975,7 +975,7 @@ fn hwp5_para_shape_carries_at_least_line_spacing_without_warning() {
     use hwpforge_foundation::LineSpacingType;
 
     let mut raw = default_para_shape();
-    // property3 = 3 → AT_LEAST (Wave 2a carry, was previously
+    // property3 = 3 → AT_LEAST (carry, was previously
     // collapsed to Percentage with a ProjectionFallback warning).
     raw.property3 = Some(3);
     raw.line_spacing = 2400;
@@ -1001,7 +1001,7 @@ fn hwp5_para_shape_carries_at_least_line_spacing_without_warning() {
             Hwp5Warning::ProjectionFallback { subject, .. }
                 if *subject == "style.para_shape.line_spacing"
         )),
-        "line_spacing projection fallback must not fire for raw=3 (AT_LEAST) after Wave 2a"
+        "line_spacing projection fallback must not fire for raw=3 (AT_LEAST)"
     );
 
     let hwpx = hwpx_store
@@ -1093,7 +1093,7 @@ fn hwp5_para_shape_carries_vertical_align_and_border_offsets() {
     }
 }
 
-/// P21: `property2` bits 0-1 "한 줄로 입력" → `lineWrap`. 1 is SQUEEZE, 0 is
+/// `property2` bits 0-1 "한 줄로 입력" → `lineWrap`. 1 is SQUEEZE, 0 is
 /// BREAK, 2 and 3 are undefined — BREAK with one warning per definition.
 /// Reserved bits 2-3 alone and a record without `property2` are BREAK and
 /// quiet.
@@ -1151,7 +1151,7 @@ fn hwp5_para_shape_single_line_input_maps_to_line_wrap() {
 
 #[test]
 fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
-    // Task #121 (Wave 12p): HWP5 wire bit 25-27 is a 3-bit zero-based
+    // Task #121: HWP5 wire bit 25-27 is a 3-bit zero-based
     // ordinal (`0..=7`) — the previous `saturating_sub(1)` assumption was
     // wrong: the first outline level is 0, the second is 1, and so on.
     let mut raw = default_para_shape();
@@ -1228,7 +1228,7 @@ fn hwp5_numbering_def_tolerates_trailing_bytes() {
     // A valid NumberingDef payload followed by extra trailing bytes (e.g. a
     // future 5.x sub-version field we don't yet decode) must parse OK rather
     // than hard-erroring the whole record — matching CharShape/ParaShape
-    // sibling parsers (E1 #5).
+    // sibling parsers.
     let version = HwpVersion::new(5, 1, 0, 0);
     let mut data = make_numbering_def_bytes(
         version,
@@ -1282,7 +1282,7 @@ fn hwp5_para_shape_preserves_custom_tab_ids() {
 
 #[test]
 fn hwp5_tab_def_maps_stops_and_auto_flags() {
-    // Coverage matrix below mirrors what 한컴 actually writes (Wave 4
+    // Coverage matrix below mirrors what 한컴 actually writes (
     // tab-fidelity hotfix). `position` is halved on the way through
     // `hwp5_tab_position_to_hwp_unit` because the HWPX encoder treats
     // `TabStop.position` as HwpUnitChar (= HWP5 raw HwpUnit / 2). The
@@ -1298,7 +1298,7 @@ fn hwp5_tab_def_maps_stops_and_auto_flags() {
             },
             // fill_type=5 is undefined in the empirical mapping → falls
             // back to "NONE" (was "LONG_DASH" before the fix; that was
-            // incorrect — see Bug B2)
+            // incorrect — the wire value means DOT)
             hwpforge_smithy_hwp5::schema::header::Hwp5RawTabStop {
                 position: 8000,
                 tab_type: 3,
@@ -1359,9 +1359,9 @@ fn to_hwpx_style_store_carries_tab_defs() {
     assert!(tabs[0].auto_tab_left);
     assert_eq!(tabs[0].stops.len(), 1);
     assert_eq!(tabs[0].stops[0].align, TabAlign::Right);
-    // HWP5 fill_type=1 → openhwp IR Dot → HWPX "DOT" (Bug B2 fix).
+    // HWP5 fill_type=1 → openhwp IR Dot → HWPX "DOT".
     assert_eq!(tabs[0].stops[0].leader.as_hwpx_str(), "DOT");
-    // HWP5 raw position 12000 HwpUnit halves to 6000 HwpUnitChar (Bug B1 fix).
+    // HWP5 raw position 12000 HwpUnit halves to 6000 HwpUnitChar.
     assert_eq!(tabs[0].stops[0].position.as_hwp_unit().unwrap().as_i32(), 6000);
 }
 
@@ -1482,7 +1482,7 @@ fn to_hwpx_style_store_emits_placeholder_for_invalid_tab_slot() {
         para_shapes: vec![para],
         numberings: vec![],
         bullets: vec![],
-        // W3: a native slot 3 has preceding slots 0..2; IDs cannot stand in for holes.
+        // a native slot 3 has preceding slots 0..2; IDs cannot stand in for holes.
         tab_defs: vec![
             parsed_tab_slot(0, Hwp5RawTabDef { property: 0, tab_stops: vec![] }),
             parsed_tab_slot(1, Hwp5RawTabDef { property: 0, tab_stops: vec![] }),
@@ -2114,7 +2114,7 @@ fn public_style_mapping_keeps_every_image_fill() {
     );
 }
 
-/// S6: the sibling resolves the reference through the storage names the
+/// the sibling resolves the reference through the storage names the
 /// decoder reports, writes the manifest id (the name's stem), and has
 /// nothing to warn about. A reference with no name is left out.
 ///
@@ -2501,7 +2501,7 @@ fn bullet_count_mismatch_emits_projection_fallback_warning() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// shade_color non-null path (style_store_convert.rs L82)
+// shade_color non-null path (style_store_convert.rs)
 // ──────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -2522,7 +2522,7 @@ fn hwp5_char_shape_shade_color_null_sentinel_maps_to_none() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// underline_shape variants (style_store_convert.rs L95-109)
+// underline_shape variants (style_store_convert.rs)
 // Bit layout: underline_type = bits 2-3 ((property >> 2) & 0b11), value 1 = Bottom
 //             underline_shape_raw = bits 4-7 ((property >> 4) & 0b1111)
 // ──────────────────────────────────────────────────────────────────────────

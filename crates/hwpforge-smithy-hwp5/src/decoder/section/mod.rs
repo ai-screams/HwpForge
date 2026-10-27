@@ -26,7 +26,7 @@ mod model;
 use gso::*;
 pub(crate) use model::*;
 // ---------------------------------------------------------------------------
-// ctrl_id constants — consolidated in `crate::ctrl_ids` (#94 Step B1)
+// ctrl_id constants — consolidated in `crate::ctrl_ids` (#94)
 // ---------------------------------------------------------------------------
 
 use crate::ctrl_ids::{
@@ -69,8 +69,7 @@ const SHAPE_COMPONENT_TYPE_TEXTART: [u8; 4] = [0x74, 0x61, 0x74, 0x24]; // "$tat
 
 /// Maximum group nesting depth the decoder will descend before degrading.
 ///
-/// Wave A only carries FLAT groups (one `$con` level), but the cap is wired
-/// now so Wave B (recursive `$con`-in-`$con`) is a small lift. Mirrors the
+/// The cap bounds recursive `$con`-in-`$con` groups. This mirrors the
 /// defense-in-depth caps in `schema/summary_info.rs` — on exceed we emit a
 /// warning and degrade rather than recurse or panic.
 const GSO_GROUP_MAX_DEPTH: u16 = 16;
@@ -174,8 +173,8 @@ impl ParaBuf {
             text_segments,
             para_shape_id: self.header.para_shape_id,
             style_id: self.header.style_id,
-            // divide_sort bit2/bit3 = 쪽/단 나누기 (hwp-rs 확증 + F2 실측:
-            // 한컴 재저장 HWPX pageBreak="1" 대응 — W3 carry 시작).
+            // divide_sort bit2/bit3 = 쪽/단 나누기 (hwp-rs 확증 + 실측:
+            // 한컴 재저장 HWPX pageBreak="1" 대응 — carry 시작).
             page_break: self.header.divide_sort & 0x04 != 0,
             column_break: self.header.divide_sort & 0x08 != 0,
             char_shape_runs,
@@ -400,10 +399,10 @@ enum NestedSubtreeKind {
     TextBox,
 }
 
-/// Wave 12p Step 5 (#134): extract the CtrlHeader's `instance_id` field
+/// (#134): extract the CtrlHeader's `instance_id` field
 /// using ctrl_id-family-aware offsets.
 ///
-/// Earlier (Wave 12p Step 1b) we tried `data[n-8..n-4]` as a uniform
+/// Earlier we tried `data[n-8..n-4]` as a uniform
 /// trailer, but wire audits (2026-06-09) on Hancom-native fixtures
 /// (footnotes, endnotes, table captions and equation captions)
 /// proved the trailer offset only matches by coincidence. The real
@@ -457,7 +456,7 @@ struct NestedSubtreeContext {
     /// Bytes [4..8] of the `CtrlHeader` payload (see
     /// [`Hwp5NestedSubtree::properties_raw`]).
     properties_raw: u32,
-    /// CtrlHeader trailer instance ID (Wave 12p Step 1b). See
+    /// CtrlHeader trailer instance ID. See
     /// [`Hwp5NestedSubtree::instance_id`].
     instance_id: u32,
     saw_list_header: bool,
@@ -1153,7 +1152,7 @@ struct BodyTextParserState {
     page_def: Option<Hwp5PageDef>,
     /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
     section_def_properties: Option<u32>,
-    /// Captured `secd` 시작번호 (`[20..28]`, all-or-none — W1).
+    /// Captured `secd` 시작번호 (`[20..28]`, all-or-none).
     section_def_start_numbers: Option<Hwp5SectionStartNumbers>,
     /// Page border/fill records collected in document order.
     page_border_fills: Vec<Hwp5PageBorderFill>,
@@ -1165,11 +1164,11 @@ struct BodyTextParserState {
     subtree_ctx: Option<NestedSubtreeContext>,
     current_subtree_para: Option<ParaBuf>,
     /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
-    /// Wave 12p Step 1c-2: stash (geometry, instance_id) from the
+    /// stash (geometry, instance_id) from the
     /// `eqed` CtrlHeader; finalized by the paired `HWPTAG_EQEDIT` record.
     eqed_pending: Option<(Hwp5ShapeComponentGeometry, u32)>,
     /// `%clk` CtrlHeader awaiting its trailing `0x57 lvl=2` sub-record
-    /// for the form-mode field name (Wave 12l). If the next top-level
+    /// for the form-mode field name. If the next top-level
     /// record is not the expected sub-record, the press-field is
     /// finalized with `name=None` and a targeted warning so the rest
     /// of the section keeps round-tripping.
@@ -1537,9 +1536,8 @@ impl BodyTextParserState {
     /// gso scope's top child level.
     ///
     /// Returns `true` when the record was consumed by group handling so the
-    /// caller skips the flat single-shape dispatch. Wave A keeps flat groups
-    /// only; nested `$con` children degrade to `Unknown` inside
-    /// [`GsoGroupBuilder`].
+    /// caller skips the flat single-shape dispatch. Nested `$con` children
+    /// exceeding the depth cap degrade to `Unknown` inside [`GsoGroupBuilder`].
     fn maybe_route_subtree_group_record(
         &mut self,
         record: &Record,
@@ -1890,7 +1888,7 @@ impl BodyTextParserState {
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {
         // Pending-state guards run before the normal arms (task #90 —
-        // extracted helpers; see each method for the wave rationale).
+        // extracted helpers; see each method for its rationale).
         if self.try_intercept_memo_cluster(record, tag, level) {
             return;
         }
@@ -1960,7 +1958,7 @@ impl BodyTextParserState {
         }
     }
 
-    /// Memo content-cluster state machine (Wave 12e — task #90 extract).
+    /// Memo content-cluster state machine (task #90 extract).
     ///
     /// `HWPTAG_MEMO_LIST` clusters appear at the end of the section's
     /// last body paragraph as a sequence of (MemoList, ListHeader,
@@ -1968,7 +1966,7 @@ impl BodyTextParserState {
     /// intercepted *before* the normal arms so the body paragraph's
     /// `self.current` text/char_shape stay untouched — without this,
     /// the cluster's lvl=2 ParaText would fall into the normal
-    /// `ParaText` arm and overwrite the body text (Wave 12e-Memo
+    /// `ParaText` arm and overwrite the body text (Memo
     /// corruption root cause).
     ///
     /// Returns `true` when the record was consumed by the cluster
@@ -2016,7 +2014,7 @@ impl BodyTextParserState {
         false
     }
 
-    /// ClickHere name sub-record pairing (Wave 12l — task #90 extract).
+    /// ClickHere name sub-record pairing (task #90 extract).
     ///
     /// A `%clk` CtrlHeader is always followed by a `0x57 lvl=2`
     /// sub-record carrying the form-mode `name`. The sub-record is
@@ -2142,7 +2140,7 @@ impl BodyTextParserState {
             // Header is 4 bytes, so falling back to 0 keeps
             // pre-spec defaults consistent.
             let properties_raw = ctrl_header_properties_raw(&record.data);
-            // Wave 12p Step 5 (#134): CtrlHeader instance_id lives at
+            // (#134): CtrlHeader instance_id lives at
             // a family-specific offset. fn/en use data[16..20], gso
             // uses data[36..40]. See `extract_ctrl_header_instance_id`
             // for offset table. HWPX cross-ref Command 의 target ID
@@ -2162,8 +2160,8 @@ impl BodyTextParserState {
             // The `eqed` ctrl carries only geometry; its HancomEQN
             // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
             // Stash the geometry + instance_id and finalize when
-            // that child arrives (Wave 12p Step 1c-2). Wave 12p
-            // Step 5: eqed instance_id at data[36..40] (audited).
+            // that child arrives.
+            // eqed instance_id at data[36..40] (audited).
             let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
                 .unwrap_or(Hwp5ShapeComponentGeometry {
                     x: 0,
@@ -2180,7 +2178,7 @@ impl BodyTextParserState {
             // immediately following `0x57 lvl=2` sub-record. Flush
             // any orphaned pending first (defensive), then store
             // the parsed control so the next `0x57` can attach the
-            // name. (Wave 12l.)
+            // name.
             self.flush_pending_clickhere();
             self.pending_clickhere_level = level;
             match Self::typed_paragraph_control(ctrl_id, &record.data, &mut self.warnings) {
@@ -2328,7 +2326,7 @@ impl BodyTextParserState {
     }
 
     /// Finalizes a pending `%clk` ClickHere control whose trailing
-    /// `0x57` name sub-record never arrived (Wave 12l). Pushes it onto
+    /// `0x57` name sub-record never arrived. Pushes it onto
     /// the current paragraph with `name=None` and emits a warning so
     /// the audit baseline can attribute the form-mode identifier loss
     /// to the ClickHere code path instead of a generic
@@ -2443,7 +2441,7 @@ impl BodyTextParserState {
         }
         self.close_nested_control();
         // Drain any orphan `%clk` whose `0x57` name sub-record was
-        // missing or replaced by another top-level record (Wave 12l).
+        // missing or replaced by another top-level record.
         self.flush_pending_clickhere();
         while let Some(ctx) = self.table_stack.pop() {
             let finished = ctx.finalize(&mut self.warnings);
@@ -2467,7 +2465,7 @@ impl BodyTextParserState {
 
         // Flush any in-flight memo-content capture (cluster at end-of-stream)
         // then join captured clusters to inline `Memo` placeholders by
-        // `memo_id`. See `phase12e_memo_design.md` for the wire layout.
+        // `memo_id` 로 메모 본문과 컨트롤을 연결한다.
         self.flush_memo_content_capture();
         if !self.nested {
             self.attach_memo_contents_to_placeholders();
@@ -3040,7 +3038,7 @@ pub(crate) mod tests {
 
     /// Same as [`gso_ctrl_header_data`] but also stamps bytes `[4..8]` with a
     /// known object-property DWORD (표 70; bit0 = 글자처럼 취급) — used by
-    /// W2p carry tests to prove the raw DWORD reaches `Hwp5ImageControl`.
+    /// carry tests to prove the raw DWORD reaches `Hwp5ImageControl`.
     fn gso_ctrl_header_data_with_properties(
         x: i32,
         y: i32,
@@ -4099,7 +4097,7 @@ pub(crate) mod tests {
         assert_eq!(table.rows[0].cells[1].margin, Some(m(11, 12, 13, 14)));
     }
 
-    /// S19: a cell without its own margin keeps its own values as a dormant
+    /// a cell without its own margin keeps its own values as a dormant
     /// margin unless they are the table's padding.
     ///
     /// 이것을 실패시키는 것: 휴면 값을 싣지 않기 / 표 여백과 같은 값을 지우지 않기 /
@@ -4160,7 +4158,7 @@ pub(crate) mod tests {
             top: hwpforge_foundation::HwpUnit::new(t).unwrap(),
             bottom: hwpforge_foundation::HwpUnit::new(b).unwrap(),
         };
-        // S19: the first cell (no own margin) keeps its values; the third,
+        // the first cell (no own margin) keeps its values; the third,
         // whose values are the table's padding, carries none; the second
         // has its own margin and no dormant one.
         assert_eq!(dormant_of(&body, [510, 520, 566, 576]), [Some(m(11, 12, 13, 14)), None, None]);
@@ -4652,7 +4650,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// S18: an object's outer margin (`CtrlHeader` bytes 28–36) reaches its
+    /// an object's outer margin (`CtrlHeader` bytes 28–36) reaches its
     /// Core placement — a body ellipse (treat-as-char, otherwise the inline
     /// default) and a group — and a negative side is reported and dropped.
     ///
@@ -6193,7 +6191,7 @@ pub(crate) mod tests {
 
     #[test]
     fn gso_shape_picture_carries_ctrl_header_object_properties_top_level() {
-        // W2p: CtrlHeader `data[4..8]` (표 70 공통 개체 속성) 은 top-level
+        // CtrlHeader `data[4..8]` (표 70 공통 개체 속성) 은 top-level
         // `handle_ctrl_header` → `NestedSubtreeContext` 경로를 통해
         // `Hwp5ImageControl.ctrl_properties` 까지 그대로 carry 돼야 한다.
         // KNOWN_PROPERTIES = bit0(글자처럼 취급) + 노이즈 비트 — bit 추출이
@@ -6222,7 +6220,7 @@ pub(crate) mod tests {
 
     #[test]
     fn gso_shape_picture_carries_ctrl_header_object_properties_inside_table_cell() {
-        // W2p: 표 셀 안 `gso ` 도 공통 컨트롤 해석기로 같은 DWORD 를 carry 한다 —
+        // 표 셀 안 `gso ` 도 공통 컨트롤 해석기로 같은 DWORD 를 carry 한다 —
         // top-level 과 별개 코드 경로.
         const KNOWN_PROPERTIES: u32 = 0x0000_0001;
         let mut stream = Vec::new();
@@ -6274,7 +6272,7 @@ pub(crate) mod tests {
 
     #[test]
     fn gso_shape_picture_carries_ctrl_header_object_properties_inside_textbox_subtree() {
-        // W2p: 글상자 subtree 안 `gso ` 도 공통 컨트롤 해석기로 같은 DWORD 를 carry 해야
+        // 글상자 subtree 안 `gso ` 도 공통 컨트롤 해석기로 같은 DWORD 를 carry 해야
         // 한다 — table-cell 경로와도 별개.
         const KNOWN_PROPERTIES: u32 = 0x0000_0001;
         let mut stream = Vec::new();

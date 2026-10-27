@@ -1,4 +1,4 @@
-//! E2 `fill` 델타 API — 이름 붙은 누름틀(ClickHere)을 값 맵으로 채운다.
+//! `fill` 델타 API — 이름 붙은 누름틀(ClickHere)을 값 맵으로 채운다.
 //!
 //! 에이전트가 섹션 JSON 전체를 왕복하지 않고 `이름 → 값` 델타만으로
 //! 문서를 채우는 상위 API. 내부적으로 preserve-first 패처
@@ -610,13 +610,13 @@ mod tests {
         );
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
-        // W2: 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
+        // 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
         // 낡는다 — 전에는 남겼던 것이 틀렸다.
         assert_eq!(caches(&xml), Vec::<usize>::new());
         assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
 
-    /// W2 (design 3.5 tests 1, 3): filling a field in the middle of three
+    /// (cache invalidation): filling a field in the middle of three
     /// cell paragraphs drops that paragraph's cache, the cell paragraph after
     /// it, the table's host paragraph and the body paragraph after the host;
     /// the first cell paragraph and the body paragraph before keep theirs.
@@ -772,7 +772,7 @@ mod tests {
         // 9000 = 캡션 문단, 9001 = 내부 문단, 9002 = 타원이 든 본문 문단.
         let bytes = with_section_xml(&doc, add_caches(&xml));
         let only_a = fill_xml(&bytes, &[("A", "1")]).expect("fill A");
-        // W2: 내부 문단(9001)의 host 는 타원이 든 본문 문단(9002) — 상자가 글에
+        // 내부 문단(9001)의 host 는 타원이 든 본문 문단(9002) — 상자가 글에
         // 맞춰 자랄 수 있으므로 host 사슬로 함께 지운다(전에는 남겼다). 캡션(9000)은
         // 다른 흐름이라 남는다.
         assert_eq!(caches(&only_a), vec![0]);
@@ -844,7 +844,7 @@ mod tests {
         let xml = add_caches(&section_xml(&doc));
         let bytes = with_section_xml(&doc, xml.clone());
         let filled = fill_xml(&bytes, &[("cap", "1")]).expect("fill caption field");
-        // W2: 캡션이 자라면 그림이 든 문단(9001, host)과 그 뒤 본문 문단(9002)이
+        // 캡션이 자라면 그림이 든 문단(9001, host)과 그 뒤 본문 문단(9002)이
         // 밀린다 — 전에는 둘 다 남겼다.
         assert_eq!(caches(&filled), Vec::<usize>::new());
 
@@ -951,7 +951,7 @@ mod tests {
             let own = xml[..at].matches("</hp:p>").count();
             let filled = fill_xml(&bytes, &[(name.as_str(), "값")])
                 .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
-            // W2: 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
+            // 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
             // 전용 시험(`cell_fill_drops_the_flow_tail_and_the_host_chain`)이 맡고,
             // 여기서는 짝지은 문단의 캐시가 가고 첫 본문 문단(9000, `body`)은
             // 다른 필드일 때 남는지만 본다.
@@ -1028,7 +1028,7 @@ mod tests {
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
         assert_eq!(listed.len(), 2, "premise: the unnamed field is listed");
         let xml = fill_xml(&bytes, &[("b", "값")]).expect("fill");
-        // W2: 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
+        // 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
         // 이빨은 위치 불일치 오류(`expect`)가 진다.
         assert_eq!(caches(&xml), Vec::<usize>::new());
     }

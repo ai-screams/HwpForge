@@ -15,7 +15,7 @@ fn patch_err(error: PatchError) -> OpsError {
     OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(error))
 }
 
-/// Every `rust` surface of the W2 cases (patch, fill, section workflow).
+/// Every `rust` surface of the cases (patch, fill, section workflow).
 fn w2_rust_cases() -> Vec<(&'static str, OpsError)> {
     let inner = include_bytes!("data/patch-inner-decode.hwpx");
     let section = include_str!("data/patch-inner-decode.section.json");
@@ -229,11 +229,11 @@ fn w3_rust_cases() -> Vec<(&'static str, OpsError)> {
 
 #[test]
 // 이것을 실패시키는 것: OpsError::Io(NotFound)를 FileReadFailed로 변경, 기타 OpsError::Io를 FileNotFound로 변경, read 구역 범위를 InvalidInput으로 변경, read 표 부재를 InvalidInput으로 변경, read 필드 부재를 InvalidInput으로 변경, manifest에 미소비 Rust surface 추가.
-// 이것을 실패시키는 것(W2): stage→코드 매핑 한 갈래 교체, PreservingPatch 위임을 PATCH_FAILED 로 고정,
+// 이것을 실패시키는 것: stage→코드 매핑 한 갈래 교체, PreservingPatch 위임을 PATCH_FAILED 로 고정,
 // FillError::Patch 위임을 FILL_FAILED 로 고정, patch 원본 decode 를 Rejected 로 감싸기,
 // metadata 검사를 원본 decode 뒤로 옮기기, 구역 범위 검사를 Rejected 로, fill 입력 decode 를 Workflow 로.
 fn w1_read_and_io_causes_are_canonical() {
-    // 이것을 실패시키는 것: W3 Codec·Invariant 매핑을 InvalidInput으로 변경, Draft 전용 Rust case 제외 제거.
+    // 이것을 실패시키는 것: Codec·Invariant 매핑을 InvalidInput으로 변경, Draft 전용 Rust case 제외 제거.
     // 이것을 실패시키는 것: read 매핑을 InvalidInput으로 치환하거나 NotFound/기타 I/O 매핑을 뒤바꿈.
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("data/error_contract_018.json")).unwrap();
@@ -268,7 +268,7 @@ fn w1_read_and_io_causes_are_canonical() {
         // `convert.*` operations live in hwpforge-convert, which this crate
         // cannot depend on; `hwpforge-convert/tests/w4_errors.rs` consumes them.
         // `w3.*` operations are consumed by `w3_errors.rs`.
-        // 이것을 실패시키는 것: 이 거르기 삭제(convert·w3 몫 case 를 이 harness 가 소비하지 못해 집합 불일치).
+        // 이것을 실패시키는 것: 이 거르기 삭제(convert·편집기 몫 case 를 이 harness 가 소비하지 못해 집합 불일치).
         .filter(|case| {
             let operation = case["surfaces"]["rust"]["operation"].as_str().unwrap();
             !operation.starts_with("convert.") && !operation.starts_with("w3.")

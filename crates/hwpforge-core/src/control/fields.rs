@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::object_id::ObjectId;
 
-/// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
+/// Typed variant of the HWP5 `%pat` Command string.
 ///
 /// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
 /// (full path). Anything else is preserved as [`PathFieldCommand::Unknown`].
@@ -51,7 +51,7 @@ impl PathFieldCommand {
     }
 }
 
-/// Cross-reference target identifier (Wave 12m Phase 2).
+/// Cross-reference target identifier.
 ///
 /// Replaces the previous `target_name: String` field on
 /// [`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the
@@ -98,7 +98,7 @@ impl RefTarget {
 }
 
 /// Typed variant of the HWP5 `atno` inline page-number `flag` byte
-/// (Wave 12n).
+///
 ///
 /// Observed values: `0x00` = current page, `0x06` = total page count.
 /// Other values surface as [`InlinePageKind::Unknown`].

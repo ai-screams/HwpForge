@@ -54,7 +54,7 @@ fn edit_cell(bytes: &[u8]) -> Result<hwpforge::ops::edit::SetCellOutput, hwpforg
     set_cell(bytes, &SetCellOptions::default().with_table(0).with_at("0,1").with_text("류한율"))
 }
 
-/// T6 for the preserve-first editors: set-cell and stamp keep the header at
+/// for the preserve-first editors: set-cell and stamp keep the header at
 /// ones and the section's own restart at 5; a header of 0 is repaired and
 /// reported; a header start number Core cannot carry is refused.
 ///

@@ -137,7 +137,7 @@ fn build_style_store() -> HwpxStyleStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 1: Wave 9 — Gutter + Mirror Margins
+// Section 1: Gutter + Mirror Margins
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_gutter_mirror() -> Section {
@@ -168,7 +168,7 @@ fn section_gutter_mirror() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 2: Wave 9 — Visibility + LineNumberShape
+// Section 2: Visibility + LineNumberShape
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_visibility_linenumber() -> Section {
@@ -216,7 +216,7 @@ fn section_visibility_linenumber() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 3: Wave 9 — PageBorderFill + BeginNum
+// Section 3: PageBorderFill + BeginNum
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_border_fill_begin_num() -> Section {
@@ -291,7 +291,7 @@ fn section_border_fill_begin_num() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 4: Wave 9 — MasterPage (배경)
+// Section 4: MasterPage (배경)
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_master_page() -> Section {
@@ -318,7 +318,7 @@ fn section_master_page() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 5: Wave 11 — Arc (3가지 타입)
+// Section 5: Arc (3가지 타입)
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_arcs() -> Section {
@@ -352,7 +352,7 @@ fn section_arcs() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 6: Wave 11 — Curve (베지어/폴리라인)
+// Section 6: Curve (베지어/폴리라인)
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_curves() -> Section {
@@ -411,7 +411,7 @@ fn section_curves() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 7: Wave 11 — ConnectLine + 화살표
+// Section 7: ConnectLine + 화살표
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_connect_lines() -> Section {
@@ -477,7 +477,7 @@ fn section_connect_lines() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 8: Wave 11 — 기존 도형 + 회전/뒤집기/채우기
+// Section 8: 기존 도형 + 회전/뒤집기/채우기
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_shape_styles() -> Section {
@@ -556,7 +556,7 @@ fn section_shape_styles() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 9: Wave 12 — Bookmark + CrossRef + Field
+// Section 9: Bookmark + CrossRef + Field
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_bookmarks_refs_fields() -> Section {
@@ -575,7 +575,7 @@ fn section_bookmarks_refs_fields() -> Section {
         bookmark_type: BookmarkType::SpanEnd,
     };
 
-    // CrossRef (참조) — Wave 12m Phase 2: RefTarget enum 명시
+    // CrossRef (참조) — RefTarget enum 명시
     let cross_ref = Control::cross_ref(
         hwpforge_core::control::RefTarget::Name("중요위치".to_string()),
         RefType::Bookmark,
@@ -585,7 +585,7 @@ fn section_bookmarks_refs_fields() -> Section {
     // Field: ClickHere (누름틀)
     let field_click = Control::field("여기를 클릭하세요");
 
-    // Field: Date — SUMMERY $modifiedtime (Wave 12n: was FieldType::Date)
+    // Field: Date — SUMMERY $modifiedtime (was FieldType::Date)
     let field_date = Control::Field {
         field_type: FieldType::ModifiedTime,
         hint_text: Some("날짜".to_string()),
@@ -594,7 +594,7 @@ fn section_bookmarks_refs_fields() -> Section {
         display_text: String::new(),
     };
 
-    // Field: PageNumber (쪽번호) — Wave 12n: moved out of Control::Field
+    // Field: PageNumber (쪽번호) — moved out of Control::Field
     let field_page =
         Control::InlinePageNumber { kind: hwpforge_core::control::InlinePageKind::CurrentPage };
 
@@ -660,7 +660,7 @@ fn section_bookmarks_refs_fields() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 10: Wave 12 — Memo + IndexMark
+// Section 10: Memo + IndexMark
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_memo_indexmark() -> Section {
@@ -761,7 +761,7 @@ fn section_memo_indexmark() -> Section {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Section 11: 기존 API + Wave 9/11/12 복합 테스트
+// Section 11: 기존 API + 복합 테스트
 // ═══════════════════════════════════════════════════════════════════
 
 fn section_combined() -> Section {

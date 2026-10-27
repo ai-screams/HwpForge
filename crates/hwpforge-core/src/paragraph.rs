@@ -491,7 +491,7 @@ impl Paragraph {
     /// ```
     pub fn text_content(&self) -> String {
         // Use the unified `plain_text` accessor so `RunContent::InlineText`
-        // (Wave 4 Phase 2 carry — attribute-rich inline tabs) is folded
+        // (carry — attribute-rich inline tabs) is folded
         // back into a tab-containing plain string the way callers expect.
         self.runs.iter().filter_map(|r| r.content.plain_text()).fold(
             String::new(),

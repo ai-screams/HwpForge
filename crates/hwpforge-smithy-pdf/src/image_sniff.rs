@@ -20,7 +20,7 @@ pub(crate) enum Sniffed {
     ///
     /// **미지원 포맷 정책**: strict = typed
     /// `PdfError::UnsupportedImageFormat` / `--degraded` = 경고+스킵.
-    /// 포맷 변환(래스터화) 지원은 후속 슬라이스 — 그때까지 이 분기가
+    /// 포맷 변환(래스터화) 지원은 후속 작업 — 그때까지 이 분기가
     /// "무음 손실 없는 미지원" 을 소유한다.
     KnownUnsupported(&'static str),
     /// 빈/절단/미지 magic — 확장자로 추측하지 않는다.

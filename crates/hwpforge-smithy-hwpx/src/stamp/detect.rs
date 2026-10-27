@@ -1,4 +1,4 @@
-//! Class-A inline marker detection (E6 Wave 1A).
+//! Class-A inline marker detection.
 //!
 //! Pure text-level scanners: given one run/paragraph text, find placeholder
 //! markers by **syntax alone**. The pattern list is closed by design — any
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn paren_interior_newline_rejected_carriage_return_allowed() {
-        // Semantic-equivalence locks for the M1 rewrite: `\n` inside the
+        // Semantic-equivalence locks for the rewrite: `\n` inside the
         // parens breaks the blank (same-line rule), `\r` counts as blank
         // whitespace, and nesting only matches the innermost pair.
         assert!(detect_markers("(\n)").is_empty());

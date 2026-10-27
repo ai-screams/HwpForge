@@ -25,7 +25,7 @@ struct ConvertHwp5Result {
     sections: usize,
     paragraphs: usize,
     warnings: usize,
-    /// 경고 상세 (최대 [`MAX_WARNING_DETAILS`]건 — W4: 개수만으로는 무엇이
+    /// 경고 상세 (최대 [`MAX_WARNING_DETAILS`]건 — 개수만으로는 무엇이
     /// 드롭됐는지 알 수 없다는 지적 상환).
     warning_details: Vec<String>,
     size_bytes: u64,
@@ -62,7 +62,7 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
     // and failed as `HWP5_CONVERT_FAILED`, exit 2, with the convert hint,
     // message keyed on the *input* path.
     // `convert_hwp5()` now returns bytes and this command does the write
-    // itself. W1 uses FileWriteFailed and exit 2 while preserving the
+    // itself. The CLI uses FileWriteFailed and exit 2 while preserving the
     // message, including `Hwp5Error::Io`'s `"I/O error: {0}"` Display
     // wrapping the raw `io::Error`, not the raw error alone.
     if let Err(e) = std::fs::write(output, &converted.bytes) {

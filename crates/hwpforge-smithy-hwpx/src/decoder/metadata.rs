@@ -12,9 +12,9 @@
 //! - **Depth** capped at [`MAX_DEPTH`].
 //! - **`<opf:meta>` element count** capped at [`MAX_META_ELEMENTS`].
 //! - **Per-text allocation** capped at [`MAX_TEXT_BYTES`].
-//! - **S3 namespace confusion**: only `opf:*` children allowed inside
+//! - **Namespace confusion**: only `opf:*` children allowed inside
 //!   `<opf:metadata>`.
-//! - **S1 XML 1.0 illegal char strip** via
+//! - **XML 1.0 illegal char strip** via
 //!   [`crate::encoder::sanitize_xml_text`].
 
 use hwpforge_core::metadata::Metadata;
@@ -157,7 +157,7 @@ impl ParserState {
         Ok(())
     }
 
-    /// S3 — namespace confusion: any element inside `<opf:metadata>`
+    /// namespace confusion: any element inside `<opf:metadata>`
     /// must use the `opf` prefix.
     ///
     /// The prior implementation used `if let Some(p) = name.prefix()` which only

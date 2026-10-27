@@ -1791,7 +1791,7 @@ fn partial_look_preserves_lines_and_reports_each_loss_in_every_host() {
 
 /// 이것을 실패시키는 것: 내부 끝에서 외부 범위를 닫기 / 필드 ID 재사용 /
 /// 한 문단 필드까지 경계 표현으로 바꾸기 / 미종료 fallback 누락 / 고아 끝 panic.
-/// 실제 변이 M06–M09·M13이 이 시험에서 실패한다.
+/// 위 변이를 실제로 적용하면 이 시험에서 실패한다.
 #[test]
 fn fspan_pairing_keeps_siblings_nested_markers_and_unclosed_fallback() {
     use hwpforge_core::field_inventory::FieldInventory;
@@ -1837,7 +1837,7 @@ fn fspan_pairing_keeps_siblings_nested_markers_and_unclosed_fallback() {
     );
 }
 
-/// 이것을 실패시키는 것: M10·M15 — 접힌 외부 필드 안의 경계만 승격하거나 다른 종류를 누름틀로 오인.
+/// 이것을 실패시키는 것: 접힌 외부 필드 안의 경계만 승격하거나 다른 종류를 누름틀로 오인.
 #[test]
 fn fspan_folded_outer_keeps_nested_cross_paragraph_fallback() {
     use crate::ctrl_ids::CTRL_ID_HYPERLINK;
@@ -1866,7 +1866,7 @@ fn fspan_folded_outer_keeps_nested_cross_paragraph_fallback() {
     assert_eq!(boundaries, 0);
 }
 
-/// 이것을 실패시키는 것: M14 — 빈 시작 문단에 접힌 필드처럼 안내문을 본문으로 합성.
+/// 이것을 실패시키는 것: 빈 시작 문단에 접힌 필드처럼 안내문을 본문으로 합성.
 #[test]
 fn fspan_empty_start_does_not_invent_hint_text() {
     use hwpforge_core::field_inventory::FieldInventory;

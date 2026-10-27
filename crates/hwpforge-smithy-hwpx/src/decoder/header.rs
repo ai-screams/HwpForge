@@ -622,7 +622,7 @@ pub(crate) fn parse_number_format(s: &str) -> hwpforge_foundation::NumberFormatT
 
 /// [`parse_number_format`] 의 판정 코어 — 미지/결측 = `None`.
 ///
-/// 호출자가 폴백 사실을 표면화(디코드 경고)할 수 있게 분리했다 (W5-α M4).
+/// 호출자가 폴백 사실을 표면화(디코드 경고)할 수 있게 분리했다.
 pub(crate) fn parse_number_format_opt(s: &str) -> Option<hwpforge_foundation::NumberFormatType> {
     use hwpforge_foundation::NumberFormatType;
     match s {
@@ -875,7 +875,7 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
     // SYMBOL, USER). Therefore, fontRef group-local indices coincide with
     // flat store indices. If a future HWPX producer uses different fonts per
     // group, this mapping breaks.
-    // See: Phase 4 analysis H3, OWPML KS X 6101 §fontRef.
+    // See: OWPML KS X 6101 §fontRef.
     // TODO(v2.0): Refactor to per-group font model for full spec compliance.
     let font_ref = cp
         .font_ref

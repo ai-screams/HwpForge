@@ -1,4 +1,4 @@
-//! `ops::edit::insert_para` — the preserving structural insert (E4).
+//! `ops::edit::insert_para` — the preserving structural insert.
 #![cfg(feature = "ops-hwpx")]
 
 #[path = "support/document.rs"]
@@ -117,7 +117,7 @@ fn an_anchor_outside_the_document_is_reported_precisely() {
 
 #[test]
 fn a_non_document_input_is_a_structural_codec_failure() {
-    // 이것을 실패시키는 것: T2 해당 입력 decode stage를 Encode로 변경.
+    // 이것을 실패시키는 것: 해당 입력 decode stage를 Encode로 변경.
     let err =
         insert_para(b"not a zip at all", &InsertParaOptions::default().with_text(owned(&["x"])))
             .expect_err("must reject");

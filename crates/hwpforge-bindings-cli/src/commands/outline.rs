@@ -1,4 +1,4 @@
-//! Document navigation map (E5): headings, tables, fields, bookmarks.
+//! Document navigation map: headings, tables, fields, bookmarks.
 
 use std::path::PathBuf;
 
@@ -13,9 +13,9 @@ pub fn run(file: &PathBuf, json_mode: bool) {
     check_file_size(file, json_mode, Command::Outline);
     let bytes = read_input(file, json_mode, Command::Outline);
 
-    // Decoder warnings (`OutlineOutput::warnings`) were not surfaced pre-W5
-    // (the pre-migration CLI never captured them; W3 kept that byte-for-byte).
-    // W5 follow-up: additive — a new, omit-if-empty `warnings` key in
+    // Decoder warnings (`OutlineOutput::warnings`) were not surfaced previously
+    // (the pre-migration CLI never captured them; the migration kept that byte-for-byte).
+    // additive — a new, omit-if-empty `warnings` key in
     // `--json`, and one `[outline]`-prefixed stderr line each in text mode.
     let out = match ops::outline(&bytes) {
         Ok(out) => out,

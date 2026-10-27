@@ -325,7 +325,7 @@ fn inspect_json_error() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// W5 후속: MCP/Python 처럼 ops 디코드 경고(`LAYOUT_CACHE_DROPPED` 등)를
+// 후속: MCP/Python 처럼 ops 디코드 경고(`LAYOUT_CACHE_DROPPED` 등)를
 // CLI 도 노출한다 — `--json`의 `warnings` 키(비었으면 생략) +
 // 텍스트 모드 stderr 한 줄씩. `delete-para`/`insert-para`는 기존
 // `warnings` 관례(항상 존재, 구조적 자문과 같은 배열)를 따른다.

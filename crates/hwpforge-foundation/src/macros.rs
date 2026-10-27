@@ -13,7 +13,7 @@
 ///   `Deserialize`
 /// - Implements `Display`, `JsonSchema`
 ///
-/// # Phase 1 Migration Note
+/// # Migration Note
 ///
 /// The internal representation will migrate from `String` to an interned
 /// type (`lasso` or `string_cache::Atom`) for O(1) comparison and memory

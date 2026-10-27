@@ -63,7 +63,7 @@ fn every_hwp5_error_code_is_classified() {
         ),
         // The decoder's own style and border-fill reference checks raise it
         // (decoder `mod.rs`, `section/mod.rs`, crate `lib.rs`); the decode
-        // stage owns them, so it is an input decode failure (W4, D10).
+        // stage owns them, so it is an input decode failure.
         (
             Hwp5Error::Core(CoreError::InvalidStructure {
                 context: "table borderFill".into(),
@@ -91,10 +91,10 @@ fn every_hwp5_error_code_is_classified() {
 }
 
 #[test]
-// 이것을 실패시키는 것(W4): `convert_code` 의 Validate·Encode 를 `Hwp5ConvertFailed` 로 되돌리기,
+// 이것을 실패시키는 것: `convert_code` 의 Validate·Encode 를 `Hwp5ConvertFailed` 로 되돌리기,
 // LayoutPatch 를 다른 코드로 바꾸기, `hint()` 의 Validate·Encode 갈래 삭제(힌트 소실).
 fn each_post_decode_stage_reports_its_own_code() {
-    // The stage decides the code (design D10): a direct Core validation of
+    // The stage decides the code: a direct Core validation of
     // the decoded document is `VALIDATION_FAILED`, the HWPX output encode is
     // `ENCODE_FAILED`, and only the layout-hint replay on the package this
     // crate just generated keeps `HWP5_CONVERT_FAILED`.
@@ -153,11 +153,11 @@ fn each_post_decode_stage_reports_its_own_code() {
 }
 
 #[test]
-// 이것을 실패시키는 것(W4): `hwp5_code` 의 `Core` 갈래를 `Hwp5ConvertFailed` 로 되돌리기.
+// 이것을 실패시키는 것: `hwp5_code` 의 `Core` 갈래를 `Hwp5ConvertFailed` 로 되돌리기.
 fn a_decode_stage_core_error_is_a_decode_failure() {
     // A Core error raised inside the decoder (a broken style or border-fill
     // reference) is part of reading the input, so the decode stage reports it
-    // like any other unreadable HWP5 (design D10, O03).
+    // like any other unreadable HWP5.
     let error = ConvertOpsError::Convert(ConvertError::Decode(Hwp5Error::Core(
         CoreError::InvalidStructure { context: "document".into(), reason: "no sections".into() },
     )));
@@ -225,7 +225,7 @@ fn only_a_render_failure_exposes_the_renderer_code() {
 /// The CLI's `pdf_error_cause` expectations, variant for variant.
 ///
 /// Copied from `hwpforge-bindings-cli`'s `pdf_error_cause_maps_every_variant`
-/// so the two mappers cannot drift: `cause_info()` exists precisely so W3 can
+/// so the two mappers cannot drift: `cause_info()` exists precisely so the CLI can
 /// delete the CLI's own 20-arm mapper and print this instead.
 fn cli_cause_cases() -> Vec<(PdfError, &'static str, Option<&'static str>, Option<&'static str>)> {
     let loc = || "s0/p1/t0r0c0".to_string();

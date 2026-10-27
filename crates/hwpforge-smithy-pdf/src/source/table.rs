@@ -1,7 +1,7 @@
-//! W3c 표 배치소스 — **검증된 프로파일**의 표만 캐시 재생한다.
+//! 표 배치소스 — **검증된 프로파일**의 표만 캐시 재생한다.
 //!
 //! 셀 텍스트·행높이·열폭은 캐시/wire 재생이지만, 분할 표의 **중간 쪽 경계는
-//! 캐시에 신호가 없어 계산**한다 (게이트2 C1 실측 — 셀 lineseg 는 전부
+//! 캐시에 신호가 없어 계산**한다 (실측 — 셀 lineseg 는 전부
 //! 셀-상대 v=0, host lineseg 는 1개). 그래서:
 //!
 //! - 분할이 일어나면 [`PdfWarning::TablePaginationComputed`] 를 **항상** 방출
@@ -97,7 +97,7 @@ pub(crate) fn placement_is_default_flow(table: &Table) -> bool {
 }
 
 /// 표 host 문단 하나를 재생한다. 분할 시 `pages` 에 새 쪽을 만든다.
-#[allow(clippy::too_many_arguments)] // 배치 컨텍스트 전달 — 구조체화는 W3d 정리 후보
+#[allow(clippy::too_many_arguments)] // 배치 컨텍스트 전달 — 구조체화는 정리 후보
 pub(crate) fn replay_table(
     input: &PdfInput<'_>,
     table: &Table,
@@ -139,7 +139,7 @@ pub(crate) fn replay_table(
     let anchors: Vec<&GridCell> = grid.iter_anchors().collect();
     let col_x = solve_column_offsets(table, &anchors, col_count, location)?;
 
-    // ── 행높이 R1' (게이트2 C3: span=1 만 기여, span>1 은 합 제약) ──
+    // ── 행높이 (span=1 만 기여, span>1 은 합 제약) ──
     let depth = 0usize; // top-level 표 — 중첩은 emit_row 재귀에서 +1
     let row_heights =
         compute_row_heights(input, table, &anchors, row_count, location, depth, warnings)?;
@@ -288,7 +288,7 @@ pub(crate) fn replay_table(
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{location}: computed table height {total_height} != saved sz height {} \
-                     (R1 mismatch; heights={row_heights:?})",
+                     (row height mismatch; heights={row_heights:?})",
                     sz.as_i32()
                 ),
             });
@@ -429,7 +429,7 @@ struct AdmittedCaption<'a> {
     last_width: Option<i32>,
 }
 
-/// D: 표 캡션 admission — 위·아래만, 캡션 번호 거부(Q7), 캡션 문단마다 줄
+/// 표 캡션 admission — 위·아래만, 캡션 번호 거부, 캡션 문단마다 줄
 /// 캐시 필수, 글자 밖 내용 거부. 이것을 실패시키는 것: 측 검사 삭제 · 캐시
 /// 검사 삭제 · 번호 거부 삭제(`unsupported_table_captions_are_refused`).
 fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<AdmittedCaption<'a>> {
@@ -567,7 +567,7 @@ fn emit_caption(
 }
 
 /// 앵커 제약(`x[c+span] − x[c] = width`)으로 열 경계 오프셋을 푼다.
-/// 미유일/모순 = 거부 (게이트2 H2).
+/// 미유일/모순 = 거부.
 fn solve_column_offsets(
     table: &Table,
     anchors: &[&GridCell],
@@ -650,7 +650,7 @@ pub(crate) fn cell_content_extent(
                 detail: format!("{location}: non-empty cache has no lines"),
             })?;
         // 중첩 표 host 문단: lineseg 는 한 줄 높이만 알므로 표 흐름 소비
-        // (host.v + om.top + Σ행높이 + om.bottom, R5)를 별도 가산한다.
+        // (host.v + om.top + Σ행높이 + om.bottom)를 별도 가산한다.
         for run in &para.runs {
             if let hwpforge_core::run::RunContent::Table(nested) = &run.content {
                 let om = nested.out_margin.unwrap_or_default();
@@ -664,7 +664,7 @@ pub(crate) fn cell_content_extent(
 }
 
 /// 셀 콘텐츠 admission: 중첩 표는 허용(재귀 배치), 그 밖의 비텍스트 run 은
-/// 자동 행높이 재현 불가로 거부 (게이트2 M4).
+/// 자동 행높이 재현 불가로 거부.
 fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     for row in &table.rows {
         for cell in &row.cells {
@@ -730,7 +730,7 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     Ok(())
 }
 
-/// 중첩 표(행 내부 — 분할 없음)의 총높이 = Σ R1' 행높이.
+/// 중첩 표(행 내부 — 분할 없음)의 총높이 = Σ행높이.
 fn flat_table_height(
     input: &PdfInput<'_>,
     table: &Table,
@@ -817,7 +817,7 @@ fn place_table_flat(
     Ok(total)
 }
 
-/// R1' 행높이: span=1 셀만 행 최소높이에 기여, span>1 은 합 제약 검사.
+/// 행높이: span=1 셀만 행 최소높이에 기여, span>1 은 합 제약 검사.
 fn compute_row_heights(
     input: &PdfInput<'_>,
     table: &Table,
@@ -835,7 +835,7 @@ fn compute_row_heights(
         let cell = cell_of(table, a);
         let m = effective_margin(table, cell);
         let Some(extent) = cell_content_extent(input, cell, location, depth)? else {
-            // 셀 캐시 결손 = 자동 행높이 재현 불가 (게이트2 C4 — 표 단위 fatal).
+            // 셀 캐시 결손 = 자동 행높이 재현 불가 (표 단위 fatal).
             return Err(PdfError::MissingLayoutCache {
                 count: 1,
                 first: format!("{location}/r{}c{}", a.anchor.row, a.anchor.col),
@@ -868,7 +868,7 @@ fn compute_row_heights(
         for &(a, r, end) in &spans {
             let cell = cell_of(table, a);
             let m = effective_margin(table, cell);
-            // C4: 병합 셀도 캐시 결손 = 표 단위 fatal (span-1 과 동일 —
+            // 병합 셀도 캐시 결손 = 표 단위 fatal (span-1 과 동일 —
             // 무음 0 처리하면 콘텐츠가 조용히 사라진다).
             let Some(extent) = cell_content_extent(input, cell, location, depth)? else {
                 return Err(PdfError::MissingLayoutCache {
@@ -1044,7 +1044,7 @@ fn emit_anchor_clipped(
             .filter(|&id| input.styles.border_fill_face(id).is_some())
             .or(cell.border_fill_id)
             .or(table.border_fill_id);
-        // 배경 (FillKind — 없음/미지원 구분, 게이트2 M2).
+        // 배경 (FillKind — 없음/미지원 구분).
         if let Some(id) = fill_id {
             match input.styles.border_fill_face(id) {
                 Some(FillKind::Solid(color)) => {
@@ -1158,7 +1158,7 @@ fn emit_anchor_clipped(
                     for atom in line {
                         if let crate::source::LineAtom::Image(img) = atom {
                             let seg = &cache.lines[li];
-                            // 표 셀은 sub-line 이미지 미개방 (W1 범위 밖 — 셀 내부
+                            // 표 셀은 sub-line 이미지 미개방 (범위 밖 — 셀 내부
                             // 세로 원점 실측 fixture 부재) → 이미지-지배 삼중
                             // 일치만 허용, 그 외는 fail-closed.
                             if !crate::source::line_matches_object_height(seg, img.height) {
@@ -1199,7 +1199,7 @@ fn emit_anchor_clipped(
                 }
                 // **내부 절단선**(from>0·to<full_h —
                 // 셀 외곽은 절단선 아님)이 이미지 줄을 strict 관통하면
-                // 잘림/넘침 (이미지에 clip IR 없음 — W5/W6) → fail-closed.
+                // 잘림/넘침 (이미지에 clip IR 없음) → fail-closed.
                 // boundary touch 는 허용.
                 if line_atoms_override.is_some() {
                     let line_bottom = line_top.checked_add(seg.vertsize).ok_or_else(|| {
@@ -1223,7 +1223,7 @@ fn emit_anchor_clipped(
                         return Err(PdfError::InvalidCache {
                             detail: format!(
                                 "{para_loc}/l{li}: split boundary intersects an image \
-                                 line — image clipping is not renderable before W5"
+                                 line — image clipping is not renderable"
                             ),
                         });
                     }

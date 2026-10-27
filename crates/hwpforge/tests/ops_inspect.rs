@@ -204,7 +204,7 @@ fn empty_input_is_a_decode_failure() {
 #[test]
 fn metadata_carries_the_full_document_metadata_projection() {
     // The report must carry everything the MCP inspect tool
-    // projects today (subject, created, modified, keywords) so the W2
+    // projects today (subject, created, modified, keywords) so the
     // migration needs no second decode. Values are fixture-dependent; the
     // contract here is the key set and the "empty, never missing" rule.
     let out = inspect(&fixture("SimpleTable.hwpx"), &InspectOptions::default()).expect("inspect");

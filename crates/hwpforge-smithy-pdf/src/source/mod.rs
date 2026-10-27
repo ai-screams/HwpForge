@@ -34,11 +34,11 @@ pub struct LineRun {
 pub enum LineAtom {
     /// 셰이핑 대상 텍스트 run.
     Text(LineRun),
-    /// 인라인 이미지 — W2a 에선 synthetic 테스트만 생성하고 production
-    /// producer 는 admission 이 막는다 (개방 = W2b).
+    /// 인라인 이미지 — admission 을 통과한 원자를 production
+    /// producer 가 생성한다.
     Image(LineImage),
-    /// 인라인(글자취급) 글상자 — W4 w2 에선 타입만 정의하고 production
-    /// producer(admission)는 w3 이 연다. 렌더는 w3 이 [`LineTextBox`] 를
+    /// 인라인(글자취급) 글상자 — production producer(admission)가 생성한다.
+    /// 렌더는 [`LineTextBox`] 를
     /// [`crate::paint::PaintItem::Clipped`] 로 낮춘다.
     TextBox(LineTextBox),
 }
@@ -57,14 +57,14 @@ pub struct LineImage {
     pub crop: Option<[f64; 4]>,
 }
 
-/// 줄 안 인라인(글자취급) 글상자 원자 (W4 w2).
+/// 줄 안 인라인(글자취급) 글상자 원자.
 ///
 /// 글상자는 이미지처럼 호스트 줄에서 인라인 **폭**([`Self::width`])을
 /// 소비하는 원자다. 내부는 박스-내용 상대 좌표의 연속 줄들
 /// ([`Self::inner_lines`])이고, 테두리·채움([`Self::style`])과 세로
 /// 정렬([`Self::vert_align`])을 가진다 (한컴 저장 문서 실측).
 ///
-/// # w3 이 소비할 계약
+/// # 렌더가 소비할 계약
 ///
 /// 1. **원점·폭 소비**: 호스트 줄의 x 커서가 [`Self::width`] 만큼 전진한다
 ///    (인라인 이미지와 동일 — [`LineImage::width`] 선례). 박스 좌상단 =
@@ -81,9 +81,9 @@ pub struct LineImage {
 ///    모두 내부 vertpos 0 — 실측) — TOP/CENTER/BOTTOM 은 렌더가
 ///    콘텐츠 높이 대비 박스 높이 여백으로 시프트한다 (셀 valign 선례).
 ///
-/// # 명시 제외 (W4 백로그 — admission fail-closed 유지)
+/// # 명시 제외 (백로그 — admission fail-closed 유지)
 ///
-/// 내부 원자가 다시 글상자·표인 중첩은 W4 범위 밖이다. w3 의 admission 이
+/// 내부 원자가 다시 글상자·표인 중첩은 범위 밖이다. admission 이
 /// 그런 캐시를 거부한다 (fixture 부재). 타입 자체는
 /// [`TextBoxLine::atoms`] 가 [`LineAtom`] 를 담아 재귀 표현이 가능하다.
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +104,7 @@ pub struct LineTextBox {
     pub inner_lines: Vec<TextBoxLine>,
 }
 
-/// 글상자 내부 한 줄 (박스-내용 상대 좌표 — w3 렌더가 박스 원점·textMargin·
+/// 글상자 내부 한 줄 (박스-내용 상대 좌표 — 렌더가 박스 원점·textMargin·
 /// vertAlign 시프트를 더해 절대 배치한다).
 ///
 /// `seg` 는 디코드 캐시의 [`hwpforge_core::layout::LineSeg`] 를 **그대로**
@@ -116,7 +116,7 @@ pub struct TextBoxLine {
     /// 이 줄의 조판 캐시 기하 (박스-내용 상대 — vertpos/baseline/horzpos/
     /// horzsize/vertsize/textheight).
     pub seg: hwpforge_core::layout::LineSeg,
-    /// 줄 원자들 (텍스트/이미지 — 재귀 표현. 중첩 글상자·표는 W4 제외,
+    /// 줄 원자들 (텍스트/이미지 — 재귀 표현. 중첩 글상자·표는 제외,
     /// admission fail-closed).
     pub atoms: Vec<LineAtom>,
     /// 이 줄이 속한 (내부) 문단의 정렬.
@@ -225,7 +225,7 @@ pub struct LaidPageNumber {
     pub anchor_bottom: i32,
 }
 
-/// 앵커형 이미지의 절대 배치 (HWPUNIT, 쪽 좌상단 원점 — W5 w1b).
+/// 앵커형 이미지의 절대 배치 (HWPUNIT, 쪽 좌상단 원점).
 ///
 /// 글자취급이 아닌(`treat_as_char == false`) 이미지는 줄 흐름에 속하지 않고
 /// 문단에 **앵커**된 오버레이다 (여러 줄에 걸침). 본문 회피는
@@ -342,8 +342,8 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             &mut warnings,
         )?;
         counter.enter_section(section.begin_num.as_ref());
-        // W2: 쪽 배정 직전에 그 쪽의 재시작 이벤트를 문서 순서로 적용한다
-        // (같은 쪽 다중 = last-wins). F1 실측: 컨트롤이 놓인 쪽부터 새 번호
+        // 쪽 배정 직전에 그 쪽의 재시작 이벤트를 문서 순서로 적용한다
+        // (같은 쪽 다중 = last-wins). 실측: 컨트롤이 놓인 쪽부터 새 번호
         // (1쪽 앵커 = `7,8`, 2쪽 앵커 = `1,7`).
         let numbers: Vec<u32> = (first_page..pages.len())
             .map(|page_idx| {
@@ -367,12 +367,12 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     Ok(ReplayLayout { pages, warnings })
 }
 
-/// 쪽번호 표시 카운터 (W1 reducer).
+/// 쪽번호 표시 카운터 (reducer).
 ///
-/// 구역 시작값(`BeginNum`)과 쪽 단위 이벤트(중간 재시작 `nwno` W2, 감춤
-/// `pghd` W3)가 **같은 카운터 상태**를 문서 순서로 변경한다 — 단일
+/// 구역 시작값(`BeginNum`)과 쪽 단위 이벤트(중간 재시작 `nwno`, 감춤
+/// `pghd`)가 **같은 카운터 상태**를 문서 순서로 변경한다 — 단일
 /// `display_start + offset` 산술로는 중간 재시작을 표현할 수 없어 쪽
-/// 단위 배정으로 바꾼다 (이 wave 에서는 기존 거동과 동일 — 골든 잠금).
+/// 단위 배정으로 바꾼다 (기존 거동과 동일 — 골든 잠금).
 #[derive(Debug)]
 struct DisplayCounter {
     next: u32,
@@ -392,7 +392,7 @@ impl DisplayCounter {
     }
 
     /// 물리 쪽 하나에 표시 번호를 배정하고 전진한다. 감춤(hide_first 등)은
-    /// **표시만** 생략하고 전진은 막지 않는다 (F2-① PDF 실측: `1, _, 3`).
+    /// **표시만** 생략하고 전진은 막지 않는다 (PDF 실측: `1, _, 3`).
     fn assign_page(&mut self) -> u32 {
         let n = self.next;
         self.next += 1;
@@ -405,7 +405,7 @@ impl DisplayCounter {
     }
 }
 
-/// `nwno` 쪽번호 재시작 이벤트 (W2) — 컨트롤이 놓인 줄이 배치된 **물리 쪽**
+/// `nwno` 쪽번호 재시작 이벤트 — 컨트롤이 놓인 줄이 배치된 **물리 쪽**
 /// (전역 인덱스)에 앵커된다. 문서 순서로 수집되어 같은 쪽 다중 이벤트는
 /// last-wins 로 적용된다.
 #[derive(Debug, Clone, Copy)]
@@ -416,9 +416,9 @@ struct PageNumberEvent {
     number: u32,
 }
 
-/// `pghd` 감춤 이벤트 (W3) — 컨트롤이 놓인 물리 쪽의 렌더 대상 3종
+/// `pghd` 감춤 이벤트 — 컨트롤이 놓인 물리 쪽의 렌더 대상 3종
 /// (쪽번호/머리말/꼬리말)만 담는다. 바탕쪽/테두리/배경은 렌더 자체가 없어
-/// carry-only. 같은 쪽 다중 이벤트는 적용부에서 OR 병합된다 (F2 계약:
+/// carry-only. 같은 쪽 다중 이벤트는 적용부에서 OR 병합된다 (계약:
 /// 감춤은 카운터 전진을 막지 않는다 — `1, _, 3`).
 #[derive(Debug, Clone, Copy)]
 struct PageHideEvent {
@@ -548,7 +548,7 @@ fn is_anchored_image(content: &RunContent) -> bool {
 ///   다중 컬럼 판정은 컬럼 기하가 필요해 호출부가 fail-closed)
 /// - `text_wrap ∈ {Square, Tight, Through, TopAndBottom}` (전부 본문이
 ///   회피 — 렌더 산술 동일). `BehindText`·`InFrontOfText`·`Other` 는
-///   z-order/겹침 의미가 달라 제외 (W5 후속).
+///   z-order/겹침 의미가 달라 제외 (후속).
 ///
 /// 앵커형이지만 위 조합 밖(예: `Paper`/`Page` rel)은 `false` → 호출부가
 /// 종류를 세분해 typed fail-closed.
@@ -580,7 +580,7 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
         )
 }
 
-/// 문단의 앵커형 이미지를 절대 배치([`LaidAnchoredImage`])로 수집한다 (W5 w1b).
+/// 문단의 앵커형 이미지를 절대 배치([`LaidAnchoredImage`])로 수집한다.
 ///
 /// 지원 조합([`is_admitted_anchored_image`])만 수집하고, 그 밖(조합 외·다중·
 /// 글자취급 인라인과 혼합)은 미측정 profile 이라 typed [`PdfError::InvalidCache`]
@@ -619,7 +619,7 @@ fn collect_anchored_images(
         return Err(PdfError::InvalidCache {
             detail: format!(
                 "{location}: {anchored_count} anchored images in one paragraph — \
-                 unmeasured z-order (unsupported before W5 follow-up)"
+                 unmeasured z-order (unsupported)"
             ),
         });
     }
@@ -655,8 +655,8 @@ fn collect_anchored_images(
     if !is_admitted_anchored_image(content) {
         return Err(PdfError::InvalidCache {
             detail: format!(
-                "{location}: anchored image placement (wrap={:?}, vert_rel={:?}, \
-                 horz_rel={:?}) unsupported before W5 w1b (scope: vert_rel=Para, \
+                "{location}: unsupported anchored image placement (wrap={:?}, vert_rel={:?}, \
+                 horz_rel={:?}) (scope: vert_rel=Para, \
                  horz_rel=Para/Column, wrap=Square/Tight/Through/TopAndBottom)",
                 placement.text_wrap, placement.vert_rel_to, placement.horz_rel_to
             ),
@@ -670,12 +670,12 @@ fn collect_anchored_images(
         return Err(PdfError::InvalidCache {
             detail: format!(
                 "{location}: anchored image horz_rel=Column in a multi-column \
-                 section — column geometry unsupported before W5 follow-up"
+                 section — column geometry unsupported"
             ),
         });
     }
     // 마커 소속 줄: 마커 가시 좌표 = 선행 run 가시 텍스트 합
-    // (앵커 마커 자신은 0폭 — W1b 가시 좌표계와 동일 축). floor-search
+    // (앵커 마커 자신은 0폭 — 가시 좌표계와 동일 축). floor-search
     // (마지막 textpos ≤ pos)로 소속 lineseg 를 고른다 — validate_textpos
     // 가 호출 전에 오름차순을 보증한다.
     let mut marker_pos: u32 = 0;
@@ -828,7 +828,7 @@ fn emit_page_numbers(
         if hide_first && offset == 0 {
             continue; // 번호 자체는 진행하고 표시만 생략.
         }
-        // W3: pghd 감춤 쪽 — 표시만 생략 (F2-① 실측 `1, _, 3`: 카운터는
+        // pghd 감춤 쪽 — 표시만 생략 (실측 `1, _, 3`: 카운터는
         // reducer 가 이미 전진시켰다). secd 첫쪽 감춤과 자연 OR.
         if hides.iter().any(|h| h.page == first_page + offset && h.page_num) {
             continue;
@@ -870,7 +870,7 @@ fn overlay_headers_footers(
         return Ok(());
     }
     // 머리말/꼬리말은 앵커 문단이 놓인 쪽부터 적용된다 —
-    // 앞 쪽에는 없다(x4b). 앵커 문단의 쪽을 재생이 정하지 못했으면(캐시 없는
+    // 앞 쪽에는 없다. 앵커 문단의 쪽을 재생이 정하지 못했으면(캐시 없는
     // 문단) 근사하지 않고 거부한다.
     let start_page = |kind: &'static str,
                       i: usize,
@@ -957,7 +957,7 @@ fn overlay_headers_footers(
             if hide_first && offset == 0 {
                 continue;
             }
-            // W3: pghd 감춤 쪽 — 해당 밴드만 억제 (F2-③ 실측: 2쪽 머리말
+            // pghd 감춤 쪽 — 해당 밴드만 억제 (실측: 2쪽 머리말
             // 소거, 1·3쪽 유지). secd 첫쪽 감춤과 자연 OR.
             if hides.iter().any(|h| {
                 h.page == first_page + offset
@@ -983,15 +983,15 @@ fn overlay_headers_footers(
 /// 쪽마다 적용되는 머리말/꼬리말 후보 (쪽 `first_page..page_count` 순서).
 ///
 /// 후보 = 그 쪽까지 시작했고(`starts[i] <= 쪽`) 쪽 종류(`kinds[i]`: 양쪽·홀·짝)가
-/// 맞는 항목 중, 같은 종류에서 가장 늦게 시작한 것(x4a: 3쪽부터 B). 시작 쪽이
+/// 맞는 항목 중, 같은 종류에서 가장 늦게 시작한 것(3쪽부터 B). 시작 쪽이
 /// 같은 같은 종류 항목은 둘 다 남는다 — 호출부가 모호성으로 거부한다. 홀수
 /// 쪽 번호는 물리 쪽(1부터) 기준.
 ///
 /// 시작 쪽 순으로 한 번 훑으며 종류별 "가장 늦은 시작" 집합을 갱신하므로
 /// 비교는 O(쪽 + 항목) 이다(쪽마다 전 후보를 다시 뒤지면 O(P·H²)).
 /// `comparisons` 는 그 비교 횟수 — 테스트가 시간 대신 센다.
-/// 이것을 실패시키는 것: 시작 쪽 조건 삭제(x4b 1쪽에 머리말) / 늦은 시작
-/// 대체를 지우기(x4a 3쪽 = 모호성 거부).
+/// 이것을 실패시키는 것: 시작 쪽 조건 삭제(1쪽에 머리말) / 늦은 시작
+/// 대체를 지우기(3쪽 = 모호성 거부).
 fn band_selections(
     starts: &[usize],
     kinds: &[ApplyPageType],
@@ -1090,7 +1090,7 @@ fn replay_band_item(
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{location}: non-text run in band paragraph is not renderable \
-                     before W2 (band allowlist is empty)"
+                     (band allowlist is empty)"
                 ),
             });
         }
@@ -1163,7 +1163,7 @@ fn replay_section(
     let mut prev_v: Option<i32> = None;
     let mut missing: Vec<String> = Vec::new();
     let mut renderable = 0usize;
-    // 직전 표의 "다음 문단 v" 캐시 앵커 검산 (게이트2 C1 — 계산 페이지네이션
+    // 직전 표의 "다음 문단 v" 캐시 앵커 검산 (계산 페이지네이션
     // 을 캐시가 반증하면 fatal).
     let mut pending_table_anchor: Option<(i32, i32, String)> = None;
 
@@ -1172,13 +1172,13 @@ fn replay_section(
         let para = expanded.as_ref();
         let location = format!("s{section_idx}/p{para_idx}");
 
-        // W2/W3 이벤트는 **cache admission 과 무관하게** 문단 진입 시 수집한다
+        // 재시작·감춤 이벤트는 **cache admission 과 무관하게** 문단 진입 시 수집한다
         // (table-host/cacheless 경로의 `continue` 가
         // 이벤트를 무음 유실시켰다).
         let (restarts, hide_marks) = collect_page_events(para);
 
-        // W3: 명시적 쪽 나누기 (ParaHeader divide_sort bit2 / HWPX
-        // pageBreak="1") — F2 실측: 한컴은 쪽나눔 문단의 lineseg v 를
+        // 명시적 쪽 나누기 (ParaHeader divide_sort bit2 / HWPX
+        // pageBreak="1") — 실측: 한컴은 쪽나눔 문단의 lineseg v 를
         // 리셋하지 않아 (연속 600) `v==0 ∨ v<prev` 규칙이 잡지 못한다.
         // 플래그가 유일한 신호. 현재 쪽이 비어 있으면 이중 쪽나눔 방지.
         if para.page_break
@@ -1192,7 +1192,7 @@ fn replay_section(
             pending_table_anchor = None;
         }
 
-        // ── 표 host 문단 (W3c — 검증된 프로파일 재생) ─────────────
+        // ── 표 host 문단 (검증된 프로파일 재생) ─────────────
         let table_count =
             para.runs.iter().filter(|r| matches!(r.content, RunContent::Table(_))).count();
         if table_count > 0 {
@@ -1370,7 +1370,7 @@ fn replay_section(
         }) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
-                    "{location}: non-text run is not renderable before W2 \
+                    "{location}: non-text run is not renderable \
                      (only replay-consumed page markers are admitted)"
                 ),
             });
@@ -1490,7 +1490,7 @@ fn replay_section(
                     .collect(),
             };
 
-            // W2: 이 줄 텍스트 구간에 놓인 nwno 재시작을 현재 물리 쪽에 앵커.
+            // 이 줄 텍스트 구간에 놓인 nwno 재시작을 현재 물리 쪽에 앵커.
             // 마지막 줄은 문단 끝 오프셋(컨트롤이 꼬리에 있는 경우)까지 흡수.
             let is_last = line_idx + 1 == line_count;
             for &(_, number) in
@@ -1532,7 +1532,7 @@ fn replay_section(
     Ok(())
 }
 
-/// 표 다음 문단의 캐시 v 로 계산 페이지네이션을 검산한다 (게이트2 C1).
+/// 표 다음 문단의 캐시 v 로 계산 페이지네이션을 검산한다.
 ///
 /// 다음 문단이 새 쪽에서 시작하면 앵커를 걸 수 없어 건너뛴다 (v 는
 /// 쪽-상대라 비교 불가) — 그 밖에 불일치 = 계산이 캐시와 모순 = fatal.
@@ -1610,7 +1610,7 @@ pub(crate) struct ClassifiedObject {
 /// - two-match = `InvalidCache` (모호).
 /// - zero-match = **sub-line 이미지면**(`sub_line_capable`) typed
 ///   `UnsupportedContent`("sub-line image on line boundary"),
-///   그 외에는 `InvalidCache` (추측 금지 — W1b 영폭 축약 사각).
+///   그 외에는 `InvalidCache` (추측 금지 — 영폭 축약 사각).
 ///
 /// sub-line 이미지는 **줄-중간**(offset 이 어느 줄 시작과도 다름)에서만
 /// admit 되고, 그 배치는 렌더 [`crate::render`] 의 이미지 높이 기반 공식이 준다.
@@ -1761,7 +1761,7 @@ fn line_image(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<Li
     })
 }
 
-/// An object with an outer margin (S18) is refused: Hancom keeps that space
+/// An object with an outer margin is refused: Hancom keeps that space
 /// around it (a treat-as-char object with a bottom margin sits that much
 /// higher on its line) and this layout does not.
 /// 이것을 실패시키는 것: 세 경로의 호출을 각각 지우기
@@ -2101,7 +2101,7 @@ fn distill_textbox_style(style: &hwpforge_core::control::ShapeStyle) -> TextBoxS
 }
 
 /// run 별 UTF-16 [start, end) 구간과 문자 스타일. 텍스트가 아닌 run
-/// (컨트롤·이미지)은 0 폭으로 취급하고 경고를 남긴다 (W5 전 미지원).
+/// (컨트롤·이미지)은 0 폭으로 취급하고 경고를 남긴다 (미지원 항목).
 fn run_utf16_spans(
     para: &hwpforge_core::paragraph::Paragraph,
     warnings: &mut Vec<PdfWarning>,
@@ -2118,8 +2118,8 @@ fn run_utf16_spans(
             }
             None => {
                 // 표는 이미 거부됐고, 여기 오는 것은 컨트롤/이미지 — 흐름 폭 0.
-                // W2: replay 가 소비하는 marker(nwno)는 드롭이 아니므로 제외.
-                // W5 w1b: 앵커 이미지는 배경 오버레이로 렌더되므로 드롭 아님.
+                // replay 가 소비하는 marker(nwno)는 드롭이 아니므로 제외.
+                // 앵커 이미지는 배경 오버레이로 렌더되므로 드롭 아님.
                 if !is_replay_consumed_marker(&run.content)
                     && !is_admitted_anchored_image(&run.content)
                 {
@@ -2182,11 +2182,11 @@ mod tests {
         }
     }
 
-    // ── W4 w2: LineAtom::TextBox 구축/접근 계약 (w3 소비 형태) ──────
+    // ── LineAtom::TextBox 구축/접근 계약 (소비 형태) ──────
 
     /// 글상자 원자가 박스 크기·스타일·vertAlign 과 내부 줄(lineseg + 재귀
     /// 원자)을 손실 없이 나르고, 호스트 줄의 텍스트 run 으로 새지 않는지
-    /// 잠근다 — w3 이 이 형태를 소비한다.
+    /// 잠근다 — 렌더가 이 형태를 소비한다.
     #[test]
     fn distill_drops_fill_color_when_fill_is_none() {
         use hwpforge_core::control::{Fill, ShapeStyle};
@@ -2330,7 +2330,7 @@ mod tests {
     }
 
     /// `placement == None` 이미지는 보수 거부 유지 (앵커/글자취급 판별 근거
-    /// 부재 — W5 w1b 는 명시 placement 만 렌더).
+    /// 부재 — 앵커 렌더는 명시 placement 만 렌더).
     #[test]
     fn placement_none_image_stays_rejected() {
         use hwpforge_core::image::{Image, ImageFormat};
@@ -2389,7 +2389,7 @@ mod tests {
     }
 
     /// The page-by-page header choice: the latest start of each page kind
-    /// wins (x4a), nothing before the first start (x4b), odd/even pages take
+    /// wins, nothing before the first start, odd/even pages take
     /// their own kind, an equal start is kept twice (for the ambiguity
     /// refusal). Every page starting a new header — P = H = 300 — costs a
     /// number of comparisons linear in pages + headers (the old
@@ -2421,7 +2421,7 @@ mod tests {
         assert!(comparisons <= 4 * (count + count), "{comparisons}");
     }
 
-    /// P16 (PDF-v3): 정렬이 top/left 가 아니거나 두 플래그가 켜진 앵커 그림은
+    /// 정렬이 top/left 가 아니거나 두 플래그가 켜진 앵커 그림은
     /// 거부, 기본이면 허용. 이것을 실패시키는 것: 앵커 admission 의 네 조건 중
     /// 하나를 지우기(각각).
     #[test]
@@ -2458,7 +2458,7 @@ mod tests {
         }
     }
 
-    /// P18 (PDF-v3): every path that draws a picture — inline, in a cell,
+    /// every path that draws a picture — inline, in a cell,
     /// in a text box, anchored — carries its crop as fractions of the whole
     /// image (crop / image extent); a crop whose image size is unknown, or
     /// an empty one, is refused; no crop = `None`.
@@ -2560,7 +2560,7 @@ mod tests {
         assert_eq!(layout.pages[0].anchored_images[0].crop, Some([0.25, 0.0, 0.75, 0.5]));
     }
 
-    /// P19: a caption number (`Control::AutoNumber`) is not drawn yet — the
+    /// a caption number (`Control::AutoNumber`) is not drawn yet — the
     /// paragraph that holds it is refused, not rendered without the number.
     ///
     /// 이것을 실패시키는 것: `AutoNumber` 를 재생 소비 marker 로 허용하는 것(번호
@@ -2707,10 +2707,11 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
         let doc = doc_of(vec![para]);
+        // 이것을 실패시키는 것: 앵커 배치 오류 문구를 정리 전 단계 이름으로 되돌리기.
         let err = replay(&doc, &PdfOptions::default()).expect_err("paper rel rejected");
         assert!(
             matches!(&err, PdfError::InvalidCache { detail }
-                if detail.contains("unsupported before W5 w1b")),
+                if detail.contains("unsupported anchored image placement")),
             "{err:?}"
         );
     }
@@ -2734,10 +2735,11 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
         let doc = doc_of(vec![para]);
+        // 이것을 실패시키는 것: 앵커 배치 오류 문구를 정리 전 단계 이름으로 되돌리기.
         let err = replay(&doc, &PdfOptions::default()).expect_err("infront rejected");
         assert!(
             matches!(&err, PdfError::InvalidCache { detail }
-                if detail.contains("unsupported before W5 w1b")),
+                if detail.contains("unsupported anchored image placement")),
             "{err:?}"
         );
     }
@@ -2936,7 +2938,7 @@ mod tests {
         assert_eq!(anchored[0].y, body_top + 500, "y 는 마커 줄(2쪽 v=0) 기준");
     }
 
-    // ── W4 w3: 인라인 글상자 admission·host predicate·fail-closed ────────
+    // ── 인라인 글상자 admission·host predicate·fail-closed ────────
 
     /// vertsize·textheight 를 지정하는 host 줄 seg (원자 지배 profile 검사용).
     fn sized_seg(textpos: u32, vertpos: i32, size: i32) -> LineSeg {
@@ -2983,7 +2985,7 @@ mod tests {
     }
 
     /// 무늬·그러데이션·그림 채우기 글상자는 거부,
-    /// 단색(F2)은 그린다. 이것을 실패시키는 것: 거부를 지우기(무늬가 단색으로).
+    /// 단색은 그린다. 이것을 실패시키는 것: 거부를 지우기(무늬가 단색으로).
     #[test]
     fn text_box_with_a_fill_paint_cannot_draw_is_refused() {
         use hwpforge_core::control::{Control, Fill, ShapeStyle};
@@ -3024,8 +3026,8 @@ mod tests {
         assert!(with_fill(None).is_ok(), "a plain colour fill renders");
     }
 
-    /// P17: 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
-    /// S18: a picture (inline and anchored) or a text box with an outer
+    /// 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
+    /// a picture (inline and anchored) or a text box with an outer
     /// margin is refused; the same objects without one are not refused for
     /// it.
     ///
@@ -3142,7 +3144,7 @@ mod tests {
         assert!(!refused(&render(None)));
     }
 
-    /// P19: a caption number in a picture's or a text box's
+    /// a caption number in a picture's or a text box's
     /// caption — captions are not drawn — is refused on the inline, the
     /// anchored and the text-box paths; the same caption without the
     /// number is not refused for it.
@@ -3408,7 +3410,7 @@ mod tests {
 
     /// 글상자 내부 글자취급 인라인 이미지는 admission 통과 — 텍스트+이미지
     /// 혼합 줄에서 이미지가 지배 줄(vertsize==textheight==3402)에 문서 순서
-    /// 그대로 귀속되고, 가시 축([0,3)/[3,4]) 텍스트 분할이 정확하다 (W5 w1a).
+    /// 그대로 귀속되고, 가시 축([0,3)/[3,4]) 텍스트 분할이 정확하다.
     #[test]
     fn textbox_inner_inline_image_admits_and_attributes() {
         use hwpforge_foundation::VerticalAlign;
@@ -3449,7 +3451,7 @@ mod tests {
         assert!(!layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })));
     }
 
-    /// 글상자 내부 **앵커형**(treat_as_char=false) 이미지는 W5 w1b(앵커 렌더)
+    /// 글상자 내부 **앵커형**(treat_as_char=false) 이미지는 앵커 렌더 거부
     /// 대상 — CLI cause 집계에서 식별 가능하게 typed kind 로 분리 거부한다.
     #[test]
     fn textbox_inner_anchored_image_is_typed_rejection() {
@@ -3527,7 +3529,7 @@ mod tests {
         );
     }
 
-    /// 앵커형(treat_as_char=false) 글상자는 admission 거부 (앵커 렌더 = W5).
+    /// 앵커형(treat_as_char=false) 글상자는 admission 거부.
     #[test]
     fn anchored_textbox_stays_rejected() {
         use hwpforge_core::control::Control;
@@ -3592,7 +3594,7 @@ mod tests {
         Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
     }
 
-    /// 앵커형(treat_as_char=false) 이미지 — 글상자 내부에서 W5 w1b 대상.
+    /// 앵커형(treat_as_char=false) 이미지 — 글상자 내부에서 거부할 시험 입력.
     fn anchored_img(key: &str) -> Run {
         use hwpforge_core::image::{Image, ImageFormat};
         use hwpforge_core::placement::ObjectPlacement;
@@ -3715,7 +3717,7 @@ mod tests {
 
     #[test]
     fn atoms_image_on_non_first_line_start_is_invalid_cache() {
-        // 이미지 offset 3 == 줄 2 시작 3 — W1b 영폭 축약상 앞/뒤 줄
+        // 이미지 offset 3 == 줄 2 시작 3 — 영폭 축약상 앞/뒤 줄
         // 귀속 불가 → InvalidCache.
         let mut para = Paragraph::with_runs(
             vec![
@@ -3877,7 +3879,7 @@ mod tests {
     #[test]
     fn atoms_subline_image_mid_line_is_attributed() {
         // sub-line 이미지(567 < 줄 1000)가 줄-중간(offset 2)에 있으면 경계
-        // 검사 없이 그 줄에 귀속된다 (C1: 줄-중간만 개방).
+        // 검사 없이 그 줄에 귀속된다 (줄-중간만 개방).
         let mut para = Paragraph::with_runs(
             vec![
                 Run::text("가나", CharShapeIndex::new(0)),
@@ -3896,7 +3898,7 @@ mod tests {
     fn atoms_subline_image_on_boundary_is_unsupported_content() {
         // sub-line 이미지(567)가 비-첫 줄 경계(offset 3)에 정확히 얹힘 — 인접
         // 두 줄 모두 텍스트-지배(1000)라 sub-line 으로 받을 수 있어 귀속 모호
-        // → C1 typed fail-closed(집계 식별용 신규 kind).
+        // → typed fail-closed(집계 식별용 신규 kind).
         let mut para = Paragraph::with_runs(
             vec![
                 Run::text("가나다", CharShapeIndex::new(0)),
@@ -3937,7 +3939,7 @@ mod tests {
     #[test]
     fn atoms_oversized_image_on_boundary_stays_invalid_cache() {
         // 과대 이미지(2000 > 줄 1000)는 어느 인접 줄에도 sub-line 으로도 안
-        // 맞음 → C1 신규 kind 아니라 기존 InvalidCache(zero-match) 유지.
+        // 맞음 → 신규 kind 아니라 기존 InvalidCache(zero-match) 유지.
         let mut para = Paragraph::with_runs(
             vec![
                 Run::text("가나다", CharShapeIndex::new(0)),
@@ -4074,7 +4076,7 @@ mod tests {
         assert_eq!(lines[1].text_runs().next().unwrap().text, "라마바");
     }
 
-    // ── W5-a 머리말/꼬리말 오버레이 ──────────────────────────────
+    // ── 머리말/꼬리말 오버레이 ──────────────────────────────
 
     use hwpforge_core::section::{BeginNum, HeaderFooter, PageStartsOn, Visibility};
     use hwpforge_foundation::ApplyPageType;
@@ -4084,7 +4086,7 @@ mod tests {
         HeaderFooter::new(paras, apply)
     }
 
-    // ── W1: DisplayCounter reducer (계약 — 감춤은 전진을 막지 않는다) ─────
+    // ── DisplayCounter reducer (계약 — 감춤은 전진을 막지 않는다) ─────
 
     #[test]
     fn display_counter_continues_and_restarts_across_sections() {
@@ -4126,7 +4128,7 @@ mod tests {
 
     #[test]
     fn header_baseline_is_band_relative_not_body() {
-        // R6: 머리말 원점 = margin.top (body_top 아님 — 한컴 저장 문서 실측).
+        // 머리말 원점 = margin.top (body_top 아님 — 한컴 저장 문서 실측).
         let doc =
             doc_with_bands(body_pages(1), vec![hf_item(ApplyPageType::Both, &["머리말"])], vec![]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
@@ -4139,7 +4141,7 @@ mod tests {
 
     #[test]
     fn footer_baseline_anchors_at_body_bottom() {
-        // R6: 꼬리말 밴드 top = H − margin.bottom − margin.footer.
+        // 꼬리말 밴드 top = H − margin.bottom − margin.footer.
         let doc =
             doc_with_bands(body_pages(1), vec![], vec![hf_item(ApplyPageType::Both, &["꼬리말"])]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
@@ -4185,7 +4187,7 @@ mod tests {
 
     #[test]
     fn both_plus_odd_header_is_ambiguous() {
-        // 게이트2 H2: 중복 매치 = 한컴 우선순위 미실측 — 첫 항목 선택 금지.
+        // 중복 매치 = 한컴 우선순위 미실측 — 첫 항목 선택 금지.
         let doc = doc_with_bands(
             body_pages(1),
             vec![hf_item(ApplyPageType::Both, &["매쪽"]), hf_item(ApplyPageType::Odd, &["홀수"])],
@@ -4214,7 +4216,7 @@ mod tests {
             .collect()
     }
 
-    /// X4 x4b: a header anchored to a later paragraph starts on that
+    /// A header anchored to a later paragraph starts on that
     /// paragraph's page. 이것을 실패시키는 것: 시작 쪽 조건 삭제(1쪽에도 머리말).
     #[test]
     fn anchored_header_starts_on_its_paragraph_page() {
@@ -4227,7 +4229,7 @@ mod tests {
         assert_eq!(header_texts_per_page(&layout), [vec![], vec!["C"], vec!["C"]]);
     }
 
-    /// X4 x4a: a later header of the same page type replaces the earlier
+    /// A later header of the same page type replaces the earlier
     /// one from its page on. 이것을 실패시키는 것: 대체 규칙 삭제(3쪽 모호성
     /// 거부) / 시작 쪽 비교를 `>=` 로(같은 쪽 시작도 대체).
     #[test]
@@ -4351,7 +4353,7 @@ mod tests {
 
     #[test]
     fn parity_header_in_later_section_is_rejected() {
-        // 다중 섹션 parity = 물리/구역 서수 미실측 — 거부 (게이트2 H2).
+        // 다중 섹션 parity = 물리/구역 서수 미실측 — 거부.
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(body_pages(1), PageSettings::a4()));
         let mut s2 = Section::with_paragraphs(body_pages(1), PageSettings::a4());
@@ -4420,7 +4422,7 @@ mod tests {
             .any(|w| matches!(w, PdfWarning::PageStartsOnFallback { section: 0 })));
     }
 
-    // ── W5-b 쪽번호 합성 ─────────────────────────────────────────
+    // ── 쪽번호 합성 ─────────────────────────────────────────
 
     use hwpforge_core::section::PageNumber;
     use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
@@ -4538,9 +4540,9 @@ mod tests {
         assert_eq!(texts, vec!["1", "2", "10", "11", "12"]);
     }
 
-    // ── W2: nwno 재시작 이벤트 (F1/F1b PDF 실측 정답지) ────────────────────
+    // ── nwno 재시작 이벤트 (PDF 실측 정답지) ────────────────────
 
-    /// [NewNumber ctrl run + 텍스트 run] 문단 (F1b 한컴 실측 run 형태 — ctrl
+    /// [NewNumber ctrl run + 텍스트 run] 문단 (한컴 실측 run 형태 — ctrl
     /// 이 텍스트 앞, textpos 는 가시 텍스트만 계수).
     fn para_with_restart(text: &str, number: u32, lines: Vec<LineSeg>) -> Paragraph {
         use hwpforge_core::control::{Control, NewNumberKind};
@@ -4560,7 +4562,7 @@ mod tests {
 
     #[test]
     fn new_number_on_second_page_restarts_from_there() {
-        // F1b 정답지: 1쪽 = 1, 2쪽(컨트롤 앵커) = 7.
+        // 정답지: 1쪽 = 1, 2쪽(컨트롤 앵커) = 7.
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(
             vec![
@@ -4574,7 +4576,7 @@ mod tests {
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         let texts: Vec<&str> =
             layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
-        assert_eq!(texts, vec!["1", "7"], "중간 쪽 재시작 (F1b `1, 7`)");
+        assert_eq!(texts, vec!["1", "7"], "중간 쪽 재시작 (`1, 7`)");
         // 소비된 marker 는 드롭 경고를 내지 않는다.
         assert!(
             !layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })),
@@ -4585,7 +4587,7 @@ mod tests {
 
     #[test]
     fn new_number_on_first_page_renumbers_whole_document() {
-        // F1 정답지: 1쪽 앵커 → 전문서 재번호 `7, 8`.
+        // 정답지: 1쪽 앵커 → 전문서 재번호 `7, 8`.
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(
             vec![
@@ -4664,7 +4666,7 @@ mod tests {
 
     #[test]
     fn explicit_page_break_splits_pages_even_with_equal_vertpos() {
-        // F2 실측: 한컴 쪽나눔 문단은 lineseg v 를 리셋하지 않는다 (전부
+        // 실측: 한컴 쪽나눔 문단은 lineseg v 를 리셋하지 않는다 (전부
         // 600) — pageBreak 플래그가 유일한 신호. 등v 3문단 = 3쪽.
         let mk = |text: &str, brk: bool| {
             let mut p = para_with_cache(text, vec![seg(0, 600)]);
@@ -4690,9 +4692,9 @@ mod tests {
         assert_eq!(layout.pages.len(), 1);
     }
 
-    // ── W3: pghd 감춤 이벤트 (F2-①/③ PDF 실측 정답지) ────────────────────
+    // ── pghd 감춤 이벤트 (PDF 실측 정답지) ────────────────────
 
-    /// [PageHiding ctrl run + 텍스트 run] 문단 (F2 한컴 실측 run 형태).
+    /// [PageHiding ctrl run + 텍스트 run] 문단 (한컴 실측 run 형태).
     fn para_with_hiding(
         text: &str,
         hide_page_num: bool,
@@ -4723,7 +4725,7 @@ mod tests {
 
     #[test]
     fn page_hiding_suppresses_number_display_but_counter_advances() {
-        // F2-① 정답지: 쪽번호 `1, _, 3` — 2쪽 표시만 소거, 카운터는 전진.
+        // 정답지: 쪽번호 `1, _, 3` — 2쪽 표시만 소거, 카운터는 전진.
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(
             vec![
@@ -4738,12 +4740,12 @@ mod tests {
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         let texts: Vec<Option<&str>> =
             layout.pages.iter().map(|p| p.page_number.as_ref().map(|n| n.text.as_str())).collect();
-        assert_eq!(texts, vec![Some("1"), None, Some("3")], "F2-① `1, _, 3`");
+        assert_eq!(texts, vec![Some("1"), None, Some("3")], "쪽번호 감춤 `1, _, 3`");
     }
 
     #[test]
     fn page_hiding_suppresses_header_band_on_its_page_only() {
-        // F2-③ 정답지: 2쪽 머리말만 소거 — 1·3쪽 머리말 유지.
+        // 정답지: 2쪽 머리말만 소거 — 1·3쪽 머리말 유지.
         let mut doc = Document::new();
         let mut section = Section::with_paragraphs(
             vec![
@@ -4927,7 +4929,7 @@ mod tests {
         assert!(!layout.warnings.iter().any(|w| matches!(w, PdfWarning::PageNumberSkipped { .. })));
     }
 
-    // ── W3c 표 admission (검증된 프로파일 밖 = fail-closed) ──────
+    // ── 표 admission (검증된 프로파일 밖 = fail-closed) ──────
 
     fn cell_with_cache(text: &str) -> TableCell {
         TableCell::new(
@@ -5069,7 +5071,7 @@ mod tests {
         );
     }
 
-    /// W5 w1a 회귀 잠금: 글상자 **내부** 인라인 이미지 개방은 body/글상자
+    /// 회귀 잠금: 글상자 **내부** 인라인 이미지 개방은 body/글상자
     /// 경로 한정 — 셀 안 글상자는 scan_cell_contents 가 여전히 셀 경계에서
     /// 거부한다 (내부 이미지 admittable 여부와 무관, 그 전에 컷).
     #[test]
@@ -5206,7 +5208,7 @@ mod tests {
         let err = replay(&doc_of(vec![table_host(bare, 0)]), &PdfOptions::default()).unwrap_err();
         assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
 
-        // 셀 문단 캐시 결손 → 표 단위 fatal (게이트2 C4 — WarnAndSkip 아님).
+        // 셀 문단 캐시 결손 → 표 단위 fatal (WarnAndSkip 아님).
         let uncached_cell = TableCell::new(
             vec![Paragraph::with_runs(
                 vec![Run::text("결손", CharShapeIndex::new(0))],
@@ -5318,7 +5320,7 @@ mod tests {
         assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
     }
 
-    /// P16: each of the four placement fields P16 added —
+    /// each of the four placement fields for anchor alignment —
     /// vertical and horizontal alignment, `affect_line_spacing`,
     /// `hold_anchor_and_so` — set alone on an otherwise default table is
     /// refused, on a body table and on a table nested in a cell.
@@ -5510,7 +5512,7 @@ mod tests {
     #[test]
     fn table_saved_sz_mismatch_is_fatal() {
         use hwpforge_core::table::TableLayoutCache;
-        // 재저장 sz(5000) ≠ 계산 첫 조각 높이(1000) → fatal (게이트2 H7).
+        // 재저장 sz(5000) ≠ 계산 첫 조각 높이(1000) → fatal .
         let table = Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])])
             .with_layout_cache(TableLayoutCache::new(Some(HwpUnit::new(5000).unwrap()), true));
         let err = replay(&doc_of(vec![table_host(table, 0)]), &PdfOptions::default()).unwrap_err();

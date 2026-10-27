@@ -1,6 +1,6 @@
 //! OLE2 PropertySet parser for the `\x05HwpSummaryInformation` stream.
 //!
-//! Wave 12o Phase 3 — extracts Hancom-stored document metadata (title /
+//! extracts Hancom-stored document metadata (title /
 //! author / subject / description / lastsaveby / created / modified /
 //! keywords) from the standard Office SummaryInformation PropertySet
 //! that 한컴 emits alongside the body streams.
@@ -33,11 +33,11 @@
 //!
 //! Security posture:
 //!
-//! - **S2 offset cycle detection**: the property table is required to be
+//! - **Offset cycle detection**: the property table is required to be
 //!   strictly monotonically increasing within the section bounds, and
 //!   every offset must point inside the section. Re-entrant offsets are
 //!   rejected, defeating the classic PropertySet payload-cycle DoS.
-//! - **S7 UTF-16LE BOM strip**: VT_LPWSTR payloads sometimes carry an
+//! - **UTF-16LE BOM strip**: VT_LPWSTR payloads sometimes carry an
 //!   inline BOM (0xfeff) — strip it explicitly so it does not survive
 //!   into [`Metadata`] values.
 //!
@@ -182,7 +182,7 @@ fn parse_section(section: &[u8]) -> Hwp5Result<Metadata> {
         });
     }
 
-    // ── S2: parse property table and validate offset monotonicity ──
+    // ── parse property table and validate offset monotonicity ──
     let mut entries: Vec<(u32, u32)> = Vec::with_capacity(property_count as usize);
     let mut last_offset: i64 = -1;
     for i in 0..property_count as usize {
@@ -250,8 +250,8 @@ fn parse_section(section: &[u8]) -> Hwp5Result<Metadata> {
                 let iso = filetime_to_iso8601(ft);
                 route_datetime(&mut meta, *pid, iso);
             }
-            // Other VT types (VT_I4 / VT_BSTR / VT_BLOB / …) — ignored
-            // for Wave 12o scope. Future waves can extend.
+            // Other VT types (VT_I4 / VT_BSTR / VT_BLOB / …) are ignored.
+            // Support can be extended when their metadata mapping is defined.
             _ => {}
         }
     }
@@ -328,7 +328,7 @@ fn read_lpwstr(body: &[u8]) -> Hwp5Result<Option<String>> {
     let raw = &body[4..4 + bytes_needed];
     let mut code_units: Vec<u16> =
         raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-    // ── S7: strip UTF-16LE BOM if present ──
+    // ── strip UTF-16LE BOM if present ──
     if matches!(code_units.first(), Some(&0xfeff)) {
         code_units.remove(0);
     }
@@ -731,7 +731,7 @@ mod tests {
         assert!(msg.contains("cap") || msg.contains("overrun"));
     }
 
-    /// S7 — inline UTF-16LE BOM (0xfeff) at the start of a VT_LPWSTR
+    /// inline UTF-16LE BOM (0xfeff) at the start of a VT_LPWSTR
     /// payload must be stripped, not surfaced in the metadata value.
     #[test]
     fn s7_utf16_bom_stripped_from_lpwstr() {

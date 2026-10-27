@@ -1,4 +1,4 @@
-//! Wire↔Core 텍스트 좌표 맵 (W1b) — 이 crate 내부 전용.
+//! Wire↔Core 텍스트 좌표 맵 — 이 crate 내부 전용.
 //!
 //! wire 좌표(HWP5 raw 스트림 = 한컴 HWPX linesegarray textpos 규약)와
 //! Core 정준 좌표(`Paragraph::text_content()` UTF-16 축) 사이의 변환을
@@ -316,7 +316,7 @@ impl WireMapBuilder {
     }
 }
 
-/// 영-core wire 토큰 하나 (S22) — 줄 경계의 종류 열을 적는다.
+/// 영-core wire 토큰 하나 — 줄 경계의 종류 열을 적는다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZeroToken {
     /// 토큰이 놓인 Core 위치.
@@ -327,7 +327,7 @@ pub(crate) struct ZeroToken {
     pub kind: hwpforge_core::layout::WireTokenKind,
 }
 
-/// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵과 나란히 기록하고 맵은
+/// 문단의 영-core 토큰 목록, wire 순서. 좌표 맵과 나란히 기록하고 맵은
 /// 바꾸지 않는다.
 ///
 /// 줄마다 하는 조회(같은 Core 위치의 토큰, 필드 안인지)는 색인으로 한다 —

@@ -1,5 +1,5 @@
 //! Package-level reference checks run on the manifest the writer is about to
-//! write (C4).
+//! write.
 //!
 //! The checks read the exact `content.hpf` text
 //! ([`render_content_hpf`](super::package::render_content_hpf)) that
@@ -187,7 +187,7 @@ mod tests {
     }
 
     /// 이것을 실패시키는 것: 겹침 판정을 이미지·OLE 항목 안에서만 하는 것 —
-    /// `header.png` 의 id `header` 는 그 집합 안에서는 하나뿐이다 (M12).
+    /// `header.png` 의 id `header` 는 그 집합 안에서는 하나뿐이다.
     #[test]
     fn an_image_named_like_a_fixed_part_conflicts_with_it() {
         let items = manifest_items(1, &strings(&["header.png"]), &[], &[]);

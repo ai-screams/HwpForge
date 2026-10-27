@@ -128,7 +128,7 @@ pub(super) fn assert_valid_hwpx(path: &Path) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// E3 Wave 2: 표 격자 주소 (grid addresses on JSON exports)
+// 표 격자 주소 (grid addresses on JSON exports)
 // ═══════════════════════════════════════════════════════════════
 
 /// (paragraph, run) indices of the first table run in a document export.

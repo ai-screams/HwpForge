@@ -210,7 +210,7 @@ fn w2_patch_and_fill_shared_fixtures() {
 }
 
 #[test]
-// 이것을 실패시키는 것(W4): convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기
+// 이것을 실패시키는 것: convert ops 의 decoder Core 갈래를 HWP5_CONVERT_FAILED 로 되돌리기
 // (inspect 단계는 이 입력을 통과시키므로 convert-hwp5 도 ops 분류를 그대로 보인다).
 fn w4_hwp5_decoder_core_shared_fixture() {
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
@@ -231,7 +231,7 @@ fn w4_hwp5_decoder_core_shared_fixture() {
 
 #[test]
 fn w3_editors_share_decode_and_admission_fixtures() {
-    // 이것을 실패시키는 것: E2/E4 cell·stamp admission 호출 목적을 Output으로 변경.
+    // 이것을 실패시키는 것: cell·stamp admission 호출 목적을 Output으로 변경.
     // 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
     let dir = test_tmp();

@@ -126,7 +126,7 @@ def run_one(bin_path: Path, doc: Path, out_pdf: Path, timeout: float, extra: lis
         "peak_rss_highwater": peak_rss,
     }
     if outcome == "fail_closed":
-        # W3 w4: 최상위 code(PDF_RENDER_FAILED 등)는 거칠어서 admission 거부의
+        # 최상위 code(PDF_RENDER_FAILED 등)는 거칠어서 admission 거부의
         # 세부(variant·kind)를 못 가른다 — CLI 의 cause DTO 를 별도 집계.
         cause = (last_json(stderr).get("cause") or last_json(stdout).get("cause")) or {}
         if cause.get("code"):
