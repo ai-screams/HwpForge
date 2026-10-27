@@ -46,7 +46,7 @@ def test_open_reports_the_shared_size_limit() -> None:
 
 
 def test_open_refuses_a_file_over_the_shared_size_limit(tmp_path, monkeypatch) -> None:
-    """ `Document.open` used to read a whole file with no
+    """`Document.open` used to read a whole file with no
     size gate at all. The real limit is 100 MB, too large to write in a
     test, so the module constant is patched down to exercise the same code
     path `Document.open` reads it through."""
