@@ -5,25 +5,15 @@
 //! which is what makes the operation safe on a document whose layout matters.
 #![cfg(feature = "ops-hwpx")]
 
-use std::collections::BTreeSet;
-
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::hwpx_fixture as fixture;
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::diff::diff;
 use hwpforge::ops::exchange::{export_section, patch, ExportSectionOptions, PatchOptions};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
-
-fn keys(value: &serde_json::Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .unwrap_or_else(|| panic!("meta must serialise as an object, got {value}"))
-        .keys()
-        .cloned()
-        .collect()
-}
+use json::{corrupt_first_address, key_set as keys};
 
 /// The annotated section export of `name`, as JSON text.
 fn exported_section_text(name: &str, section: usize) -> String {
@@ -156,30 +146,6 @@ fn a_stale_grid_address_in_the_patch_is_refused() {
     let err = patch(&fixture("SimpleTable.hwpx"), &opts).expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::GridAddrInvalid, "{err}");
-}
-
-fn corrupt_first_address(value: &mut serde_json::Value, patched: &mut usize) {
-    if *patched > 0 {
-        return;
-    }
-    match value {
-        serde_json::Value::Object(map) => {
-            if let Some(addr) = map.get_mut("addr") {
-                *addr = serde_json::json!({ "row": 99, "col": 99 });
-                *patched += 1;
-                return;
-            }
-            for child in map.values_mut() {
-                corrupt_first_address(child, patched);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for child in items {
-                corrupt_first_address(child, patched);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[test]

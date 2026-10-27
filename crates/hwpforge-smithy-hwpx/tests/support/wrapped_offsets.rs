@@ -1,4 +1,5 @@
-use super::*;
+#[path = "package.rs"]
+mod package;
 
 /// -2429, the most common wrapped `vertOffset` in the Hancom set.
 pub(super) const V: &str = "4294964867";
@@ -6,10 +7,7 @@ pub(super) const V: &str = "4294964867";
 pub(super) const H: &str = "4294967190";
 
 pub(super) fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut out).unwrap();
-    out
+    package::section_xml(bytes)
 }
 
 /// No offset attribute in `xml` is written as a negative literal.

@@ -2,8 +2,6 @@
 mod shared;
 use shared::*;
 
-use std::io::{Cursor, Read, Write};
-
 use hwpforge_core::run::RunContent;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxPatcher};
 

@@ -8,8 +8,13 @@
 //! looked at; a base document that already holds such characters keeps them
 //! in every slot the edit leaves alone.
 
+#[path = "support/document.rs"]
+mod document;
+use document::text_para;
+#[path = "support/package.rs"]
+mod package;
+use package::{section_xml_utf8 as section_xml, splice};
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 
 use hwpforge_core::control::Control;
 use hwpforge_core::document::Document;
@@ -24,10 +29,6 @@ use hwpforge_smithy_hwpx::{
 };
 
 const SECTION0: &str = "Contents/section0.xml";
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
 
 fn field_para(name: &str, display: &str) -> Paragraph {
     let mut para = Paragraph::new(ParaShapeIndex::new(0));
@@ -62,40 +63,9 @@ fn clean() -> Vec<u8> {
         .expect("encode")
 }
 
-/// Replaces `from` with `to` in `Contents/section0.xml` — the only way to get
-/// a character the encoder refuses into a base package.
-fn splice(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
-    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for i in 0..zin.len() {
-        let mut entry = zin.by_index(i).expect("entry");
-        let name = entry.name().expect("ZIP entry name").to_string();
-        let method = entry.compression();
-        let mut data = Vec::new();
-        entry.read_to_end(&mut data).expect("read");
-        if name == SECTION0 {
-            let text = String::from_utf8(data).expect("utf-8");
-            assert!(text.contains(from), "{from:?} not in {text}");
-            data = text.replace(from, to).into_bytes();
-        }
-        out.start_file(name, zip::write::SimpleFileOptions::default().compression_method(method))
-            .expect("start");
-        out.write_all(&data).expect("write");
-    }
-    out.finish().expect("finish").into_inner()
-}
-
 /// The base with U+0001 already in paragraph 0 and in field `f2`.
 fn dirty() -> Vec<u8> {
     splice(&splice(&clean(), "QQQ", "A\u{1}B"), "QQF", "R\u{1}S")
-}
-
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut entry = zip.by_name(SECTION0).expect("section0");
-    let mut text = String::new();
-    entry.read_to_string(&mut text).expect("utf-8");
-    text
 }
 
 /// Each paragraph's text as Core reads it; a field shows as `[display]`.

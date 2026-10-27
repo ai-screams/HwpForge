@@ -1,13 +1,14 @@
 //! W3 editor boundaries, with synthetic inputs only.
 #![cfg(feature = "hwpx")]
+#[path = "support/document.rs"]
+mod document;
+use document::run_para as paragraph;
+
 use hwpforge::hwpx::{apply_set_cells, CellSpec, CellTarget};
 use hwpforge_core::table::grid::GridCoord;
-use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow};
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_core::{Document, PageSettings, Run, Section, Table, TableCell, TableRow};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit};
 
-fn paragraph(run: Run) -> Paragraph {
-    Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))
-}
 fn table(run: Run) -> Run {
     Run::table(
         Table::new(vec![TableRow::new(vec![TableCell::new(

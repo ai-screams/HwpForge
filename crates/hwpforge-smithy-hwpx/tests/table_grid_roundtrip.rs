@@ -5,28 +5,20 @@
 //! through the HWPX codec: encode emits an empty row element, decode restores
 //! the empty row, and the result is a decode/encode fixed point.
 
+#[path = "support/document.rs"]
+mod document;
+use document::text_para;
+#[path = "support/encoding.rs"]
+mod encoding;
+use encoding::encode;
 use std::io::{Cursor, Read};
 
-use hwpforge_core::image::ImageStore;
 use hwpforge_core::page::PageSettings;
 use hwpforge_core::run::Run;
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Document, Draft, Paragraph, Section};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-fn encode(doc: Document<Draft>) -> Vec<u8> {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    let validated = doc.validate().expect("validate");
-    HwpxEncoder::encode(&validated, &styles, &ImageStore::new()).expect("encode")
-}
 
 /// 2×1 grid: one rs-2 anchor, second row fully covered (no cells).
 fn covered_row_doc() -> Document<Draft> {

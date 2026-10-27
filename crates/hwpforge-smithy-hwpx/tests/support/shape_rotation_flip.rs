@@ -1,3 +1,6 @@
+#[path = "encoding.rs"]
+mod encoding;
+
 use super::*;
 
 pub(super) fn section0(bytes: &[u8]) -> String {
@@ -31,10 +34,7 @@ pub(super) fn wire_transforms(xml: &str) -> Vec<(String, String, String, [String
 }
 
 pub(super) fn styles() -> HwpxStyleStore {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    styles
+    encoding::dotum_styles()
 }
 
 pub(super) fn rect(w: i32, h: i32, rotation: f32, flip: Option<Flip>) -> Control {

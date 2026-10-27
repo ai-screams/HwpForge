@@ -1,12 +1,19 @@
 //! `ops::stamp::stamp` — applying an approved map, phase two of stamping.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
+use document::{encode, text_para, two_candidates};
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::warning_fixture;
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::core::control::Control;
-use hwpforge::core::image::ImageStore;
 use hwpforge::core::run::Run;
 use hwpforge::core::table::grid::GridCoord;
 use hwpforge::core::table::{Table, TableCell, TableRow};
-use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+use hwpforge::core::{Document, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge::hwpx::stamp::{
@@ -14,37 +21,10 @@ use hwpforge::hwpx::stamp::{
     StampRequestV2, StampSpec, STAMP_MANIFEST_V2_VERSION, STAMP_MANIFEST_VERSION,
     STAMP_MAP_VERSION,
 };
-use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge::hwpx::{HwpxEncoder, HwpxFiller};
+use hwpforge::hwpx::HwpxFiller;
 use hwpforge::ops::stamp::{stamp, stamp_plan, StampOptions, StampedManifest};
 use hwpforge::ops::OpsError;
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-fn encode(doc: Document<Draft>) -> Vec<u8> {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
-        .expect("encode")
-}
-
-/// A body paren blank plus a checkbox in a table cell.
-fn two_candidates() -> Vec<u8> {
-    let width = HwpUnit::new(8000).expect("width");
-    let row = TableRow::new(vec![TableCell::new(vec![text_para("□ 동의")], width)]);
-    let mut host = Paragraph::new(ParaShapeIndex::new(0));
-    host.add_run(Run::table(Table::new(vec![row]), CharShapeIndex::new(0)));
-
-    let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(
-        vec![text_para("성명: (   )"), host],
-        PageSettings::a4(),
-    ));
-    encode(doc)
-}
+use json::sorted_keys as keys;
 
 /// A document with no candidates whose re-encode loses a note number head.
 fn title_mark_note() -> Vec<u8> {
@@ -77,14 +57,6 @@ fn approve_all(bytes: &[u8]) -> Vec<StampSpec> {
             },
         })
         .collect()
-}
-
-/// The object's keys, sorted, so the assertion is on the key **set** rather
-/// than on `serde_json`'s map ordering.
-fn keys(value: &serde_json::Value) -> Vec<String> {
-    let mut keys: Vec<String> = value.as_object().expect("object").keys().cloned().collect();
-    keys.sort();
-    keys
 }
 
 #[test]
@@ -262,24 +234,6 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(value["ignored"], 0);
     assert_eq!(value["skipped_guarded"], 0);
     assert_eq!(value["warnings"], serde_json::json!([]));
-}
-
-/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
-/// admissible.
-///
-/// It is this codec's own output with the last paragraph's
-/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
-/// shape a third-party edit leaves behind — so the decoder refuses to
-/// promote a guessed coordinate and reports the drop instead. Being our own
-/// output is what keeps it admissible: the two native documents in the tree
-/// that warn both fail the gate on uncarried ZIP entries.
-///
-/// The same fixture backs the decode-warning tests of `fill`, `insert_para`,
-/// `delete_para` and `stamp`, so the four surfaces cannot disagree about
-/// what "a document that warns" means.
-fn warning_fixture() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
-    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
 }
 
 /// A stamp decodes its input behind the admission gate, so the caller hears

@@ -1,8 +1,12 @@
 //! Field policy and independent-flow validation through the public Core API.
+#[path = "support/document.rs"]
+mod document;
+use document::{para, text};
+
 use hwpforge_core::control::{FieldBoundary, FieldStart};
 use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
-use hwpforge_core::{Control, Document, PageSettings, Paragraph, Run, Section};
-use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+use hwpforge_core::{Control, Document, PageSettings, Run, Section};
+use hwpforge_foundation::CharShapeIndex;
 fn start(id: &str, kind: &str) -> Run {
     let mut s = FieldStart::default();
     s.id = id.into();
@@ -20,12 +24,6 @@ fn end(id: &str) -> Run {
         },
         CharShapeIndex::new(0),
     )
-}
-fn text(s: &str) -> Run {
-    Run::text(s, CharShapeIndex::new(0))
-}
-fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
 }
 fn document(runs: Vec<Run>) -> Document {
     let mut doc = Document::new();

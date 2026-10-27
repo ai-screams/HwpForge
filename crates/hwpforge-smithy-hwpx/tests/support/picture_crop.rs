@@ -1,10 +1,12 @@
+#[path = "package.rs"]
+mod package;
+#[path = "xml.rs"]
+mod xml;
+
 use super::*;
 
 pub(super) fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut out).unwrap();
-    out
+    package::section_xml(bytes)
 }
 
 /// Each picture's frame elements, in document order: `orgSz`, `imgClip`,
@@ -34,9 +36,7 @@ pub(super) fn frames(xml: &str) -> Vec<(String, String, String, (f64, f64))> {
 }
 
 pub(super) fn attr<'a>(tag: &'a str, name: &str) -> &'a str {
-    let needle = format!(" {name}=\"");
-    let at = tag.find(&needle).unwrap_or_else(|| panic!("{name} in {tag}")) + needle.len();
-    &tag[at..at + tag[at..].find('"').unwrap()]
+    xml::attr(tag, name)
 }
 
 pub(super) fn u(v: i32) -> HwpUnit {

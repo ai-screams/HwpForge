@@ -1,16 +1,11 @@
+use shared::fixtures::test_font_dir;
+
 #[path = "support/synthetic_face_fixture.rs"]
 mod shared;
 use shared::*;
 
-use std::path::{Path, PathBuf};
-
 use hwpforge_convert::ops::{to_pdf, ToPdfOptions};
 use hwpforge_smithy_hwpx::HwpxDecoder;
-
-/// The committed synthetic faces smithy-pdf renders its own e2e with.
-fn test_font_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hwpforge-smithy-pdf/tests/fonts")
-}
 
 #[test]
 fn the_fixture_renders_with_the_committed_fonts_and_nothing_else() {

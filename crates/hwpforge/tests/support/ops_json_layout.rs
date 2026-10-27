@@ -1,10 +1,10 @@
+#[path = "package.rs"]
+mod package;
+
 use super::*;
 
 pub(super) fn xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut text = String::new();
-    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut text).unwrap();
-    text
+    package::section_xml(bytes)
 }
 
 pub(super) fn export(bytes: &[u8]) -> Value {

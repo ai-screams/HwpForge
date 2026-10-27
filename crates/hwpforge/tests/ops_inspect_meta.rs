@@ -4,23 +4,15 @@
 //! an equality against a literal list rather than a "contains" check.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::hwpx_fixture as fixture;
+#[path = "support/json.rs"]
+mod json;
+use json::key_set as keys;
 use std::collections::BTreeSet;
 
 use hwpforge::ops::{inspect, InspectOptions};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
-
-fn keys(value: &serde_json::Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .unwrap_or_else(|| panic!("meta must serialise as an object, got {value}"))
-        .keys()
-        .cloned()
-        .collect()
-}
 
 fn expected(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|s| (*s).to_string()).collect()

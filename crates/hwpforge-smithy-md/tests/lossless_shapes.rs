@@ -3,6 +3,11 @@
 //! the body and in groups, their text is an exact subtree, and the old
 //! `<textbox>text</textbox>` form still reads.
 
+use lossless::document::{doc, para, text, u};
+#[path = "support/lossless.rs"]
+mod lossless;
+use lossless::{decode_body, encode, round_trip};
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::{
     ArrowStyle, Control, Fill, GroupChild, LineStyle, ShapePoint, ShapeStyle,
@@ -12,37 +17,10 @@ use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::{Document, ObjectFrame, PageSettings, Paragraph, Run, RunContent, Section};
 use hwpforge_foundation::{
-    ArrowSize, ArrowType, CharShapeIndex, Color, DropCapStyle, Flip, GradientType, HwpUnit,
-    ImageFillMode, ParaShapeIndex, PatternType, VerticalAlign,
+    ArrowSize, ArrowType, CharShapeIndex, Color, DropCapStyle, Flip, GradientType, ImageFillMode,
+    ParaShapeIndex, PatternType, VerticalAlign,
 };
-use hwpforge_smithy_md::{MdDecoder, MdEncoder, MdError};
-
-fn u(v: i32) -> HwpUnit {
-    HwpUnit::new(v).unwrap()
-}
-
-fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
-
-fn text(t: &str) -> Run {
-    Run::text(t, CharShapeIndex::new(0))
-}
-
-fn doc(runs: Vec<Run>) -> Document {
-    let mut d = Document::new();
-    d.add_section(Section::with_paragraphs(vec![para(runs)], PageSettings::a4()));
-    d
-}
-
-fn encode(runs: Vec<Run>) -> Result<String, MdError> {
-    MdEncoder::encode_lossless(&doc(runs).validate().unwrap())
-}
-
-fn round_trip(run: Run) -> Run {
-    let md = encode(vec![run]).unwrap();
-    MdDecoder::decode_lossless(&md).unwrap().sections()[0].paragraphs[0].runs[0].clone()
-}
+use hwpforge_smithy_md::{MdEncoder, MdError};
 
 fn style_of(run: &Run) -> ShapeStyle {
     let RunContent::Control(c) = &run.content else { panic!() };
@@ -327,14 +305,7 @@ fn shape_text_admission() {
     }
 }
 
-const SECTION: &str = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0">"#;
 const BOX: &str = r#"data-char-shape="0" data-width-unit="10" data-height-unit="10""#;
-
-fn decode_body(body: &str) -> Result<Document, MdError> {
-    let md = encode(vec![text("t")]).unwrap();
-    let frontmatter = &md[..md.find("<section").unwrap()];
-    MdDecoder::decode_lossless(&format!("{frontmatter}{SECTION}{body}</p></section>\n"))
-}
 
 /// The old form `<textbox>text</textbox>` (no `<p>`, no new attribute)
 /// still reads as one paragraph, as before; an old box with paragraphs reads

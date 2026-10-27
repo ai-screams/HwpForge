@@ -1,3 +1,5 @@
+#[path = "support/package.rs"]
+mod package;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::layout::{LayoutCache, LineSeg};
@@ -8,6 +10,7 @@ use hwpforge_core::section::{HeaderFooter, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{style_store_for_preset, EncodeOptions, HwpxDecoder, HwpxEncoder};
+use package::section_xml_utf8 as section_xml;
 
 fn seg(textpos: u32, vertpos: i32) -> LineSeg {
     {
@@ -47,18 +50,6 @@ fn build_doc() -> Document<Draft> {
     let mut doc = Document::new();
     doc.add_section(section);
     doc
-}
-
-fn section_xml(bytes: &[u8]) -> String {
-    use std::io::Read as _;
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("zip");
-    let mut xml = String::new();
-    archive
-        .by_name("Contents/section0.xml")
-        .expect("section0")
-        .read_to_string(&mut xml)
-        .expect("utf-8");
-    xml
 }
 
 #[test]

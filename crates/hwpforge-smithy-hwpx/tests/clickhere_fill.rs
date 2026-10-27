@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+#[path = "support/fixtures.rs"]
+mod fixtures;
 
 use hwpforge_core::control::Control;
 use hwpforge_core::run::RunContent;
@@ -8,11 +9,7 @@ use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxPatcher};
 const FILLED: &str = "soeburi@example.com";
 
 fn fixture_bytes() -> Vec<u8> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("tests/fixtures/fields/clickhere_named.hwpx");
-    std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {}: {e}", path.display()))
+    fixtures::fields_fixture("clickhere_named.hwpx")
 }
 
 /// 섹션 안의 첫 `Control::Field` 를 `(name, display_text)` 로 뽑는다.

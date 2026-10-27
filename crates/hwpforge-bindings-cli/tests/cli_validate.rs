@@ -3,18 +3,17 @@
 //! split (another lane owns `cli_integration.rs` and the rest of
 //! `src/commands/*.rs`).
 
+#[path = "support/process.rs"]
+mod process;
+use process::run;
+
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-fn hwpforge_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_hwpforge"))
-}
 
 fn test_tmp() -> PathBuf {
     let id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -28,16 +27,6 @@ fn fixture(rel: &str) -> PathBuf {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(rel);
     assert!(path.exists(), "fixture not found: {}", path.display());
     path
-}
-
-/// Runs the built `hwpforge` binary, returning `(stdout, stderr, exit_code)`.
-fn run(args: &[&str]) -> (String, String, i32) {
-    let output =
-        Command::new(hwpforge_bin()).args(args).output().expect("failed to execute hwpforge");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
-    (stdout, stderr, code)
 }
 
 /// Runs with `--json` prepended and parses **stdout** as JSON regardless of

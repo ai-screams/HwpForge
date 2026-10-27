@@ -7,14 +7,12 @@
 //! meta's keys must be exactly the payload's keys plus `warnings`.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::hwpx_fixture as fixture;
 use std::collections::BTreeSet;
 
 use hwpforge::ops::{diff, inspect, stamp_plan, InspectOptions};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
 
 fn keys(value: &serde_json::Value) -> BTreeSet<String> {
     value.as_object().expect("object").keys().cloned().collect()

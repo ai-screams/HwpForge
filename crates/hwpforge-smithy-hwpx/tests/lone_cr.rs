@@ -1,7 +1,10 @@
 //! Body CR is a line break; only encoding folds CRLF within a text fragment.
 
-use std::io::{Read, Write};
-
+#[path = "support/document.rs"]
+mod document;
+use document::text_para;
+#[path = "support/package.rs"]
+mod package;
 use hwpforge_core::control::Control;
 use hwpforge_core::document::Document;
 use hwpforge_core::image::ImageStore;
@@ -16,15 +19,10 @@ use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{
     CellSpec, CellTarget, HwpxCellEditor, HwpxDecoder, HwpxEncoder, HwpxPatcher,
 };
-
-const SECTION0: &str = "Contents/section0.xml";
+use package::{section_xml_utf8 as section_xml, splice};
 
 fn run_para(run: Run) -> Paragraph {
     Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))
-}
-
-fn text_para(text: &str) -> Paragraph {
-    run_para(Run::text(text, CharShapeIndex::new(0)))
 }
 
 fn encode(paragraphs: Vec<Paragraph>) -> Vec<u8> {
@@ -33,36 +31,6 @@ fn encode(paragraphs: Vec<Paragraph>) -> Vec<u8> {
     let styles = hwpforge_smithy_hwpx::style_store_for_preset("default").expect("preset");
     HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::default())
         .expect("encode")
-}
-
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut entry = zip.by_name(SECTION0).expect("section0");
-    let mut text = String::new();
-    entry.read_to_string(&mut text).expect("utf-8");
-    text
-}
-
-/// Replaces `from` with `to` in section0 (the way to hand-write a base).
-fn splice(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
-    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for i in 0..zin.len() {
-        let mut entry = zin.by_index(i).expect("entry");
-        let name = entry.name().expect("ZIP entry name").to_string();
-        let method = entry.compression();
-        let mut data = Vec::new();
-        entry.read_to_end(&mut data).expect("read");
-        if name == SECTION0 {
-            let text = String::from_utf8(data).expect("utf-8");
-            assert!(text.contains(from), "{from:?} not in {text}");
-            data = text.replace(from, to).into_bytes();
-        }
-        out.start_file(name, zip::write::SimpleFileOptions::default().compression_method(method))
-            .expect("start");
-        out.write_all(&data).expect("write");
-    }
-    out.finish().expect("finish").into_inner()
 }
 
 /// Every run of the first section as Core reads it, flattened to text; a

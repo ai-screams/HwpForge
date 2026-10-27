@@ -2,8 +2,6 @@
 mod shared;
 use shared::*;
 
-use std::io::{Cursor, Read, Write};
-
 use hwpforge_core::control::Control;
 use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder, HwpxEncoder};
 

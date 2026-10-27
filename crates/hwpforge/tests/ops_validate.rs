@@ -5,14 +5,12 @@
 //! a document" is an error, because there was nothing to ask about.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::hwpx_fixture as fixture;
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::inspect::{inspect, InspectOptions};
 use hwpforge::ops::style::validate;
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
 
 #[test]
 fn a_sound_document_passes_with_no_errors() {

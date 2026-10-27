@@ -1,10 +1,10 @@
-use super::*;
+#[path = "package.rs"]
+mod package;
+#[path = "xml.rs"]
+mod xml;
 
 pub(super) fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut out).unwrap();
-    out
+    package::section_xml(bytes)
 }
 
 /// The first `<hp:pos …/>` after the first `<{tag} ` element start, and that
@@ -18,7 +18,5 @@ pub(super) fn element_and_pos(xml: &str, tag: &str) -> (String, String) {
 }
 
 pub(super) fn attr<'a>(tag: &'a str, name: &str) -> &'a str {
-    let needle = format!(" {name}=\"");
-    let at = tag.find(&needle).unwrap_or_else(|| panic!("{name} in {tag}")) + needle.len();
-    &tag[at..at + tag[at..].find('"').unwrap()]
+    xml::attr(tag, name)
 }

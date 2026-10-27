@@ -17,7 +17,7 @@ use std::io::{Cursor, Read, Write};
 fn paragraph(text: &str) -> Paragraph {
     Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
 }
-fn save(name: &str, section: Section, images: &ImageStore, stale_cache: bool) {
+fn encode(section: Section, images: &ImageStore, stale_cache: bool) -> Vec<u8> {
     let mut doc = Document::new();
     doc.add_section(section);
     let bytes = HwpxEncoder::encode_with_options(
@@ -28,7 +28,7 @@ fn save(name: &str, section: Section, images: &ImageStore, stale_cache: bool) {
     )
     .unwrap();
     // A deliberately stale line offset exercises decode diagnostics on otherwise editable text.
-    let bytes = if stale_cache {
+    if stale_cache {
         let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for i in 0..input.len() {
@@ -54,13 +54,9 @@ fn save(name: &str, section: Section, images: &ImageStore, stale_cache: bool) {
         output.finish().unwrap().into_inner()
     } else {
         bytes
-    };
-    let directory = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "crates/hwpforge-smithy-hwpx/tests/fixtures".into());
-    std::fs::write(std::path::Path::new(&directory).join(name), bytes).unwrap();
+    }
 }
-fn main() {
+pub fn build_garden_notes() -> Vec<u8> {
     let empty = ImageStore::new();
     let mut cached = paragraph("작은 정원의 관찰 기록입니다.");
     let mut line = LineSeg::default();
@@ -69,15 +65,17 @@ fn main() {
     line.baseline = 850;
     line.horzsize = 40000;
     cached.layout_cache = Some(LayoutCache::new(vec![line]));
-    save(
-        "garden_notes.hwpx",
+    encode(
         Section::with_paragraphs(
             vec![cached, paragraph("새 잎을 살펴봅니다.")],
             PageSettings::a4(),
         ),
         &empty,
         true,
-    );
+    )
+}
+
+pub fn build_green_swatch() -> Vec<u8> {
     let mut images = ImageStore::new();
     // One green RGB pixel, encoded as PNG; no external image input.
     images.insert(
@@ -98,8 +96,7 @@ fn main() {
         HwpUnit::new(17664).unwrap(),
         HwpUnit::new(5975).unwrap(),
     ));
-    save(
-        "green_swatch.hwpx",
+    encode(
         Section::with_paragraphs(
             vec![
                 paragraph("정원의 색상 표본"),
@@ -112,23 +109,44 @@ fn main() {
         ),
         &images,
         false,
-    );
+    )
+}
+
+pub fn build_small_page() -> Vec<u8> {
+    let empty = ImageStore::new();
     let mut page = PageSettings::a4();
     page.width = HwpUnit::from_mm(180.0).unwrap();
     page.height = HwpUnit::from_mm(240.0).unwrap();
     page.margin_left = HwpUnit::from_mm(17.0).unwrap();
     page.margin_right = HwpUnit::from_mm(23.0).unwrap();
-    save(
-        "small_page.hwpx",
+    encode(
         Section::with_paragraphs(vec![paragraph("작은 쪽의 여백을 확인합니다.")], page),
         &empty,
         false,
-    );
+    )
+}
+
+pub fn build_garden_columns() -> Vec<u8> {
+    let empty = ImageStore::new();
     let mut section = Section::with_paragraphs(
         (1..=6).map(|i| paragraph(&format!("관찰 기록 {i}"))).collect(),
         PageSettings::a4(),
     );
     section.column_settings =
         Some(ColumnSettings::equal_columns(2, HwpUnit::new(1200).unwrap()).unwrap());
-    save("garden_columns.hwpx", section, &empty, false);
+    encode(section, &empty, false)
+}
+
+fn main() {
+    let directory = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "crates/hwpforge-smithy-hwpx/tests/fixtures".into());
+    for (name, bytes) in [
+        ("garden_notes.hwpx", build_garden_notes()),
+        ("green_swatch.hwpx", build_green_swatch()),
+        ("small_page.hwpx", build_small_page()),
+        ("garden_columns.hwpx", build_garden_columns()),
+    ] {
+        std::fs::write(std::path::Path::new(&directory).join(name), bytes).unwrap();
+    }
 }

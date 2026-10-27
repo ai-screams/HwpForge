@@ -2,8 +2,6 @@
 mod shared;
 use shared::*;
 
-use std::io::{Cursor, Read};
-
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::{HeaderFooter, Section};

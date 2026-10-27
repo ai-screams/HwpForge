@@ -2,6 +2,11 @@
 //! back equal, what the grammar cannot hold is refused whole, and the object
 //! elements read a closed attribute grammar.
 
+use lossless::document::{para, u};
+#[path = "support/lossless.rs"]
+mod lossless;
+use lossless::{decode_body, encode};
+
 use hwpforge_core::caption::Caption;
 use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::image::{Image, ImageCrop, ImageFormat};
@@ -9,27 +14,9 @@ use hwpforge_core::placement::{
     HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
 };
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
-use hwpforge_core::{Document, ObjectFrame, ObjectId, PageSettings, Paragraph, Run, Section};
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, Size};
-use hwpforge_smithy_md::{MdDecoder, MdEncoder, MdError};
-
-fn u(v: i32) -> HwpUnit {
-    HwpUnit::new(v).unwrap()
-}
-
-fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
-
-fn doc(runs: Vec<Run>) -> Document {
-    let mut d = Document::new();
-    d.add_section(Section::with_paragraphs(vec![para(runs)], PageSettings::a4()));
-    d
-}
-
-fn encode(runs: Vec<Run>) -> Result<String, MdError> {
-    MdEncoder::encode_lossless(&doc(runs).validate().unwrap())
-}
+use hwpforge_core::{Document, ObjectFrame, ObjectId, Run};
+use hwpforge_foundation::{CharShapeIndex, Size};
+use hwpforge_smithy_md::{MdDecoder, MdError};
 
 fn first_run(d: &Document) -> &Run {
     &d.sections()[0].paragraphs[0].runs[0]
@@ -219,15 +206,8 @@ fn attribute_control_characters_round_trip() {
     ));
 }
 
-const SECTION: &str = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0">"#;
 const PLACE: &str = r#"data-text-wrap="Square" data-text-flow="BothSides" data-treat-as-char="false" data-flow-with-text="true" data-allow-overlap="false" data-vert-rel-to="Para" data-horz-rel-to="Para" data-vert-offset-unit="0" data-horz-offset-unit="0" data-vert-align="TOP" data-horz-align="LEFT" data-affect-line-spacing="false" data-hold-anchor="false""#;
 const IMG: &str = r#"src="BinData/a.png" alt="BinData/a.png" data-format="PNG" data-width-unit="10" data-height-unit="10""#;
-
-fn decode_body(body: &str) -> Result<Document, MdError> {
-    let md = encode(vec![Run::text("t", CharShapeIndex::new(0))]).unwrap();
-    let frontmatter = &md[..md.find("<section").unwrap()];
-    MdDecoder::decode_lossless(&format!("{frontmatter}{SECTION}{body}</p></section>\n"))
-}
 
 /// The closed grammar: an unknown attribute, a repeated one, part of PLACE,
 /// an unknown enum value, a boolean other than true/false, a char shape on

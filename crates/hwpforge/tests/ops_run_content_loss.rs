@@ -4,6 +4,12 @@
 //! editors still work on it.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
+use document::text_para as para;
+#[path = "support/stamping.rs"]
+mod stamping;
+use stamping::stamp_all;
 use std::io::{Cursor, Read, Write};
 
 use hwpforge::core::chart::{ChartData, ChartType};
@@ -15,21 +21,15 @@ use hwpforge::core::table::{Table, TableCell, TableRow};
 use hwpforge::core::{Document, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge::hwpx::stamp::{StampAction, StampMap, StampSpec};
 use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge::hwpx::{DecodeWarning, HwpxDecoder, HwpxDocument, HwpxEncoder};
 use hwpforge::ops::edit::{
     fill, insert_para, set_cell, FillOptions, InsertParaOptions, SetCellOptions,
 };
 use hwpforge::ops::exchange::{export_section, patch, ExportSectionOptions, PatchOptions};
-use hwpforge::ops::stamp::{stamp, stamp_plan, StampOptions};
 use hwpforge::ops::style::{restyle, RestyleOptions};
 
 // ── the document ─────────────────────────────────────────────────
-
-fn para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
 
 fn styles() -> HwpxStyleStore {
     let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
@@ -187,24 +187,6 @@ fn lost(bytes: &[u8]) -> Vec<(String, String)> {
 
 fn kinds(bytes: &[u8]) -> Vec<String> {
     lost(bytes).into_iter().map(|(_, kind)| kind).collect()
-}
-
-fn stamp_all(bytes: &[u8]) -> Result<hwpforge::ops::stamp::StampOutput, hwpforge::ops::OpsError> {
-    let specs: Vec<StampSpec> = stamp_plan(bytes)
-        .expect("plan")
-        .plan
-        .text
-        .into_iter()
-        .map(|candidate| StampSpec {
-            section: candidate.section,
-            path: candidate.path,
-            span: candidate.span,
-            marker: candidate.marker.clone(),
-            action: StampAction::Field { name: "소속".into(), hint: None },
-        })
-        .collect();
-    assert!(!specs.is_empty(), "the paren blank is a stamp candidate");
-    stamp(bytes, &StampMap::Legacy(specs), &StampOptions::default())
 }
 
 fn set_cell_once(bytes: &[u8]) -> Result<(), hwpforge::ops::OpsError> {

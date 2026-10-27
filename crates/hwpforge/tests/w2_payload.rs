@@ -1,3 +1,6 @@
+#![cfg(feature = "hwpx")]
+// 이것을 실패시키는 것: 이 가드를 제거하면 none·md·schemars 조합의 hwpx import가 실패한다.
+
 //! Error contract 0.18, D24: a codec failure keeps the original error's
 //! stage, leaf code and message, and the wrappers that carry a patch error
 //! (`FillError::Patch`, `SectionWorkflowError::PreservingPatch`) pass it on

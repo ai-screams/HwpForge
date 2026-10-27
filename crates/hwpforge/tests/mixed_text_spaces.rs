@@ -1,6 +1,12 @@
 //! Whitespace is text at every mixed-content boundary, including nested paragraphs.
 #![cfg(feature = "hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
+use document::text_para as para;
+#[path = "support/package.rs"]
+mod package;
+use package::section_xml as section;
 use std::io::{Cursor, Read, Write};
 
 use hwpforge::core::control::Control;
@@ -9,16 +15,12 @@ use hwpforge::core::inline::{InlineSegment, InlineTabAttr, InlineText};
 use hwpforge::core::layout::{LayoutCache, LineBoundary, LineSeg, WireTokenKind};
 use hwpforge::core::run::{Run, RunContent};
 use hwpforge::core::table::{Table, TableCell, TableRow};
-use hwpforge::core::{Document, PageSettings, Paragraph, Section};
-use hwpforge::foundation::{BookmarkType, CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge::core::{Document, PageSettings, Section};
+use hwpforge::foundation::{BookmarkType, CharShapeIndex, HwpUnit};
 use hwpforge::hwpx::{style_store_for_preset, EncodeOptions, HwpxDecoder, HwpxEncoder};
 
 const TEXT: &str = "  \u{1f}  \t   \n  끝\u{1f} ";
 const WIRE: &str = "<hp:t>  <hp:fwSpace/>  <hp:tab/>   <hp:lineBreak/>  끝<hp:fwSpace/> </hp:t>";
-
-fn para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
 
 fn package(cached: bool, rich_tab: bool) -> Vec<u8> {
     let mut target = para(TEXT);
@@ -80,13 +82,6 @@ fn package(cached: bool, rich_tab: bool) -> Vec<u8> {
     .unwrap();
     assert!(encoded.warnings.is_empty(), "{:?}", encoded.warnings);
     encoded.bytes
-}
-
-fn section(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
 }
 
 // 이것을 실패시키는 것: mixed 공백 보호 제거(캐시 없는 본문·칸·글상자에서도 실패),

@@ -5,6 +5,9 @@
 //! 후속 섹션 번호가 1 로 리셋된다 (1,2,3 → 1,2,1). 이 게이트가 그 회귀를
 //! 공개 API 경로 그대로 잠근다.
 
+#[path = "support/encoding.rs"]
+mod encoding;
+use encoding::minimal_store;
 use hwpforge_core::control::Control;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
@@ -12,18 +15,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{EncodeWarning, HwpxDecoder, HwpxEncoder};
-
-fn minimal_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
-        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
-    }
-    store.push_char_shape(HwpxCharShape::default());
-    store.push_para_shape(HwpxParaShape::default());
-    store
-}
 
 fn note_section(bodies: &[&str]) -> Section {
     let runs = bodies

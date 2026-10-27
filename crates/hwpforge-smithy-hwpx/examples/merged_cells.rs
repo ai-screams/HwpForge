@@ -43,7 +43,7 @@ fn cell(text: &str, cols: u16, rows: u16) -> TableCell {
     )
 }
 
-fn main() {
+pub fn build_merged_cells() -> Vec<u8> {
     // An invented, deliberately unavailable face makes font resolution failures reproducible.
     let mut styles = HwpxStyleStore::with_default_fonts("HwpForge Missing Test Face");
     styles.push_char_shape(HwpxCharShape::default());
@@ -64,13 +64,17 @@ fn main() {
         vec![host, paragraph("병합 셀의 숫자를 읽습니다.")],
         PageSettings::a4(),
     ));
-    let bytes = HwpxEncoder::encode_with_options(
+    HwpxEncoder::encode_with_options(
         &doc.validate().unwrap(),
         &styles,
         &ImageStore::new(),
         EncodeOptions::default().with_emit_layout_cache(true),
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn main() {
+    let bytes = build_merged_cells();
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "crates/hwpforge-smithy-hwpx/tests/fixtures/SimpleTable.hwpx".into());

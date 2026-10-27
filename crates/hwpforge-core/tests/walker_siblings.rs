@@ -1,4 +1,8 @@
 //! Baseline 6e6cc1be sibling order, including the table own/descend phases.
+#[path = "support/document.rs"]
+mod document;
+use document::para as p;
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::{GroupChild, ShapePoint};
 use hwpforge_core::image::ImageFormat;
@@ -7,10 +11,7 @@ use hwpforge_core::table::{TableCell, TableRow};
 use hwpforge_core::{
     Control, Document, Image, ObjectFrame, PageSettings, Paragraph, Run, Section, Table,
 };
-use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
-fn p(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
+use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit};
 fn control(c: Control) -> Run {
     Run::control(c, CharShapeIndex::new(0))
 }

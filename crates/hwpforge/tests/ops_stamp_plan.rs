@@ -1,58 +1,22 @@
 //! `ops::stamp::stamp_plan` — candidate discovery, phase one of stamping.
 #![cfg(feature = "ops-hwpx")]
 
-use hwpforge::core::image::ImageStore;
-use hwpforge::core::run::Run;
-use hwpforge::core::table::{Table, TableCell, TableRow};
-use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+#[path = "support/document.rs"]
+mod document;
+use document::{encode, text_para, two_candidates};
+#[path = "support/json.rs"]
+mod json;
+use hwpforge::core::{Document, PageSettings, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
-use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge::hwpx::stamp::STAMP_MAP_VERSION;
-use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge::hwpx::HwpxEncoder;
 use hwpforge::ops::stamp::stamp_plan;
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-fn encode(doc: Document<Draft>) -> Vec<u8> {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
-        .expect("encode")
-}
-
-/// The two dominant class-A shapes of the government corpus: a paren blank
-/// in the body and a checkbox inside a table cell.
-fn two_candidates() -> Vec<u8> {
-    let width = HwpUnit::new(8000).expect("width");
-    let row = TableRow::new(vec![TableCell::new(vec![text_para("□ 동의")], width)]);
-    let mut host = Paragraph::new(ParaShapeIndex::new(0));
-    host.add_run(Run::table(Table::new(vec![row]), CharShapeIndex::new(0)));
-
-    let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(
-        vec![text_para("성명: (   )"), host],
-        PageSettings::a4(),
-    ));
-    encode(doc)
-}
+use json::sorted_keys as keys;
 
 /// A document with no placeholder markers at all.
 fn no_candidates() -> Vec<u8> {
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(vec![text_para("본문")], PageSettings::a4()));
     encode(doc)
-}
-
-/// The object's keys, sorted, so the assertion is on the key **set** rather
-/// than on `serde_json`'s map ordering.
-fn keys(value: &serde_json::Value) -> Vec<String> {
-    let mut keys: Vec<String> = value.as_object().expect("object").keys().cloned().collect();
-    keys.sort();
-    keys
 }
 
 #[test]

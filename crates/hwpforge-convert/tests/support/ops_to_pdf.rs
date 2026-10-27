@@ -1,8 +1,14 @@
-use super::*;
+#![allow(dead_code)]
+
+#[path = "fixtures.rs"]
+pub(super) mod fixtures;
+
+use hwpforge_convert::ops::{ConvertOpsWarning, ToPdfOptions};
+use std::path::PathBuf;
 
 /// The committed synthetic faces smithy-pdf renders its own e2e with.
 pub(super) fn test_font_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hwpforge-smithy-pdf/tests/fonts")
+    fixtures::test_font_dir()
 }
 
 /// Render with the committed test fonts in degraded mode.

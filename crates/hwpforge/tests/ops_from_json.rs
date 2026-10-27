@@ -1,24 +1,14 @@
 //! `ops::from_json` — building a package from an exported JSON document.
 #![cfg(feature = "ops-hwpx")]
 
-use std::collections::BTreeSet;
-
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::hwpx_fixture as fixture;
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::exchange::{from_json, to_json, FromJsonOptions, ToJsonOptions};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
-
-fn keys(value: &serde_json::Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .unwrap_or_else(|| panic!("meta must serialise as an object, got {value}"))
-        .keys()
-        .cloned()
-        .collect()
-}
+use json::{corrupt_first_address, key_set as keys};
 
 /// Exports `name` and returns the annotated JSON text, which is what a
 /// caller of `to_json` would have written to a file.
@@ -68,30 +58,6 @@ fn a_mismatched_grid_address_is_refused() {
 
     assert_eq!(err.code(), OpsCode::GridAddrInvalid, "{err}");
     assert_eq!(err.code().as_str(), "GRID_ADDR_INVALID");
-}
-
-fn corrupt_first_address(value: &mut serde_json::Value, patched: &mut usize) {
-    if *patched > 0 {
-        return;
-    }
-    match value {
-        serde_json::Value::Object(map) => {
-            if let Some(addr) = map.get_mut("addr") {
-                *addr = serde_json::json!({ "row": 99, "col": 99 });
-                *patched += 1;
-                return;
-            }
-            for child in map.values_mut() {
-                corrupt_first_address(child, patched);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for child in items {
-                corrupt_first_address(child, patched);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// When the JSON carries no `styles` block, the fallback must be the full

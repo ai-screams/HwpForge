@@ -1,9 +1,11 @@
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::fields_fixture as fixture_bytes;
 #[path = "support/fill_api.rs"]
 mod shared;
 use shared::*;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use hwpforge_core::control::Control;
 use hwpforge_core::document::Document;
@@ -14,15 +16,6 @@ use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{FillError, HwpxDecoder, HwpxEncoder, HwpxFiller};
-
-fn fixture_bytes(name: &str) -> Vec<u8> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("tests/fixtures/fields");
-    path.push(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {}: {e}", path.display()))
-}
 
 fn named_field(name: &str, hint: &str) -> Control {
     Control::Field {
