@@ -102,7 +102,7 @@ pub(crate) struct WireTextMap {
     /// Core 축 총길이.
     core_end: u32,
     /// 각 span 시작의 Core 위치(span 순서, 비감소) — 좌표 변환은 이것과
-    /// `spans` 의 wire 시작을 이진 탐색한다(S22 r2: 줄마다 span 을 앞에서부터
+    /// `spans` 의 wire 시작을 이진 탐색한다(줄마다 span 을 앞에서부터
     /// 훑지 않는다).
     core_start: Vec<u32>,
 }
@@ -398,7 +398,7 @@ impl TokenLedger {
         core: u32,
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
-        // S22 r2: borrow the position's index and binary search for the
+        // Borrow the position's index and binary search for the
         // tokens before `wire`; read only that prefix and the token after it.
         let here = self.by_core.get(&core).map_or(&[][..], Vec::as_slice);
         let k = here.partition_point(|&i| self.tokens[i].wire_start < wire);
@@ -417,7 +417,7 @@ impl TokenLedger {
 mod tests {
     use super::*;
 
-    /// The walk from the front `to_core` used before (S22 r2), as the oracle.
+    /// The walk from the front `to_core` used before, as the oracle.
     fn walked_to_core(map: &WireTextMap, wire: u32) -> Result<u32, CacheMapError> {
         if wire > map.wire_end {
             return Err(CacheMapError::OutOfRange { pos: wire, end: map.wire_end });
@@ -437,7 +437,7 @@ mod tests {
         Ok(core_cursor + (wire - wire_cursor))
     }
 
-    /// S22 r2: the binary searches give the walk's answer at every position,
+    /// The binary searches give the walk's answer at every position,
     /// over maps that mix zero-width tokens, tabs, runs of tokens, and text.
     /// 이것을 실패시키는 것: 탐색 경계를 한 칸 어긋나게(`<` 를 `<=` 로) 하는 것.
     #[test]
@@ -473,7 +473,7 @@ mod tests {
         }
     }
 
-    /// S22 r2: 16,000 zero-width tokens, one character, then 16,000 lines
+    /// 16,000 zero-width tokens, one character, then 16,000 lines
     /// after it — each conversion searches the spans, it does not walk them.
     /// 이것을 실패시키는 것: 좌표 변환을 앞에서부터 span 을 훑는 것으로
     /// 되돌리기(검사한 span 수가 N² 로 는다).
@@ -494,11 +494,11 @@ mod tests {
         assert!(visits <= 40 * u64::from(n), "{visits} spans checked for {n} lines");
     }
 
-    /// S22 r1: the per-line lookups use the ledger's index — N lines over
+    /// The per-line lookups use the ledger's index — N lines over
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
     /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
     /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
-    /// S22 r2: N tokens and N lines at one Core position (bookmarks with no
+    /// N tokens and N lines at one Core position (bookmarks with no
     /// text, every line at 0) — each lookup reads only the prefix it needs,
     /// not the whole position.
     /// 이것을 실패시키는 것: 조회마다 그 위치의 토큰 전체를 복제·순회하는 것

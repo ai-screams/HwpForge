@@ -219,7 +219,7 @@ const DEPTH_CASES: &[(&[u8], hwpforge::hwpx::HwpxErrorCode, &str)] = &[
 #[cfg(feature = "ops-hwpx")]
 #[test]
 fn stamp_v2_admission_is_canonical() {
-    // 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+    // 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
     let request =
         hwpforge::hwpx::stamp::parse_stamp_map(include_str!("data/stamp-v2-admission.json"))
             .unwrap();
@@ -238,7 +238,7 @@ fn stamp_v2_admission_is_canonical() {
 #[cfg(feature = "ops-hwpx")]
 #[test]
 fn w3_manifest_cases_are_all_consumed() {
-    // 이것을 실패시키는 것: F5 manifest에 rust operation=w3.x case 추가.
+    // 이것을 실패시키는 것: manifest에 rust operation=w3.x case 추가.
     // Use the same IDs as the fixture assertions above, never a separate allowlist.
     let consumed: std::collections::BTreeSet<_> =
         [DRAFT_CASE, V2_CASE].into_iter().chain(DEPTH_CASES.iter().map(|(_, _, id)| *id)).collect();

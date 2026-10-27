@@ -254,7 +254,7 @@ fn run_children_the_reader_drops_are_reported_lost() {
                 assert_eq!(found[0].1, kind, "{label}: {found:?}");
                 assert!(found[0].0.ends_with(at), "{label}: {found:?}");
                 assert_rewriters_refuse(&bytes, kind, &label);
-                // 이것을 실패시키는 것: F11 ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
+                // 이것을 실패시키는 것: ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
                 #[cfg(feature = "ops-md")]
                 {
                     let md =

@@ -707,11 +707,11 @@ impl HwpxCellEditor {
             crate::EncodeOptions::default(),
         )
         .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        // 의미 손상 fail-closed (7차 평결 High) — 편집기가 알고 있는 의미
+        // 의미 손상 fail-closed — 편집기가 알고 있는 의미
         // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다. 손상
         // 집합의 정의는 `EncodeWarning::is_semantic_loss` 하나뿐이다 —
         // stamper 의 `encode_fail_closed` 도 같은 메서드를 호출한다.
-        // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
+        // typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
         // 뭉개져 호출자가 어떤 경고였는지 알 수 없었다).
         // the non-semantic half is no longer discarded — it is
         // what `set_cells_with_diagnostics` hands back on success. The

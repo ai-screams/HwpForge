@@ -473,7 +473,7 @@ pub struct HxDrawText {
 
 /// `<hp:line>` — line drawing object (2 endpoints).
 ///
-/// Flat struct (independent of HxRect) per Wave 3 API design decision.
+/// Flat struct (independent of HxRect).
 /// Common attributes duplicated from AbstractShapeObjectType / AbstractShapeComponentType.
 ///
 /// Element order matches 한글's expected serialization:

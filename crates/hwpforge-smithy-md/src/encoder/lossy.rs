@@ -2609,7 +2609,7 @@ mod tests {
         let expected_table = || GfmBlock::Table(vec![vec!["head".into()], vec!["cell".into()]]);
         let body = |text: &str| GfmBlock::Paragraph(text.into());
         let cases = [
-            // r1: the second child must not become a discarded excess cell.
+            // The second child must not become a discarded excess cell.
             (
                 vec![textbox(vec![table(), p(vec![t("TAIL")])])],
                 vec![expected_table(), body("TAIL")],

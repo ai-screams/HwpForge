@@ -578,7 +578,7 @@ mod tests {
         Section::with_paragraphs((0..n).map(|_| holder(table(None))).collect(), PageSettings::a4())
     }
 
-    /// S22 r2: with no Core ids, a captioned table draws its own id after
+    /// With no Core ids, a captioned table draws its own id after
     /// its cells and before its caption's equation, as it always has — the
     /// diagnostic's reordering does not change the ids written.
     /// 이것을 실패시키는 것: 표 id 를 캡션 인코딩 뒤에 뽑기(표 2, 수식 1).

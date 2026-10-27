@@ -1114,7 +1114,7 @@ mod tests {
 
     #[test]
     fn insert_fragment_encode_failure_is_validation() {
-        // 이것을 실패시키는 것: F3 삽입 fragment 호출 목적을 Admission으로 변경.
+        // 이것을 실패시키는 것: 삽입 fragment 호출 목적을 Admission으로 변경.
         let doc = HwpxDecoder::decode(include_bytes!(
             "../../hwpforge/tests/data/edit-empty-section.hwpx"
         ))

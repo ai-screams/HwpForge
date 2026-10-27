@@ -113,7 +113,7 @@ fn convert_unknown_preset() {
 #[test]
 // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
 fn convert_unknown_preset_rejected_before_missing_input_is_read() {
-    // W3 remediation finding 6: legacy validated `--preset` before any
+    // Legacy validated `--preset` before any
     // input I/O — a bogus preset must still report UNKNOWN_PRESET even
     // against a nonexistent input file, not FILE_READ_FAILED.
     let tmp = test_tmp();

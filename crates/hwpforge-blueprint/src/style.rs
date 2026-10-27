@@ -1503,7 +1503,7 @@ widow_orphan: true
         assert_eq!(ls.value, Some(160.0));
     }
 
-    // ── 글자 그림자: 칸별 상속(설계 S21 7.4) ─────────────────────
+    // ── 글자 그림자: 칸별 상속 ─────────────────────
 
     fn shadow_partial(yaml_shadow: &str) -> PartialCharShape {
         serde_yaml::from_str(&format!("font: A\nsize: 10pt\nshadow: {yaml_shadow}\n")).unwrap()

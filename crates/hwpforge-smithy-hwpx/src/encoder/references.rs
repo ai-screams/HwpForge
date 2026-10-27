@@ -107,7 +107,7 @@ pub(crate) fn unresolved_references(
     items: &[(String, String)],
     parts: &[(&str, &str)],
 ) -> HwpxResult<Vec<EncodeWarning>> {
-    // Sets, so the work grows with the items and references (B-M1).
+    // Sets, so the work grows with the items and references.
     // 이것을 실패시키는 것: 목록 훑기로 되돌리기(`checks_stay_linear`).
     let binary: std::collections::HashSet<&str> = items
         .iter()

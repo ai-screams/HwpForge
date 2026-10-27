@@ -1633,7 +1633,7 @@ pub struct HxPageNum {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNote {
     /// 종류별 순번 캐시 (한컴 F1/F4 실측: `number="1"` — 항상 존재).
-    /// 종전엔 스키마에 없어 한컴 wire 를 **무음 드롭**했다 (M-W3.5-2).
+    /// 종전엔 스키마에 없어 한컴 wire 를 **무음 드롭**했다.
     #[serde(rename = "@number", default, skip_serializing_if = "Option::is_none")]
     pub number: Option<u32>,
     /// 접미 문자(십진 문자코드 — 한컴 F1: `suffixChar="41"` = `)`).
@@ -1671,7 +1671,7 @@ pub struct HxFootNotePr {
 ///
 /// `newNum` 은 의도적으로 파싱하지 않는다 — 경고 판정에 불필요하고,
 /// `xs:positiveInteger` 는 u32 상한을 넘을 수 있어 typed 파싱이 schema-valid
-/// 문서의 디코드 실패를 만든다 (4차 평결 Medium — typed carry 승격 때
+/// 문서의 디코드 실패를 만든다 (typed carry 승격 때
 /// 문자열/광폭 정수로 재설계).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxNoteNumberingPolicy {

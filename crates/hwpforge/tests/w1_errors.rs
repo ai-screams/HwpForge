@@ -233,7 +233,7 @@ fn w3_rust_cases() -> Vec<(&'static str, OpsError)> {
 // FillError::Patch 위임을 FILL_FAILED 로 고정, patch 원본 decode 를 Rejected 로 감싸기,
 // metadata 검사를 원본 decode 뒤로 옮기기, 구역 범위 검사를 Rejected 로, fill 입력 decode 를 Workflow 로.
 fn w1_read_and_io_causes_are_canonical() {
-    // 이것을 실패시키는 것: O1–O3/I1–I3 W3 Codec·Invariant 매핑을 InvalidInput으로 변경, B4 Draft 전용 Rust case 제외 제거.
+    // 이것을 실패시키는 것: W3 Codec·Invariant 매핑을 InvalidInput으로 변경, Draft 전용 Rust case 제외 제거.
     // 이것을 실패시키는 것: read 매핑을 InvalidInput으로 치환하거나 NotFound/기타 I/O 매핑을 뒤바꿈.
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("data/error_contract_018.json")).unwrap();
@@ -281,7 +281,7 @@ fn w1_read_and_io_causes_are_canonical() {
 #[test]
 // 이것을 실패시키는 것: 퇴역 variant 7개와 lookup을 복원.
 fn w1_retired_codes_are_not_lookup_aliases() {
-    // 이것을 실패시키는 것: R1 SetCellCodecFailed variant와 lookup 복원.
+    // 이것을 실패시키는 것: SetCellCodecFailed variant와 lookup 복원.
     // 이것을 실패시키는 것: 퇴역 OpsCode variant와 lookup을 복원.
     for code in [
         "SET_CELL_CODEC_FAILED",

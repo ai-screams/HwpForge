@@ -213,9 +213,8 @@ mod cases {
         doc.validate().expect("valid")
     }
 
-    /// The fixture `fixture-md-lookalike` in the shape Hancom saved it (no
-    /// copy of the file): `auto` with the list paragraphs and the line
-    /// shape Hancom's auto-format made, else the literal text.
+    /// List-like text in the shape Hancom saved it: `auto` selects the list
+    /// paragraphs and line shape made by auto-format; otherwise, literal text.
     pub fn lookalike(auto: bool) -> Document<Validated> {
         let first = if auto {
             vec![p(BULLET, vec![t("항목처럼 보이는 글")]), p(NUMBER, vec![t("번호처럼 보이는 글")])]

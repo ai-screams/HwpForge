@@ -350,7 +350,7 @@ fn stamp_v2_uncovered_cell_and_unknown_field_rejected() {
     assert_eq!(value["code"], "INVALID_STAMP_MAP");
 }
 
-/// R1 F4 회귀 잠금 (CLI stamp): 의미 손상은 typed `StamperError::SemanticLoss`
+/// 회귀 잠금 (CLI stamp): 의미 손상은 typed `StamperError::SemanticLoss`
 /// 를 canonical `ENCODE_SEMANTIC_LOSS`로 내보내며 exit 2를 유지한다.
 /// 의미 손상을 포괄 실패로 축약하면 이 계약이 깨진다.
 ///

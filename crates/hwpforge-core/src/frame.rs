@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(serde_json::from_str::<ObjectFrame>(&json).unwrap(), both);
     }
 
-    /// Hancom's resize: the frame-less circle of the r1 counterexample —
+    /// Hancom's resize: the frame-less circle of the counterexample —
     /// width 850, centre 425 — resized to 1700 keeps its original box 850,
     /// so the centre is drawn at 425 × 1700 / 850 = 850.
     /// 이것을 실패시키는 것: 접기를 크기 바꾸기 전 상태 기준으로 하기(원래 크기가

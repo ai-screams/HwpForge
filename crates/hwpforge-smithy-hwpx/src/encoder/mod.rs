@@ -237,7 +237,7 @@ mod escape_xml_tests {
     #[test]
     fn leaves_forbidden_characters_to_the_part_scan() {
         // The part scan removes and reports them; a removal here would hide
-        // them from it (R1-5).
+        // them from it.
         let input = "a\u{0}\u{0001}b\u{001F}c\u{FFFE}<\u{FFFF}>";
         assert_eq!(escape_xml(input), "a\u{0}\u{0001}b\u{001F}c\u{FFFE}&lt;\u{FFFF}&gt;");
     }
@@ -1800,7 +1800,7 @@ mod tests {
                     table.border_fill_id = Some(id);
                 }
                 if kind == "border-zone" {
-                    // The r5 counterexample must not generate table border 3.
+                    // This counterexample must not generate table border 3.
                     table.border_fill_id = Some(0);
                     table.cell_zones = vec![CellZone::new(0, 0, 0, 0, id)];
                 }

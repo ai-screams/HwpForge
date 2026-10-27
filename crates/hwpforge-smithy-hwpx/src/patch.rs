@@ -1287,7 +1287,7 @@ mod tests {
         );
     }
 
-    // F-T6: 최상위 꼬리말 + 뒤 문단 칸 안 꼬리말 = 둘 → semantic 쪽 `footers[i]`
+    // 최상위 꼬리말 + 뒤 문단 칸 안 꼬리말 = 둘 → semantic 쪽 `footers[i]`
     // 와 같은 이름. 이것을 실패시키는 것: `numbered_header_footer_slots` 가
     // 여럿일 때도 `footer.` 로 두기(경로 불일치 오류).
     #[test]

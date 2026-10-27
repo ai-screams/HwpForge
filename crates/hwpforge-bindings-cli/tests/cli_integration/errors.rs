@@ -232,7 +232,7 @@ fn w4_hwp5_decoder_core_shared_fixture() {
 #[test]
 fn w3_editors_share_decode_and_admission_fixtures() {
     // 이것을 실패시키는 것: E2/E4 cell·stamp admission 호출 목적을 Output으로 변경.
-    // 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
+    // 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hwpforge/tests/data");
     let dir = test_tmp();
     let out = dir.join("out.hwpx");

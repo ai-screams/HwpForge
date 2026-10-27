@@ -448,8 +448,8 @@ mod tests {
             check(ids[2], structural::run_delete_para(file, 0, &[0], output).err().unwrap());
             check(ids[3], stamp::run_stamp(file, &[], &[], None, output, None).err().unwrap());
         }
-        // 이것을 실패시키는 것: F4 v2 admission 호출 목적을 Output으로 변경.
-        // 이것을 실패시키는 것: F6 MCP stamp admission 힌트를 코덱 갭 대기로 복원.
+        // 이것을 실패시키는 것: v2 admission 호출 목적을 Output으로 변경.
+        // 이것을 실패시키는 것: MCP stamp admission 힌트를 코덱 갭 대기로 복원.
         let request: hwpforge_smithy_hwpx::stamp::StampRequestV2 =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/stamp-v2-admission.json"))
                 .unwrap();

@@ -404,7 +404,7 @@ impl HwpxFiller {
 
 #[cfg(test)]
 mod tests {
-    //! 채운 누름틀의 문단 캐시를 wire 에서 찾는 경로(R1-4)의 테스트.
+    //! 채운 누름틀의 문단 캐시를 wire 에서 찾는 경로의 테스트.
     //!
     //! 캐시 표지: [`add_caches`] 가 모든 `</hp:p>` 앞에 `vertpos` = 9000 + (닫히는
     //! 순서) 인 `linesegarray` 를 넣는다. 안쪽 문단이 먼저 닫히므로 번호는
@@ -611,7 +611,7 @@ mod tests {
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
         // W2: 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
-        // 낡는다 — 전에는 남겼던 것이 틀렸다(r1-3).
+        // 낡는다 — 전에는 남겼던 것이 틀렸다.
         assert_eq!(caches(&xml), Vec::<usize>::new());
         assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
@@ -845,7 +845,7 @@ mod tests {
         let bytes = with_section_xml(&doc, xml.clone());
         let filled = fill_xml(&bytes, &[("cap", "1")]).expect("fill caption field");
         // W2: 캡션이 자라면 그림이 든 문단(9001, host)과 그 뒤 본문 문단(9002)이
-        // 밀린다 — 전에는 둘 다 남겼다(r1-3).
+        // 밀린다 — 전에는 둘 다 남겼다.
         assert_eq!(caches(&filled), Vec::<usize>::new());
 
         let start = xml.find("binaryItemIDRef=\"").expect("img ref") + "binaryItemIDRef=\"".len();

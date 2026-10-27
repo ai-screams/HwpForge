@@ -363,9 +363,9 @@ jobs:
     #
     # ubuntu-22.04 고정 = glibc 2.35. 인터프리터 테스트와 sdist 는 러너에서 바로
     # 돌고, 후보 wheel 만 manylinux_2_28 컨테이너에서 만든다 — 그래야 PR 에서
-    # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다(계획 부록 A-1).
+    # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다.
     runs-on: ubuntu-22.04
-    # W0 (h): CI 시간은 이 첫 run 이 실측이다. 계획의 초기값은 20 분이지만 이 잡은
+    # W0 (h): CI 시간은 이 첫 run 이 실측이다. 이 잡은
     # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + manylinux 컨테이너
     # 안의 또 한 벌 cold release 빌드까지 한 잡에서 치른다 — required 가 될 잡을
     # 타임아웃으로 빨갛게 만드는 비용이 넉넉한 상한보다 크므로 40 에서 시작하고
@@ -566,7 +566,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
       - name: Debian 12 unpack smoke (no pip)
-        # 계획 부록 A-1: pip 를 부르지 않고 wheel 을 풀어 PYTHONPATH 로만
+        # pip 를 부르지 않고 wheel 을 풀어 PYTHONPATH 로만
         # import → open → outline → fill → save → to_json. 컨테이너 페이로드는
         # 파일로 써서 넘긴다 — YAML 안의 중첩 따옴표 한 줄짜리는 actionlint 의
         # shellcheck 를 깨뜨린다.

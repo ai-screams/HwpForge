@@ -40,7 +40,7 @@ struct ConvertResult {
 ///
 /// `convert_md` also swaps `"default"`'s own font to `builtin_presets()`'s
 /// declared value (함초롬돋움) for every preset, `"default"` included —
-/// decision I17 in the W3 report: the Markdown decoder's own `default`
+/// the Markdown decoder's own `default`
 /// template used 한컴바탕, which no longer matches what `templates show
 /// default`/`ops::convert_md` advertise, so this makes `convert`'s output
 /// agree with the preset table it already publishes.
@@ -48,8 +48,8 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     // Legacy validated `--preset` before any input I/O (5ff81af `run`'s
     // `if preset != "default"` guard ran first thing) — a bad preset name
     // must fail the same way whether the input file is missing or stdin is
-    // still open, not surface as `FILE_READ_FAILED`/a stdin block (W3
-    // remediation finding 6). `convert_md`'s own `check_preset` validates
+    // still open, not surface as `FILE_READ_FAILED`/a stdin block.
+    // `convert_md`'s own `check_preset` validates
     // against this same `builtin_presets()` table (`ops/convert.rs`), so
     // this preflight and the one inside `convert_md` can never disagree.
     if !builtin_presets().iter().any(|p| p.name == preset) {
@@ -198,7 +198,7 @@ mod tests {
     use super::*;
     use hwpforge_smithy_hwpx::{ParagraphPath, PathSeg};
 
-    /// Legacy fidelity lock (team-lead follow-up, W3): the pre-`ops` CLI's
+    /// Legacy fidelity lock: the pre-`ops` CLI's
     /// `[convert]` stderr lines and `--json` `warnings` array entries for an
     /// encode warning were machine-parsable code-prefixed strings
     /// (`LAYOUT_CACHE_DROPPED at …: …`), not `OpsWarning::info()`'s

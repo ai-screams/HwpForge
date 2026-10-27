@@ -124,7 +124,7 @@ mod tests {
 
     /// titleMark 각주 문서는 재인코드에서 번호 머리가 생략된다
     /// (`NoteHeadSkipped`). restyle 도 preserve-first 재인코드 경로이므로
-    /// **파일을 쓰지 않고 거부**해야 한다 (R1 F2 — 과거엔 경고만 싣고 썼다).
+    /// **파일을 쓰지 않고 거부**해야 한다 (과거엔 경고만 싣고 썼다).
     ///
     /// fixture 는 `hwpforge-smithy-hwpx/tests/note_numbering_roundtrip.rs`
     /// 의 `stamper_fails_closed_on_note_head_skip` 과 같은 구성이다:

@@ -1094,7 +1094,7 @@ fn convert_paragraph_from(
     // marker 문단을 무음 오절단 — 철폐). 실패 = fail-closed: 캐시 미승격
     // + `DecodeWarning::LayoutCacheDropped` (추측 좌표 승격 금지).
     let layout_cache = hx.linesegarray.as_ref().and_then(|array| {
-        // S22 r2: the cached lines were laid out with text Core does not hold
+        // The cached lines were laid out with text Core does not hold
         // — wherever a line starts, replaying them would place other text.
         // Checked on the loss itself: once a later change carries a dropped
         // body, the Core control that then holds it must be added to the
@@ -1167,7 +1167,7 @@ fn convert_paragraph_from(
                     // position the line starts (`None` = before them all).
                     // 이것을 실패시키는 것: 경계 기록 삭제(`hancom_boundary_round_trips`).
                     line.boundary = tokens.boundary_at(textpos, s.textpos);
-                    // S22 r1: the boundaries' skipped tokens stay within a
+                    // The boundaries' skipped tokens stay within a
                     // bound, so N tokens at one place cannot grow N²/2 kinds.
                     // 이것을 실패시키는 것: 이 검사 삭제, 또는 `>` 를 `>=` 로
                     // (`boundary_skip_cap_keeps_the_limit_and_drops_past_it`).
@@ -1843,7 +1843,7 @@ fn decode_cell_zones(hx: &HxTable, table: &Table, ctx: &mut DecodeCtx) -> Vec<Ce
 fn decode_table_placement(hx: &HxTable, ctx: &mut DecodeCtx) -> Option<ObjectPlacement> {
     let default = crate::encoder::table_default_placement();
     // Without `<hp:pos>` the position reads as the default, but the table's
-    // own `textWrap`/`textFlow` still count (they were dropped).
+    // own `textWrap`/`textFlow` still count (previously dropped).
     // 이것을 실패시키는 것: pos 없을 때 조기 반환으로 되돌리기
     // (`table_without_pos_keeps_its_wrap`).
     let Some(pos) = hx.pos.as_ref() else {
@@ -2405,7 +2405,7 @@ fn decode_note_paragraphs(
 /// run[0] = autoNum(FOOTNOTE/ENDNOTE)-전용 ctrl 만 담은 run (텍스트·개체 없음),
 /// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
 /// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로 (NoteHeadSkipped
-/// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다 (4차 평결 L-N1).
+/// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다.
 /// Returns how many leading runs of the first paragraph the pair takes.
 pub(crate) fn injected_head_range(sub_list: &HxSubList) -> Option<usize> {
     let first = sub_list.paragraphs.first()?;
@@ -2439,7 +2439,7 @@ fn is_injected_note_head_run(run: &HxRun) -> bool {
 /// 방출 형태와 정확 일치 — 그 외 ws-only run 은 내용으로 보존).
 ///
 /// Known markers inside `<hp:t>` (`markpenBegin`·`markpenEnd`·`titleMark`)
-/// project to empty text and are dropped with the pair as before (U-D5);
+/// project to empty text and are dropped with the pair as before;
 /// an unknown element or a sibling the reader drops keeps the pair.
 /// 이것을 실패시키는 것: `has_unknown_part` 생략(c), 종류 비교 생략(b·e),
 /// parts 정확 일치로 좁히기(f·g 가 떼어지지 않음)
@@ -2464,9 +2464,8 @@ fn run_child_kinds_are(run: &HxRun, kinds: &[HxRunChildKind]) -> bool {
 /// run 에 텍스트/ctrl 외 개체 payload 가 전혀 없는지 (head/spacer 공용 검사).
 ///
 /// 구조 분해로 전 필드를 강제 나열한다 — `HxRun` 에 payload 필드가 추가되면
-/// 여기서 컴파일이 깨져, 새 payload 를 조용히 삼키는 오인 드롭(H-N3 —
-/// `textarts` 누락으로 TextArt 가 head 쌍과 함께 삭제될 뻔한 실사고)을
-/// 구조적으로 방지한다.
+/// 여기서 컴파일이 깨져 새 payload 를 조용히 삼키는 오인 드롭을 방지한다.
+/// `textarts` 누락으로 TextArt 가 head 쌍과 함께 삭제될 뻔한 사례도 막는다.
 fn hx_run_has_no_objects(run: &HxRun) -> bool {
     let HxRun {
         origin: _,
@@ -2858,7 +2857,7 @@ pub(crate) fn decode_sublist_paragraphs(
 /// [`decode_sublist_paragraphs`] + 첫 문단의 run 구간 `(offset, count)` 생략.
 ///
 /// 주입 번호-머리 쌍 드롭 전용 — subtree 전체 clone(중첩 note 에서 중첩
-/// clone, M-N4 메모리 증폭) 대신 첫 문단만 재구성한다.
+/// clone, 메모리 증폭) 대신 첫 문단만 재구성한다.
 fn decode_sublist_paragraphs_skipping(
     sub_list: &HxSubList,
     strip_first: usize,
@@ -3703,7 +3702,7 @@ fn parse_page_number_position(
 
 #[cfg(test)]
 mod tests {
-    /// H-N3 잠금: autoNum-전용처럼 보여도 TextArt 등 다른 payload 가 실린
+    /// autoNum-전용처럼 보여도 TextArt 등 다른 payload 가 실린
     /// run 은 주입 head 로 오인 드롭하면 안 된다 (내용 무음 삭제 방지).
     #[test]
     fn injected_head_predicate_rejects_run_with_textart() {
@@ -3723,11 +3722,11 @@ mod tests {
         run.textarts.push(HxTextArt::default());
         assert!(
             !super::is_injected_note_head_run(&run),
-            "TextArt 가 실린 run 을 head 로 오인하면 통째 드롭된다 (H-N3)"
+            "TextArt 가 실린 run 을 head 로 오인하면 통째 드롭된다"
         );
     }
 
-    /// 4차 평결 반영: titleMark 첫 run 문단에는 인코더가 주입하지 않으므로
+    /// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로
     /// (`NoteHeadSkipped`) 디코더도 offset 변형 없이 선두 쌍만 드롭한다 —
     /// titleMark 문단의 후속 run 들은 오탐 없이 그대로 보존돼야 한다.
     #[test]
@@ -3759,7 +3758,7 @@ mod tests {
             super::injected_head_range(&make(vec![title, head, spacer, body])),
             None,
             "titleMark 첫 run 문단은 인코더가 주입하지 않으므로 쌍 미탐지 — \
-             후속 run 을 오탐 삭제하면 저작 내용 손실 (L-N1 오탐 확대 방지)"
+             후속 run 을 오탐 삭제하면 저작 내용 손실 (오탐 확대 방지)"
         );
     }
 
@@ -3949,7 +3948,7 @@ mod tests {
         assert!(result.warnings.is_empty(), "no drop warning: {:?}", result.warnings);
     }
 
-    /// S22 r1: a paragraph's line boundaries pass at most
+    /// A paragraph's line boundaries pass at most
     /// `MAX_PARAGRAPH_BOUNDARY_SKIP` tokens in total — 64 bookmarks at one
     /// place, lines after k of them for k in a set summing to exactly the
     /// limit, keep the cache; one more drops it with a warning.
@@ -4755,7 +4754,7 @@ mod tests {
             .collect()
     }
 
-    /// F-T2: 칸 안 header → 최상위 header → (다음 문단) 칸 안 footer 가 교차해도
+    /// 칸 안 header → 최상위 header → (다음 문단) 칸 안 footer 가 교차해도
     /// Core 순서 = wire 순서, 앵커 = 최상위 문단.
     /// 이것을 실패시키는 것: 칸 안 것을 최상위 것 뒤에 붙이기(첫 두 순서가
     /// 바뀜) / 표 갈래 삭제(칸 안 둘 소실) / 앵커를 0 으로 고정.
@@ -5942,7 +5941,7 @@ mod tests {
 
     #[test]
     fn serde_ctrl_newnum_page_produces_new_number() {
-        // F1b 한컴 실측 (rules-newnum2 section1.xml): 새 번호 지정은 run 안
+        // 한컴이 저장한 둘째 구역 실측: 새 번호 지정은 run 안
         // `<hp:ctrl><hp:newNum num="7" numType="PAGE"/></hp:ctrl>` 자기닫힘.
         let xml = r#"<sec>
             <p paraPrIDRef="0">
@@ -6570,7 +6569,7 @@ mod tests {
 
     // ── 미지 enum 경고 표면화 (W5-α M4 — 증거 세탁 방지) ─────────
 
-    /// 3차 평결(ON_SECTION 무음 정규화): 비기본 note 번호 정책은 인코더가
+    /// ON_SECTION 무음 정규화: 비기본 note 번호 정책은 인코더가
     /// `CONTINUOUS` 고정값으로 재생성한다 — 디코드 시점에 경고를 내야
     /// 무음 정책 변경이 아니다 (warning-first).
     #[test]
@@ -6603,7 +6602,7 @@ mod tests {
         );
     }
 
-    /// 4차 평결 Medium: `numbering@newNum` 은 `xs:positiveInteger` 라 u32
+    /// `numbering@newNum` 은 `xs:positiveInteger` 라 u32
     /// 상한을 넘는 schema-valid 값이 올 수 있다 — typed 파싱으로 섹션
     /// 디코드가 통째로 실패하면 신규 호환성 회귀다 (newNum 은 파싱하지
     /// 않는 게 계약).
@@ -6625,7 +6624,7 @@ mod tests {
         assert!(result.is_ok(), "u32 초과 newNum 으로 디코드가 죽으면 안 됨: {result:?}");
     }
 
-    /// 4차 평결 Low: 명시적 `type=""` 는 결측과 달리 비정상 명시값 — 경고를
+    /// 명시적 `type=""` 는 결측과 달리 비정상 명시값 — 경고를
     /// 우회하면 안 된다.
     #[test]
     fn explicit_empty_note_policy_type_warns() {

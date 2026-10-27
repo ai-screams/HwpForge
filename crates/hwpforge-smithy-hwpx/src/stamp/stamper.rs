@@ -39,7 +39,7 @@ pub const STAMP_MANIFEST_V2_VERSION: u32 = 2;
 /// (admission-gated apply + manifest).
 pub struct HwpxStamper;
 
-/// 인코드 + **의미 손상 fail-closed** (7차 평결 High).
+/// 인코드 + **의미 손상 fail-closed**.
 ///
 /// 편집기(stamper/cell-edit)는 preserve-first 계약이다 — 인코더가
 /// [`crate::EncodeWarning::NoteHeadSkipped`] 등 의미 손상 경고를 낸 산출물을
@@ -66,7 +66,7 @@ fn encode_fail_closed(
         crate::EncodeOptions::default(),
     )
     .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-    // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
+    // typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
     // 호출자가 어떤 경고였는지 알 수 없었다). Display 문자열은 불변이라
     // 프론트엔드 출력은 그대로다.
     crate::encoder::split_successful_encode(outcome)
@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn fixed_point_encode_failure_is_verification() {
-        // 이것을 실패시키는 것: F1 fixed-point 호출 목적을 Admission으로 변경.
+        // 이것을 실패시키는 것: fixed-point 호출 목적을 Admission으로 변경.
         let mut doc = doc_with_text("x");
         doc.document = Document::new();
         assert!(matches!(
@@ -1459,7 +1459,7 @@ mod tests {
 
     #[test]
     fn reference_encode_failure_is_verification() {
-        // 이것을 실패시키는 것: F2 reference 호출 목적을 Admission으로 변경.
+        // 이것을 실패시키는 것: reference 호출 목적을 Admission으로 변경.
         let mut doc = doc_with_text("x");
         doc.document = Document::new();
         assert!(matches!(

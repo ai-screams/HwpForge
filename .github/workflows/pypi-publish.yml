@@ -308,7 +308,7 @@ jobs:
           uv run --no-project python .github/scripts/check_dist.py "${args[@]}"
       - name: Debian 12 import smoke (no pip, same architecture)
         if: matrix.smoke
-        # 계획 부록 A-1 과 같은 경로. 러너 아키텍처가 곧 컨테이너 아키텍처다.
+        # 러너 아키텍처가 곧 컨테이너 아키텍처다.
         run: |
           set -euo pipefail
           cp crates/hwpforge-bindings-py/tests/smoke_unpacked_wheel.py dist/

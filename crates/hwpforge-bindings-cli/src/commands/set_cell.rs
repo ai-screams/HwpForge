@@ -103,8 +103,8 @@ pub fn run(
 /// Builds the options `ops::edit::set_cell` itself validates and interprets:
 /// "table/text required" and "exactly one direction", and the `--map`
 /// batch's own empty-list rejection, now live in `SetCellOptions`'s
-/// consumer (see the W3 report). The `--map`/single-target mutual-exclusion
-/// guard is restored here instead (W3 remediation) — legacy checked it
+/// consumer. The `--map`/single-target mutual-exclusion
+/// guard is restored here instead — legacy checked it
 /// before ever reading the `--map` file, and `ops::edit::set_cell` cannot
 /// reproduce that ordering since it only sees the already-built options,
 /// not the raw flags.

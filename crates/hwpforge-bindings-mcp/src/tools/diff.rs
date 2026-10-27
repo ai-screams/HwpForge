@@ -251,7 +251,7 @@ mod tests {
 
     /// `diff` itself (an identical-pair report) is tiny here — the
     /// oversized total comes entirely from `warnings` — so this exercises
-    /// the branch the whole-payload gate exists for (finding #3): a small
+    /// the branch the whole-payload gate exists for: a small
     /// diff and a large `warnings` list must still take the externalized
     /// path when a `report_path` is available, not slip past unnoticed.
     #[test]

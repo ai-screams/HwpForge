@@ -28,7 +28,7 @@ fn api_doc(anchor: Option<usize>) -> Vec<u8> {
         .expect("encode")
 }
 
-// F-T12: 앵커 없는 API 문서는 첫 문단에 쓰이고, `Some(0)`(JSON 으로 올 수
+// 앵커 없는 API 문서는 첫 문단에 쓰이고, `Some(0)`(JSON 으로 올 수
 // 있음)도 같은 뜻이다. 이것을 실패시키는 것: `None` 을 0 이 아닌 문단으로
 // 처리 / `Some(0)` 에 자리표시 run 을 만들기.
 #[test]

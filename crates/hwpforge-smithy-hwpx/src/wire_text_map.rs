@@ -107,7 +107,7 @@ pub(crate) struct WireTextMap {
     /// Core 축 총길이.
     core_end: u32,
     /// 각 span 시작의 Core 위치(span 순서, 비감소) — 좌표 변환은 이것과
-    /// `spans` 의 wire 시작을 이진 탐색한다(S22 r2: 줄마다 span 을 앞에서부터
+    /// `spans` 의 wire 시작을 이진 탐색한다(줄마다 span 을 앞에서부터
     /// 훑지 않는다).
     core_start: Vec<u32>,
 }
@@ -176,8 +176,8 @@ impl WireTextMap {
         if core == 0 {
             return Ok(0);
         }
-        // The first span that starts at or after `core` decides (S22 r2:
-        // binary search, not a walk from the front).
+        // The first span that starts at or after `core` decides (binary search,
+        // not a walk from the front).
         // 이것을 실패시키는 것: span 을 앞에서부터 훑기
         // (`conversions_after_many_spans_stay_logarithmic`).
         let at = self.core_start.partition_point(|&start| {
@@ -395,7 +395,7 @@ impl TokenLedger {
     /// 시작과 끝이 이 문단에 다 있는 필드만 본다. 문단을 가로지르는 필드(한컴
     /// 보도자료 서식의 "본문" 누름틀 — 한컴 저장 HWPX 3,517 문서 중 858)는
     /// 시작·끝 토큰만 영-core 이고 본문 글자가 1:1 이라 줄 자리가 Core 글자와
-    /// 맞는다(S22 r1 실측: 시작·끝이 든 문단 1,719 개의 둘째 줄부터 3,199 줄 중
+    /// 맞는다(실측: 시작·끝이 든 문단 1,719 개의 둘째 줄부터 3,199 줄 중
     /// 불일치 10, 모두 필드와 무관 — 보조 평면 글자 8, `<hp:fwSpace/>` 뒤
     /// 공백뿐인 꼬리 2). 시작과 같은 run 에서 접힌 본문 안의 줄은 좌표 맵이
     /// 수축 안쪽으로 거부한다.
@@ -427,7 +427,7 @@ impl TokenLedger {
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
         let here = self.at(core);
-        // S22 r2: binary search for the tokens before `wire`, then read only
+        // Binary search for the tokens before `wire`, then read only
         // that prefix and the token after it.
         let k = here.partition_point(|&i| self.tokens[i].wire_start < wire);
         (k > 0).then(|| {
@@ -486,7 +486,7 @@ impl TokenLedger {
                 }
             }
         }
-        // S22 r2: only the skipped prefix and the token after it are read.
+        // Only the skipped prefix and the token after it are read.
         self.count_visits(k.min(here.len()) + 1);
         if !matches {
             return Err(format!(
@@ -531,7 +531,7 @@ impl TokenLedger {
 mod tests {
     use super::*;
 
-    /// The walk from the front `to_core` used before (S22 r2), as the oracle.
+    /// The walk from the front `to_core` used before, as the oracle.
     fn walked_to_core(map: &WireTextMap, wire: u32) -> Result<u32, CacheMapError> {
         if map.wire_end.checked_add(1) == Some(wire) {
             return Ok(map.core_end);
@@ -554,7 +554,7 @@ mod tests {
         Ok(core_cursor + (wire - wire_cursor))
     }
 
-    /// The walk from the front `to_wire` used before (S22 r2), as the oracle.
+    /// The walk from the front `to_wire` used before, as the oracle.
     fn walked_to_wire(map: &WireTextMap, core: u32) -> Result<u32, CacheMapError> {
         if core > map.core_end {
             return Err(CacheMapError::OutOfRange { pos: core, end: map.core_end });
@@ -581,7 +581,7 @@ mod tests {
         Ok(wire_cursor + (core - core_cursor))
     }
 
-    /// S22 r2: the binary searches give the walk's answer at every position,
+    /// The binary searches give the walk's answer at every position,
     /// over maps that mix zero-width tokens, tabs, runs of tokens, and text.
     /// 이것을 실패시키는 것: 탐색 경계를 한 칸 어긋나게(`<` 를 `<=` 로) 하는 것.
     #[test]
@@ -620,7 +620,7 @@ mod tests {
         }
     }
 
-    /// S22 r2: 16,000 zero-width tokens, one character, then 16,000 lines
+    /// 16,000 zero-width tokens, one character, then 16,000 lines
     /// after it — each conversion searches the spans, it does not walk them.
     /// 이것을 실패시키는 것: 좌표 변환을 앞에서부터 span 을 훑는 것으로
     /// 되돌리기(검사한 span 수가 N² 로 는다).
@@ -642,11 +642,11 @@ mod tests {
         assert!(visits <= 40 * u64::from(n), "{visits} spans checked for {n} lines");
     }
 
-    /// S22 r1: the per-line lookups use the ledger's index — N lines over
+    /// The per-line lookups use the ledger's index — N lines over
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
     /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
     /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
-    /// S22 r2: N tokens and N lines at one Core position (bookmarks with no
+    /// N tokens and N lines at one Core position (bookmarks with no
     /// text, every line at 0) — each lookup reads only the prefix it needs,
     /// not the whole position.
     /// 이것을 실패시키는 것: 조회마다 그 위치의 토큰 전체를 복제·순회하는 것

@@ -2228,7 +2228,7 @@ impl BodyTextParserState {
                 }
                 // 시작번호 `[20..28]` (쪽/그림/표/수식 u16 — 한컴 실측).
                 // all-or-none: 28바이트 미만이면 캡처하지 않는다 (부분값을
-                // 기본값과 섞어 날조 금지 — 계획 W1 fail-safe).
+                // 기본값과 섞어 날조 금지).
                 if let Some(bytes) = record.data.get(20..28) {
                     let word = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
                     self.section_def_start_numbers = Some(Hwp5SectionStartNumbers {
@@ -3737,7 +3737,7 @@ pub(crate) mod tests {
         tb.paragraphs.iter().map(|p| p.text.clone()).collect()
     }
 
-    /// 1a-T1/T2: a text box in a table cell keeps its paragraphs, and a text
+    /// A text box in a table cell keeps its paragraphs, and a text
     /// box inside it (in the cell and in a body text box) keeps its own — the
     /// body path's collection one level down. Before, both were plain rects
     /// without text.
@@ -3941,7 +3941,7 @@ pub(crate) mod tests {
         data
     }
 
-    /// A-T3/A-T4 from the wire: a body table's, a nested
+    /// From the wire: a body table's, a nested
     /// table's and a header table's `CtrlHeader` placement word and height
     /// reach `Hwp5Table::ctrl` — before, the tests built `ctrl` by hand and
     /// dropping the decoder's note passed them.
@@ -5026,7 +5026,7 @@ pub(crate) mod tests {
             .count()
     }
 
-    /// D-T1: a tab is eight wire units and one character. The boundary at
+    /// A tab is eight wire units and one character. The boundary at
     /// wire 10 is after "나".
     ///
     /// 이것을 실패시키는 것: 변환을 지워 wire 위치를 그대로 쓰는 것.
@@ -5038,7 +5038,7 @@ pub(crate) mod tests {
         assert_eq!(run_texts(para), [(1, "가\t나".to_string()), (2, "다라".to_string())]);
     }
 
-    /// D-T2: the shape of an underlined phrase after an inline object (the
+    /// The shape of an underlined phrase after an inline object (the
     /// 법무부 rec260 form) covers exactly that phrase.
     ///
     /// 이것을 실패시키는 것: 개체를 wire 1 칸으로 세는 것.
@@ -5061,7 +5061,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// D-T3: a field begin at the head of the paragraph takes no text, so a
+    /// A field begin at the head of the paragraph takes no text, so a
     /// boundary right after it starts at the first character — and replaces
     /// the boundary at 0.
     ///
@@ -5073,7 +5073,7 @@ pub(crate) mod tests {
         assert_eq!(run_texts(&result.paragraphs[0]), [(2, "본문".to_string())]);
     }
 
-    /// D-T4: a silently consumed extended control (`0x01`) takes wire units
+    /// A silently consumed extended control (`0x01`) takes wire units
     /// but no text.
     ///
     /// 이것을 실패시키는 것: `silent_wires` 를 무시하는 것.
@@ -5087,7 +5087,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// D-T5: a group child's text box paragraph goes through the gso path,
+    /// A group child's text box paragraph goes through the gso path,
     /// which writes its text and runs after the paragraph is finished. Its
     /// boundaries move the same way, silent controls included.
     ///
@@ -5236,7 +5236,7 @@ pub(crate) mod tests {
         assert_eq!(p.char_shape_runs.len(), 1);
     }
 
-    /// D-T6: a boundary inside an object's eight wire units (no file has
+    /// A boundary inside an object's eight wire units (no file has
     /// one) moves to the object's end and is reported.
     ///
     /// 이것을 실패시키는 것: 경고 갈래를 지우는 것, 개체 시작으로 붙이는 것.
@@ -5252,7 +5252,7 @@ pub(crate) mod tests {
         assert_eq!(boundary_warnings(&decode_paragraph(&units, &[(0, 1), (9, 2)])), 0);
     }
 
-    /// D-T8: inside a field, the character after an object takes the shape
+    /// Inside a field, the character after an object takes the shape
     /// that starts after the object — in the decoded boundaries and in the
     /// Core runs projection makes of the field's text.
     ///
@@ -5278,7 +5278,7 @@ pub(crate) mod tests {
         assert!(!text_runs.iter().any(|(t, id)| t.contains('나') && *id != 2), "{text_runs:?}");
     }
 
-    /// D-T9: a surrogate pair is two UTF-16 units on both axes, so a silent
+    /// A surrogate pair is two UTF-16 units on both axes, so a silent
     /// control after it (and the tab before that) is found at the right
     /// wire position.
     ///
@@ -5399,7 +5399,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// D-T10: boundaries on a run of zero-width controls (section definition,
+    /// Boundaries on a run of zero-width controls (section definition,
     /// field begin) all land on the same character: the last one wins.
     ///
     /// 이것을 실패시키는 것: 같은 위치에 겹친 경계에서 앞 경계를 남기는 것.

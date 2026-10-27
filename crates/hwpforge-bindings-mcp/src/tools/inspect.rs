@@ -107,7 +107,7 @@ pub struct InspectData {
 /// Inspect an HWPX file and return structural summary.
 ///
 /// `_show_styles` stays unused: `InspectData` has no `styles` field (schema
-/// freeze — adding one is a W4 decision), matching the pre-migration tool,
+/// freeze — adding one requires a schema change), matching the pre-migration tool,
 /// which also decoded without ever building a style summary.
 ///
 /// The legacy contract counts `tables`/`images`/`charts` (and `paragraphs`)

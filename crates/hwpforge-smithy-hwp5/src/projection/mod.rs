@@ -1674,7 +1674,7 @@ fn promote_line_segments(
         // 이것을 실패시키는 것: 경계 기록 삭제(붕괴 문단이 한 자리로 접힌다,
         // `collapsed_lines_keep_their_token_boundary`).
         line.boundary = tokens.boundary_at(textpos, s.text_start_position);
-        // S22 r1: the boundaries' skipped tokens stay within a bound, so N
+        // The boundaries' skipped tokens stay within a bound, so N
         // tokens at one place cannot grow N²/2 kinds.
         // 이것을 실패시키는 것: 이 검사 삭제, 또는 `>` 를 `>=` 로
         // (`boundary_skip_cap_keeps_the_limit_and_drops_past_it`).
@@ -5966,7 +5966,7 @@ mod tests {
         assert_eq!(document.sections()[0].content_counts().images, 1);
     }
 
-    /// D-T7: an object takes the char shape that starts at its own
+    /// An object takes the char shape that starts at its own
     /// position — here a boundary right at the object, after "A" (a
     /// boundary sits at a control's start 3,724 times in 1,163 corpus
     /// documents, `scan_cs_interior.py`) — not the shape of the character
@@ -6027,7 +6027,7 @@ mod tests {
         assert_eq!(runs[1].char_shape_id, CharShapeIndex::new(2));
     }
 
-    /// D-T7 on the structured path (the one that walks `text_segments`; a
+    /// On the structured path (the one that walks `text_segments`; a
     /// bookmark point in the paragraph selects it): the object takes the
     /// shape that starts at it, the character after it the next one.
     ///
@@ -6680,7 +6680,7 @@ mod tests {
         assert_eq!(placement, ObjectPlacement::legacy_inline_defaults());
     }
 
-    /// E-T1: bits 21–23 are Hancom's four-value table (X2 fixture and the
+    /// Bits 21–23 are Hancom's four-value table (X2 fixture and the
     /// 457 floating objects of the Hancom pairs), not the spec's six.
     ///
     /// 이것을 실패시키는 것: 6값 스펙 표로 되돌리는 것, 1·2·3 중 둘을
@@ -6700,7 +6700,7 @@ mod tests {
         }
     }
 
-    /// E-T2: 4–7 are outside what Hancom writes: a canary warning and the
+    /// 4–7 are outside what Hancom writes: a canary warning and the
     /// most conservative wrap.
     ///
     /// 이것을 실패시키는 것: 경고 조건을 `>= 6` 으로 되돌리는 것(4·5 가
@@ -7141,7 +7141,7 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 
-    /// S22 r1: a paragraph's line boundaries pass at most
+    /// A paragraph's line boundaries pass at most
     /// `MAX_PARAGRAPH_BOUNDARY_SKIP` tokens in total — 64 bookmarks at one
     /// place, lines after k of them for k in a set summing to exactly the
     /// limit, keep the cache; one more drops it with a warning.
@@ -7461,7 +7461,7 @@ mod tests {
         assert!(!lock(0x082a_4310));
     }
 
-    /// A-T3 (법무부 실측 속성 word): 본문 표 `0x082a4310` = 떠 있음·PARA/PARA·
+    /// 법무부 실측 속성 word: 본문 표 `0x082a4310` = 떠 있음·PARA/PARA·
     /// overlap·offset (13, 27415); 머리 표 `0x082a2311` = 글자처럼 취급·PARA/PARA·
     /// flowWithText — 글자처럼 취급 표도 wire 기준·flow 를 그대로 싣는다(한컴
     /// 짝 5,131/5,131). 기본 flow word 는 `None`.
@@ -8776,7 +8776,7 @@ mod tests {
         );
     }
 
-    // ── R0-2: chart extraction is charged to the document budget ─────────
+    // ── chart extraction is charged to the document budget ─────────
 
     fn chart_ole_control(binary_data_id: u16) -> Hwp5Control {
         Hwp5Control::OleObject(Hwp5OleObjectControl {
@@ -9051,7 +9051,7 @@ mod shape_style_tests {
         assert_eq!(opaque, 0);
     }
 
-    /// 1b-T2 + r6 안쪽 제목 상자: 종류 0 = 선 없음 — 색·굵기는 있어도
+    /// 안쪽 제목 상자: 종류 0 = 선 없음 — 색·굵기는 있어도
     /// 종류가 이긴다(굵기로 판정하지 않음); 색은 COLORREF(BGR) 그대로
     /// (`0x00179EDE` → `#DE9E17`). 이것을 실패시키는 것: 종류 판정을 굵기로 /
     /// `0 => None` 갈래를 실선으로 / BGR 변환 누락.
@@ -9072,7 +9072,7 @@ mod shape_style_tests {
         assert_eq!((s.line_style, w), (Some(LineStyle::Solid), 1), "unconfirmed type reported");
     }
 
-    /// 1b-T6: 채우기 없음은 빈 상자(흰 칠과 구별), 선 도형에는 채우기가
+    /// 채우기 없음은 빈 상자(흰 칠과 구별), 선 도형에는 채우기가
     /// 없다. 이것을 실패시키는 것: 종류 0 을 기본(흰 칠)으로 두기 / 선 도형에
     /// 채우기를 쓰기.
     #[test]
@@ -9124,7 +9124,7 @@ mod shape_style_tests {
         }
     }
 
-    /// A text box gets its outline and fill too (r6: the boxes around the
+    /// A text box gets its outline and fill too (the boxes around the
     /// Ministry of Justice text). 이것을 실패시키는 것: 글상자 투영에서
     /// 스타일을 빼기.
     #[test]
@@ -9156,7 +9156,7 @@ mod shape_style_tests {
         assert_eq!(s.fill_color.unwrap().to_hex_rgb(), "#86AFDC");
     }
 
-    /// 1b-T3 (x6 F1·F2): 무늬 −1 = 없음(단색만), 무늬 2 = Hancom `SLASH`.
+    /// 한컴이 저장한 무늬 채우기 실측: 무늬 −1 = 없음(단색만), 무늬 2 = Hancom `SLASH`.
     /// 이것을 실패시키는 것: 무늬 −1 을 0(가로줄)으로 / 무늬 표 한 줄 교체.
     #[test]
     fn hatch_none_and_slash() {

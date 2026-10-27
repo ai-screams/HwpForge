@@ -70,7 +70,7 @@ pub(super) fn build_table(
     // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
     // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
     // 없으면 sequential fallback — drawn after the cells and before the
-    // caption, the order this encoder has always drawn it in (S22 r2).
+    // caption, the order this encoder has always drawn it in.
     // 이것을 실패시키는 것: 이 줄을 캡션 인코딩 뒤로
     // (`drawn_ids_keep_the_table_before_its_caption`).
     let id = super::super::object_ids::core_or_drawn_at(id_slot, "table", table.inst_id);

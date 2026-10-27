@@ -1227,7 +1227,7 @@ fn replay_section(
                     location,
                 });
             }
-            // S22 r1: a placement the replay does not support is refused
+            // A placement the replay does not support is refused
             // before a missing host cache — re-saving in Hancom would write
             // the cache but leave the table unrenderable.
             // 이것을 실패시키는 것: 이 검사를 캐시 검사 뒤로
@@ -2089,7 +2089,7 @@ fn distill_textbox_style(style: &hwpforge_core::control::ShapeStyle) -> TextBoxS
     // 이것을 실패시키는 것: 이 판정을 지우고 `fill_color` 를 그대로 쓰기
     // (`distill_drops_fill_color_when_fill_is_none`).
     let no_fill = matches!(style.fill, Some(hwpforge_core::control::Fill::None));
-    // 선 종류 "없음"은 테두리가 없다(색·굵기가 있어도 — HWP5 r6 안쪽 상자).
+    // 선 종류 "없음"은 테두리가 없다(색·굵기가 있어도 — HWP5 안쪽 상자).
     // 이것을 실패시키는 것: 이 판정을 지우기(없는 테두리를 그림,
     // `distill_drops_the_border_when_the_line_is_none`).
     let no_line = matches!(style.line_style, Some(hwpforge_core::control::LineStyle::None));
@@ -5220,7 +5220,7 @@ mod tests {
         assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
     }
 
-    /// S22 r1: a cacheless table host is refused for its placement first —
+    /// A cacheless table host is refused for its placement first —
     /// a re-save writes the cache, not a supported placement — and only a
     /// default-flow table is refused for the missing cache.
     #[test]
@@ -5249,7 +5249,7 @@ mod tests {
         assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
     }
 
-    /// A-T6: 표 admission 은 Core `placement` 를 본다 — 캐시가 기본 flow 라도
+    /// 표 admission 은 Core `placement` 를 본다 — 캐시가 기본 flow 라도
     /// placement 가 떠 있으면 거부, 기본 flow 를 `Some` 으로 가진 표(디코더가
     /// 접지 않은 경우)는 허용. 이것을 실패시키는 것: 캐시 `default_flow_pos`
     /// 로 되돌리기 / 기본값 비교를 `None` 만으로 좁히기.

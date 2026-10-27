@@ -2194,7 +2194,7 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
 /// text) and the images it holds, empty without one. The caption's numbers
 /// ("그림 3") live here (captions were not written at
 /// all; a picture inside the caption lost its bytes).
-/// 이것을 실패시키는 것: 캡션 출력을 지우기(F17 의 3·4·7 이 사라짐 —
+/// 이것을 실패시키는 것: 캡션 출력을 지우기(캡션 번호 3·4·7 이 사라짐 —
 /// `f17_caption_numbers_reach_the_readable_views`) / 캡션 그림의 바이트를
 /// 버리기(`caption_pictures_and_html_table_captions_are_kept`).
 fn styled_caption(

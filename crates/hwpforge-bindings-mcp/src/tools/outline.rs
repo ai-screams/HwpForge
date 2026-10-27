@@ -132,7 +132,7 @@ mod tests {
 
     /// The outline itself is empty here — the oversized total comes
     /// entirely from `warnings` — so this exercises the branch the
-    /// whole-payload gate exists for (finding #4). Outline has no
+    /// whole-payload gate exists for. Outline has no
     /// `report_path`-style externalization, so this must still error
     /// rather than silently return an oversized response.
     #[test]

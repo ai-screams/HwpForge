@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn warnings_from_rejects_length_mismatch() {
-        // 짧은 쪽에서 멈추면 경고가 무음 드롭된다 — 거부해야 한다 (R1 F7).
+        // 짧은 쪽에서 멈추면 경고가 무음 드롭된다 — 거부해야 한다.
         let doc = doc_with_srcs(&["https://example.com/a.png"]);
         let plan = collect_asset_plan(&doc);
         let err = warnings_from(&plan, &[]).expect_err("1 plan entry vs 0 outcomes");
@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn finish_rejects_sources_swapped_behind_unchanged_locators() {
-        // R1 F1: 주소는 그대로인데 두 이미지의 src 가 맞바뀌면, 대조가 없으면
+        // 주소는 그대로인데 두 이미지의 src 가 맞바뀌면, 대조가 없으면
         // a.png 의 바이트가 b.png 의 run 에 박힌다.
         let mut doc = doc_with_srcs(&["a.png", "b.png"]);
         let plan = collect_asset_plan(&doc);

@@ -71,7 +71,7 @@ cat > tpl.md <<'MD'
 MD
 assert_ok "$BIN" convert tpl.md -o tpl.hwpx
 assert_file tpl.hwpx
-# W3 (CLI -> hwpforge::ops migration, decision I17): `convert` now resolves
+# W3 (CLI -> hwpforge::ops migration): `convert` now resolves
 # every catalogued preset (default/modern/classic/latest), not just
 # `default` — `ops::convert_md` applies each preset's font uniformly.
 # PRESET_NOT_FOUND still fires for a name no built-in preset has at all.

@@ -154,7 +154,7 @@ pub fn run_stamp(
     let manifest_file = manifest_path.map(str::to_string).unwrap_or_else(|| {
         ops::default_manifest_path(std::path::Path::new(output_path)).to_string_lossy().into_owned()
     });
-    // R2: identical paths would silently overwrite the stamped .hwpx with
+    // Identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if std::path::Path::new(output_path) == std::path::Path::new(&manifest_file) {
         return Err(ToolErrorInfo::new(

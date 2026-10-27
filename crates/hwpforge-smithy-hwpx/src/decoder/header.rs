@@ -325,7 +325,7 @@ fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bo
 }
 
 /// A `paraPr` border offset outside the HWPUNIT range: the style store
-/// cannot hold it and keeps 0 (it was dropped without a word).
+/// cannot hold it and keeps 0 (previously dropped without a word).
 /// 이것을 실패시키는 것: 이 보고를 지우기
 /// (`para_border_offset_out_of_range_is_reported_lost`).
 fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
@@ -356,7 +356,7 @@ fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
 /// `type`, a `color` that is neither `#RRGGBB` nor `none`, or an offset
 /// outside −100..=100. The store keeps a fallback (kind NONE, the default
 /// color, the clamped offset), so a re-encode would write a different
-/// shadow; the editors refuse the input instead (S21 r1-1).
+/// shadow; the editors refuse the input instead.
 fn char_shadow_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
     let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
     char_props

@@ -692,7 +692,7 @@ fn from_json_finds_a_cache_in_a_group_picture_caption() {
     assert!(warning.message.contains("group[0].caption"), "{}", warning.message);
 }
 
-/// R1-1: a JSON `Unknown` control has no HWPX form. `from_json` still writes
+/// A JSON `Unknown` control has no HWPX form. `from_json` still writes
 /// the document (generation is not fail-closed) but says what it left out,
 /// under its own code, where it was.
 ///

@@ -216,7 +216,7 @@ fn only_folded_field_interiors_drop_the_cache() {
     );
 }
 
-/// S22 r1: a bookmark span that crosses paragraphs writes its begin in the
+/// A bookmark span that crosses paragraphs writes its begin in the
 /// first paragraph and its text one to one after it, so that paragraph keeps
 /// its line cache; the end paragraph now retains the shared host span ID
 /// and keeps its cache too. 이것을 실패시키는 것: 문단마다 span 맵 초기화.

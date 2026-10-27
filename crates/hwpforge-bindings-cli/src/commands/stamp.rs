@@ -144,7 +144,7 @@ pub fn run(
 
     let manifest_file: PathBuf =
         manifest_path.map(Path::to_path_buf).unwrap_or_else(|| default_manifest_path(output));
-    // R2: identical paths would silently overwrite the stamped .hwpx with
+    // Identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if output == &manifest_file {
         CliError::new(

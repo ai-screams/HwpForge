@@ -564,7 +564,7 @@ fn fallback_measures_against_the_original_points() {
     assert!(plan.loss().is_none(), "{plan:?}");
 }
 
-/// The plan keeps a frame the policy stores within 2: the r6 circle
+/// The plan keeps a frame the policy stores within 2: the circle
 /// (original 560, shown 850) stores its centre at 280 and the scale
 /// 850 / 560, and lands exactly where Core draws it (centre at 425).
 /// 이것을 실패시키는 것: 점을 현재 상자로 옮겨 쓰기 / 배율을 1 로.

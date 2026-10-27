@@ -7604,7 +7604,7 @@ mod frame_tests {
         assert_eq!(copied, 0);
     }
 
-    /// FR-T1/T2: the ministry's r6 bullet — original 560, shown 850, scale
+    /// The ministry's bullet — original 560, shown 850, scale
     /// 1.517943, defining points in the original box, size locked — decodes
     /// to its frame with the points as stored, and writes them back.
     ///
@@ -7799,7 +7799,7 @@ mod frame_tests {
     /// An `orgSz` that cannot be a frame value is reported, not carried: an
     /// axis of 0 under a displayed axis that is not, a side outside the
     /// HWPUNIT range. One equal to the kind's default (the displayed size, a
-    /// TextArt's 14173 design box) is no frame value at all (FR-T5).
+    /// TextArt's 14173 design box) is no frame value at all.
     /// 이것을 실패시키는 것: 0 축 보고를 지우기 / 범위 밖 보고를 지우기 /
     /// 기본값과 같은 원래 크기를 접지 않기.
     #[test]
@@ -7818,7 +7818,7 @@ mod frame_tests {
         assert!(control(content).frame().unwrap().is_unset());
     }
 
-    /// FR-T6: a shape resized through Core keeps its original box on the
+    /// A shape resized through Core keeps its original box on the
     /// wire with the scale between (850 → 1700: scale 2, centre at 425).
     /// 이것을 실패시키는 것: 인코더가 `orgSz` 를 현재 크기로 쓰기.
     #[test]

@@ -1101,7 +1101,7 @@ mod tests {
         assert_eq!(others[0].code, "LAYOUT_CACHE_DROPPED");
     }
 
-    /// R1-1: a control the encoder left out blocks a fail-closed editor.
+    /// A control the encoder left out blocks a fail-closed editor.
     ///
     /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
     /// `ContentLost` 를 `false` 갈래로 옮기는 것.

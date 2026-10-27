@@ -81,7 +81,7 @@ fn a_lost_field_body_is_refused_by_the_editors() {
             );
             assert!(err.to_string().contains("field_body"), "{surface} cached={cached}: {err}");
         }
-        // 이것을 실패시키는 것: F9 ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
+        // 이것을 실패시키는 것: ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
         #[cfg(feature = "ops-md")]
         {
             // Reading succeeds and says what it lost.
@@ -130,7 +130,7 @@ fn recovered_bodies_survive_all_editors() {
                 .bytes,
                 stamp_all(&bytes).unwrap().bytes,
             ];
-            // 이것을 실패시키는 것: F10 ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
+            // 이것을 실패시키는 것: ops-md gate 제거 — ops-hwpx 전용 컴파일 실패.
             // All editors still run above when Markdown checks are disabled.
             #[cfg(feature = "ops-md")]
             for output in _outputs {

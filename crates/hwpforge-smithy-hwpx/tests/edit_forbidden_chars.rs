@@ -723,7 +723,7 @@ fn stamp_v2_removes_a_control_from_a_cell_hint() {
 fn stamp_v2_keeps_u001f_in_a_cell_hint_as_a_fixed_width_space() {
     // The entry keeps U+001F, so the shown hint has its fixed-width space. The
     // field's `Direction` and `Command` parameters are not text runs and cannot
-    // hold it; the section scan removes it there and reports both (R1-5).
+    // hold it; the section scan removes it there and reports both.
     // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것 (입구 경고가 하나 더 붙는다).
     let diagnosed = stamp_cell("H\u{1F}I").expect("stamp");
 
