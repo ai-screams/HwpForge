@@ -466,14 +466,14 @@ fn classify_pair(
     let at = format!("$.sections[{section}].paragraphs[{para}]");
     if let Some((changes, end_marks)) = try_cell_diff(&b, &r, base, base_tables) {
         out.cells.extend(changes);
-        // §19.22 D5: a cell paragraph's end-mark char shape that changed with
+        // A cell paragraph's end-mark char shape that changed with
         // its text is reported on the raw axis (cell changes carry text only).
         // 이것을 실패시키는 것: 이 보고를 지우기
         // (`end_char_shape_change_is_reported_with_a_text_change`).
         for (path, detail) in end_marks {
             out.push_raw(format!("{at}.{path}"), detail);
         }
-        // The host paragraph's own end mark too (review r1).
+        // The host paragraph's own end mark too.
         // 이것을 실패시키는 것: 이 보고를 지우기
         // (`end_char_shape_change_is_reported_with_a_text_change`, host 경우).
         if b.end_char_shape != r.end_char_shape {
@@ -494,7 +494,7 @@ fn classify_pair(
             before: Some(excerpt(&b_text)),
             after: Some(excerpt(&r_text)),
         });
-        // §19.22 D5: the text change does not say the end mark changed too.
+        // The text change does not say the end mark changed too.
         // 이것을 실패시키는 것: 이 보고를 지우기
         // (`end_char_shape_change_is_reported_with_a_text_change`).
         if b.end_char_shape != r.end_char_shape {
@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(cut.chars().count(), EXCERPT_MAX + 1);
     }
 
-    /// §19.22 D5: an end-mark char shape change is reported on the raw axis
+    /// An end-mark char shape change is reported on the raw axis
     /// — alone (already, by the first-difference path), with a text change
     /// of the paragraph, and with a text change of a table cell; a cell
     /// end-mark change alone too.
@@ -848,7 +848,7 @@ mod tests {
         assert_eq!(change.after.as_deref(), Some("diff@gate.io"));
         // The field axis owns the value change; W1b 이후 fill 은 해당
         // 문단의 stale linesegarray 도 제거하므로 raw 축에 `$.layout_cache`
-        // 변경 하나가 **정직하게** 함께 보고된다 (§1g v5 변경 5).
+        // 변경 하나가 **정직하게** 함께 보고된다.
         assert!(diff.semantic.cells.is_empty(), "cells: {:?}", diff.semantic.cells);
         assert!(diff.semantic.paragraphs.is_empty(), "paras: {:?}", diff.semantic.paragraphs);
         assert!(diff.semantic.structure.is_empty());
@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn unnamed_field_body_change_falls_to_raw_not_silence() {
-        // Review H1: the field axis only reports named ClickHere fields, so
+        // The field axis only reports named ClickHere fields, so
         // an unnamed field's body change must surface via `raw` — never be
         // stripped into silence.
         let base_fixture = fixture("fields/clickhere_named.hwpx");
@@ -1028,8 +1028,7 @@ mod tests {
 
     #[test]
     fn added_section_itemizes_its_paragraphs() {
-        // Review L1: a whole added section must not be paragraph-level
-        // silent.
+        // A whole added section must also appear in paragraph-level changes.
         let base = fixture("fields/clickhere_named.hwpx");
         let mut decoded = HwpxDecoder::decode(&base).unwrap();
         decoded.document.add_section(Section::with_paragraphs(

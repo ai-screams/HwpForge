@@ -325,7 +325,7 @@ fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bo
 }
 
 /// A `paraPr` border offset outside the HWPUNIT range: the style store
-/// cannot hold it and keeps 0 (review r1: it was dropped without a word).
+/// cannot hold it and keeps 0 (it was dropped without a word).
 /// 이것을 실패시키는 것: 이 보고를 지우기
 /// (`para_border_offset_out_of_range_is_reported_lost`).
 fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
@@ -1649,7 +1649,7 @@ mod tests {
         assert_eq!(border_fill.fill_hatch_style.as_deref(), Some("HORIZONTAL"));
     }
 
-    /// Review r1 HIGH-1: an embedded font or substitute font (flag or a
+    /// An embedded font or substitute font (flag or a
     /// binary reference) is reported as lost content; a plain one is not.
     /// 이것을 실패시키는 것: 보고 삭제 · 대체 글꼴 참조 무시 · 일반 글꼴에도 보고.
     #[test]

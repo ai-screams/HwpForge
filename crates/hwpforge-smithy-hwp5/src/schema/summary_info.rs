@@ -31,7 +31,7 @@
 //!              FILETIME = 64-bit 100-ns units since 1601-01-01 UTC)
 //! ```
 //!
-//! Architect-mandated security posture (Wave 12o §11.4 S2 / S7):
+//! Security posture:
 //!
 //! - **S2 offset cycle detection**: the property table is required to be
 //!   strictly monotonically increasing within the section bounds, and
@@ -120,8 +120,7 @@ pub fn parse_summary_information(bytes: &[u8]) -> Hwp5Result<Metadata> {
         });
     }
 
-    // 3. Section start offset (typically 0x30). Codex(architect) Wave
-    //    12o-fixup §Top-1: `sec_start + 8` was unchecked `usize` add — on
+    // 3. Section start offset (typically 0x30). `sec_start + 8` was unchecked `usize` add — on
     //    32-bit/wasm targets a `u32`-derived `sec_start >= 0xFFFFFFF8`
     //    wraps before the bounds check fires and lands in a panicking
     //    slice. Use `checked_add` + `bytes.get(..)` so a malformed
@@ -361,8 +360,7 @@ fn strip_trailing_nuls(bytes: &[u8]) -> &[u8] {
 /// Converts a Windows FILETIME (100-ns intervals since 1601-01-01 UTC)
 /// into an ISO 8601 string truncated to seconds:
 /// `"YYYY-MM-DDTHH:MM:SSZ"`. Sub-second precision is discarded
-/// intentionally — Hancom's content.hpf wire only carries seconds
-/// (Wave 12o §11.2 M4).
+/// intentionally — Hancom's content.hpf wire only carries seconds.
 ///
 /// Returns `None` for FILETIME = 0 (meaning "unset") and for years
 /// outside the ISO 8601 four-digit range (1..=9999).
@@ -510,7 +508,7 @@ mod tests {
         assert!(format!("{err}").contains("BOM"));
     }
 
-    /// Codex(architect) Wave 12o-fixup §Top-1: a `u32`-derived `sec_start`
+    /// A `u32`-derived `sec_start`
     /// near `usize::MAX` (only possible on 32-bit/wasm targets) must
     /// exit via `Hwp5Error::RecordParse` rather than panic on
     /// `checked_add` or slice-index overflow. We can't actually

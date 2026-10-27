@@ -261,7 +261,7 @@ fn write_artifacts(
         .exit(json_mode, Command::Stamp);
     }
     if let Err(e) = std::fs::write(manifest_file, manifest_json) {
-        // Review L1: a stamped .hwpx without its manifest is a partial
+        // A stamped .hwpx without its manifest is a partial
         // artifact — remove it so a failed command leaves nothing behind.
         let _ = std::fs::remove_file(output);
         CliError::new(

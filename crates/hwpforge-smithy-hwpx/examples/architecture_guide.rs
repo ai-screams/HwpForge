@@ -488,7 +488,7 @@ fn build_section_2() -> Section {
                 ShapePoint::new(tw / 2, 0),
                 ShapePoint::new(tw, th),
                 ShapePoint::new(0, th),
-                ShapePoint::new(tw / 2, 0), // 첫 점 반복 (gotcha #17)
+                ShapePoint::new(tw / 2, 0), // 첫 점 반복 (닫힌 다각형은 시작점을 끝에 한 번 더 둔다)
             ])
             .expect("polygon with 4 vertices valid");
             // Caption::new on polygon (constructor #17)

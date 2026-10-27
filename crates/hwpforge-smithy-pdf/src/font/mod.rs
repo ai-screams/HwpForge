@@ -2,7 +2,7 @@
 //!
 //! `header.xml` 의 fontface 이름(예: "한컴바탕")은 파일명이 아니다 —
 //! name table 을 읽어 실물 파일에 매핑해야 한다 (W0 실측: 한컴바탕 =
-//! `HBatang.TTF`). W4a 분류 계약 (Codex 적대 리뷰 H2 재설계):
+//! `HBatang.TTF`). W4a 분류 계약:
 //!
 //! - **family** = nameID 16(typographic) 우선, 없으면 1 폴백. **subfamily**
 //!   = 17 우선, 없으면 2. 로캘별 레코드 전부 등록한다 (한/영 병기 이름).
@@ -154,7 +154,7 @@ pub enum EmbedLicense {
     Denied(String),
 }
 
-/// face 의 임베드 라이선스를 판정한다 (Codex C1·H4 — 기본 fail-closed).
+/// face 의 임베드 라이선스를 판정한다 (기본 fail-closed).
 ///
 /// 검사는 raw bit 가 아니라 ttf-parser 의 **버전 인지 helper**
 /// (`permissions`/`is_subsetting_allowed`/`is_outline_embedding_allowed`)로

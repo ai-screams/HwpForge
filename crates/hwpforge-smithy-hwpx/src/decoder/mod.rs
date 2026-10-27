@@ -655,7 +655,7 @@ pub mod warning_samples {
     }
 }
 
-/// 디코드 경고가 가리키는 문단의 중첩 경로 (§1g v5 변경 5).
+/// 디코드 경고가 가리키는 문단의 중첩 경로.
 ///
 /// `(section, paragraph)` 튜플로는 셀/머리말/각주 내부 문단을 표현할 수
 /// 없어 ordered segment vector 로 기록한다. `Section` 으로 시작해 최종
@@ -840,7 +840,7 @@ impl HwpxDecoder {
 
         // Step 4: Extract masterpage XMLs from ZIP, by file number, and the
         // manifest ids that name them (`secPr/masterPage@idRef` resolves
-        // through `content.hpf`, branch review C2).
+        // through `content.hpf`).
         // Ordered by file number, so the unreferenced-part warnings come in a
         // fixed order.
         let masterpage_xmls = pkg.read_masterpage_parts()?;
@@ -893,7 +893,7 @@ impl HwpxDecoder {
 
             // The master pages this section owns are the parts its
             // `masterPage@idRef`s name — not the next ones in file order
-            // (branch review C2: two sections whose references were swapped
+            // (two sections whose references were swapped
             // read each other's master page, and a re-encode made it
             // permanent). A reference that names no master page part is lost
             // content; `masterPageCnt` only checks the count.
@@ -928,13 +928,12 @@ impl HwpxDecoder {
                 // a master page, first and copies alike charged the part's XML
                 // size against one budget (`MASTER_PAGE_BUDGET`), checked
                 // before parsing or copying; only an admitted reference is
-                // charged, one past the budget is lost content (branch review
-                // r2 H1, r3 H2, r4 H2, r5 H1). Copies come from the first kept
+                // charged, one past the budget is lost content. Copies come from the first kept
                 // master page, so nothing else is held.
                 // 이것을 실패시키는 것: 공유를 손실로 보기(`shared_master_pages_are_kept`),
                 // 예산 없이 복제하기 · Core 일부만 세기(`a_master_page_part_is_read_once`),
                 // 거절도 과금하기(`copy_budget_charges_admitted_copies_only`).
-                // Named by a section, kept or not (r6 L1: a part refused by
+                // Named by a section, kept or not (a part refused by
                 // the budget is not also "referenced by no section").
                 // 이것을 실패시키는 것: 보관 맵으로 무참조를 판정하기
                 // (`a_refused_master_page_is_not_reported_unreferenced`).
@@ -1205,7 +1204,7 @@ impl HwpxDecoder {
     }
 }
 
-/// Review r1 HIGH-2: a table cell zone whose `borderFillIDRef` names no
+/// A table cell zone whose `borderFillIDRef` names no
 /// border fill of the header (looked up by id, not by count) is dropped and
 /// reported as lost content — a renderer would draw nothing for it.
 /// 이것을 실패시키는 것: 이 검사 삭제(`cell_zone_with_an_unknown_border_fill_is_lost`).
@@ -1391,7 +1390,6 @@ fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, Option<String>
                 if let (Some(id), Some(href)) = (attr("id"), attr("href")) {
                     // An id given to two different parts names neither: keep
                     // that as `None` rather than letting the last item win
-                    // (branch review r2 H2).
                     // 이것을 실패시키는 것: 마지막 항목으로 덮어쓰기
                     // (`an_ambiguous_manifest_id_is_lost_content`).
                     out.entry(id)
@@ -1573,7 +1571,7 @@ mod tests {
             .collect()
     }
 
-    /// Branch review C2: each section owns the master page its `idRef`
+    /// Each section owns the master page its `idRef`
     /// names. With the two references swapped, section 0 owns B and section
     /// 1 owns A — and a re-encode keeps it that way.
     /// 이것을 실패시키는 것: 파일 순서로 배정(A·B 로 읽힌다).
@@ -1610,7 +1608,7 @@ mod tests {
         doc.warnings.iter().filter(|w| w.is_content_loss()).map(|w| w.message()).collect()
     }
 
-    /// Branch review r2 H2: an id the manifest gives two parts names
+    /// An id the manifest gives two parts names
     /// neither. Both parts are also used by unambiguous ids, so no
     /// unreferenced-part report hides the case.
     /// 이것을 실패시키는 것: 마지막 항목으로 덮어쓰기(구역 1 이 B 를 하나 더 받는다).
@@ -1636,7 +1634,7 @@ mod tests {
         assert!(lost[0].contains("more than one manifest item"), "{lost:?}");
     }
 
-    /// Branch review r2 H1 / r4 H2: references to one large part are
+    /// References to one large part are
     /// admitted while their decoded size fits the master page budget; the
     /// rest are each reported, so repeated references cannot multiply it.
     /// 이것을 실패시키는 것: 예산 없이 참조마다 복제하기(31 개 모두 들어간다).
@@ -1671,7 +1669,7 @@ mod tests {
             .len()
     }
 
-    /// Branch review r5 H1: the charge does not depend on the Core form the
+    /// The charge does not depend on the Core form the
     /// part becomes — a 3 MiB text with a tab (tab-mixed text) and a 3 MiB
     /// picture caption are charged their XML like plain text, so 30 more
     /// references are cut at the budget.
@@ -1761,7 +1759,7 @@ mod tests {
         }
     }
 
-    /// Branch review r6 L1: a part its section names but the budget refuses
+    /// A part its section names but the budget refuses
     /// is reported once, as over the budget — not also as named by no
     /// section.
     /// 이것을 실패시키는 것: 무참조를 보관 맵으로 판정하기.
@@ -1783,7 +1781,7 @@ mod tests {
         assert!(lost[0].contains("does not fit the master page budget"), "{lost:?}");
     }
 
-    /// Branch review r3 H2 / r4 H2: a part named by three or five sections,
+    /// A part named by three or five sections,
     /// once each, is kept by all — the schema gives a part no owner — and
     /// whether the package also holds a part nobody names changes nothing.
     /// 이것을 실패시키는 것: 공유를 손실로 보기 · 예산을 part 크기 합으로 잡기.
@@ -1929,7 +1927,7 @@ mod tests {
         }
     }
 
-    /// Review r2 HIGH: a package whose picture-caption table names a border
+    /// A package whose picture-caption table names a border
     /// fill the header lacks decodes with that zone dropped and reported.
     /// The package is encoded with border fill 7, then its header renames 7.
     /// 이것을 실패시키는 것: 디코드 순회가 그림 캡션에 들어가지 않기.
@@ -2024,7 +2022,7 @@ mod tests {
         assert_eq!(caption_zones(&package.write().unwrap()), (0, 1));
     }
 
-    /// Review r1 HIGH-2: a cell zone naming a border fill the header does
+    /// A cell zone naming a border fill the header does
     /// not have (by id — the store holds 1 and 5, the zone names 3) is
     /// dropped and reported; known ids stay, in nested tables too.
     /// 이것을 실패시키는 것: 검사 삭제 · 개수 비교로 바꾸기(3 ≤ 2 개라 통과) ·

@@ -452,7 +452,7 @@ pub(crate) fn build_paint_pages(
 /// 함수를 **재귀**로 호출한다. 종료 보장 = production producer
 /// (`build_line_text_box`)가 내부 비텍스트 run 을 거부해 실제 깊이는 1
 /// — 재귀 자체는 원자 종류에 일반적이라 테스트가 내부 이미지 원자를
-/// 합성해도 동작한다 (리뷰 Low-3 문구 정정). 반환 Vec 순서 = z-order.
+/// 합성해도 동작한다. 반환 Vec 순서 = z-order.
 #[allow(clippy::too_many_arguments)]
 /// sub-line 인라인 이미지가 baseline 아래로 얹히는 descent 비율 k 의 분자
 /// (`descent = img_h × NUM / DEN`) — Hancom 내부 상수 (TEXTBOX_TEXT_MARGIN=283
@@ -461,7 +461,7 @@ pub(crate) fn build_paint_pages(
 ///
 /// 실측 k ≈ 0.152 (subline_image_v2 body 4측점 0.1499~0.1523). **폰트 메트릭
 /// 유도가 아니다** — hhea descent/em 0.23·OS/2 typo 0.170·win 0.23 어느 정의와도
-/// 불일치(적대 리뷰 r2 가 TTF 직접 파싱으로 실증). lineseg 비율
+/// 불일치(TTF 직접 파싱으로 확인). lineseg 비율
 /// ((vertsize−baseline)/vertsize = 0.150)과 이 상수(0.152)는 현 데이터(단일 글꼴
 /// 패밀리·85:15 고정 줄 메트릭)로 비식별이며, 상수 vs 비율 판별은 **다른 글꼴
 /// 패밀리 실측(w2 v3 fixture) 몫**이다 — 그때까지 폰트 스케일-불변 상수가 안전하다.
@@ -1037,7 +1037,7 @@ mod atom_tests {
 
     #[test]
     fn subline_image_atom_paints_at_descent_formula_y() {
-        // 리뷰 Low-2 잠금 (CI 실행·fixture 불요): render_line →
+        // CI에서 합성 입력으로 검증: render_line →
         // inline_image_top 의 인자 결선(top_y·baseline·vertsize·height)을
         // sub-line 분기(img_h < vertsize)에서 잠근다 — 결선 전치(baseline↔
         // vertsize 스왑 등)는 좌표가 달라져 즉시 적발된다.

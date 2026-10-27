@@ -50,8 +50,8 @@ pub enum ListSource {
 /// List marker family of a [`ParaKind::ListItem`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListItemKind {
-    /// Bullet marker. Checkable bullets stay in this family (gotcha #8 —
-    /// checkable is still `BULLET`); see the `checked` field.
+    /// Bullet marker. Checkable bullets stay in this family because
+    /// checkable is still `BULLET`; see the `checked` field.
     Bullet,
     /// Ordered/numbered marker.
     Number,

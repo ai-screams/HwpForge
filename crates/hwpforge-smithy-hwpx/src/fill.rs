@@ -5,7 +5,7 @@
 //! ([`crate::HwpxPatcher`])를 사용하므로 채워진 섹션 XML 외의 모든 ZIP
 //! 엔트리는 바이트 그대로 보존된다.
 //!
-//! # 정책 (설계 토론 확정 — `.docs/planning/2026-07-10-agent-editing-architecture.md`)
+//! # 정책
 //!
 //! - **전량 preflight 후 전량 적용** (all-or-nothing): 요청 값 중 하나라도
 //!   검증에 실패하면 아무 것도 쓰지 않는다.
@@ -648,7 +648,7 @@ mod tests {
         }
     }
 
-    /// W2 review: per container, filling the middle of three paragraphs
+    /// Per container, filling the middle of three paragraphs
     /// drops exactly that paragraph, the one after it, the host paragraph
     /// and the body paragraph after the host — every other cache stays.
     /// 이것을 실패시키는 것: host 사슬 생략 · 꼬리 대신 문단 하나만 · 목록

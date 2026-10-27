@@ -213,7 +213,7 @@ fn collect_flow_paragraph_layout_hints(
 }
 
 /// A body table: its cells are flow paragraphs too, so a header/footer in a
-/// cell (lifted into the section by projection, §19.7 F) leaves its hints
+/// cell (lifted into the section by projection) leaves its hints
 /// in the header/footer scope rather than the body.
 ///
 /// 이것을 실패시키는 것: 칸 문단을 `collect_scope_paragraphs(.., body)` 로

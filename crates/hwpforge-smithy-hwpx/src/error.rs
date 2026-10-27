@@ -89,7 +89,7 @@ pub enum HwpxError {
     },
     /// 캐시 방출(`emit_layout_cache`) 중 하나 이상의 문단 캐시가
     /// 드롭됨 — legacy `encode_with_options` 는 무음 성공 대신 이 에러를
-    /// 반환한다 (W1b §1g v5 변경 2; 진단 보존 경로는
+    /// 반환한다 (진단 보존 경로는
     /// `encode_with_diagnostics`).
     #[error("layout cache dropped at {path}: {reason}")]
     LayoutCacheDropped {

@@ -371,7 +371,7 @@ impl DocumentEncodeContext {
     }
 }
 
-/// 방출-통합 wire ledger (W1b §1g v5 변경 4) — `build_runs` 가 각 방출
+/// 방출-통합 wire ledger — `build_runs` 가 각 방출
 /// 사이트에서 span 을 기여한다. 모든 스킵/재배치/placeholder-미상 방출은
 /// [`mark_cache_inadmissible`] 단일 choke 를 지나며, `false→true` 복구는
 /// 불가능하다 (monotonic AND).
@@ -449,7 +449,7 @@ impl EncoderLedger {
 
     /// 접힘 필드(begin 8 + 본문 + end 8) 의 (n, 0) span.
     ///
-    /// 독립 리뷰 Low 상환: 본문 tab 은 wire 8유닛이다 (디코더 in_field
+    /// 본문 tab 은 wire 8유닛이다 (디코더 in_field
     /// Tab=(8,0) 과 대칭) — utf16 1:1 로 세면 필드가 tab 당 7유닛
     /// 좁아져 이후 lineseg 가 무음 표류한다.
     fn folded_field(&mut self, bodies: impl IntoIterator<Item = impl AsRef<str>>) {
@@ -580,7 +580,7 @@ pub(crate) fn encode_section_with_note_counters(
     // 레벨 `NoteNumbering::from_document_begin` 이 1회 반영하고, 여기서는
     // 본문 `NewNumber` 재시작만 처리한다. 후속 섹션에 **비기본 실값**이
     // 들어온 경우는 무음으로 버리지 않고 경고한다 (`ON_SECTION` typed
-    // 지원은 Core 승격이 필요한 후속 — 계획 문서 §7f).
+    // 지원은 Core 승격이 필요한 후속).
     // Replacement list for run-level XML fragments that serde cannot express
     // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
     let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
@@ -844,7 +844,7 @@ fn build_section(
     anchor_runs: &mut Vec<AnchorRun>,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSection> {
-    // 문단마다 그 문단에 앵커된 머리말/꼬리말 수 (§19.17 F2).
+    // 문단마다 그 문단에 앵커된 머리말/꼬리말 수.
     let mut anchored = vec![0usize; section.paragraphs.len()];
     for hf in section.headers.iter().chain(section.footers.iter()) {
         if let Some(slot) = anchored.get_mut(header_footer_anchor(hf)) {
@@ -985,7 +985,7 @@ fn build_paragraph(
             // 를 오삭제했다 (6차 평결 Medium — 정확 일치로 오탐 원천 차단;
             // `<hp:t>` 단위 키 HWPTXT 는 형식이 달라 자연 제외). 형식 변경
             // 시 이 재구성과 함께 갱신할 것 — typed replacement registry
-            // 승격은 백로그 (계획 문서 §7h).
+            // 승격은 백로그.
             let first_text = first_run.texts.first().map(HxText::text).unwrap_or_default();
             let is_replacement_marker_run = !first_text.is_empty() && {
                 let this_run_key = format!(
@@ -1024,7 +1024,7 @@ fn build_paragraph(
     // 되더해 방출한다. 디코더 정규화와 정확히 왕복 대칭.
     // 편집 표면은 절대 켜지 않는다 — EncodeOptions::emit_layout_cache 문서 참조.
     // W1b: Core 가시 좌표 → wire 좌표 역변환은 **방출-통합 ledger** 가
-    // 소유한다 (별도 match 복제 금지 — §1g v5 변경 4). to_wire(0)=0
+    // 소유한다 (별도 match 복제 금지). to_wire(0)=0
     // canonicalization 으로 첫 lineseg 는 native 불변식(항상 0)을 따른다.
     // 실패(축약점 모호·inadmissible 방출 등) = 캐시 미방출 + 경고.
     let drops_before = sink.warnings.len();
@@ -1037,7 +1037,7 @@ fn build_paragraph(
                     None
                 }
                 Ok((map, tokens)) => {
-                    // 자가검증 (독립 리뷰 hardening — 디코더·HWP5 choke 와
+                    // 자가검증 (디코더·HWP5 choke 와
                     // 3중 대칭): ledger 의 Core 총길이 == 접힌 필드 밖 텍스트.
                     // 누락된 zero-core span(미계측 방출 사이트)을 방어한다.
                     // Memo anchor도 folded_field의 core 0 계약을 따른다.
@@ -1143,7 +1143,7 @@ fn build_paragraph(
         other => other,
     };
 
-    // §19.22 D5 (S17): the paragraph-end mark's char shape is an empty last
+    // The paragraph-end mark's char shape is an empty last
     // run, as Hancom writes it. 이것을 실패시키는 것: 이 run 을 쓰지 않기
     // (`end_mark_run_round_trips`).
     if let Some(end) = para.end_char_shape {
@@ -1204,7 +1204,7 @@ fn build_runs(
     let mut sec_pr_injected = false;
 
     for run in runs {
-        // 독립 리뷰 High #8: 첫 문단이 control run(NewNumber/PageHiding 등)
+        // 첫 문단이 control run(NewNumber/PageHiding 등)
         // 으로 시작하면 secPr 가 둘째 run 으로 밀려 한컴 계약(secPr = 첫
         // 문단의 첫 run)을 깬다 — 전용 carrier run 을 index 0 에 먼저
         // 삽입한다 (뒤의 "no non-control runs" 합성 run 과 동일 형태;
@@ -1427,8 +1427,7 @@ fn build_runs(
                     }
                     Control::Chart { .. } => {
                         // 디코더가 chart 를 문단 꼬리로 재배치 (W1a 문서화)
-                        // — raw 위치 손실을 cache equality 로 세탁하지 않는다
-                        // (§1g v5 R3#6).
+                        // — raw 위치 손실을 cache equality 로 세탁하지 않는다.
                         ledger.mark_cache_inadmissible("chart emission reorders content");
                         let chart_ref = sink.add_chart(generate_chart_xml(ctrl)?);
                         switches.push(encode_chart_switch(ctrl, &chart_ref));
@@ -1559,7 +1558,7 @@ fn build_runs(
                             ctrls.push(hx_ctrl);
                         } else {
                             // NewNumberKind::Unknown 등 — 방출 스킵 = 내용 손실
-                            // + 기하 stale (§1g v5 R3#6 일반 불변식).
+                            // + 기하 stale.
                             sink.content_lost(
                                 ctrl.kind_name(),
                                 "no HWPX form for this control (e.g. a new number of unknown \
@@ -1655,7 +1654,7 @@ fn build_runs(
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
-                        // 본문 = 미채움이면 힌트 (E1/gotcha #30 계약과 동일).
+                        // 본문 = 미채움이면 힌트.
                         ledger.folded_field([if display_text.is_empty() {
                             hint
                         } else {
@@ -1676,7 +1675,7 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    // LOSSY (Wave 12n architect review): The DateCodeField and
+                    // LOSSY: The DateCodeField and
                     // UnknownSummary arms below emit SUMMERY-shaped XML as a
                     // *best-effort* HWPX surrogate. HWPX has no native counterpart
                     // for `%smr` unknown tokens or `%dte` format patterns.
@@ -1781,8 +1780,7 @@ fn build_runs(
                     Control::InlinePageNumber { kind, .. } => {
                         // atno inline page number renders as <hp:autoNum
                         // numType="PAGE"|"TOTAL_PAGE">. Unknown flag values are
-                        // skipped to avoid fabricating semantics (Wave 12n
-                        // architect review CRITICAL: TotalPages/Unknown must not
+                        // skipped to avoid fabricating semantics (TotalPages/Unknown must not
                         // collapse to CurrentPage).
                         let Some(real_xml) = build_autonum_run_xml(char_pr_id_ref, *kind) else {
                             ledger.mark_cache_inadmissible("unencodable control skipped");
@@ -1798,7 +1796,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::AutoNumber { kind, num, format } => {
-                        // §19.16 J (P19): a caption number, written as Hancom
+                        // A caption number, written as Hancom
                         // writes it (`<hp:autoNum>` in its own run).
                         let Some(real_xml) =
                             build_auto_number_run_xml(char_pr_id_ref, *kind, *num, format)
@@ -1930,7 +1928,7 @@ fn build_runs(
                     }
                     Control::Unknown { tag, .. } => {
                         // 방출할 wire 형태가 없다 — 내용 손실로 보고하고 기하
-                        // stale (§1g v5 R3#6: skipped emission 은 캐시 무효).
+                        // stale (skipped emission 은 캐시 무효).
                         sink.content_lost(
                             ctrl.kind_name(),
                             format!(
@@ -1955,8 +1953,7 @@ fn build_runs(
             }
             _ => {
                 // 이 버전이 모르는 미래 RunContent 변형 (non_exhaustive enum)
-                // — 내용 손실로 보고하고 기하 stale (§1g v5 R3#6, 독립 리뷰
-                // Low 상환: Control `_` arm 과 대칭).
+                // — 내용 손실로 보고하고 기하 stale (Control `_` arm 과 대칭).
                 sink.content_lost(
                     "run_content",
                     "run content kind unknown to this encoder; left out of the output".to_string(),
@@ -2196,7 +2193,7 @@ fn encode_control_to_ctrl(
 /// `HxRun` 직렬화는 texts 가 ctrls 보다 앞이라 같은 run 에 넣으면 순서가
 /// 뒤집힌다 — **별도 선행 run** 으로 주입한다 (run 순서는 Vec 보존).
 ///
-/// **본문 run 은 절대 수정하지 않는다** (Codex C-W3.5-1): 본문 첫 텍스트는
+/// **본문 run 은 절대 수정하지 않는다**: 본문 첫 텍스트는
 /// 인라인 치환 마커(`__HWPTXT_…__` 등)일 수 있어, 문자 하나만 붙여도 치환
 /// 키가 깨져 최종 XML 에 내부 마커가 유출된다. 한컴형 번호-본문 간격은
 /// 공백 하나를 담은 **별도 텍스트 run** 으로 방출한다 (공백 전용 run 은
@@ -2217,7 +2214,7 @@ pub(crate) enum NoteHeadInjection {
     /// 본문 **뒤**에 렌더된다 (4차 평결 High). 특히 그 run 이 하이퍼링크/
     /// 필드 치환 marker run 이면 전체-run 치환 키가 어긋나 내부 마커가
     /// 유출된다 (4차 평결 Critical 경로). 안전한 배치가 없어 번호 머리를
-    /// 생략하고 경고한다 — typed 해법은 백로그 (계획 문서 §7f).
+    /// 생략하고 경고한다 — typed 해법은 백로그.
     SkippedTitleMark,
 }
 
@@ -2359,7 +2356,7 @@ impl NoteCounter {
     }
 }
 
-/// 각주/미주 번호 상태 — "다음에 부여할 번호" 모델 (Codex H-W3.5-2).
+/// 각주/미주 번호 상태 — "다음에 부여할 번호" 모델.
 ///
 /// - 문서 시작: **첫 섹션** `begin_num` 의 footnote/endnote 를 딱 한 번
 ///   반영한다 — header.xml `<hh:beginNum>` 실값이 첫 섹션에만 병합되는
@@ -3877,7 +3874,7 @@ mod tests {
     /// 4차 평결 정정: `hp:newNum@num` 은 XSD 상 `xs:integer` — `0` 도 유효
     /// wire 다. 방출되는 `<hp:newNum num="0">` 과 재생성 캐시가 갈라지지
     /// 않도록 재시작 신호로 **수용**한다 (걸러내면 wire-캐시 의미 불일치;
-    /// 값 검증은 Core validate 소관 — 계획 문서 §7f HITL).
+    /// 값 검증은 Core validate 소관).
     #[test]
     fn note_numbering_applies_new_number_zero_verbatim() {
         use hwpforge_core::control::{Control, NewNumberKind};
@@ -4996,7 +4993,7 @@ mod tests {
 
     #[test]
     fn leading_control_run_gets_secpr_carrier_at_index_zero() {
-        // 독립 리뷰 High #8: 첫 문단이 [NewNumber, Text]면 secPr 가 둘째
+        // 첫 문단이 [NewNumber, Text]면 secPr 가 둘째
         // run 으로 밀려 한컴 계약(secPr = 첫 run)을 깬다 — 전용 carrier
         // run 이 index 0 에 삽입돼야 한다.
         use hwpforge_core::control::{Control, NewNumberKind};
@@ -5624,7 +5621,7 @@ mod tests {
 
     #[test]
     fn roundtrip_inline_pagenumber_totalpages_lossless() {
-        // Wave 12n architect review CRITICAL gate: TotalPages must not
+        // TotalPages must not
         // collapse to CurrentPage in either direction. Encoder emits
         // numType="TOTAL_PAGE"; decoder maps it back to TotalPages
         // (kind preserved through the autoNum numType attribute).
@@ -5665,7 +5662,7 @@ mod tests {
     /// this test catches it before HWPX→한컴 round-trip breaks
     /// silently.
     ///
-    /// Expected N comes from `.docs/research/2026-06-02_clickhere_wire_dump.md`.
+    /// N is the UTF-16 length after `Clickhere:set:N:` minus one trailing space.
     #[test]
     fn clickhere_command_string_matches_hancom_fixture_n() {
         // (hint, help, hint_len, help_len, expected_N)
@@ -6108,7 +6105,7 @@ mod tests {
 
     #[test]
     fn build_autonum_run_xml_total_pages() {
-        // Wave 12n architect review CRITICAL: TotalPages must NOT collapse to PAGE.
+        // TotalPages must NOT collapse to PAGE.
         let xml = build_autonum_run_xml(3, hwpforge_core::control::InlinePageKind::TotalPages)
             .expect("TotalPages must encode");
         assert!(

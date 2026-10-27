@@ -22,7 +22,7 @@ use crate::patch::collect_stamp_text_slots;
 ///
 /// Candidates are proposals only — nothing is applied until the whole plan
 /// preflights and every candidate is approved (named or ignored) by the
-/// caller's map (design decision §3-2/§3-3).
+/// caller's map.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StampCandidate {

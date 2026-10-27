@@ -81,7 +81,7 @@ mod tests {
                     // Downgrade-on-modify: replacing the visible
                     // string of an `InlineText` run collapses the
                     // structure to plain `Text(String)`. Documented
-                    // policy in debug doc §3a-C18 — substitution is
+                    // policy — substitution is
                     // a plain-text operation.
                     RunContent::InlineText(_) => {
                         run.content = RunContent::Text(replacement.to_string());

@@ -458,11 +458,11 @@ fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<Admitted
                 location: location.to_string(),
             });
         }
-        // D review r1 HIGH-1: the lines must cover the caption's text from
+        // The lines must cover the caption's text from
         // its start, and no line may start past the text — or at its end,
-        // except the empty line after a closing line break (review r3 M1).
+        // except the empty line after a closing line break.
         // A line may not start inside a surrogate pair either: the halves
-        // would be replaced without a word (review r3 M2).
+        // would be replaced without a word.
         // 이것을 실패시키는 것: 첫 줄 0 검사 삭제 · 끝 검사 삭제 · 끝 줄바꿈 뒤
         // 빈 줄 거부 · 서로게이트 검사 삭제(`caption_lines_must_cover_the_text`,
         // `caption_line_breaks_and_surrogates`).
@@ -488,7 +488,7 @@ fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<Admitted
                 ),
             });
         }
-        // D review r1 MEDIUM-3: line geometry within the unit range, so the
+        // Line geometry within the unit range, so the
         // caption box sums below cannot overflow. 이것을 실패시키는 것: 범위
         // 검사 삭제(`caption_geometry_out_of_range_is_invalid_cache` — debug
         // 빌드 overflow panic).
@@ -869,7 +869,7 @@ fn compute_row_heights(
             let cell = cell_of(table, a);
             let m = effective_margin(table, cell);
             // C4: 병합 셀도 캐시 결손 = 표 단위 fatal (span-1 과 동일 —
-            // 무음 0 처리하면 콘텐츠가 조용히 사라진다, 독립리뷰 H1).
+            // 무음 0 처리하면 콘텐츠가 조용히 사라진다).
             let Some(extent) = cell_content_extent(input, cell, location, depth)? else {
                 return Err(PdfError::MissingLayoutCache {
                     count: 1,
@@ -890,7 +890,7 @@ fn compute_row_heights(
     }
     if redistributed {
         // 배분 규칙(마지막 스팬 행 몰빵)은 실측 1종 + blank-HPC 괘선 대조로
-        // 확정 — 그래도 내부 기하가 검산 사각이므로 표면화한다 (독립리뷰 M1).
+        // 확정 — 그래도 내부 기하가 검산 사각이므로 표면화한다.
         warnings.push(PdfWarning::TableDeficitDistributed { location: location.to_string() });
     }
     // 배분 후에도 0 인 행 = 어떤 셀도 높이를 결정 못 함 → 재현 불가.
@@ -1022,7 +1022,7 @@ fn emit_anchor_clipped(
                 [l.left, l.right, l.top, l.bottom].iter().any(|e| e.kind != BorderLineKind::None)
             }) || input.styles.border_fill_has_inner_lines(zone.border_fill_id)
                 != Some(false);
-            // Review r1 HIGH-2: a zone whose border fill is not in the store
+            // A zone whose border fill is not in the store
             // would select nothing and erase the cell's own fill — the cell
             // keeps its fill and the gap is reported.
             // 이것을 실패시키는 것: 이 분기 삭제(`cell_zone_with_a_missing_border_fill_keeps_the_cell_fill`).
@@ -1216,7 +1216,7 @@ fn emit_anchor_clipped(
                     // 상단 관통은 검사 불필요: 줄은 top 기준으로 한 조각에
                     // 배정되므로(위 continue) 이 조각에 온 줄은 항상
                     // line_top >= clip_from — 위 절단선을 걸치는 줄은 직전
-                    // 조각의 crosses_to 가 잡는다 (리뷰 L2).
+                    // 조각의 crosses_to 가 잡는다.
                     let crosses_to =
                         clip_to < full_h && line_top < clip_to && clip_to < line_bottom;
                     if has_image && crosses_to {

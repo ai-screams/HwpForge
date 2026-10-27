@@ -104,14 +104,13 @@ pub(super) fn offset_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
 }
 
 /// Object common property bit 20 (표 70): the size is locked (HWPX
-/// `<hp:sz protect>`; HWP5 ↔ Hancom twins 1,806/1,806, §19.23.1).
+/// `<hp:sz protect>`; HWP5 ↔ Hancom twins 1,806/1,806).
 pub(super) const CTRL_PROPERTY_SIZE_PROTECT_BIT: u32 = 1 << 20;
 
 /// S20: an HWP 5.0 object's original box from its `ShapeComponent` initial
 /// size (bytes 20–28, HWPX `orgSz` — twins 1,806/1,806), `None` when it is
-/// the displayed size or cannot be one: out of the signed range (reported,
-/// §19.23.15), or an axis of 0 under a displayed axis that is not
-/// (reported).
+/// the displayed size or cannot be one: out of the signed range (reported),
+/// or an axis of 0 under a nonzero displayed axis (reported).
 /// 이것을 실패시키는 것: 이 변환을 지우기(`top_level_shapes_carry_their_frame`) /
 /// 범위 밖·0 축 보고를 지우기(`unusable_initial_size_is_reported`).
 pub(super) fn original_box(
@@ -177,7 +176,7 @@ fn displayed(geometry: &Hwp5ShapeComponentGeometry) -> Option<(i32, i32)> {
     (HwpUnit::new(w).is_ok() && HwpUnit::new(h).is_ok()).then_some((w, h))
 }
 
-/// S20 (§19.23.11): a shape whose initial box is known keeps its stored
+/// S20: a shape whose initial box is known keeps its stored
 /// points (they are coordinates in that box) and is shown at its layout size
 /// with that box as its original box. `control` holds the wire points; this
 /// sets its size and frame. `false` when the initial box is unknown or the
@@ -252,7 +251,7 @@ pub(super) fn project_line_run(
     line: &Hwp5LineControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
-    // S20: the stored ends in the initial box (§19.23.11).
+    // S20: the stored ends in the initial box.
     // 이것을 실패시키는 것: 이 갈래를 지우기(끝점이 표시 상자로 맞춰지고 원래 상자를 잃는다).
     let mut control = wire_line(line.start, line.end, false);
     if line.start != line.end
@@ -716,7 +715,7 @@ mod tests {
         }
     }
 
-    /// S20 (§19.23.11, FR-T1): the ministry's bullet stored in HWP 5.0 —
+    /// A ministry document's bullet stored in HWP 5.0 —
     /// initial box 560, shown 850, size locked — keeps its stored centre
     /// 280 in its original box 560 instead of a centre rebuilt in the shown
     /// box. A line keeps its stored ends with its initial box; a rect its box.

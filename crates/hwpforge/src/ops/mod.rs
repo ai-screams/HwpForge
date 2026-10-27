@@ -561,7 +561,7 @@ fn core_code(error: &CoreError) -> OpsCode {
 /// contract broke, so they map to [`OpsCode::AssetPlanMismatch`] and
 /// [`OpsCode::AssetIdentityConflict`].
 /// `tests/ops_error_inventory.rs::asset_contract_violations_get_dedicated_codes`
-/// pins it (W1a adversarial review F6).
+/// pins it.
 #[cfg(feature = "ops-md")]
 fn md_code(error: &MdError, stage: Stage) -> OpsCode {
     let stage_code = match stage {

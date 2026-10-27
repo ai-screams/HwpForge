@@ -598,7 +598,7 @@ pub(crate) fn encode_textbox_to_rect(
             name: String::new(),
             editable: 0,
             sub_list,
-            // §19.22 D4: the box's own margin; `None` = 283 on every side.
+            // The box's own margin; `None` = 283 on every side.
             // 이것을 실패시키는 것: 상수 복귀 / 왼·오, 위·아래 맞바꿈
             // (`shape_text_margins_round_trip`).
             text_margin: Some(match text_margin {
@@ -1483,8 +1483,8 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
 /// `<hc:transMatrix>` translation (`e3` = x, `e6` = y).
 ///
 /// 한컴 positions a `<hp:container>` child by the translation components of
-/// its transform matrix, NOT by `<hp:offset>` (verified against native
-/// `sample-gso-group.hwpx`: a child at offset (17360, 0) carries
+/// its transform matrix, NOT by `<hp:offset>` (verified against
+/// a Hancom-saved group document: a child at offset (17360, 0) carries
 /// `transMatrix e3="17360" e6="0"`; an identity matrix renders every child at
 /// the group origin → overlap). `build_shape_common` emits an identity
 /// transMatrix for non-rotated shapes, so we rewrite that exact string. The
@@ -1745,7 +1745,7 @@ fn coefficient(v: f64) -> String {
 
 /// `xml` with its own (first) `<hp:renderingInfo>` replaced by the group
 /// plan's chain for this node — the translation, then every enclosing
-/// group's pair and its own (§19.23.13) — when an enclosing group stores a
+/// group's pair and its own — when an enclosing group stores a
 /// scale or an image-filled child needs its identity ancestor pairs. With
 /// one pair the per-shape writer's block already is the plan.
 /// 이것을 실패시키는 것: 이 교체를 지우기(묶음 배율이 있는 잎이 자기 쌍 하나만
@@ -1817,7 +1817,7 @@ fn encode_group_picture_xml(
 /// block (`offset`/`orgSz`/`curSz`/`flip`/`rotationInfo`/`renderingInfo`),
 /// the child shapes in z-order (each with `groupLevel` = parent + 1), then
 /// `sz`/`pos`/`outMargin`/`shapeComment`. Children carry absolute geometry —
-/// no rescaling (gotcha #3: geometry stays in the `hc:` namespace, which the
+/// no rescaling (geometry stays in the `hc:` namespace, which the
 /// per-shape encoders already honor).
 pub(crate) fn encode_group_to_xml(
     ctrl: &Control,
@@ -1881,7 +1881,7 @@ fn encode_group_at(
         }
         _ => unreachable!("encode_group_to_xml called with non-Group"),
     };
-    // Diagnostic slot before the children (document order, review W2 r1 LOW).
+    // Diagnostic slot before the children (document order).
     let id_slot = super::object_ids::reserve();
 
     let plan = shape_frame_plan(ctrl, as_child)?;
@@ -2104,7 +2104,7 @@ mod tests {
 
     #[test]
     fn arrow_type_diamond_maps_to_empty_diamond() {
-        // Gotcha #14: 한글 only recognises EMPTY_* form for geometric shapes
+        // 한글 only recognises EMPTY_* form for geometric shapes
         assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond), "EMPTY_DIAMOND");
     }
 
@@ -2164,7 +2164,7 @@ mod tests {
         use hwpforge_foundation::HwpUnit;
         let hu = |v: i32| HwpUnit::new(v).unwrap();
         // A group with two rects at distinct offsets (0,1365) + (17360,0),
-        // mirroring the placement in native `sample-gso-group`.
+        // mirroring the placement in a Hancom-saved group document.
         let child = |w, h, hx, vy| Control::Rect {
             frame: hwpforge_core::ObjectFrame::new(),
             width: hu(w),
@@ -2316,7 +2316,7 @@ mod tests {
         use hwpforge_foundation::HwpUnit;
         let hu = |v: i32| HwpUnit::new(v).unwrap();
         // outer group = { inner group { rect, ellipse }, line }, mirroring the
-        // native `sample-gso-group-nested` layout: a $con nested inside a $con.
+        // Hancom-saved nested group layout: a $con nested inside a $con.
         let rect = Control::Rect {
             frame: hwpforge_core::ObjectFrame::new(),
             width: hu(12_440),
@@ -2494,7 +2494,7 @@ mod tests {
         }
     }
 
-    /// S20 review r1 (HIGH): in a group a sibling sends to its fallback, a
+    /// In a group a sibling sends to its fallback, a
     /// framed line turned 0.15° (stored as 0°) whose end moves from 1499 in
     /// its original box 1500 to 999 in its shown box 1000 lands 2.099 from
     /// where Core draws it — the writer reports it.
@@ -2961,7 +2961,7 @@ mod tests {
             ..Default::default()
         };
         let sc = common(1000, 500, Some(&style));
-        // Per gotcha #25: Diamond always maps to EMPTY_DIAMOND; headfill controls fill
+        // Diamond always maps to EMPTY_DIAMOND; headfill controls fill
         assert_eq!(sc.line_shape.tail_style, "EMPTY_DIAMOND");
         assert_eq!(sc.line_shape.tail_fill, 0);
         assert_eq!(sc.line_shape.tail_sz, "SMALL_SMALL");

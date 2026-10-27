@@ -62,8 +62,7 @@ fn inspect_multicol_paragraphs() {
     assert_eq!(val["sections"][0]["paragraphs"], 6);
 }
 
-/// Value-parity regression (independent review round 2, finding A): a
-/// table/image/chart nested inside an *image's* caption is invisible to
+/// Value-parity regression: a table/image/chart nested inside an *image's* caption is invisible to
 /// `ops::inspect`'s shared paragraph traversal — Core's
 /// `image_caption_paragraphs_are_skipped_documents_known_gap` test
 /// documents that image captions (unlike table/textbox captions) are not

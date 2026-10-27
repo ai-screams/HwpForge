@@ -396,11 +396,7 @@ pub(crate) enum Prepared {
 /// 는 이 함수가 가져갔으므로 **오류일 때 돌려받지 못한다**. 소유권을
 /// 넘기기 전에 확인하려면 [`validate_assets`] 를 먼저 부른다.
 ///
-/// # 이력
-///
-/// `plan` 인자는 R1 리뷰(F1)에서 추가됐다. 이 API 는 아직 릴리스되지
-/// 않았으므로(브랜치 `feat/python-bindings` 안에서만 존재) 시그니처 변경은
-/// semver 사건이 아니다.
+/// `plan`은 자산 계획과 제공된 바이트의 일치를 검증하는 기준이다.
 pub fn finish_assets(
     mut document: Document,
     plan: &[AssetPlanEntry],
@@ -752,7 +748,7 @@ fn decode_data_uri(src: &str) -> Result<Vec<u8>, ImageEmbedSkipReason> {
 /// # Errors
 ///
 /// 길이가 다르면 [`MdError::AssetPlanMismatch`]. 짧은 쪽에서 조용히 멈추면
-/// **경고가 소리 없이 사라지므로**(= 무음 드롭) 거부한다 — R1 리뷰 F7.
+/// **경고가 소리 없이 사라지므로**(= 무음 드롭) 거부한다.
 pub fn warnings_from(
     plan: &[AssetPlanEntry],
     outcomes: &[AssetOutcome],

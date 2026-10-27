@@ -149,7 +149,7 @@ fn is_sensitive_output_path(target: &Path, home: &Path) -> bool {
 /// Non-sensitive absolute paths stay allowed: callers legitimately derive
 /// output from absolute input paths (`to_md`) and agents write into e.g. the
 /// user's Documents. Full allowed-root confinement (config-driven) is a
-/// possible future tightening (see `.docs/planning` E1 audit).
+/// possible future tightening.
 pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolErrorInfo> {
     let out = Path::new(output_path);
     if out.components().any(|c| matches!(c, std::path::Component::ParentDir)) {

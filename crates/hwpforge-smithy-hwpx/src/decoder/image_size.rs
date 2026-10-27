@@ -18,7 +18,7 @@ use hwpforge_core::image::ImageFormat;
 ///
 /// The rule is applied through one index of the stored names and stems, and
 /// each image's header is read once, so the work grows with the image count
-/// (branch review B-M2: resolving every reference by scanning the store was
+/// (resolving every reference by scanning the store was
 /// quadratic).
 /// 이것을 실패시키는 것: 참조마다 저장소 훑기(`sizes_stay_linear`), 해석 규칙
 /// 어긋남(`references_resolve_by_the_image_rule`).
@@ -140,7 +140,7 @@ mod tests {
         }
     }
 
-    /// Branch review B-M2: constant work per image.
+    /// Constant work per image.
     #[test]
     fn sizes_stay_linear() {
         const N: usize = 2000;

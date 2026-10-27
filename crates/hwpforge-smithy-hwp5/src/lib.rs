@@ -1260,8 +1260,7 @@ fn first_visible_text_in_paragraphs(
 fn first_visible_text_in_paragraph(para: &hwpforge_core::paragraph::Paragraph) -> Option<String> {
     para.runs.iter().find_map(|run| match &run.content {
         // Text + InlineText share the "first visible trimmed text"
-        // semantic via the unified `plain_text()` accessor — see
-        // debug doc §3a-A9.
+        // semantic via the unified `plain_text()` accessor.
         hwpforge_core::run::RunContent::Text(_) | hwpforge_core::run::RunContent::InlineText(_) => {
             let cow = run.content.plain_text()?;
             let trimmed = cow.trim();

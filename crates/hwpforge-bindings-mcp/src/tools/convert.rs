@@ -21,7 +21,7 @@ pub struct ConvertData {
     pub sections: usize,
     /// Total number of paragraphs across all sections.
     pub paragraphs: usize,
-    /// 이미지 임베드에서 제외된 참조와 인코드 경고 (W6 §12b). Omitted when empty.
+    /// 이미지 임베드에서 제외된 참조와 인코드 경고. Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
@@ -75,10 +75,10 @@ pub fn run_convert(
     };
 
     // 4. base_dir — image references resolve relative to the markdown
-    //    file's directory (W6 §12b); inline input has none, so a relative
+    //    file's directory; inline input has none, so a relative
     //    reference is excluded (and reported) while an inline `data:` URI
     //    still embeds. Bare filenames' `parent()` is the empty path
-    //    `Some("")` — normalize to the current directory (독립 리뷰 B2).
+    //    `Some("")` — normalize to the current directory.
     let base_dir = if is_file {
         match std::path::Path::new(markdown).parent() {
             Some(p) if p.as_os_str().is_empty() => Some(std::path::Path::new(".")),
@@ -94,7 +94,7 @@ pub fn run_convert(
         ops_convert_md(&md_content, base_dir, &ConvertMdOptions::default().with_preset(preset))
             .map_err(|e| compat::tool_error(Tool::ConvertMd, e))?;
 
-    // 6. 이미지 임베드 제외 + 인코드 경고 (W6 §12b). 무음 폐기 금지.
+    // 6. 이미지 임베드 제외 + 인코드 경고. 무음 폐기 금지.
     let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
     // 7. Write output file

@@ -599,8 +599,8 @@ fn name_policy_utf16_second_unit_matches_reference() {
 #[test]
 fn name_policy_opaque_requires_identical_raw_effective_names() {
     for (raw, effective) in [
-        ("Unused/original.bin", "Unused/./opaque.bin"), // 리뷰 반례 A
-        ("Unused/./alias", "Unused/normal"),            // 리뷰 반례 B
+        ("Unused/original.bin", "Unused/./opaque.bin"), // 별칭 경로 반례 A
+        ("Unused/./alias", "Unused/normal"),            // 별칭 경로 반례 B
         ("Unused/./a", "UNUSED/./A"),
         ("Unused/", "Unused/normal"),
         ("Unused/normal", "Unused/"),

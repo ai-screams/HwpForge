@@ -127,7 +127,7 @@ pub(super) fn preflight_with_work(
 ) -> CoreResult<Directory> {
     let budget = bytes.len().saturating_add(EOCD_WINDOW).saturating_mul(4);
     // Same window/order/comment inequality as zip 9.0.4. Do not prefer a
-    // terminal outer EOCD over a parseable EOCD in its comment (r2 M1).
+    // terminal outer EOCD over a parseable EOCD in its comment.
     let mut selected = None;
     for p in (bytes.len().saturating_sub(EOCD_WINDOW)..bytes.len().saturating_sub(3)).rev() {
         if !work.signature(bytes, p, b"PK\x05\x06", budget)? {

@@ -2,8 +2,7 @@
 //!
 //! wire 좌표(HWP5 raw 스트림 = 한컴 HWPX linesegarray textpos 규약)와
 //! Core 정준 좌표(`Paragraph::text_content()` UTF-16 축) 사이의 변환을
-//! 담당한다. 설계 정본: `.docs/planning/2026-08-13-image-textbox-epic.md`
-//! §1g v5 (Codex 4라운드 확정 수학 법칙).
+//! 담당한다. 각 경계에서 누적된 wire/Core 길이 차이를 적용한다.
 //!
 //! ## 모델
 //!
@@ -25,7 +24,7 @@
 //!
 //! ⚠️ smithy-hwpx 의 동명 모듈과 **to_core 방향 동형** — conformance
 //! vector 테스트를 양쪽에 복제해 drift 를 방지한다 (Core 승격은 계층
-//! 누수라 기각, §1g v2 disposition #2). **`to_wire` 는 이 crate 에
+//! 누수라 기각). **`to_wire` 는 이 crate 에
 //! 없다**: HWP5 writer 가 없어 역변환 수요가 없음 (v4 disposition #10
 //! YAGNI — 필요해지는 시점에 hwpx 모듈에서 conformance 와 함께 복제).
 
@@ -547,7 +546,7 @@ mod tests {
     /// conformance vector — smithy-hwpx 의 동명 모듈 테스트와 to_core
     /// 방향에서 동일하게 유지할 것 (동형성 게이트).
     fn marker_ledger_p1() -> WireTextMap {
-        // rules-marker-ledger p1: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
+        // 한컴 새 번호 문단 실측: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
         // raw lineseg [0, 76, 132] → core [0, 60, 116].
         let mut b = WireMapBuilder::new();
         b.advance_identity(17);

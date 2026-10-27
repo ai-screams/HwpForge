@@ -65,8 +65,8 @@ pub(crate) fn read_manifest(content_hpf: &str) -> HwpxResult<Vec<(String, String
 /// items share, in the order the id first appears. `items` come from
 /// [`read_manifest`].
 ///
-/// The ids are indexed once, so the work grows with the item count (branch
-/// review B-M1: a scan of the ids so far per item was quadratic).
+/// The ids are indexed once, so the work grows with the item count (scanning
+/// the ids so far per item was quadratic).
 /// 이것을 실패시키는 것: 항목마다 앞 id 를 훑기(`checks_stay_linear`).
 pub(crate) fn manifest_id_conflicts(items: &[(String, String)]) -> Vec<EncodeWarning> {
     let mut by_id: Vec<(&str, Vec<String>)> = Vec::new();
@@ -167,7 +167,7 @@ mod tests {
         xs.iter().map(|x| x.to_string()).collect()
     }
 
-    /// Branch review B-M1: the manifest conflicts and the reference check
+    /// The manifest conflicts and the reference check
     /// do constant work per item and per reference.
     #[test]
     fn checks_stay_linear() {

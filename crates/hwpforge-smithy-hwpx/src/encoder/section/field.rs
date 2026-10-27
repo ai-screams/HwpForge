@@ -3,7 +3,7 @@
 //! (task #92 split from `encoder/section.rs`; Wave 12l/12m/12n carry
 //! series). Includes the date helpers the SUMMERY builders evaluate
 //! and the cross-ref wire-code mappers (8-param Hancom-canonical
-//! Command — see HWP5_WIRE_SPEC.md §14 / gotcha #23-27).
+//! Command — see HWP5_WIRE_SPEC.md §14).
 
 use super::*;
 
@@ -169,7 +169,7 @@ pub(super) fn build_field_run_xml(
             build_summary_field_xml(field_type, hint, name, display_text, char_pr_id_ref, begin_id)
         }
         // `FieldType` is `#[non_exhaustive]`. We intentionally do NOT collapse
-        // future variants into ClickHere (Wave 12n architect review): silently
+        // future variants into ClickHere: silently
         // mis-encoding a future SUMMERY/auto-field token as CLICK_HERE would
         // create a stealth corruption path. New variants must explicitly extend
         // this match.
@@ -235,8 +235,7 @@ pub(super) fn build_clickhere_field_xml(
 ///
 /// The HWP5 ctrl_id `%smr`
 /// is shared by all SUMMERY auto-fields; discrimination is via the `Command`
-/// `$token`. Token mapping verified against 한컴 native fixtures in Wave 12n
-/// (see `.docs/research/2026-06-02_auto_field_wire_dump.md`).
+/// `$token`. Token mapping follows the observed 한컴 command syntax.
 pub(super) fn build_summary_field_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
@@ -400,14 +399,12 @@ pub(super) fn build_path_field_run_xml_raw(
 /// Builds the `Clickhere:set:N:...` command string.
 ///
 /// `N` is **not** the total UTF-16 length of the command — empirically (verified
-/// against five 한컴-authored fixtures including `basic`, `with-help`,
-/// `empty-hint`, `multi`, and `named`) it equals the UTF-16 length of the
+/// against five 한컴-authored documents covering plain, help-bearing,
+/// empty-hint, multiple and named fields) it equals the UTF-16 length of the
 /// substring after `"Clickhere:set:N:"` minus one (one of the two trailing
 /// spaces is excluded from `N`). The encoder can compute this directly
 /// without iteration because the formula does not depend on `digits(N)`.
 ///
-/// See `.docs/research/2026-06-02_clickhere_wire_dump.md` for the empirical
-/// derivation.
 pub(super) fn clickhere_command_string(
     hint: &str,
     help: &str,
@@ -429,7 +426,7 @@ pub(super) fn clickhere_command_string(
 ///
 /// Returns `None` for [`hwpforge_core::control::InlinePageKind::Unknown`] —
 /// the caller is expected to skip and emit a warning rather than fabricate
-/// a `numType`. Wave 12n architect review CRITICAL: do not collapse
+/// a `numType`. Do not collapse
 /// `TotalPages`/`Unknown` to `CurrentPage`.
 pub(super) fn build_autonum_run_xml(
     char_pr_id_ref: u32,
@@ -532,7 +529,7 @@ pub(super) fn ref_content_type_wire_code(
         Number => 1,
         // `Contents` → N2 wire code 2. Figure/Table/Eq/Outline 의 "캡션
         // 내용" 과 Bookmark 의 "책갈피 이름" 둘 다 N2=2 로 emit — 의미
-        // 구분은 동반 RefType 가 carry (gotcha #27). E6 슬라이스 B 에서
+        // 구분은 동반 RefType 가 carry. E6 슬라이스 B 에서
         // `BookmarkName` variant 를 `Contents` 로 흡수. (Bookmark+N2=1 =
         // 책갈피 본문/번호 는 위 `Number => 1` arm 이 처리.)
         Contents => 2,
@@ -794,7 +791,7 @@ mod bookmarkname_collapse_tests {
             "Bookmark Contents (책갈피 이름) must emit N2=2"
         );
         // caption-content (Figure/Table/Eq/Outline) 도 동일 N2=2 — 의미
-        // 구분은 RefType 가 carry (gotcha #27), wire 는 동일.
+        // 구분은 RefType 가 carry, wire 는 동일.
         assert_eq!(
             ref_content_type_wire_code(&RefType::Figure, &RefContentType::Contents),
             2,

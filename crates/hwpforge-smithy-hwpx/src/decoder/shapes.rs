@@ -40,7 +40,7 @@ fn anchored_residual(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
 /// without the translation (the object is placed by `<hp:pos>`). An object
 /// whose Core kind has no rotation or mirror (`with_rotation` false) is
 /// judged on the scale's size only: a mirror kept in a negative scale is a
-/// separate loss, not a frame residual (§19.23.20). No `<hp:renderingInfo>`
+/// separate loss, not a frame residual. No `<hp:renderingInfo>`
 /// is the identity.
 fn source_map(
     ri: Option<&crate::schema::section::HxRenderingInfo>,
@@ -53,7 +53,7 @@ fn source_map(
 }
 
 /// Why an `<hp:orgSz>` cannot become a frame value, if it cannot: a negative
-/// side (no reading of one by Hancom is known — §19.23.15), an axis of 0 under
+/// side (no reading of one by Hancom is known), an axis of 0 under
 /// a displayed axis that is not (`validate` would refuse it), or a side out
 /// of the HWPUNIT range.
 fn unusable_original(org: (i32, i32), displayed: (i32, i32)) -> Option<String> {
@@ -79,11 +79,11 @@ fn unusable_original(org: (i32, i32), displayed: (i32, i32)) -> Option<String> {
 ///
 /// - The plan without it is within 2: the original size is dropped and
 ///   reported (`object_original_size`).
-/// - Neither is within 2 (the source draws a size other than its layout size,
-///   §19.23.13 H1): reported as `shape_drawn_extent`. **The frame is kept**
-///   (§19.23.20, decision pending): the drawn result is the same either way
+/// - Neither is within 2 (the source draws a size other than its layout size):
+///   reported as `shape_drawn_extent`. **The frame is kept** because
+///   the drawn result is the same either way
 ///   (both write the layout size), and dropping it would lose `orgSz` values
-///   the decoder carried before — design §19.23.17 drops it.
+///   the decoder carried before.
 enum FrameCheck {
     Kept,
     Dropped(String),
@@ -393,7 +393,7 @@ pub(crate) fn settle_shape_frame(
         .chain(defining_points(control).iter().map(|p| (f64::from(p.x), f64::from(p.y))))
         .map(|p| map.apply(p))
         .collect();
-    // r4 M1 (same shape): the copy that tries the dropped box holds only the
+    // the copy that tries the dropped box holds only the
     // control's own fields — its text, caption and group children are set
     // aside, the frame plan reads none of them — so a text box holding a
     // chain of groups is not copied whole at every level.
@@ -825,7 +825,7 @@ pub(crate) fn decode_textbox(
         &rect.dropcap_style,
         ctx,
     );
-    // S4 (§19.5 1c): 모서리 곡률. 0 = 각진 모서리(`None`), 51 이상은 Core
+    // S4: 모서리 곡률. 0 = 각진 모서리(`None`), 51 이상은 Core
     // 범위 밖이라 보고하고 50 으로 자른다.
     // 이것을 실패시키는 것: 이 읽기를 지우기(`corner_ratio_round_trips`) /
     // 범위 밖 경고 삭제.
@@ -854,7 +854,7 @@ pub(crate) fn decode_textbox(
             let text_vertical_align = decode_shape_vert_align(&draw_text.sub_list.vert_align);
             Control::TextBox {
                 frame: hwpforge_core::ObjectFrame::new(),
-                // §19.22 D4: the wire value, also when it is 283 everywhere.
+                // The wire value, also when it is 283 everywhere.
                 // 이것을 실패시키는 것: 읽지 않기(`shape_text_margins_round_trip`).
                 text_margin: draw_text_margin(draw_text.text_margin.as_ref())?,
                 paragraphs,
@@ -1925,14 +1925,14 @@ pub(crate) fn decode_container(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
-    // Branch review B: an outer group's retry decodes its whole subtree
+    // An outer group's retry decodes its whole subtree
     // again, and a group in a child's text would be retried again for each
     // outer attempt — 2^depth decodes. Its result and warnings do not depend
     // on the outer attempt (its own state is saved below), so the first one
     // is reused.
     // 이것을 실패시키는 것: 이 재사용 삭제(`nested_group_retries_stay_linear`).
     //
-    // r2 M3 / r3 H1·M2: a group decoded inside another group's decode is
+    // a group decoded inside another group's decode is
     // kept once in a slot (with the warnings of its own level), numbered in
     // the order its parent made the call, and a placeholder stands for it in
     // the parent's tree. The parent's retry makes the same calls in the same
@@ -2003,7 +2003,7 @@ pub(crate) fn decode_container(
     if !ctx.group_calls.is_empty() {
         // Nested: keep it in a slot, the parent records the slot. A lost
         // group (no run) keeps its warnings and children there too — they
-        // are gathered once, at the outermost group (r4 H1: copying them to
+        // are gathered once, at the outermost group (copying them to
         // the parent as well doubled them at every lost level).
         // 이것을 실패시키는 것: 잃은 묶음 경고를 부모에도 넣기(`lost_nested_groups_report_each_warning_once`).
         let slot = GroupSlot { run, placed: false, warnings: own, children: frame.record };
@@ -2176,7 +2176,7 @@ thread_local! {
     pub(crate) static CONTAINER_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// S20 (§19.23.17 M2, §19.23.20): a group decoded with its original boxes is
+/// S20: a group decoded with its original boxes is
 /// checked as one — the writer's [`group_plan`] against the source, for every
 /// node that keeps an original box and the group's own box. Preservation
 /// has not touched this tree. Over 2 HWPUNIT anywhere: decoded again without
@@ -2464,7 +2464,7 @@ fn flipped(flip: Option<&crate::schema::section::HxFlip>) -> bool {
     flip.is_some_and(|f| f.horizontal != 0 || f.vertical != 0)
 }
 
-/// S20 (§19.23.13): a group leaf is axis-aligned when its whole chain is
+/// S20: a group leaf is axis-aligned when its whole chain is
 /// `x' = a·x + c`, `y' = e·y + f` with `a, e > 0` and `<hp:flip>` mirrors
 /// nothing — the leaves that keep their original box.
 fn wire_aligned(map: Option<super::group_geometry::Affine>, flipped: bool) -> bool {
@@ -2472,8 +2472,8 @@ fn wire_aligned(map: Option<super::group_geometry::Affine>, flipped: bool) -> bo
 }
 
 /// Whether every non-image-filled leaf under `container`, nested groups
-/// included, is axis-aligned ([`wire_aligned`]) — the groups that keep their original box
-/// (§19.23.13). An OLE object counts as a leaf that is not.
+/// included, is axis-aligned ([`wire_aligned`]) — the groups that keep their original box.
+/// An OLE object counts as a leaf that is not.
 /// 이것을 실패시키는 것: 중첩 묶음을 보지 않기 / 잎 하나만 보기
 /// (`mixed_group_keeps_aligned_leaves_only`).
 // 이것을 실패시키는 것: 회전 그림 하나 때문에 부모 frame이 재디코드에서 사라지기.
@@ -2772,7 +2772,7 @@ fn decode_group_picture(
     image.width = HwpUnit::new(fold.width()).unwrap_or(HwpUnit::ZERO);
     image.height = HwpUnit::new(fold.height()).unwrap_or(HwpUnit::ZERO);
     image.placement = group_child_placement(fold.offset().0, fold.offset().1);
-    // S20 (§19.23.13 M5): the original box is judged against the FINAL
+    // S20: the original box is judged against the FINAL
     // displayed size, once the chain has scaled the picture. `convert_picture`
     // judged it against a provisional size (`orgSz` itself when there is no
     // `sz` and `curSz` is 0) and folded it away. (A picture has no points,
@@ -2911,7 +2911,7 @@ fn decode_nested_container(
     }))
 }
 
-/// S20 (§19.23.13): a group's original box — its `orgSz` (or `curSz`) when
+/// S20: a group's original box — its `orgSz` (or `curSz`) when
 /// every non-image-filled leaf is axis-aligned ([`all_aligned`]) and the box can be a
 /// frame value — and, for a top-level group, its size lock. A group that is
 /// not all aligned keeps no original box (its turned leaves are folded into
@@ -3140,11 +3140,11 @@ fn normalize_group_child(
         ),
         _ => false,
     };
-    // S20 (§19.23.13): an axis-aligned leaf keeps its points in its original
+    // S20: an axis-aligned leaf keeps its points in its original
     // box. Non-aligned picture geometry is saved separately for the later trial.
     // 이것을 실패시키는 것: 이 갈래를 지우기(`aligned_leaves_keep_their_original_box`).
     // An aligned leaf whose `orgSz` cannot be a frame value is reported as
-    // at the top level (§19.23.15) and folds without an original box.
+    // at the top level and folds without an original box.
     // 이것을 실패시키는 것: 이 보고를 지우기(`negative_original_size_in_a_group_is_reported`).
     let usable = org.0 >= 0.0
         && org.1 >= 0.0
@@ -3238,9 +3238,9 @@ fn fits_hwpunit(values: &[i32]) -> bool {
 }
 
 /// A drawn shape's text margin (`<hp:drawText><hp:textMargin>`) as a Core
-/// margin; `None` when absent (§19.22 D4). A side outside the HWPUNIT range
-/// is an error, as for table margins — not a silent fall back to 283
-/// (review r1). 이것을 실패시키는 것: 범위 밖 한 변을 `None` 으로 접기
+/// margin; `None` when absent. A side outside the HWPUNIT range
+/// is an error, as for table margins — not a silent fall back to 283.
+/// 이것을 실패시키는 것: 범위 밖 한 변을 `None` 으로 접기
 /// (`out_of_range_text_margin_is_refused`).
 fn draw_text_margin(
     margin: Option<&crate::schema::section::HxTableMargin>,
@@ -5408,7 +5408,7 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["pic", "group"]);
     }
 
-    // ── TextArt in a group (§7 contract; no Hancom sample yet) ───────
+    // ── TextArt in a group (no Hancom sample yet) ───────
 
     fn solid_brush(face: &str) -> String {
         format!(
@@ -6574,7 +6574,7 @@ mod group_tests {
         assert_eq!(crops.iter().flatten().collect::<Vec<_>>(), [&[0, 0, 7474, 15_000]]);
     }
 
-    /// The crop of a picture without `<hp:imgDim>` (§19.21 H-v4): Hancom
+    /// The crop of a picture without `<hp:imgDim>`: Hancom
     /// wrote two orders, named and `right`/`top` exchanged. The one valid
     /// reading is taken (exchanged → a warning, the value is exact); both
     /// valid and different → `picture_crop_order` lost; both empty →
@@ -6770,7 +6770,7 @@ mod group_tests {
         assert_eq!(lost(bare_pic((min, max, min, max), None)), ["picture_crop"]);
     }
 
-    // ── S20: original boxes in groups (§19.23.13–§19.23.17) ─────────
+    // ── S20: original boxes in groups ─────────
 
     fn s20_size(w: i32, h: i32) -> hwpforge_foundation::Size {
         let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
@@ -6795,7 +6795,7 @@ mod group_tests {
         (w, h, o, c.frame().and_then(|f| f.original_size))
     }
 
-    /// §19.23.13 H2: a group scaled ×2 holding a rect scaled ×3 at
+    /// A group scaled ×2 holding a rect scaled ×3 at
     /// (100, 40). By hand the rect's box 100 × 50 lands at (100, 40)–(700,
     /// 340): Core shows it 600 × 300 there and keeps 100 × 50 as its original
     /// box (the group keeps 350 × 170). The writer stores the group's pair and
@@ -6865,7 +6865,7 @@ mod group_tests {
     /// A group with one axis-aligned rect (scaled ×2) and one turned 30°: the
     /// aligned rect keeps its original box, the turned one folds as before
     /// (no original box, rotation 30), and the group keeps none — one of its
-    /// leaves is not axis-aligned (§19.23.13 표).
+    /// leaves is not axis-aligned.
     /// 이것을 실패시키는 것: 묶음 정렬 판정에서 잎 하나만 보기 / 축 정렬 판정에서
     /// 돌림을 무시하기.
     #[test]
@@ -6903,7 +6903,7 @@ mod group_tests {
     /// polygon with text and a 30° polygon with a gradient: none is
     /// axis-aligned, so each stores `inverse(group pair) · R(30°)` after the
     /// group's pair — the turn is read from each Core value's `ShapeStyle`,
-    /// whatever the kind (§19.23.17 H1). Decoded again, every shape lands
+    /// whatever the kind. Decoded again, every shape lands
     /// where Core draws it.
     /// 이것을 실패시키는 것: 다각형의 θ 를 종류로 0 으로 정하기 / 자기 쌍에서
     /// 조상 배율을 빼지 않기.
@@ -6962,7 +6962,7 @@ mod group_tests {
         container((5000, 1500), &format!("{text_box}{text_poly}{grad_poly}{extra}"))
     }
 
-    /// §19.23.15 H1: an axis-aligned leaf whose original box is far too
+    /// An axis-aligned leaf whose original box is far too
     /// large to store its scale (100,000,000 shown 49) makes the whole group
     /// fall back — but only the original boxes go: the three 30° siblings
     /// keep their `rotMatrix` 30° and land within 2 of where Core draws them.
@@ -6996,7 +6996,7 @@ mod group_tests {
         }
     }
 
-    /// S20 review r1: an aligned group leaf whose `orgSz` is wrapped
+    /// An aligned group leaf whose `orgSz` is wrapped
     /// (4294967295) is reported and kept without an original box — no
     /// negative frame value reaches Core.
     #[test]
@@ -7017,7 +7017,7 @@ mod group_tests {
         }
     }
 
-    /// §19.23.17 M2 (b): an axis-aligned leaf B next to the extreme leaf A.
+    /// An axis-aligned leaf B next to the extreme leaf A.
     /// The plan falls back for the whole group, so B too is written with its
     /// displayed box; the decoder measures that same plan against the source
     /// (no report: it lands within 2), and what is written is the plan.
@@ -7053,7 +7053,7 @@ mod group_tests {
     /// A frameless sibling the writer cannot store exactly (a large box
     /// turned 30.4°, stored as 30°) does not make the group fall back: the
     /// frames do not change it, so the aligned rect keeps its original box
-    /// (corpus case: a picture next to a sheared ellipse, §19.23.20).
+    /// (corpus case: a picture next to a sheared ellipse).
     /// 이것을 실패시키는 것: fallback 판정에 frame 없는 노드도 세기.
     #[test]
     fn frameless_sibling_does_not_drop_the_boxes() {
@@ -7104,7 +7104,7 @@ mod group_tests {
         assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)));
     }
 
-    /// §19.23.15 M3 in a group: the leaf's source end is 1002.49 (original
+    /// In a group: the leaf's source end is 1002.49 (original
     /// 5,000,000, scale 0.000200498); with its original box the writer would
     /// store 1000 — 2.49 away. The decoder drops the group's original boxes
     /// (reported) and the leaf lands at 1002.
@@ -7133,7 +7133,7 @@ mod group_tests {
         assert_eq!(g.unwrap().frame().unwrap().original_size, Some(s20_size(1000, 1000)));
     }
 
-    /// Branch review B: a group whose box its matrices do not draw is
+    /// A group whose box its matrices do not draw is
     /// decoded twice (with and without original boxes). Nested through a
     /// child's text — group → polygon text → group … — the inner groups must
     /// not be decoded again for every outer retry: the work stays linear in
@@ -7199,12 +7199,12 @@ mod group_tests {
         }
         // Two decodes per group: 8 and 16.
         assert_eq!(counts, [8, 16]);
-        // r2 M3: holding and placing the groups is linear too — no copy per
+        // holding and placing the groups is linear too — no copy per
         // level (the work doubles with the depth, it does not quadruple).
         assert!(work[1] <= 2 * work[0] + 4, "{work:?}");
     }
 
-    /// Branch review r4 H1: a chain of groups nested through their text
+    /// A chain of groups nested through their text
     /// boxes' text, where every text box has an unreadable matrix (so every
     /// group loses its only child and is lost), reports each warning once —
     /// the work and the warnings grow with the depth, they do not double per
@@ -7246,7 +7246,7 @@ mod group_tests {
         }
     }
 
-    /// Branch review r4 H1: the same through retries, both ways — each
+    /// The same through retries, both ways — each
     /// group keeps its first decode (`shape_drawn_extent`) or takes its
     /// retry (`object_original_size`) — with a lost group at the bottom:
     /// every warning once, work linear in the depth.
@@ -7305,7 +7305,7 @@ mod group_tests {
         }
     }
 
-    /// Branch review r3 H1: groups inside notes whose first paragraph
+    /// Groups inside notes whose first paragraph
     /// starts with the encoder's number head are decoded from a trimmed copy
     /// of that paragraph. Two such notes in one text box of an outer group,
     /// each holding its own group, keep their own content: nothing keys a
@@ -7478,7 +7478,7 @@ mod group_tests {
 }
 
 /// S20: an object's original box and size lock through HWPX decode and
-/// encode (design §19.23, implementation log §19.23.20).
+/// encode.
 #[cfg(test)]
 mod frame_tests {
     use hwpforge_core::control::geometry::frame_plan;
@@ -7577,8 +7577,8 @@ mod frame_tests {
 
     const R6_POINTS: &str = r#"<hc:center x="280" y="280"/><hc:ax1 x="280" y="0"/><hc:ax2 x="560" y="280"/><hc:start1 x="0" y="0"/><hc:end1 x="0" y="0"/><hc:start2 x="0" y="0"/><hc:end2 x="0" y="0"/>"#;
 
-    /// Branch review r4 M1 (same shape): the copy the frame check tries the
-    /// dropped box on holds none of the shape's text — an ellipse with
+    /// The frame check uses a geometry-only copy to try dropping the
+    /// original box — an ellipse with
     /// 100,000 bytes of text copies none of them.
     /// 이것을 실패시키는 것: 도형을 통째 복제하기(글 바이트만큼 센다).
     #[test]
@@ -7669,7 +7669,7 @@ mod frame_tests {
         assert_eq!(image.frame.original_size, Some(size(57_600, 43_500)));
 
         // A picture whose `orgSz` is its displayed size has no frame value,
-        // but is still judged (S20 review r1): its matrices draw it at
+        // but is still judged: its matrices draw it at
         // 331 x 250, not its layout size — a drawn-extent loss
         // (`default_frame_still_reports_the_drawn_extent`).
         let plain = pic.replace(
@@ -7683,7 +7683,7 @@ mod frame_tests {
         assert!(image.frame.original_size.is_none());
     }
 
-    /// S20 review r1: an object whose `orgSz` is its default (no frame value)
+    /// An object whose `orgSz` is its default (no frame value)
     /// is still judged against the source — a rect `orgSz = sz = 1000²`
     /// drawn at scale 2 is written 1000 wide where Hancom draws 2000, and
     /// that is reported; at scale 1 nothing is.
@@ -7706,7 +7706,7 @@ mod frame_tests {
         assert!(lost.is_empty(), "{lost:?}");
     }
 
-    /// §19.23.15 M3: original 5,000,000, scale 0.000200498 — the source end
+    /// Original 5,000,000, scale 0.000200498 — the source end
     /// lands at 1002.49, Core shows 1002, and the plan with the frame would
     /// write `0.000200` (1000): 2.49 from the source although each step is
     /// within 2. The decoder drops the original box (reported), keeping the
@@ -7741,7 +7741,7 @@ mod frame_tests {
         assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("안"));
     }
 
-    /// §19.23.17 M2: original 10,000,000, shown 1004, scale 0.000100 — the
+    /// Original 10,000,000, shown 1004, scale 0.000100 — the
     /// source end is 1000. The writer's plan cannot store 1004 / 10,000,000
     /// within 2 (it would write 1000) and falls back to the displayed box;
     /// the decoder, measuring that same plan, finds the source 4 away with or
@@ -7767,7 +7767,7 @@ mod frame_tests {
         );
     }
 
-    /// §19.23.15: a negative `orgSz` (an unsigned wrap) is reported and not
+    /// A negative `orgSz` (an unsigned wrap) is reported and not
     /// carried; Core holding one is refused by the writer rather than written
     /// wrapped.
     ///
@@ -7955,7 +7955,7 @@ mod frame_tests {
         }
     }
 
-    /// D review r1 MEDIUM-4: a table caption `lastWidth` past the unit range
+    /// A table caption `lastWidth` past the unit range
     /// (table width 2,000) is reported as lost, not read as "equal to the
     /// table width"; the range end decodes as a value.
     /// 이것을 실패시키는 것: 손실 진단 삭제 · 범위 끝(100,000,000) 거부.

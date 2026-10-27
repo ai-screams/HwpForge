@@ -494,8 +494,7 @@ impl HwpxStructuralEditor {
     ///
     /// Every inserted paragraph **uniformly** inherits the anchor's paragraph
     /// and character shape (no per-paragraph override — this is a block of
-    /// sibling paragraphs, not the Markdown task-item continuation bridge of
-    /// gotcha #11); only the texts are new. `texts[0]` lands first, the rest
+    /// sibling paragraphs, not Markdown task-item continuations); only the texts are new. `texts[0]` lands first, the rest
     /// follow in order. The paragraphs are encoded by the real encoder — so
     /// escaping and element order are correct — and their bytes are spliced
     /// into the original section XML in one splice, leaving untouched
@@ -1633,7 +1632,7 @@ mod tests {
 
     #[test]
     fn insert_keeps_paragraph_ids_unique_and_contiguous() {
-        // Review H1: a transplanted paragraph must not duplicate a wire id.
+        // A transplanted paragraph must not duplicate a wire id.
         let base = fixture("plain_paragraphs.hwpx");
         let out = HwpxStructuralEditor::insert_paragraph(
             &base,
@@ -1646,7 +1645,7 @@ mod tests {
 
     #[test]
     fn delete_keeps_paragraph_ids_contiguous() {
-        // Review H1: delete must not leave a gap in the sequential ids.
+        // Delete must not leave a gap in the sequential ids.
         let base = fixture("plain_paragraphs.hwpx");
         let out = HwpxStructuralEditor::delete_paragraphs(&base, &[loc(0, 2)]).expect("delete");
         let ids = paragraph_ids(&out);
@@ -1834,7 +1833,7 @@ mod tests {
 
     #[test]
     fn insert_batch_matches_sequential_single_inserts() {
-        // Differential lock (Codex Q2): batch-N must equal N sequential
+        // Differential lock: batch-N must equal N sequential
         // single inserts byte-for-byte — same splice product, one admission.
         let base = fixture("plain_paragraphs.hwpx");
         let texts = vec!["추가 하나.".to_string(), "추가 둘.".to_string()];
@@ -1923,7 +1922,7 @@ mod tests {
 
     #[test]
     fn insert_batch_keeps_paragraph_ids_unique_and_contiguous() {
-        // Review H1 extended to the batch surface: the transplanted block
+        // For a batch edit: the transplanted block
         // must renumber into one contiguous id space.
         let base = fixture("plain_paragraphs.hwpx");
         let texts = vec!["일.".to_string(), "이.".to_string(), "삼.".to_string()];

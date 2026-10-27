@@ -264,7 +264,7 @@ TestPyPI 에 올린 것을 같은 방법으로 확인할 때는 인덱스를 둘
 | GitHub environment `pypi`     | 같은 이름으로 생성. 필요하면 reviewer 를 붙여 수동 승인 게이트로 쓴다                                    |
 | GitHub environment `testpypi` | 같은 이름으로 생성, reviewer 없이                                                                        |
 
-증빙은 `gh api repos/ai-screams/HwpForge/environments` 출력을 `.docs/prs/` 에 남긴다. 토큰은 쓰지 않는다 — OIDC 뿐이다.
+증빙은 `gh api repos/ai-screams/HwpForge/environments` 출력을 PR 기록에 남긴다. 토큰은 쓰지 않는다 — OIDC 뿐이다.
 
 ### 9.7 이용자에게 알릴 것
 

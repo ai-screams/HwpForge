@@ -1,6 +1,5 @@
-//! W1b corpus 센서스: `--carry-layout-cache` 변환에서 문단 캐시 드롭률과
-//! 사유 분포를 전수 측정한다 (§1g v5 R3#3 — "구현된 Rust ledger 가 곧
-//! 측정기"; 파이썬 근사는 오차 위험으로 기각된 그 게이트).
+//! `--carry-layout-cache` 변환에서 문단 캐시 드롭률과 사유 분포를 측정한다.
+//! 변환기가 반환한 경고를 집계하므로 별도 레이아웃 추정이 필요 없다.
 //!
 //! ```bash
 //! cargo run --release -p hwpforge-convert --example census_layout_carry -- <corpus-dir>

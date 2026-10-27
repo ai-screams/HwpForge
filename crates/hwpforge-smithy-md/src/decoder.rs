@@ -435,7 +435,7 @@ struct NoteDefinition {
     reference_count: u32,
 }
 
-/// 정의 수집 모드 — 본문 빌더와 **격리**된 캡처 (Codex H1).
+/// 정의 수집 모드 — 본문 빌더와 **격리**된 캡처.
 ///
 /// 전역 리스트/인용/표 상태를 읽지도 쓰지도 않는다. 화이트리스트:
 /// 문단 · 텍스트 · 인라인 서식(W0 스택 재사용) · soft/hard break ·
@@ -2164,7 +2164,7 @@ mod tests {
         let notes = collect_notes(&result.document);
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0], (false, vec!["각주 본문".to_string()]));
-        // 참조 지점: 본문 문단 안 inline control (gotcha #12)
+        // 참조 지점: 본문 문단 안 inline control
         let para = &result.document.sections()[0].paragraphs[0];
         assert!(para.text_content().contains("본문"));
         assert!(para

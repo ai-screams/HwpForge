@@ -3,9 +3,9 @@
 
 corpus 의 각 문서를 `hwpforge to-pdf` 로 **프로세스 격리** 실행하고,
 per-doc 타임아웃·RSS 실측·경고 버킷을 manifest(JSONL) 로 남긴다.
-corpus 자체는 `.docs` 내부 자산(미커밋)이라 경로를 인자로 받는다.
+측정할 corpus 경로를 인자로 받는다.
 
-판정 계층 (Codex 게이트 2 반영 — "panic 0" 단독은 빈 게이트):
+판정 계층 (panic 부재만으로는 성공을 보장하지 않는다):
   ok            : exit 0 — PDF 산출 (경고 버킷·문단 스킵은 별도 지표)
   fail_closed   : exit 2 + 구조화 오류 JSON (convert/decode/render 거부)
   crash         : 그 외 exit / 시그널 — **게이트 위반**

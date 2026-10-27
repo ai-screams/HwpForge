@@ -498,7 +498,7 @@ impl HwpxPatcher {
             edits.push((&preserved_slot.locator, new_text.as_str()));
         }
 
-        // Branch review A3: a changed text slot makes its paragraph's line
+        // A changed text slot makes its paragraph's line
         // cache stale, and the caches of the later paragraphs of its flow and
         // of the host chain — the same set `fill` drops (`cache_flow`). Text
         // replacements and cache removals are written in one pass, which
@@ -697,8 +697,7 @@ fn text_runs(
     let mut stack: Vec<_> =
         runs.iter().enumerate().rev().map(|(ri, run)| (run, ri, path.len())).collect();
     while let Some((run, ri, restore)) = stack.pop() {
-        // 비텍스트 run 경로 선별의 비용 효과는 레포 밖 비용 probe로만 확인했다.
-        // /private/tmp/codex-fpath/cost-mutations.json (CI 비용 시험 아님).
+        // 텍스트나 메모 앵커가 없는 run은 텍스트 슬롯 탐색에서 제외한다.
         if !has_text_or_anchor(run) {
             continue;
         }
@@ -920,8 +919,7 @@ fn redact_runs(runs: &mut [Run]) {
             // `InlineText` to an empty `Text(String)` — the tab
             // attributes are intentionally lost because keeping a
             // structured `<hp:tab>` next to redacted text would leak
-            // structure that the redactor is trying to remove. See
-            // debug doc §3a-C17.
+            // structure that the redactor is trying to remove.
             RunContent::InlineText(_) => run.content = RunContent::Text(String::new()),
             RunContent::Table(table) => redact_table(table),
             RunContent::Image(image) => redact_image(image),
@@ -1240,7 +1238,7 @@ mod tests {
                 </hp:tr>
               </hp:tbl>"#;
 
-    // §19.7 F1 계약 변경: 칸 안 꼬리말은 구역 꼬리말로 올라가고(옛 계약
+    // 계약: 칸 안 꼬리말은 구역 꼬리말로 올라가고(옛 계약
     // "구역 꼬리말이 아니다" 를 뒤집음), raw 슬롯도 같은 자리에서 센다.
     // 이것을 실패시키는 것: raw 표 칸 슬롯에 `false` 를 넘기기(슬롯 수 불일치).
     #[test]

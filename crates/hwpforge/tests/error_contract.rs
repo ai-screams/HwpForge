@@ -154,7 +154,7 @@ fn missing_audited_variants(audited: &[String], inventory: &Inventory) -> Vec<St
 }
 
 /// The audit scope of 0.18: the variants whose constructors are generation
-/// sites once they exist (design §4, §4.1).
+/// sites once they exist.
 fn is_audit_target(enum_name: &str, variant: &str) -> bool {
     match variant {
         "Invariant" => matches!(
@@ -494,7 +494,7 @@ fn collector_counts_repeats_closures_fn_values_and_self_but_not_patterns_or_comp
 
 #[test]
 fn trait_impls_of_one_self_type_get_distinct_keys() {
-    // 리뷰 LOW 1 의 반례. 이것을 실패시키는 것: 키에서 trait 경로(제네릭 포함)를
+    // 반례. 이것을 실패시키는 것: 키에서 trait 경로(제네릭 포함)를
     // 빼는 변경 — 두 키가 겹쳐 중복 오류가 난다.
     let source = r"
         impl From<StampError> for StamperError {
@@ -697,7 +697,7 @@ fn production_module_tree_leaves_out_test_modules() {
 
 #[test]
 fn audited_variants_must_exist_in_the_enum_inventory() {
-    // 리뷰 M3 반례(`Invarient`). 이것을 실패시키는 것: missing_audited_variants 의
+    // 오타 반례(`Invarient`). 이것을 실패시키는 것: missing_audited_variants 의
     // 존재 대조를 항상 통과로 바꿈.
     let inventory = synthetic_inventory();
     let audited =
@@ -713,7 +713,7 @@ fn audited_variants_must_exist_in_the_enum_inventory() {
 
 #[test]
 fn compared_operands_are_skipped_under_parens_and_references() {
-    // 리뷰 M1 반례와 같은 꼴: 괄호·중첩 괄호·`&` 아래의 비교 피연산자는 생성점이
+    // 중첩 비교: 괄호·중첩 괄호·`&` 아래의 비교 피연산자는 생성점이
     // 아니다. 비교식 안의 호출 인자로 실제 생성되는 stage 는 센다.
     // 이것을 실패시키는 것: is_compared_path 의 Paren 갈래 삭제(Decode·Admission
     // 추가) 또는 Reference 갈래 삭제(Encode 추가), 비교식 피연산자를 통째로
@@ -731,7 +731,7 @@ fn compared_operands_are_skipped_under_parens_and_references() {
 
 #[test]
 fn self_resolves_before_the_stage_check() {
-    // 리뷰 L1 반례. 이것을 실패시키는 것: classify_pair 에서 `Self` 해석을
+    // 타입 해석 반례. 이것을 실패시키는 것: classify_pair 에서 `Self` 해석을
     // CodecStage 판정 뒤로 옮김.
     let source = r"impl CodecStage { fn input() -> Self { Self::Decode } }";
     assert_eq!(keys(source), [key("CodecStage::input", "stage", "Decode", 1)]);
@@ -739,7 +739,7 @@ fn self_resolves_before_the_stage_check() {
 
 #[test]
 fn audit_targets_in_the_inventory_must_be_listed() {
-    // 리뷰 2회차 MEDIUM 반례: variant 는 추가했지만 감사 목록 등록을 빠뜨림.
+    // 누락 등록 반례: variant 는 추가했지만 감사 목록 등록을 빠뜨림.
     // 이것을 실패시키는 것: unlisted_audit_targets 의 목록 대조 삭제(항상 빈 결과).
     let inventory: Inventory = serde_json::from_str(
         r#"{"enums": [{"krate": "k", "file": "f.rs", "name": "FillError",

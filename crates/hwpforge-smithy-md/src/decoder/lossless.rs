@@ -1597,7 +1597,7 @@ fn parse_image_format(raw: &str) -> ImageFormat {
     }
 }
 
-/// The FRAME attributes (S20, design §19.23.21), in a fixed order.
+/// The FRAME attributes, in a fixed order.
 const FRAME_ATTRIBUTES: [&str; 5] = [
     "data-original-width-unit",
     "data-original-height-unit",
@@ -1606,7 +1606,7 @@ const FRAME_ATTRIBUTES: [&str; 5] = [
     "data-size-protect",
 ];
 
-/// Reads an element's object frame (S20, design §19.23.21). The whole
+/// Reads an element's object frame. The whole
 /// attribute list is scanned once — without quick-xml's duplicate check, so
 /// the policy for the other attributes stays as it is — and a FRAME name met
 /// twice is refused. The original box needs both `-unit` attributes (the
@@ -1829,7 +1829,7 @@ fn parse_optional_u16_attr(
     }
 }
 
-/// §19.22 D3: `data-line-wrap` (`SQUEEZE`, `KEEP`); missing = the default
+/// `data-line-wrap` (`SQUEEZE`, `KEEP`); missing = the default
 /// break. `BREAK` itself is not a written value and is refused like any
 /// other unknown spelling; a repeated name is refused.
 /// The other `<td>` lookups stop at the first match, so only this scan
@@ -1912,7 +1912,7 @@ mod tests {
         s
     }
 
-    // ── S20 FRAME (design §19.23.21) ──
+    // ── S20 FRAME ──
 
     const IMG: &str = r#"data-char-shape="0" src="a.png" alt="a.png" data-format="PNG" data-width-unit="3000" data-height-unit="2000""#;
 
@@ -2022,7 +2022,7 @@ mod tests {
         assert_eq!(t.caption.as_ref().unwrap().side, hwpforge_core::caption::CaptionSide::Top);
     }
 
-    /// §19.22 D3: an unknown or default spelling, or a repeat, of
+    /// An unknown or default spelling, or a repeat, of
     /// `data-line-wrap` is refused.
     #[test]
     fn cell_line_wrap_attribute_errors() {

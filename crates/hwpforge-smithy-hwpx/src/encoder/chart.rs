@@ -503,7 +503,7 @@ fn write_xy_series(
 /// Writes the chart title element.
 ///
 /// Mirrors the 한컴-native custom-title form byte-for-byte (probed from
-/// `sample-chart-title.hwpx`, a 한컴-authored chart with a user-set
+/// a 한컴-authored chart with a user-set
 /// title). 한컴's chart engine is a partial OOXML implementation: the
 /// previous minimal form (`<a:bodyPr/><a:lstStyle/>` + bare
 /// `<a:rPr lang="ko-KR"/>`) parsed fine in Excel-style consumers but
@@ -605,7 +605,7 @@ mod tests {
     use hwpforge_foundation::HwpUnit;
 
     /// The custom-title form must mirror 한컴-native byte conventions
-    /// (probed from `sample-chart-title.hwpx`): fully-attributed
+    /// (measured from a Hancom-saved chart with a title): fully-attributed
     /// `<a:bodyPr>`, no `<a:lstStyle/>`, `pPr/defRPr` + `rPr` carrying
     /// the 함초롬돋움 font set, and a trailing `<a:endParaRPr/>`. The
     /// earlier minimal form (`<a:bodyPr/><a:lstStyle/>` + bare

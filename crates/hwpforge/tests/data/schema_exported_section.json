@@ -66,7 +66,7 @@
           "$ref": "#/$defs/PageSettings"
         },
         "headers": {
-          "description": "Headers for this section, ordered as in HWPX wire (`<hp:header>` × N).\n\nHWPX allows multiple `<hp:header>` elements in a single section,\ndifferentiated by `applyPageType` (`BOTH` / `ODD` / `EVEN`). HWP5\nstores the same information as multiple `head` ctrl records.\nEmpty `Vec` = \"no header on this section\". See\n[ADR-002](../../../.docs/architecture/adr/ADR-002-section-multi-header-footer-cardinality.md)\nfor the cardinality decision.",
+          "description": "Headers for this section, ordered as in HWPX wire (`<hp:header>` × N).\n\nHWPX allows multiple `<hp:header>` elements in a single section,\ndifferentiated by `applyPageType` (`BOTH` / `ODD` / `EVEN`). HWP5\nstores the same information as multiple `head` ctrl records.\nEmpty `Vec` = \"no header on this section\".",
           "type": "array",
           "items": {
             "$ref": "#/$defs/HeaderFooter"
@@ -1864,7 +1864,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A HWP5 chart carried as opaque OOXML + OLE blob passthrough.\n\nUsed when chart data is extracted from a HWP5 BinData OLE container\nand emitted to HWPX without round-tripping through the structured\n[`Control::Chart`] data model. Renders in 한컴 via the `<hp:switch>`\nblock with full OOXML chart inside `<hp:case>` and an OLE fallback\ninside `<hp:default>`.\n\nWave 4c passthrough: the chart XML and OLE bytes are carried as-is\nfrom the source HWP5 file. The encoder writes:\n- `Chart/chartN.xml` (NOT registered in manifest — gotcha #5)\n- `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)\n- section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole",
+          "description": "A HWP5 chart carried as opaque OOXML + OLE blob passthrough.\n\nUsed when chart data is extracted from a HWP5 BinData OLE container\nand emitted to HWPX without round-tripping through the structured\n[`Control::Chart`] data model. Renders in 한컴 via the `<hp:switch>`\nblock with full OOXML chart inside `<hp:case>` and an OLE fallback\ninside `<hp:default>`.\n\nWave 4c passthrough: the chart XML and OLE bytes are carried as-is\nfrom the source HWP5 file. The encoder writes:\n- `Chart/chartN.xml` (NOT registered in manifest)\n- `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)\n- section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole",
           "type": "object",
           "properties": {
             "EmbeddedChart": {
@@ -4280,7 +4280,7 @@
       ]
     },
     "DutmalMetadata": {
-      "description": "Wire-mirrored metadata attached to a `Control::Dutmal`.\n\nCarries HWPX `<hp:dutmal>` attributes that HwpForge does not yet\nmodel as typed fields — currently just `option`. Field is mirrored\nverbatim from HWP5 wire / HWPX `option=` attribute and emitted\nverbatim on encode so round-trips preserve the value even when the\nsemantics aren't pinned down (see\n`.docs/algorithms/2026-06-01_dutmal_carry.md`).\n\n`#[non_exhaustive]` — additions like `style_id_ref` or the two\nreserved tail words are additive and don't break existing\ndestructure / pattern-match sites.",
+      "description": "Wire-mirrored metadata attached to a `Control::Dutmal`.\n\nCarries HWPX `<hp:dutmal>` attributes that HwpForge does not yet\nmodel as typed fields — currently just `option`. Field is mirrored\nverbatim from HWP5 wire / HWPX `option=` attribute and emitted\nverbatim on encode so round-trips preserve the value even when the\nsemantics aren't pinned down.\n\n`#[non_exhaustive]` — additions like `style_id_ref` or the two\nreserved tail words are additive and don't break existing\ndestructure / pattern-match sites.",
       "type": "object",
       "properties": {
         "option": {
@@ -4341,7 +4341,7 @@
       "type": "string"
     },
     "RefTarget": {
-      "description": "Cross-reference target identifier (Wave 12m Phase 2).\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
+      "description": "Cross-reference target identifier (Wave 12m Phase 2).\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
       "oneOf": [
         {
           "description": "사용자 지정 책갈피 이름 (Bookmark 전용).",

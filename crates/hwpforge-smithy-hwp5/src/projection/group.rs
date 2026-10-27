@@ -93,7 +93,7 @@ pub(super) fn chain(render: &Hwp5ShapeRender) -> ShapeTransform {
     render.map()
 }
 
-/// S20 (§19.23.13): a chain with no turn, mirror or shear —
+/// S20: a chain with no turn, mirror or shear —
 /// `x' = a·x + c`, `y' = e·y + f`, `a, e > 0`.
 fn aligned(render: &Hwp5ShapeRender) -> bool {
     let m = chain(render).matrix();
@@ -358,7 +358,7 @@ fn plan_child<'a>(
             turns = true;
         }
     }
-    // S20 (§19.23.13): an axis-aligned leaf keeps its stored points, in its
+    // S20: an axis-aligned leaf keeps its stored points, in its
     // initial box. A line or connector takes its stored ends as they are.
     // 이것을 실패시키는 것: 이 갈래를 지우기(`hwp5_group_keeps_its_original_box`).
     if aligned(render) {
@@ -1510,7 +1510,7 @@ mod tests {
         assert_eq!((axis2.x, axis2.y), (150, 300));
     }
 
-    /// S20 (§19.23.13): an axis-aligned leaf (a rect stored 100 × 50, scaled
+    /// S20: an axis-aligned leaf (a rect stored 100 × 50, scaled
     /// ×4) keeps its stored box as its original box, shown 400 × 200; the
     /// group (initial 500 × 300, shown 1000 × 600) keeps its own. A turned
     /// leaf in a nested group makes the outer group keep none.
@@ -1548,7 +1548,7 @@ mod tests {
         assert!(g.unwrap().frame().unwrap().original_size.is_none());
     }
 
-    /// S20 review r1: the group's size lock is kept with or without its
+    /// The group's size lock is kept with or without its
     /// original box — a turned leaf (no box) or an unreadable render.
     #[test]
     fn hwp5_group_size_lock_is_kept() {
@@ -2120,8 +2120,8 @@ mod tests {
         group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![child(pic, at(100, 100, 0.0, 0.0))])
     }
 
-    /// Branch review B-H3: a group of pictures of one asset stores it once,
-    /// and (r2 H3) reads its image header once — for the group plan and for
+    /// A group of pictures of one asset stores it once,
+    /// and reads its image header once — for the group plan and for
     /// every picture's crop together.
     /// 이것을 실패시키는 것: 참조마다 복사하기(그림 수만큼 복사) · 크기 캐시 없이
     /// 읽기(계획과 방출에서 그림마다 두 번).

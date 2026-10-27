@@ -6,7 +6,7 @@
 //! exhaustive content export stays with `to-json`, and targeted text
 //! extraction with `read`.
 //!
-//! Address contract (agent-editing architecture §2.2 — indexes are the last
+//! Address contract (indexes are the last
 //! resort): every entry leads with its **name anchor** (heading text, field
 //! name, bookmark name, table ordinal) as the primary key; the `{section,
 //! para}` locator is a secondary convenience that goes stale after

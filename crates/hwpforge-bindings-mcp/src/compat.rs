@@ -982,7 +982,7 @@ mod tests {
             let Some(surface) = case["surfaces"].get("mcp") else { continue };
             let id = case["id"].as_str().unwrap();
             if surface["mode"] == "unreachable" {
-                assert_eq!(id, "cell.draft_depth", "unreviewed unreachable case: {id}");
+                assert_eq!(id, "cell.draft_depth", "unhandled unreachable case: {id}");
                 assert!(!surface["reason"].as_str().unwrap().is_empty());
             } else {
                 let row = baseline

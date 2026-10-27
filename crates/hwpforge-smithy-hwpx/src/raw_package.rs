@@ -328,7 +328,7 @@ mod tests {
     /// A decodable package can still hold a document Core rejects.
     ///
     /// This is the reachability question behind `ops::validate`'s `ok: false`
-    /// branch (W1b review R2, finding 10). The encoder cannot produce such a
+    /// branch. The encoder cannot produce such a
     /// package — `HwpxEncoder::encode` takes a `Document<Validated>`, so the
     /// type state makes an invalid document unencodable — but a package from
     /// another producer can carry a section with no paragraphs, and the

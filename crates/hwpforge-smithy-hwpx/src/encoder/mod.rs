@@ -404,7 +404,7 @@ use self::package::PackageWriter;
 use self::section::encode_section_with_note_counters;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
-/// 인코드 중 표면화된 비치명 경고 (W1b — §1g v5 변경 2).
+/// 인코드 중 표면화된 비치명 경고.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
@@ -780,7 +780,7 @@ pub fn partition_semantic_loss(
 /// 의미 손상 경고가 하나라도 있으면 `Err((의미 손상, 그 외))` — 호출자가
 /// 각자의 오류형(`StamperError::SemanticLoss` ·
 /// `CellEditError::SemanticLoss`)으로 감싼다. 없으면
-/// `Ok((바이트, 비의미 경고))` — **R2 HIGH 1**: 과거엔 이 지점에서 비의미
+/// `Ok((바이트, 비의미 경고))` — 과거엔 이 지점에서 비의미
 /// 경고를 버리고 바이트만 남겼다.
 ///
 /// 편집기마다 복제하지 않고 한 곳에 둔다 (분류의 정의는
@@ -1060,10 +1060,10 @@ impl EncodeOptions {
     }
 }
 
-/// Review r1 HIGH-2: a table cell zone must name a border fill the package
+/// A table cell zone must name a border fill the package
 /// writes (looked up by id) — JSON or Markdown can author any number, and
 /// the package would point at nothing. Every written table is checked
-/// ([`Document::for_each_table`] — picture captions too, review r2 HIGH).
+/// ([`Document::for_each_table`] — picture captions too).
 /// 이것을 실패시키는 것: 이 검사 삭제(`unknown_cell_zone_fill_is_refused`).
 fn refuse_unknown_cell_zone_fills(
     document: &Document<Validated>,
@@ -1072,8 +1072,7 @@ fn refuse_unknown_cell_zone_fills(
     let written =
         |id: u32| crate::header_references::HeaderReferences::border_fill(style_store, id).is_ok();
     // Tables in a memo's anchor runs are not written (the anchor keeps its
-    // text only, `build_memo_anchor_xml`), so they are not checked (review r3
-    // M3). 이것을 실패시키는 것: 앵커 표 제외 삭제(`unknown_cell_zone_fill_is_refused`
+    // text only, `build_memo_anchor_xml`), so they are not checked. 이것을 실패시키는 것: 앵커 표 제외 삭제(`unknown_cell_zone_fill_is_refused`
     // 의 메모 앵커 안 999 성공).
     let mut dropped: std::collections::HashSet<*const hwpforge_core::table::Table> =
         std::collections::HashSet::new();
@@ -1354,11 +1353,11 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<Vec<u8>> {
         let outcome = Self::encode_with_diagnostics(document, style_store, image_store, options)?;
-        // W1b (§1g v5 변경 2): emit_layout_cache 요청 중 캐시 드롭은 무음
+        // W1b: emit_layout_cache 요청 중 캐시 드롭은 무음
         // 성공 금지 — 데이터 손실을 진단 없이 넘기지 않는다 (breaking,
         // 0.14.0). 경고 보존 경로는 `encode_with_diagnostics`.
         if options.emit_layout_cache {
-            // 독립 리뷰 Low: first() 는 미래 variant 가 앞에 끼는 순간
+            // `first()` 는 미래 variant 가 앞에 끼는 순간
             // 데이터-손실 신호를 삼킨다 — find 로 전수 검색.
             if let Some(EncodeWarning::LayoutCacheDropped { path, reason }) = outcome
                 .warnings
@@ -1562,7 +1561,7 @@ impl HwpxEncoder {
         let dropped_caches: Vec<Vec<EncodeWarning>> =
             section_results.iter_mut().map(|r| std::mem::take(&mut r.dropped_caches)).collect();
         // W0: two written objects with one Core id keep it, and are reported
-        // — counted from the ids the encoder actually wrote (review W0 r3).
+        // — counted from the ids the encoder actually wrote.
         // 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
         for (id, kinds) in object_ids::conflicts(&object_ids::written()) {
             context.warnings.push(EncodeWarning::ObjectIdConflict {
@@ -2375,7 +2374,7 @@ mod tests {
         }
     }
 
-    /// Review r1 HIGH-2: encoding refuses a cell zone whose border fill the
+    /// Encoding refuses a cell zone whose border fill the
     /// store does not have; a known one encodes.
     /// 이것을 실패시키는 것: 사전 검사 삭제.
     #[test]
@@ -2434,7 +2433,7 @@ mod tests {
         let refused = |r: HwpxResult<Vec<u8>>| matches!(r, Err(crate::error::HwpxError::InvalidStructure { ref detail }) if detail.contains("cell zone"));
         assert!(encode(true, false, 1, None).is_ok());
         assert!(refused(encode(true, false, 999, None)));
-        // Review r2 HIGH: a table in a picture caption is checked too.
+        // A table in a picture caption is checked too.
         assert!(encode(true, true, 1, None).is_ok());
         assert!(refused(encode(true, true, 999, None)));
         // 이것을 실패시키는 것: 빈 표 zone 1·2·3 허용 또는 표 Some(0)일 때 zone 검사 생략.
@@ -2443,7 +2442,7 @@ mod tests {
         }
         assert!(refused(encode(false, false, 3, Some(0))));
         assert!(refused(encode(false, false, 4, None)));
-        // Review r3 M3: a table in a memo anchor is not written, so its zone
+        // A table in a memo anchor is not written, so its zone
         // is not checked; the same table in the memo body is.
         let memo = |in_anchor: bool| {
             let table = Table::new(vec![TableRow::new(vec![TableCell::new(
@@ -2457,7 +2456,7 @@ mod tests {
             let holder = Run::table(table, CharShapeIndex::new(0));
             let text = || Run::text("a", CharShapeIndex::new(0));
             let (content, anchor) = if in_anchor {
-                // The reviewed case: the table sits in a text box in the anchor.
+                // Nested case: the table sits in a text box in the anchor.
                 let text_box = hwpforge_core::control::Control::text_box(
                     vec![Paragraph::with_runs(vec![holder], ParaShapeIndex::new(0))],
                     HwpUnit::new(1000).unwrap(),
@@ -2491,7 +2490,7 @@ mod tests {
         assert!(refused(memo(false)));
     }
 
-    /// R2 HIGH 1 — the defect was that a *successful* encode kept only the
+    /// the defect was that a *successful* encode kept only the
     /// bytes. These four cases pin the split both editors now share.
     ///
     /// The encoder cannot be driven to emit a non-semantic warning through

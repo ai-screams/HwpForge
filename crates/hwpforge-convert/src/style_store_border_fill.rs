@@ -340,8 +340,8 @@ fn hwp5_image_fill_mode_to_hwpx(kind: Hwp5FillImageMode) -> Option<&'static str>
     // HWP5 raw image-fill modes 0-15 map 1:1 (same ordinal order) to the
     // KS X 6101 OWPML `ImageBrushMode` enum. Previously only TILE/TOTAL/
     // CENTER/ZOOM (0/5/6/15) were mapped and the other 12 modes silently
-    // collapsed to a transparent fill. Confirmed against native fixture
-    // `sample-cell-image-fill` (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM
+    // collapsed to a transparent fill. Confirmed against
+    // Hancom image-fill documents (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM
     // = raw 1/7/10/14) spanning every dropped family. (`Resize` → `TOTAL`,
     // `*Middle` → `*_CENTER` per the OWPML naming.)
     match kind {
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn image_fill_mode_maps_all_16_ks_x_6101_modes() {
         // HWP5 raw 0-15 ↔ OWPML ImageBrushMode, same ordinal order. Verified
-        // against native fixture sample-cell-image-fill for raw 1/7/10/14
+        // against Hancom image-fill documents for raw 1/7/10/14
         // (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM) plus the
         // pre-existing 0/5/6/15. Before the P1-2 fix only 4 of 16 mapped;
         // the rest collapsed to a transparent fill.

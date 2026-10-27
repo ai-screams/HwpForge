@@ -142,11 +142,11 @@ pub fn run_stamp(
         )
     })?;
 
-    // Review L1: serialize the manifest BEFORE writing anything, and remove
+    // Serialize the manifest BEFORE writing anything, and remove
     // the .hwpx if the manifest write fails — a failed call must leave no
     // partial artifact behind (fail-closed).
     //
-    // W6b audit follow-up: the default path is now `ops::default_manifest_path`
+    // The default path is `ops::default_manifest_path`
     // — the CLI's own pre-migration rule, shared here instead of this file's
     // separate `trim_end_matches(".hwpx")` version (see that function's doc
     // for the one input the two disagreed on and why this migrates rather
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     // 이것을 실패시키는 것: canonical 출력 코드를 MUTANT로 치환.
     fn stamp_manifest_write_failure_removes_output() {
-        // Review L1: manifest 기록 실패 시 .hwpx 산출물도 제거되어야 한다
+        // Manifest 기록 실패 시 .hwpx 산출물도 제거되어야 한다
         // (fail-closed — 부분 산출물 금지).
         let dir = tempfile::tempdir().unwrap();
         let src = make_template(&dir);

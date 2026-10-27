@@ -19,7 +19,7 @@ struct ConvertResult {
     sections: usize,
     paragraphs: usize,
     size_bytes: usize,
-    /// 이미지 임베드에서 제외된 참조들 (W6 §12b — typed 경고의 표시 문자열).
+    /// 이미지 임베드에서 제외된 참조들 (typed 경고의 표시 문자열).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -85,11 +85,10 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
         }
     };
 
-    // 이미지 참조 해석 base_dir (W6 §12b — stdin 입력은 base_dir 없음:
+    // 이미지 참조 해석 base_dir (stdin 입력은 base_dir 없음:
     // 상대 경로는 typed 경고로 제외되고 data: URI 만 임베드된다).
     // bare 파일명(`convert a.md`)의 parent() 는 None 이 아니라 빈 경로
-    // `Some("")` — canonicalize 불가라 base 를 통째로 잃는다 (독립 리뷰
-    // B2). 빈 경로 = 현재 디렉터리로 정규화.
+    // `Some("")` — canonicalize 불가라 base 를 통째로 잃는다. 빈 경로 = 현재 디렉터리로 정규화.
     let base_dir = if input == "-" {
         None
     } else {

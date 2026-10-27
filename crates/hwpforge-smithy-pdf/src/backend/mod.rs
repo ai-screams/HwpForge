@@ -277,7 +277,7 @@ fn cached_image(
 /// metadata 만 읽음) — valid-header/corrupt-body 를 Degraded 로 걸러내려면
 /// 임시 1×1 문서로 디코드를 강제해야 한다 (§3 disposition H1).
 ///
-/// ⚠️ 보장 범위는 포맷 의존 (독립 리뷰 Low#2): PNG/GIF/WebP 는 재인코드
+/// ⚠️ 보장 범위는 포맷 의존: PNG/GIF/WebP 는 재인코드
 /// 경로라 본문 손상이 여기서 잡히지만, **JPEG 는 DCTDecode passthrough**
 /// (scan 데이터 미디코드 임베드)라 valid-header/corrupt-scan JPEG 는
 /// preflight·finish 모두 통과한다 — 뷰어에서야 드러난다. corrupt-JPEG

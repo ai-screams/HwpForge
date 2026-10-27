@@ -1827,7 +1827,7 @@ mod tests {
         assert!(ole_control.notes.iter().any(|note| note == "bin_data_stream_missing"));
     }
 
-    /// §19 C: an OLE reference counts `DocInfo` `BIN_DATA` records — the
+    /// An OLE reference counts `DocInfo` `BIN_DATA` records — the
     /// record at position 1 stores id 2, and the reference 1 joins it. No
     /// record stores id 1, so the stored-id reading differs: the join is
     /// only a low-confidence interpretation, with both readings in its notes.

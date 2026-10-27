@@ -444,9 +444,7 @@ fn paragraph_pieces_at<S: Sink>(
             // Markdown cannot represent inline tab attributes, so any
             // `<hp:tab width=... leader=... type=.../>` collapses back
             // to a literal `\t` via `plain_text()` — same effective
-            // output the `Text(String)` arm would produce. See
-            // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
-            // §3a-A4.
+            // output the `Text(String)` arm would produce.
             Part::Text(content) => {
                 if let Some(cow) = content.plain_text() {
                     text(&mut pieces, &cow);
@@ -593,7 +591,7 @@ fn container_pieces_at<S: Sink>(
 }
 
 /// A picture's or table's caption as a paragraph after it, empty without
-/// one — the caption numbers ("그림 3") live there (§19.16 J, review r1).
+/// one — the caption numbers ("그림 3") live there.
 /// In a cell the paragraph break is `<br><br>` (the cell's line endings).
 /// 이것을 실패시키는 것: 캡션 출력을 지우기
 /// (`f17_caption_numbers_reach_the_readable_views`).

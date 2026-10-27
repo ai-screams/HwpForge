@@ -518,7 +518,7 @@ impl ValidationError {
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
             Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
             // A shape geometry value out of range: the existing shape code
-            // (review r1 — a new `CoreErrorCode` variant is a breaking
+            // (a new `CoreErrorCode` variant is a breaking
             // change outside the approved API).
             Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidShapeDimension,
             // Same reason: no new `CoreErrorCode` variant.

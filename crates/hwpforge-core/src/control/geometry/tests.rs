@@ -495,7 +495,7 @@ fn framed_line(end: (i32, i32), size: (i32, i32), original: (i32, i32)) -> Contr
     c
 }
 
-/// The extreme ratio of §19.23.11 H3: shown 49 wide from an original box of
+/// An extreme ratio: shown 49 wide from an original box of
 /// 100,000,000 the six-decimal scale is `0.000000` — the end would land 49
 /// off. The plan falls back to the displayed box (end at 49, scale 1) and
 /// is exact again.

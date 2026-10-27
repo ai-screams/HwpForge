@@ -11,7 +11,7 @@ use crate::lossless_grammar as g;
 
 pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String> {
     // Validated documents already satisfy Core's depth limit of 32.
-    // §19.16 J (review r1): the grammar has no place for a caption number,
+    // The grammar has no place for a caption number,
     // and captions are written as plain text (tables) or not at all
     // (pictures) — so a number anywhere, captions included, is refused
     // here rather than dropped. 이것을 실패시키는 것: 이 검사를 지우기
@@ -70,7 +70,7 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
     Ok(output)
 }
 
-/// The object frame (S20, design §19.23.21 FRAME): the original box as
+/// The object frame: the original box as
 /// `data-original-width-unit`/`-height-unit` (with readable `-mm`) when it
 /// is set, and `data-size-protect="true"` when the size is locked. A default
 /// frame writes nothing, so its output is unchanged.
@@ -94,8 +94,8 @@ fn frame_attrs(frame: &hwpforge_core::ObjectFrame) -> String {
     out
 }
 
-/// One paragraph. Its end-mark char shape (`Paragraph::end_char_shape`,
-/// §19.22 D5) is not written: like the layout cache it only sets the height
+/// One paragraph. Its end-mark char shape (`Paragraph::end_char_shape`)
+/// is not written: like the layout cache it only sets the height
 /// of the last line Hancom computes, which this grammar does not carry
 /// (decided for the closed grammar of the lossless view).
 fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
@@ -109,8 +109,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
             // path — Markdown has no native representation for them
             // and this lossless encoder targets MD round-trip, not
             // HWPX-attribute preservation. Use the HWPX→HWPX path
-            // (Wave 4 Phase 3) when those attributes matter. See
-            // debug doc §3a-A7.
+            // when those attributes matter.
             RunContent::Text(_) | RunContent::InlineText(_) => {
                 let Some(cow) = run.content.plain_text() else {
                     continue;
@@ -401,7 +400,7 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
             if let Some(header) = cell.header {
                 out.push_str(&format!(" {}=\"{}\"", g::CELL_HEADER, g::bool_str(header)));
             }
-            // §19.22 D3: a cell's line wrap other than the default break,
+            // A cell's line wrap other than the default break,
             // spelled as its Core serde name (`SQUEEZE`, `KEEP`).
             // 이것을 실패시키는 것: 방출 삭제 · 기본값에도 쓰기
             // (`cell_line_wrap_round_trips`).
@@ -1134,7 +1133,7 @@ mod tests {
         }
     }
 
-    // ── S20 FRAME (design §19.23.21) ──
+    // ── S20 FRAME ──
 
     fn frame_doc(runs: Vec<Run>) -> Document<Validated> {
         let mut d = Document::new();
@@ -1539,7 +1538,7 @@ mod tests {
         }
     }
 
-    /// A text box whose margin is not 283 everywhere is refused (§19.22 D4);
+    /// A text box whose margin is not 283 everywhere is refused;
     /// 283 everywhere is written.
     #[test]
     fn text_box_margin_round_trips() {
@@ -1576,7 +1575,7 @@ mod tests {
         }
     }
 
-    /// §19.22 D3: every cell line wrap comes back as written; the default
+    /// Every cell line wrap comes back as written; the default
     /// break writes nothing, so a breaking cell's markup is the one written
     /// before.
     #[test]

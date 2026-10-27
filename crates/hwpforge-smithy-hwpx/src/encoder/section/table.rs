@@ -8,7 +8,7 @@ pub(super) fn build_table(
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTable> {
-    // Diagnostic slot before the cells (document order, review W2 r1 LOW).
+    // Diagnostic slot before the cells (document order).
     let id_slot = super::super::object_ids::reserve();
 
     // Guard the lenient placement scan before it allocates per-position
@@ -38,7 +38,7 @@ pub(super) fn build_table(
 
     let table_border_fill_id = table.border_fill_id.unwrap_or(TABLE_BORDER_FILL_ID);
     // The caption is written before the cells but encoded after them: its
-    // diagnostic records go here (review S22 r1 LOW).
+    // diagnostic records go here.
     let caption_at = super::super::object_ids::mark();
     let header_rows = table.header_row_count();
     let rows = table
@@ -84,7 +84,7 @@ pub(super) fn build_table(
     // "footnote, equation" 으로, `shared_core_id_is_kept_and_reported`).
     super::super::object_ids::move_since(caption_from, caption_at);
 
-    // §19.6 A: `None` = the placement this encoder has always written.
+    // `None` = the placement this encoder has always written.
     // 이것을 실패시키는 것: 고정값 복귀(`table_placement_round_trips`).
     let placement = table.placement.clone().unwrap_or_else(table_default_placement);
     Ok(HxTable {
@@ -258,7 +258,7 @@ fn build_table_cell(
                 options,
                 sink,
             )?;
-            // §19.22 D3: the cell's line wrap, not a fixed `BREAK`.
+            // The cell's line wrap, not a fixed `BREAK`.
             // 이것을 실패시키는 것: 고정 BREAK 복귀(`cell_line_wrap_round_trips`).
             sub_list.line_wrap = match cell.line_wrap {
                 hwpforge_core::table::CellLineWrap::Squeeze => "SQUEEZE",

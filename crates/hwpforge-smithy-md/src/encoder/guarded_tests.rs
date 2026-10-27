@@ -1005,7 +1005,7 @@ fn entity_split_is_closed_where_guarded() {
 }
 
 // ---------------------------------------------------------------------------
-// Memo anchors (review 1, HIGH): a memo inside another memo's anchor
+// Memo anchors: a memo inside another memo's anchor
 // ---------------------------------------------------------------------------
 
 /// A memo left standing in another memo's anchor is drawn the way an
@@ -1223,7 +1223,7 @@ fn nests(pieces: &[(bool, bool, bool)]) -> bool {
 /// character is read with its own emphasis, with no HTML and no warning,
 /// and the decoder reads it; where it crosses, the same, or the paragraph
 /// is written as plain text with one warning and every character kept. The
-/// review's four failing cases are among them.
+/// four delimiter-boundary cases are among them.
 /// 이것을 실패시키는 것: 구성 되돌리기(조각마다 표지) · 평문 대체 끄기 · 빈 조각 건너뛰기 삭제.
 #[test]
 fn three_emphasized_pieces_keep_their_emphasis() {
@@ -1270,7 +1270,7 @@ fn three_emphasized_pieces_keep_their_emphasis() {
         }
     }
     assert!(problems.is_empty(), "{}:\n{}", problems.len(), problems.join("\n"));
-    // The review's four cases (bold → bold italic → italic and back, with
+    // Four delimiter-boundary cases (bold → bold italic → italic and back, with
     // and without strikeout over all three) are crossing. Some crossing
     // placements this writer does not handle and writes as plain text
     // (with a warning, every character kept, as checked above); a better
@@ -1476,7 +1476,7 @@ fn backslash_links_are_linear() {
 /// every emphasis (7³): the check reads the text after the comment as it is
 /// written (on its own line), so nested emphasis is exact and crossing is
 /// exact or plain text with one warning — never markers shown as text. The
-/// review's case is a memo, then bold `a`, bold italic `b`, italic `c`.
+/// boundary case is a memo, then bold `a`, bold italic `b`, italic `c`.
 /// 이것을 실패시키는 것: 주석 뒤 줄 끝내기를 검사 뒤로 미루기 · 읽지 않은 글을 통과시키기.
 #[test]
 fn hidden_emphasis_is_not_passed() {
@@ -2127,7 +2127,7 @@ fn lossy_definition_shapes() {
     assert_eq!(warnings.len(), 1);
 }
 
-/// The regression rows of the G4 reviews, lossy: the document text, the
+/// Lossy regression cases: the document text, the
 /// output and warnings of 0.17.1 (`a5e33451`; bd3f6e67 wrote the same),
 /// this view's, and the text this view's output reads back as. Each row
 /// writes the earlier bytes, or falls back with a warning where the earlier

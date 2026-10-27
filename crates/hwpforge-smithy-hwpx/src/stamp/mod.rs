@@ -7,7 +7,7 @@
 //! addressing; example-content placeholders (class C) are never auto-detected
 //! and require explicit caller rules.
 //!
-//! Design contract (2026-07-20 design review):
+//! Design contract:
 //! - detection is a **closed** built-in pattern list — no semantic-word
 //!   heuristics ("작성"/"기재" are NOT positive signals)
 //! - candidates in instruction context (`※`/`【작성방법】`/`(예시)`) are

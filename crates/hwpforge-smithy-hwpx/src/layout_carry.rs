@@ -27,7 +27,7 @@
 //! The cache comes from the encoder, not from the original XML: its line
 //! starts are written for the tokens the OUTPUT holds (the encoder may add
 //! one the input omitted, such as a `colPr`), and a cache the decoder
-//! dropped is not in Core, so it is not revived (branch review A2).
+//! dropped is not in Core, so it is not revived.
 //!
 //! Fail-open by design: any count mismatch or scan anomaly disables the
 //! carry for that section — the result is the current (reflowed) behavior,
@@ -173,7 +173,7 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
 /// byte-identical to the baseline's, taking each cache from `source` — the
 /// same edited document encoded with its Core caches emitted, so every line
 /// start is written through the encoder's own token ledger for exactly the
-/// tokens `output` holds (branch review A2: the original cache XML counted
+/// tokens `output` holds (the original cache XML counted
 /// the original's tokens, and an encoder that adds one — a `colPr` the
 /// input omitted — moved every line start after it). Returns `None` when
 /// the carry cannot be aligned (paragraph count mismatch, scan anomaly, or
@@ -207,7 +207,7 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String,
         .map(|i| baseline[base[i].start..base[i].end] != output[out[i].start..out[i].end])
         .collect();
     // The rule `fill` and `patch` use (`cache_flow::stale_paragraphs`), one
-    // pass over the paragraphs (branch review r2 M4: walking to the end of
+    // pass over the paragraphs (walking to the end of
     // the list from every changed paragraph was quadratic in a batch edit).
     // 이것을 실패시키는 것: 바뀐 문단마다 끝까지 훑기(`carry_stays_linear`).
     let para_list: Vec<usize> = out.iter().map(|s| s.list).collect();
@@ -228,7 +228,7 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String,
         let unchanged = !changed[i] && !stale[i];
         let has_close = out[i].content_end < out[i].end;
         let seg = &source[seg_start..seg_end];
-        // Branch review r2 M1: a marker cache is a drop with its reason.
+        // A marker cache is a drop with its reason.
         // 이것을 실패시키는 것: 표지를 캐시로 넣거나 보고하지 않기
         // (`an_untouched_cache_the_encoder_cannot_place_is_reported`).
         if let Some(warning) = dropped_mark(seg) {
@@ -339,7 +339,7 @@ pub(crate) fn carry_line_segs(
             continue;
         }
         if let Some((spliced, dropped)) = splice_section(&base_xml, &out_xml, &src_xml) {
-            // r3 M1: a marker's ordinal counts within its own section.
+            // a marker's ordinal counts within its own section.
             // 이것을 실패시키는 것: 문서 전체 번호로 읽기(`drops_in_two_sections_are_each_reported`).
             let section_drops = section_index(&path).and_then(|i| source.dropped.get(i));
             reported.extend(
@@ -544,7 +544,7 @@ mod tests {
         assert!(splice_section(&two, &two, &one).is_none());
     }
 
-    /// Branch review r2 M4: a batch edit changing every one of N paragraphs
+    /// A batch edit changing every one of N paragraphs
     /// costs work linear in N.
     #[test]
     fn carry_stays_linear() {
@@ -563,7 +563,7 @@ mod tests {
         assert!(work <= 3 * N, "{work} work units for {N} paragraphs");
     }
 
-    /// Branch review r2 M1: an untouched paragraph whose cache the encoder
+    /// An untouched paragraph whose cache the encoder
     /// could not place (a marker in the source) is reported by its warning
     /// index; a changed paragraph's marker is not, and no marker is spliced
     /// in.
@@ -641,7 +641,7 @@ mod tests {
         ));
     }
 
-    /// Branch review r3 M1: an untouched cache the encoder cannot place in
+    /// An untouched cache the encoder cannot place in
     /// each of two sections is reported once each, with its own section's
     /// path — the marker ordinals count within a section.
     /// 이것을 실패시키는 것: 표지 번호를 문서 전체 번호로 읽기(구역 0 의 경고가
@@ -718,7 +718,7 @@ mod tests {
         );
     }
 
-    /// Branch review A2: the cache source must hold the output's tokens
+    /// The cache source must hold the output's tokens
     /// exactly — otherwise its coordinates count other tokens.
     #[test]
     fn splice_bails_when_the_source_differs_beyond_caches() {

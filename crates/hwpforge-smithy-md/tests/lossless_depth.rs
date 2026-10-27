@@ -49,7 +49,7 @@ fn groups(n: usize) -> Control {
     c
 }
 
-/// `n` times picture → caption → table → cell, the review's path (each
+/// `n` times picture → caption → table → cell (each
 /// round is three containers: picture, caption, table).
 fn caption_chain(n: usize) -> Run {
     let mut run = Run::text("x", CharShapeIndex::new(0));

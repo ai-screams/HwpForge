@@ -474,9 +474,7 @@ fn count_non_empty_paragraphs_recursive(paragraphs: &[Paragraph]) -> usize {
 
 fn count_runs_paragraphs(run: &hwpforge_core::run::Run) -> usize {
     match &run.content {
-        // Text-bearing variants have no nested paragraph children — see
-        // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
-        // §3a-A for the per-site classification.
+        // Text-bearing variants have no nested paragraph children.
         RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => 0,
         RunContent::Table(table) => table
             .rows

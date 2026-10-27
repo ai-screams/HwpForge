@@ -240,7 +240,7 @@ pub enum Control {
     ///
     /// Wave 4c passthrough: the chart XML and OLE bytes are carried as-is
     /// from the source HWP5 file. The encoder writes:
-    /// - `Chart/chartN.xml` (NOT registered in manifest — gotcha #5)
+    /// - `Chart/chartN.xml` (NOT registered in manifest)
     /// - `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)
     /// - section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole
     EmbeddedChart {

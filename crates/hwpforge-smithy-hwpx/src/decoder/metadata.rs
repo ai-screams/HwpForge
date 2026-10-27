@@ -3,7 +3,7 @@
 //! Symmetric to [`crate::encoder::package::build_metadata_block`] —
 //! consumes Hancom-style metadata XML and produces a Core [`Metadata`].
 //!
-//! # Security model (Wave 12o §11.1 B3 / §11.4 S1-S3)
+//! # Security model
 //!
 //! quick-xml's defaults do **not** reject DTD declarations or entity
 //! expansion. This parser hardens the boundary explicitly:
@@ -148,7 +148,7 @@ impl ParserState {
                 )));
             }
             // Self-closing `<opf:meta name="X"/>` → typed slot pinned
-            // to `None` (Wave 12o §11.2 M5 canonical form).
+            // to `None`.
             if let Some(meta_name) = parse_meta_name_attr(e)? {
                 promote_meta(&mut self.metadata, &meta_name, None);
             }
@@ -160,8 +160,7 @@ impl ParserState {
     /// S3 — namespace confusion: any element inside `<opf:metadata>`
     /// must use the `opf` prefix.
     ///
-    /// Codex(architect) Wave 12o-fixup §S3-namespace-guard: the prior
-    /// implementation used `if let Some(p) = name.prefix()` which only
+    /// The prior implementation used `if let Some(p) = name.prefix()` which only
     /// triggered when a prefix was present. Bare `<title>` / `<meta>`
     /// elements (no prefix) bypassed the gate entirely, so a hostile
     /// `content.hpf` could shadow the `<opf:title>` slot with an
@@ -451,8 +450,7 @@ mod tests {
         assert!(format!("{err}").contains("namespace prefix"));
     }
 
-    /// Codex(architect) Wave 12o-fixup §S3-namespace-guard: unprefixed
-    /// elements inside `<opf:metadata>` (e.g. `<title>` without the
+    /// Unprefixed elements inside `<opf:metadata>` (e.g. `<title>` without the
     /// `opf:` prefix) used to bypass the typed-name router. Reject
     /// them so a hostile / malformed `content.hpf` cannot shadow the
     /// typed slots.
@@ -468,8 +466,7 @@ mod tests {
         );
     }
 
-    /// Codex(architect) Wave 12o-fixup §Top-2: a Hancom-authored
-    /// `content.hpf` that emits a populated `<opf:meta name="date">`
+    /// A Hancom-authored `content.hpf` that emits a populated `<opf:meta name="date">`
     /// must round-trip through the encoder without the value being
     /// dropped at the typed-collision guard. The encoder now emits
     /// `extras["date"]` at the canonical 9-slot position rather than

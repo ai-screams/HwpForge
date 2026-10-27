@@ -1,4 +1,4 @@
-//! Per-encode object id allocation (W0, design §3.2).
+//! Per-encode object id allocation.
 //!
 //! The encoder used to draw `id`/`instid` values for objects without an
 //! imported id from one process-global counter, so the same document encoded
@@ -179,7 +179,7 @@ pub(crate) fn field_id(preferred: u64) -> u64 {
 /// The id to write for an object of `kind`: its Core id, recorded as
 /// written, else a drawn one. Every place that writes a Core id goes
 /// through here (notes through [`record`]), so the duplicate-id diagnostic
-/// sees exactly the objects in the output (review W0 r3): an object the
+/// sees exactly the objects in the output: an object the
 /// encoder leaves out — anything in a memo anchor, a group child equation —
 /// is never recorded.
 pub(crate) fn core_or_drawn(kind: &'static str, id: Option<ObjectId>) -> String {
@@ -189,7 +189,7 @@ pub(crate) fn core_or_drawn(kind: &'static str, id: Option<ObjectId>) -> String 
 
 /// Reserves the diagnostic slot of an object whose children are encoded
 /// before its own id is written (tables, pictures, groups), so the record
-/// stays in document order (review W2 r1 LOW). `usize::MAX` outside a scope.
+/// stays in document order. `usize::MAX` outside a scope.
 pub(crate) fn reserve() -> usize {
     SCOPES.with(|s| match s.borrow_mut().last_mut() {
         Some(alloc) => {
@@ -225,7 +225,7 @@ pub(crate) fn mark() -> usize {
 
 /// Moves the records added since `from` to position `to` (`to <= from`, both
 /// [`mark`]s of this scope), keeping their order. A table's caption precedes its cells in the output
-/// but is encoded after them (review S22 r1 LOW): the ids are still drawn in
+/// but is encoded after them: the ids are still drawn in
 /// encoding order, only the diagnostic follows the output.
 pub(crate) fn move_since(from: usize, to: usize) {
     SCOPES.with(|s| {
@@ -540,7 +540,7 @@ mod tests {
     fn same_document_same_bytes_in_one_process() {
         let a = || with_drawn_ids(2);
         let b = || with_drawn_ids(5);
-        // Whole package bytes (review W0 r1 L1), not only the XML parts.
+        // Whole package bytes, not only the XML parts.
         let first = encode_bytes(a());
         assert_eq!(encode_bytes(a()), first);
         let _ = encode_bytes(b());
@@ -549,7 +549,7 @@ mod tests {
         assert_eq!(other_thread.join().unwrap(), first);
     }
 
-    /// Review W0 r1 L2: closing an inner scope resumes the outer one where
+    /// closing an inner scope resumes the outer one where
     /// it stopped, and a scope closes on unwind too.
     /// 이것을 실패시키는 것: `Drop` 의 `pop` 삭제(바깥이 3 대신 안쪽 2 를 낸다 ·
     /// panic 뒤 깊이가 하나 늘어 있다).
@@ -683,7 +683,7 @@ mod tests {
                 ]),
                 holder(table(Some(10))),
                 para(vec![Run::image(picture(Some(11)), CharShapeIndex::new(0))]),
-                // Review W0 r2·r3 LOW: a memo anchor is written as text only,
+                // a memo anchor is written as text only,
                 // so the tables in it — one in a text box, one in a picture
                 // caption in that text box — share 12 with nothing written.
                 holder(table(Some(12))),
@@ -704,7 +704,7 @@ mod tests {
                     ),
                     CharShapeIndex::new(0),
                 )]),
-                // Review W2 r1 LOW: a parent sharing an id with its child is
+                // a parent sharing an id with its child is
                 // reported in document order (parent first).
                 para(vec![Run::control(
                     Control::Group {
@@ -737,7 +737,7 @@ mod tests {
                     },
                     CharShapeIndex::new(0),
                 )]),
-                // Review S22 r1 LOW: a table's caption is written before its
+                // a table's caption is written before its
                 // cells — a caption equation and a cell footnote sharing 24
                 // are reported in that order.
                 holder({
@@ -754,7 +754,7 @@ mod tests {
                     ));
                     t
                 }),
-                // Review W0 r3 LOW: a group child equation is left out (lost
+                // a group child equation is left out (lost
                 // content), so it shares 13 with no written object.
                 para(vec![
                     Run::control(

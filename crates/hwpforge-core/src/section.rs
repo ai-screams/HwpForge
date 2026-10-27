@@ -630,9 +630,7 @@ pub struct Section {
     /// HWPX allows multiple `<hp:header>` elements in a single section,
     /// differentiated by `applyPageType` (`BOTH` / `ODD` / `EVEN`). HWP5
     /// stores the same information as multiple `head` ctrl records.
-    /// Empty `Vec` = "no header on this section". See
-    /// [ADR-002](../../../.docs/architecture/adr/ADR-002-section-multi-header-footer-cardinality.md)
-    /// for the cardinality decision.
+    /// Empty `Vec` = "no header on this section".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<HeaderFooter>,
     /// Footers for this section, ordered as in HWPX wire (`<hp:footer>` × N).

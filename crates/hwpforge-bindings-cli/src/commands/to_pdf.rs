@@ -113,7 +113,7 @@ pub fn run(
     partial_cache_reject: bool,
     json_mode: bool,
 ) {
-    // 플래그 오류는 파이프라인 진입 전에 (독립 리뷰 L1 — .hwp 변환 후 exit 방지).
+    // 플래그 오류는 파이프라인 진입 전에 (.hwp 변환 후 exit 방지).
     let discovery = parse_discovery(discovery, json_mode);
     check_file_size(input, json_mode, Command::ToPdf);
     let bytes = crate::error::read_input(input, json_mode, Command::ToPdf);

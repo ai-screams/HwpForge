@@ -255,8 +255,7 @@ impl Hwp5Decoder {
             )?;
         warnings.extend(proj_warnings);
 
-        // Codex(architect) Wave 12o-fixup §Top-4: forward
-        // `\x05HwpSummaryInformation` derived metadata so the canonical
+        // Forward `\x05HwpSummaryInformation` derived metadata so the canonical
         // entry point honors the same wire contract as
         // `decode_hwp5_with_images` / `decode_hwp5_to_core`. Without
         // this the public API silently dropped metadata for any

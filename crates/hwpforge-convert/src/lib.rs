@@ -36,7 +36,7 @@ use hwpforge_smithy_hwpx::EncodeWarning;
 
 pub use crate::error::{ConvertError, LayoutPatchError};
 
-/// 변환 전 단계의 typed 경고 합성 (W1b — §1g v5 변경 2).
+/// 변환 전 단계의 typed 경고 합성.
 ///
 /// convert 는 HWP5 디코드/projection/스타일 경고와 HWPX 인코드 경고를
 /// **타입 그대로** 전달한다 (`Hwp5Warning` 으로 강제 변환하지 않음 —
@@ -646,7 +646,7 @@ fn empty_placeholder_tab_def(id: u32) -> hwpforge_core::TabDef {
 /// - 한국어 "개요 N" (N=1..10) 또는 영문 "Outline N"
 /// - 원본 `para_shape_id`는 공통 참조 조회를 통과해야 함
 /// - `heading_type` 이 이미 Outline 인 paraPr 만 override (Number/Bullet/None
-///   에는 영향 없음 — Codex §5 "순차 ID 신앙 금지" 호환)
+///   에는 영향 없음)
 fn apply_outline_style_level_overrides(
     store: &mut HwpxStyleStore,
     styles: &[Hwp5RawStyle],
@@ -670,7 +670,7 @@ fn apply_outline_style_level_overrides(
         let level_zero_based = level_one_based - 1;
         let index = references.para_index(u32::from(style.para_shape_id))?;
         let para_shape = store.para_shape_mut(index)?;
-        // Codex §5: only override outline-kind paraPrs; never repurpose
+        // only override outline-kind paraPrs; never repurpose
         // Number/Bullet/None.
         if !matches!(para_shape.heading_type, HeadingType::Outline) {
             continue;

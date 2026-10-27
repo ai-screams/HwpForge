@@ -86,8 +86,7 @@ fn only_styled_extracts_images() {
     for mode in [MdMode::Lossy, MdMode::Lossless] {
         assert!(export("green_swatch.hwpx", mode).images.is_empty(), "{}", mode.as_str());
     }
-    // The lossless rendering carries the picture's original box (S20,
-    // design §19.23.21: original 17664 x 5975, shown 25942 x 8775).
+    // The lossless rendering carries the picture's original box (original 17664 x 5975, shown 25942 x 8775).
     // 이것을 실패시키는 것: 그림 원래 크기를 쓰지 않거나 거부하기.
     let lossless = export("green_swatch.hwpx", MdMode::Lossless).markdown;
     assert!(

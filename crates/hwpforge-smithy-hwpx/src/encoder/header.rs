@@ -2028,7 +2028,7 @@ mod tests {
     }
 
     /// A paragraph's vertical alignment, border offsets and border flags
-    /// survive a header round trip (§19.16 I, S11 — before, every paraPr
+    /// survive a header round trip (before, every paraPr
     /// came back BASELINE with zero offsets: 2,875 + 686 Hancom documents);
     /// a default paraPr writes what it did before.
     ///

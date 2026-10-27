@@ -250,9 +250,9 @@ fn build_section_0() -> Section {
     paras.push(text_para("1. HWPX 포맷 개요", CS_HEADING, PS_LEFT));
     paras.push(empty());
 
-    // 본문 + 각주 (CLAUDE.md gotcha #12: 각주는 같은 문단의 inline Run.
+    // 본문 + 각주: 각주는 같은 문단의 inline Run.
     // 별도 문단으로 만들면 각주 번호 "1)" 이 단독 줄에 표시됨. 따라서
-    // 참조 단어 뒤 → 각주 Control → 이어지는 본문을 한 문단의 runs 로 구성.)
+    // 참조 단어 뒤 → 각주 Control → 이어지는 본문을 한 문단의 runs 로 구성.
     paras.push(Paragraph::with_runs(
         vec![
             Run::text("HWPX는 한컴오피스(한글)가 사용하는 ", CharShapeIndex::new(CS_NORMAL)),
@@ -357,7 +357,7 @@ fn build_section_1() -> Section {
     )));
     paras.push(empty());
 
-    // xmlns 래핑 + 각주 (gotcha #12: 각주는 같은 문단의 inline Run)
+    // xmlns 래핑 + 각주 (각주는 같은 문단의 inline Run)
     paras.push(Paragraph::with_runs(
         vec![
             Run::text("네임스페이스 선언(xmlns)은 각 XML 파일의 ", CharShapeIndex::new(CS_NORMAL)),
@@ -735,9 +735,9 @@ fn build_section_3() -> Section {
     paras.push(p(
         "HwpForge는 순수 Rust로 HWPX 포맷의 완전한 인코드/디코드를 구현한 최초의 오픈소스 프로젝트입니다.",
     ));
-    // 본문 + 미주 (CLAUDE.md gotcha #12: 각주/미주는 같은 문단의 inline Run.
+    // 본문 + 미주: 각주/미주는 같은 문단의 inline Run.
     // 별도 문단으로 만들면 미주 번호 "1)" 이 단독 줄에 표시됨. 각주와 동일하게
-    // 참조 문장 끝 → 미주 Control 을 한 문단의 runs 로 구성.)
+    // 참조 문장 끝 → 미주 Control 을 한 문단의 runs 로 구성.
     paras.push(Paragraph::with_runs(
         vec![
             Run::text(

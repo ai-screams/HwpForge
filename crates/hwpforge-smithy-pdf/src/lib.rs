@@ -2,8 +2,8 @@
 //!
 //! 이 크레이트는 문서를 **조판하지 않는다**. 한컴이 저장한 줄 조판 캐시
 //! ([`hwpforge_core::layout::LayoutCache`], W1 에서 decode-only 승격)를
-//! 재생해 "한컴과 같은 PDF" 를 만든다. 캐시에 없는 것만 실측 확정 규칙
-//! (`.docs/algorithms/pdf-cache-replay-rules.md`, W0)으로 계산한다.
+//! 재생해 "한컴과 같은 PDF" 를 만든다. 캐시에 없는 것만
+//! 검증된 글꼴 메트릭과 배치 규칙으로 계산한다.
 //!
 //! # 3계층 구조 (에픽 §4)
 //!
@@ -28,7 +28,7 @@
 //! # 입력 계약
 //!
 //! 렌더 입력은 [`PdfInput`] — Core 문서만으로는 폰트명·크기·정렬을 알 수 없어
-//! [`StyleLookup`] 이 필수다 (Codex 리뷰 C1, smithy-md styled encoder 선례).
+//! [`StyleLookup`] 이 필수다 (smithy-md styled encoder 선례).
 
 #![deny(missing_docs)]
 
@@ -147,7 +147,7 @@ pub enum PdfWarning {
     },
     /// 캐시 결손으로 스킵된 문단이 쪽번호 재시작/감춤 컨트롤을 갖고 있어
     /// 그 **페이지 이벤트가 유실**됨 — 물리 쪽을 결정할 수 없어 근사
-    /// 앵커로 날조하는 대신 유실을 특정한다 (독립 리뷰 High #3).
+    /// 앵커로 날조하는 대신 유실을 특정한다.
     PageEventLost {
         /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).
         location: String,

@@ -73,7 +73,7 @@ pub struct LineImage {
 ///    [`crate::paint::PaintItem::Clipped`] 를 세운다 — overflow 실측(한컴은
 ///    넘친 줄을 캐시에 방출하고 렌더에서 절단)이라 상시 clip.
 /// 3. **내부 줄 replay**: [`Self::inner_lines`] 각 줄을 **박스 원점 +
-///    textMargin(기본 283, gotcha #29) + vertAlign 시프트** 를 더해 절대
+///    textMargin(기본 283) + vertAlign 시프트** 를 더해 절대
 ///    배치한다 (셀 replay 선례 — `crate::source::table`). 내부 캐시 v축은
 ///    문단 경계를 넘어 연속이다 (§8a). 각 줄의 `seg`([`hwpforge_core::layout::LineSeg`])·
 ///    `alignment`·`is_last_line` 이 텍스트/이미지 배치와 JUSTIFY 규칙을 준다.
@@ -307,7 +307,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     for (section_idx, section) in input.document.sections().iter().enumerate() {
         // pageStartsOn != BOTH 는 미실측 페이지네이션 속성 (한컴이 빈 쪽을
         // 삽입할 수 있음) — 머리말/꼬리말·쪽번호 유무와 무관하게 BOTH 거동으로
-        // 재생하고 무조건 표면화한다 (§9 b0 — 독립 리뷰 M2 상환).
+        // 재생하고 무조건 표면화한다 (§9 b0).
         if section
             .begin_num
             .as_ref()
@@ -435,7 +435,7 @@ struct PageHideEvent {
 /// 문단의 nwno(쪽 종류) 재시작·pghd 감춤을 **가시 텍스트 오프셋**과 함께
 /// 수집한다 (오프셋 → 줄 → 물리 쪽 앵커의 입력). cache admission 과 분리해
 /// 문단 진입 시 항상 호출된다 — table-host/cacheless 경로도 이벤트를 놓치지
-/// 않는다 (독립 리뷰 High #3·#4).
+/// 않는다.
 fn collect_page_events(
     para: &hwpforge_core::paragraph::Paragraph,
 ) -> (Vec<(usize, u32)>, Vec<(usize, PageHideEvent)>) {
@@ -474,9 +474,9 @@ fn collect_page_events(
     (restarts, hide_marks)
 }
 
-/// 글상자 내부 텍스트 여백 (HWPUNIT) — HWPX `<hp:textMargin>` 기본값
-/// (gotcha #29). Core `Control::TextBox` 는 여백을 carry 하지 않으므로 기본을
-/// 쓴다 (리뷰 Low-2). 비기본 여백 문서의 거동은 regime 에 따라 다르다:
+/// 글상자 내부 텍스트 여백 (HWPUNIT) — HWPX `<hp:textMargin>` 기본값.
+/// Core `Control::TextBox` 는 여백을 carry 하지 않으므로 기본을
+/// 쓴다. 비기본 여백 문서의 거동은 regime 에 따라 다르다:
 /// content+margin-dominated(내용이 박스를 채움)에선 host-줄 predicate
 /// 불일치로 fail-closed 되지만, **box-dominated**(`box.height ≥
 /// content+2×여백)에선 조용히 admitted 되어 내부 세로 offset 이 실제
@@ -988,7 +988,7 @@ fn overlay_headers_footers(
 /// 쪽 번호는 물리 쪽(1부터) 기준.
 ///
 /// 시작 쪽 순으로 한 번 훑으며 종류별 "가장 늦은 시작" 집합을 갱신하므로
-/// 비교는 O(쪽 + 항목) 이다(리뷰 r1: 쪽마다 전 후보를 다시 뒤지면 O(P·H²)).
+/// 비교는 O(쪽 + 항목) 이다(쪽마다 전 후보를 다시 뒤지면 O(P·H²)).
 /// `comparisons` 는 그 비교 횟수 — 테스트가 시간 대신 센다.
 /// 이것을 실패시키는 것: 시작 쪽 조건 삭제(x4b 1쪽에 머리말) / 늦은 시작
 /// 대체를 지우기(x4a 3쪽 = 모호성 거부).
@@ -1173,7 +1173,7 @@ fn replay_section(
         let location = format!("s{section_idx}/p{para_idx}");
 
         // W2/W3 이벤트는 **cache admission 과 무관하게** 문단 진입 시 수집한다
-        // (독립 리뷰 High #3·#4: table-host/cacheless 경로의 `continue` 가
+        // (table-host/cacheless 경로의 `continue` 가
         // 이벤트를 무음 유실시켰다).
         let (restarts, hide_marks) = collect_page_events(para);
 
@@ -1253,7 +1253,7 @@ fn replay_section(
             }
             check_table_anchor(&mut pending_table_anchor, host_v, broke)?;
 
-            // 독립 리뷰 High #4: `[marker, Table]` host 문단의 재시작/감춤은
+            // `[marker, Table]` host 문단의 재시작/감춤은
             // host lineseg 가 귀속된 쪽(표 재생 전 현재 쪽)에 앵커한다.
             let host_page = pages.len() - 1;
             para_pages[para_idx] = Some(host_page);
@@ -1308,7 +1308,7 @@ fn replay_section(
         }
 
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
-            // 독립 리뷰 High #3: 스킵 문단의 재시작/감춤은 물리 쪽을 결정할
+            // 스킵 문단의 재시작/감춤은 물리 쪽을 결정할
             // 수 없다 — 근사 앵커로 날조하지 않고 유실을 특정 경고로 표면화.
             if !restarts.is_empty() || !hide_marks.is_empty() {
                 warnings.push(PdfWarning::PageEventLost { location: location.clone() });
@@ -1629,7 +1629,7 @@ pub(crate) fn build_inline_object_line_atoms(
         return Ok(atoms);
     }
     let starts: Vec<usize> = cache.lines.iter().map(|l| l.textpos as usize).collect();
-    // 독립 리뷰 M1 상환: 동일 textpos 중복(영폭 줄)은 단일 pass 분할이
+    // 동일 textpos 중복(영폭 줄)은 단일 pass 분할이
     // 뒤 줄을 건너뛰어 텍스트 꼬리를 무음 유실한다 — 객체 가드와
     // 대칭으로 fail-closed (validate_textpos 는 == 를 허용하므로 여기가
     // 유일 검출점).
@@ -1781,7 +1781,7 @@ fn refuse_object_out_margin(
 }
 
 /// A caption that holds a caption number (`Control::AutoNumber`) is
-/// refused (§19.16 J, review r1): captions of pictures and text boxes are
+/// refused (§19.16 J): captions of pictures and text boxes are
 /// not drawn, so the number would vanish from a successful render.
 /// 이것을 실패시키는 것: 이 거부를 지우기(`caption_number_in_a_caption_is_refused`).
 pub(crate) fn refuse_caption_number(
@@ -1790,7 +1790,7 @@ pub(crate) fn refuse_caption_number(
 ) -> PdfResult<()> {
     // The Core paragraph walk does not enter a picture's caption, so a
     // picture inside the caption has its own caption looked at here
-    // (review r2: caption → picture → caption → number passed).
+    // (caption → picture → caption → number passed).
     // 이것을 실패시키는 것: 그림 캡션으로 재귀하지 않기
     // (`caption_number_in_a_caption_is_refused`).
     fn holds_number(caption: &hwpforge_core::caption::Caption) -> bool {
@@ -1860,7 +1860,7 @@ pub(crate) fn build_inline_image_line_atoms(
 }
 
 /// 표 **셀** 인라인 이미지 문단의 원자 귀속 — body 래퍼와 달리
-/// `sub_line_capable=false` 로 결선한다 (독립 리뷰 Low-1): 셀은 sub-line
+/// `sub_line_capable=false` 로 결선한다: 셀은 sub-line
 /// 미개방이라 경계-일치 이미지가 body/글상자 전용 typed kind 로 누출되지
 /// 않고 기존 InvalidCache(zero/two-match)로 떨어진다 — census 오염 방지.
 pub(crate) fn build_cell_image_line_atoms(
@@ -2392,7 +2392,7 @@ mod tests {
     /// wins (x4a), nothing before the first start (x4b), odd/even pages take
     /// their own kind, an equal start is kept twice (for the ambiguity
     /// refusal). Every page starting a new header — P = H = 300 — costs a
-    /// number of comparisons linear in pages + headers (review r1: the old
+    /// number of comparisons linear in pages + headers (the old
     /// per-page rescan was O(P·H²)).
     ///
     /// 이것을 실패시키는 것: 시작 쪽 조건 삭제 / 늦은 시작 대체 삭제 / 홀짝
@@ -3142,7 +3142,7 @@ mod tests {
         assert!(!refused(&render(None)));
     }
 
-    /// P19 (review r1): a caption number in a picture's or a text box's
+    /// P19: a caption number in a picture's or a text box's
     /// caption — captions are not drawn — is refused on the inline, the
     /// anchored and the text-box paths; the same caption without the
     /// number is not refused for it.
@@ -3174,7 +3174,7 @@ mod tests {
         let refused = |r: &PdfResult<()>| {
             matches!(r, Err(PdfError::UnsupportedContent { kind: "caption number", .. }))
         };
-        // A caption whose picture has the numbered caption (review r2).
+        // A caption whose picture has the numbered caption.
         let nested = |numbered: bool| {
             let size = HwpUnit::new(1000).unwrap();
             let inner = hwpforge_core::image::Image::new(
@@ -3277,7 +3277,7 @@ mod tests {
             PdfError::UnsupportedContent { kind: "text box with rounded corners", .. }
         ));
         assert!(with_ratio(None).is_ok());
-        // A ratio of 0 is a square box (review r1: `is_some()` would refuse it).
+        // A ratio of 0 is a square box (`is_some()` would refuse it).
         assert!(with_ratio(Some(0)).is_ok());
     }
 
@@ -3917,7 +3917,7 @@ mod tests {
 
     #[test]
     fn atoms_cell_wrapper_boundary_subline_stays_invalid_cache() {
-        // 리뷰 Low-1 잠금: 셀 래퍼는 sub_line_capable=false — 같은 경계
+        // 셀 래퍼는 sub_line_capable=false — 같은 경계
         // 상황이 body/글상자 전용 typed kind 로 누출되지 않고 기존
         // InvalidCache 로 떨어진다 (census 오염 방지).
         let mut para = Paragraph::with_runs(
@@ -3974,7 +3974,7 @@ mod tests {
 
     #[test]
     fn atoms_duplicate_line_textpos_is_invalid_cache() {
-        // 독립 리뷰 M1: starts=[0,3,3] — 단일 pass 는 줄 2 를 건너뛰어
+        // Starts=[0,3,3] — 단일 pass 는 줄 2 를 건너뛰어
         // 꼬리 텍스트를 유실한다 → fail-closed.
         let mut para = Paragraph::with_runs(
             vec![Run::text("가나다라마바", CharShapeIndex::new(0)), inline_img("BinData/dup.png")],
@@ -4385,7 +4385,7 @@ mod tests {
 
     #[test]
     fn header_leading_non_text_run_is_rejected() {
-        // 독립 리뷰 M1 상환: 밴드 경로도 본문과 동일한 fail-closed —
+        // 밴드 경로도 본문과 동일한 fail-closed —
         // 로고 이미지 등으로 시작하는 머리말은 textpos 오절단 대신 거부.
         let mut hf = hf_item(ApplyPageType::Both, &["머리말"]);
         hf.paragraphs[0].runs.insert(
@@ -4405,7 +4405,7 @@ mod tests {
 
     #[test]
     fn page_starts_on_warns_even_without_headers_or_footers() {
-        // 독립 리뷰 M2 상환: pageStartsOn 은 페이지네이션 속성 — 머리말/꼬리말
+        // PageStartsOn 은 페이지네이션 속성 — 머리말/꼬리말
         // 유무와 무관하게 무조건 표면화돼야 한다 (§9 b0).
         let mut section = Section::with_paragraphs(body_pages(1), PageSettings::a4());
         section.begin_num =
@@ -4770,7 +4770,7 @@ mod tests {
 
     #[test]
     fn cacheless_paragraph_with_restart_surfaces_page_event_lost() {
-        // 독립 리뷰 High #3: 스킵 문단의 이벤트는 근사 앵커로 날조하지 않고
+        // 스킵 문단의 이벤트는 근사 앵커로 날조하지 않고
         // 유실을 특정 경고로 표면화한다.
         use hwpforge_core::control::{Control, NewNumberKind};
         let mut cacheless = Paragraph::with_runs(
@@ -4840,7 +4840,7 @@ mod tests {
 
     #[test]
     fn collect_page_events_sees_markers_in_table_host_paragraph() {
-        // 독립 리뷰 High #4: 이벤트 수집은 admission/표 분기와 분리돼
+        // 이벤트 수집은 admission/표 분기와 분리돼
         // [marker, Table] host 문단에서도 재시작·감춤을 놓치지 않는다
         // (host 쪽 앵커 부착은 replay_section 표 분기의 직선 코드).
         use hwpforge_core::control::{Control, NewNumberKind};
@@ -5318,7 +5318,7 @@ mod tests {
         assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
     }
 
-    /// P16 (review r1): each of the four placement fields P16 added —
+    /// P16: each of the four placement fields P16 added —
     /// vertical and horizontal alignment, `affect_line_spacing`,
     /// `hold_anchor_and_so` — set alone on an otherwise default table is
     /// refused, on a body table and on a table nested in a cell.
@@ -5442,7 +5442,7 @@ mod tests {
         };
         // 총높이 5000 앵커 = 성공 + 배분 경고 + 기하 직접 잠금:
         // "C"(행1 셀) baseline = body_top + 행0 높이(1000, 최소 유지) + 850
-        // — 부족분이 행0 이 아니라 행1 하단으로 갔다는 증명 (독립리뷰 M1).
+        // — 부족분이 행0 이 아니라 행1 하단으로 갔다는 증명.
         let follow = para_with_cache("후속", vec![seg(0, 5000)]);
         // host lineseg vertsize = 표 흐름 소비(총높이 5000) — corpus 실측 규칙
         // (미분할 표의 흐름 앵커 = 캐시). 이전 합성값 1000 은 실물과 다른 거짓말.
@@ -5600,7 +5600,7 @@ mod tests {
 
     #[test]
     fn leading_non_text_run_before_text_is_rejected() {
-        // 독립 리뷰 열린질문 상환: 디코더의 textpos 정규화가 다루지 않는
+        // 디코더의 textpos 정규화가 다루지 않는
         // 선행 컨트롤(각주·그림 등)은 무음 오절단 대신 fail-closed 거부.
         let mut para = para_with_cache("본문", vec![seg(0, 0)]);
         para.runs.insert(

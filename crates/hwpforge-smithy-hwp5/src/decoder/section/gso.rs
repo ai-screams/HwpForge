@@ -19,7 +19,7 @@ use super::{
     Hwp5Warning, CTRL_ID_GSO, GSO_GROUP_MAX_DEPTH, SHAPE_COMPONENT_TYPE_GROUP,
 };
 
-/// The property word of a shape's text `LIST_HEADER` (§19.22 D4): a u32
+/// The property word of a shape's text `LIST_HEADER`: a u32
 /// paragraph count, then the property word at bytes 4..8 — not the cell
 /// layout (u16 count) the three readers used before, which put the vertical
 /// align two bytes off. Every shape text list in the corpus is 20, 28, 33 or
@@ -31,7 +31,7 @@ pub(super) fn shape_text_list_properties(data: &[u8]) -> Option<u32> {
     data.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// The inner margin of a shape's text `LIST_HEADER` (§19.22 D4): bytes
+/// The inner margin of a shape's text `LIST_HEADER`: bytes
 /// 8..16, left, right, top, bottom (Hancom twins match `textMargin` in all
 /// 348 text boxes). `None` when shorter than 16 bytes.
 ///

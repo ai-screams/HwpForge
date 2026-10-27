@@ -357,7 +357,7 @@ fn meta_carries_exactly_the_documented_keys() {
 fn meta_deserializes_json_written_before_sections_and_paragraphs_existed() {
     // The exact key set hwpforge 0.16.5's `ConvertMeta` wrote — pinned by
     // `meta_carries_exactly_the_assets_and_warnings_keys` at main@350851f,
-    // before this review fix (`git show 350851f:crates/hwpforge/tests/ops_convert_md.rs`).
+    // see that main commit (PR #176): `git show 350851f:crates/hwpforge/tests/ops_convert_md.rs`.
     let old_json = r#"{"assets":[],"warnings":[]}"#;
 
     let meta: hwpforge::ops::ConvertMeta =

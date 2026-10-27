@@ -43,7 +43,7 @@ pub enum MdWarning {
         /// Number of cells in the table with `col_span > 1` or `row_span > 1`.
         merged_cells: usize,
     },
-    /// MD→HWPX (W6 §12b): an image reference could not be embedded — the
+    /// MD→HWPX: an image reference could not be embedded — the
     /// image run is dropped so no dangling `binaryItemIDRef` reaches the
     /// package, and the exclusion is declared here.
     ImageEmbedSkipped {
@@ -168,7 +168,7 @@ impl MdEncoder {
     }
 }
 
-/// A caption number as text (§19.16 J, P19): the number Hancom cached,
+/// A caption number as text: the number Hancom cached,
 /// between its prefix and suffix characters. Markdown writes the number in
 /// digits whatever its number shape (a lossy view; only DIGIT occurs in the
 /// corpus).

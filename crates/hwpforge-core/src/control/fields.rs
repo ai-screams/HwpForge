@@ -65,7 +65,7 @@ impl PathFieldCommand {
 ///   `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를
 ///   타입 수준에서 보장한다 (ADR-010).
 /// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
-///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
+///   silent fallback 위조 금지 원칙 — 의미를
 ///   모르면 raw 보존.
 ///
 /// 변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의

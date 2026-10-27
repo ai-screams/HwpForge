@@ -834,7 +834,7 @@ mod tests {
         assert!(serde_json::from_value::<Table>(json).unwrap().no_adjust);
     }
 
-    /// §19.22 D3: a breaking cell's JSON has no `line_wrap` (old JSON and
+    /// A breaking cell's JSON has no `line_wrap` (old JSON and
     /// output unchanged), a JSON without it reads as `Break`, and a squeezed
     /// cell writes and reads `"SQUEEZE"`.
     ///

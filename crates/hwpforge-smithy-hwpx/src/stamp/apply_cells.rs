@@ -9,7 +9,7 @@
 //! invalidate a cell target (markers require non-whitespace text, stampable
 //! targets are whitespace-only, and run splits never move tables).
 //!
-//! Contract (design §7.3, Codex-settled):
+//! Contract:
 //! - spec `at` must be the canonical anchor — covered coordinates are
 //!   rejected, never silently resolved (unlike set-cell's read surface).
 //! - a spec with a label claim approves a DETECTED candidate: the claim is

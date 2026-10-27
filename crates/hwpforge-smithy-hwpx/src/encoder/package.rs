@@ -235,7 +235,7 @@ pub(crate) fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) ->
 /// `<opf:title>value</opf:title>` / `<opf:meta name="..."
 /// content="text">value</opf:meta>` form. The `date` slot is intentionally
 /// left empty so Hancom recomputes the human-readable Korean locale string
-/// on save (Wave 12o §11.3 Q2). Keywords join with `";"` (Q3).
+/// on save. Keywords join with `";"`.
 fn build_metadata_block(meta: &Metadata) -> String {
     use std::fmt::Write as _;
 
@@ -263,8 +263,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
     //         (HWPX → HWPX round-trip) parked a non-empty value in
     //         extras["date"], honor it at the canonical 9-slot position
     //         rather than dropping it through the typed-collision guard
-    //         below (Codex(architect) Wave 12o-fixup §Top-2, Option A
-    //         수정형). `creator`/`subject`/... stay reserved for the
+    //         below. `creator`/`subject`/... stay reserved for the
     //         typed `Metadata` fields.
     push_meta(&mut out, "date", meta.extras.get("date").map(String::as_str));
 
@@ -284,7 +283,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
     // key that collides with a typed slot (defense in depth — decoder
     // promotes known names to typed fields).
     //
-    // Codex(architect) Wave 12o-fixup §Top-2: `date` is intentionally
+    // `date` is intentionally
     // NOT in the reserved list — extras["date"] is the canonical
     // carry slot for the Hancom display-date string and is already
     // emitted at the fixed 9-slot position above. Including it here

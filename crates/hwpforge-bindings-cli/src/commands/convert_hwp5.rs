@@ -60,12 +60,11 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
     // `crates/hwpforge-convert/src/lib.rs`), so a write failure there
     // (missing parent dir, permission denial) surfaced as a `Hwp5Error::Io`
     // and failed as `HWP5_CONVERT_FAILED`, exit 2, with the convert hint,
-    // message keyed on the *input* path (W3 remediation finding 8).
+    // message keyed on the *input* path.
     // `convert_hwp5()` now returns bytes and this command does the write
     // itself. W1 uses FileWriteFailed and exit 2 while preserving the
     // message, including `Hwp5Error::Io`'s `"I/O error: {0}"` Display
-    // wrapping the raw `io::Error`, not the raw error alone (independent
-    // review round 2, finding B).
+    // wrapping the raw `io::Error`, not the raw error alone.
     if let Err(e) = std::fs::write(output, &converted.bytes) {
         let wrapped = hwpforge_smithy_hwp5::Hwp5Error::Io(e);
         CliError::new(
@@ -97,7 +96,7 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
         .collect();
 
     // 집계 드롭 경고(unknown_control)를 우선 배치 — 선행 decode 경고가
-    // 상한을 다 먹어 집계가 가려지는 일 방지 (독립 리뷰 Medium #6).
+    // 상한을 다 먹어 집계가 가려지는 일 방지.
     let is_aggregate = |w: &&ConvertWarning| {
         matches!(
             w.as_hwp5(),

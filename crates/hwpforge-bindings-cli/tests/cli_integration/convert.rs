@@ -15,7 +15,7 @@ fn convert_md_to_hwpx() {
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 }
 
-/// W6 §12b B2 게이트: bare 파일명 입력(`convert a.md`)에서도 md 옆 이미지가
+/// 게이트: bare 파일명 입력(`convert a.md`)에서도 md 옆 이미지가
 /// 임베드된다 — `parent()` 의 빈 경로가 base 를 잃게 하던 회귀 잠금.
 #[test]
 fn convert_bare_filename_embeds_sibling_image() {
@@ -38,7 +38,7 @@ fn convert_bare_filename_embeds_sibling_image() {
     );
 }
 
-/// W6 §12b B1 게이트: 해결 불가 참조(원격 URL)가 문단의 유일한 run 이어도
+/// 게이트: 해결 불가 참조(원격 URL)가 문단의 유일한 run 이어도
 /// 변환은 성공한다 — 빈 문단 validate 거부로 문서 전체가 죽던 회귀 잠금.
 #[test]
 fn convert_remote_image_only_paragraph_still_succeeds() {

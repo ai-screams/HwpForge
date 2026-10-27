@@ -5,8 +5,7 @@
 //! logical grid coordinate or a label-relative direction, then its text-only
 //! content is replaced (or cleared) in one all-or-nothing batch.
 //!
-//! Design contract (Codex-settled, see
-//! `.docs/planning/2026-07-21-e3-table-grid-addressing.md`):
+//! Design contract:
 //!
 //! - **Covered coordinates resolve silently to their anchor**, and every
 //!   result always reports `requested` / `anchor` / `resolution` so callers
@@ -104,8 +103,7 @@ pub struct SetCellResult {
 /// Result of an all-or-nothing [`apply_set_cells`] batch.
 ///
 /// 현재 인코드 [`EncodeWarning`] 은 이 결과에 실리지
-/// 않는다 — 경고 채널 신설은 public 필드 추가(semver) 라 별도 승인 대기
-/// (각주 에픽 계획 문서 §7h).
+/// 않는다 — 경고 채널을 추가하면 공개 구조체 필드가 바뀐다.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SetCellOutcome {
     /// Applied edits, in spec order.
@@ -434,7 +432,7 @@ pub fn apply_set_cells(
             for edit in edits {
                 let cell = &mut table.rows[edit.row_idx].cells[edit.cell_idx];
                 let (para_shape, char_shape) = inherit_style(cell);
-                // §19.22 D5: the end mark keeps its char shape, as when the
+                // The end mark keeps its char shape, as when the
                 // text is retyped in Hancom (the first paragraph's).
                 // 이것을 실패시키는 것: 물려받지 않기
                 // (`set_cell_keeps_the_end_char_shape`).
@@ -715,7 +713,7 @@ impl HwpxCellEditor {
         // stamper 의 `encode_fail_closed` 도 같은 메서드를 호출한다.
         // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
         // 뭉개져 호출자가 어떤 경고였는지 알 수 없었다).
-        // R2 HIGH 1: the non-semantic half is no longer discarded — it is
+        // the non-semantic half is no longer discarded — it is
         // what `set_cells_with_diagnostics` hands back on success. The
         // split is shared with the stamper (`split_successful_encode`), so
         // the two editors cannot drift apart.
@@ -872,7 +870,7 @@ mod tests {
         assert_eq!(para.runs[0].char_shape_id, CharShapeIndex::new(3));
     }
 
-    /// §19.22 D5: set-cell keeps the cell's end-mark char shape.
+    /// Set-cell keeps the cell's end-mark char shape.
     ///
     /// 이것을 실패시키는 것: 새 문단을 `None` 으로 만들기.
     #[test]

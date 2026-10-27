@@ -1086,9 +1086,9 @@ impl Hwp5RawParaShape {
     /// Task #121 (Wave 12p): an earlier implementation applied
     /// `.saturating_sub(1)` under the (incorrect) assumption that the wire
     /// was 1-based, which produced an off-by-1 emit (level 1~6 became 0~5).
-    /// Verified against the Codex-architect review of Hancom HWP5 PDF spec
+    /// Verified against the Hancom HWP5 PDF spec
     /// (bit 23-24 = list family, bit 25-27 = level, bit 28 = border-connect)
-    /// and the user-authored `sample-outline-9levels.hwpx` native fixture.
+    /// and a user-authored Hancom document with nine outline levels.
     pub fn heading_level(&self) -> u8 {
         ((self.property1 >> 25) & 0b111) as u8
     }

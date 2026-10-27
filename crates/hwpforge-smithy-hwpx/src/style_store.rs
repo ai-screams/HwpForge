@@ -2086,7 +2086,7 @@ impl StyleLookup for HwpxStyleStore {
         ))
     }
 
-    // Review r1 MEDIUM-4: a diagonal or a center line is a line too (a cell
+    // A diagonal or a center line is a line too (a cell
     // zone that only has those must still warn). 이것을 실패시키는 것: 대각선
     // 판정 삭제(`border_fill_inner_lines`).
     fn border_fill_has_inner_lines(&self, id: u32) -> Option<bool> {
@@ -3519,7 +3519,7 @@ mod tests {
         assert_eq!(store.font_count(), 14);
     }
 
-    /// Review r1 MEDIUM-4: a diagonal (slash or back-slash with a drawn
+    /// A diagonal (slash or back-slash with a drawn
     /// diagonal line) or a center line counts as an inner line; none of them
     /// does not, nor an unknown id.
     /// 이것을 실패시키는 것: 대각선 판정 삭제 · 대각선 선 종류 무시(NONE 선에도 참) ·

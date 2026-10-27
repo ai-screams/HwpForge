@@ -168,7 +168,7 @@ fn stamp_error_codes_for_bad_maps() {
 
 #[test]
 fn stamp_manifest_write_failure_removes_output() {
-    // Review L1: manifest 기록 실패 시 .hwpx 산출물도 남기지 않아야 한다.
+    // Manifest 기록 실패 시 .hwpx 산출물도 남기지 않아야 한다.
     let f = fixture("stamp/placeholder_basic.hwpx");
     let tmp = test_tmp();
     let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);

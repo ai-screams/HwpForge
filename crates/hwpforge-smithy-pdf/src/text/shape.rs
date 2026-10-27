@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn descent_is_positive_and_scales_with_size() {
-        // 독립 리뷰 L1 상환: descent 는 fixture-optional 통합 테스트에만
+        // Descent 는 fixture-optional 통합 테스트에만
         // 기대지 않고 커밋된 테스트 폰트로 결정적으로 고정한다.
         let data = test_font();
         let at10 = shape_text(&data, 0, "가", 1000).expect("shape@10");

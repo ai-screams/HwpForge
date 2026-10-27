@@ -123,7 +123,7 @@ fn stray_paragraph_content<'de, D: serde::Deserializer<'de>>(d: D) -> Result<boo
 /// 함께 기록한다 (한컴 인터리브 `<t>a</t><pic/><t>b</t>` 의 순서 보존 —
 /// 스파이크 `tests/hxrun_read_spike.rs` 로 quick-xml 0.41 지원 확증).
 /// 직렬화는 derive 유지 (인코더는 1 Core Run → 1 HxRun 정규형 — mixed
-/// 직렬화 불요, Codex 리뷰 #2 채택).
+/// 직렬화 불요).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct HxRun {
     #[serde(rename = "@_hwpforge_origin", default, skip_serializing)]
@@ -1013,8 +1013,6 @@ impl HxText {
     /// characters `text()` uses, so the HWPX encoder restores them
     /// via `encode_inline_text_xml` without loss.
     ///
-    /// See `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
-    /// for the algorithm and side-effect analysis.
     pub fn to_run_content(&self) -> RunContent {
         let needs_inline = self.parts.iter().any(|p| {
             matches!(
@@ -1071,8 +1069,6 @@ pub enum HxTextPart {
     /// `RunContent::Text("\t")` — keeping the existing
     /// `Text(String)` surface in place for the common path.
     ///
-    /// See `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
-    /// for the algorithm and side-effect analysis.
     #[serde(rename(serialize = "hp:tab", deserialize = "tab"))]
     Tab {
         /// Inline tab stop position (HwpUnit). `None` when the

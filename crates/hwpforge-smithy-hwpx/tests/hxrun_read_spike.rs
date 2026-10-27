@@ -2,12 +2,12 @@
 //! `@attr + $value` 혼합 자식 **순서 보존** 역직렬화 지원을 잠근다 —
 //! W1a `HxRunRead`(decode 전용 ordered DTO) 전환의 전제 조건.
 //!
-//! 검증 항목 (에픽 계획 §1b W0b):
+//! 검증 항목:
 //! 1. `<run charPrIDRef>` 속성과 `$value` enum 병용 (in-tree 선례 없음)
 //! 2. `<t>a</t><pic/><t>b</t>` 의 문서 순서가 Vec 순서로 보존되는지
 //! 3. 미지 자식 → `#[serde(other)]` 폴백 (파싱 실패 금지)
 //!
-//! 직렬화는 검증하지 않는다 — Codex 리뷰 #2 채택: 인코더는 1 Core Run →
+//! 직렬화는 검증하지 않는다 — 인코더는 1 Core Run →
 //! 1 HxRun 정규형을 유지하므로 read/write DTO 분리로 mixed serializer 불요.
 
 // Spike tests exercise quick-xml directly, without the decoder limits.

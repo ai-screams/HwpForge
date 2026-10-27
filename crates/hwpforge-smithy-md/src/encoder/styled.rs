@@ -531,8 +531,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
             // Code block detection: all text runs with code font.
             // InlineText runs (post-Phase-3 inline-tab carry) fold to
-            // their `\t`-bearing plain string — see debug doc
-            // §3a-B13.
+            // their `\t`-bearing plain string.
             if is_code_paragraph(paragraph, styles) {
                 let text = paragraph
                     .runs
@@ -779,8 +778,7 @@ fn paragraph_text_styled(
             // `plain_text()` because Markdown styling has no
             // representation for `<hp:tab>` attributes. The
             // formatting group key still uses `char_shape_id`, so the
-            // run gets wrapped exactly like a plain `Text(String)` run
-            // — see debug doc §3a-A5.
+            // run gets wrapped exactly like a plain `Text(String)` run.
             Part::Text(content) => {
                 let Some(cow) = content.plain_text() else {
                     continue;
@@ -1585,7 +1583,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         // else the target's display form in brackets (Name → "bookmark1",
         // SystemId → "#5"). Markdown has no anchor link here: text only.
         // The brackets are text too: as syntax they made a link with a
-        // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
+        // following `(…)`. 이것을 실패시키는 것: 대괄호를 문법으로
         // 쓰기(`markup_safety` 의 빈 상호 참조).
         // A field: the filled value if any, else the hint — the HWPX
         // encoder's hint fallback order (Epic 1).
@@ -1609,7 +1607,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             md
         }
         // A caption number's prefix/suffix characters are text, not
-        // Markdown (review r1: a `*` prefix and suffix turned "3" into
+        // Markdown (a `*` prefix and suffix turned "3" into
         // emphasis). 이것을 실패시키는 것: 텍스트 escape 삭제
         // (`caption_number_prefix_is_escaped`).
         Control::AutoNumber { num, format, .. } => {
@@ -2103,7 +2101,7 @@ fn extract_paragraph_text_html(
             current_format = InlineFormat::default();
         }
         match part {
-            // Same as the Markdown styled path (debug doc §3a-A6):
+            // Same as the Markdown styled path:
             // `InlineText` folds to its `\t`-bearing plain string via
             // `plain_text()` so HTML output stays consistent.
             Part::Text(content) => {
@@ -2194,8 +2192,8 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
 
 /// A picture's or table's caption as a paragraph after it (`\n\n` + its
 /// text) and the images it holds, empty without one. The caption's numbers
-/// ("그림 3") live here (§19.16 J, review r1: captions were not written at
-/// all; review r2: a picture inside the caption lost its bytes).
+/// ("그림 3") live here (captions were not written at
+/// all; a picture inside the caption lost its bytes).
 /// 이것을 실패시키는 것: 캡션 출력을 지우기(F17 의 3·4·7 이 사라짐 —
 /// `f17_caption_numbers_reach_the_readable_views`) / 캡션 그림의 바이트를
 /// 버리기(`caption_pictures_and_html_table_captions_are_kept`).
@@ -2219,7 +2217,7 @@ fn styled_caption(
 }
 
 /// [`styled_caption`] inside an HTML table cell: the caption's paragraphs
-/// in HTML after a `<br>` (review r2: a picture or table in a merged or
+/// in HTML after a `<br>` (a picture or table in a merged or
 /// nested-table cell lost its caption and number).
 /// 이것을 실패시키는 것: HTML 칸의 캡션 출력을 지우기
 /// (`caption_pictures_and_html_table_captions_are_kept`).
@@ -2262,7 +2260,7 @@ fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
     // `carries_text()` matches both `Text(String)` and `InlineText(...)`
     // so a paragraph that picked up `InlineText` after the HWPX
     // decoder Phase 3 carry is still detected as code if it would
-    // have qualified before — see debug doc §3a-B13.
+    // have qualified before.
     let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
     if text_runs.is_empty() {
         return false;

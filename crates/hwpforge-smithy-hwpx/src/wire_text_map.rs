@@ -2,8 +2,7 @@
 //!
 //! wire 좌표(HWP5 raw 스트림 = 한컴 HWPX linesegarray textpos 규약)와
 //! Core 정준 좌표(`Paragraph::text_content()` UTF-16 축) 사이의 변환을
-//! 담당한다. 설계 정본: `.docs/planning/2026-08-13-image-textbox-epic.md`
-//! §1g v5 (Codex 4라운드 확정 수학 법칙).
+//! 담당한다. 각 경계에서 누적된 wire/Core 길이 차이를 적용한다.
 //!
 //! ## 모델
 //!
@@ -24,8 +23,7 @@
 //!   (단 core 0 은 canonicalization 으로 항상 wire 0).
 //!
 //! ⚠️ smithy-hwp5 의 동명 모듈과 **동형** — conformance vector 테스트를
-//! 양쪽에 복제해 drift 를 방지한다 (Core 로의 승격은 계층 누수라 기각,
-//! §1g v2 disposition #2).
+//! 양쪽에 복제해 drift 를 방지한다 (Core 로의 승격은 계층 누수라 기각).
 
 use std::fmt;
 
@@ -130,12 +128,12 @@ impl WireTextMap {
     /// **문단부호 sentinel (wire끝+1)**: Square 어울림 앵커가 행을 좌/우로
     /// 쪼갠 문단에서, 텍스트 소진 후의 오른쪽 빈 세그먼트 lineseg 를
     /// 한컴이 문단부호 좌표(= wire끝+1)로 방출한다 — byte 확정 실측 2건
-    /// (에픽 문서 §10h: 52/[0,51] · 267/[0,266]). Core 끝으로 수용한다.
+    /// (52/[0,51] · 267/[0,266]). Core 끝으로 수용한다.
     /// 그 외 초과는 기존대로 [`CacheMapError::OutOfRange`] (임의 클램프
     /// 금지). **HWPX 실측 한정** — HWP5 동형 사본에는 native 실측 전
     /// 이식 금지. 왕복 비대칭: 재인코드([`Self::to_wire`])는 축약점
     /// 규약(earliest preimage)대로 방출하므로 이 sentinel 은 byte
-    /// 복제되지 않는다 (known 정규화 — §11b F2).
+    /// 복제되지 않는다 (known 정규화).
     pub(crate) fn to_core(&self, wire: u32) -> Result<u32, CacheMapError> {
         if self.wire_end.checked_add(1) == Some(wire) {
             return Ok(self.core_end);
@@ -166,7 +164,7 @@ impl WireTextMap {
     /// Core 좌표 → wire 좌표.
     ///
     /// **축약점(영-core span 경계, preimage ≥ 2)은 earliest preimage**
-    /// (marker 시작) — W3 실측 개정 (에픽 문서 §7): native 셀 fixture
+    /// (marker 시작) — 한컴 실측: native 셀 fixture
     /// 2건의 raw tp 가 모두 marker 시작이고, 첫 lineseg tp=0 전수
     /// 불변식(13,598건)도 동일 규약이다 (W1b 의 Err 는 미측정 시점의
     /// fail-closed — 측정이 규약을 확정함). `AmbiguousPreimage` 는
@@ -700,7 +698,7 @@ mod tests {
     /// conformance vector — smithy-hwp5 의 동명 모듈 테스트와 동일하게
     /// 유지할 것 (동형성 게이트).
     fn marker_ledger_p1() -> WireTextMap {
-        // rules-marker-ledger p1: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
+        // 한컴 새 번호 문단 실측: 텍스트 17유닛 + nwno(8,0)×2 + 텍스트.
         // raw lineseg [0, 76, 132] → core [0, 60, 116].
         let mut b = WireMapBuilder::new();
         b.advance_identity(17);
@@ -719,7 +717,7 @@ mod tests {
         assert_eq!(map.core_end(), 0);
         assert_eq!(map.to_core(0), Ok(0));
         assert_eq!(map.to_wire(0), Ok(0));
-        // wire끝+1 = 문단부호 sentinel (§10h) — 빈 문단에도 문단부호는
+        // wire끝+1 = 문단부호 sentinel — 빈 문단에도 문단부호는
         // 존재하므로 수용된다. +2 부터 거부.
         assert_eq!(map.to_core(1), Ok(0));
         assert_eq!(map.to_core(2), Err(CacheMapError::OutOfRange { pos: 2, end: 0 }));
@@ -821,7 +819,7 @@ mod tests {
         assert_eq!(map.to_wire(3), Ok(3));
     }
 
-    // ── 문단부호(+1) sentinel (§10h — Square 앵커 분할 행) ─────────
+    // ── 문단부호(+1) sentinel (Square 앵커 분할 행) ─────────
 
     #[test]
     fn paragraph_mark_sentinel_maps_to_core_end() {
@@ -854,7 +852,7 @@ mod tests {
 
     #[test]
     fn paragraph_mark_sentinel_roundtrip_normalizes_to_contraction_point() {
-        // 왕복 비대칭 잠금 (§11b F2 Critical): sentinel 로 디코드한
+        // 왕복 비대칭 잠금: sentinel 로 디코드한
         // core_end 를 재인코드하면 축약점 규약(earliest preimage = marker
         // 시작 = 43)대로 방출된다 — 원본 byte(+1 sentinel = 52)는 복제되지
         // 않는다 (known 정규화, 인코드 방향 byte 복제는 스코프 아님).

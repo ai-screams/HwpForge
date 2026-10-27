@@ -130,7 +130,7 @@ impl HwpxRegistryBridge {
     /// Rebinds `paragraph` and every paragraph nested in it, through Core's
     /// one paragraph traversal ([`Paragraph::for_each_paragraph_mut`]) — so a
     /// container Core walks (group children, nested groups, …) cannot be
-    /// missed here (branch review C3: the group arm used to be skipped).
+    /// missed here (the group arm used to be skipped).
     /// That traversal does not enter run pictures' captions; those are
     /// rebound from their run ([`Self::rebind_own`]). Each paragraph is
     /// visited once — the mapping is not idempotent.
@@ -148,7 +148,7 @@ impl HwpxRegistryBridge {
     /// paragraphs nested in them, which the traversal visits on its own.
     fn rebind_own(&self, paragraph: &mut Paragraph) -> HwpxResult<()> {
         paragraph.para_shape_id = self.map_para_shape(paragraph.para_shape_id)?;
-        // §19.22 D5: the end mark's char shape is a char shape reference too.
+        // The end mark's char shape is a char shape reference too.
         // 이것을 실패시키는 것: 이 다시 매기기를 지우기
         // (`end_char_shape_is_rebound_in_a_cell`).
         if let Some(end) = paragraph.end_char_shape {
@@ -305,7 +305,7 @@ mod tests {
         );
     }
 
-    /// §19.22 D5: a paragraph's end-mark char shape is rebound like its
+    /// A paragraph's end-mark char shape is rebound like its
     /// runs', also in a table cell.
     ///
     /// 이것을 실패시키는 것: `end_char_shape` 다시 매기기를 지우기.
@@ -330,7 +330,7 @@ mod tests {
         assert_eq!(table.rows[0].cells[0].paragraphs[0].end_char_shape, Some(expected));
     }
 
-    /// Branch review C3: a group's picture caption and a text box inside a
+    /// A group's picture caption and a text box inside a
     /// nested group are rebound too (char shape, end mark and para shape).
     /// 이것을 실패시키는 것: 묶음을 건너뛰기 · 중첩 묶음으로 내려가지 않기 ·
     /// 같은 문단을 두 번 다시 매기기(매핑이 항등이 아니라 값이 어긋난다).

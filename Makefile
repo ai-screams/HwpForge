@@ -137,12 +137,12 @@ fmt-fix:
 	cargo fmt --all
 
 lint-md:
-	dprint check
-	npx markdownlint-cli2 "**/*.md"
+	git ls-files -- '*.md' '*.toml' '*.json' | dprint check --stdin-files
+	git ls-files -z -- '*.md' | xargs -0 npx markdownlint-cli2 --no-globs
 
 lint-md-fix:
-	dprint fmt
-	npx markdownlint-cli2 --fix "**/*.md"
+	git ls-files -- '*.md' '*.toml' '*.json' | dprint fmt --stdin-files
+	git ls-files -z -- '*.md' | xargs -0 npx markdownlint-cli2 --no-globs --fix
 
 doc:
 	cargo doc --workspace --all-features --no-deps --open

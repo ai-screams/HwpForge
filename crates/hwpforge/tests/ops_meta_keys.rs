@@ -1,4 +1,4 @@
-//! Flattened `*Meta` wrappers reserve the `warnings` key (review R2 #6).
+//! Flattened `*Meta` wrappers reserve the `warnings` key.
 //!
 //! `InspectMeta`, `DiffMeta` and `StampPlanMeta` splice their payload's fields
 //! into the wire object and add `warnings` beside them. If a payload ever

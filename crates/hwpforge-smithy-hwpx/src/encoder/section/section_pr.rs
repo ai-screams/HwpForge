@@ -20,7 +20,7 @@ pub(super) fn build_sec_pr(ps: &PageSettings, text_direction: TextDirection) -> 
         line_number_shape: None,
         page_pr: Some(HxPagePr {
             // 한글 실제 동작: WIDELY=portrait (세로), NARROWLY=landscape (가로)
-            // KS X 6101 스펙과 반대! (gotcha #3: landscape 값 반전)
+            // KS X 6101 스펙과 반대! (landscape 값 반전)
             landscape: if ps.landscape { "NARROWLY".to_string() } else { "WIDELY".to_string() },
             width: ps.width.as_i32(),
             height: ps.height.as_i32(),

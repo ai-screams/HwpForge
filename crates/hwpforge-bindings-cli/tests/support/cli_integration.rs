@@ -61,7 +61,7 @@ pub(super) fn replace_first_text_run(paragraphs: &mut [Paragraph], replacement: 
                     return true;
                 }
                 // Downgrade-on-modify: same policy as the MCP patch
-                // helper. See debug doc §3a-C19.
+                // helper.
                 RunContent::InlineText(_) => {
                     run.content = RunContent::Text(replacement.to_string());
                     return true;

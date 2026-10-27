@@ -1044,7 +1044,7 @@ fn hwp5_para_shape_warns_on_unknown_latin_break_mode_3() {
 
 /// Vertical alignment (bits 20–21), border offsets (bytes 34–42) and the
 /// border connect / ignore-margin flags (bits 28–29) are carried into the
-/// HWPX paragraph shape (§19.16 I, S11) and no longer reported; the font
+/// HWPX paragraph shape and no longer reported; the font
 /// line height and auto-spacing flags still are.
 ///
 /// 이것을 실패시키는 것: 세로 정렬 비트 대응을 바꾸는 것(2 → CENTER) / 오프셋
@@ -2058,7 +2058,7 @@ fn image_fill_store() -> Hwp5StyleStore {
     }
 }
 
-/// C4 + §19 C: an image fill names the image of its reference's `DocInfo`
+/// An image fill names the image of its reference's `DocInfo`
 /// position. One whose reference has no image the package will carry is
 /// left out rather than written as a reference to nothing (the decoder has
 /// already warned that the asset is missing); one that has an image is
@@ -2631,7 +2631,7 @@ fn store_with_char_borders(borders: &[Option<u16>]) -> Hwp5StyleStore {
 
 /// A char shape whose border is 0 or absent points at an empty border fill
 /// appended after the document's own; one pointing at slot 2 keeps slot 2
-/// (§19.22 A — slot 2 is the document's solid box here, not "no border").
+/// (slot 2 is the document's solid box here, not "no border").
 ///
 /// 이것을 실패시키는 것: `!= 2` 필터 복귀(2 가 `None` 이 되어 실패) / 덧붙이기를
 /// 지우기 / 덧붙인 것에 선 넣기.

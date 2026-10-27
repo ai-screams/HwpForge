@@ -1,10 +1,10 @@
-//! Markdown → HWPX 이미지 임베드 로더 (W6 §12b v2).
+//! Markdown → HWPX 이미지 임베드 로더.
 //!
 //! md 디코더는 `![..](src)` 를 `src` 경로 참조만 담긴 [`hwpforge_core::image::Image`]
 //! run 으로 만든다 — 참조된 바이트를 [`ImageStore`] 로 적재해야 인코더가
 //! `BinData/` 로 포장한다 (미적재 = dangling `binaryItemIDRef`).
 //!
-//! **핵심 원칙 — 디스크 조회 경로와 패키지 키의 분리** (적대 리뷰 C1·H2·H3):
+//! **핵심 원칙 — 디스크 조회 경로와 패키지 키의 분리**:
 //!
 //! - 디스크 조회는 신뢰 불가 입력이다: `canonicalize` + base_dir 포함
 //!   검사로 경로 탈출(`../..`·절대경로)을 차단하고, **스니핑이 알려진
@@ -108,8 +108,7 @@ pub struct EmbeddedImages {
 /// 실패한 참조는 run 이 **드롭**되고 경고로 선언된다 — 결과 문서에는
 /// dangling `binaryItemIDRef` 가 남지 않는다. 드롭으로 문단이 비면 빈
 /// 텍스트 run 으로 문단을 보존한다 — `![..](url)` 단독 문단은 md 표준
-/// 형태라, 빈 문단 거부(validate)로 문서 전체가 죽으면 회귀다 (독립
-/// 리뷰 B1).
+/// 형태라, 빈 문단 거부(validate)로 문서 전체가 죽으면 회귀다.
 ///
 /// # 단계 구성
 ///
@@ -317,7 +316,7 @@ mod tests {
 
     #[test]
     fn image_only_paragraph_survives_failed_embed() {
-        // B1 (독립 리뷰 Critical): `![..](url)` 단독 문단은 md 표준 형태 —
+        // B1: `![..](url)` 단독 문단은 md 표준 형태 —
         // 드롭 후 빈 문단이 남아 validate 가 문서 전체를 거부하면 회귀.
         let mut doc = doc_with_srcs(&["https://example.com/logo.png"]);
         let out = load_referenced_images(&mut doc, None);
@@ -329,7 +328,7 @@ mod tests {
 
     #[test]
     fn bm_prefixed_garbage_is_rejected() {
-        // 독립 리뷰 M1 실증 벡터 — 2바이트 BM magic 을 위장한 임의 파일.
+        // 검증 벡터 — 2바이트 BM magic 을 위장한 임의 파일.
         let dir = TempDir::new("bm-garbage");
         dir.write("blob.png", b"BMsecret-credential-material-here-0123456789");
         let mut doc = doc_with_srcs(&["blob.png"]);

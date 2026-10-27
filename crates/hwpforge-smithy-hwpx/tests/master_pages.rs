@@ -26,7 +26,7 @@ fn cell_spec() -> Vec<CellSpec> {
     }]
 }
 
-// ── wire text through the paragraph decoder (G2 §3.1) ────────────
+// ── wire text through the paragraph decoder ────────────
 
 // 이것을 실패시키는 것: 바탕쪽을 문자열 스캐너로 되돌리기 — 엔티티가 풀리지
 // 않고(`A&amp;B`), 탭·줄바꿈 마크업이 글자로 들어가고, 두 번째 `<hp:t>` 가

@@ -2,8 +2,8 @@
 //!
 //! Every facade in this crate that decodes internally used to drop the
 //! decoder's warning list, which made a `warnings` channel above it
-//! permanently empty (W1b review R2, findings 1–3). The twins added for that
-//! review carry the diagnostics; the original entry points stay as thin
+//! permanently empty. The diagnostic twins carry the diagnostics;
+//! the original entry points stay as thin
 //! wrappers over them.
 //!
 //! Two things are worth proving, and each test does one of them:
@@ -248,11 +248,11 @@ fn set_cells_twin_returns_the_same_package_as_the_plain_entry_point() {
     );
 }
 
-// ── the editing twins (W1b review R3) ───────────────────────────
+// ── the editing twins  ───────────────────────────
 //
 // `fill`, `insert_paragraphs`, `delete_paragraphs` and the stamper's
 // admission decode were the entry points still dropping the decoder's
-// warnings after the R2 pass. They all need one fixture that both warns and
+// warnings. They all need one fixture that both warns and
 // survives the admission gate, which the two native warning documents do not:
 // each fails the gate on uncarried ZIP entries.
 

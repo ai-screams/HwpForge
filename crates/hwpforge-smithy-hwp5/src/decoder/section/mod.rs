@@ -49,7 +49,7 @@ const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
 
 /// `ShapeComponent` (`0x4C`) type tag identifying a group container (묶음
 /// 객체 / 개체 묶기), stored as the little-endian bytes for `"$con"`. Probed
-/// from the native fixture `sample-gso-group.hwp` (the leading 4 bytes of the
+/// from a Hancom-saved group document (the leading 4 bytes of the
 /// `$con` `ShapeComponent` decode to `[0x6E, 0x6F, 0x63, 0x24]`). Shares the
 /// same discriminator mechanism as `$col` (connect line) and `$rec`/`$ell`/
 /// `$cur` (rect/ellipse/curve).
@@ -204,16 +204,16 @@ fn segment_lengths(segment: &TextSegment) -> (u32, u32) {
     }
 }
 
-/// Takes the paragraph-end mark's char shape out of the wire boundaries
-/// (§19.22 D5, S17), before they move to text positions: the entry placed
+/// Takes the paragraph-end mark's char shape out of the wire boundaries,
+/// before they move to text positions: the entry placed
 /// exactly at the wire position of the paragraph-end character (the last
 /// segment, `ParaBreak`) — the last one there when several share it.
 /// Whether it differs from the last character is decided at projection,
-/// against the last run actually written (review r1: the last wire boundary
+/// against the last run actually written (the last wire boundary
 /// can belong to something that writes no run, such as a field end). Entries
 /// past the end character are left to the conversion. An empty paragraph
 /// (no segment but the end character, or none) keeps its boundary: its one
-/// run takes the shape at position 0 (§19.22 B).
+/// run takes the shape at position 0.
 ///
 /// 이것을 실패시키는 것: 변환 뒤 위치로 판정 / 끝 경계를 본문 목록에 남기기 /
 /// 빈 문단에서도 판정 / 문자 수로 셈(`end_mark_shape_is_read_from_the_wire`).
@@ -405,7 +405,7 @@ enum NestedSubtreeKind {
 ///
 /// Earlier (Wave 12p Step 1b) we tried `data[n-8..n-4]` as a uniform
 /// trailer, but wire audits (2026-06-09) on Hancom-native fixtures
-/// (`sample-field-crossref-footnote/endnote/table-caption/eq-caption.hwp`)
+/// (footnotes, endnotes, table captions and equation captions)
 /// proved the trailer offset only matches by coincidence. The real
 /// `instance_id` lives at a fixed offset relative to ctrl_id (record-data
 /// prefix), and the offset depends on the control family because
@@ -491,7 +491,7 @@ struct NestedSubtreeContext {
     /// carries the `"$con"` type tag. When `Some`, all subtree records are
     /// routed to the group instead of the flat single-shape slots above.
     group: Option<GsoGroupBuilder>,
-    /// Outline and fill from the scope's first `ShapeComponent` (§19.5 1b).
+    /// Outline and fill from the scope's first `ShapeComponent`.
     look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Caption paragraphs read before the shape's component (not carried).
     caption_paragraphs: usize,
@@ -548,21 +548,21 @@ impl NestedSubtreeContext {
 
     fn note_list_header(&mut self, data: &[u8]) {
         self.saw_list_header = true;
-        // A shape's text list (§19.22 D4): its own layout. A header's or
+        // A shape's text list: its own layout. A header's or
         // footer's list header passes here too; its word is not used.
         self.list_header_properties = gso::shape_text_list_properties(data);
         self.text_margin = gso::shape_text_list_margin(data);
         self.list_header_len = Some(data.len());
     }
 
-    /// A rectangle record: its byte 0 is the corner ratio (§19.5 1c).
+    /// A rectangle record: its byte 0 is the corner ratio.
     ///
     /// 이것을 실패시키는 것: 비율 읽기를 지우기(`rect_corner_ratio_is_read`).
     fn note_shape_rectangle(&mut self, data: &[u8]) {
         self.saw_shape_rectangle = true;
         match (self.look.as_mut(), data.first()) {
             (Some(look), Some(&ratio)) => look.corner_ratio = ratio,
-            // No outline/fill block to carry it with (review r1): reported
+            // No outline/fill block to carry it with: reported
             // when the shape is classified, not dropped.
             (None, Some(&ratio)) => self.unread_corner_ratio = ratio,
             _ => {}
@@ -584,7 +584,7 @@ impl NestedSubtreeContext {
             // A shape's caption is a list one level below its control
             // header, before the component; its text list comes after. The
             // caption is not carried — its paragraphs must not become the
-            // shape's text (review r1 of §19.5 1a: a polygon showed its
+            // shape's text (a polygon showed its
             // "[그림 3]" caption as its own text).
             // 이것을 실패시키는 것: 이 분리를 지우기
             // (`ellipse_and_polygon_keep_their_text`).
@@ -675,7 +675,7 @@ impl NestedSubtreeContext {
                 ),
             });
         }
-        // A shape's text list too short for its property word (§19.22 D4).
+        // A shape's text list too short for its property word.
         // 이것을 실패시키는 것: 이 보고를 지우기
         // (`shape_text_list_header_reads_its_own_layout`).
         if let Some(len) = self.list_header_len.filter(|_| self.comp_level.is_some()) {
@@ -1377,8 +1377,8 @@ impl BodyTextParserState {
                 let table_header = parse_table_header(&record.data);
                 if let Some(ctx) = self.table_stack.last_mut() {
                     // D: the caption's paragraphs end where the body starts.
-                    // Fewer than the list header declared is a cut caption
-                    // (D review r1 MEDIUM-5). 이것을 실패시키는 것: 이 경고 삭제
+                    // Fewer than the list header declared is a cut caption.
+                    // 이것을 실패시키는 것: 이 경고 삭제
                     // (`table_caption_is_read` 의 2 문단 선언·1 문단 도착) · `<` 를 `<=` 로
                     // (선언대로 온 캡션도 경고).
                     if ctx.current_cell.as_ref().is_some_and(|c| c.caption.is_some()) {
@@ -2029,7 +2029,7 @@ impl BodyTextParserState {
     /// the next top-level record is anything else, the pending
     /// press-field is finalized with `name=None` and `false` lets the
     /// record fall through to the normal dispatch — this keeps the rest
-    /// of the section round-tripping (Codex review: grace-degrade
+    /// of the section round-tripping (grace-degrade
     /// rather than drop).
     fn try_attach_clickhere_name(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
         if self.pending_clickhere.is_none() {
@@ -2226,7 +2226,7 @@ impl BodyTextParserState {
                         });
                     }
                 }
-                // 시작번호 `[20..28]` (쪽/그림/표/수식 u16 — F1 실측 §1.2).
+                // 시작번호 `[20..28]` (쪽/그림/표/수식 u16 — 한컴 실측).
                 // all-or-none: 28바이트 미만이면 캡처하지 않는다 (부분값을
                 // 기본값과 섞어 날조 금지 — 계획 W1 fail-safe).
                 if let Some(bytes) = record.data.get(20..28) {
@@ -2362,7 +2362,6 @@ impl BodyTextParserState {
             // ParaHeader caused `parse_para_header_buf` to return None
             // earlier). Surface the silent data loss with a targeted
             // DroppedControl warning instead of a silent drop — per
-            // Wave 12l quality review (HIGH).
             self.warnings.push(Hwp5Warning::DroppedControl {
                 control: "clickhere",
                 reason: "no active paragraph buffer to attach orphan %clk press-field".to_string(),
@@ -2771,7 +2770,7 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
     // the rest. 이것을 실패시키는 것: 수 오프셋 오류 · 행·열 뒤바꿈 · 잘림
     // 보고 삭제(`table_cell_zones_are_read`).
     let zone_count_at = border_fill_offset.saturating_add(2);
-    // Review r1 MEDIUM-5: one byte left is half a count — damage, not an
+    // One byte left is half a count — damage, not an
     // absent field. 이것을 실패시키는 것: `left == 1` 판정 삭제(`table_cell_zones_are_read`).
     let left = data.len().saturating_sub(zone_count_at);
     let (cell_zones, cell_zones_declared) = match data.get(zone_count_at..zone_count_at + 2) {
@@ -3290,7 +3289,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// `secd` payload — F1 실측 레이아웃 (계획 §1.2): 속성 u32 + 열간격/세로/
+    /// `secd` payload — 한컴 실측 레이아웃: 속성 u32 + 열간격/세로/
     /// 가로 정렬(각 u16) + 기본 탭(u32) + 번호 문단 모양 id(u16) + 시작번호
     /// 4×u16. `starts = None` 이면 20바이트에서 자른다 (truncation 케이스).
     fn secd_ctrl_data(properties: u32, starts: Option<(u16, u16, u16, u16)>) -> Vec<u8> {
@@ -3324,7 +3323,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ctrl_header_secd_captures_start_numbers_when_payload_full() {
-        // F1 실측 (rules-newnum-base.hwp): 한컴 5.1 은 [20..28] 에 쪽/그림/표/
+        // 한컴 새 번호 문서 실측: 한컴 5.1 은 [20..28] 에 쪽/그림/표/
         // 수식 시작번호를 쓴다 — sidecar 가 네 값을 그대로 캡처해야 한다.
         let mut stream = Vec::new();
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
@@ -3339,7 +3338,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ctrl_header_secd_truncated_payload_captures_no_start_numbers() {
-        // all-or-none (Codex 결함 8): [20..28] 이 없으면 부분 캡처 대신 None —
+        // all-or-none: [20..28] 이 없으면 부분 캡처 대신 None —
         // 속성 word 캡처(기존 gap B 경로)는 그대로 살아 있어야 한다.
         let mut stream = Vec::new();
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
@@ -3351,7 +3350,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ctrl_header_nwno_produces_typed_new_number() {
-        // F1 실측 (rules-newnum-base.hwp): nwno = ctrl_id + 속성 u32(bits0-3
+        // 한컴 새 번호 문서 실측: nwno = ctrl_id + 속성 u32(bits0-3
         // = kind) + 번호 u16 — `00 00 00 00 07 00` = 쪽 번호 7.
         let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
         nwno.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x07, 0x00]);
@@ -3374,7 +3373,7 @@ pub(crate) mod tests {
     #[test]
     fn ctrl_header_nwno_truncated_payload_warns_and_keeps_placeholder() {
         // 10바이트 미만 payload → DroppedControl 경고 + **Unknown placeholder**
-        // 로 marker↔control 큐 정렬 보존 (독립 리뷰 High #1 — placeholder 가
+        // 로 marker↔control 큐 정렬 보존 (placeholder 가
         // 없으면 승격된 0x15 marker 가 뒤따르는 객체를 오소비한다).
         let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
         nwno.extend_from_slice(&[0x00, 0x00]);
@@ -3399,7 +3398,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ctrl_header_pghd_produces_typed_page_hiding() {
-        // F2-① 실측 (rules-pagehide-base.hwp): pghd = ctrl_id + 속성 u32 —
+        // 한컴 쪽 감춤 문서 실측: pghd = ctrl_id + 속성 u32 —
         // `20 00 00 00` = bit5 = 쪽번호만 감춤.
         let mut pghd = CTRL_ID_PAGE_HIDING.to_le_bytes().to_vec();
         pghd.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]);
@@ -3432,7 +3431,7 @@ pub(crate) mod tests {
                 result.paragraphs[0].controls.as_slice(),
                 [Hwp5Control::Unknown { ctrl_id, .. }] if *ctrl_id == CTRL_ID_PAGE_HIDING
             ),
-            "placeholder 로 큐 정렬 보존 (독립 리뷰 High #1): {:?}",
+            "placeholder 로 큐 정렬 보존: {:?}",
             result.paragraphs[0].controls
         );
         assert!(result
@@ -3704,7 +3703,7 @@ pub(crate) mod tests {
         stream.extend(make_record(TagId::ShapeComponentRect, level + 2, &[0u8; 9]));
     }
 
-    /// Branch review B-M3: text boxes nested in text boxes are read up to
+    /// Text boxes nested in text boxes are read up to
     /// the budget; a deeper one is skipped and reported.
     /// 이것을 실패시키는 것: 상한 삭제(전부 읽힘, 보고 없음) · 상한을 하나 낮추기.
     #[test]
@@ -3841,8 +3840,8 @@ pub(crate) mod tests {
 
     /// A rectangle whose component has no readable outline/fill block (here
     /// the bare type tags) cannot carry its corner ratio: the ratio is
-    /// reported — for a body shape and for one in a table cell — not dropped
-    /// (review r1). A ratio of 0 is not reported.
+    /// reported — for a body shape and for one in a table cell — not dropped.
+    /// A ratio of 0 is not reported.
     #[test]
     fn corner_ratio_without_a_look_is_reported() {
         let rect = |stream: &mut Vec<u8>, level: u16, ratio: u8| {
@@ -3942,7 +3941,7 @@ pub(crate) mod tests {
         data
     }
 
-    /// A-T3/A-T4 from the wire (review r1): a body table's, a nested
+    /// A-T3/A-T4 from the wire: a body table's, a nested
     /// table's and a header table's `CtrlHeader` placement word and height
     /// reach `Hwp5Table::ctrl` — before, the tests built `ctrl` by hand and
     /// dropping the decoder's note passed them.
@@ -4037,7 +4036,7 @@ pub(crate) mod tests {
         assert_eq!(heights[3..], [Some(900), Some(700)]);
     }
 
-    /// §19.22 D1·D2: the table body record's bytes 10..18 are the default
+    /// The table body record's bytes 10..18 are the default
     /// cell padding, the table `CtrlHeader`'s bytes 28..36 the outer margin
     /// (all four sides different, so a swapped side or offset shows), and a
     /// cell's property bit 16 says whether it has its own margin — a cell
@@ -4173,7 +4172,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// §19.22 D3: cell property bits 3–4 — 0 break, 1 squeeze, 2 keep (no
+    /// Cell property bits 3–4 — 0 break, 1 squeeze, 2 keep (no
     /// Hancom twin, reported), 3 no meaning (reported, read as break). Bits
     /// 5–6 (vertical align) set in every cell so a shifted read shows.
     ///
@@ -4242,7 +4241,7 @@ pub(crate) mod tests {
         data
     }
 
-    /// §19.22 D4: a shape's text list header carries a u32 paragraph count
+    /// A shape's text list header carries a u32 paragraph count
     /// and its property word at bytes 4..8 (vertical align bits 5–6), in all
     /// three readers — a body text box (33 bytes), a group child (45 bytes)
     /// and a text box in a table cell (33 bytes). A header shorter than 8
@@ -4366,7 +4365,7 @@ pub(crate) mod tests {
         data
     }
 
-    /// §19.22 D4: a text box's margin is bytes 8..16 of its text list
+    /// A text box's margin is bytes 8..16 of its text list
     /// header, read in all three readers (body, group child, in a cell) and
     /// carried to Core — all four sides different, so a swapped pair shows;
     /// an ellipse's or polygon's margin other than 283 is reported; a header
@@ -4374,7 +4373,7 @@ pub(crate) mod tests {
     ///
     /// 이것을 실패시키는 것: 세 읽기 중 하나의 여백 읽기 / 오프셋 / 왼·오, 위·아래
     /// 맞바꿈 / 타원·다각형 보고 / 12 바이트 보고.
-    /// S20 review r1: a top-level TextArt's initial size (7000 x 8000) and
+    /// A top-level TextArt's initial size (7000 x 8000) and
     /// size lock reach its model and its Core frame.
     /// 이것을 실패시키는 것: 글맵시 모델에 초기 크기·속성을 넘기지 않기.
     #[test]
@@ -4425,7 +4424,7 @@ pub(crate) mod tests {
         assert!(frame.size_protect);
     }
 
-    /// S20 review r1: a group's `CtrlHeader` size lock (bit 20) reaches the
+    /// A group's `CtrlHeader` size lock (bit 20) reaches the
     /// group model and the Core group — a control in the paragraph's text, a
     /// bare control header, and a group in a table cell (the inline context).
     /// 이것을 실패시키는 것: 묶음 모델에 속성을 넘기지 않기(세 경로 중 하나라도).
@@ -4751,7 +4750,7 @@ pub(crate) mod tests {
     }
 
     /// A table and a picture in a cell's footer stay objects of the footer
-    /// paragraph (review r1 of §19.7 F): before, the table's cell paragraph
+    /// paragraph: before, the table's cell paragraph
     /// was read as one more footer paragraph and the picture was dropped as
     /// an unknown control.
     ///
@@ -4795,8 +4794,7 @@ pub(crate) mod tests {
     }
 
     /// A table in a top-level header stays an object of the header
-    /// paragraph, not flattened into the header's text (review r1 of §19.7
-    /// F, the same path as a cell's header).
+    /// paragraph, not flattened into the header's text (the same path as a cell's header).
     ///
     /// 이것을 실패시키는 것: subtree 갈래의 `tbl` 처리를 지우기 / 끝난 표를 본문
     /// 문단에 붙이기.
@@ -4965,7 +4963,7 @@ pub(crate) mod tests {
         assert_eq!(group.children.len(), 2);
     }
 
-    // ── §19 D: char shape boundaries are wire positions ──────────────────
+    // ── char shape boundaries are wire positions ──────────────────
 
     /// A `ParaText` payload from code units; `ctrl(code)` gives the eight
     /// units of an inline or extended control.
@@ -5135,7 +5133,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// §19.22 D5 (S17): the char shape entry at the wire position of the
+    /// The char shape entry at the wire position of the
     /// paragraph-end character is the end mark's, taken out of the body
     /// boundaries before they move to text positions; it is kept only when it
     /// differs from the last character's.
@@ -5171,7 +5169,7 @@ pub(crate) mod tests {
         assert_eq!(end(&object, &[(0, 1), (8, 5)]).0, Some(5));
         // A character outside the BMP: two code units.
         assert_eq!(end(&text("𝒜"), &[(0, 1), (2, 5)]).0, Some(5));
-        // An empty paragraph keeps its boundary for its one run (§19.22 B),
+        // An empty paragraph keeps its boundary for its one run,
         // with or without a ParaText.
         assert_eq!(end(&[0x0D], &[(0, 5)]), (None, vec![(0, 5)]));
         let mut stream = Vec::new();
@@ -5182,7 +5180,7 @@ pub(crate) mod tests {
         assert_eq!(no_text.paragraphs[0].char_shape_runs.len(), 1);
     }
 
-    /// Review r1 counterexample: body shape 1, a field end with shape 2 just
+    /// Counterexample: body shape 1, a field end with shape 2 just
     /// before the end mark, end mark 2. The field end writes no run, so the
     /// last written run has shape 1 and the end mark (2) must be kept.
     ///
@@ -5200,7 +5198,7 @@ pub(crate) mod tests {
         assert_eq!(p.end_char_shape, Some(hwpforge_foundation::CharShapeIndex::new(2)));
     }
 
-    /// The same reading in a group child's text (§19.22 D5).
+    /// The same reading in a group child's text.
     ///
     /// 이것을 실패시키는 것: 묶음 자식 글에서 끝 표시를 빼지 않기.
     #[test]

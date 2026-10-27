@@ -267,7 +267,7 @@ pub fn to_pdf(data: &[u8], opts: &ToPdfOptions) -> Result<ToPdfOutput, ConvertOp
 
 /// Where a picture's crop was lost on the way in, if anywhere: the decoder
 /// leaves such a picture whole (`crop = None`), so drawing it would show the
-/// whole image where the document shows a part (§19.21 H-v4, review r1) —
+/// whole image where the document shows a part —
 /// an HWPX `picture_crop_order`/`picture_crop` loss, or an HWP5 crop that
 /// could not be carried (`picture.crop_lost`).
 ///

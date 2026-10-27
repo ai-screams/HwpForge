@@ -1,4 +1,4 @@
-// Review r1: the same wire controls must mean the same thing in every host.
+// The same wire controls must mean the same thing in every host.
 const R1_GROUP: u32 = u32::MAX;
 const R1_NESTED_GROUP: u32 = u32::MAX - 1;
 const R1_CAPTION: u32 = u32::MAX - 2;

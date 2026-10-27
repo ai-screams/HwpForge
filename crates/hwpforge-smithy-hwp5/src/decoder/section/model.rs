@@ -40,7 +40,7 @@ pub(crate) struct Hwp5Paragraph {
     pub line_segments: Vec<Hwp5ParaLineSeg>,
     /// Inline control objects found in this paragraph (table refs, footnote refs, etc.).
     pub controls: Vec<Hwp5Control>,
-    /// The paragraph-end mark's char shape as the wire places it (§19.22 D5);
+    /// The paragraph-end mark's char shape as the wire places it;
     /// projection drops it when it equals the last written run's.
     pub end_char_shape: Option<u32>,
 }
@@ -229,7 +229,7 @@ pub(crate) struct Hwp5LineControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
@@ -252,7 +252,7 @@ pub(crate) struct Hwp5RectControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
@@ -277,7 +277,7 @@ pub(crate) struct Hwp5PolygonControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// The shape's text (`LIST_HEADER` one level below its component and
@@ -313,7 +313,7 @@ pub(crate) struct Hwp5EllipseControl {
     pub ctrl_properties: u32,
     /// The stored centre and axis points, in the shape's local coordinates.
     pub shape: Hwp5ShapeComponentEllipse,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// The shape's text (`LIST_HEADER` one level below its component and
@@ -375,7 +375,7 @@ pub(crate) struct Hwp5ArcControl {
     /// The stored centre, axis and arc end points, in the shape's local
     /// coordinates (used inside a group).
     pub shape: Hwp5ShapeComponentEllipse,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
@@ -407,7 +407,7 @@ pub(crate) struct Hwp5ConnectLineControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
@@ -451,8 +451,7 @@ pub(crate) struct Hwp5MemoControl {
     pub ctrl_id: u32,
     /// Full wire command — shape_id / memo_id / author / etc. The
     /// downstream HWPX encoder uses these fields to emit the seven
-    /// `<hp:parameters>` 한컴 needs for correct memo classification (see
-    /// `.docs/algorithms/2026-06-01_memo_anchor_serialization.md`).
+    /// `<hp:parameters>` 한컴 needs for correct memo classification.
     pub command: Hwp5MemoCommand,
     /// Memo body paragraphs. Empty after the inline-ctrl push; filled by
     /// `attach_memo_contents_to_placeholders` during `finish()`. Stays empty
@@ -477,7 +476,7 @@ pub(crate) struct Hwp5CurveControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
@@ -508,7 +507,7 @@ pub(crate) struct Hwp5TextBoxControl {
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`. Distinct from
     /// `list_header_properties` (the textbox `HWPTAG_LIST_HEADER` 속성 word).
     pub ctrl_properties: u32,
-    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// The shape's outline and fill; `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
@@ -617,11 +616,11 @@ pub(crate) struct Hwp5Table {
     /// attribute 로 emit. 추출 불가하면 0.
     #[allow(dead_code)]
     pub instance_id: u32,
-    /// The table's own `CtrlHeader` placement facts (§19.6 A); `None` when the
+    /// The table's own `CtrlHeader` placement facts; `None` when the
     /// header is too short to hold them.
     pub ctrl: Option<Hwp5TableCtrl>,
     /// Default cell padding: table body record bytes 10..18 (left, right,
-    /// top, bottom — §19.22 D1; 5,131/5,131 Hancom twins match `inMargin`).
+    /// top, bottom; 5,131/5,131 Hancom twins match `inMargin`).
     /// `None` when the record is too short.
     pub inner_margin: Option<Hwp5TableCellMargin>,
     /// Whether the cell sizes are fixed: table body record property bit 3
@@ -697,7 +696,7 @@ pub(crate) struct Hwp5TableCtrl {
     /// Offsets (`x` = horizontal, `y` = vertical) and size (bytes 8..24);
     /// `height` is the table's height as Hancom saved it.
     pub geometry: crate::schema::section::Hwp5ShapeComponentGeometry,
-    /// Outer margin: bytes 28..36 (left, right, top, bottom — §19.22 D1;
+    /// Outer margin: bytes 28..36 (left, right, top, bottom;
     /// 5,131/5,131 Hancom twins match `outMargin`). `None` when the header
     /// is too short.
     pub outer_margin: Option<Hwp5TableCellMargin>,
@@ -785,11 +784,11 @@ pub(crate) struct Hwp5TableCell {
     /// Whether this cell is marked as belonging to a title/header row.
     pub is_header: bool,
     /// Property bit 16: the cell has its own margin. Without it the cell
-    /// uses the table's default padding (§19.22 D2; 61,246/61,246 Hancom
+    /// uses the table's default padding (61,246/61,246 Hancom
     /// twin cells match `hasMargin`).
     pub has_margin: bool,
-    /// Property bits 3–4: line wrap (0 break, 1 squeeze, 2 keep — §19.22
-    /// D3; 0 and 1 match `lineWrap` in all Hancom twin cells, 2 has no
+    /// Property bits 3–4: line wrap (0 break, 1 squeeze, 2 keep;
+    /// 0 and 1 match `lineWrap` in all Hancom twin cells, 2 has no
     /// twin, 3 has no meaning).
     pub line_wrap: u8,
     /// Optional border/fill reference.
@@ -845,7 +844,7 @@ pub(crate) struct SectionResult {
     /// projection into `Section.visibility` (gap B).
     pub section_def_properties: Option<u32>,
     /// `secd` payload `[20..28]` 시작번호 (쪽/그림/표/수식 각 u16 — F1 실측,
-    /// 계획 §1.2). payload 가 28바이트 미만이면 부분 캡처 대신 `None`
+    /// 한컴 실측). payload 가 28바이트 미만이면 부분 캡처 대신 `None`
     /// (all-or-none — 읽지 않은 값을 기본값으로 날조하지 않는다).
     pub section_def_start_numbers: Option<Hwp5SectionStartNumbers>,
     /// Page border/fill records (`HWPTAG_PAGE_BORDER_FILL`, 0x4B) that
@@ -878,7 +877,7 @@ pub(crate) struct Hwp5MasterPage {
 
 /// `secd` ctrl 의 시작번호 묶음 (payload `[20..28]`, 각 u16 LE).
 ///
-/// F1 실측 (2026-08-12 rules-newnum): 한컴은 이 필드가 `1` 이고 속성
+/// 한컴 새 번호 문서 실측 (2026-08-12): 한컴은 이 필드가 `1` 이고 속성
 /// bits 20-21 이 0 인 구역을 `<hp:startNum page="0">`(이어서) 로 변환한다 —
 /// "필드값 = 재시작" 이 아니다. bits ≠ 0 의 의미는 레퍼런스 3사 충돌로
 /// 미확정 (corpus 0.12%) — projection 이 경고로 표면화한다.

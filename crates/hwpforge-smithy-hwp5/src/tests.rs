@@ -335,7 +335,7 @@ fn every_entry_point_charges_image_decompression_to_the_budget() {
     }
 }
 
-// ── BinData references are DocInfo positions (§19 C) ─────────────────
+// ── BinData references are DocInfo positions ─────────────────
 
 /// One level-0 `DocInfo` record: TLV header (tag, level 0, size) + payload.
 fn doc_info_record(tag: u16, payload: &[u8]) -> Vec<u8> {

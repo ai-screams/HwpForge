@@ -129,7 +129,7 @@ pub enum StampError {
         name: String,
     },
     /// An unguarded candidate has no spec — every candidate must be named
-    /// or explicitly ignored (design §3-2 step 5).
+    /// or explicitly ignored.
     UncoveredCandidate {
         /// Section index.
         section: usize,

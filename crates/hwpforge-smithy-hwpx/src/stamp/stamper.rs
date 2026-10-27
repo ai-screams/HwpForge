@@ -1,7 +1,7 @@
 //! Byte-level stamping facade (E6 Wave 1B surface): admission-gated
 //! decode → apply → encode over a complete `.hwpx`, plus the manifest.
 //!
-//! Fail-closed (design §3-1/§3-6): an input is admitted only when it is
+//! Fail-closed: an input is admitted only when it is
 //! provably round-trip-safe for THIS codec — a no-op decode→encode→decode
 //! must reproduce the same Core semantics and the output package must carry
 //! every input ZIP entry. Anything else is rejected with no output; file
@@ -48,11 +48,11 @@ pub struct HwpxStamper;
 /// 머리는 재인코드에서 `AlreadyPresent` 가 될 수 없다 — titleMark 각주의
 /// 가시 번호가 무음 삭제되는 실경로). public 결과형 변경 없이 기존
 /// `Codec` 오류로 거부한다 — 경고를 결과에 싣는 richer API 는 별도 승인
-/// 대상 (계획 문서 §7i).
+/// 대상.
 ///
 /// 어떤 경고가 의미 손상인지는 [`crate::EncodeWarning::is_semantic_loss`]
 /// 가 단독으로 정의한다 (편집기별 손수 목록 금지).
-/// R2 HIGH 1: 성공 시 **비의미 경고를 함께** 돌려준다 (과거엔 바이트만
+/// 성공 시 **비의미 경고를 함께** 돌려준다 (과거엔 바이트만
 /// 남기고 버렸다 — `*_with_diagnostics` 트윈이 이 목록을 싣는다).
 fn encode_fail_closed(
     validated: &hwpforge_core::Document<hwpforge_core::Validated>,
@@ -77,7 +77,7 @@ fn encode_fail_closed(
 ///
 /// 현재 인코드 [`EncodeWarning`](crate::EncodeWarning) (각주 번호 머리
 /// 생략 등)은 이 결과에 실리지 않는다 — 경고 채널 신설은 public 필드
-/// 추가(semver) 라 별도 승인 대기 (각주 에픽 계획 문서 §7h).
+/// 추가로 공개 구조체가 바뀐다.
 #[derive(Debug)]
 pub struct StampResult {
     /// The stamped `.hwpx` bytes.
@@ -88,7 +88,7 @@ pub struct StampResult {
     pub outcome: StampOutcome,
 }
 
-/// Machine-readable inventory of the stamped output (design §3-5).
+/// Machine-readable inventory of the stamped output.
 ///
 /// Invariant: `fields[*].field` is the re-decoded OUTPUT's `list_fields`
 /// result verbatim — never a projection estimated during planning.
@@ -152,7 +152,7 @@ pub enum StamperError {
         diff_path: String,
     },
     /// The encoder does not carry these input ZIP entries — stamping would
-    /// silently drop them (closed-world admission, design §3-6②).
+    /// silently drop them (closed-world admission).
     UncarriedZipEntries {
         /// Input entry names missing from the re-encoded package.
         entries: Vec<String>,
@@ -209,7 +209,7 @@ impl std::fmt::Display for StamperError {
                  no-op decode→encode→decode — refusing to stamp (E4 preserve-first path \
                  required for this input)"
             ),
-            // Review L2: entry names come from an untrusted archive — debug
+            // Entry names come from an untrusted archive — debug
             // formatting escapes control characters (terminal injection).
             Self::UncarriedZipEntries { entries } => write!(
                 f,
@@ -348,8 +348,7 @@ impl HwpxStamper {
     /// Three other decodes run on this path and none of them is reported: the
     /// admission gate re-decodes its own no-op encode (a discarded artefact),
     /// and the manifest re-reads the **output** through
-    /// [`HwpxFiller::list_fields`]. That last one is the line the review
-    /// pointed at; it reads bytes produced from the very decode already
+    /// [`HwpxFiller::list_fields`]. It reads bytes produced from the very decode already
     /// reported, so its diagnostics can only restate a subset of them, and
     /// carrying both would report one document's losses twice.
     ///

@@ -146,8 +146,7 @@ pub(crate) enum TextSegment {
     /// followed by 8 reserved bytes. Core's inline text model cannot
     /// currently carry these per-tab attributes, so the projection
     /// stage records the payload here and emits a warning when any of
-    /// them are non-zero (see Bug A in
-    /// `.docs/research/2026-05-26_tab_fidelity_bugs.md`).
+    /// them are non-zero.
     Tab {
         /// Fourteen bytes of inline tab metadata. All-zero for the
         /// "default" tab — non-zero values are silently lost on emit
@@ -418,7 +417,7 @@ impl Hwp5ParaText {
                 // control parked on the paragraph's control queue. Promote
                 // it to a `ControlRef` so the structural projection pops
                 // that footnote/endnote control *at the marker's inline
-                // position* (CLAUDE.md gotcha #12: 각주/미주는 같은 문단의
+                // position* (각주/미주는 같은 문단의
                 // inline Run, 별도 문단 금지) instead of draining it to the
                 // paragraph tail. Only `fn  `/`en  `-tagged 0x11 markers are
                 // promoted; any other 0x11 owner keeps falling through to
@@ -732,7 +731,7 @@ impl Hwp5ShapeComponentGeometry {
     /// | `[16..20]` | width (u32, orgSz)     |
     /// | `[20..24]` | height (u32, orgSz)    |
     ///
-    /// Derived by correlating native `sample-gso-group.hwp` child bytes with
+    /// Derived by correlating a Hancom-saved group document's child bytes with
     /// the 한컴-emitted `<hp:offset>` / `<hp:orgSz>` in the `.hwpx` pair
     /// (Wave A group carry).
     pub(crate) fn parse_from_shape_component(data: &[u8]) -> Hwp5Result<Self> {
@@ -797,7 +796,7 @@ impl Hwp5ShapeLine {
     }
 }
 
-/// A single shape's outline and fill (§19.5 1b).
+/// A single shape's outline and fill.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Hwp5ShapeLook {
     /// The outline.
@@ -808,7 +807,7 @@ pub(crate) struct Hwp5ShapeLook {
     /// The fill block, or why it could not be read.
     pub fill: Result<super::border_fill::Hwp5RawBorderFillFill, String>,
     /// Corner ratio of a rectangle (byte 0 of its `ShapeComponentRect`
-    /// record, §19.5 1c); 0 for other shapes.
+    /// record); 0 for other shapes.
     pub corner_ratio: u8,
 }
 
@@ -1266,7 +1265,7 @@ impl Hwp5ShapeComponentEllipse {
 
     /// Whether this record describes an arc rather than a plain ellipse:
     /// property bit 1 ("changed into an arc"). Hancom leaves uninitialised
-    /// values in a plain ellipse's arc-point fields (§19.22 C: all 102
+    /// values in a plain ellipse's arc-point fields (all 102
     /// ellipse records in the corpus have property 0, 95 of them with such
     /// points, and the Hancom HWPX files available for them write no arc),
     /// so the points do not decide it.
@@ -1838,8 +1837,7 @@ pub(crate) struct Hwp5DutmalControl {
     pub sz_ratio: u32,
     /// Raw `option` word from the wire. Mirrored verbatim into the
     /// HWPX `<hp:dutmal option=…>` attribute — the precise meaning is
-    /// not pinned down (see
-    /// `.docs/algorithms/2026-06-01_dutmal_carry.md`), but mirroring it
+    /// not pinned down, but mirroring it
     /// preserves fidelity round-trip without needing to know.
     pub option_raw: u32,
     /// Raw `align` word from the wire (tail `[16..20]`, task #73):
@@ -1923,10 +1921,8 @@ impl Hwp5DutmalControl {
 /// projection layer can map them to the OWPML enum strings — same
 /// strategy `Hwp5DutmalControl` uses for `pos_type_raw`.
 ///
-/// See `.docs/algorithms/2026-06-01_compose_carry.md` for the longer
-/// rationale (including why the layout is inferred from total payload
-/// size rather than a length prefix, and which fields we deliberately
-/// do not promote to typed enums yet).
+/// Infer the layout from total payload size rather than a length prefix.
+/// Preserve unmodeled fields as raw values instead of guessing typed enums.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ComposeControl {
     /// Owning control identifier, always `tcps` (`0x7463_7073` BE-ascii).
@@ -2087,9 +2083,7 @@ impl Hwp5ComposeControl {
 /// The trailing 4 bytes are deliberately discarded — HWPX has no
 /// corresponding `<hp:indexmark>` field and Wave 12k is HWP5 →
 /// HWPX carry only. Their presence is still required (a truncated
-/// trailer means we no longer know the record boundary). See
-/// `.docs/algorithms/2026-06-02_indexmark_carry.md` for the
-/// Codex-reviewed rationale.
+/// trailer means we no longer know the record boundary).
 ///
 /// Defence-in-depth allocation cap (task #86 hardening). Index keys
 /// are short search strings; 1024 units accommodates the longest
@@ -2180,8 +2174,7 @@ impl Hwp5IndexMarkControl {
 ///
 /// Command parser is length-driven (not delimiter split) so embedded
 /// colons in hint/help do not break decoding. Lengths are UTF-16 code
-/// unit counts — Codex review explicitly required this so surrogate
-/// pairs (Wave 12k learning) decode correctly.
+/// unit counts, so surrogate pairs decode correctly.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ClickHereControl {
     /// Owning control identifier, always `0x2563_6C6B` (`"%clk"` BE-ascii).
@@ -2207,7 +2200,7 @@ pub(crate) struct Hwp5ClickHereControl {
 }
 
 /// Defence-in-depth allocation cap for the `%clk` Command UTF-16
-/// payload (Wave 12l security review MEDIUM). The largest observed
+/// payload. The largest observed
 /// command across the five Wave 12l fixtures is 107 UTF-16 units; 32 K
 /// is roughly two orders of magnitude over the realistic ceiling
 /// while keeping a single hostile record under 64 KB. The cap is
@@ -2276,7 +2269,7 @@ impl Hwp5ClickHereControl {
         // Skip the 8-byte CtrlHeader prefix (ctrl_id + properties).
         let body = &data[8..];
         // Command char count at body[1..3]; body[0] is the 0x09 flag
-        // (validated softly — codex review: warning on mismatch but
+        // (validated softly — warning on mismatch but
         // continue, so we accept any value here and trust the count).
         let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
         if command_units > MAX_CLICKHERE_COMMAND_UNITS {
@@ -2308,9 +2301,8 @@ impl Hwp5ClickHereControl {
             body[command_end + 3],
         ]);
         // body[command_end+4..command_end+8] is the 4-byte zero pad —
-        // intentionally not validated; Codex review (medium severity)
-        // recommended warning-not-error on mismatch which the decoder
-        // does at the dispatch layer.
+        // intentionally not validated here; the decoder warns instead of
+        // returning an error on mismatch at the dispatch layer.
 
         Ok(Self {
             ctrl_id,
@@ -2326,11 +2318,11 @@ impl Hwp5ClickHereControl {
     /// `name`. Returns [`ClickHereNameSubrecord::Malformed`] on
     /// truncation or impossible length; callers should treat that as
     /// "name not recoverable, keep the rest of the press-field"
-    /// (codex review medium: don't drop the entire clickhere just
+    /// (don't drop the entire clickhere just
     /// because the name sub-record is bad).
     pub(crate) fn parse_name_subrecord(data: &[u8]) -> ClickHereNameSubrecord {
         // 12-byte constant header observed: 1B 02 01 00 00 00 00 40 01 00 LL LL
-        // We tolerate constant-prefix mismatch (codex: "부분 strict"):
+        // We tolerate constant-prefix mismatch:
         // the only field we strictly need is the u16 LE name length at
         // [10..12]. Lengths above that bound the body.
         if data.len() < 12 {
@@ -2379,7 +2371,7 @@ pub(crate) enum ClickHereNameSubrecord {
     Unnamed,
     /// Truncated / impossible length / invalid UTF-16 — the caller
     /// warns and keeps the press-field with `name = None`
-    /// (grace-degrade rather than drop, per the Wave 12l codex review).
+    /// (grace-degrade rather than drop).
     Malformed,
 }
 
@@ -2389,7 +2381,7 @@ pub(crate) enum ClickHereNameSubrecord {
 ///
 /// Length-driven (not delimiter split) so embedded `:` characters in
 /// hint/help do not break decoding. UTF-16 code-unit aware throughout —
-/// surrogate-pair safe per the Codex review.
+/// surrogate-pair safe.
 fn parse_clickhere_command(units: &[u16]) -> Option<(Option<String>, Option<String>)> {
     let mut cursor = 0usize;
     // Helper: try to match an ASCII literal at the current cursor.
@@ -2461,8 +2453,8 @@ fn parse_clickhere_command(units: &[u16]) -> Option<(Option<String>, Option<Stri
 // Hwp5SummaryControl (Wave 12n)
 // ---------------------------------------------------------------------------
 
-/// Defence-in-depth allocation cap for the `%smr` Command UTF-16 payload
-/// (Wave 12n architect review). The longest observed SUMMERY token across
+/// Defence-in-depth allocation cap for the `%smr` Command UTF-16 payload.
+/// The longest observed SUMMERY token across
 /// the Wave 12n native fixtures is 13 UTF-16 units (`$modifiedtime`). A
 /// 1024-unit cap is roughly two orders of magnitude over the realistic
 /// ceiling while keeping a single hostile record well under 4 KB.
@@ -2481,8 +2473,7 @@ const MAX_SUMMERY_COMMAND_UNITS: usize = 1024;
 /// | `body[3+2N..3+2N+4]` | LE u32 | field unique id (smithy-local, discarded by Core) | u32 LE |
 /// | `body[3+2N+4..3+2N+8]` | `00 00 00 00` | trailer padding | u32 LE |
 ///
-/// Token meanings (Wave 12n native fixture analysis,
-/// `.docs/research/2026-06-02_auto_field_wire_dump.md`):
+/// Auto-field command token meanings:
 /// - `$author` → 만든 사람 → `FieldType::Author`
 /// - `$lastsaveby` → 마지막 저장한 사람 → `FieldType::LastSavedBy`
 /// - `$createtime` → 만든 날짜 → `FieldType::CreatedTime`
@@ -2670,7 +2661,7 @@ impl Hwp5InlinePageNumberControl {
 
 /// `nwno` 새 번호 지정 control payload.
 ///
-/// Wire layout — **F1 native fixture 실측 (2026-08-12, rules-newnum)**:
+/// Wire layout — **한컴 새 번호 문서 실측 (2026-08-12)**:
 ///
 /// | offset | bytes | meaning |
 /// |---|---|---|
@@ -2679,7 +2670,7 @@ impl Hwp5InlinePageNumberControl {
 /// | `[8..10]` | LE u16 | 새 번호 값 |
 ///
 /// 실측 `00 00 00 00 07 00` = 쪽 번호 7. 총 10바이트 — openhwp 의
-/// 8바이트(u16+u16) 형은 이 실측으로 반증됐다 (계획 §1.2).
+/// 8바이트(u16+u16) 형은 이 실측으로 반증됐다 (한컴 실측).
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5NewNumberControl {
     /// Owning control identifier, always `0x6E77_6E6F` (`"nwno"`).
@@ -2707,7 +2698,7 @@ impl Hwp5NewNumberControl {
 
 /// `pghd` 감추기 control payload.
 ///
-/// Wire layout — **F2 native fixture 실측 (2026-08-12, rules-pagehide ①②③)**:
+/// Wire layout — **한컴 쪽 감춤 문서 세 종류 실측 (2026-08-12)**:
 ///
 /// | offset | bytes | meaning |
 /// |---|---|---|
@@ -2716,7 +2707,7 @@ impl Hwp5NewNumberControl {
 ///
 /// 실측: 쪽번호만 = `0x20`(bit5) · 배경만 = `0x10`(bit4) · 전부 = `0x3F` —
 /// secd 속성 word(표 130)와 동일 배열. libhwp(쪽번호=bit4)·hwp-rs(u8,
-/// bits1-6)의 다른 주장은 이 실측으로 반증됐다 (계획 §1.2).
+/// bits1-6)의 다른 주장은 이 실측으로 반증됐다 (한컴 실측).
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5PageHidingControl {
     /// Owning control identifier, always `0x7067_6864` (`"pghd"`).
@@ -2796,15 +2787,14 @@ impl Hwp5SummaryControl {
 /// pathological inputs without inviting allocator abuse.
 ///
 /// Cap is applied **immediately after reading the length-prefix**, before
-/// any allocation occurs (Codex(architect) Wave 12m §UTF-16 cap timing).
+/// any allocation occurs.
 #[allow(dead_code)] // Step 4 (decoder/projection wire-up) will reference this.
 const MAX_CROSSREF_COMMAND_UNITS: usize = 1024;
 
 /// HWP5 representation of a `%xrf` cross-reference control (Wave 12m
 /// Phase 2).
 ///
-/// Wire envelope (verified against 12 한컴 native fixtures in
-/// `tests/fixtures/hwp5/crossref/`):
+/// Wire envelope (verified against 12 Hancom-saved cross-reference documents):
 ///
 /// | offset | bytes | meaning |
 /// |---|---|---|
@@ -2867,7 +2857,7 @@ impl Hwp5CrossRefControl {
     /// - N1/N2/N3/N4 fail to parse as `u8`
     ///
     /// All allocation caps are applied **before** any `Vec`/`String`
-    /// allocation (Codex(architect) Wave 12m §UTF-16 cap timing CRITICAL).
+    /// allocation.
     pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
         if data.len() < 19 {
             return None;
@@ -3602,7 +3592,7 @@ mod tests {
 
     #[test]
     fn shape_component_ellipse_arc_points_alone_do_not_mark_arc() {
-        // Property 0 with leftover arc points is a plain ellipse (§19.22 C).
+        // Property 0 with leftover arc points is a plain ellipse.
         let data = ellipse_bytes(0, [(10, 10), (20, 10), (10, 20), (5, 5), (7, 3), (9, 9), (1, 2)]);
         let parsed = Hwp5ShapeComponentEllipse::parse(&data).unwrap();
         assert!(!parsed.is_arc(), "leftover arc points do not make an arc");
@@ -3852,7 +3842,7 @@ mod tests {
         // HWP 5.0 spec 표 6 코드 17 (0x11) = 각주/미주. A `fn  `-tagged 0x11
         // inline marker must surface as a `ControlRef` so the structural
         // projection can place the footnote control inline at the marker
-        // position (CLAUDE.md gotcha #12), not drain it to the para tail.
+        // position, not drain it to the para tail.
         let data = inline_marker_with_ctrl_id(0x11, CTRL_ID_FOOTNOTE);
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(pt.segments.len(), 1);
@@ -4129,7 +4119,7 @@ mod tests {
     #[test]
     fn shape_component_geometry_parses_group_child_layout() {
         // Group-relative child layout: x=[4..8], y=[8..12], flags=[12..16],
-        // w=[16..20], h=[20..24]. Mirrors the native `sample-gso-group.hwp`
+        // w=[16..20], h=[20..24]. Mirrors a Hancom-saved group document's
         // ellipse child (offset 17360,0; orgSz 6998×12426).
         let mut data = vec![0u8; 24];
         data[0..4].copy_from_slice(b"\x6c\x6c\x65\x24"); // "$ell" (LE)
@@ -4249,7 +4239,7 @@ mod tests {
     /// with alpha 128 and an extra-data length of 1 but no extra byte, or a
     /// 16-byte block whose last four bytes are not zero, or a gradient fill
     /// cut to the short form's 16 bytes, keeps its error
-    /// (review r2 — it came out as an opaque fill and the transparency
+    /// (it came out as an opaque fill and the transparency
     /// warning was lost).
     ///
     /// 이것을 실패시키는 것: 대체 읽기의 끝 네 바이트 조건 / 색 채우기 종류
@@ -4611,7 +4601,7 @@ mod tests {
         // Wave 12k: 한컴 단일-char primary는 fixture로 관찰되지 않았지만,
         // 파서 산수는 char[0]을 properties에 두고 body[0..0]을 비우는
         // 형태로 그대로 통과한다. 회귀를 막으려면 명시적 단위 테스트가
-        // 필요하다 (Codex 검토 권고).
+        // 필요하다.
         let data = make_idxm("A", None, 0x0000_0000);
         let parsed = Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, &data)
             .expect("primary_units_len == 1 must decode");
@@ -4621,7 +4611,7 @@ mod tests {
 
     #[test]
     fn indexmark_parse_native_wire_bytes_match() {
-        // Reuses the raw native fixture bytes from `wire-native.txt`
+        // Reuses measured bytes from a Hancom-saved index-mark record
         // (entry [012], primary="테스트", no secondary, trailer
         // 0xFFFF_FFFF). The exact-byte assertion catches offset
         // drift better than synthetic-only coverage.
@@ -4697,8 +4687,7 @@ mod tests {
     const CLK_CTRL_ID: u32 = 0x2563_6C6B;
 
     /// Builds a synthetic `%clk` CtrlHeader payload mirroring the
-    /// observed 한컴 wire layout — see
-    /// `.docs/research/2026-06-02_clickhere_wire_dump.md`.
+    /// observed 한컴 wire layout.
     fn make_clk(hint: &str, help: &str, field_id: u32) -> Vec<u8> {
         let hint_units = hint.encode_utf16().count();
         let help_units = help.encode_utf16().count();
@@ -4763,7 +4752,7 @@ mod tests {
     #[test]
     fn clickhere_parse_hint_with_embedded_colon() {
         // hint contains ':' — length-driven parser must not split on
-        // colon (Codex review HIGH).
+        // colon.
         let data = make_clk("scheme://host:port", "tip: read this", 0);
         let parsed = Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).expect("parse");
         assert_eq!(parsed.hint_text.as_deref(), Some("scheme://host:port"));
@@ -5078,7 +5067,7 @@ mod tests {
     #[test]
     fn crossref_parse_rejects_oversized_command() {
         // CRITICAL: cap (MAX_CROSSREF_COMMAND_UNITS = 1024) is applied
-        // BEFORE allocation (Codex(architect) §UTF-16 cap timing).
+        // BEFORE allocation.
         let mut data = Vec::new();
         data.extend_from_slice(&XRF_CTRL_ID.to_be_bytes());
         data.extend_from_slice(&0x0000_0002u32.to_le_bytes());
