@@ -1,4 +1,10 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/document.rs"]
+mod document;
+use document::text_para;
+#[path = "support/stamping.rs"]
+mod stamping;
+use stamping::stamp_all;
 #[path = "support/ops_begin_num.rs"]
 mod shared;
 use shared::*;
@@ -12,16 +18,10 @@ use hwpforge::core::table::{Table, TableCell, TableRow};
 use hwpforge::core::{Document, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge::hwpx::stamp::{StampAction, StampMap, StampSpec};
 use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge::hwpx::HwpxEncoder;
 use hwpforge::ops::edit::{set_cell, SetCellOptions};
-use hwpforge::ops::stamp::{stamp, stamp_plan, StampOptions};
 use hwpforge::ops::style::{restyle, RestyleOptions};
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
 
 /// A package this codec wrote — set-cell and stamp accept it — whose only
 /// section restarts at page 5, with a stamp candidate
@@ -52,24 +52,6 @@ fn editable() -> Vec<u8> {
 
 fn edit_cell(bytes: &[u8]) -> Result<hwpforge::ops::edit::SetCellOutput, hwpforge::ops::OpsError> {
     set_cell(bytes, &SetCellOptions::default().with_table(0).with_at("0,1").with_text("류한율"))
-}
-
-fn stamp_all(bytes: &[u8]) -> Result<hwpforge::ops::stamp::StampOutput, hwpforge::ops::OpsError> {
-    let specs: Vec<StampSpec> = stamp_plan(bytes)
-        .expect("plan")
-        .plan
-        .text
-        .into_iter()
-        .map(|candidate| StampSpec {
-            section: candidate.section,
-            path: candidate.path,
-            span: candidate.span,
-            marker: candidate.marker.clone(),
-            action: StampAction::Field { name: "소속".into(), hint: None },
-        })
-        .collect();
-    assert!(!specs.is_empty(), "the paren blank is a stamp candidate");
-    stamp(bytes, &StampMap::Legacy(specs), &StampOptions::default())
 }
 
 /// T6 for the preserve-first editors: set-cell and stamp keep the header at

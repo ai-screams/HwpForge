@@ -1,16 +1,19 @@
+#[path = "document.rs"]
+mod document;
+
 use hwpforge_core::control::{FieldBoundary, FieldStart, GroupChild};
 use hwpforge_core::section::{HeaderFooter, MasterPage};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Control, Document, PageSettings, Paragraph, Run, Section};
-use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit};
 fn text(s: &str) -> Run {
-    Run::text(s, CharShapeIndex::new(0))
+    document::text_run(s)
 }
 fn control(c: Control) -> Run {
-    Run::control(c, CharShapeIndex::new(0))
+    document::control_run(c)
 }
 fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
+    document::runs_para(runs)
 }
 fn start(id: &str, kind: &str) -> Run {
     let mut s = FieldStart::default();
@@ -20,9 +23,7 @@ fn start(id: &str, kind: &str) -> Run {
     control(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(s)) })
 }
 fn end(id: &str) -> Run {
-    control(Control::FieldBoundary {
-        boundary: FieldBoundary::End { begin_id: id.into(), field_id: String::new() },
-    })
+    document::end_field(id)
 }
 fn boxed(ps: Vec<Paragraph>) -> Run {
     control(Control::text_box(ps, HwpUnit::ZERO, HwpUnit::ZERO))

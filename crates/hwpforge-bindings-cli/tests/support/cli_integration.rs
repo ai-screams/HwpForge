@@ -1,4 +1,14 @@
-use super::*;
+#![allow(dead_code)]
+
+#[path = "process.rs"]
+mod process;
+
+use hwpforge_core::{Paragraph, RunContent};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use zip::ZipArchive;
 
 pub(super) static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -6,7 +16,7 @@ pub(super) static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Path to the built binary (set by cargo for integration tests).
 pub(super) fn hwpforge_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_hwpforge"))
+    process::hwpforge_bin()
 }
 
 /// Create a unique temp directory for each test.
@@ -64,12 +74,7 @@ pub(super) fn replace_first_text_run(paragraphs: &mut [Paragraph], replacement: 
 
 /// Run hwpforge with given args, return (stdout, stderr, exit_code).
 pub(super) fn run(args: &[&str]) -> (String, String, i32) {
-    let output =
-        Command::new(hwpforge_bin()).args(args).output().expect("failed to execute hwpforge");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
-    (stdout, stderr, code)
+    process::run(args)
 }
 
 /// Run hwpforge with --json flag prepended.

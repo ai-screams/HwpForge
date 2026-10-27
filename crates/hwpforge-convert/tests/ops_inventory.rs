@@ -33,8 +33,11 @@
 //! regardless of `cfg`, so an audit run on one platform cannot miss a variant
 //! that exists on another.
 
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::workspace_root;
+
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 
 use hwpforge_convert::ops::PdfCause;
 use syn::visit::Visit;
@@ -205,11 +208,6 @@ const PDF_ERROR_CAUSE_TABLE: &[(&str, &str)] = &[
 ];
 
 // ── the parser ──────────────────────────────────────────────────
-
-/// The workspace root, derived from this crate's manifest directory.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
-}
 
 /// Collects the variant names of one enum, including inline submodules.
 struct EnumFinder {

@@ -8,7 +8,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{CharShapeIndex, Flip, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 use hwpforge_smithy_hwpx::{EncodeOptions, EncodeWarning, HwpxEncoder, PackageReader};
 
 fn shape_emission(warnings: &[EncodeWarning]) -> Vec<String> {

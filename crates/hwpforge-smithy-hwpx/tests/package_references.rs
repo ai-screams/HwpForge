@@ -1,3 +1,6 @@
+#[path = "support/encoding.rs"]
+mod encoding;
+use encoding::batang_styles as styles;
 #[path = "support/package_references.rs"]
 mod shared;
 use shared::*;
@@ -10,15 +13,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{EncodeOptions, EncodeOutcome, EncodeWarning, HwpxDecoder, HwpxEncoder};
-
-fn styles() -> HwpxStyleStore {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬바탕");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    styles
-}
 
 fn try_encode_runs(
     runs: Vec<Run>,

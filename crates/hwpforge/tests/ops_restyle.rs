@@ -1,5 +1,8 @@
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::{hwpx_fixture as fixture, warning_fixture};
 use hwpforge::core::control::Control;
 use hwpforge::core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
@@ -7,21 +10,6 @@ use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
 use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge::hwpx::{HwpxDecoder, HwpxEncoder};
 use hwpforge::ops::style::{restyle, RestyleOptions};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
-
-/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
-/// admissible — the same fixture `fill`/`insert_para`/`delete_para`/`stamp`
-/// use for their own decode-warning tests (`ops_insert_para.rs`,
-/// `ops_delete_para.rs`), so the surfaces cannot disagree about what "a
-/// document that warns" means.
-fn warning_fixture() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
-    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
-}
 
 /// A store with every language slot filled, which is what the encoder needs
 /// before it will write a font table.

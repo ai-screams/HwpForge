@@ -1,10 +1,12 @@
+#[path = "document.rs"]
+mod document;
+#[path = "package.rs"]
+mod package;
+
 use super::*;
 
 pub(super) fn part(bytes: &[u8], name: &str) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name(name).unwrap_or_else(|e| panic!("{name}: {e}")).read_to_string(&mut out).unwrap();
-    out
+    package::part(bytes, name)
 }
 
 /// `bytes` with entry `name` replaced by `xml`; every other entry copied as is.
@@ -27,7 +29,7 @@ pub(super) fn with_part(bytes: &[u8], name: &str, xml: &str) -> Vec<u8> {
 }
 
 pub(super) fn para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    document::text_para(text)
 }
 
 /// `bytes` with master page part `n` given a new root `type` and subList body.

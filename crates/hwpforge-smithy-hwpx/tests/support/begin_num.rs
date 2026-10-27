@@ -1,10 +1,8 @@
-use super::*;
+#[path = "package.rs"]
+mod package;
 
 pub(super) fn part(bytes: &[u8], name: &str) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
-    let mut out = String::new();
-    zip.by_name(name).unwrap_or_else(|e| panic!("{name}: {e}")).read_to_string(&mut out).unwrap();
-    out
+    package::part(bytes, name)
 }
 
 /// The attribute values of the first `<{tag} …>` in `xml`, in `names` order.

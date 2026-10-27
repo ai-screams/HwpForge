@@ -1,3 +1,6 @@
+#[path = "support/package.rs"]
+mod package;
+use package::section_xml_unchecked as section_xml;
 use std::io::{Cursor, Read, Write};
 
 use hwpforge_core::image::ImageStore;
@@ -30,12 +33,6 @@ fn para(body: &str, lines: &[u32]) -> String {
     format!(
         r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">{body}{cache}</hp:p>"#
     )
-}
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
 }
 fn package(body: &str) -> Vec<u8> {
     let mut doc = Document::new();

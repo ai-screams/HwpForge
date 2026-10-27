@@ -3,6 +3,10 @@
 //! These tests exercise the full document lifecycle across module boundaries:
 //! create -> populate -> validate -> serialize -> deserialize -> re-validate.
 
+#[path = "support/document.rs"]
+mod document;
+use document::text as text_run;
+
 use hwpforge_core::control::Control;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::error::{CoreError, ValidationError};
@@ -18,10 +22,6 @@ use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex, Vertic
 // ==========================================================================
 // Helpers
 // ==========================================================================
-
-fn text_run(s: &str) -> Run {
-    Run::text(s, CharShapeIndex::new(0))
-}
 
 fn simple_paragraph(text: &str) -> Paragraph {
     Paragraph::with_runs(vec![text_run(text)], ParaShapeIndex::new(0))

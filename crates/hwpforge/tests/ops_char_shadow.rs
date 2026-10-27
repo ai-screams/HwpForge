@@ -1,47 +1,21 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/document.rs"]
+mod document;
+use document::editable;
+#[path = "support/stamping.rs"]
+mod stamping;
+use stamping::stamp_all;
 #[path = "support/ops_char_shadow.rs"]
 mod shared;
 use shared::*;
 
 use std::io::{Cursor, Read, Write};
 
-use hwpforge::core::image::ImageStore;
-use hwpforge::core::run::Run;
-use hwpforge::core::table::{Table, TableCell, TableRow};
-use hwpforge::core::{Document, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
-use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge::hwpx::stamp::{StampAction, StampMap, StampSpec};
-use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge::hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge::hwpx::HwpxDecoder;
 use hwpforge::ops::edit::{set_cell, SetCellOptions};
 use hwpforge::ops::exchange::{export_section, patch, ExportSectionOptions, PatchOptions};
-use hwpforge::ops::stamp::{stamp, stamp_plan, StampOptions};
 use hwpforge::ops::style::{restyle, RestyleOptions};
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-/// A stamp candidate (`(   )`) and a 1×2 label table.
-fn editable() -> Vec<u8> {
-    let width = HwpUnit::new(8000).expect("width");
-    let table = Table::new(vec![TableRow::new(vec![
-        TableCell::new(vec![text_para("성명")], width),
-        TableCell::new(vec![text_para("")], width),
-    ])]);
-    let mut host = Paragraph::new(ParaShapeIndex::new(0));
-    host.add_run(Run::table(table, CharShapeIndex::new(0)));
-    let section =
-        Section::with_paragraphs(vec![text_para("소속: (   )"), host], PageSettings::a4());
-    let mut doc = Document::new();
-    doc.add_section(section);
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
-        .expect("encode")
-}
 
 /// `bytes` with the first `<hh:shadow>` type set to `SPARKLE`.
 fn with_unknown_shadow_type(bytes: &[u8]) -> Vec<u8> {
@@ -65,24 +39,6 @@ fn with_unknown_shadow_type(bytes: &[u8]) -> Vec<u8> {
         out.write_all(&data).expect("write");
     }
     out.finish().expect("finish").into_inner()
-}
-
-fn stamp_all(bytes: &[u8]) -> Result<hwpforge::ops::stamp::StampOutput, hwpforge::ops::OpsError> {
-    let specs: Vec<StampSpec> = stamp_plan(bytes)
-        .expect("plan")
-        .plan
-        .text
-        .into_iter()
-        .map(|candidate| StampSpec {
-            section: candidate.section,
-            path: candidate.path,
-            span: candidate.span,
-            marker: candidate.marker.clone(),
-            action: StampAction::Field { name: "소속".into(), hint: None },
-        })
-        .collect();
-    assert!(!specs.is_empty(), "the paren blank is a stamp candidate");
-    stamp(bytes, &StampMap::Legacy(specs), &StampOptions::default())
 }
 
 /// 이것을 실패시키는 것: 디코더가 모르는 그림자 종류를 무음으로 NONE 에 접는 것(편집 셋이

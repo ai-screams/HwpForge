@@ -1,8 +1,11 @@
+#[path = "support/encoding.rs"]
+mod encoding;
+use encoding::dotum_styles as styles;
 #[path = "support/master_pages.rs"]
 mod shared;
 use shared::*;
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Write};
 
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::run::{Run, RunContent};
@@ -10,7 +13,6 @@ use hwpforge_core::section::{MasterPage, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{
     CellEditError, CellSpec, CellTarget, DecodeWarning, HwpxCellEditor, HwpxDecoder, HwpxDocument,
     HwpxEncoder, HwpxError,
@@ -294,13 +296,6 @@ fn a_master_page_shape_without_fill_stays_without_fill() {
     };
     let Control::Rect { style, .. } = c.as_ref() else { panic!("{c:?}") };
     assert_eq!(style.as_ref().and_then(|s| s.fill.clone()), Some(Fill::None));
-}
-
-fn styles() -> HwpxStyleStore {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    styles
 }
 
 /// A section with a 2×2 table (so set-cell has a target) and one master page.

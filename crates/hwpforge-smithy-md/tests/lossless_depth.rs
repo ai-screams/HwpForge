@@ -2,24 +2,20 @@
 //! pictures, captions, shapes, notes), in both directions, before building
 //! or walking the tree — so a deep input is an error, not a stack overflow.
 
+#[path = "support/document.rs"]
+mod document;
+use document::{para, u};
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::table::{Table, TableCell, TableRow};
-use hwpforge_core::{Document, ObjectFrame, PageSettings, Paragraph, Run, Section};
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_core::{Document, ObjectFrame, PageSettings, Run, Section};
+use hwpforge_foundation::CharShapeIndex;
 use hwpforge_smithy_md::{MdDecoder, MdEncoder, MdError};
 
 /// The limit (`MAX_NESTING_DEPTH`), the same as the HWPX reader's.
 const LIMIT: usize = 32;
-
-fn u(v: i32) -> HwpUnit {
-    HwpUnit::new(v).unwrap()
-}
-
-fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
 
 fn encode(run: Run) -> Result<String, MdError> {
     let mut d = Document::new();

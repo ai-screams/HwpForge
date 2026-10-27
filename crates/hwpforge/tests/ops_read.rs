@@ -1,28 +1,13 @@
 #![cfg(feature = "ops-hwpx")]
 
-use std::collections::BTreeSet;
-
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::{hwpx_fixture, repo_fixture};
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::read::{read, ReadOptions};
-
-fn hwpx_fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
-
-fn repo_fixture(relative: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/");
-    std::fs::read(format!("{path}{relative}")).unwrap_or_else(|e| panic!("fixture {relative}: {e}"))
-}
-
-fn keys(value: &serde_json::Value) -> BTreeSet<String> {
-    value
-        .as_object()
-        .unwrap_or_else(|| panic!("meta must serialise as an object, got {value}"))
-        .keys()
-        .cloned()
-        .collect()
-}
+use json::key_set as keys;
 
 // ── target rules ────────────────────────────────────────────────
 

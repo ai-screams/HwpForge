@@ -1,30 +1,19 @@
 //! Read-only field consumers retain the 6e6cc1be result at depth 33.
+#[path = "support/document.rs"]
+mod document;
+use document::{control_run as c, end_field as end, runs_para as p, text_run as text};
 use hwpforge_core::control::{FieldBoundary, FieldStart};
 use hwpforge_core::field_inventory::FieldInventory;
 use hwpforge_core::table::{TableCell, TableRow};
-use hwpforge_core::{Control, Document, PageSettings, Paragraph, Run, Section, Table};
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_core::{Control, Document, PageSettings, Run, Section, Table};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit};
 use hwpforge_smithy_hwpx::stamp;
-fn p(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
-fn c(control: Control) -> Run {
-    Run::control(control, CharShapeIndex::new(0))
-}
-fn text(value: &str) -> Run {
-    Run::text(value, CharShapeIndex::new(0))
-}
 fn start(id: &str, kind: &str) -> Run {
     let mut start = FieldStart::default();
     start.id = id.into();
     start.kind = kind.into();
     start.name = "deep-name".into();
     c(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) })
-}
-fn end(id: &str) -> Run {
-    c(Control::FieldBoundary {
-        boundary: FieldBoundary::End { begin_id: id.into(), field_id: String::new() },
-    })
 }
 fn fixture() -> Document {
     let table = || {

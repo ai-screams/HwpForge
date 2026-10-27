@@ -1,27 +1,21 @@
 //! `ops::edit::delete_para` — the preserving structural delete (E4).
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
+use document::{encode, text_para, texts};
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::warning_fixture;
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::core::control::Control;
-use hwpforge::core::image::ImageStore;
 use hwpforge::core::run::Run;
-use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+use hwpforge::core::{Document, PageSettings, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
-use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
-use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge::hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge::foundation::CharShapeIndex;
 use hwpforge::ops::edit::{delete_para, DeleteParaOptions};
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-fn encode(doc: Document<Draft>) -> Vec<u8> {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
-        .expect("encode")
-}
+use json::sorted_keys as keys;
 
 /// One section holding four named paragraphs.
 fn four_paragraphs() -> Vec<u8> {
@@ -46,23 +40,6 @@ fn with_index_mark() -> Vec<u8> {
         PageSettings::a4(),
     ));
     encode(doc)
-}
-
-/// Top-level paragraph texts of the first section.
-fn texts(bytes: &[u8]) -> Vec<String> {
-    HwpxDecoder::decode(bytes).expect("decode").document.sections()[0]
-        .paragraphs
-        .iter()
-        .map(Paragraph::text_content)
-        .collect()
-}
-
-/// The object's keys, sorted, so the assertion is on the key **set** rather
-/// than on `serde_json`'s map ordering.
-fn keys(value: &serde_json::Value) -> Vec<String> {
-    let mut keys: Vec<String> = value.as_object().expect("object").keys().cloned().collect();
-    keys.sort();
-    keys
 }
 
 #[test]
@@ -183,24 +160,6 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(value["deleted"], 1);
     assert_eq!(value["inserted"], 0);
     assert_eq!(value["warnings"], serde_json::json!([]));
-}
-
-/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
-/// admissible.
-///
-/// It is this codec's own output with the last paragraph's
-/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
-/// shape a third-party edit leaves behind — so the decoder refuses to
-/// promote a guessed coordinate and reports the drop instead. Being our own
-/// output is what keeps it admissible: the two native documents in the tree
-/// that warn both fail the gate on uncarried ZIP entries.
-///
-/// The same fixture backs the decode-warning tests of `fill`, `insert_para`,
-/// `delete_para` and `stamp`, so the four surfaces cannot disagree about
-/// what "a document that warns" means.
-fn warning_fixture() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
-    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
 }
 
 /// The delete admits its input by decoding it, so the caller hears what that

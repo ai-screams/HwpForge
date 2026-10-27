@@ -1,13 +1,11 @@
 //! `ops::markdown::to_md` — three renderings, and what each one costs.
 #![cfg(feature = "ops-md")]
 
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::hwpx_fixture as fixture;
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::markdown::{to_md, MdExportOptions, MdMode};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
 
 fn export(name: &str, mode: MdMode) -> hwpforge::ops::markdown::MdExportOutput {
     to_md(&fixture(name), &MdExportOptions::default().with_mode(mode))

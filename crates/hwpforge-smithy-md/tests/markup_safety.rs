@@ -28,6 +28,10 @@
 //! only what CommonMark reads as raw HTML, links, images or entities is
 //! escaped), so only the safety properties are checked for it.
 
+#[path = "support/document.rs"]
+mod document;
+use document::{para, text, u};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use hwpforge_core::caption::{Caption, CaptionSide};
@@ -37,7 +41,7 @@ use hwpforge_core::{
     Document, PageSettings, Paragraph, Run, Section, StyleLookup, Table, TableCell, TableRow,
     Validated,
 };
-use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex, UnderlineType};
+use hwpforge_foundation::{CharShapeIndex, FieldType, UnderlineType};
 use hwpforge_smithy_md::{MdEncoder, MdWarning};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -119,20 +123,8 @@ fn cs(i: usize) -> CharShapeIndex {
     CharShapeIndex::new(i)
 }
 
-fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
-
-fn text(s: &str) -> Run {
-    Run::text(s, cs(PLAIN))
-}
-
 fn ctrl(c: Control) -> Run {
     Run::control(c, cs(PLAIN))
-}
-
-fn u(v: i32) -> HwpUnit {
-    HwpUnit::new(v).unwrap()
 }
 
 fn picture(path: &str) -> Image {

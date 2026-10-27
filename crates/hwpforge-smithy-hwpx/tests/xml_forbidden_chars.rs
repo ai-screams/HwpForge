@@ -7,6 +7,9 @@
 //! U+0001. They go through the public encode path, and the test reads the
 //! parts back out of the ZIP.
 
+#[path = "support/document.rs"]
+mod document;
+use document::text_para;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
@@ -30,10 +33,6 @@ fn encode(face: &str, eng_name: &str, body: &str) -> (Vec<(String, String)>, Vec
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(vec![text_para(body)], PageSettings::a4()));
     encode_with(doc, face, eng_name)
-}
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
 }
 
 /// Encodes `doc` with one style and one font face.

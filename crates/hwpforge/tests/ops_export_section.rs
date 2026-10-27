@@ -1,4 +1,7 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::{hwpx_fixture as fixture, repo_fixture};
 #[path = "support/ops_export_section.rs"]
 mod shared;
 use shared::*;
@@ -7,16 +10,6 @@ use std::collections::BTreeSet;
 
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::exchange::{export_section, to_json, ExportSectionOptions, ToJsonOptions};
-
-fn fixture(name: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
-    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
-}
-
-fn repo_fixture(relative: &str) -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/");
-    std::fs::read(format!("{path}{relative}")).unwrap_or_else(|e| panic!("fixture {relative}: {e}"))
-}
 
 fn address_count(value: &serde_json::Value) -> usize {
     match value {

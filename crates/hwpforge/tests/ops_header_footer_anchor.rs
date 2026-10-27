@@ -1,4 +1,7 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "support/document.rs"]
+mod document;
+use document::text_para;
 #[path = "support/ops_header_footer_anchor.rs"]
 mod shared;
 use shared::*;
@@ -16,10 +19,6 @@ use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge::hwpx::HwpxEncoder;
 use hwpforge::ops::edit::{set_cell, SetCellOptions};
 use hwpforge::ops::stamp::{stamp, stamp_plan, StampOptions};
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
 
 /// A package this codec wrote — set-cell and stamp accept it — with a
 /// footer anchored to paragraph 1, a stamp candidate in paragraph 1 and a

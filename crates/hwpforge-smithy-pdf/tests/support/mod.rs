@@ -18,8 +18,8 @@
 //! 페이지의 이미지가 누락되므로 (경고 없이도) 테스트 assert 가 잡는다.
 //!
 //! 공용 헬퍼 모듈이라 각 통합 테스트 바이너리가 API 의 **부분집합**만
-//! 쓴다 (예: `pdf_textbox_render` 는 쪽수·clip 만, `pdf_image_placement_bbox`
-//! 는 bbox 산술까지) — 바이너리별 미사용은 정상이므로 dead_code 를 허용한다.
+//! 쓴다 (쪽수·clip·색상 연산·이미지 bbox) — 바이너리별 미사용은
+//! 정상이므로 dead_code 를 허용한다.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

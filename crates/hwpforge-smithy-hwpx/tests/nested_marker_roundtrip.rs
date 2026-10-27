@@ -1,3 +1,6 @@
+#[path = "support/encoding.rs"]
+mod encoding;
+use encoding::minimal_store;
 #[path = "support/nested_marker_roundtrip.rs"]
 mod shared;
 use shared::*;
@@ -11,18 +14,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
-
-fn minimal_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
-        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
-    }
-    store.push_char_shape(HwpxCharShape::default());
-    store.push_para_shape(HwpxParaShape::default());
-    store
-}
 
 // 이것을 실패시키는 것: 단일 pass 회귀 — 메모 안 하이퍼링크(HWPHL 전체-run
 // 마커)도 메모 조각 안에 숨어 있다.

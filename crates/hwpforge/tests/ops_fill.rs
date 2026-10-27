@@ -1,16 +1,23 @@
 //! `ops::edit::fill` — the preserving, name-addressed delta edit.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
+use document::encode;
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::warning_fixture;
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::core::control::Control;
-use hwpforge::core::image::ImageStore;
 use hwpforge::core::run::{Run, RunContent};
-use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+use hwpforge::core::{Document, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
-use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge::hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge::hwpx::HwpxDecoder;
 use hwpforge::ops::edit::{fill, FillOptions};
 use hwpforge::ops::{inspect, InspectOptions};
+use json::sorted_keys as keys;
 
 /// A native Hancom document with one named, unfilled click-here field.
 fn named_fixture() -> Vec<u8> {
@@ -46,14 +53,6 @@ fn build(sections: &[Vec<Control>]) -> Vec<u8> {
     encode(doc)
 }
 
-fn encode(doc: Document<Draft>) -> Vec<u8> {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
-        .expect("encode")
-}
-
 /// The body text of the named field in `section`.
 fn body(bytes: &[u8], section: usize, name: &str) -> String {
     HwpxDecoder::decode(bytes).expect("decode").document.sections()[section]
@@ -74,14 +73,6 @@ fn body(bytes: &[u8], section: usize, name: &str) -> String {
 
 fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
     values.iter().map(|(n, v)| ((*n).to_owned(), (*v).to_owned())).collect()
-}
-
-/// The object's keys, sorted, so the assertion is on the key **set** rather
-/// than on `serde_json`'s map ordering.
-fn keys(value: &serde_json::Value) -> Vec<String> {
-    let mut keys: Vec<String> = value.as_object().expect("object").keys().cloned().collect();
-    keys.sort();
-    keys
 }
 
 #[test]
@@ -228,25 +219,6 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(keys(&value), ["filled", "warnings"]);
     assert_eq!(value["filled"][0]["name"], "user_email");
     assert_eq!(value["warnings"], serde_json::json!([]));
-}
-
-/// A package whose decode raises `LAYOUT_CACHE_DROPPED` **and** whose named
-/// click-here field is fillable.
-///
-/// No pre-existing fixture is both: the only two documents in the tree that
-/// warn carry no field at all, and every field fixture decodes cleanly. This
-/// one is this codec's own output with the last paragraph's
-/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
-/// shape a third-party edit leaves behind. The decoder refuses to promote a
-/// guessed coordinate and reports the drop instead (`decoder::section`).
-///
-/// Being this codec's own output also keeps the package admissible, so the
-/// same fixture backs the decode-warning tests of `insert_para`,
-/// `delete_para` and `stamp`, and the four surfaces cannot disagree about
-/// what "a document that warns" means.
-fn warning_fixture() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
-    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
 }
 
 /// `fill` resolves the requested names against a decode of the package, so

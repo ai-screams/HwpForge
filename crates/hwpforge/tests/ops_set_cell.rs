@@ -1,33 +1,28 @@
 //! `ops::edit::set_cell` — the regenerating, grid-addressed cell edit.
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
+use document::{encode, text_para};
+#[path = "support/fixtures.rs"]
+mod fixtures;
+use fixtures::warning_fixture;
+#[path = "support/json.rs"]
+mod json;
 use hwpforge::core::control::Control;
-use hwpforge::core::image::ImageStore;
 use hwpforge::core::run::Run;
 use hwpforge::core::table::grid::GridCoord;
 use hwpforge::core::table::{Table, TableCell, TableRow};
-use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+use hwpforge::core::{Document, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge::hwpx::{CellResolution, CellSpec, CellTarget, HwpxDecoder, HwpxEncoder};
+use hwpforge::hwpx::{CellResolution, CellSpec, CellTarget, HwpxDecoder};
 use hwpforge::ops::edit::{set_cell, SetCellOptions};
 use hwpforge::ops::OpsError;
-
-fn text_para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
+use json::sorted_keys as keys;
 
 fn width() -> HwpUnit {
     HwpUnit::new(8000).expect("width")
-}
-
-fn encode(doc: Document<Draft>) -> Vec<u8> {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
-        .expect("encode")
 }
 
 fn section_of(paragraphs: Vec<Paragraph>) -> Section {
@@ -109,14 +104,6 @@ fn cell_texts(bytes: &[u8]) -> Vec<String> {
         }
     });
     out
-}
-
-/// The object's keys, sorted, so the assertion is on the key **set** rather
-/// than on `serde_json`'s map ordering.
-fn keys(value: &serde_json::Value) -> Vec<String> {
-    let mut keys: Vec<String> = value.as_object().expect("object").keys().cloned().collect();
-    keys.sort();
-    keys
 }
 
 #[test]
@@ -368,19 +355,6 @@ fn a_successful_edit_reports_the_encoders_nonsemantic_warnings() {
         "a semantic-loss warning must fail the edit, never ride along: {codes:?}"
     );
     assert_eq!(codes, Vec::<String>::new(), "this encode raises nothing: {codes:?}");
-}
-
-/// A package that warns on decode, is admissible, and holds one 2x2 table.
-///
-/// This codec's own output with one paragraph's `<hp:linesegarray>` pointing
-/// past the end of that paragraph's text — the shape a third-party edit
-/// leaves behind — so the decoder refuses to promote a guessed coordinate and
-/// reports the drop. The same fixture backs the decode-warning tests of
-/// `fill`, `insert_para`, `delete_para` and `stamp`, so the five editing
-/// surfaces cannot disagree about what "a document that warns" means.
-fn warning_fixture() -> Vec<u8> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
-    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
 }
 
 /// The edit admits its input by decoding it, so the caller hears what that

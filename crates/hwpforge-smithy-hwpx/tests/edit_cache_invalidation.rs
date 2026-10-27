@@ -2,6 +2,12 @@
 //! stale — the edited cell paragraph, the table's host paragraph and the
 //! body paragraph after the host — and keeps the rest.
 
+#[path = "support/document.rs"]
+mod document;
+use document::text_para as para;
+#[path = "support/package.rs"]
+mod package;
+use package::section_xml_unchecked as section_xml;
 use std::io::{Cursor, Read, Write};
 
 use hwpforge_core::document::Document;
@@ -15,17 +21,6 @@ use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{
     style_store_for_preset, CellSpec, CellTarget, HwpxCellEditor, HwpxEncoder,
 };
-
-fn para(text: &str) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
-}
-
-fn section_xml(bytes: &[u8]) -> String {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut xml = String::new();
-    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
-    xml
-}
 
 fn with_section_xml(bytes: &[u8], xml: &str) -> Vec<u8> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();

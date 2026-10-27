@@ -2,37 +2,19 @@
 //! image extent and raw format come back equal, and the picture caption is a
 //! `<caption>` child whose content is an exact subtree.
 
+use lossless::document::{para, text, u};
+#[path = "support/lossless.rs"]
+mod lossless;
+use lossless::{decode_body, encode, round_trip};
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::{Image, ImageCrop, ImageFormat};
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::{Document, ObjectId, PageSettings, Paragraph, Run, RunContent, Section};
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_md::{MdDecoder, MdEncoder, MdError};
-
-fn u(v: i32) -> HwpUnit {
-    HwpUnit::new(v).unwrap()
-}
-
-fn para(runs: Vec<Run>) -> Paragraph {
-    Paragraph::with_runs(runs, ParaShapeIndex::new(0))
-}
-
-fn text(t: &str) -> Run {
-    Run::text(t, CharShapeIndex::new(0))
-}
-
-fn encode(runs: Vec<Run>) -> Result<String, MdError> {
-    let mut d = Document::new();
-    d.add_section(Section::with_paragraphs(vec![para(runs)], PageSettings::a4()));
-    MdEncoder::encode_lossless(&d.validate().unwrap())
-}
-
-fn round_trip(run: Run) -> Run {
-    let md = encode(vec![run]).unwrap();
-    MdDecoder::decode_lossless(&md).unwrap().sections()[0].paragraphs[0].runs[0].clone()
-}
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+use hwpforge_smithy_md::{MdEncoder, MdError};
 
 fn picture() -> Image {
     Image::new("BinData/BIN0002", u(6860), u(2388), ImageFormat::Unknown("BIN0002".into()))
@@ -159,14 +141,7 @@ fn picture_caption_admission() {
     assert!(encode(vec![with_caption(ok)]).is_ok());
 }
 
-const SECTION: &str = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0">"#;
 const IMG: &str = r#"data-char-shape="0" src="a" alt="a" data-format="PNG" data-width-unit="10" data-height-unit="10""#;
-
-fn decode_body(body: &str) -> Result<Document, MdError> {
-    let md = encode(vec![text("t")]).unwrap();
-    let frontmatter = &md[..md.find("<section").unwrap()];
-    MdDecoder::decode_lossless(&format!("{frontmatter}{SECTION}{body}</p></section>\n"))
-}
 
 /// The caption grammar: side and gap are required, an unknown side is
 /// invalid, a width given only in millimetres is missing its unit, a second

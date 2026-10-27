@@ -2,8 +2,6 @@
 mod shared;
 use shared::*;
 
-use std::io::{Cursor, Read, Write};
-
 fn fixture(path: &str) -> Vec<u8> {
     let path = format!("{}/../../tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))

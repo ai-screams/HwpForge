@@ -1,13 +1,17 @@
 //! Synthetic admission tests: no corpus, GUI or PDF writer.
 #![cfg(feature = "ops-md")]
+#[path = "support/document.rs"]
+mod document;
+use document::run_para as para;
+
 use hwpforge::ops::exchange::{from_json, patch, FromJsonOptions, PatchOptions};
 use hwpforge_core::control::GroupChild;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::{
-    Control, Document, ObjectFrame, PageSettings, Paragraph, Run, Section, StyleLookup, Table,
-    TableCell, TableRow,
+    Control, Document, ObjectFrame, PageSettings, Run, Section, StyleLookup, Table, TableCell,
+    TableRow,
 };
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit};
 use hwpforge_smithy_hwpx::{
     apply_set_cells, CellEditError, CodecFailure, CodecStage, ExportedDocument, ExportedSection,
     HwpxDecoder, HwpxEncoder, HwpxError, HwpxErrorCode, HwpxPatcher, PatchError,
@@ -19,9 +23,6 @@ fn u() -> HwpUnit {
 }
 fn text() -> Run {
     Run::text("leaf", CharShapeIndex::new(0))
-}
-fn para(r: Run) -> Paragraph {
-    Paragraph::with_runs(vec![r], ParaShapeIndex::new(0))
 }
 fn doc(r: Run) -> Document {
     let mut d = Document::new();

@@ -263,7 +263,7 @@ fn preview_print_font_renders_with_one_warning() {
 
 #[test]
 fn axis_mismatch_is_fatal_by_default_and_warns_once_in_degraded() {
-    // charPr 언어축이 서로 다른 폰트 참조 (blank-HPC 실측: run 30%) —
+    // charPr 언어축이 서로 다른 폰트 참조 —
     // 기본 = fatal, Degraded = 한글 축 + charPr 당 1회 경고.
     let doc = doc_of(vec![
         para_with_cache("가나 ABC", vec![seg(0, 0)]),

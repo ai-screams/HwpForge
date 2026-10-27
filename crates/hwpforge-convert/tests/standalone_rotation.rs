@@ -1,13 +1,8 @@
-#[allow(dead_code)]
 #[path = "support/standalone_rotation.rs"]
 mod shared;
 use shared::*;
 
-use hwpforge_smithy_hwpx::{EncodeOptions, HwpxDecoder, HwpxEncoder, PackageReader};
-use quick_xml::{
-    events::{BytesStart, Event},
-    Reader,
-};
+use hwpforge_smithy_hwpx::HwpxDecoder;
 use std::collections::BTreeMap;
 fn fixture(dir: &str, name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/../../tests/fixtures/{dir}/{name}", env!("CARGO_MANIFEST_DIR")))

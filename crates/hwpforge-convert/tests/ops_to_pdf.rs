@@ -1,10 +1,10 @@
+use shared::fixtures::workspace_root;
+
 #[path = "support/ops_to_pdf.rs"]
 mod shared;
 use shared::*;
 
-use std::path::{Path, PathBuf};
-
-use hwpforge_convert::ops::{to_pdf, ConvertOpsWarning, ToPdfOptions};
+use hwpforge_convert::ops::{to_pdf, ToPdfOptions};
 use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_smithy_pdf::font::FontDiscovery;
 
@@ -34,10 +34,6 @@ const PY_FONT_DIR: &str = "crates/hwpforge-bindings-py/tests/fixtures/fonts";
 
 /// The one face in that directory, and the only face the document names.
 const PY_FONT_FILE: &str = "HwpForgeTest-Regular.ttf";
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
-}
 
 #[test]
 fn the_committed_fixture_pair_renders_with_no_installed_font() {

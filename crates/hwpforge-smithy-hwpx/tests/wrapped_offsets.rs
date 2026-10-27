@@ -1,8 +1,9 @@
+#[path = "support/encoding.rs"]
+mod encoding;
+use encoding::batang_styles as styles;
 #[path = "support/wrapped_offsets.rs"]
 mod shared;
 use shared::*;
-
-use std::io::{Cursor, Read};
 
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
@@ -11,16 +12,7 @@ use hwpforge_core::section::Section;
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Control, Document, PageSettings, Paragraph};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
-
-fn styles() -> HwpxStyleStore {
-    // 이것을 실패시키는 것: 합성 fixture에서 참조하는 원본 글꼴 정의 누락.
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬바탕");
-    styles.push_char_shape(HwpxCharShape::default());
-    styles.push_para_shape(HwpxParaShape::default());
-    styles
-}
 
 fn encode_one(run: Run) -> Vec<u8> {
     let para = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
