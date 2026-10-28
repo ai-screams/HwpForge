@@ -47,12 +47,12 @@ pub(crate) struct ParsedChart {
 ///
 /// Extracts chart type, series data, title, legend position, and grouping
 /// from the `<c:chartSpace>` document.
-pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
+pub(crate) fn parse_chart_xml(xml: &str, part: &str) -> HwpxResult<ParsedChart> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    reader.config_mut().trim_text(false);
 
     let mut chart_type: Option<ChartType> = None;
     let mut bar_dir: Option<String> = None;
@@ -104,7 +104,8 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
     let mut in_xval = false;
     let mut in_yval = false;
     let mut in_title = false;
-    let mut in_formula = false; // inside <c:f> — skip text
+    // One accumulator per value element, shared by all chart data paths.
+    let mut value_text: Option<String> = None;
 
     let mut buf = Vec::new();
 
@@ -127,7 +128,7 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                             stock_series_count += 1;
                         }
                     }
-                    "f" if in_series => in_formula = true,
+                    "v" | "t" => value_text = Some(String::new()),
                     "tx" if in_series => in_tx = true,
                     "cat" if in_series => in_cat = true,
                     "val" if in_series && !in_xval && !in_yval => in_val = true,
@@ -190,64 +191,78 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                 );
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.to_string();
-                if text.is_empty() || in_formula {
-                    // skip formula text (<c:f>Sheet1!...</c:f>)
-                } else if in_title && !in_series {
-                    title = Some(text);
-                } else if in_series && in_tx {
-                    series_name = text;
-                } else if in_series && in_cat {
-                    if cat_values.len() >= MAX_CHART_DATA_POINTS {
-                        return Err(HwpxError::InvalidStructure {
-                            detail: format!(
-                                "chart category count exceeds limit of {}",
-                                MAX_CHART_DATA_POINTS,
-                            ),
-                        });
-                    }
-                    cat_values.push(text);
-                } else if in_series && in_xval {
-                    if let Ok(f) = text.parse::<f64>() {
-                        if x_values.len() >= MAX_CHART_DATA_POINTS {
-                            return Err(HwpxError::InvalidStructure {
-                                detail: format!(
-                                    "chart x-value count exceeds limit of {}",
-                                    MAX_CHART_DATA_POINTS,
-                                ),
-                            });
-                        }
-                        x_values.push(f);
-                    }
-                } else if in_series && in_yval {
-                    if let Ok(f) = text.parse::<f64>() {
-                        if y_values.len() >= MAX_CHART_DATA_POINTS {
-                            return Err(HwpxError::InvalidStructure {
-                                detail: format!(
-                                    "chart y-value count exceeds limit of {}",
-                                    MAX_CHART_DATA_POINTS,
-                                ),
-                            });
-                        }
-                        y_values.push(f);
-                    }
-                } else if in_series && in_val {
-                    if let Ok(f) = text.parse::<f64>() {
-                        if val_values.len() >= MAX_CHART_DATA_POINTS {
-                            return Err(HwpxError::InvalidStructure {
-                                detail: format!(
-                                    "chart value count exceeds limit of {}",
-                                    MAX_CHART_DATA_POINTS,
-                                ),
-                            });
-                        }
-                        val_values.push(f);
-                    }
+                if let Some(text) = value_text.as_mut() {
+                    text.push_str(e);
+                }
+            }
+            Ok(Event::GeneralRef(ref e)) => {
+                let resolved = crate::wire_xml::resolve_general_ref(e).map_err(|err| {
+                    HwpxError::XmlParse { file: part.to_string(), detail: err.to_string() }
+                })?;
+                if let Some(text) = value_text.as_mut() {
+                    text.push_str(&resolved);
                 }
             }
             Ok(Event::End(ref e)) => {
                 let name = e.name();
                 let local = local_name(name.as_ref());
+                if matches!(local, "v" | "t") {
+                    let value = value_text.take().unwrap_or_default();
+                    let text = quick_xml::utils::trim_xml_spaces(&value).to_string();
+                    if text.is_empty() {
+                        // Preserve the existing omission of empty values.
+                    } else if in_title && !in_series {
+                        title = Some(text);
+                    } else if in_series && in_tx {
+                        series_name = text;
+                    } else if in_series && in_cat {
+                        if cat_values.len() >= MAX_CHART_DATA_POINTS {
+                            return Err(HwpxError::InvalidStructure {
+                                detail: format!(
+                                    "chart category count exceeds limit of {}",
+                                    MAX_CHART_DATA_POINTS,
+                                ),
+                            });
+                        }
+                        cat_values.push(text);
+                    } else if in_series && in_xval {
+                        if let Ok(f) = text.parse::<f64>() {
+                            if x_values.len() >= MAX_CHART_DATA_POINTS {
+                                return Err(HwpxError::InvalidStructure {
+                                    detail: format!(
+                                        "chart x-value count exceeds limit of {}",
+                                        MAX_CHART_DATA_POINTS,
+                                    ),
+                                });
+                            }
+                            x_values.push(f);
+                        }
+                    } else if in_series && in_yval {
+                        if let Ok(f) = text.parse::<f64>() {
+                            if y_values.len() >= MAX_CHART_DATA_POINTS {
+                                return Err(HwpxError::InvalidStructure {
+                                    detail: format!(
+                                        "chart y-value count exceeds limit of {}",
+                                        MAX_CHART_DATA_POINTS,
+                                    ),
+                                });
+                            }
+                            y_values.push(f);
+                        }
+                    } else if in_series && in_val {
+                        if let Ok(f) = text.parse::<f64>() {
+                            if val_values.len() >= MAX_CHART_DATA_POINTS {
+                                return Err(HwpxError::InvalidStructure {
+                                    detail: format!(
+                                        "chart value count exceeds limit of {}",
+                                        MAX_CHART_DATA_POINTS,
+                                    ),
+                                });
+                            }
+                            val_values.push(f);
+                        }
+                    }
+                }
                 match local {
                     "plotArea" => in_plot_area = false,
                     "title" if in_title => in_title = false,
@@ -295,7 +310,6 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                         in_yval = false;
                         in_marker = false;
                     }
-                    "f" => in_formula = false,
                     "tx" => in_tx = false,
                     "cat" => in_cat = false,
                     "val" if in_val => in_val = false,
@@ -314,10 +328,7 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
             }
             Ok(Event::Eof) => break,
             Err(e) => {
-                return Err(HwpxError::XmlParse {
-                    file: "Chart/*.xml".to_string(),
-                    detail: e.to_string(),
-                })
+                return Err(HwpxError::XmlParse { file: part.to_string(), detail: e.to_string() })
             }
             _ => {}
         }
@@ -567,7 +578,7 @@ mod tests {
     fn parse_bar_chart() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:title><c:tx><c:rich><c:p><c:r><c:t>Sales</c:t></c:r></c:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Revenue</c:v></c:pt></c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>100</c:v></c:pt><c:pt idx="1"><c:v>200</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart></c:plotArea><c:legend><c:legendPos val="b"/></c:legend></c:chart></c:chartSpace>"#;
 
-        let parsed = parse_chart_xml(xml).unwrap();
+        let parsed = parse_chart_xml(xml, "Chart/test.xml").unwrap();
         assert_eq!(parsed.chart_type, ChartType::Bar);
         assert_eq!(parsed.title, Some("Sales".to_string()));
         assert_eq!(parsed.legend, LegendPosition::Bottom);
@@ -586,7 +597,7 @@ mod tests {
     #[test]
     fn parse_column_via_bar_dir() {
         let xml = r#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>S</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
-        let parsed = parse_chart_xml(xml).unwrap();
+        let parsed = parse_chart_xml(xml, "Chart/test.xml").unwrap();
         assert_eq!(parsed.chart_type, ChartType::Column);
         assert_eq!(parsed.grouping, ChartGrouping::Stacked);
     }
@@ -594,7 +605,7 @@ mod tests {
     #[test]
     fn parse_scatter_xy_data() {
         let xml = r#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:scatterChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Points</c:v></c:pt></c:strCache></c:strRef></c:tx><c:xVal><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:xVal><c:yVal><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numCache></c:numRef></c:yVal></c:ser></c:scatterChart></c:plotArea></c:chart></c:chartSpace>"#;
-        let parsed = parse_chart_xml(xml).unwrap();
+        let parsed = parse_chart_xml(xml, "Chart/test.xml").unwrap();
         assert_eq!(parsed.chart_type, ChartType::Scatter);
         match &parsed.data {
             ChartData::Xy { series } => {
@@ -610,7 +621,7 @@ mod tests {
     #[test]
     fn parse_pie_chart() {
         let xml = r#"<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/><c:pieChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Slice</c:v></c:pt></c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>60</c:v></c:pt><c:pt idx="1"><c:v>40</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:pieChart></c:plotArea></c:chart></c:chartSpace>"#;
-        let parsed = parse_chart_xml(xml).unwrap();
+        let parsed = parse_chart_xml(xml, "Chart/test.xml").unwrap();
         assert_eq!(parsed.chart_type, ChartType::Pie);
         assert_eq!(parsed.legend, LegendPosition::Right); // default (no legend element)
     }
@@ -626,7 +637,7 @@ mod tests {
             ChartData::category(&["A", "B", "C"], &[("Series1", &[10.0, 20.0, 30.0])]),
         );
         let xml = generate_chart_xml(&ctrl).unwrap();
-        let parsed = parse_chart_xml(&xml).unwrap();
+        let parsed = parse_chart_xml(&xml, "Chart/test.xml").unwrap();
 
         assert_eq!(parsed.chart_type, ChartType::Line);
         assert_eq!(parsed.grouping, ChartGrouping::Clustered);
@@ -638,6 +649,57 @@ mod tests {
                 assert_eq!(series[0].values, vec![10.0, 20.0, 30.0]);
             }
             _ => panic!("expected Category data"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod value_contract_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: XML 공백 제거를 Unicode trim으로 교체하거나 생략, 숫자만 Unicode trim.
+    #[test]
+    fn reference_free_whitespace_contract() {
+        for space in
+            ["", " ", "\t", "\r", "\n", "\u{3000}", "\u{a0}", "\u{2002}", "\u{2028}", "\u{85}"]
+        {
+            let text = format!("{space}합계{space}");
+            let number = format!("{space}5{space}");
+            let xml_space = matches!(space, "" | " " | "\t" | "\r" | "\n");
+            let expected = if xml_space { "합계" } else { &text };
+            for kind in ["barChart", "scatterChart", "bubbleChart"] {
+                let xml = format!("<c:chart><c:title><c:t>{text}</c:t></c:title><c:plotArea><c:{kind}><c:ser><c:tx><c:v>{text}</c:v></c:tx><c:cat><c:v>{text}</c:v></c:cat><c:val><c:v>{number}</c:v></c:val><c:xVal><c:v>{number}</c:v></c:xVal><c:yVal><c:v>{number}</c:v></c:yVal></c:ser></c:{kind}></c:plotArea></c:chart>");
+                let parsed = parse_chart_xml(&xml, "Chart/test.xml").unwrap();
+                assert_eq!(parsed.title.unwrap().as_bytes(), expected.as_bytes());
+                let expected_numbers = if xml_space { vec![5.0] } else { vec![] };
+                if kind == "barChart" {
+                    let ChartData::Category { categories, series } = parsed.data else {
+                        panic!("{kind} must decode as category data")
+                    };
+                    assert_eq!(categories[0].as_bytes(), expected.as_bytes());
+                    assert_eq!(series[0].name.as_bytes(), expected.as_bytes());
+                    assert_eq!(series[0].values, expected_numbers);
+                } else {
+                    let ChartData::Xy { series } = parsed.data else {
+                        panic!("{kind} must decode as xy data")
+                    };
+                    assert_eq!(series[0].name.as_bytes(), expected.as_bytes());
+                    assert_eq!(series[0].x_values, expected_numbers);
+                    assert_eq!(series[0].y_values, expected_numbers);
+                }
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: formatCode를 값 누적기의 시작·종료 경계에 추가.
+    #[test]
+    fn format_codes_are_not_data() {
+        for code in ["0", "0.0"] {
+            let xml = format!("<c:barChart><c:ser><c:cat><c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:pt><c:v>2026</c:v></c:pt></c:numCache></c:numRef></c:cat><c:val><c:numRef><c:numCache><c:formatCode>{code}</c:formatCode><c:pt><c:v>5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart>");
+            let parsed = parse_chart_xml(&xml, "Chart/test.xml").unwrap();
+            let ChartData::Category { categories, series } = parsed.data else { panic!() };
+            assert_eq!(categories, ["2026"]);
+            assert_eq!(series[0].values, [5.0]);
         }
     }
 }

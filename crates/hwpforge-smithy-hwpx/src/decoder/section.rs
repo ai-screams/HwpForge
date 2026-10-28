@@ -2802,7 +2802,7 @@ fn decode_chart(
         None => return Ok(None),
     };
 
-    let parsed = super::chart::parse_chart_xml(chart_xml)?;
+    let parsed = super::chart::parse_chart_xml(chart_xml, &hx.chart_id_ref)?;
 
     let (width, height) = hx
         .sz

@@ -68,6 +68,18 @@ pub(crate) fn collect_master_path_inventory(
     Ok(out)
 }
 
+/// Character Core reads for an inline element inside `<hp:t>`, written either
+/// as an empty element or with start and end tags.
+fn inline_text_char(name: &str) -> Option<char> {
+    match name {
+        "tab" => Some('\t'),
+        "lineBreak" => Some('\n'),
+        "nbSpace" => Some('\u{a0}'),
+        "fwSpace" => Some('\u{1f}'),
+        _ => None,
+    }
+}
+
 pub(crate) fn scan_section_xml(
     section_index: usize,
     part: &str,
@@ -79,6 +91,7 @@ pub(crate) fn scan_section_xml(
     let mut buf: Vec<u8> = Vec::new();
     let mut stack: Vec<String> = Vec::new();
     let mut occurrences: Vec<HwpxPathOccurrence> = Vec::new();
+    let mut text_value = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -86,6 +99,9 @@ pub(crate) fn scan_section_xml(
                 let name: String = local_name(element.name().as_ref()).to_string();
                 let path: String = build_path(&stack, &name);
                 record_element_occurrence(section_index, &path, &name, &element, &mut occurrences);
+                if stack.last().is_some_and(|parent| parent == "t") {
+                    text_value.extend(inline_text_char(&name));
+                }
                 stack.push(name);
             }
             Ok(Event::Empty(element)) => {
@@ -93,11 +109,27 @@ pub(crate) fn scan_section_xml(
                 let name: &str = local_name(qname.as_ref());
                 let path: String = build_path(&stack, name);
                 record_element_occurrence(section_index, &path, name, &element, &mut occurrences);
+                if stack.last().is_some_and(|parent| parent == "t") {
+                    text_value.extend(inline_text_char(name));
+                }
             }
             Ok(Event::Text(text)) => {
                 if stack.last().is_some_and(|name| name == "t") {
-                    let decoded_text = text.xml_content(XmlVersion::Explicit1_0);
-                    let trimmed: &str = decoded_text.trim();
+                    text_value.push_str(&text.xml_content(XmlVersion::Explicit1_0));
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                let wire = format!("&{};", &*reference);
+                let resolved = quick_xml::escape::unescape(&wire).map_err(|err| {
+                    HwpxError::XmlParse { file: part.into(), detail: err.to_string() }
+                })?;
+                if stack.last().is_some_and(|name| name == "t") {
+                    text_value.push_str(&resolved);
+                }
+            }
+            Ok(Event::End(_)) => {
+                if stack.last().is_some_and(|name| name == "t") {
+                    let trimmed = quick_xml::utils::trim_xml_spaces(&text_value);
                     if !trimmed.is_empty() {
                         occurrences.push(HwpxPathOccurrence {
                             section_index,
@@ -107,9 +139,8 @@ pub(crate) fn scan_section_xml(
                             text: Some(trimmed.to_string()),
                         });
                     }
+                    text_value.clear();
                 }
-            }
-            Ok(Event::End(_)) => {
                 stack.pop();
             }
             Ok(Event::Eof) => {
@@ -269,5 +300,62 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].kind, "tbl");
         assert_eq!(found[1].text.as_deref(), Some("x"));
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    // 이것을 실패시키는 것: 참조 무시, 조각별 trim, 인접 t 병합, 빈 값 기록,
+    // Text·GeneralRef·End의 부모 t 가드 제거.
+    #[test]
+    fn text_reference_boundaries() {
+        let rows = scan_section_xml(0, "section.xml", "<sec>outside&amp;<p><run><t> A &amp; B </t><t>&amp;</t><t>&amp;&lt;&#xAC00;</t><t>&amp;amp;</t><t> </t><t>C<tab>ignored&amp;</tab>D</t></run></p></sec>").unwrap();
+        let texts: Vec<_> = rows.iter().filter_map(|r| r.text.as_deref()).collect();
+        assert_eq!(texts, ["A & B", "&", "&<가", "&amp;", "C\tD"]);
+    }
+    // 이것을 실패시키는 것: 참조 오류 무시.
+    #[test]
+    fn invalid_text_reference() {
+        for reference in ["&unknown;", "&#0;", "&#xD800;"] {
+            assert!(scan_section_xml(0, "section.xml", &format!("<sec><t>{reference}</t></sec>"))
+                .is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod inline_empty_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: 빈 인라인 요소별 문자 누락, 부모 t 가드 제거.
+    #[test]
+    fn empty_inline_text_characters() {
+        for (tag, expected) in [
+            ("tab", "\t"),
+            ("lineBreak", "\n"),
+            ("nbSpace", "\u{a0}"),
+            ("fwSpace", "\u{1f}"),
+            ("unknown", ""),
+        ] {
+            let xml = format!("<sec><hp:{tag}/><hp:p><hp:run><hp:t>이름<hp:{tag}/>홍길동</hp:t><hp:t>다음</hp:t></hp:run></hp:p></sec>");
+            let rows = scan_section_xml(0, "section.xml", &xml).unwrap();
+            let texts: Vec<_> = rows.iter().filter_map(|r| r.text.as_deref()).collect();
+            assert_eq!(texts, [format!("이름{expected}홍길동"), "다음".into()]);
+        }
+    }
+
+    // 이것을 실패시키는 것: 기록 앞뒤 정리를 XML 공백 4종이 아닌 유니코드 공백 기준(`str::trim`)으로
+    // 되돌리기(전각 공백이 잘림), 또는 시작·끝 태그로 쓴 tab 을 무시하기.
+    #[test]
+    fn record_edges_follow_xml_whitespace() {
+        let rows = scan_section_xml(
+            0,
+            "section.xml",
+            "<sec><t> \u{3000}이름\u{3000} </t><t><tab/>홍길동</t><t>가<tab>무시</tab>나</t></sec>",
+        )
+        .unwrap();
+        let texts: Vec<_> = rows.iter().filter_map(|r| r.text.as_deref()).collect();
+        assert_eq!(texts, ["\u{3000}이름\u{3000}", "홍길동", "가\t나"]);
     }
 }
