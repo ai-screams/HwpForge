@@ -244,3 +244,26 @@ fn crossref_contents_survives_wire_roundtrip() {
         .expect("cross reference");
     assert_eq!(*content_type, RefContentType::Contents);
 }
+
+/// 이것을 실패시키는 것: Modern 또는 Latest의 개요 8·9·10 paraPr 참조를 0으로 변경.
+#[test]
+fn outline_styles_reference_paragraph_shapes() {
+    use hwpforge_smithy_hwpx::{default_styles::HancomStyleSet, HwpxEncoder, HwpxStyleStore};
+    let registry = hwpforge_blueprint::registry::StyleRegistry::with_fonts(Vec::new());
+    for set in [HancomStyleSet::Modern, HancomStyleSet::Latest] {
+        let store = HwpxStyleStore::from_registry_with(&registry, set).unwrap();
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![document::text_para("본문")],
+            PageSettings::a4(),
+        ));
+        let bytes =
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &Default::default()).unwrap();
+        let header = Element::parse(&package::part(&bytes, "Contents/header.xml"));
+        let styles = header.find("hh:styles");
+        for (name, expected) in [("개요 8", "18"), ("개요 9", "16"), ("개요 10", "17")] {
+            let style = styles.children.iter().find(|s| s.attr("name") == Some(name)).unwrap();
+            assert_eq!(style.attr("paraPrIDRef"), Some(expected));
+        }
+    }
+}

@@ -172,6 +172,11 @@ impl HancomStyleSet {
 
 // ── Helper macro ───────────────────────────────────────────────────────────
 
+/// Paragraph shape IDs of 개요 8, 9 and 10, in that order. Hancom numbers
+/// them 18, 16, 17 (not in sequence); every table below that lists the
+/// outline styles reads them from here.
+const OUTLINE_PARA_IDS: [u8; 3] = [18, 16, 17];
+
 macro_rules! entry {
     ($name:expr, $eng:expr, $ty:expr, $cp:expr, $pp:expr) => {
         DefaultStyleEntry {
@@ -229,19 +234,19 @@ const MODERN_STYLES: [DefaultStyleEntry; 22] = [
     entry!("개요 5", "Outline 5", "PARA", 0, 6), //  6  charPr=0 paraPr=6
     entry!("개요 6", "Outline 6", "PARA", 0, 7), //  7  charPr=0 paraPr=7
     entry!("개요 7", "Outline 7", "PARA", 0, 8), //  8  charPr=0 paraPr=8
-    entry!("개요 8", "Outline 8", "PARA", 0, 18), //  9  charPr=0 paraPr=18 ← non-sequential!
-    entry!("개요 9", "Outline 9", "PARA", 0, 16), // 10  charPr=0 paraPr=16
-    entry!("개요 10", "Outline 10", "PARA", 0, 17), // 11  charPr=0 paraPr=17
+    entry!("개요 8", "Outline 8", "PARA", 0, OUTLINE_PARA_IDS[0]), //  9  charPr=0 paraPr=18 ← non-sequential!
+    entry!("개요 9", "Outline 9", "PARA", 0, OUTLINE_PARA_IDS[1]), // 10  charPr=0 paraPr=16
+    entry!("개요 10", "Outline 10", "PARA", 0, OUTLINE_PARA_IDS[2]), // 11  charPr=0 paraPr=17
     entry!("쪽 번호", "Page Number", "CHAR", 1, 0), // 12  charPr=1 paraPr=0 (CHAR: paraPr unused)
-    entry!("머리말", "Header", "PARA", 2, 9), // 13  charPr=2 paraPr=9
-    entry!("각주", "Footnote", "PARA", 3, 10), // 14  charPr=3 paraPr=10
-    entry!("미주", "Endnote", "PARA", 3, 10), // 15  charPr=3 paraPr=10
-    entry!("메모", "Memo", "PARA", 4, 11),    // 16  charPr=4 paraPr=11
+    entry!("머리말", "Header", "PARA", 2, 9),       // 13  charPr=2 paraPr=9
+    entry!("각주", "Footnote", "PARA", 3, 10),      // 14  charPr=3 paraPr=10
+    entry!("미주", "Endnote", "PARA", 3, 10),       // 15  charPr=3 paraPr=10
+    entry!("메모", "Memo", "PARA", 4, 11),          // 16  charPr=4 paraPr=11
     entry!("차례 제목", "TOC Heading", "PARA", 5, 12), // 17  charPr=5 paraPr=12
-    entry!("차례 1", "TOC 1", "PARA", 6, 13), // 18  charPr=6 paraPr=13
-    entry!("차례 2", "TOC 2", "PARA", 6, 14), // 19  charPr=6 paraPr=14
-    entry!("차례 3", "TOC 3", "PARA", 6, 15), // 20  charPr=6 paraPr=15
-    entry!("캡션", "Caption", "PARA", 0, 19), // 21  charPr=0 paraPr=19
+    entry!("차례 1", "TOC 1", "PARA", 6, 13),       // 18  charPr=6 paraPr=13
+    entry!("차례 2", "TOC 2", "PARA", 6, 14),       // 19  charPr=6 paraPr=14
+    entry!("차례 3", "TOC 3", "PARA", 6, 15),       // 20  charPr=6 paraPr=15
+    entry!("캡션", "Caption", "PARA", 0, 19),       // 21  charPr=0 paraPr=19
 ];
 
 // ── Latest (23 styles, 한글 2025+) ─────────────────────────────────────────
@@ -251,29 +256,29 @@ const MODERN_STYLES: [DefaultStyleEntry; 22] = [
 /// Identical to [`MODERN_STYLES`] with the addition of 줄 번호 (Line Number)
 /// as a character style at ID 22.
 const LATEST_STYLES: [DefaultStyleEntry; 23] = [
-    entry!("바탕글", "Normal", "PARA", 0, 0),          //  0
-    entry!("본문", "Body", "PARA", 0, 1),              //  1
-    entry!("개요 1", "Outline 1", "PARA", 0, 2),       //  2
-    entry!("개요 2", "Outline 2", "PARA", 0, 3),       //  3
-    entry!("개요 3", "Outline 3", "PARA", 0, 4),       //  4
-    entry!("개요 4", "Outline 4", "PARA", 0, 5),       //  5
-    entry!("개요 5", "Outline 5", "PARA", 0, 6),       //  6
-    entry!("개요 6", "Outline 6", "PARA", 0, 7),       //  7
-    entry!("개요 7", "Outline 7", "PARA", 0, 8),       //  8
-    entry!("개요 8", "Outline 8", "PARA", 0, 18),      //  9
-    entry!("개요 9", "Outline 9", "PARA", 0, 16),      // 10
-    entry!("개요 10", "Outline 10", "PARA", 0, 17),    // 11
-    entry!("쪽 번호", "Page Number", "CHAR", 1, 0),    // 12
-    entry!("머리말", "Header", "PARA", 2, 9),          // 13
-    entry!("각주", "Footnote", "PARA", 3, 10),         // 14
-    entry!("미주", "Endnote", "PARA", 3, 10),          // 15
-    entry!("메모", "Memo", "PARA", 4, 11),             // 16
+    entry!("바탕글", "Normal", "PARA", 0, 0),    //  0
+    entry!("본문", "Body", "PARA", 0, 1),        //  1
+    entry!("개요 1", "Outline 1", "PARA", 0, 2), //  2
+    entry!("개요 2", "Outline 2", "PARA", 0, 3), //  3
+    entry!("개요 3", "Outline 3", "PARA", 0, 4), //  4
+    entry!("개요 4", "Outline 4", "PARA", 0, 5), //  5
+    entry!("개요 5", "Outline 5", "PARA", 0, 6), //  6
+    entry!("개요 6", "Outline 6", "PARA", 0, 7), //  7
+    entry!("개요 7", "Outline 7", "PARA", 0, 8), //  8
+    entry!("개요 8", "Outline 8", "PARA", 0, OUTLINE_PARA_IDS[0]), //  9
+    entry!("개요 9", "Outline 9", "PARA", 0, OUTLINE_PARA_IDS[1]), // 10
+    entry!("개요 10", "Outline 10", "PARA", 0, OUTLINE_PARA_IDS[2]), // 11
+    entry!("쪽 번호", "Page Number", "CHAR", 1, 0), // 12
+    entry!("머리말", "Header", "PARA", 2, 9),    // 13
+    entry!("각주", "Footnote", "PARA", 3, 10),   // 14
+    entry!("미주", "Endnote", "PARA", 3, 10),    // 15
+    entry!("메모", "Memo", "PARA", 4, 11),       // 16
     entry!("차례 제목", "TOC Heading", "PARA", 5, 12), // 17
-    entry!("차례 1", "TOC 1", "PARA", 6, 13),          // 18
-    entry!("차례 2", "TOC 2", "PARA", 6, 14),          // 19
-    entry!("차례 3", "TOC 3", "PARA", 6, 15),          // 20
-    entry!("캡션", "Caption", "PARA", 0, 19),          // 21
-    entry!("줄 번호", "Line Number", "CHAR", 1, 0),    // 22  ← new in 2025 (same charPr as 쪽 번호)
+    entry!("차례 1", "TOC 1", "PARA", 6, 13),    // 18
+    entry!("차례 2", "TOC 2", "PARA", 6, 14),    // 19
+    entry!("차례 3", "TOC 3", "PARA", 6, 15),    // 20
+    entry!("캡션", "Caption", "PARA", 0, 19),    // 21
+    entry!("줄 번호", "Line Number", "CHAR", 1, 0), // 22  ← new in 2025 (same charPr as 쪽 번호)
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -281,6 +286,12 @@ const LATEST_STYLES: [DefaultStyleEntry; 23] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 이것을 실패시키는 것: 개요 번호 배열의 원소 하나를 바꾸기.
+    #[test]
+    fn outline_para_ids() {
+        assert_eq!(OUTLINE_PARA_IDS, [18, 16, 17]);
+    }
 
     #[test]
     fn classic_has_18_styles() {
