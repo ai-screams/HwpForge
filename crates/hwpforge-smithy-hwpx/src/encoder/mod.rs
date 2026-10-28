@@ -18,6 +18,7 @@ mod object_ids;
 pub(crate) mod package;
 mod references;
 pub(crate) mod section;
+pub(crate) mod wire_rules;
 pub(crate) use section::table_default_placement;
 pub(crate) mod shapes;
 

@@ -388,7 +388,7 @@ fn write_category_series(
     write!(xml, "<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>").unwrap();
 
     // Series name (direct value, matching 한글 output)
-    write!(xml, "<c:tx><c:v>{}</c:v></c:tx>", escape_xml(&s.name)).unwrap();
+    xml.push_str(&super::wire_rules::series_name_xml(&s.name));
 
     // Pie-family: explosion attribute (required by 한글 for correct rendering)
     if pie_family {
@@ -454,7 +454,7 @@ fn write_xy_series(
     write!(xml, "<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>").unwrap();
 
     // Series name (direct value, matching 한글 output)
-    write!(xml, "<c:tx><c:v>{}</c:v></c:tx>", escape_xml(&s.name)).unwrap();
+    xml.push_str(&super::wire_rules::series_name_xml(&s.name));
 
     xml.push_str(r#"<c:invertIfNegative val="0"/>"#);
 

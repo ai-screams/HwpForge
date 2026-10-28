@@ -208,7 +208,7 @@ pub(super) fn build_clickhere_field_xml(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldBegin id="{bid}" type="CLICK_HERE" name="{name}" editable="1" dirty="0" "#,
-            r#"zorder="-1" fieldid="627272811" metaTag="">"#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
             r#"<hp:parameters cnt="3" name="">"#,
             r#"<hp:integerParam name="Prop">9</hp:integerParam>"#,
             r#"<hp:stringParam name="Command" xml:space="preserve">{cmd}</hp:stringParam>"#,
@@ -218,10 +218,11 @@ pub(super) fn build_clickhere_field_xml(
             r#"</hp:ctrl>"#,
             r#"{display}"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="627272811"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
+        fid = crate::encoder::wire_rules::CLICK_HERE_FIELD_ID,
         cpr = char_pr_id_ref,
         bid = begin_id,
         name = escaped_name,
@@ -311,7 +312,7 @@ pub(super) fn build_summary_run_xml_raw(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldBegin id="{bid}" type="SUMMERY" name="{name}" editable="{ed}" dirty="0" "#,
-            r#"zorder="-1" fieldid="628321650" metaTag="">"#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
             r#"<hp:parameters cnt="3" name="">"#,
             r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
             r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
@@ -321,7 +322,7 @@ pub(super) fn build_summary_run_xml_raw(
             r#"</hp:ctrl>"#,
             r#"{display}"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             // trailing `<hp:t/>` matches Hancom native
             // wire shape — its absence triggers the "low-security recovery"
@@ -330,6 +331,7 @@ pub(super) fn build_summary_run_xml_raw(
             r#"<hp:t/>"#,
             r#"</hp:run>"#,
         ),
+        fid = crate::encoder::wire_rules::SUMMARY_FIELD_ID,
         cpr = char_pr_id_ref,
         bid = begin_id,
         name = escaped_name,
@@ -374,7 +376,7 @@ pub(super) fn build_path_field_run_xml_raw(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldBegin id="{bid}" type="PATH" name="" editable="0" dirty="0" "#,
-            r#"zorder="-1" fieldid="628121972" metaTag="">"#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
             r#"<hp:parameters cnt="3" name="">"#,
             r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
             r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
@@ -384,11 +386,12 @@ pub(super) fn build_path_field_run_xml_raw(
             r#"</hp:ctrl>"#,
             r#"{display}"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628121972"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             r#"<hp:t/>"#,
             r#"</hp:run>"#,
         ),
+        fid = crate::encoder::wire_rules::PATH_FIELD_ID,
         cpr = char_pr_id_ref,
         bid = begin_id,
         cmd = escaped_cmd,
@@ -599,7 +602,7 @@ pub(super) fn build_crossref_run_xml(
     // All CROSSREF fields in a document share this fieldid; per-instance
     // identity is carried by `id` (begin_id) above. Verified against
     // n=11 native Hancom-authored .hwpx samples.
-    let field_uid: u64 = 0x25787266;
+    let field_uid = crate::encoder::wire_rules::CROSSREF_FIELD_ID;
     let _ = field_id; // kept in signature for symmetry; not used for fieldid.
     let display_text_xml = build_text_element_xml(display_text);
     format!(
@@ -637,71 +640,6 @@ pub(super) fn build_crossref_run_xml(
         content_type = content_type_str,
         hyperlink = hyperlink_val,
         display_text_xml = display_text_xml,
-    )
-}
-
-/// Legacy Hancom-format CROSSREF builder retained for fieldid regression
-/// gates. The production encoder routes everything through
-/// [`build_crossref_run_xml`]; this stays only as
-/// a stable target for guarantees about fieldid range and pairing
-/// invariants.
-#[cfg(test)]
-pub(super) fn build_hwp5_crossref_run_xml(
-    target_name: &str,
-    display_text: &str,
-    ref_type: hwpforge_foundation::RefType,
-    content_type: hwpforge_foundation::RefContentType,
-    as_hyperlink: bool,
-    char_pr_id_ref: u32,
-    field_id: usize,
-) -> String {
-    let escaped_target_name = escape_field_value(target_name);
-    let escaped_display_text = build_text_element_xml(display_text);
-    let ref_type_str = ref_type.to_string();
-    let content_type_str = content_type.to_string();
-    let hyperlink_val = if as_hyperlink { "true" } else { "false" };
-    // Signed-32-bit-safe begin_id base; distinct from other field builders.
-    // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative and
-    // the field is no longer recognized (click / F9 / Ctrl+click jump fail).
-    let begin_id = super::super::object_ids::field_id(1_400_000_000_u64 + field_id as u64);
-    // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
-    // value. A raw 0-based `field_id` would emit `fieldid="0"`, which Hancom
-    // treats as an invalid instance (F9 refresh / Ctrl+click jump break).
-    // Distinct base keeps it unique vs other field types' fieldid id-space
-    // and stays under 2^31 (truth fixtures use values < 2^31).
-    let field_uid = 1_928_000_000_u64 + field_id as u64;
-    format!(
-        concat!(
-            r#"<hp:run charPrIDRef="{cpr}">"#,
-            r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin id="{bid}" type="CROSSREF" name="" editable="0" dirty="0" "#,
-            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
-            r#"<hp:parameters cnt="8" name="">"#,
-            r#"<hp:booleanParam name="Fiexde">1</hp:booleanParam>"#,
-            r#"<hp:integerParam name="Prop">0</hp:integerParam>"#,
-            r#"<hp:stringParam name="Command">?{target};6;0;0;0;</hp:stringParam>"#,
-            r#"<hp:stringParam name="RefPath">?{target};</hp:stringParam>"#,
-            r#"<hp:stringParam name="RefType">{ref_type}</hp:stringParam>"#,
-            r#"<hp:stringParam name="RefContentType">{content_type}</hp:stringParam>"#,
-            r#"<hp:booleanParam name="RefHyperLink">{hyperlink}</hp:booleanParam>"#,
-            r#"<hp:stringParam name="RefOpenType">HWPHYPERLINK_JUMP_CURRENTTAB</hp:stringParam>"#,
-            r#"</hp:parameters>"#,
-            r#"</hp:fieldBegin>"#,
-            r#"</hp:ctrl>"#,
-            r#"{display_text}"#,
-            r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
-            r#"</hp:ctrl>"#,
-            r#"</hp:run>"#,
-        ),
-        cpr = char_pr_id_ref,
-        bid = begin_id,
-        fid = field_uid,
-        target = escaped_target_name,
-        ref_type = ref_type_str,
-        content_type = content_type_str,
-        hyperlink = hyperlink_val,
-        display_text = escaped_display_text,
     )
 }
 

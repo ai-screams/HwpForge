@@ -83,14 +83,14 @@ use super::EncodeOptions;
 
 use self::chart::{build_embedded_chart_run_xml, encode_chart_switch};
 use self::equation::encode_equation_to_hx;
+#[cfg(test)]
+use self::field::clickhere_command_string;
 use self::field::{
     build_auto_number_run_xml, build_autonum_run_xml, build_bookmark_span_end_run_xml,
     build_bookmark_span_start_run_xml, build_crossref_run_xml, build_field_boundary_xml,
     build_field_run_xml, build_hyperlink_run_xml, build_path_field_run_xml_raw,
     build_summary_run_xml_raw, unix_to_ymdhms,
 };
-#[cfg(test)]
-use self::field::{build_hwp5_crossref_run_xml, clickhere_command_string};
 #[cfg(test)]
 use self::header_footer::find_ctrl_injection_point;
 use self::header_footer::{
@@ -927,9 +927,7 @@ fn build_section(
             anchor_runs.push(AnchorRun {
                 paragraph: idx,
                 char_pr_id_ref,
-                key: format!(
-                    r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#
-                ),
+                key: super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker),
             });
         }
         paragraphs.push(built);
@@ -988,10 +986,8 @@ fn build_paragraph(
             // 승격은 백로그.
             let first_text = first_run.texts.first().map(HxText::text).unwrap_or_default();
             let is_replacement_marker_run = !first_text.is_empty() && {
-                let this_run_key = format!(
-                    r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
-                    first_run.char_pr_id_ref, first_text
-                );
+                let this_run_key =
+                    super::wire_rules::placeholder_run_key(first_run.char_pr_id_ref, &first_text);
                 hyperlink_entries.iter().any(|(key, _)| *key == this_run_key)
             };
             if is_replacement_marker_run {
@@ -1459,9 +1455,8 @@ fn build_runs(
                             chart_horz_offset,
                             chart_vert_offset,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1491,9 +1486,8 @@ fn build_runs(
                         // <hp:run charPrIDRef="N"><hp:t>__HWPFORGE_HYPERLINK_0__</hp:t></hp:run>
                         // We record the full serialized marker run pattern so the
                         // replacement in encode_section is exact.
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1577,9 +1571,8 @@ fn build_runs(
                         let marker = next_marker("HWPBM", field_id);
                         let real_xml =
                             build_bookmark_span_start_run_xml(name, char_pr_id_ref, field_id);
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1591,9 +1584,8 @@ fn build_runs(
                             let marker = next_marker("HWPBE", field_id);
                             let real_xml =
                                 build_bookmark_span_end_run_xml(char_pr_id_ref, field_id);
-                            let marker_run_xml = format!(
-                                r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                            );
+                            let marker_run_xml =
+                                super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                             hyperlink_entries.push((marker_run_xml, real_xml));
                             texts.push(HxText::new(marker));
                         } else {
@@ -1644,9 +1636,8 @@ fn build_runs(
                         });
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFB", field_id);
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1669,9 +1660,8 @@ fn build_runs(
                             char_pr_id_ref,
                             field_id,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1703,9 +1693,8 @@ fn build_runs(
                             1_000_000_000_u64 + field_id as u64,
                             true,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1733,9 +1722,8 @@ fn build_runs(
                             1_000_000_000_u64 + field_id as u64,
                             true,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1758,9 +1746,8 @@ fn build_runs(
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1771,9 +1758,8 @@ fn build_runs(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}">{}<hp:t/></hp:run>"#,
                             header_footer::build_page_number_xml(number),
                         );
-                        let marker_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#
-                        );
+                        let marker_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1789,9 +1775,8 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::AutoNumber);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1807,9 +1792,8 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::AutoNumber);
                         let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1843,9 +1827,8 @@ fn build_runs(
                             char_pr_id_ref,
                             field_id,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1876,9 +1859,8 @@ fn build_runs(
                             field_id,
                             options.memo_create_time,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1901,9 +1883,8 @@ fn build_runs(
                         let real_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}">{container_xml}</hp:run>"#,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -1920,9 +1901,8 @@ fn build_runs(
                         let real_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}">{textart_xml}</hp:run>"#,
                         );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
+                        let marker_run_xml =
+                            super::wire_rules::placeholder_run_key(char_pr_id_ref, &marker);
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
@@ -5725,41 +5705,7 @@ mod tests {
     fn crossref_builders_emit_nonzero_matching_fieldid() {
         use hwpforge_foundation::{RefContentType, RefType};
 
-        // HWP5 path: field_id=0 must NOT produce fieldid="0".
-        let hwp5_xml = build_hwp5_crossref_run_xml(
-            "bookmark1",
-            "see bookmark1",
-            RefType::default(),
-            RefContentType::default(),
-            true,
-            0,
-            0,
-        );
-        assert!(
-            !hwp5_xml.contains(r#"fieldid="0""#),
-            "HWP5 CROSSREF must never emit fieldid=0 (invalid in Hancom)"
-        );
-        assert!(
-            hwp5_xml.contains(r#"fieldid="1928000000""#),
-            "HWP5 CROSSREF fieldid must be the non-zero derived value"
-        );
-        // fieldBegin and fieldEnd fieldid must match each other.
-        assert_eq!(
-            hwp5_xml.matches(r#"fieldid="1928000000""#).count(),
-            2,
-            "fieldBegin and fieldEnd must share the same non-zero fieldid"
-        );
-        // beginIDRef must reference the `id` (begin_id), NOT the fieldid.
-        assert!(
-            hwp5_xml.contains(r#"<hp:fieldBegin id="1400000000""#),
-            "HWP5 CROSSREF fieldBegin id must be the derived begin_id"
-        );
-        assert!(
-            hwp5_xml.contains(r#"<hp:fieldEnd beginIDRef="1400000000" fieldid="1928000000"/>"#),
-            "fieldEnd beginIDRef must reference id, not fieldid"
-        );
-
-        // Non-HWP5 path: same guarantees with its own distinct base.
+        // 이것을 실패시키는 것: CROSSREF_FIELD_ID의 %xrf를 변경.
         let core_xml = build_crossref_run_xml(
             &hwpforge_core::control::RefTarget::Name("bookmark1".to_string()),
             "see bookmark1",
@@ -5813,6 +5759,18 @@ mod tests {
         assert!(!xml.contains("__HWPME_"), "no leftover Memo marker");
     }
 
+    // 이것을 실패시키는 것: placeholder_run_key의 hp:t를 hp:x로 변경.
+    #[test]
+    fn placeholder_key_connects_to_replacement() {
+        let marker = next_marker("HWPTXT", 0);
+        let xml = format!(r#"<hp:run charPrIDRef="7"><hp:t>{marker}</hp:t></hp:run>"#);
+        let key = super::super::wire_rules::placeholder_run_key(7, &marker);
+        assert_eq!(
+            apply_run_xml_replacements(xml, &[(key, "RESOLVED".into())]).unwrap(),
+            "RESOLVED"
+        );
+    }
+
     /// A child marker embedded in its parent's `real_xml` is resolved once the
     /// parent is spliced in, whichever order the pairs were registered in
     /// (#195). The encoder registers the child first (a memo body's tab run is
@@ -5846,7 +5804,7 @@ mod tests {
     #[test]
     fn apply_run_xml_replacements_rejects_leftover_marker() {
         let orphan = next_marker("HWPTXT", 0);
-        let xml = format!("<hp:t>{orphan}</hp:t>");
+        let xml = super::super::wire_rules::placeholder_run_key(0, &orphan);
         for repls in [vec![], vec![(next_marker("HWPTXT", 0), "X".to_string())]] {
             let err = apply_run_xml_replacements(xml.clone(), &repls).unwrap_err();
             let HwpxError::InvalidStructure { detail } = err else { panic!("{err:?}") };
@@ -6346,18 +6304,6 @@ mod tests {
                 big,
             ),
             "crossref",
-        );
-        assert_ids_under_limit(
-            &build_hwp5_crossref_run_xml(
-                "bookmark1",
-                "see bookmark1",
-                RefType::default(),
-                RefContentType::default(),
-                true,
-                0,
-                big,
-            ),
-            "hwp5_crossref",
         );
         assert_ids_under_limit(
             &build_memo_run_xml(
