@@ -6,6 +6,12 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
 /// Registered positions and the shared strict reference resolver.
+///
+/// The bound of a style reference is the number of definitions the header
+/// holds: a `charPrIDRef` or `paraPrIDRef` at or past that count fails the
+/// decode for every paragraph and run converted to Core (body, table cell,
+/// master page, chart run). Runs the decoder leaves out, such as a note's
+/// injected number head, are not looked up.
 #[doc(hidden)]
 pub struct HeaderReferences {
     chars: usize,

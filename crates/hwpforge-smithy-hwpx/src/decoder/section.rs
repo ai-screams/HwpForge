@@ -280,15 +280,6 @@ pub(crate) fn parse_section_with_references(
                 }
 
                 // Chart runs (from <hp:switch><hp:case><hp:chart>)
-                const MAX_STYLE_INDEX: u32 = 100_000;
-                if ctx.references.is_none() && hx_run.char_pr_id_ref > MAX_STYLE_INDEX {
-                    return Err(crate::error::HwpxError::InvalidStructure {
-                        detail: format!(
-                            "charPrIDRef {} exceeds maximum allowed index {}",
-                            hx_run.char_pr_id_ref, MAX_STYLE_INDEX,
-                        ),
-                    });
-                }
                 let char_shape_id = ctx.char_index(hx_run.char_pr_id_ref)?;
                 for switch in &hx_run.switches {
                     if let Some(case) = &switch.case {
@@ -967,15 +958,6 @@ fn convert_paragraph_from(
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<(Paragraph, Option<PageSettings>)> {
     let hx_runs = hx.runs.get(skip..).unwrap_or_default();
-    const MAX_STYLE_INDEX: u32 = 100_000;
-    if ctx.references.is_none() && hx.para_pr_id_ref > MAX_STYLE_INDEX {
-        return Err(crate::error::HwpxError::InvalidStructure {
-            detail: format!(
-                "paraPrIDRef {} exceeds maximum allowed index {}",
-                hx.para_pr_id_ref, MAX_STYLE_INDEX,
-            ),
-        });
-    }
     let para_shape_id = ctx.para_index(hx.para_pr_id_ref)?;
     let mut page_settings = None;
 
@@ -985,19 +967,6 @@ fn convert_paragraph_from(
     // 이것을 실패시키는 것: 이 읽기를 지우기(`end_mark_run_round_trips`).
     let end_mark =
         (hx_runs.len() >= 2).then(|| hx_runs.last()).flatten().filter(|r| is_end_mark_run(r));
-    // The end run's reference is checked like every run's (`convert_run`),
-    // which it does not go through. 이것을 실패시키는 것: 이 검사를
-    // 지우기(`end_run_reference_is_bounded`).
-    if let Some(run) =
-        end_mark.filter(|r| ctx.references.is_none() && r.char_pr_id_ref > MAX_STYLE_INDEX)
-    {
-        return Err(crate::error::HwpxError::InvalidStructure {
-            detail: format!(
-                "charPrIDRef {} exceeds maximum allowed index {}",
-                run.char_pr_id_ref, MAX_STYLE_INDEX,
-            ),
-        });
-    }
     let end_char_shape = end_mark.map(|r| ctx.char_index(r.char_pr_id_ref)).transpose()?;
     let body_runs = &hx_runs[..hx_runs.len() - usize::from(end_mark.is_some())];
 
@@ -1237,15 +1206,6 @@ pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
 /// Also returns whether text after a field begin whose end is not in this
 /// run was left out of the runs (that body is not carried).
 fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec<Run>, bool)> {
-    const MAX_STYLE_INDEX: u32 = 100_000;
-    if ctx.references.is_none() && hx.char_pr_id_ref > MAX_STYLE_INDEX {
-        return Err(crate::error::HwpxError::InvalidStructure {
-            detail: format!(
-                "charPrIDRef {} exceeds maximum allowed index {}",
-                hx.char_pr_id_ref, MAX_STYLE_INDEX,
-            ),
-        });
-    }
     let char_shape_id = ctx.char_index(hx.char_pr_id_ref)?;
     // Observe fields before folding or discarding them, in every decoded run
     // (including image captions). Do not depend on Core's paragraph walker.
