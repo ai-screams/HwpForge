@@ -115,9 +115,8 @@ impl Node {
                 Event::Text(e) => record_text(stack.last_mut().unwrap(), &e.xml10_content()),
                 Event::CData(e) => record_text(stack.last_mut().unwrap(), &e.xml10_content()),
                 Event::GeneralRef(e) => {
-                    let escaped = format!("&{};", e.as_ref());
-                    let value =
-                        quick_xml::escape::unescape(&escaped).map_err(|e| error(e.to_string()))?;
+                    let value = crate::wire_xml::resolve_general_ref(&e)
+                        .map_err(|e| error(e.to_string()))?;
                     record_text(stack.last_mut().unwrap(), &value);
                 }
                 Event::DocType(_) => return Err(error("DTD is not a cache-proof input".into())),

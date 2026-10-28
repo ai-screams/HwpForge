@@ -497,3 +497,25 @@ fn restyle_clears_the_replaced_face_metadata() {
     assert_eq!(font.substitute, None);
     assert_eq!(font.type_info.as_ref().unwrap().family_type, "FCAT_GOTHIC");
 }
+
+const LIMIT: usize = 64 * 1024; // = decoder MAX_TEXT_BYTES
+
+// 이것을 실패시키는 것: restyle 입력의 콘텐츠 손실 거부 삭제.
+#[test]
+fn metadata_overflow_refuses_restyle() {
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("body", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    doc.metadata_mut().description = Some("x".repeat(LIMIT + 1));
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &minimal_store(), &ImageStore::new())
+        .unwrap();
+    let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern")).unwrap_err();
+    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe);
+    assert_eq!(HwpxDecoder::decode(&bytes).unwrap().warnings[0].code(), "CONTENT_LOST");
+    assert!(err.to_string().contains("meta[name=description]"));
+}
