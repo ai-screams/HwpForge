@@ -153,7 +153,8 @@ impl HancomStyleSet {
     ///
     /// Returns `None` if no matching default style is found in this version's
     /// style table. The returned index corresponds directly to the `styleIDRef`
-    /// attribute in HWPX `<hp:p>` elements.
+    /// attribute in HWPX `<hp:p>` elements. This is a wire definition position,
+    /// not a document StyleRef.
     ///
     /// # Examples
     ///

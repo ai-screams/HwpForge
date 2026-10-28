@@ -109,11 +109,11 @@ pub fn classify_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> Pa
         };
     }
 
-    if let Some(style_id) = paragraph.style_id {
-        if let Some(level) = styles.style_heading_level(style_id) {
+    if let Some(style_ref) = paragraph.style_ref {
+        if let Some(level) = styles.style_heading_level(style_ref) {
             return ParaKind::Heading { level: level.clamp(1, 6), source: HeadingSource::Style };
         }
-        if let Some(name) = styles.style_name(style_id) {
+        if let Some(name) = styles.style_name(style_ref) {
             if name.contains("글머리") || name.contains("개조") {
                 return ParaKind::ListItem {
                     kind: ListItemKind::Bullet,
@@ -136,10 +136,15 @@ pub fn classify_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> Pa
     ParaKind::Body
 }
 
+/// Converts a zero-based outline level to a Markdown heading depth (1–6).
+pub fn outline_heading_depth(level: u8) -> u8 {
+    level.min(5) + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
+    use hwpforge_foundation::{ParaShapeIndex, StyleRef};
     use std::collections::HashMap;
 
     #[derive(Default)]
@@ -165,10 +170,10 @@ mod tests {
         fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
             self.para_checked.get(&id.get()).copied()
         }
-        fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
+        fn style_heading_level(&self, id: StyleRef) -> Option<u8> {
             self.style_headings.get(&id.get()).copied()
         }
-        fn style_name(&self, id: StyleIndex) -> Option<&str> {
+        fn style_name(&self, id: StyleRef) -> Option<&str> {
             self.style_names.get(&id.get()).copied()
         }
     }
@@ -179,7 +184,7 @@ mod tests {
 
     fn styled_para(shape: usize, style: usize) -> Paragraph {
         let mut p = para(shape);
-        p.style_id = Some(StyleIndex::new(style));
+        p.style_ref = Some(StyleRef::new(style));
         p
     }
 

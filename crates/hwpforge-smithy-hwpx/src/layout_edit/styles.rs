@@ -198,14 +198,14 @@ impl<'a> Styles<'a> {
                     let kind = match key.as_str() {
                         "char_shape_id" | "end_char_shape" => Some("char_shapes"),
                         "para_shape_id" => Some("para_shapes"),
-                        "style_id" => Some("styles"),
+                        "style_ref" => Some("styles"),
                         "border_fill_id" => Some("border_fills"),
                         _ => None,
                     };
                     kind.zip(value.as_u64()).is_none_or(|(kind, id)| self.same(kind, id))
                         && self.references_unchanged(value)
                 }) && (!super::paragraph(value)
-                    || self.same("styles", value["style_id"].as_u64().unwrap_or(0)))
+                    || self.same("styles", value["style_ref"].as_u64().unwrap_or(0)))
             }
             Value::Array(items) => items.iter().all(|v| self.references_unchanged(v)),
             _ => true,
@@ -343,7 +343,7 @@ mod tests {
             let before = styles.work.steps.get();
             for _ in 0..n {
                 assert!(styles.references_unchanged(
-                    &json!({"runs": [{"char_shape_id": 0}], "para_shape_id": 0, "style_id": 0})
+                    &json!({"runs": [{"char_shape_id": 0}], "para_shape_id": 0, "style_ref": 0})
                 ));
             }
             assert_eq!(

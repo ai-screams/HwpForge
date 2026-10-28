@@ -114,6 +114,52 @@ styles:
         left: 20pt
         first_line: -10pt
 
+  heading4:
+    char_shape:
+      font: 한컴바탕
+      size: 12pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 8pt
+        after: 4pt
+
+  heading5:
+    char_shape:
+      font: 한컴바탕
+      size: 12pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 8pt
+        after: 4pt
+
+  heading6:
+    char_shape:
+      font: 한컴바탕
+      size: 12pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 8pt
+        after: 4pt
+
+
 markdown_mapping:
   body: body
   heading1: heading1

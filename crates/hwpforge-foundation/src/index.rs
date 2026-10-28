@@ -213,8 +213,8 @@ pub type ParaShapeIndex = Index<ParaShapeMarker>;
 pub type FontIndex = Index<FontMarker>;
 /// Index into a border/fill collection.
 pub type BorderFillIndex = Index<BorderFillMarker>;
-/// Index into a style collection.
-pub type StyleIndex = Index<StyleMarker>;
+/// Document-scoped style entry identity, resolved by the accompanying store.
+pub type StyleRef = Index<StyleMarker>;
 /// Index into the numbering definition list.
 pub type NumberingIndex = Index<NumberingMarker>;
 /// Index into the bullet definition list.

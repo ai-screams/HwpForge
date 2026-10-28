@@ -16,7 +16,7 @@ fn roundtrip(name: &str) {
     let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("decode hwpx");
 
     let exported = ExportedDocument {
-        format_version: 2,
+        format_version: hwpforge_smithy_hwpx::exchange::FORMAT_VERSION,
         document: decoded.document,
         styles: Some(decoded.style_store),
     };

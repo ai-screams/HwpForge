@@ -65,6 +65,11 @@ pub trait TemplateProvider {
     ///
     /// Returns `None` if the template does not exist.
     fn get_template(&self, name: &str) -> Option<&Template>;
+
+    /// Whether this lookup slot was loaded from a builtin resource.
+    fn is_builtin_template(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 impl TemplateProvider for HashMap<String, Template> {
@@ -107,11 +112,18 @@ pub fn resolve_template(
 ) -> BlueprintResult<Template> {
     // No inheritance chain: return clone
     if template.meta.extends.is_none() {
-        return Ok(template.clone());
+        let mut resolved = template.clone();
+        if !resolved.styles.is_empty() {
+            resolved.markdown_mapping =
+                Some(crate::markdown::resolve_markdown_style_names(&resolved)?);
+        }
+        return Ok(resolved);
     }
 
     // Collect ancestors via DFS
     let mut ancestors = Vec::new();
+    let mut builtin_names = HashSet::new();
+    let mut user_names: HashSet<String> = template.styles.keys().cloned().collect();
     let mut visited = HashSet::new();
     visited.insert(template.meta.name.clone()); // Mark starting template as visited
     let mut current = template;
@@ -138,20 +150,34 @@ pub fn resolve_template(
             .get_template(parent_name)
             .ok_or_else(|| BlueprintError::TemplateNotFound { name: parent_name.clone() })?;
 
+        if provider.is_builtin_template(parent_name) {
+            builtin_names.extend(parent.styles.keys().cloned());
+        } else {
+            user_names.extend(parent.styles.keys().cloned());
+        }
         ancestors.push(parent.clone());
         chain.push(parent_name.clone());
         current = parent;
     }
 
-    // Merge from root to child (reverse order)
-    let mut merged = ancestors
-        .into_iter()
-        .rev()
-        .fold(template.clone(), |acc, parent| merge_templates(&parent, &acc));
+    // Apply declarations from the root toward the leaf so the nearest explicit
+    // value wins and inherited entries keep their original insertion order.
+    let mut ancestors = ancestors.into_iter().rev();
+    let root = ancestors.next().expect("an extending template has a parent");
+    let inherited = ancestors.fold(root, |acc, child| merge_templates(&acc, &child));
+    let mut merged = merge_templates(&inherited, template);
 
     // Clear extends after resolution
     merged.meta.extends = None;
 
+    let excluded = ["heading4", "heading5", "heading6"]
+        .into_iter()
+        .filter(|name| builtin_names.contains(*name) && !user_names.contains(*name))
+        .map(str::to_string)
+        .collect();
+    if !merged.styles.is_empty() {
+        merged.markdown_mapping = Some(crate::markdown::select_names(&merged, &excluded)?);
+    }
     Ok(merged)
 }
 
@@ -415,6 +441,74 @@ mod tests {
         assert_eq!(body.char_shape.as_ref().unwrap().font, Some("Times".to_string()));
         assert_eq!(body.char_shape.as_ref().unwrap().size, Some(HwpUnit::from_pt(10.0).unwrap()));
         assert_eq!(body.para_shape.as_ref().unwrap().alignment, Some(Alignment::Center));
+    }
+
+    // 같은 필드·mapping 덮기: 두 독립 override는 가까운 선언이 이긴다.
+    // 이것을 실패시키는 것: leaf 초기 fold, mapping 병합 인자 역전, 최종 leaf 병합 생략.
+    #[test]
+    fn nearest_ancestor_fields_and_mapping_override_independently() {
+        for (size, expected_size) in [(None, 2000), (Some(2400), 2400)] {
+            for (mapping, expected_mapping) in
+                [(None, "parent_alias"), (Some("leaf_alias"), "leaf_alias")]
+            {
+                let mut root = make_template(
+                    "root",
+                    None,
+                    vec![
+                        ("heading3", style_size(HwpUnit::new(1200).unwrap())),
+                        ("root_alias", style_font("Arial")),
+                        ("parent_alias", style_font("Arial")),
+                        ("leaf_alias", style_font("Arial")),
+                    ],
+                );
+                root.markdown_mapping = Some(MarkdownMapping {
+                    heading3: Some("root_alias".into()),
+                    ..Default::default()
+                });
+                let mut parent = make_template(
+                    "parent",
+                    Some("root"),
+                    vec![("heading3", style_size(HwpUnit::new(2000).unwrap()))],
+                );
+                parent.markdown_mapping = Some(MarkdownMapping {
+                    heading3: Some("parent_alias".into()),
+                    ..Default::default()
+                });
+                let mut leaf = make_template("leaf", Some("parent"), vec![]);
+                if let Some(size) = size {
+                    leaf.styles.insert("heading3".into(), style_size(HwpUnit::new(size).unwrap()));
+                }
+                leaf.markdown_mapping = Some(MarkdownMapping {
+                    heading3: mapping.map(str::to_owned),
+                    ..Default::default()
+                });
+                let provider = vec![root, parent];
+                let resolved = resolve_template(&leaf, &provider).unwrap();
+                assert_eq!(
+                    resolved.styles["heading3"].char_shape.as_ref().unwrap().size,
+                    Some(HwpUnit::new(expected_size).unwrap())
+                );
+                assert_eq!(
+                    resolved.markdown_mapping.unwrap().heading3.as_deref(),
+                    Some(expected_mapping)
+                );
+            }
+        }
+    }
+
+    // entry 순서는 최상위 선언부터 누적되어 첫 entry 선택을 결정한다.
+    // 이것을 실패시키는 것: leaf에서 시작하는 역방향 fold가 parent_only를 앞에 배치함.
+    #[test]
+    fn inheritance_entries_keep_root_before_parent_order() {
+        let root = make_template("root", None, vec![("root_only", style_font("Arial"))]);
+        let parent =
+            make_template("parent", Some("root"), vec![("parent_only", style_font("Arial"))]);
+        let leaf = make_template("leaf", Some("parent"), vec![("leaf_only", style_font("Arial"))]);
+        let resolved = resolve_template(&leaf, &vec![root, parent]).unwrap();
+        assert_eq!(
+            resolved.styles.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["root_only", "parent_only", "leaf_only"]
+        );
     }
 
     #[test]

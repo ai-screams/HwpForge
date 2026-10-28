@@ -652,6 +652,7 @@ fn r3_encode(
         styles.push_char_shape(HwpxCharShape::default());
     }
     styles.push_para_shape(HwpxParaShape::default());
+    styles.push_style(hwpforge_smithy_hwpx::style_store::HwpxStyle::new(0, "PARA", "바탕글", "Normal", 0, 0, 0, 1042, 0));
     // 이것을 실패시키는 것: 합성 셀의 명시적 borderFill 1 정의 누락.
     // This helper authors its store directly; output defaults cannot resolve
     // the cell's original reference on its behalf.
@@ -1052,6 +1053,7 @@ fn ck_encode_with_images(
         styles.push_char_shape(HwpxCharShape::default());
     }
     styles.push_para_shape(HwpxParaShape::default());
+    styles.push_style(hwpforge_smithy_hwpx::style_store::HwpxStyle::new(0, "PARA", "바탕글", "Normal", 0, 0, 0, 1042, 0));
     hwpforge_smithy_hwpx::HwpxEncoder::encode(&doc.validate().unwrap(), &styles, images).unwrap()
 }
 

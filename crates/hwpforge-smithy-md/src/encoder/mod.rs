@@ -26,6 +26,13 @@ pub struct MdEncoder;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MdWarning {
+    /// A heading uses a separate paragraph shape to preserve an explicit list definition.
+    HeadingListConflict {
+        /// Markdown heading level.
+        level: u8,
+        /// Selected template style.
+        style_name: String,
+    },
     /// Markdown has no representation for the source paragraph measure.
     ParagraphMeasureLost {
         /// Paragraph definition index.
@@ -92,6 +99,7 @@ pub enum MdWarning {
 impl core::fmt::Display for MdWarning {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::HeadingListConflict { level, style_name } => write!(f, "heading {level} conflicts with explicit list in style {style_name}; preserving entry definition"),
             Self::ParagraphMeasureLost { definition, field, measure } => write!(
                 f, "paragraph definition {definition} {field} {measure:?} cannot be represented in Markdown"
             ),

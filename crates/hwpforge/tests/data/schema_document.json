@@ -168,8 +168,8 @@
           "minimum": 0,
           "maximum": 255
         },
-        "style_id": {
-          "description": "Optional reference to a named style (e.g. 개요 1, 본문).\n`None` means 바탕글 (style 0, the default).",
+        "style_ref": {
+          "description": "Optional document-scoped named style reference.\n`None` leaves the named style unspecified; HWPX emits wire position 0.",
           "anyOf": [
             {
               "$ref": "#/$defs/Index"

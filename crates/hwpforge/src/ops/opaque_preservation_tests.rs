@@ -1,4 +1,7 @@
 //! Ops-level save contract; synthetic HWPX keeps the tests independent of corpus paths.
+#[path = "../../tests/support/style_references.rs"]
+mod style_references;
+
 use super::ensure_opaque_carried;
 use crate::ops::*;
 use hwpforge_core::image::ImageStore;
@@ -99,6 +102,11 @@ fn assert_carried(input: &[u8], output: &[u8]) {
 }
 
 fn legacy(value: &mut Value) {
+    style_references::transform(value, &|map| {
+        if let Some(r) = map.remove("style_ref") {
+            map.insert("style_id".into(), r);
+        }
+    });
     value.as_object_mut().unwrap().remove("format_version");
     for para in value["styles"]["para_shapes"].as_array_mut().unwrap() {
         for key in ["margin_left", "margin_right", "indent", "spacing_before", "spacing_after"] {

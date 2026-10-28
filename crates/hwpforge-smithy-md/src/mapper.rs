@@ -1,5 +1,8 @@
 //! Markdown element to Core/Blueprint mapping utilities.
 
+use hwpforge_blueprint::inheritance::TemplateProvider;
+use hwpforge_blueprint::markdown::apply_markdown_heading_levels;
+use hwpforge_foundation::StyleRef;
 use std::collections::HashMap;
 
 use hwpforge_blueprint::builtins::{builtin_default, builtin_gov_proposal};
@@ -18,6 +21,8 @@ use crate::internal_styles::{
 /// Resolved style indices for a markdown semantic element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MdStyleRef {
+    /// Selected registry entry identity.
+    pub style_ref: StyleRef,
     /// Paragraph shape index.
     pub para_shape_id: ParaShapeIndex,
     /// Character shape index.
@@ -26,7 +31,11 @@ pub struct MdStyleRef {
 
 impl MdStyleRef {
     fn from_entry(entry: &StyleEntry) -> Self {
-        Self { para_shape_id: entry.para_shape_id, char_shape_id: entry.char_shape_id }
+        Self {
+            style_ref: entry.style_ref(),
+            para_shape_id: entry.para_shape_id,
+            char_shape_id: entry.char_shape_id,
+        }
     }
 }
 
@@ -35,6 +44,8 @@ const TASK_LIST_LEVELS: usize = ParagraphListRef::MAX_LEVEL as usize + 1;
 /// Resolved paragraph styles for list-item continuation paragraphs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MdListContinuationMapping {
+    /// Selected continuation entry identities.
+    pub style_refs: [StyleRef; TASK_LIST_LEVELS],
     /// Para shapes for continuation paragraphs, indexed by zero-based nesting level.
     pub levels: [ParaShapeIndex; TASK_LIST_LEVELS],
     /// Shared character shape used for continuation text.
@@ -44,7 +55,11 @@ pub struct MdListContinuationMapping {
 impl MdListContinuationMapping {
     fn style_for(self, level: u8) -> MdStyleRef {
         let idx = usize::from(level.min(ParagraphListRef::MAX_LEVEL));
-        MdStyleRef { para_shape_id: self.levels[idx], char_shape_id: self.char_shape_id }
+        MdStyleRef {
+            style_ref: self.style_refs[idx],
+            para_shape_id: self.levels[idx],
+            char_shape_id: self.char_shape_id,
+        }
     }
 
     /// Returns the continuation nesting level for the given para shape.
@@ -56,6 +71,8 @@ impl MdListContinuationMapping {
 /// Resolved paragraph styles for GFM task-list items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MdTaskListMapping {
+    /// Selected list entry identity.
+    pub style_ref: StyleRef,
     /// Para shapes for unchecked task items, indexed by zero-based nesting level.
     pub unchecked: [ParaShapeIndex; TASK_LIST_LEVELS],
     /// Para shapes for checked task items, indexed by zero-based nesting level.
@@ -68,6 +85,7 @@ impl MdTaskListMapping {
     fn style_for(self, checked: bool, level: u8) -> MdStyleRef {
         let idx = usize::from(level.min(ParagraphListRef::MAX_LEVEL));
         MdStyleRef {
+            style_ref: self.style_ref,
             para_shape_id: if checked { self.checked[idx] } else { self.unchecked[idx] },
             char_shape_id: self.char_shape_id,
         }
@@ -77,6 +95,7 @@ impl MdTaskListMapping {
 /// Resolved markdown mapping based on a blueprint template.
 #[derive(Debug, Clone)]
 pub struct MdMapping {
+    pub warnings: Vec<crate::MdWarning>,
     /// Body text style.
     pub body: MdStyleRef,
     /// H1 style.
@@ -195,28 +214,31 @@ pub enum ParagraphKind {
 pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistry)> {
     let resolved = resolve_template_with_builtins(template)?;
     let mut registry = StyleRegistry::from_template(&resolved)?;
-    let fallback = fallback_style(&registry)?;
-
-    let md = resolved.markdown_mapping.as_ref();
-
-    let body = resolve_style(&registry, md.and_then(|m| m.body.as_deref()), "body", fallback);
-    let heading1 =
-        resolve_style(&registry, md.and_then(|m| m.heading1.as_deref()), "heading1", body);
-    let heading2 =
-        resolve_style(&registry, md.and_then(|m| m.heading2.as_deref()), "heading2", heading1);
-    let heading3 =
-        resolve_style(&registry, md.and_then(|m| m.heading3.as_deref()), "heading3", heading2);
-    let heading4 =
-        resolve_style(&registry, md.and_then(|m| m.heading4.as_deref()), "heading4", heading3);
-    let heading5 =
-        resolve_style(&registry, md.and_then(|m| m.heading5.as_deref()), "heading5", heading4);
-    let heading6 =
-        resolve_style(&registry, md.and_then(|m| m.heading6.as_deref()), "heading6", heading5);
-    let code = resolve_style(&registry, md.and_then(|m| m.code.as_deref()), "code", body);
-    let blockquote =
-        resolve_style(&registry, md.and_then(|m| m.blockquote.as_deref()), "blockquote", body);
-    let list_item =
-        resolve_style(&registry, md.and_then(|m| m.list_item.as_deref()), "list_item", body);
+    let names = resolved.markdown_mapping.as_ref().expect("resolved mapping");
+    let (heading_shapes, conflicts) = apply_markdown_heading_levels(&mut registry, names)?;
+    let lookup = |name: &Option<String>| {
+        MdStyleRef::from_entry(
+            registry.get_style(name.as_deref().expect("resolved name")).expect("validated name"),
+        )
+    };
+    let body = lookup(&names.body);
+    let code = lookup(&names.code);
+    let blockquote = lookup(&names.blockquote);
+    let list_item = lookup(&names.list_item);
+    let [heading1, heading2, heading3, heading4, heading5, heading6] = [
+        &names.heading1,
+        &names.heading2,
+        &names.heading3,
+        &names.heading4,
+        &names.heading5,
+        &names.heading6,
+    ]
+    .map(lookup);
+    let [heading1, heading2, heading3, heading4, heading5, heading6] =
+        std::array::from_fn::<_, 6, _>(|i| MdStyleRef {
+            para_shape_id: heading_shapes[i],
+            ..[heading1, heading2, heading3, heading4, heading5, heading6][i]
+        });
     let list_continuation = install_list_continuation_mapping(&mut registry, list_item)?;
     install_note_styles(&mut registry, body)?;
     let task_list = install_task_list_mapping(&mut registry, list_item)?;
@@ -229,6 +251,13 @@ pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistr
 
     Ok((
         MdMapping {
+            warnings: conflicts
+                .into_iter()
+                .map(|(level, style_name)| crate::MdWarning::HeadingListConflict {
+                    level,
+                    style_name,
+                })
+                .collect(),
             body,
             heading1,
             heading2,
@@ -252,12 +281,9 @@ fn install_list_continuation_mapping(
     list_item: MdStyleRef,
 ) -> MdResult<MdListContinuationMapping> {
     let base_entry = registry
-        .style_entries
+        .style_entries()
         .values()
-        .find(|entry| {
-            entry.para_shape_id == list_item.para_shape_id
-                && entry.char_shape_id == list_item.char_shape_id
-        })
+        .find(|entry| entry.style_ref() == list_item.style_ref)
         .copied()
         .ok_or_else(|| MdError::TemplateResolution {
             detail: format!(
@@ -288,6 +314,12 @@ fn install_list_continuation_mapping(
             base_entry.font_id,
             indent_step,
         ),
+        style_refs: std::array::from_fn(|i| {
+            registry
+                .get_style(&list_continuation_style_name(i as u8))
+                .expect("installed continuation")
+                .style_ref()
+        }),
         char_shape_id: list_item.char_shape_id,
     })
 }
@@ -312,6 +344,7 @@ fn install_task_list_mapping(
     };
 
     Ok(MdTaskListMapping {
+        style_ref: list_item.style_ref,
         unchecked: push_task_list_para_shapes(registry, &base_para, bullet_id, false, indent_step),
         checked: push_task_list_para_shapes(registry, &base_para, bullet_id, true, indent_step),
         char_shape_id: list_item.char_shape_id,
@@ -378,9 +411,9 @@ fn install_note_styles(registry: &mut StyleRegistry, body: MdStyleRef) -> MdResu
     }
 
     let font_id = registry
-        .style_entries
+        .style_entries()
         .values()
-        .find(|e| e.char_shape_id == body.char_shape_id)
+        .find(|e| e.style_ref() == body.style_ref)
         .map(|e| e.font_id)
         .ok_or_else(|| MdError::TemplateResolution {
             detail: "body style entry missing for note style derivation".to_string(),
@@ -412,9 +445,13 @@ fn install_note_styles(registry: &mut StyleRegistry, body: MdStyleRef) -> MdResu
     let para_shape_id = ParaShapeIndex::new(registry.para_shapes.len());
     registry.para_shapes.push(note_para);
 
-    let entry = StyleEntry::new(char_shape_id, para_shape_id, font_id);
-    registry.style_entries.entry(FOOTNOTE_STYLE_NAME.to_string()).or_insert(entry);
-    registry.style_entries.entry(ENDNOTE_STYLE_NAME.to_string()).or_insert(entry);
+    for name in [FOOTNOTE_STYLE_NAME, ENDNOTE_STYLE_NAME] {
+        if registry.get_style(name).is_none() {
+            registry
+                .register_style(name.to_string(), char_shape_id, para_shape_id, font_id)
+                .expect("valid note style");
+        }
+    }
     Ok(())
 }
 
@@ -433,19 +470,35 @@ fn push_list_continuation_para_shapes(
         para.list = None;
         let para_shape_id = ParaShapeIndex::new(registry.para_shapes.len());
         registry.para_shapes.push(para);
-        registry.style_entries.insert(
-            list_continuation_style_name(idx as u8),
-            StyleEntry::new(char_shape_id, para_shape_id, font_id),
-        );
+        registry
+            .register_style(
+                list_continuation_style_name(idx as u8),
+                char_shape_id,
+                para_shape_id,
+                font_id,
+            )
+            .expect("valid continuation style");
         para_shape_id
     })
 }
 
 fn resolve_template_with_builtins(template: &Template) -> MdResult<Template> {
     if template.meta.extends.is_none() {
-        return Ok(template.clone());
+        return Ok(resolve_template(template, &HashMap::new())?);
     }
 
+    struct Builtins {
+        slots: HashMap<String, Template>,
+        user: String,
+    }
+    impl TemplateProvider for Builtins {
+        fn get_template(&self, name: &str) -> Option<&Template> {
+            self.slots.get(name)
+        }
+        fn is_builtin_template(&self, name: &str) -> bool {
+            name != self.user && self.slots.contains_key(name)
+        }
+    }
     let mut provider = HashMap::new();
     let default_template = builtin_default()?;
     provider.insert(default_template.meta.name.clone(), default_template);
@@ -455,6 +508,7 @@ fn resolve_template_with_builtins(template: &Template) -> MdResult<Template> {
 
     provider.insert(template.meta.name.clone(), template.clone());
 
+    let provider = Builtins { slots: provider, user: template.meta.name.clone() };
     match resolve_template(template, &provider) {
         Ok(t) => Ok(t),
         Err(BlueprintError::TemplateNotFound { name }) => Err(MdError::TemplateResolution {
@@ -464,37 +518,6 @@ fn resolve_template_with_builtins(template: &Template) -> MdResult<Template> {
         }),
         Err(err) => Err(err.into()),
     }
-}
-
-fn fallback_style(registry: &StyleRegistry) -> MdResult<MdStyleRef> {
-    if let Some(entry) = registry.get_style("body") {
-        return Ok(MdStyleRef::from_entry(entry));
-    }
-
-    if let Some(entry) = registry.style_entries.values().next() {
-        return Ok(MdStyleRef::from_entry(entry));
-    }
-
-    Err(MdError::TemplateResolution { detail: "resolved style registry is empty".to_string() })
-}
-
-fn resolve_style(
-    registry: &StyleRegistry,
-    mapped_style_name: Option<&str>,
-    conventional_name: &str,
-    fallback: MdStyleRef,
-) -> MdStyleRef {
-    if let Some(name) = mapped_style_name {
-        if let Some(entry) = registry.get_style(name) {
-            return MdStyleRef::from_entry(entry);
-        }
-    }
-
-    if let Some(entry) = registry.get_style(conventional_name) {
-        return MdStyleRef::from_entry(entry);
-    }
-
-    fallback
 }
 
 /// Guesses image format from file extension.

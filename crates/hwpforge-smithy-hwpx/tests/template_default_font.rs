@@ -119,7 +119,7 @@ fn single_font_template_encodes_with_registered_font_refs() {
     // The bridge uses the same construction boundary, for every style set.
     for set in [HancomStyleSet::Classic, HancomStyleSet::Modern, HancomStyleSet::Latest] {
         let bridge = HwpxRegistryBridge::from_registry_with(&registry, set).unwrap();
-        let entry = &registry.style_entries["sample0"];
+        let entry = &registry.style_entries()["sample0"];
         let doc = bridge
             .rebind_draft_document(document(entry.char_shape_id.get(), entry.para_shape_id.get()))
             .unwrap();

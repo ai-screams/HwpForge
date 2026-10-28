@@ -80,7 +80,7 @@ HwpForge는 HTML + CSS의 관계처럼 **문서 구조와** **스타일 정의�
 Core (구조)           Blueprint (스타일)
 ─────────────         ──────────────────
 Paragraph             font: "맑은 고딕"
-  style_id: 2    ──▶  size: 10pt
+  style_ref: 2    ──▶  size: 10pt
   runs: [...]         color: #000000
 ```
 

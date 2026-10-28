@@ -28,7 +28,7 @@
 //! assert_eq!(para.run_count(), 2);
 //! ```
 
-use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -70,10 +70,10 @@ pub struct Paragraph {
     /// will emit `<hp:titleMark>` in HWPX for auto-TOC support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_level: Option<u8>,
-    /// Optional reference to a named style (e.g. 개요 1, 본문).
-    /// `None` means 바탕글 (style 0, the default).
+    /// Optional document-scoped named style reference.
+    /// `None` leaves the named style unspecified; HWPX emits wire position 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style_id: Option<StyleIndex>,
+    pub style_ref: Option<StyleRef>,
     /// Hancom 이 저장한 줄 조판 캐시 (decode-only 승격).
     ///
     /// HWPX `<hp:linesegarray>` / HWP5 `PARA_LINE_SEG` 에서 디코더가
@@ -120,7 +120,7 @@ impl Paragraph {
             column_break: false,
             page_break: false,
             heading_level: None,
-            style_id: None,
+            style_ref: None,
             layout_cache: None,
             end_char_shape: None,
         }
@@ -148,7 +148,7 @@ impl Paragraph {
             column_break: false,
             page_break: false,
             heading_level: None,
-            style_id: None,
+            style_ref: None,
             layout_cache: None,
             end_char_shape: None,
         }
@@ -403,14 +403,14 @@ impl Paragraph {
     ///
     /// ```
     /// use hwpforge_core::paragraph::Paragraph;
-    /// use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
+    /// use hwpforge_foundation::{ParaShapeIndex, StyleRef};
     ///
     /// let para = Paragraph::new(ParaShapeIndex::new(0))
-    ///     .with_style(StyleIndex::new(2));
-    /// assert_eq!(para.style_id, Some(StyleIndex::new(2)));
+    ///     .with_style(StyleRef::new(2));
+    /// assert_eq!(para.style_ref, Some(StyleRef::new(2)));
     /// ```
-    pub fn with_style(mut self, style_id: StyleIndex) -> Self {
-        self.style_id = Some(style_id);
+    pub fn with_style(mut self, style_ref: StyleRef) -> Self {
+        self.style_ref = Some(style_ref);
         self
     }
 
@@ -781,42 +781,42 @@ mod tests {
     #[test]
     fn new_has_no_style_id() {
         let para = Paragraph::new(ParaShapeIndex::new(0));
-        assert_eq!(para.style_id, None);
+        assert_eq!(para.style_ref, None);
     }
 
     #[test]
     fn with_style_builder_works() {
-        let para = Paragraph::new(ParaShapeIndex::new(0)).with_style(StyleIndex::new(2));
-        assert_eq!(para.style_id, Some(StyleIndex::new(2)));
+        let para = Paragraph::new(ParaShapeIndex::new(0)).with_style(StyleRef::new(2));
+        assert_eq!(para.style_ref, Some(StyleRef::new(2)));
     }
 
     #[test]
     fn with_runs_has_no_style_id() {
         let para = Paragraph::with_runs(vec![text_run("x")], ParaShapeIndex::new(0));
-        assert_eq!(para.style_id, None);
+        assert_eq!(para.style_ref, None);
     }
 
     #[test]
     fn serde_roundtrip_with_style_id() {
-        let para = Paragraph::new(ParaShapeIndex::new(0)).with_style(StyleIndex::new(5));
+        let para = Paragraph::new(ParaShapeIndex::new(0)).with_style(StyleRef::new(5));
         let json = serde_json::to_string(&para).unwrap();
         let back: Paragraph = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.style_id, Some(StyleIndex::new(5)));
+        assert_eq!(back.style_ref, Some(StyleRef::new(5)));
     }
 
     #[test]
     fn serde_missing_style_id_deserializes_to_none() {
-        // JSON without style_id field → backward compat → None
+        // JSON without style_ref field → backward compat → None
         let json = r#"{"runs":[],"para_shape_id":0,"column_break":false}"#;
         let para: Paragraph = serde_json::from_str(json).unwrap();
-        assert_eq!(para.style_id, None);
+        assert_eq!(para.style_ref, None);
     }
 
     #[test]
     fn serde_style_id_omitted_when_none() {
         let para = Paragraph::new(ParaShapeIndex::new(0));
         let json = serde_json::to_string(&para).unwrap();
-        assert!(!json.contains("style_id"), "None should be skipped in serialization");
+        assert!(!json.contains("style_ref"), "None should be skipped in serialization");
     }
 
     /// Every picture: run pictures, a group's pictures, a nested group's

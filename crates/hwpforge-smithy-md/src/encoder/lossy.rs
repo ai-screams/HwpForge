@@ -244,6 +244,15 @@ fn format_paragraph_text(
         }
     }
 
+    if let Some(hwpforge_core::ParagraphListRef::Outline { level }) =
+        registry.and_then(|r| r.para_shape(paragraph.para_shape_id)).and_then(|p| p.list)
+    {
+        return format!(
+            "{} {}",
+            "#".repeat(usize::from(hwpforge_core::outline::outline_heading_depth(level))),
+            trimmed
+        );
+    }
     if let Some(mapping) = mapping {
         match mapping.classify_para_shape(paragraph.para_shape_id) {
             ParagraphKind::Heading(level) => {
@@ -1242,7 +1251,7 @@ mod tests {
         let template = builtin_default().unwrap();
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::text("제목", CharShapeIndex::new(3))],
-            ParaShapeIndex::new(3),
+            resolve_mapping(&template).unwrap().0.heading1.para_shape_id,
         )]);
 
         let md = encode_with_template(&doc, &template).unwrap();

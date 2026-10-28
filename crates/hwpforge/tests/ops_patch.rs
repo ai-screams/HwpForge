@@ -7,6 +7,9 @@
 
 #[path = "support/fixtures.rs"]
 mod fixtures;
+#[path = "support/style_references.rs"]
+mod style_references;
+
 use fixtures::hwpx_fixture as fixture;
 #[path = "support/json.rs"]
 mod json;
@@ -202,4 +205,77 @@ fn a_forbidden_character_in_an_edited_slot_is_removed_and_reported() {
                 .to_string()
         )]
     );
+}
+
+// 이것을 실패시키는 것: patch 비교에서 ref 정수 직접 비교 또는 대응표 무시.
+#[test]
+fn permuted_reference_space_is_compared_by_effective_wire() {
+    use serde_json::{json, Value};
+    let bytes = fixture("garden_notes.hwpx");
+    let mut exported: Value =
+        serde_json::from_str(&exported_section_text("garden_notes.hwpx", 0)).unwrap();
+    let count = exported["styles"]["styles"].as_array().unwrap().len();
+    assert!(count > 1);
+    exported["styles"]["style_positions"] = json!((0..count).rev().collect::<Vec<_>>());
+
+    style_references::transform(&mut exported["section"], &|map| {
+        if let Some(r) = map.get_mut("style_ref") {
+            if let Some(n) = r.as_u64() {
+                *r = json!(count - 1 - n as usize);
+            }
+        }
+    });
+    let out = patch(&bytes, &PatchOptions::default().with_patch(exported.to_string())).unwrap();
+    assert!(diff(&bytes, &out.bytes).unwrap().diff.semantic.is_empty());
+    exported["styles"]["style_positions"] = json!((0..count).collect::<Vec<_>>());
+    let error =
+        patch(&bytes, &PatchOptions::default().with_patch(exported.to_string())).unwrap_err();
+    assert_eq!(error.code(), OpsCode::PatchFailed);
+    assert_eq!(error.to_string(), "Preserving patch failed: Invalid HWPX structure: preserving patch currently supports text-only section edits; structural change detected");
+}
+
+// 이것을 실패시키는 것: styles 생략 구역에 원본 header 정체성을 추정하거나 styles 비교를 생략.
+#[test]
+fn omitted_styles_use_submitted_base_even_with_a_different_header() {
+    use serde_json::{json, Value};
+    use std::io::{Cursor, Read, Write};
+    let a = fixture("garden_notes.hwpx");
+    let mut input = zip::ZipArchive::new(Cursor::new(&a)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut changed = false;
+    for i in 0..input.len() {
+        let mut entry = input.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == "Contents/header.xml" {
+            let text = String::from_utf8(bytes).unwrap();
+            let edited = text.replacen("name=\"바탕글\"", "name=\"개요 2\"", 1);
+            changed = edited != text;
+            bytes = edited.into_bytes();
+        }
+        output.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&bytes).unwrap();
+    }
+    assert!(changed);
+    let b = output.finish().unwrap().into_inner();
+    let mut exported: Value =
+        serde_json::from_str(&exported_section_text("garden_notes.hwpx", 0)).unwrap();
+    let error = patch(&b, &PatchOptions::default().with_patch(exported.to_string())).unwrap_err();
+    assert_eq!(error.code(), OpsCode::PatchFailed);
+    assert_eq!(error.to_string(), "Preserving patch failed: Invalid HWPX structure: preserving patch does not support style-store changes yet");
+    exported.as_object_mut().unwrap().remove("styles");
+    for version in [3, 2] {
+        let mut payload = exported.clone();
+        payload["format_version"] = json!(version);
+        if version == 2 {
+            style_references::transform(&mut payload["section"], &|map| {
+                if let Some(r) = map.remove("style_ref") {
+                    map.insert("style_id".into(), r);
+                }
+            });
+        }
+        let result = patch(&b, &PatchOptions::default().with_patch(payload.to_string())).unwrap();
+        assert!(diff(&b, &result.bytes).unwrap().diff.semantic.is_empty());
+    }
 }

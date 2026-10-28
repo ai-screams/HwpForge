@@ -130,7 +130,7 @@ hwpforge to-json [OPTIONS] --output <OUTPUT> <FILE>
 
 `--section` 없이 내보낸 **문서 전체 JSON은** `from-json`이, `--section N`으로 내보낸 **섹션 JSON은** `patch`가 읽습니다. 두 JSON은 서로 다른 형식입니다.
 
-0.17.0 부터 두 JSON 모두 맨 위에 `"format_version": 2` 를 쓰고, 문단 여백 다섯 가지(`margin_left`, `margin_right`, `indent`, `spacing_before`, `spacing_after`)와 탭 위치(`position`)를 단위와 값으로 씁니다. `hwpunit` 은 1/100 pt, `char` 는 1/500 글자입니다.
+두 JSON 모두 맨 위에 `"format_version": 3` 를 쓰고, 문단 여백 다섯 가지(`margin_left`, `margin_right`, `indent`, `spacing_before`, `spacing_after`)와 탭 위치(`position`)를 단위와 값으로 씁니다. `hwpunit` 은 1/100 pt, `char` 는 1/500 글자입니다.
 
 ```json
 "margin_left": { "unit": "hwpunit", "value": 2000 },
@@ -141,7 +141,7 @@ hwpforge to-json [OPTIONS] --output <OUTPUT> <FILE>
 
 - 탭 위치가 하나라도 있으면 `LEGACY_JSON_TABS` 로 거부합니다. 옛 JSON 에는 탭 단위가 남아 있지 않아 추측하지 않습니다.
 - 탭 위치가 없으면 문단 여백을 옛 표현에서 풀어 읽고 `LEGACY_PARAGRAPH_MEASURES` 경고를 냅니다. 옛 JSON 이 이미 잃은 단위는 되살리지 못합니다.
-- 다른 버전 번호나 정수가 아닌 `format_version` 은 거부합니다.
+- 명시 v2는 문단 style_id를 정의 배열 위치로 해석해 v3로 이행합니다. 그 밖의 버전 번호나 정수가 아닌 `format_version` 은 거부합니다.
 
 어느 경우든 원본 HWPX 또는 HWP5 에서 새 판의 `to-json` 을 다시 실행하는 것이 가장 정확합니다.
 
@@ -462,3 +462,13 @@ CLI 전용 `INVALID_SET`·`DUPLICATE_SET`과 진단용 네 코드는 유지합�
 MCP의 도구 필드 역직렬화 실패는 필드 경로를 메시지에 포함한 `INVALID_PARAMS`입니다. 경고가 있는 18개 도구는 `{code, message, hint?}` 객체 배열을 반환하며, 빈 경고는 생략합니다. `templates`에는 경고 필드가 없습니다. 전송·JSON-RPC·알 수 없는 도구·worker 실패는 기존 프로토콜 경계를 유지합니다.
 
 Python 파일 I/O는 `HwpForgeError`와 `OSError`로 포착할 수 있고, 입력 부재는 `FileNotFoundError`로도 포착할 수 있습니다. 정확한 타입 비교나 `PermissionError` 같은 세부 포착은 달라집니다. Python 호출 규약·인자 변환의 `TypeError`·`ValueError`는 유지합니다.
+
+### 스타일 참조와 JSON 이행
+
+v3 문단의 `style_ref`는 문서 내부 참조입니다. `styles.style_positions[ref]`가 `styles.styles` 정의 배열의 위치를 가리킵니다. 숫자 ref 0은 wire 0과 다를 수 있으며, null은 출력에서 wire 0을 사용합니다. 대응표는 모든 정의를 정확히 한 번 포함해야 합니다. `schema`의 Document는 Core 구조이고 ExportedDocument/ExportedSection은 이 교환 envelope를 설명합니다.
+
+독립 `from-json`은 non-null 참조가 있으면 styles를 요구합니다(base 제공 여부와 무관). styles 없는 구역 `patch`는 제출한 base의 참조 공간으로 해석합니다. 동일 section과 다른 header를 가진 파일의 출처 차이까지 검출하지는 않습니다. 완전 왕복에는 styles를 포함하세요. v2는 위치 참조를 단방향 이행하며, styles 없는 v2 문서 작성은 default preset을 사용합니다. 버전 없는 JSON은 기존 여백 단위 이행을 먼저 수행합니다.
+
+MCP from-json의 문자열 인자 안 JSON도 같은 계약입니다. 별도 MCP schema 도구는 없으며 CLI schema를 사용합니다. Python의 dict 반환 타입과 callable은 그대로이고, 그 내부 데이터 계약만 v3로 바뀝니다.
+
+v3에서 Core JSON의 `style_id`는 `style_ref`로 바뀌었으며, 교환에는 envelope를 사용하세요. `to-json --no-styles`로 내보낸 v3 문서는 non-null 참조에 필요한 styles가 없어 그대로 `from-json`에 넣으면 거절됩니다.

@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use hwpforge_core::{BulletDef, NumberingDef, TabDef};
 use hwpforge_foundation::{
-    BulletIndex, CharShapeIndex, FontId, FontIndex, NumberingIndex, ParaShapeIndex,
+    BulletIndex, CharShapeIndex, FontId, FontIndex, NumberingIndex, ParaShapeIndex, StyleRef,
 };
 
 use crate::error::{BlueprintError, BlueprintResult};
@@ -42,6 +42,7 @@ use crate::template::{Template, TemplateTabDef};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct StyleEntry {
+    style_ref: StyleRef,
     /// Index into the character shape collection.
     pub char_shape_id: CharShapeIndex,
     /// Index into the paragraph shape collection.
@@ -51,13 +52,9 @@ pub struct StyleEntry {
 }
 
 impl StyleEntry {
-    /// Creates a resolved style entry with explicit indices.
-    pub fn new(
-        char_shape_id: CharShapeIndex,
-        para_shape_id: ParaShapeIndex,
-        font_id: FontIndex,
-    ) -> Self {
-        Self { char_shape_id, para_shape_id, font_id }
+    /// Returns the document-scoped identity of this entry.
+    pub fn style_ref(&self) -> StyleRef {
+        self.style_ref
     }
 }
 
@@ -109,10 +106,33 @@ pub struct StyleRegistry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bullets: Vec<BulletDef>,
     /// Mapping from style name to its indices (insertion-order preserved).
-    pub style_entries: IndexMap<String, StyleEntry>,
+    style_entries: IndexMap<String, StyleEntry>,
 }
 
 impl StyleRegistry {
+    /// Returns registered entries in insertion order.
+    pub fn style_entries(&self) -> &IndexMap<String, StyleEntry> {
+        &self.style_entries
+    }
+
+    /// Registers a named entry, retaining its identity when updating its formatting.
+    pub fn register_style(
+        &mut self,
+        name: String,
+        char_shape_id: CharShapeIndex,
+        para_shape_id: ParaShapeIndex,
+        font_id: FontIndex,
+    ) -> BlueprintResult<StyleRef> {
+        validate_style_name(&name)?;
+        let style_ref = self
+            .style_entries
+            .get(&name)
+            .map_or(StyleRef::new(self.style_entries.len()), |entry| entry.style_ref);
+        self.style_entries
+            .insert(name, StyleEntry { style_ref, char_shape_id, para_shape_id, font_id });
+        Ok(style_ref)
+    }
+
     /// Creates an empty StyleRegistry with only fonts.
     ///
     /// Useful when constructing a style store from preset fonts without a full
@@ -184,7 +204,8 @@ impl StyleRegistry {
         };
 
         for (style_name, partial_style) in &template.styles {
-            let style_entry = build_style_entry(&mut build_ctx, style_name, partial_style)?;
+            let mut style_entry = build_style_entry(&mut build_ctx, style_name, partial_style)?;
+            style_entry.style_ref = StyleRef::new(style_entries.len());
             style_entries.insert(style_name.clone(), style_entry);
         }
 
@@ -311,7 +332,7 @@ fn build_style_entry(
     let para_shape_id = ParaShapeIndex::new(ctx.para_shapes.len());
     ctx.para_shapes.push(para_shape);
 
-    Ok(StyleEntry { char_shape_id, para_shape_id, font_id })
+    Ok(StyleEntry { style_ref: StyleRef::new(0), char_shape_id, para_shape_id, font_id })
 }
 
 fn resolve_char_shape(
@@ -810,6 +831,7 @@ mod tests {
     #[test]
     fn style_entry_serde_roundtrip() {
         let entry = StyleEntry {
+            style_ref: StyleRef::new(0),
             char_shape_id: CharShapeIndex::new(3),
             para_shape_id: ParaShapeIndex::new(7),
             font_id: FontIndex::new(1),

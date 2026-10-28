@@ -910,6 +910,7 @@ fn structural_warning_code(warning: &StructuralWarning) -> &'static str {
 #[cfg(feature = "ops-md")]
 fn md_warning_code(warning: &MdWarning) -> &'static str {
     match warning {
+        MdWarning::HeadingListConflict { .. } => "HEADING_LIST_CONFLICT",
         MdWarning::ParagraphMeasureLost { .. } => "PARAGRAPH_MEASURE_LOST",
         MdWarning::MergedCellsFlattened { .. } => "TABLE_MERGE_FLATTENED",
         MdWarning::ImageEmbedSkipped { .. } => "IMAGE_EMBED_SKIPPED",

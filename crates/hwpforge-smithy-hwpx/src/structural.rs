@@ -680,7 +680,7 @@ impl HwpxStructuralEditor {
                     vec![Run::text(text, char_shape)],
                     anchor_para.para_shape_id,
                 );
-                p.style_id = anchor_para.style_id;
+                p.style_ref = anchor_para.style_ref;
                 p
             })
             .collect();

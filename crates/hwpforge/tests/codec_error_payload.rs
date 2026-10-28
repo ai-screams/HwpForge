@@ -33,8 +33,10 @@ fn patch_inner_decode_failure_reaches_the_workflow_unchanged() {
     // 이것을 실패시키는 것: patch 원본 decode 의 leaf 를 다른 코드로 바꾸기, 또는
     // PreservingPatch 로 넘길 때 CodecFailure 를 고쳐 쓰기.
     let bytes = include_bytes!("data/patch-inner-decode.hwpx");
-    let exported: ExportedSection =
+    let mut value =
         serde_json::from_str(include_str!("data/patch-inner-decode.section.json")).unwrap();
+    hwpforge::hwpx::exchange::read_exchange(&mut value).unwrap();
+    let exported: ExportedSection = serde_json::from_value(value).unwrap();
     let decode = HwpxDecoder::decode(bytes).unwrap_err();
 
     let direct = HwpxPatcher::patch_section_preserving_with_codec_diagnostics(

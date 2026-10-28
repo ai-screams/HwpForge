@@ -1319,6 +1319,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "HeadingListConflict",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "ParagraphMeasureLost",
           "shape": "struct",
           "cfg": [],

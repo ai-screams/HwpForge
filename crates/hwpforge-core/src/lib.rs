@@ -154,3 +154,6 @@ pub mod field_view;
 
 #[doc(hidden)]
 pub mod zip_package;
+
+/// Document-scoped style entry reference.
+pub use hwpforge_foundation::StyleRef;

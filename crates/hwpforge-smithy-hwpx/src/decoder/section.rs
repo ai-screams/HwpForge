@@ -21,7 +21,7 @@ use hwpforge_core::table::{
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     ApplyPageType, BorderLineType, CharShapeIndex, Color, HwpUnit, PageNumberPosition,
-    ParaShapeIndex, StyleIndex, TextDirection,
+    ParaShapeIndex, StyleRef, TextDirection,
 };
 
 use crate::color::parse_hex_color_raw;
@@ -397,12 +397,12 @@ impl DecodeCtx {
             .as_ref()
             .map_or_else(|| Ok(ParaShapeIndex::new(id as usize)), |r| r.para_index(id))
     }
-    fn style_index(&self, id: u32) -> HwpxResult<Option<StyleIndex>> {
+    fn style_index(&self, id: u32) -> HwpxResult<Option<StyleRef>> {
         if let Some(r) = &self.references {
             let index = r.style_index(id)?;
-            Ok((id != 0).then_some(index))
+            Ok(Some(index))
         } else {
-            Ok((id != 0).then(|| StyleIndex::new(id as usize)))
+            Ok(Some(StyleRef::new(id as usize)))
         }
     }
 
@@ -1053,7 +1053,7 @@ fn convert_paragraph_from(
     // being the true outline depth from the original document.
     let heading_level = if has_title_mark { Some(1) } else { None };
 
-    let style_id = ctx.style_index(hx.style_id_ref)?;
+    let style_ref = ctx.style_index(hx.style_id_ref)?;
 
     // 줄 조판 캐시 승격 (decode-only). 인코더는 기본적으로 재방출하지 않는다.
     //
@@ -1166,7 +1166,7 @@ fn convert_paragraph_from(
         column_break: hx.column_break != 0,
         page_break: hx.page_break != 0,
         heading_level,
-        style_id,
+        style_ref,
         layout_cache,
     };
     ctx.source.record_paragraph(hx.source_origin, &paragraph, origins);

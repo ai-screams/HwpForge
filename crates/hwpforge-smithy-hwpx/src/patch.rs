@@ -307,6 +307,20 @@ impl HwpxPatcher {
         let normalize_measures = decoded.requires_header_normalization();
         let decode_warnings = decoded.warnings.clone();
         let mut replacement = replacement.clone();
+        let source_styles = styles.unwrap_or(&decoded.style_store);
+        crate::header_references::HeaderReferences::build(source_styles)
+            .map_err(PatchError::Rejected)?;
+        let mut reference_error = None;
+        replacement.for_each_paragraph_mut(|p| {
+            match source_styles.effective_style_position(p.style_ref) {
+                Ok(position) => p.style_ref = decoded.style_store.style_ref_at(position),
+                Err(error) => reference_error = Some(error),
+            }
+        });
+        if let Some(error) = reference_error {
+            return Err(PatchError::Rejected(error));
+        }
+
         let mut authored = decoded.document.sections().to_vec();
         if let Some(section) = authored.get_mut(section_idx) {
             *section = replacement;
@@ -329,7 +343,7 @@ impl HwpxPatcher {
             .ok_or(PatchError::SectionOutOfRange { requested: section_idx, sections })?;
 
         if let Some(patch_styles) = styles {
-            if patch_styles != &decoded.style_store {
+            if !patch_styles.same_definitions(&decoded.style_store) {
                 return Err(PatchError::Rejected(HwpxError::InvalidStructure {
                     detail: "preserving patch does not support style-store changes yet".into(),
                 }));

@@ -198,6 +198,8 @@ pub(crate) fn unchanged(
     }
     let mut original = tree(&base.document)?;
     let mut edited = tree(document)?;
+    base.style_store.project_style_references(&mut original)?;
+    styles.project_style_references(&mut edited)?;
     // The ordinary path supplies the existing diagnostic for a cache forged
     // where the base had none. It will still never copy that supplied cache.
     if supplied_without_base(&original, &edited) {
@@ -224,6 +226,8 @@ pub(crate) fn prepare(
     let supplied = tree(document)?;
     let mut original = trusted.clone();
     let mut edited = supplied.clone();
+    base.style_store.project_style_references(&mut original)?;
+    style_store.project_style_references(&mut edited)?;
     clean(&mut original);
     clean(&mut edited);
     // The cache was computed against these original bytes, not encode(decode(base)).
@@ -302,6 +306,8 @@ pub(crate) fn prepare(
         list_host: plan.list_host,
     };
     let invalidation = plan_invalidation(&base_wire, &edited_wire, &correspondence, &changes);
+    edited = supplied;
+    clean(&mut edited);
     for (candidate, reasons) in plan.candidates.into_iter().zip(invalidation.paragraphs) {
         let stale = !reasons.is_empty();
         if stale || candidate.cache.is_none() {

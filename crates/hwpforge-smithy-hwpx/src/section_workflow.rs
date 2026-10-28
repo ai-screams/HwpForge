@@ -147,7 +147,7 @@ impl HwpxPatcher {
             };
 
         let exported = ExportedSection {
-            format_version: 2,
+            format_version: crate::exchange::FORMAT_VERSION,
             section_index: section_idx,
             section,
             styles: include_styles.then_some(hwpx_doc.style_store),
