@@ -6,7 +6,18 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      # major 는 그룹에서 제외한다. 그룹에 major 가 섞이면 파괴적 bump 하나가
+      # pyo3 와 pythonize 는 한 PR 로 묶는다. pythonize 판마다 요구하는 pyo3
+      # 범위가 정해져 있고(0.29 → ^0.29) pyo3 는 links 때문에 그래프에 한
+      # 버전만 둘 수 있어서, pyo3 의 0.x minor(파괴적 bump 로 분류됨)만 올린
+      # PR 은 의존성 해석에서 실패한다(PR #248). 묶음은 호환판이 나왔을 때
+      # 둘을 같이 올릴 뿐이고, pythonize 의 지원판이 없는 동안 그 bump 는
+      # 여전히 불가능하다. 결합 때문에 이 그룹만 major 도 묶는 예외이고,
+      # 먼저 맞는 그룹에 들어가므로 rust-workspace 보다 앞에 둔다.
+      pyo3:
+        patterns:
+          - "pyo3"
+          - "pythonize"
+      # rust-workspace 에서는 major 를 제외한다. 그룹에 major 가 섞이면 파괴적 bump 하나가
       # 실패할 때 같은 PR 에 묶인 나머지 cargo 업데이트까지 전부 정체된다
       # (rmcp 2.0 -> 3.1 이 PR #120 에서 실제로 그랬음).
       rust-workspace:
