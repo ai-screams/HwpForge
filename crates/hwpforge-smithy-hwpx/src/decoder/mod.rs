@@ -826,13 +826,29 @@ impl HwpxDecoder {
         references.validate(&style_store, false)?;
         let begin_num = header_result.begin_num;
 
-        // Parse Contents/content.hpf metadata.
-        // Missing or malformed metadata downgrades to default rather
-        // than failing the whole decode — Hancom-emitted XML always
-        // has a metadata block, but third-party authoring tools may not.
-        let metadata = match pkg.read_text_entry("Contents/content.hpf") {
-            Ok(xml) => metadata::parse_content_hpf_metadata(&xml).unwrap_or_default(),
-            Err(_) => hwpforge_core::metadata::Metadata::default(),
+        // Parse Contents/content.hpf metadata. A missing block reads as
+        // default metadata without a warning; a block the parser cannot
+        // read downgrades to default but is reported as content loss.
+        let parsed_metadata = pkg
+            .read_text_entry("Contents/content.hpf")
+            .and_then(|xml| metadata::parse_content_hpf_metadata(&xml));
+        // Any content.hpf problem the package-order pass reported (unreadable
+        // XML, a missing part, or a spine/manifest error) already marks the
+        // document lossy, so the metadata failure is not reported twice.
+        // Otherwise a parser failure must not silently erase all metadata.
+        let (metadata, dropped_metadata) = match parsed_metadata {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                let dropped = if pkg.order.content_problem_reported {
+                    Vec::new()
+                } else {
+                    vec![metadata::DroppedField {
+                        field: "metadata".into(),
+                        reason: error.to_string(),
+                    }]
+                };
+                (Default::default(), dropped)
+            }
         };
 
         // Step 3: Extract chart XMLs from ZIP
@@ -862,11 +878,17 @@ impl HwpxDecoder {
         let mut master_budget = CopyBudget::new(MASTER_PAGE_BUDGET);
         let mut named_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
+        warnings.extend(dropped_metadata.into_iter().map(|dropped| DecodeWarning::ContentLost {
+            part: "Contents/content.hpf".into(),
+            path: ParagraphPath::default(),
+            kind: dropped.field,
+            reason: dropped.reason,
+        }));
         warnings.extend(header_result.warnings);
         warnings.extend(references.validate_auxiliary_xml(&header_xml, "Contents/header.xml")?);
         warnings.extend(pkg.order.problems.iter().map(|reason| DecodeWarning::ContentLost {
             part: "Contents/content.hpf / META-INF/container.xml".into(),
-            path: ParagraphPath(Vec::new()),
+            path: ParagraphPath::default(),
             kind: "package_reading_order".into(),
             reason: reason.clone(),
         }));

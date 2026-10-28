@@ -8,7 +8,7 @@
 //! quick-xml's defaults do **not** reject DTD declarations or entity
 //! expansion. This parser hardens the boundary explicitly:
 //!
-//! - **DocType / Entity events** → rejected (XXE / billion-laughs).
+//! - **DocType** → rejected (XXE / billion-laughs).
 //! - **Depth** capped at [`MAX_DEPTH`].
 //! - **`<opf:meta>` element count** capped at [`MAX_META_ELEMENTS`].
 //! - **Per-text allocation** capped at [`MAX_TEXT_BYTES`].
@@ -38,8 +38,8 @@ fn structure(detail: impl Into<String>) -> HwpxError {
     HwpxError::InvalidStructure { detail: detail.into() }
 }
 
-/// Parses `content.hpf` XML and returns the populated [`Metadata`].
-pub fn parse_content_hpf_metadata(xml: &str) -> HwpxResult<Metadata> {
+/// Parses metadata and reports discarded modeled values.
+pub(crate) fn parse_content_hpf_metadata(xml: &str) -> HwpxResult<(Metadata, Vec<DroppedField>)> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     reader.config_mut().expand_empty_elements = false;
@@ -61,10 +61,18 @@ pub fn parse_content_hpf_metadata(xml: &str) -> HwpxResult<Metadata> {
             Ok(Event::Start(e)) => state.on_start(&e)?,
             Ok(Event::Empty(e)) => state.on_empty(&e)?,
             Ok(Event::Text(t)) => {
-                let unescaped = quick_xml::escape::unescape(&t)
-                    .map_err(|e| structure(format!("text unescape: {e}")))?
-                    .into_owned();
-                state.on_text(&unescaped)?;
+                state.on_text(&t);
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                match crate::wire_xml::resolve_general_ref(&reference) {
+                    Ok(value) => state.on_text(&value),
+                    Err(_) => {
+                        if let Some(element) = state.stack.last_mut() {
+                            element.invalid_reference = true;
+                            element.text.clear();
+                        }
+                    }
+                }
             }
             Ok(Event::CData(_)) => {
                 return Err(structure("content.hpf: CDATA in <opf:metadata> rejected"));
@@ -82,19 +90,40 @@ pub fn parse_content_hpf_metadata(xml: &str) -> HwpxResult<Metadata> {
         buf.clear();
     }
 
-    Ok(state.metadata)
+    Ok((state.metadata, state.dropped))
+}
+
+#[derive(Debug)]
+pub(crate) struct DroppedField {
+    pub field: String,
+    pub reason: String,
 }
 
 #[derive(Default)]
 struct ParserState {
-    stack: Vec<ElementKind>,
-    pending_text: String,
-    pending_meta_name: Option<String>,
+    stack: Vec<Element>,
+    dropped: Vec<DroppedField>,
     meta_count: usize,
     metadata: Metadata,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
+struct Element {
+    kind: ElementKind,
+    name: Option<String>,
+    text: String,
+    bytes: usize,
+    name_bytes: usize,
+    invalid_reference: bool,
+}
+
+impl Element {
+    fn collects_text(&self) -> bool {
+        self.kind == ElementKind::Title || (self.kind == ElementKind::Meta && self.name.is_some())
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum ElementKind {
     Package,
     Metadata,
@@ -103,6 +132,7 @@ enum ElementKind {
     Meta,
     Manifest,
     Spine,
+    #[default]
     Other,
 }
 
@@ -121,40 +151,64 @@ impl ParserState {
         let name = e.name();
         let kind = classify(name);
         self.enforce_namespace(name)?;
-        if matches!(kind, ElementKind::Meta) {
+        let mut element = Element { kind, ..Element::default() };
+        if kind == ElementKind::Meta {
             self.meta_count += 1;
             if self.meta_count > MAX_META_ELEMENTS {
                 return Err(structure(format!(
                     "content.hpf: <opf:meta> count exceeds {MAX_META_ELEMENTS} (DoS guard)",
                 )));
             }
-            self.pending_meta_name = parse_meta_name_attr(e)?;
+            Self::parse_meta_name_attr(e, &mut element)?;
         }
-        self.pending_text.clear();
-        self.stack.push(kind);
+        self.stack.push(element);
         Ok(())
     }
 
     fn on_empty(&mut self, e: &BytesStart<'_>) -> HwpxResult<()> {
-        self.check_depth()?;
-        let name = e.name();
-        let kind = classify(name);
-        self.enforce_namespace(name)?;
-        if matches!(kind, ElementKind::Meta) {
-            self.meta_count += 1;
-            if self.meta_count > MAX_META_ELEMENTS {
-                return Err(structure(format!(
-                    "content.hpf: <opf:meta> count exceeds {MAX_META_ELEMENTS} (DoS guard)",
-                )));
-            }
-            // Self-closing `<opf:meta name="X"/>` → typed slot pinned
-            // to `None`.
-            if let Some(meta_name) = parse_meta_name_attr(e)? {
-                promote_meta(&mut self.metadata, &meta_name, None);
+        self.on_start(e)?;
+        self.on_end(e.name())
+    }
+
+    /// Reads the name without copying oversized attributes; disposal happens at element end.
+    fn parse_meta_name_attr(e: &BytesStart<'_>, element: &mut Element) -> HwpxResult<()> {
+        for attr in e.attributes() {
+            let attr = attr.map_err(|e| structure(format!("attr: {e}")))?;
+            if attr.key.as_ref() == "name" {
+                element.name_bytes = attr.value.len();
+                if element.name_bytes <= MAX_TEXT_BYTES {
+                    element.name = Some(attr.value.to_string());
+                }
+                break;
             }
         }
-        self.pending_text.clear();
         Ok(())
+    }
+
+    /// The sole disposal gate for modeled values, regardless of the loss cause.
+    fn discard_element(&mut self, element: &Element) -> bool {
+        let field = match element.kind {
+            ElementKind::Title => "title".to_string(),
+            ElementKind::Meta if element.name_bytes > MAX_TEXT_BYTES => "meta@name".into(),
+            ElementKind::Meta => match &element.name {
+                Some(name) => format!(
+                    "meta[name={}]",
+                    sanitize_xml_text(name).chars().take(64).collect::<String>()
+                ),
+                None => return false,
+            },
+            _ => return false,
+        };
+        let bytes = element.bytes.max(element.name_bytes);
+        let reason = if element.invalid_reference {
+            "metadata value contains an unresolved reference".to_string()
+        } else if bytes > MAX_TEXT_BYTES {
+            format!("metadata value has {bytes} bytes, exceeds {MAX_TEXT_BYTES} bytes")
+        } else {
+            return false;
+        };
+        self.dropped.push(DroppedField { field, reason });
+        true
     }
 
     /// namespace confusion: any element inside `<opf:metadata>`
@@ -167,7 +221,7 @@ impl ParserState {
     /// unprefixed sibling and still pass the typed-name router. Reject
     /// any non-`opf` prefix, including the absent-prefix case.
     fn enforce_namespace(&self, name: QName) -> HwpxResult<()> {
-        if !self.stack.iter().any(|k| matches!(k, ElementKind::Metadata)) {
+        if !self.stack.iter().any(|k| matches!(k.kind, ElementKind::Metadata)) {
             return Ok(());
         }
         match name.prefix().map(|p| p.into_inner()) {
@@ -182,15 +236,24 @@ impl ParserState {
         }
     }
 
-    fn on_text(&mut self, text: &str) -> HwpxResult<()> {
-        let want = self.pending_text.len().saturating_add(text.len());
-        if want > MAX_TEXT_BYTES {
-            return Err(structure(format!(
-                "content.hpf: metadata text exceeds {MAX_TEXT_BYTES} bytes (DoS guard)",
-            )));
+    fn on_text(&mut self, text: &str) {
+        let Some(element) = self.stack.last_mut() else { return };
+        element.bytes = element.bytes.saturating_add(text.len());
+        if !element.collects_text()
+            || element.bytes > MAX_TEXT_BYTES
+            || element.invalid_reference
+            || element.name_bytes > MAX_TEXT_BYTES
+        {
+            element.text.clear();
+            return;
         }
-        self.pending_text.push_str(text);
-        Ok(())
+        let need = element.text.len() + text.len();
+        let cap = element.text.capacity();
+        if need > cap {
+            let target = cap.saturating_mul(2).max(need).min(MAX_TEXT_BYTES);
+            element.text.reserve_exact(target - element.text.len());
+        }
+        element.text.push_str(text);
     }
 
     fn on_end(&mut self, name: QName) -> HwpxResult<()> {
@@ -201,15 +264,17 @@ impl ParserState {
                 name.as_ref(),
             ))
         })?;
-        if opened != kind {
+        if opened.kind != kind {
             return Err(structure(format!(
                 "content.hpf: mismatched closing tag: {:?}",
                 name.as_ref(),
             )));
         }
 
-        let raw_text = std::mem::take(&mut self.pending_text);
-        let safe_text = sanitize_xml_text(&raw_text);
+        if self.discard_element(&opened) || !opened.collects_text() {
+            return Ok(());
+        }
+        let safe_text = sanitize_xml_text(&opened.text);
 
         match kind {
             ElementKind::Title => {
@@ -218,7 +283,7 @@ impl ParserState {
                 }
             }
             ElementKind::Meta => {
-                if let Some(name) = self.pending_meta_name.take() {
+                if let Some(name) = opened.name {
                     let value = if safe_text.is_empty() { None } else { Some(safe_text) };
                     promote_meta(&mut self.metadata, &name, value);
                 }
@@ -278,28 +343,6 @@ fn promote_meta(meta: &mut Metadata, name: &str, value: Option<String>) {
     }
 }
 
-/// Extracts the `name="..."` attribute on a `<opf:meta>` element.
-pub(crate) fn parse_meta_name_attr(e: &BytesStart<'_>) -> HwpxResult<Option<String>> {
-    for attr in e.attributes() {
-        let attr = attr.map_err(|e| structure(format!("attr: {e}")))?;
-        if attr.key.as_ref() == "name" {
-            // The `name="..."` attribute on `<opf:meta>` is always a
-            // simple identifier (creator / subject / …). Use the raw
-            // attribute value directly — no XML entity expansion is
-            // expected here, and avoiding `unescape_value()` keeps the
-            // crate free of deprecation warnings (still deprecated in quick-xml 0.42).
-            let raw: &str = &attr.value;
-            if raw.len() > MAX_TEXT_BYTES {
-                return Err(structure(format!(
-                    "content.hpf: <opf:meta name=...> value exceeds {MAX_TEXT_BYTES} bytes",
-                )));
-            }
-            return Ok(Some(raw.to_string()));
-        }
-    }
-    Ok(None)
-}
-
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -315,7 +358,7 @@ mod tests {
     }
 
     fn parse(meta_inner: &str) -> Metadata {
-        parse_content_hpf_metadata(&wrap(meta_inner)).expect("parse")
+        parse_content_hpf_metadata(&wrap(meta_inner)).expect("parse").0
     }
 
     #[test]
@@ -376,13 +419,6 @@ mod tests {
         assert_eq!(m.extras.get("date").map(String::as_str), Some("2026년 6월 4일"));
     }
 
-    // Note: an isolated `<opf:title>&lt;script&gt;</opf:title>` entity
-    // gate is intentionally omitted because quick-xml's Event::Text
-    // boundary around entity references is reader-version sensitive;
-    // [`roundtrip_with_encoder_lossless`] below covers escape ↔
-    // unescape symmetry against the canonical encoder output, which is
-    // what any real-world path actually needs.
-
     // ── Security gates ────────────────────────────────────────────
 
     #[test]
@@ -433,12 +469,171 @@ mod tests {
         assert!(format!("{err}").contains("count"));
     }
 
+    // 이것을 실패시키는 것: 바이트 경계 >= 변경, GeneralRef 무시/빈 문자열, 필드명 보고 삭제.
     #[test]
-    fn text_byte_cap_enforced() {
-        let big = "A".repeat(MAX_TEXT_BYTES + 1);
-        let xml = wrap(&format!("<opf:title>{big}</opf:title>"));
-        let err = parse_content_hpf_metadata(&xml).unwrap_err();
-        assert!(format!("{err}").contains("bytes"));
+    fn value_and_name_byte_boundaries() {
+        for n in [MAX_TEXT_BYTES, MAX_TEXT_BYTES + 1] {
+            for attribute in [false, true] {
+                let big = "x".repeat(n);
+                let extra = if attribute {
+                    format!(r#"<opf:meta name="{big}">v</opf:meta>"#)
+                } else {
+                    format!(
+                        r#"<opf:meta name="description">{}&#xAC00;</opf:meta>"#,
+                        "x".repeat(n - 3)
+                    )
+                };
+                let xml = wrap(&format!(
+                    r#"<opf:title>A &amp; B &#xAC00; C</opf:title><opf:meta name="creator">A &amp; B &#xAC00; C</opf:meta>{extra}"#
+                ));
+                let (m, dropped) = parse_content_hpf_metadata(&xml).unwrap();
+                assert_eq!(m.title.as_deref(), Some("A & B 가 C"));
+                assert_eq!(m.author.as_deref(), Some("A & B 가 C"));
+                assert_eq!(dropped.len(), usize::from(n > MAX_TEXT_BYTES));
+                if n > MAX_TEXT_BYTES {
+                    assert!(dropped[0].reason.contains(&n.to_string()));
+                    assert_eq!(
+                        dropped[0].field,
+                        if attribute { "meta@name" } else { "meta[name=description]" }
+                    );
+                    assert!(m.description.is_none());
+                    assert!(m.extras.is_empty());
+                } else if attribute {
+                    assert_eq!(m.extras.get(&big).unwrap(), "v");
+                } else {
+                    assert_eq!(m.description.unwrap().len(), n);
+                }
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: 제목 폐기 누락 또는 모델링하지 않는 언어의 손실 보고.
+    #[test]
+    fn title_and_unmodeled_language_limits() {
+        let (m, lost) = parse_content_hpf_metadata(&wrap(&format!(
+            "<opf:title>{}</opf:title>",
+            "x".repeat(MAX_TEXT_BYTES + 1)
+        )))
+        .unwrap();
+        assert!(m.title.is_none());
+        assert_eq!(lost[0].field, "title");
+        let (_, lost) = parse_content_hpf_metadata(&wrap(&format!(
+            r#"<opf:meta name="{}"/><opf:language>{}</opf:language>"#,
+            "x".repeat(MAX_TEXT_BYTES + 1),
+            "x".repeat(MAX_TEXT_BYTES + 1)
+        )))
+        .unwrap();
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].field, "meta@name");
+        let (m, lost) = parse_content_hpf_metadata(&wrap(&format!(
+            r#"<opf:meta name="{}">{}&amp;tail</opf:meta><opf:meta name="creator">ok</opf:meta>"#,
+            "x".repeat(MAX_TEXT_BYTES + 1),
+            "x".repeat(MAX_TEXT_BYTES + 1)
+        )))
+        .unwrap();
+        assert_eq!(lost.len(), 1);
+        assert_eq!(m.author.as_deref(), Some("ok"));
+    }
+
+    // 이것을 실패시키는 것: 조각마다 정확 크기 할당, 상한 없는 배증, 넘친 뒤 수집, 할당 횟수 상한의 +1 제거.
+    #[test]
+    fn fragmented_buffer_growth_is_bounded() {
+        let mut state = ParserState::default();
+        state.on_start(&BytesStart::new("opf:title")).unwrap();
+        let mut allocations = 0;
+        for _ in 0..MAX_TEXT_BYTES {
+            let before = state.stack[0].text.capacity();
+            state.on_text("&");
+            allocations += usize::from(before != state.stack[0].text.capacity());
+            assert!(state.stack[0].text.capacity() <= MAX_TEXT_BYTES);
+        }
+        assert!(
+            allocations <= MAX_TEXT_BYTES.ilog2() as usize + 1,
+            "capacity changes: {allocations}"
+        );
+        let mut uneven = ParserState::default();
+        uneven.on_start(&BytesStart::new("opf:title")).unwrap();
+        uneven.on_text(&"x".repeat(MAX_TEXT_BYTES / 2 + 1));
+        uneven.on_text(&"x".repeat(MAX_TEXT_BYTES / 2 - 1));
+        assert_eq!(uneven.stack[0].text.len(), MAX_TEXT_BYTES);
+        assert!(uneven.stack[0].text.capacity() <= MAX_TEXT_BYTES);
+        state.on_text("&tail");
+        assert!(state.stack[0].text.is_empty());
+        assert_eq!(state.stack[0].bytes, MAX_TEXT_BYTES + "&tail".len());
+    }
+
+    // 이것을 실패시키는 것: 참조 오류의 전체 전파, 자식 시작 때 부모 상태 초기화,
+    // 하나의 요소에 중복 손실 보고.
+    #[test]
+    fn element_loss_is_isolated_and_reported_once() {
+        for bad in [
+            "&nbsp;".to_string(),
+            "&#0;".into(),
+            "&#xD800;".into(),
+            "&#x110000;".into(),
+            "x".repeat(MAX_TEXT_BYTES + 1),
+        ] {
+            for child in [
+                "",
+                "<opf:x/>",
+                "<opf:x>child</opf:x>",
+                "<opf:meta name=\"subject\">kept</opf:meta>",
+            ] {
+                for tag in [
+                    "opf:title".to_string(),
+                    "opf:meta name=\"description\"".into(),
+                    format!("opf:meta name=\"{}\"", "x".repeat(MAX_TEXT_BYTES + 1)),
+                ] {
+                    let close = tag.split(' ').next().unwrap();
+                    let (m, lost) = parse_content_hpf_metadata(&wrap(&format!(
+                        "<{tag}>{bad}{child}tail</{close}><opf:meta name=\"creator\">ok</opf:meta>"
+                    )))
+                    .unwrap();
+                    assert!(m.title.is_none());
+                    assert!(m.description.is_none());
+                    assert_eq!(m.author.as_deref(), Some("ok"));
+                    if child.contains("subject") {
+                        assert_eq!(m.subject.as_deref(), Some("kept"));
+                    }
+                    assert_eq!(lost.len(), 1, "{tag}: {lost:?}");
+                }
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: 경고 이름 정리 또는 길이 제한 삭제.
+    #[test]
+    fn warning_name_is_sanitized_and_truncated() {
+        let name = format!("bad\u{1}{}", "가".repeat(100));
+        let (_, lost) = parse_content_hpf_metadata(&wrap(&format!(
+            "<opf:meta name=\"{name}\">&nbsp;</opf:meta>"
+        )))
+        .unwrap();
+        assert_eq!(lost[0].field, format!("meta[name=bad{}]", "가".repeat(61)));
+    }
+
+    // 이것을 실패시키는 것: 모델링하지 않는 요소에 참조 손실 경고 추가.
+    #[test]
+    fn unmodeled_reference_loss_is_silent() {
+        let (_, lost) = parse_content_hpf_metadata(&wrap(
+            "<opf:language>&nbsp;</opf:language><opf:x>&nbsp;</opf:x>",
+        ))
+        .unwrap();
+        assert!(lost.is_empty());
+    }
+
+    // 이것을 실패시키는 것: 저장하지 않는 요소의 텍스트 수집 재개.
+    #[test]
+    fn unmodeled_text_does_not_allocate() {
+        for tag in ["opf:language", "opf:x", "opf:meta"] {
+            let mut state = ParserState::default();
+            state.on_start(&BytesStart::new(tag)).unwrap();
+            state.on_text("ignored");
+            assert_eq!(state.stack[0].bytes, 7);
+            assert_eq!(state.stack[0].text.capacity(), 0);
+            state.on_end(QName(tag)).unwrap();
+            assert!(state.dropped.is_empty());
+        }
     }
 
     #[test]
@@ -477,7 +672,7 @@ mod tests {
         let xml = format!(
             "{WRAPPER_START}<opf:metadata><opf:meta name=\"date\" content=\"text\">2026년 6월 4일 목요일 오후 4:47:38</opf:meta></opf:metadata>{WRAPPER_END}",
         );
-        let decoded = parse_content_hpf_metadata(&xml).unwrap();
+        let decoded = parse_content_hpf_metadata(&xml).unwrap().0;
         assert_eq!(
             decoded.extras.get("date").map(String::as_str),
             Some("2026년 6월 4일 목요일 오후 4:47:38"),
@@ -491,7 +686,7 @@ mod tests {
         );
         // And the second decode must observe the same value (no drift).
         let xml2 = format!("{WRAPPER_START}{block}{WRAPPER_END}");
-        let decoded2 = parse_content_hpf_metadata(&xml2).unwrap();
+        let decoded2 = parse_content_hpf_metadata(&xml2).unwrap().0;
         assert_eq!(decoded2.extras.get("date"), decoded.extras.get("date"));
     }
 
@@ -518,7 +713,7 @@ mod tests {
             .with_extra("category", "research");
         let block = enc::build_metadata_block_for_test(&original);
         let xml = format!("{WRAPPER_START}{block}{WRAPPER_END}");
-        let decoded = parse_content_hpf_metadata(&xml).unwrap();
+        let decoded = parse_content_hpf_metadata(&xml).unwrap().0;
         assert_eq!(decoded, original);
     }
 }

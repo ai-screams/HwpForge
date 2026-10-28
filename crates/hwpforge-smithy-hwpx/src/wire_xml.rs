@@ -16,6 +16,13 @@
 
 use std::borrow::Cow;
 
+/// Resolves a streaming XML reference; unknown entities remain errors.
+pub(crate) fn resolve_general_ref(
+    reference: &str,
+) -> Result<String, quick_xml::escape::EscapeError> {
+    quick_xml::escape::unescape(&format!("&{reference};")).map(Cow::into_owned)
+}
+
 /// How Hancom writes one TextArt line break inside `<hp:textart text="…">`:
 /// the visible pair `␍␊` (U+240D U+240A). A raw CR/LF would not survive —
 /// XML attribute-value normalization reads it back as a space. Core carries

@@ -21,6 +21,8 @@ pub(crate) struct PackageOrder {
     pub content_excludable: bool,
     /// Decoder reports these as document-wide ContentLost; analysis fails closed.
     pub problems: Vec<String>,
+    /// A content.hpf failure is already represented in package-order warnings.
+    pub content_problem_reported: bool,
 }
 
 fn numbered_part(path: &str, prefix: &str) -> Option<usize> {
@@ -52,6 +54,7 @@ impl PackageOrder {
                 result.content_excludable = excludable;
             }
             Err(reason) => {
+                result.content_problem_reported = true;
                 result.problems.push(format!("spine: {reason}; using file-number fallback"))
             }
         }
