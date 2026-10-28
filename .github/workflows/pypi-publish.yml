@@ -119,7 +119,7 @@ jobs:
           # 유도된 ref 를 체크아웃하는 곳은 이제 하나도 없다.
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.12.13"
           # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
@@ -248,7 +248,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.12.13"
           # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
@@ -352,7 +352,7 @@ jobs:
           # 신뢰 ref — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이다.
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.12.13"
           # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
@@ -396,7 +396,7 @@ jobs:
           # 신뢰 ref — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이다.
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.12.13"
           # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
