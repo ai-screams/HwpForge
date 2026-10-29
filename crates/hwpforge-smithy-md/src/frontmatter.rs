@@ -31,7 +31,22 @@ pub struct Frontmatter {
     pub metadata: BTreeMap<String, serde_yaml::Value>,
 }
 
+/// The `metadata` key and value every lossless output carries, so general
+/// decoding can tell the machine view apart from Markdown meant for convert.
+const LOSSLESS_FORMAT: (&str, &str) = ("format", "lossless");
+
 impl Frontmatter {
+    /// Marks this frontmatter as lossless output (#281).
+    pub(crate) fn mark_lossless(&mut self) {
+        let (key, value) = LOSSLESS_FORMAT;
+        self.metadata.insert(key.to_string(), serde_yaml::Value::String(value.to_string()));
+    }
+
+    fn is_lossless(&self) -> bool {
+        let (key, value) = LOSSLESS_FORMAT;
+        self.metadata.get(key).and_then(serde_yaml::Value::as_str) == Some(value)
+    }
+
     fn has_content(&self) -> bool {
         self.template.is_some()
             || self.title.is_some()
@@ -115,6 +130,21 @@ fn looks_like_frontmatter(yaml_block: &str) -> bool {
         .lines()
         .map(str::trim)
         .any(|line| !line.is_empty() && !line.starts_with('#') && line.contains(':'))
+}
+
+/// Refuses lossless output as general decode input: it is a machine view for
+/// checking what the preservation scope keeps, and round-trip edits go
+/// through JSON (#281).
+pub(crate) fn reject_lossless_view(frontmatter: Option<&Frontmatter>) -> MdResult<()> {
+    if frontmatter.is_some_and(Frontmatter::is_lossless) {
+        return Err(MdError::UnsupportedStructure {
+            detail: "lossless Markdown is a machine-oriented view for checking what the \
+                     preservation scope keeps and is not a convert input; use to-json/from-json \
+                     for round-trip edits"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Renders frontmatter back to markdown YAML block syntax.

@@ -410,11 +410,13 @@ fn write_report(report: &MigrationReport, path: &str) {
 
 ## Lossy vs Lossless 모드 선택
 
-| 목적                | 권장 모드         | 이유                                |
-| ------------------- | ----------------- | ----------------------------------- |
-| **RAG/검색 인덱싱** | `encode_lossy`    | 표준 GFM, 청크 분할 호환, 토큰 절약 |
-| **아카이브 백업**   | `encode_lossless` | 구조 완전 보존, 원본 복원 가능      |
-| **하이브리드**      | 둘 다 생성        | lossy는 검색용, lossless는 백업용   |
+| 목적                | 권장 모드         | 이유                                        |
+| ------------------- | ----------------- | ------------------------------------------- |
+| **RAG/검색 인덱싱** | `encode_lossy`    | 표준 GFM, 청크 분할 호환, 토큰 절약         |
+| **보존 범위 확인**  | `encode_lossless` | 변환이 담는 구조를 기계로 확인              |
+| **하이브리드**      | 둘 다 생성        | lossy는 검색용, lossless는 보존 범위 확인용 |
+
+Lossless 출력은 원본 복원용 백업이 아니고 `convert` 입력으로도 쓸 수 없습니다. 원본은 HWPX 파일 그대로 보관하고, 고쳐서 되돌릴 때는 `to-json`/`from-json` 을 사용하세요.
 
 하이브리드 전략이 이상적입니다:
 
@@ -429,9 +431,9 @@ let validated = result.document.validate().unwrap();
 let lossy = MdEncoder::encode_lossy(&validated).unwrap();
 std::fs::write("output/search/document.md", &lossy).unwrap();
 
-// 아카이브 백업용
+// 보존 범위 확인용
 let lossless = MdEncoder::encode_lossless(&validated).unwrap();
-std::fs::write("output/archive/document.lossless.md", &lossless).unwrap();
+std::fs::write("output/inspect/document.lossless.md", &lossless).unwrap();
 ```
 
 ## 관련 문서

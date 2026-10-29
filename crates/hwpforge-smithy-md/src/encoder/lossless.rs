@@ -23,16 +23,7 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
         });
     }
     let mut frontmatter = from_metadata(document.metadata(), None);
-    if frontmatter.template.is_none()
-        && frontmatter.title.is_none()
-        && frontmatter.author.is_none()
-        && frontmatter.date.is_none()
-        && frontmatter.metadata.is_empty()
-    {
-        frontmatter
-            .metadata
-            .insert("format".to_string(), serde_yaml::Value::String("lossless".to_string()));
-    }
+    frontmatter.mark_lossless();
     let mut output = render_frontmatter(&frontmatter)?;
     output.push('\n');
 
@@ -2168,16 +2159,56 @@ mod tests {
         assert!(out.contains("</compose>"));
     }
 
-    #[test]
-    fn lossless_no_frontmatter_adds_format_key() {
-        // Document with no metadata should add format=lossless to frontmatter
-        let doc = validated_document(vec![Paragraph::with_runs(
-            vec![Run::text("body", CharShapeIndex::new(0))],
-            ParaShapeIndex::new(0),
-        )]);
+    /// The frontmatter block of lossless output for `metadata`.
+    fn lossless_frontmatter(metadata: hwpforge_core::Metadata) -> String {
+        let mut draft = Document::new();
+        *draft.metadata_mut() = metadata;
+        draft.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("body", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            hwpforge_core::PageSettings::a4(),
+        ));
+        let out = encode_lossless(&draft.validate().unwrap()).unwrap();
+        let end = out.find("\n---\n").expect("closed frontmatter") + "\n---\n".len();
+        out[..end].to_string()
+    }
 
-        let out = encode_lossless(&doc).unwrap();
-        assert!(out.contains("format: lossless"));
+    // The marker is written whatever metadata the document has (#281), once,
+    // in the YAML renderer's key order.
+    // 이것을 실패시키는 것: `mark_lossless` 호출을 metadata 가 모두 빈 경우로만 되돌리기
+    // (제목·저자·사용자 metadata 가 있는 세 시험이 표식 없이 실패), 호출 삭제(네 시험 모두).
+    #[test]
+    fn lossless_frontmatter_marks_empty_metadata() {
+        assert_eq!(
+            lossless_frontmatter(hwpforge_core::Metadata::default()),
+            "---\nmetadata:\n  format: lossless\n---\n"
+        );
+    }
+
+    #[test]
+    fn lossless_frontmatter_marks_a_titled_document() {
+        let mut metadata = hwpforge_core::Metadata::default();
+        metadata.title = Some("Report".into());
+        assert_eq!(
+            lossless_frontmatter(metadata),
+            "---\ntitle: Report\nmetadata:\n  format: lossless\n---\n"
+        );
+    }
+
+    #[test]
+    fn lossless_frontmatter_marks_author_date_and_custom_metadata() {
+        let mut metadata = hwpforge_core::Metadata::default();
+        metadata.author = Some("Kim".into());
+        metadata.created = Some("2026-10-29".into());
+        metadata.subject = Some("Budget".into());
+        metadata.keywords = vec!["a".into(), "b".into()];
+        metadata.modified = Some("2026-10-30".into());
+        assert_eq!(
+            lossless_frontmatter(metadata),
+            "---\nauthor: Kim\ndate: 2026-10-29\nmetadata:\n  format: lossless\n  keywords:\n  - a\n  - b\n  modified: 2026-10-30\n  subject: Budget\n---\n"
+        );
     }
 
     #[test]

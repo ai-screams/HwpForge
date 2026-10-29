@@ -47,8 +47,10 @@ pub(crate) fn convert_md<'py>(
 /// Args:
 ///     data: The HWPX package.
 ///     mode: `"styled"` for GFM with a style frontmatter, `"lossy"` for plain
-///         GFM, `"lossless"` for the round-trip rendering. Any other spelling
-///         raises `HwpForgeError(INVALID_INPUT)` listing the three.
+///         GFM, `"lossless"` for a machine-oriented view of what the
+///         preservation scope keeps (`convert_md` refuses it; edit through
+///         `to_json`/`from_json`). Any other spelling raises
+///         `HwpForgeError(INVALID_INPUT)` listing the three.
 ///
 /// Returns:
 ///     The Markdown text, and a report whose `images` maps each referenced

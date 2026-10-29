@@ -121,6 +121,8 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 an object the scope lists as refused, and may leave out anything else (paragraph styles,
 headers and footers …) without an error — the scope is the "Lossless 보존 범위" section of the
 [Markdown bridge guide](https://ai-scream.ai/HwpForge/guide/markdown-bridge.html#lossless-보존-범위).
+The lossless text is a machine-oriented view for checking that scope: `convert_md` refuses it
+(`MD_DECODE_FAILED`), and round-trip edits go through `to_json`/`from_json`.
 
 Constructors and accessors beside these: `Document.open(path)` (bounded at 100 MB, raising
 `INPUT_TOO_LARGE` beyond it), `Document.from_bytes(data)` (no bound — the caller already holds

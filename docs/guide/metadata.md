@@ -106,11 +106,12 @@ assert_eq!(meta.modified.as_deref(), Some("2026-03-10"));
 
 `metadata:` 아래의 하위 필드:
 
-| 하위 필드  | Metadata 필드 | 설명               |
-| ---------- | ------------- | ------------------ |
-| `subject`  | `subject`     | 주제/설명          |
-| `keywords` | `keywords`    | 검색 키워드 (배열) |
-| `modified` | `modified`    | 수정일 (ISO 8601)  |
+| 하위 필드  | Metadata 필드 | 설명                                                            |
+| ---------- | ------------- | --------------------------------------------------------------- |
+| `subject`  | `subject`     | 주제/설명                                                       |
+| `keywords` | `keywords`    | 검색 키워드 (배열)                                              |
+| `modified` | `modified`    | 수정일 (ISO 8601)                                               |
+| `format`   | _(없음)_      | 값이 `lossless` 이면 lossless 출력 표식이라 디코드가 거부합니다 |
 
 `subject`/`keywords`/`modified`는 반드시 `metadata:` 아래에 중첩해야 합니다 — 최상위에 쓰면 조용히 무시됩니다.
 
