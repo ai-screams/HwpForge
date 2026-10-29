@@ -13,7 +13,7 @@ use hwpforge_core::{
 use hwpforge_foundation::UnderlineType;
 
 use super::guard::{Block, Source, MEMO_CLOSE, MEMO_OPEN, TOO_DEEP};
-use super::list_format::{format_list_continuation, format_list_item};
+use super::list_format::ListIndent;
 use super::markup::{Cell, Html, Md};
 use super::{MdWarning, Part};
 use crate::eqn::{render_equation, EqnRender};
@@ -102,6 +102,7 @@ impl FootnoteCollector {
                     at: vec![note.at],
                 }),
                 body: false,
+                tight: false,
             })
             .collect()
     }
@@ -210,14 +211,14 @@ struct Ctx {
     /// group or a picture is not one (groups are spread by an iterator), so
     /// this differs from the semantic depth checked by Core validation.
     depth: usize,
-    /// Document text drawn here must make no block structure: a top-level
-    /// Body paragraph that is not a continuation, and the table of a
-    /// top-level one-table paragraph that is not one. Its text goes through
-    /// [`Md::guarded_text`] and a table it draws ends its block
-    /// ([`Md::ending_block`]). Set in [`encode_paragraph_styled`] only; a
-    /// memo, a note body and a one-table or one-picture paragraph's caption
-    /// turn it off; everything else passes it on. Outside it, output is as
-    /// before.
+    /// Document text drawn here must make no structure it did not mean: a
+    /// top-level Body paragraph, a list item's and a continuation's text,
+    /// and the table of a top-level one-table paragraph that is not a
+    /// continuation. Its text goes through [`Md::guarded_text`] and a table
+    /// it draws ends its block ([`Md::ending_block`]). Set in
+    /// [`encode_paragraph_styled`] only; a heading, a memo, a note body and a
+    /// one-table or one-picture paragraph's caption turn it off; everything
+    /// else passes it on. Outside it, output is as before.
     guarded: bool,
     /// Drawing a GFM table cell: inline content, so the
     /// emphasis check reads it in a cell ([`emphasis_kept`]) and a comment
@@ -271,6 +272,8 @@ struct State {
     note_alias: HashMap<usize, usize>,
     /// The copies drawn ([`expanded`]), kept so their addresses stay theirs.
     copies: Vec<std::rc::Rc<Paragraph>>,
+    /// The open list items, for nesting ([`ListIndent`]).
+    lists: ListIndent,
 }
 
 impl State {
@@ -297,6 +300,7 @@ impl State {
             note_marks: HashMap::new(),
             note_alias: HashMap::new(),
             copies: Vec::new(),
+            lists: ListIndent::default(),
         }
     }
 }
@@ -499,8 +503,10 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 markdown: super::guard::SECTION_MARKER.to_string(),
                 source: None,
                 body: false,
+                tight: false,
             });
         }
+        st.lists.reset();
 
         // A code block's lines and their paragraphs.
         let mut code: Vec<(String, (usize, usize))> = Vec::new();
@@ -512,6 +518,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     markdown: Md::code_block(&lines.join("\n")).into_string(),
                     source: source(lines.iter().map(|l| super::guard::plain_text(l)).collect(), at),
                     body: false,
+                    tight: false,
                 });
                 code.clear();
             }
@@ -523,8 +530,14 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             // Page break
             if paragraph.page_break {
                 flush_code(&mut code, &mut blocks);
-                blocks.push(Block { markdown: "---".to_string(), source: None, body: false });
+                blocks.push(Block {
+                    markdown: "---".to_string(),
+                    source: None,
+                    body: false,
+                    tight: false,
+                });
                 continuation = None;
+                st.lists.reset();
             }
 
             // Code block detection: all text runs with code font.
@@ -539,15 +552,17 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     .collect::<String>();
                 code.push((text, st.at));
                 continuation = None;
+                st.lists.reset();
                 continue;
             }
             flush_code(&mut code, &mut blocks);
 
             let continuation_level = continuation
                 .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
-            let (markdown, body) =
+            let (markdown, drawn) =
                 encode_paragraph_styled(paragraph, styles, &mut st, continuation_level.is_some());
-            if !markdown.trim().is_empty() {
+            let written = !markdown.trim().is_empty();
+            if written {
                 let text =
                     fallback(std::slice::from_ref(paragraph), 0, &mut st).remove(0).into_string();
                 // A continuation is its own block (`join` writes the same
@@ -556,10 +571,18 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 // 이것을 실패시키는 것: 직전 블록에 붙이기
                 // (`continuation_is_its_own_block`).
                 let markdown = match continuation_level {
-                    Some(level) => format_list_continuation(&markdown, level),
-                    None => markdown,
+                    Some(_) => st.lists.continuation(&markdown),
+                    None => {
+                        if drawn != Drawn::Item {
+                            st.lists.reset();
+                        }
+                        markdown
+                    }
                 };
-                blocks.push(Block { markdown, source: source(vec![text], vec![st.at]), body });
+                let body = drawn == Drawn::Body;
+                let tight = st.lists.take_tight();
+                let source = source(vec![text], vec![st.at]);
+                blocks.push(Block { markdown, source, body, tight });
             }
 
             if continuation_level.is_none() {
@@ -586,19 +609,31 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }
 
-/// Encodes a single top-level paragraph into styled markdown, and whether
-/// it was drawn as a Body block: not a `continuation`, drawn by the body
-/// branch (not as a heading, a list item, or a one-table or one-picture
-/// paragraph). The answer comes from the branch that drew it, and is the
-/// paragraph's `Ctx::guarded`.
+/// What a top-level paragraph was drawn as, told by the branch that drew it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drawn {
+    /// A Body block: not a continuation, drawn by the body branch.
+    Body,
+    /// A list item ([`ListIndent::item`]).
+    Item,
+    /// A heading, a continuation, or a one-table or one-picture paragraph.
+    Other,
+}
+
+/// Encodes a single top-level paragraph into styled markdown, and what it
+/// was drawn as ([`Drawn`]). The text of a Body paragraph, a list item and
+/// a continuation is guarded (`Ctx::guarded`): it opens no block, so a list
+/// item or a continuation makes no structure it did not mean and does not
+/// close its item.
 /// 이것을 실패시키는 것: 단일 표·그림을 Body 로(`out_of_scope_is_base_output`) ·
-/// continuation 을 Body 로(`continuation_is_its_own_block`).
+/// continuation 을 Body 로(`continuation_is_its_own_block`) · 항목·continuation 글을
+/// 보호하지 않기(`item_text_stays_in_its_item`).
 fn encode_paragraph_styled(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
     st: &mut State,
     continuation: bool,
-) -> (String, bool) {
+) -> (String, Drawn) {
     let ctx = Ctx::default();
     // Handle single-run block elements (table, image) as standalone blocks.
     // A paragraph whose one run is a group is not one of them, even when the
@@ -611,48 +646,61 @@ fn encode_paragraph_styled(
                 let table_ctx = Ctx { guarded: !continuation, ..ctx };
                 let mut md = table_to_styled_markdown(table, styles, false, st, table_ctx);
                 md.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
-                return (md.into_string(), false);
+                return (md.into_string(), Drawn::Other);
             }
             RunContent::Image(image) => {
                 let mut md = emit_picture(image, styles, st, ctx);
                 md.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
-                return (md.into_string(), false);
+                return (md.into_string(), Drawn::Other);
             }
             _ => {}
         }
     }
 
     // Shared outline/list classification (hwpforge-core). Classification is
-    // text-blind, so it decides the context before drawing; the empty-text
-    // guards below are rendering concerns (an empty heading/list item
-    // renders as nothing).
+    // text-blind, so it decides the context before drawing. Empty headings
+    // render as nothing; empty list items render as their marker alone.
     let kind = classify_paragraph(paragraph, styles);
     let body = !continuation && matches!(kind, ParaKind::Body);
-    let text =
-        paragraph_text_styled(paragraph, styles, st, Ctx { guarded: body, ..ctx }).into_string();
+    let guarded = !matches!(kind, ParaKind::Heading { .. });
+    let text = paragraph_text_styled(paragraph, styles, st, Ctx { guarded, ..ctx }).into_string();
     let markdown = match kind {
         ParaKind::Heading { level, .. } => {
             // Headings must be single-line: collapse lineBreak-originated newlines.
             let heading_text = text.trim().replace('\n', " ");
             if heading_text.is_empty() {
-                return (String::new(), false);
+                return (String::new(), Drawn::Other);
             }
             format!("{} {}", "#".repeat(level as usize), heading_text)
         }
         ParaKind::ListItem { kind, level, checked, .. } => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return (String::new(), false);
-            }
-            format_list_item(comments_after_text(trimmed).trim(), kind, level, checked)
+            let content = list_text(paragraph, comments_after_text(text.trim()), st);
+            // An empty item is written as its marker alone.
+            // 이것을 실패시키는 것: 빈 항목 쓰지 않기(`empty_item_holds_its_first_block`).
+            let item = st.lists.item(content.trim(), kind, level, checked);
+            return (item, Drawn::Item);
         }
-        // A continuation is out of the guarantee: as before (G.3 (라)).
-        // 이것을 실패시키는 것: continuation 에도 줄 끝내기
-        // (`continuation_line_start_comment_is_base_output`).
         ParaKind::Body if body => comment_ends_line(text.trim_start()).0,
-        ParaKind::Body => comments_after_text(text.trim_start()),
+        // A continuation is not a Body block: no line is ended after a
+        // comment; the comment moves after the text, as in a list item.
+        // 이것을 실패시키는 것: continuation 에도 줄 끝내기
+        // (`continuation_line_start_comment_moves_after_text`).
+        ParaKind::Body => list_text(paragraph, comments_after_text(text.trim_start()), st),
     };
-    (markdown, body)
+    (markdown, if body { Drawn::Body } else { Drawn::Other })
+}
+
+/// A list item's or a continuation's text, or, when it would still make a
+/// structure in its item ([`super::list_format::makes_structure`]: pieces escaped
+/// one by one joined into a marker), the paragraph as plain text with one
+/// warning, as a Body block falls back; the item's marker is kept.
+/// 이것을 실패시키는 것: 검사 삭제(`joined_pieces_make_no_list_in_an_item`).
+fn list_text(paragraph: &Paragraph, text: String, st: &mut State) -> String {
+    if !super::list_format::makes_structure(&text) {
+        return text;
+    }
+    super::guard::written_as_text(&mut st.warnings, &mut st.warned, st.at);
+    fallback(std::slice::from_ref(paragraph), 0, st).remove(0).into_string()
 }
 
 /// A Body block with each comment the encoder wrote at a line start (a
@@ -2733,7 +2781,311 @@ mod tests {
         styles.list_para_levels.insert(2, 2);
 
         let output = encode_styled(&doc, &styles);
-        assert_eq!(output.markdown, "- Top\n\n    - Nested");
+        // A level that skips one nests one step deeper.
+        assert_eq!(output.markdown, "- Top\n\n  - Nested");
+    }
+
+    /// A paragraph of [`encode_list`]: a numbered or bullet item, a
+    /// continuation, at a level, or a Body paragraph.
+    #[derive(Clone, Copy)]
+    enum Li {
+        Num(u8),
+        Bul(u8),
+        Cont(u8),
+        Body,
+    }
+
+    /// Styled Markdown of one paragraph per `(text, kind)`, then each text
+    /// with how many list items hold it when read back.
+    fn encode_list(paras: &[(&str, Li)]) -> Vec<(String, Option<usize>)> {
+        encode_list_runs(
+            paras
+                .iter()
+                .map(|&(text, kind)| (vec![Run::text(text, CharShapeIndex::new(0))], kind))
+                .collect(),
+        )
+    }
+
+    /// [`encode_list`] of paragraphs with any runs.
+    fn encode_list_runs(paras: Vec<(Vec<Run>, Li)>) -> Vec<(String, Option<usize>)> {
+        super::super::list_format::item_depths(&list_markdown(paras))
+    }
+
+    /// The styled Markdown of [`encode_list_runs`].
+    fn list_markdown(paras: Vec<(Vec<Run>, Li)>) -> String {
+        let mut styles = MockStyles::new();
+        let mut paragraphs = Vec::new();
+        for (i, (runs, kind)) in paras.into_iter().enumerate() {
+            let id = i + 1;
+            match kind {
+                Li::Num(level) | Li::Bul(level) => {
+                    let ty = if matches!(kind, Li::Num(_)) { "NUMBER" } else { "BULLET" };
+                    styles.list_para_types.insert(id, ty);
+                    styles.list_para_levels.insert(id, level);
+                }
+                Li::Cont(level) => {
+                    styles
+                        .para_style_names
+                        .insert(id, crate::internal_styles::list_continuation_style_name(level));
+                }
+                Li::Body => {}
+            }
+            paragraphs.push(Paragraph::with_runs(runs, ParaShapeIndex::new(id)));
+        }
+        encode_styled(&validated_document(paragraphs), &styles).markdown
+    }
+
+    fn depths(pairs: &[(&str, usize)]) -> Vec<(String, Option<usize>)> {
+        pairs.iter().map(|&(text, depth)| (text.to_string(), Some(depth))).collect()
+    }
+
+    /// Numbered levels 0 to 3 nest one item deeper each, none a code block.
+    /// 이것을 실패시키는 것: 들여쓰기를 수준당 두 칸(`"  ".repeat(level)`)으로.
+    #[test]
+    fn numbered_levels_nest_under_numbered_items() {
+        let out = encode_list(&[
+            ("a", Li::Num(0)),
+            ("b", Li::Num(1)),
+            ("c", Li::Num(2)),
+            ("d", Li::Num(3)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("c", 3), ("d", 4)]));
+    }
+
+    /// A numbered item under a bullet and a bullet under a numbered item
+    /// each start at their parent's content column.
+    /// 이것을 실패시키는 것: 번호 표지 폭을 글머리표 폭(2)으로.
+    #[test]
+    fn mixed_markers_nest_by_parent_marker_width() {
+        let out = encode_list(&[("a", Li::Bul(0)), ("b", Li::Num(1)), ("c", Li::Bul(2))]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("c", 3)]));
+    }
+
+    /// A level that skips some (0 → 3) nests one item deeper, not into a
+    /// code block.
+    /// 이것을 실패시키는 것: 들여쓰기를 부모 칸 대신 수준(`3 * level`)으로.
+    #[test]
+    fn skipped_level_nests_one_step_deeper() {
+        let out = encode_list(&[("a", Li::Num(0)), ("b", Li::Num(3))]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2)]));
+    }
+
+    /// A continuation of a numbered item stays inside that item, at any
+    /// depth.
+    /// 이것을 실패시키는 것: continuation 들여쓰기를 `2 * (level + 1)` 로.
+    #[test]
+    fn numbered_continuation_stays_in_its_item() {
+        let out = encode_list(&[
+            ("a", Li::Num(0)),
+            ("a2", Li::Cont(0)),
+            ("b", Li::Num(1)),
+            ("b2", Li::Cont(1)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("a2", 1), ("b", 2), ("b2", 2)]));
+    }
+
+    /// A Body paragraph ends the list: the next list starts at column 0, so
+    /// its deeper item is not indented past the Body text into a code block.
+    /// 이것을 실패시키는 것: 목록이 아닌 블록에서 열린 항목 비우기 삭제.
+    #[test]
+    fn body_paragraph_resets_open_items() {
+        let out = encode_list(&[
+            ("a", Li::Num(0)),
+            ("b", Li::Num(1)),
+            ("x", Li::Body),
+            ("c", Li::Num(2)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("x", 0), ("c", 1)]));
+    }
+
+    /// An item's text stays in its item and makes no structure, read back with its
+    /// characters: a table after its text is a table in the item, a blank
+    /// line then `- x` is text in the item (not a list that closes it), a
+    /// blank line then indented text is text in the item (not a code
+    /// block); the next deeper item nests under it.
+    /// 이것을 실패시키는 것: 항목 글을 보호하지 않기 · 뒷줄 들여쓰기 삭제 · 앞 공백 남기기.
+    #[test]
+    fn item_text_stays_in_its_item() {
+        let cell = TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("v", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::new(1000).unwrap(),
+        );
+        let text = |s: &str| vec![Run::text(s, CharShapeIndex::new(0))];
+        let mut item = text("b");
+        item.push(Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0)));
+        let out = encode_list_runs(vec![
+            (text("a"), Li::Num(0)),
+            (item, Li::Num(1)),
+            (text("c"), Li::Num(2)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("v", 2), ("c", 3)]));
+        let out = encode_list(&[("a", Li::Num(0)), ("b\n\n- x", Li::Num(1)), ("c", Li::Num(2))]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("- x", 2), ("c", 3)]));
+        let out = encode_list(&[
+            ("a", Li::Num(0)),
+            ("b", Li::Num(1)),
+            ("c\n\n   x\n\n    y", Li::Num(2)),
+            ("d", Li::Num(3)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("c", 3), ("x", 3), ("y", 3), ("d", 4)]));
+    }
+
+    /// An empty item is written as its marker alone and holds what follows
+    /// it: its first block (a deeper item, a continuation) is joined with
+    /// one line ending, since CommonMark ends an item that starts with a
+    /// blank line at the next blank line. A sibling after it is not joined.
+    /// Each case read back: the child nests under the empty parent, a
+    /// continuation stays in it (`- child` as text), and the items closed
+    /// before it stay closed.
+    /// 이것을 실패시키는 것: 빈 항목 쓰지 않기 · `tight` 무시 · 형제도 붙이기 · 닫기 삭제.
+    #[test]
+    fn empty_item_holds_its_first_block() {
+        let text = |s: &str| vec![Run::text(s, CharShapeIndex::new(0))];
+        for (paras, want) in [
+            (vec![(text(""), Li::Bul(0)), (text("child"), Li::Bul(1))], "-\n  - child"),
+            (vec![(text(""), Li::Num(0)), (text("child"), Li::Num(1))], "1.\n   1. child"),
+            (vec![(text(""), Li::Num(0)), (text("b"), Li::Num(0))], "1.\n\n1. b"),
+        ] {
+            let md = list_markdown(paras);
+            assert_eq!(md, want);
+        }
+        let lists = |md: &str| {
+            pulldown_cmark::Parser::new_ext(md, super::super::md_options())
+                .filter(|e| matches!(e, pulldown_cmark::Event::Start(pulldown_cmark::Tag::List(_))))
+                .count()
+        };
+        assert_eq!(lists("-\n  - child"), 2);
+        assert_eq!(lists("1.\n\n1. b"), 1);
+        let out = encode_list(&[("", Li::Bul(0)), ("child", Li::Bul(1))]);
+        assert_eq!(out, depths(&[("child", 2)]));
+        let out = encode_list(&[
+            ("a", Li::Num(0)),
+            ("b", Li::Num(1)),
+            ("", Li::Num(0)),
+            ("c", Li::Cont(0)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("c", 1)]));
+        let out = encode_list(&[("a", Li::Num(0)), ("", Li::Num(1)), ("c", Li::Cont(1))]);
+        assert_eq!(out, depths(&[("a", 1), ("c", 2)]));
+        let out = encode_list(&[("", Li::Num(1)), ("- child", Li::Cont(1))]);
+        assert_eq!(out, depths(&[("- child", 1)]));
+        let out = encode_list(&[
+            ("a", Li::Num(0)),
+            ("b", Li::Num(1)),
+            ("", Li::Num(0)),
+            ("d", Li::Num(1)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("d", 2)]));
+    }
+
+    /// Text pieces escaped one by one can join into a marker (`1` then a
+    /// composed `. x`): the item's text is then written as plain text, its
+    /// marker kept, and reads back as text in the item; the next deeper item
+    /// nests under it.
+    /// 이것을 실패시키는 것: `list_text` 의 검사 삭제.
+    #[test]
+    fn joined_pieces_make_no_list_in_an_item() {
+        let text = |s: &str| vec![Run::text(s, CharShapeIndex::new(0))];
+        let joined = vec![
+            Run::text("1", CharShapeIndex::new(0)),
+            Run::control(Control::compose(". x"), CharShapeIndex::new(0)),
+        ];
+        for kind in [Li::Num(1), Li::Cont(0)] {
+            let below = if matches!(kind, Li::Num(_)) { 3 } else { 2 };
+            let out = encode_list_runs(vec![
+                (text("a"), Li::Num(0)),
+                (joined.clone(), kind),
+                (text("c"), Li::Num(below as u8 - 1)),
+            ]);
+            let at = if matches!(kind, Li::Num(_)) { 2 } else { 1 };
+            assert_eq!(out, depths(&[("a", 1), ("1. x", at), ("c", below)]));
+        }
+    }
+
+    /// Styled escaping already protects fences and definitions regardless
+    /// of source indentation; layout must keep the text and its child.
+    #[test]
+    fn styled_indented_list_syntax_stays_text() {
+        use pulldown_cmark::{Event, Parser, Tag};
+        let text = |s: &str| vec![Run::text(s, CharShapeIndex::new(0))];
+        for syntax in ["```", "~~~", "[ref]: /target"] {
+            for indent in ["    ", "        ", "\t"] {
+                for continuation in [false, true] {
+                    let source = format!("{indent}{syntax}");
+                    let gap = if syntax.starts_with('[') { "\n\n" } else { "\n" };
+                    let paras = if continuation {
+                        vec![(text("parent"), Li::Bul(0)), (text(&source), Li::Cont(0))]
+                    } else {
+                        vec![(text(&format!("parent{gap}{source}")), Li::Bul(0))]
+                    };
+                    let md = list_markdown(
+                        paras.into_iter().chain([(text("child"), Li::Bul(1))]).collect(),
+                    );
+                    let out = super::super::list_format::item_depths(&md);
+                    let want = if continuation || gap == "\n\n" {
+                        depths(&[("parent", 1), (syntax, 1), ("child", 2)])
+                    } else {
+                        depths(&[(&format!("parent\n{syntax}"), 1), ("child", 2)])
+                    };
+                    assert_eq!(
+                        out, want,
+                        "{indent:?} {syntax:?} continuation={continuation}: {md}"
+                    );
+                    assert!(
+                        !Parser::new_ext(&md, super::super::md_options())
+                            .any(|event| matches!(event, Event::Start(Tag::CodeBlock(_)))),
+                        "{md}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A continuation's leading blank lines stay in the empty item before
+    /// it.
+    /// 이것을 실패시키는 것: continuation 앞 빈 줄 남기기.
+    #[test]
+    fn continuation_leading_blank_lines_stay_in_an_empty_item() {
+        let out = encode_list(&[("", Li::Num(0)), ("\n\ntext", Li::Cont(0))]);
+        assert_eq!(out, depths(&[("text", 1)]));
+    }
+
+    /// An empty task item reads back as a task item with its state, last in
+    /// the document or followed by another block.
+    /// 이것을 실패시키는 것: 체크 표지 뒤 공백 지우기.
+    #[test]
+    fn empty_task_item_keeps_its_state() {
+        use hwpforge_core::ParagraphListRef;
+        let template = hwpforge_blueprint::builtins::builtin_default().unwrap();
+        for checked in [true, false] {
+            for tail in [false, true] {
+                let mut paragraphs = vec![Paragraph::with_runs(
+                    vec![Run::text("", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(1),
+                )];
+                let mut styles = MockStyles::new();
+                styles.list_para_types.insert(1, "BULLET");
+                styles.list_para_levels.insert(1, 0);
+                styles.list_para_checked.insert(1, checked);
+                if tail {
+                    paragraphs.push(Paragraph::with_runs(
+                        vec![Run::text("after", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(2),
+                    ));
+                }
+                let md = encode_styled(&validated_document(paragraphs), &styles).markdown;
+                let decoded = crate::MdDecoder::decode(&md, &template).unwrap();
+                let first = &decoded.document.sections()[0].paragraphs[0];
+                let list = decoded.style_registry.para_shape(first.para_shape_id).unwrap().list;
+                assert!(
+                    matches!(list, Some(ParagraphListRef::CheckBullet { checked: c, .. }) if c == checked),
+                    "{md:?} → {list:?}"
+                );
+            }
+        }
     }
 
     #[test]

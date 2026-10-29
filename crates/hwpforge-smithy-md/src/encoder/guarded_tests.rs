@@ -2,9 +2,14 @@
 //! block — a top-level body paragraph that is not a continuation — and in a
 //! guarded cell, document text makes no block structure and comes back as
 //! the same characters; what a rule cannot close is written as plain text
-//! with one warning per paragraph. Outside it (lists, headings,
-//! continuations, notes, memos, one-table or one-picture captions, lossy)
-//! the output is the base commit's, byte for byte (`BASE`).
+//! with one warning per paragraph. A list item's and a continuation's text
+//! is guarded the same way (#296): it makes no structure it did not mean
+//! and does not close its item;
+//! being list blocks themselves, they are not checked as Body blocks.
+//! Outside it (headings, notes, memos, one-table or one-picture
+//! paragraphs and captions, lossy) the output is the base commit's, byte
+//! for byte (`BASE`); the list cases are asserted with their own output
+//! (`list_text_is_guarded`).
 //!
 //! The documents are built in [`cases`] with the public API only, so the
 //! same builders run against the base commit's crates to give `BASE`.
@@ -857,29 +862,31 @@ fn body_check_and_table_end_close_the_rest() {
 /// Body 로 · 출처 없는 블록에 붙이기.
 #[test]
 fn continuation_is_its_own_block() {
-    // Body `a`, an empty item, its continuation `b`: base output, no warning.
+    // Body `a`, an empty item, its continuation `b`: no warning. The empty
+    // item is its marker alone and holds `b` on the next line; the base's
+    // four spaces read back as a code block (#296).
     let (out, fallbacks) = styled(&case("g2_continuation_after_empty_item"));
-    assert_eq!((out.as_str(), fallbacks), (base("g2_continuation_after_empty_item").0, 0));
-    assert_eq!(out, "a\n\n    b");
-    // A page-broken empty item, then a continuation holding `a`, `:b`: the
-    // continuation alone falls back, the definition list is gone.
+    assert_eq!((out.as_str(), fallbacks), ("a\n\n-\n  b", 0));
+    // A page-broken empty item, then its continuation holding `a`, `:b`:
+    // the continuation is guarded in the item; its `:` is escaped and
+    // nothing falls back.
     let mut item = cases::p(BULLET, vec![t("")]);
     item.page_break = true;
     let (out, fallbacks) = styled(&doc(vec![item, cases::p(CONT0, vec![t("a\n\n:b")])]));
-    assert_eq!((out.as_str(), fallbacks), ("---\n\na  \\:b", 1));
-    // An item, then a continuation holding `x`, `:y`: only the continuation
-    // falls back; the item keeps its marker.
+    assert_eq!((out.as_str(), fallbacks), ("---\n\n-\n  a\n\n  \\:b", 0));
+    // An item, then a continuation holding `x`, `:y`: the continuation's
+    // text is guarded and stays in the item, both lines at its column.
     let (out, fallbacks) =
         styled(&doc(vec![cases::p(BULLET, vec![t("a")]), cases::p(CONT0, vec![t("x\n\n:y")])]));
-    assert_eq!((out.as_str(), fallbacks), ("- a\n\nx  \\:y", 1));
+    assert_eq!((out.as_str(), fallbacks), ("- a\n\n  x\n\n  \\:y", 0));
 }
 
 // ---------------------------------------------------------------------------
 // G-3: nothing outside the guarantee changes
 // ---------------------------------------------------------------------------
 
-/// Lists, headings, continuations, notes, code, memos, one-table captions,
-/// and a list paragraph's table: the base output, no warning. Body text
+/// Headings, notes, code, memos, one-table captions, and a list
+/// paragraph's one table: the base output, no warning. Body text
 /// with pictures, links and memo comments mid-line, and a table last: the
 /// base output too (no rule fires).
 /// 이것을 실패시키는 것: Body 검사를 모든 문단 블록에 · `body` 를 분류로 추정 ·
@@ -888,18 +895,12 @@ fn continuation_is_its_own_block() {
 #[test]
 fn out_of_scope_is_base_output() {
     for name in [
-        "g3_item_blank_line",
-        "g3_number_continuation",
-        "g3_bullet_continuation",
         "g3_list_one_table",
         "g3_heading_one_image",
         "g3_note_paragraphs",
         "g3_code",
         "g3_body_table_last",
         "g3_body_inline_media",
-        "g3_list_chart",
-        "g3_list_level2",
-        "g3_list_table_then_text",
         "g3_one_table_caption",
         "g3_note_lines",
         "g3_memo",
@@ -908,9 +909,44 @@ fn out_of_scope_is_base_output() {
         assert_eq!(out, base(name).0, "{name}");
         assert_eq!(fallbacks, 0, "{name}");
     }
-    // The two places a classified-shape check would write as plain text.
-    assert_eq!(base("g3_list_chart").0, "- - x<!-- chart -->");
-    assert_eq!(base("g3_list_level2").0, "    - - x");
+}
+
+/// A list item's and a continuation's text is guarded (#296): what would
+/// open a block is escaped, every line after the first is at the item's
+/// content column, a table in it ends its block inside the item, and its
+/// emphasis is written as in a Body paragraph. Each case reads back with
+/// no list or code block made by its text, no warning; the base wrote
+/// them as text that made blocks (`BASE`).
+/// 이것을 실패시키는 것: 항목·continuation 글을 보호하지 않기 · 뒷줄 들여쓰기 삭제.
+#[test]
+fn list_text_is_guarded() {
+    for (name, want) in [
+        ("g2_continuation_after_empty_item", "a\n\n-\n  b"),
+        ("g3_item_blank_line", "- a\n\n  b"),
+        ("g3_number_continuation", "1. a\n\n   b"),
+        ("g3_bullet_continuation", "- a\n\n  b"),
+        ("g3_list_chart", "- \\- x<!-- chart -->"),
+        ("g3_list_level2", "- \\- x"),
+        (
+            "g3_list_table_then_text",
+            "- a\n  <table>\n  <tbody>\n  <tr>\n  <td colspan=\"2\">c</td>\n  </tr>\n  </tbody>\n  </table>\n\n  \\- x",
+        ),
+        ("g5_item", "- \\&amp;"),
+        ("g5_item_cell", "- a\n  | \\&amp; |\n  | --- |"),
+        ("g10_item", "- <strong>\\- x</strong>"),
+        ("g10_continuation", "- a\n\n  <strong>\\- x</strong>"),
+        ("g11_cont_memo_list", "- a\n\n  \\- x<!-- memo: m -->"),
+        ("g11_cont_chart_number", "- a\n\n  1\\. x<!-- chart -->"),
+        ("g11_cont1_memo_list", "- a\n\n  \\- x<!-- memo: m -->"),
+    ] {
+        assert_eq!(styled(&case(name)), (want.to_string(), 0), "{name}");
+        let lists = Parser::new_ext(want, md_options())
+            .filter(|e| matches!(e, Event::Start(Tag::List(_))))
+            .count();
+        let code = Parser::new_ext(want, md_options())
+            .any(|e| matches!(e, Event::Start(Tag::CodeBlock(_))));
+        assert_eq!((lists, code), (1, false), "{name}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -950,6 +986,7 @@ fn definition_lists_never_reach_the_decoder() {
             at: vec![at],
         }),
         body: true,
+        tight: false,
     };
     let dests = std::collections::HashSet::new();
     let allowed =
@@ -1002,7 +1039,7 @@ fn entity_split_is_closed_where_guarded() {
         assert_eq!(fallbacks, 0);
         assert!(visible(&out).contains("&amp;"), "{out}");
     }
-    for name in ["g5_item", "g5_note", "g5_caption", "g5_item_cell"] {
+    for name in ["g5_note", "g5_caption"] {
         assert_eq!(styled(&case(name)).0, base(name).0, "{name}");
     }
 }
@@ -1031,7 +1068,7 @@ fn memo_anchor_follows_the_renderer() {
 }
 
 /// A memo in another memo's anchor outside the guarantee (a heading, a
-/// list item, a continuation, a note, a memo body, a one-table or
+/// note, a memo body, a one-table or
 /// one-picture caption) and in an HTML cell: its anchor's text as before,
 /// byte for byte.
 /// 이것을 실패시키는 것: 범위 밖 앵커를 문단 렌더러로 · HTML 앵커를 문단 렌더러로 ·
@@ -1040,8 +1077,6 @@ fn memo_anchor_follows_the_renderer() {
 fn memo_anchor_out_of_scope_is_base_output() {
     for name in [
         "g10_heading",
-        "g10_item",
-        "g10_continuation",
         "g10_note",
         "g10_memo_body",
         "g10_caption",
@@ -1078,14 +1113,17 @@ fn line_start_memo_keeps_comment_and_text() {
 }
 
 /// A memo or chart comment at a continuation's start, then text that looks
-/// like a list item: a continuation is out of the guarantee, so no line is
-/// ended after the comment; the comment moves after the text, as in a list
-/// item (`comments_after_text`), and the text reads as a list item does.
+/// like a list item: no line is ended after the comment (a continuation is
+/// not a Body block); the comment moves after the text, as in a list item
+/// (`comments_after_text`), and the text, guarded, stays text.
 /// 이것을 실패시키는 것: 줄 끝내기 조건을 `ParaKind::Body` 만으로.
 #[test]
-fn continuation_line_start_comment_is_base_output() {
-    for name in ["g11_cont_memo_list", "g11_cont_chart_number", "g11_cont1_memo_list"] {
-        assert_eq!(styled(&case(name)), (base(name).0.to_string(), 0), "{name}");
+fn continuation_line_start_comment_moves_after_text() {
+    for (name, want) in [
+        ("g11_cont_memo_list", "- a\n\n  \\- x<!-- memo: m -->"),
+        ("g11_cont_chart_number", "- a\n\n  1\\. x<!-- chart -->"),
+    ] {
+        assert_eq!(styled(&case(name)), (want.to_string(), 0), "{name}");
     }
 }
 
@@ -1196,9 +1234,9 @@ fn adjacent_formatted_text_keeps_its_characters() {
         [('a', false, false, false), ('*', false, false, false), ('1', false, true, false)],
         "{out}"
     );
-    // Outside the guarantee, as before.
+    // A list item's text is guarded too (#296): one span.
     let runs = vec![styled_t("a", BOLD), compose(""), styled_t("1", BOLD)];
-    assert_eq!(styled(&doc(vec![cases::p(BULLET, runs)])).0, "- **a****1**");
+    assert_eq!(styled(&doc(vec![cases::p(BULLET, runs)])).0, "- **a1**");
 }
 
 /// Whether emphasis over three pieces nests: each emphasis covers a run of
@@ -2125,6 +2163,7 @@ fn lossy_definition_shapes() {
             at: vec![(0, 0)],
         }),
         body: false,
+        tight: false,
     };
     let mut warnings = Vec::new();
     assert_eq!(checked(vec![block], &lossy, &mut warnings), "\\- x \t\\[\\^r\\]\\: y");

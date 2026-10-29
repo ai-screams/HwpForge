@@ -127,34 +127,9 @@ impl Md {
         let raw = lines(raw);
         let chars: Vec<char> = raw.chars().collect();
         let mut escape = vec![false; chars.len()];
-        let gap = |i: usize| matches!(chars.get(i), None | Some(' ' | '\t' | '\n'));
-        // One cursor: every candidate in a run of whitespace (line endings
-        // included) lands on the same first character, so the run is
-        // skipped once and the next candidate is after the next line ending.
-        // 이것을 실패시키는 것: 후보마다 공백을 다시 훑기(`guarded_text_is_linear`).
-        let mut start = 0;
-        while let Some(j) = (start..chars.len()).find(|&i| !chars[i].is_whitespace()) {
-            start = chars[j..].iter().position(|&c| c == '\n').map_or(chars.len(), |p| j + p + 1);
-            let next = chars.get(j + 1).copied();
-            match chars[j] {
-                '-' if gap(j + 1) || matches!(next, Some('-' | ':' | '|')) => escape[j] = true,
-                '+' if gap(j + 1) => escape[j] = true,
-                '=' if gap(j + 1) || next == Some('=') => escape[j] = true,
-                ':' => escape[j] = true,
-                '|' => {
-                    let k = (j..chars.len()).find(|&i| !matches!(chars[i], '|' | ' ' | '\t'));
-                    if let Some(k) = k.filter(|&k| matches!(chars[k], '-' | ':')) {
-                        escape[k] = true;
-                    }
-                }
-                c if c.is_ascii_digit() => {
-                    let n = chars[j..].iter().take_while(|c| c.is_ascii_digit()).count();
-                    let p = j + n;
-                    if n <= 9 && matches!(chars.get(p), Some('.' | ')')) && gap(p + 1) {
-                        escape[p] = true;
-                    }
-                }
-                _ => {}
+        for j in line_starts(&chars) {
+            if let Some(k) = block_opener(&chars, j) {
+                escape[k] = true;
             }
         }
         if let Some(amp) = chars.iter().rposition(|&c| c == '&') {
@@ -199,6 +174,19 @@ impl Md {
     /// markup the encoder made included, as context ([`escape_pieces`]).
     pub(crate) fn lossy_paragraph(pieces: Vec<Piece<Md>>) -> Self {
         Self::of(escape_pieces(pieces.into_iter().map(|p| p.map(|m| m.0)).collect(), false))
+    }
+
+    /// [`Md::lossy_paragraph`] for a list item's or a continuation's text,
+    /// which must make no structure it did not mean and not close its
+    /// item: at each line start (whitespace skipped) the character that
+    /// could open a block is escaped too, as [`Md::guarded_text`] does, and
+    /// also `*`, `_`, `#` and `>`, which lossy text otherwise keeps (styled
+    /// text escapes them everywhere).
+    /// 이것을 실패시키는 것: 줄 머리 보호 삭제(`lossy_item_text_stays_in_its_item`) ·
+    /// 첫 줄 보호 삭제(`lossy_mapped_item_text_is_text`).
+    pub(crate) fn lossy_list_paragraph(pieces: Vec<Piece<Md>>) -> Self {
+        let pieces = pieces.into_iter().map(|p| p.map(|m| m.0)).collect();
+        Self::of(escape_pieces_scanned(pieces, false, true).0)
     }
 
     /// A lossy link label or alt text: [`Md::lossy`] with every `\`, `[`,
@@ -731,10 +719,17 @@ impl<M> Piece<M> {
 /// escape 하기 · 링크 너머 글자를 따로 판정하기
 /// (`lossy_text_escapes_only_markup`, `markup_safety`).
 fn escape_pieces(pieces: Vec<Piece<String>>, cell: bool) -> String {
-    escape_pieces_scanned(pieces, cell).0
+    escape_pieces_scanned(pieces, cell, false).0
 }
 
-fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, FenceScan) {
+/// [`escape_pieces`], with `line_rule` the line-start rule of
+/// [`Md::lossy_list_paragraph`]. List lines lose leading spaces and tabs
+/// before scanning, just as they do when laid out at the item content column.
+fn escape_pieces_scanned(
+    pieces: Vec<Piece<String>>,
+    cell: bool,
+    line_rule: bool,
+) -> (String, FenceScan) {
     let mut chars: Vec<char> = Vec::new();
     let mut markup: Vec<bool> = Vec::new();
     for piece in &pieces {
@@ -751,8 +746,34 @@ fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, Fen
             Piece::Block(m) => (m.clone(), true),
         };
         for c in s.chars() {
+            // List layout drops each line's leading spaces and tabs. Do
+            // that before protection too: removing them later can expose
+            // a fence or reference definition. Keep each retained character's
+            // markup identity, including across piece boundaries.
+            // 이것을 실패시키는 것: 보호 전 공백 제거 삭제 · 탭만 남기기 · 공백만
+            // 남기기 · 줄 머리 조건 삭제 · 첫 줄/후속 줄 공백 남기기
+            // (`lossy_indented_list_syntax_stays_text`) · 목록 밖에도 적용
+            // (`backtick_scan_work_is_linear`).
+            if line_rule && matches!(c, ' ' | '\t') && matches!(chars.last(), None | Some('\n')) {
+                continue;
+            }
             chars.push(c);
             markup.push(is_markup);
+        }
+    }
+    let mut opener = vec![false; chars.len()];
+    if line_rule {
+        for j in line_starts(&chars) {
+            if markup[j] {
+                continue;
+            }
+            let k = match chars[j] {
+                '*' | '_' | '#' | '>' => Some(j),
+                _ => block_opener(&chars, j),
+            };
+            if let Some(k) = k.filter(|&k| !markup[k]) {
+                opener[k] = true;
+            }
         }
     }
     let mut scan = FenceScan::new(&markup);
@@ -783,26 +804,27 @@ fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, Fen
             continue;
         }
         let next = chars.get(i + 1).copied();
-        let escape = match c {
-            // Cell paragraphs, captions and nested tables share one final
-            // inline context. Close raw syntax here, while text and generated
-            // markup are still distinct, never by re-escaping a finished Cell.
-            // 이것을 실패시키는 것: 셀 원문의 백틱/링크/강조 구문 보호 삭제.
-            '`' | '[' | ']' | '*' | '_' | '~' | '<' | '&' | '!' if cell => true,
-            '\\' => cell,
-            '|' => cell,
-            '`' | '~' if !cell && fence => true,
-            // A code span opened here could close past the markup after it
-            // (an escaped backtick still closes a span), so before markup
-            // every backtick is escaped. 이것을 실패시키는 것: 이 갈래 삭제
-            // (`markup_safety` 의 링크 앞뒤 백틱).
-            '`' => scan.last_markup.is_some_and(|last| i < last),
-            '<' => markup_after_lt(&chars[i + 1..]),
-            '&' => entity_follows(&chars[i + 1..]),
-            ']' => next == Some('('),
-            '[' => !cell && definition_at(&chars, i),
-            _ => false,
-        };
+        let escape = opener[i]
+            || match c {
+                // Cell paragraphs, captions and nested tables share one final
+                // inline context. Close raw syntax here, while text and generated
+                // markup are still distinct, never by re-escaping a finished Cell.
+                // 이것을 실패시키는 것: 셀 원문의 백틱/링크/강조 구문 보호 삭제.
+                '`' | '[' | ']' | '*' | '_' | '~' | '<' | '&' | '!' if cell => true,
+                '\\' => cell,
+                '|' => cell,
+                '`' | '~' if !cell && fence => true,
+                // A code span opened here could close past the markup after it
+                // (an escaped backtick still closes a span), so before markup
+                // every backtick is escaped. 이것을 실패시키는 것: 이 갈래 삭제
+                // (`markup_safety` 의 링크 앞뒤 백틱).
+                '`' => scan.last_markup.is_some_and(|last| i < last),
+                '<' => markup_after_lt(&chars[i + 1..]),
+                '&' => entity_follows(&chars[i + 1..]),
+                ']' => next == Some('('),
+                '[' => !cell && definition_at(&chars, i),
+                _ => false,
+            };
         if escape {
             // Where every backslash is escaped on its own there is no run.
             if !cell {
@@ -814,6 +836,43 @@ fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, Fen
         out.push(c);
     }
     (out, scan)
+}
+
+/// The first non-whitespace character of `chars` and of each line after a
+/// line ending. One cursor: every candidate in a run of whitespace (line
+/// endings included) lands on the same first character, so the run is
+/// skipped once and the next candidate is after the next line ending.
+/// 이것을 실패시키는 것: 후보마다 공백을 다시 훑기(`guarded_text_is_linear`).
+fn line_starts(chars: &[char]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while let Some(j) = (start..chars.len()).find(|&i| !chars[i].is_whitespace()) {
+        start = chars[j..].iter().position(|&c| c == '\n').map_or(chars.len(), |p| j + p + 1);
+        out.push(j);
+    }
+    out
+}
+
+/// The character to escape when a line's first character, at `j`, could
+/// open a block ([`Md::guarded_text`]'s table), if any.
+fn block_opener(chars: &[char], j: usize) -> Option<usize> {
+    let gap = |i: usize| matches!(chars.get(i), None | Some(' ' | '\t' | '\n'));
+    let next = chars.get(j + 1).copied();
+    match chars[j] {
+        '-' if gap(j + 1) || matches!(next, Some('-' | ':' | '|')) => Some(j),
+        '+' if gap(j + 1) => Some(j),
+        '=' if gap(j + 1) || next == Some('=') => Some(j),
+        ':' => Some(j),
+        '|' => (j..chars.len())
+            .find(|&i| !matches!(chars[i], '|' | ' ' | '\t'))
+            .filter(|&k| matches!(chars[k], '-' | ':')),
+        c if c.is_ascii_digit() => {
+            let n = chars[j..].iter().take_while(|c| c.is_ascii_digit()).count();
+            let p = j + n;
+            (n <= 9 && matches!(chars.get(p), Some('.' | ')')) && gap(p + 1)).then_some(p)
+        }
+        _ => None,
+    }
 }
 
 /// A paragraph's line start and current backtick/tilde run. Each run is
@@ -1152,6 +1211,7 @@ mod tests {
                         let (out, scan) = escape_pieces_scanned(
                             vec![Piece::Text(raw), Piece::Markup(suffix.to_string())],
                             cell,
+                            false,
                         );
                         let fenced = matches!(prefix, "" | "   " | "x\n") && !cell;
                         let ticks = if cell || fenced || !suffix.is_empty() {
