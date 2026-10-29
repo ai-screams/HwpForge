@@ -5,7 +5,8 @@
 //!
 //! - Decode: Markdown + Template -> `Document<Draft>`
 //! - Encode (lossy): `Document<Validated>` -> readable GFM
-//! - Encode (lossless): `Document<Validated>` -> frontmatter + HTML-like markup
+//! - Encode (lossless): `Document<Validated>` -> frontmatter + HTML-like markup,
+//!   a machine view for checking the preservation scope (not a decode input)
 //!
 //! # Architecture
 //!

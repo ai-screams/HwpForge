@@ -1,6 +1,6 @@
 //! HWPX → Markdown 변환 예제.
 //!
-//! 각 HWPX 파일을 Lossy(읽기용 GFM)와 Lossless(라운드트립용 HTML) 두 가지
+//! 각 HWPX 파일을 Lossy(읽기용 GFM)와 Lossless(보존 범위 확인용 HTML) 두 가지
 //! 마크다운으로 변환합니다.
 //!
 //! Usage: cargo run -p hwpforge-smithy-md --example hwpx_md_convert
@@ -49,7 +49,7 @@ fn convert(name: &str) {
         styled.images.len()
     );
 
-    // ── 3. Lossless MD (라운드트립용 HTML-like) ──────────────────
+    // ── 3. Lossless MD (보존 범위 확인용 HTML-like) ─────────────
     // 차트/수식/호/곡선 등 미지원 Control이 포함된 문서는 lossless 변환을 건너뜁니다.
     match MdEncoder::encode_lossless(&validated) {
         Ok(lossless_md) => {

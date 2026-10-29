@@ -16,7 +16,8 @@ pub enum MdMode {
     Styled,
     /// Readable markdown without style information.
     Lossy,
-    /// Round-trip-safe markdown with YAML frontmatter.
+    /// Machine-oriented view for checking what the preservation scope keeps;
+    /// `convert` refuses it, round-trip edits go through to-json/from-json.
     Lossless,
 }
 
@@ -410,7 +411,9 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Conversion mode: styled (default), lossy, or lossless.
+        /// Conversion mode: styled (default), lossy, or lossless (a view for
+        /// checking the preservation scope, not a `convert` input; edit with
+        /// to-json/from-json).
         #[arg(long, value_enum, default_value_t = MdMode::Styled)]
         mode: MdMode,
     },

@@ -359,7 +359,10 @@ class Document:
                 scope lists, raises for an object the scope lists as refused,
                 and may leave out anything else, such as paragraph styles or
                 headers, without an error (the scope is the "Lossless 보존
-                범위" section of the Markdown bridge guide).
+                범위" section of the Markdown bridge guide). The lossless text
+                is a machine-oriented view for checking that scope:
+                ``convert_md`` refuses it, and round-trip edits go through
+                ``to_json``/``from_json``.
 
         Returns:
             The Markdown text, and a report holding the mode, the images the

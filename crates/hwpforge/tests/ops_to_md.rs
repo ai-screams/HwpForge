@@ -109,11 +109,29 @@ fn every_extracted_image_is_referenced_by_the_markdown_that_carries_it() {
     }
 }
 
+// 이것을 실패시키는 것: lossless 인코더의 `mark_lossless` 호출 삭제.
 #[test]
-fn lossless_carries_frontmatter_so_the_decoder_can_read_it_back() {
+fn lossless_frontmatter_carries_the_view_marker() {
     let out = export("SimpleTable.hwpx", MdMode::Lossless);
 
-    assert!(out.markdown.starts_with("---"), "{}", &out.markdown[..out.markdown.len().min(80)]);
+    let head = &out.markdown[..out.markdown.find("\n---\n").expect("closed frontmatter")];
+    assert!(head.starts_with("---\n"), "{head}");
+    assert!(head.contains("\nmetadata:\n  format: lossless"), "{head}");
+}
+
+// 이것을 실패시키는 것: 일반 decode 의 lossless 표식 거부를 지우기(본문 raw HTML
+// 오류로 바뀌어 안내 문구 단언이 실패).
+#[test]
+fn convert_refuses_lossless_output_with_json_guidance() {
+    use hwpforge::ops::convert::{decode_md, ConvertMdOptions};
+
+    let out = export("SimpleTable.hwpx", MdMode::Lossless);
+    let err = decode_md(&out.markdown, &ConvertMdOptions::default()).expect_err("must refuse");
+
+    assert_eq!(err.code(), OpsCode::MdDecodeFailed, "{err}");
+    let message = err.to_string();
+    assert!(message.contains("machine-oriented view"), "{message}");
+    assert!(message.contains("to-json/from-json"), "{message}");
 }
 
 #[test]

@@ -3,8 +3,9 @@
 //! Three renderings of the same document, and the choice is the caller's:
 //! `styled` keeps as much presentation as GFM plus inline HTML can carry
 //! and extracts the images, `lossy` produces plain readable Markdown and
-//! reports what that costs, `lossless` produces Markdown the decoder can
-//! turn back into the same document.
+//! reports what that costs, `lossless` produces a machine-oriented view for
+//! checking what the preservation scope keeps. Markdown decoding refuses
+//! that view; round-trip edits go through `to_json`/`from_json`.
 
 use std::collections::BTreeMap;
 
@@ -29,7 +30,9 @@ pub enum MdMode {
     /// Readable Markdown without style information. Reports what the plain
     /// GFM grid cannot express (merged table cells).
     Lossy,
-    /// Round-trip-safe Markdown with YAML frontmatter.
+    /// Machine-oriented view for checking what the preservation scope keeps,
+    /// marked `metadata.format: lossless` in its YAML frontmatter. Markdown
+    /// decoding refuses it; round-trip edits go through `to_json`/`from_json`.
     Lossless,
 }
 

@@ -176,6 +176,11 @@ impl MdEncoder {
     }
 
     /// Encodes a validated document into lossless markdown (frontmatter + HTML-like body).
+    ///
+    /// The output is a machine-oriented view for checking what the
+    /// preservation scope keeps. Its frontmatter always carries
+    /// `metadata.format: lossless`, and [`crate::MdDecoder::decode`] refuses
+    /// it; round-trip edits of a document go through JSON.
     pub fn encode_lossless(document: &Document<Validated>) -> MdResult<String> {
         lossless::encode_lossless(document)
     }

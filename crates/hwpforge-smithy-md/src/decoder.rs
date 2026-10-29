@@ -20,7 +20,7 @@ use unicase::UniCase;
 
 use crate::encoder::{guard, MdWarning};
 use crate::error::{MdError, MdResult};
-use crate::frontmatter::{apply_to_metadata, extract_frontmatter};
+use crate::frontmatter::{apply_to_metadata, extract_frontmatter, reject_lossless_view};
 use crate::mapper::{image_format_from_path, resolve_mapping, MdMapping, MdStyleRef};
 
 mod lossless;
@@ -93,8 +93,13 @@ impl MdDecoder {
     /// The template is used for paragraph/character style index mapping.
     /// Built-in template inheritance (`default`/`gov_proposal`) is resolved
     /// automatically.
+    ///
+    /// Lossless output (frontmatter `metadata.format: lossless`) is refused
+    /// with [`MdError::UnsupportedStructure`]: it is a machine view for
+    /// checking the preservation scope, not an input for this decoder.
     pub fn decode(markdown: &str, template: &Template) -> MdResult<MdDocument> {
         let extracted = extract_frontmatter(markdown)?;
+        reject_lossless_view(extracted.frontmatter.as_ref())?;
         let (mapping, mut style_registry) = resolve_mapping(template)?;
 
         let mut document = Document::new();
@@ -128,7 +133,8 @@ impl MdDecoder {
     ///
     /// This parses the lossless HTML-like body produced by
     /// [`crate::MdEncoder::encode_lossless`], preserving paragraph/run shape IDs
-    /// and control/table structures.
+    /// and control/table structures. It reads back only what the preservation
+    /// scope keeps; round-trip edits of a document go through JSON.
     pub fn decode_lossless(markdown: &str) -> MdResult<Document> {
         let extracted = extract_frontmatter(markdown)?;
         let sections = lossless::decode_lossless_sections(extracted.content)?;

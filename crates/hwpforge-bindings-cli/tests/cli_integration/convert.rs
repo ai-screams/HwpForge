@@ -162,6 +162,33 @@ fn convert_unknown_preset_rejected_before_stdin_is_read() {
     assert_eq!(err["code"], "PRESET_NOT_FOUND");
 }
 
+/// `to-md --mode lossless` output is a view for checking the preservation
+/// scope, so `convert` refuses it and points at the JSON round trip (#281).
+/// 이것을 실패시키는 것: 일반 decode 의 lossless 표식 거부를 지우기(raw HTML 오류로
+/// 바뀌어 안내 문구 단언이 실패).
+#[test]
+fn convert_refuses_lossless_markdown_with_json_guidance() {
+    let tmp = test_tmp();
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let (_, stderr, code) =
+        run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossless"]);
+    assert_eq!(code, 0, "{stderr}");
+    let md = tmp.join("merged_grid_form.md");
+    let out = tmp.join("back.hwpx");
+
+    let (_, stderr, code) =
+        run(&["--json", "convert", md.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+
+    assert_eq!(code, 2, "{stderr}");
+    let err: serde_json::Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|e| panic!("invalid JSON stderr: {e}\n{stderr}"));
+    assert_eq!(err["code"], "MD_DECODE_FAILED");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.contains("machine-oriented view"), "{message}");
+    assert!(message.contains("to-json/from-json"), "{message}");
+    assert!(!out.exists());
+}
+
 #[test]
 fn convert_stdin() {
     let tmp = test_tmp();
