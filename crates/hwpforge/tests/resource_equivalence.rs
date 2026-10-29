@@ -123,7 +123,7 @@ mod recovery {
         let bytes = package(&para(&run(&(begin(7, "FORMULA") + "<hp:t>open</hp:t>")), &[]));
         let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
         let mut budget = 0;
-        // 디코더 읽기 순서가 바뀌면 이 두 목록을 함께 고친다
+        // 디코더 읽기 순서가 바뀌면 crates/hwpforge-smithy-hwpx/examples/resource_series_a.rs의 목록도 함께 고친다.
         for name in [
             "mimetype",
             "Contents/content.hpf",

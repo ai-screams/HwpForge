@@ -28,7 +28,7 @@ fn costs(bytes: &[u8]) -> (Vec<usize>, Vec<usize>) {
         .collect();
     // Decoder reads mimetype, content for ordering, container, header, content
     // for metadata, content for master-page references, then each section.
-    // 디코더 읽기 순서가 바뀌면 이 두 목록을 함께 고친다
+    // 디코더 읽기 순서가 바뀌면 crates/hwpforge/tests/resource_equivalence.rs의 목록도 함께 고친다.
     let mut units = [
         "mimetype",
         "Contents/content.hpf",
@@ -138,6 +138,10 @@ fn holdout_sizes(b: usize) -> Vec<Vec<usize>> {
                 let size = 2 * b / r;
                 let mut sizes = vec![size; r];
                 sizes[r - 1] = 2 * b - size * (r - 1);
+                if sizes[r - 1] == sizes[0] {
+                    sizes[r - 2] -= 1;
+                    sizes[r - 1] += 1;
+                }
                 sizes
             } else {
                 let mut sizes = vec![b / 4; r];
@@ -149,11 +153,17 @@ fn holdout_sizes(b: usize) -> Vec<Vec<usize>> {
         .collect::<Vec<_>>();
     // 이것을 실패시키는 것: 보류 분배가 개발 합계 수준을 벗어나기.
     assert!(cases.iter().all(|sizes| [b / 4, b / 2, b, 2 * b].contains(&sizes.iter().sum())));
+    // 이것을 실패시키는 것: 6의 배수 예산에서 마지막 section의 1바이트 이동 생략.
+    let twelve = cases.last().unwrap();
+    assert_ne!(twelve.first(), twelve.last());
+    assert_eq!(twelve.iter().sum::<usize>(), 2 * b);
     cases
 }
 
 #[test]
 fn holdout_totals_preserve_development_levels() {
-    let cases = holdout_sizes(65536);
-    assert_eq!(cases.last().unwrap().len(), 12);
+    for b in [65536, 393216] {
+        let cases = holdout_sizes(b);
+        assert_eq!(cases.last().unwrap().len(), 12);
+    }
 }

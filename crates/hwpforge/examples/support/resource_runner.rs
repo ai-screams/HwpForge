@@ -205,7 +205,10 @@ pub(crate) fn write_output(
     file.sync_all()?;
     // Persist the measured call before a diagnostic replay can fail or be interrupted.
     if error_detail_enabled {
-        let detail = replay()?;
+        let api_ok =
+            rows.iter().any(|row| row["stage"] == "call_complete" && row["api_ok"] == true);
+        let detail = if api_ok { None } else { replay()? };
+        let source = if api_ok { None } else { Some("diagnostic replay after DROP") };
         let mut path = output.as_os_str().to_os_string();
         path.push(".error-detail.json");
         let mut file = std::fs::File::create(path)?;
@@ -213,7 +216,7 @@ pub(crate) fn write_output(
             &mut file,
             &serde_json::json!({
                 "case_id": case_id, "error_detail": detail,
-                "error_detail_source": "diagnostic replay after DROP"
+                "error_detail_source": source
             }),
         )?;
         file.sync_all()?;
@@ -227,12 +230,75 @@ mod tests {
     // 이것을 실패시키는 것: 선택 플래그 없이 진단 재실행하기.
     #[test]
     fn output_without_detail_does_not_replay() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../../target/no-detail-{}.json", std::process::id()));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-detail.json");
         write_output(&[], &path, "test", false, || panic!("unexpected replay")).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[]");
         assert!(!std::path::PathBuf::from(format!("{}.error-detail.json", path.display())).exists());
-        std::fs::remove_file(path).unwrap();
+    }
+    // 이것을 실패시키는 것: 측정 행 저장 전에 진단 재실행하기.
+    #[test]
+    fn detail_replay_reads_persisted_four_stages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rows.json");
+        let rows = run(
+            b"text[^n]\n\n[^n]: expanded note",
+            "md-decode",
+            Experiment {
+                timing: experiment::Timing::Measured,
+                scope: experiment::Scope::Document,
+                budget: 1,
+            },
+            "test",
+        )
+        .unwrap();
+        let mut calls = 0;
+        write_output(&rows, &path, "test", true, || {
+            calls += 1;
+            let saved: Vec<serde_json::Value> =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(saved, rows);
+            assert_eq!(
+                saved.iter().map(|r| r["stage"].as_str().unwrap()).collect::<Vec<_>>(),
+                ["call_start", "first_reject", "call_complete", "drop_complete"]
+            );
+            Ok(Some("detail".into()))
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+    }
+    // 이것을 실패시키는 것: 성공한 호출도 진단 재실행하기 또는 null 진단 파일 생략.
+    #[test]
+    fn detail_success_does_not_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rows.json");
+        let rows = run(
+            b"# heading",
+            "md-decode",
+            Experiment {
+                timing: experiment::Timing::Measured,
+                scope: experiment::Scope::Document,
+                budget: u64::MAX,
+            },
+            "test",
+        )
+        .unwrap();
+        assert!(rows.iter().any(|r| r["stage"] == "call_complete" && r["api_ok"] == true));
+        let mut calls = 0;
+        write_output(&rows, &path, "test", true, || {
+            calls += 1;
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(calls, 0);
+        let detail: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("rows.json.error-detail.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            detail,
+            serde_json::json!({"case_id":"test", "error_detail":null, "error_detail_source":null})
+        );
     }
     // 이것을 실패시키는 것: 관측 함수에서 JSON 직렬화로 할당하기, Q 또는 생존량 저장 생략.
     #[test]
