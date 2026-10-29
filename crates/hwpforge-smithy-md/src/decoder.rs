@@ -11,7 +11,9 @@ use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape};
+use hwpforge_foundation::{
+    CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, UnderlineType, VerticalPosition,
+};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use unicase::UniCase;
 
@@ -76,7 +78,8 @@ pub struct MdDocument {
     /// What the Markdown asked for that the document does not hold: an image
     /// with an empty target (`![x]()`) names no file, so it is left out and
     /// reported as [`MdWarning::ImageEmbedSkipped`] with an empty `src`, the
-    /// same warning an image that could not be read gives.
+    /// same warning an image that could not be read gives; a chart or memo
+    /// comment is left out as [`MdWarning::ContentLost`].
     pub warnings: Vec<MdWarning>,
 }
 
@@ -455,10 +458,19 @@ struct DecoderState<'a> {
     /// character shapes (bold/italic/strikethrough runs).
     registry: &'a mut StyleRegistry,
     /// Inline-format nesting counters (pulldown-cmark guarantees balanced
-    /// start/end tags; counters keep same-tag nesting safe).
+    /// start/end tags; counters keep same-tag nesting safe). HTML formats
+    /// (`<strong>` … `<sub>`) count here too; their order is checked on
+    /// [`Self::html_open`].
     fmt_bold: u32,
     fmt_italic: u32,
     fmt_strike: u32,
+    fmt_underline: u32,
+    fmt_sup: u32,
+    fmt_sub: u32,
+    /// HTML formats and links opened and not yet closed, innermost last.
+    html_open: Vec<String>,
+    /// The lines of the HTML block being read, read whole at its end.
+    html_block: Option<String>,
     /// Cache of derived char shapes: (base shape index, format flags) → index.
     derived_shapes: std::collections::HashMap<(usize, u8), CharShapeIndex>,
     /// 각주/미주 정의 — 키는 파서(UniCase)와 동일한 case-fold canonical.
@@ -517,6 +529,11 @@ impl<'a> DecoderState<'a> {
             fmt_bold: 0,
             fmt_italic: 0,
             fmt_strike: 0,
+            fmt_underline: 0,
+            fmt_sup: 0,
+            fmt_sub: 0,
+            html_open: Vec::new(),
+            html_block: None,
             derived_shapes: std::collections::HashMap::new(),
             paragraphs: Vec::new(),
             current: None,
@@ -667,6 +684,24 @@ impl<'a> DecoderState<'a> {
     }
 
     fn handle_event(&mut self, event: Event<'_>) -> MdResult<()> {
+        // HTML takes one path in every context (body, list item, quote,
+        // table cell, note definition): an inline tag at a time, or a block
+        // of lines read whole at its end.
+        // 이것을 실패시키는 것: 정의 수집 앞에서 HTML 을 가로채지 않기
+        // (`note_definition_reads_a_leading_comment_block`).
+        let event = match event {
+            Event::InlineHtml(html) => return self.read_html(&html),
+            Event::Start(Tag::HtmlBlock) => {
+                self.html_block = Some(String::new());
+                return Ok(());
+            }
+            Event::Html(html) => {
+                self.html_block.get_or_insert_with(String::new).push_str(&html);
+                return Ok(());
+            }
+            Event::End(TagEnd::HtmlBlock) => return self.end_html_block(),
+            other => other,
+        };
         if self.definition_capture.is_some() {
             return self.handle_definition_event(event);
         }
@@ -676,7 +711,8 @@ impl<'a> DecoderState<'a> {
             Event::Text(text) => self.push_text(text.as_ref())?,
             Event::Code(code) => self.push_inline_code(code.as_ref())?,
             Event::InlineMath(math) | Event::DisplayMath(math) => self.push_text(math.as_ref())?,
-            Event::Html(html) | Event::InlineHtml(html) => self.handle_html_event(html.as_ref())?,
+            // Taken above.
+            Event::Html(_) | Event::InlineHtml(_) => {}
             Event::FootnoteReference(label) => self.handle_footnote_reference(label.as_ref())?,
             Event::SoftBreak => self.push_soft_break()?,
             Event::HardBreak => self.push_hard_break()?,
@@ -702,12 +738,14 @@ impl<'a> DecoderState<'a> {
             Tag::TableHead => self.start_table_row_tag(),
             Tag::TableRow => self.start_table_row_tag(),
             Tag::TableCell => self.start_table_cell_tag(),
-            Tag::Link { dest_url, .. } => self.start_link_tag(&dest_url),
+            Tag::Link { dest_url, .. } => self.start_link_tag(&dest_url)?,
             Tag::Image { dest_url, .. } => self.start_image_tag(&dest_url),
             Tag::Strong => self.fmt_bold += 1,
             Tag::Emphasis => self.fmt_italic += 1,
             Tag::Strikethrough => self.fmt_strike += 1,
-            Tag::HtmlBlock | Tag::Superscript | Tag::Subscript => {}
+            // Taken in `handle_event`.
+            Tag::HtmlBlock => {}
+            Tag::Superscript | Tag::Subscript => {}
             Tag::FootnoteDefinition(label) => self.start_footnote_definition(label.as_ref())?,
             Tag::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             Tag::DefinitionListTitle => {
@@ -723,22 +761,32 @@ impl<'a> DecoderState<'a> {
 
     fn end_tag(&mut self, tag_end: TagEnd) -> MdResult<()> {
         match tag_end {
-            TagEnd::Paragraph => self.finalize_paragraph(),
-            TagEnd::Heading(_) => self.finalize_paragraph(),
+            TagEnd::Paragraph | TagEnd::Heading(_) => {
+                self.html_closed()?;
+                self.finalize_paragraph();
+            }
             TagEnd::BlockQuote(_) => self.end_blockquote_tag(),
             TagEnd::CodeBlock => self.end_code_block_tag(),
             TagEnd::List(_) => self.end_list_tag(),
-            TagEnd::Item => self.end_item_tag(),
+            TagEnd::Item => {
+                self.html_closed()?;
+                self.end_item_tag();
+            }
             TagEnd::Table => self.finalize_table()?,
             TagEnd::TableHead => self.end_table_row_tag(),
             TagEnd::TableRow => self.end_table_row_tag(),
-            TagEnd::TableCell => self.end_table_cell_tag(),
+            TagEnd::TableCell => {
+                self.html_closed()?;
+                self.end_table_cell_tag();
+            }
             TagEnd::Link => self.end_link_tag(),
             TagEnd::Image => self.end_image_tag()?,
             TagEnd::Strong => self.fmt_bold = self.fmt_bold.saturating_sub(1),
             TagEnd::Emphasis => self.fmt_italic = self.fmt_italic.saturating_sub(1),
             TagEnd::Strikethrough => self.fmt_strike = self.fmt_strike.saturating_sub(1),
-            TagEnd::HtmlBlock | TagEnd::Superscript | TagEnd::Subscript => {}
+            // Taken in `handle_event`.
+            TagEnd::HtmlBlock => {}
+            TagEnd::Superscript | TagEnd::Subscript => {}
             TagEnd::FootnoteDefinition => {
                 // capture 활성 중에는 handle_definition_event 가 소화한다.
                 // 여기 도달 = 시작 없이 끝 — 파서 계약 위반 (방어).
@@ -757,13 +805,183 @@ impl<'a> DecoderState<'a> {
         Ok(())
     }
 
-    fn handle_html_event(&mut self, html: &str) -> MdResult<()> {
-        let raw = html.trim();
-        if guard::comment_kind(raw) == Some(guard::Comment::Section) && !self.is_in_table_cell() {
-            self.push_section_marker();
-            return Ok(());
+    /// The end of an HTML block: its lines read as one fragment, which must
+    /// close what it opens; its text is a paragraph of its own, in the
+    /// note definition being read or in the body.
+    fn end_html_block(&mut self) -> MdResult<()> {
+        let block = self.html_block.take().unwrap_or_default();
+        self.read_html(&block)?;
+        self.html_closed()?;
+        match self.definition_capture.as_mut() {
+            Some(capture) => {
+                if let Some(builder) = capture.current.take() {
+                    capture.paragraphs.push(builder.build());
+                }
+            }
+            None => self.finalize_paragraph(),
         }
-        Err(unsupported_markdown_feature("raw HTML"))
+        Ok(())
+    }
+
+    /// Reads HTML as the encoder writes it ([`guard::tokens`]): formats,
+    /// `<br>`, `<a href>`, `<img src alt>` and its comments. Anything else,
+    /// HTML tables included, is raw HTML and fails. In a note definition
+    /// links and pictures fail as their Markdown does; in a table cell so
+    /// does `<br>`.
+    ///
+    /// Text (only a block has any) is read as a paragraph's: a raw line end
+    /// is a soft break, a space, the line's surrounding spaces dropped; one
+    /// written `&#10;` is content. Raw whitespace before the first content
+    /// and after the last is left out; whitespace between content is kept,
+    /// written before the next text or the next tag that opens or closes,
+    /// so it takes the formats open where it stood.
+    /// 이것을 실패시키는 것: 표 태그 받기 · 정의 안 `<a>` 받기 · 셀 안 `<br>` 받기 ·
+    /// 앞 공백 넣기 · 내용 사이 공백 버리기 · 줄 끝을 글로 넣기 · `&#10;` 를 줄 끝으로 읽기
+    /// (`html_*` 시험들).
+    fn read_html(&mut self, html: &str) -> MdResult<()> {
+        let raw_html = || unsupported_markdown_feature("raw HTML");
+        let tokens = guard::tokens(html.trim_end()).ok_or_else(raw_html)?;
+        let in_note = self.definition_capture.is_some();
+        // Where the last content is: whitespace after it is left out.
+        let last = tokens.iter().rposition(|t| match t {
+            guard::Token::Text(raw) => !raw.trim().is_empty(),
+            guard::Token::Open { name, .. } => matches!(*name, "br" | "img"),
+            _ => false,
+        });
+        let mut started = false;
+        let mut space = String::new();
+        for (i, token) in tokens.into_iter().enumerate() {
+            let tag = !matches!(token, guard::Token::Text(_) | guard::Token::Comment(_));
+            if tag && last.is_some_and(|last| i <= last) {
+                self.push_html_text(&std::mem::take(&mut space))?;
+            }
+            match token {
+                guard::Token::Text(raw) => {
+                    // A raw line end is a soft break: it and the spaces
+                    // around it fold into one space.
+                    let mut text = String::new();
+                    for (n, line) in raw.split('\n').enumerate() {
+                        if n > 0 {
+                            text.truncate(text.trim_end().len());
+                            text.push(' ');
+                        }
+                        text.push_str(if n > 0 { line.trim_start() } else { line });
+                    }
+                    // Whitespace is raw whitespace: a `&#10;` is content.
+                    let core = text.trim();
+                    if core.is_empty() {
+                        if started {
+                            space.push_str(&text);
+                        }
+                        continue;
+                    }
+                    if started {
+                        space.push_str(&text[..text.len() - text.trim_start().len()]);
+                    }
+                    self.push_html_text(&std::mem::take(&mut space))?;
+                    self.push_html_text(&guard::unescape(core))?;
+                    space.push_str(&text[text.trim_end().len()..]);
+                    started = true;
+                }
+                guard::Token::Comment(guard::Comment::Section) => {
+                    if in_note || self.is_in_table_cell() || !self.html_open.is_empty() {
+                        return Err(raw_html());
+                    }
+                    self.push_section_marker();
+                }
+                guard::Token::Comment(guard::Comment::Chart) => {
+                    self.warnings.push(MdWarning::ContentLost { kind: "chart" });
+                }
+                guard::Token::Comment(guard::Comment::Memo) => {
+                    self.warnings.push(MdWarning::ContentLost { kind: "memo" });
+                }
+                guard::Token::Open { name: "br", .. } => {
+                    if self.is_in_table_cell() {
+                        return Err(raw_html());
+                    }
+                    self.push_html_text("\n")?;
+                    started = true;
+                }
+                guard::Token::Open { name: "a", attributes } => {
+                    let href = attributes.iter().find(|(n, _)| *n == "href");
+                    let Some((_, href)) = href.filter(|_| !in_note) else { return Err(raw_html()) };
+                    self.start_link_tag(href)?;
+                    self.html_open.push("a".into());
+                }
+                guard::Token::Open { name: "img", attributes } => {
+                    let value = |key| attributes.iter().find(|(n, _)| *n == key).map(|(_, v)| v);
+                    let Some(src) =
+                        value("src").filter(|_| !in_note && self.pending_image.is_none())
+                    else {
+                        return Err(raw_html());
+                    };
+                    self.start_image_tag(src);
+                    self.push_text(value("alt").map_or("", String::as_str))?;
+                    self.end_image_tag()?;
+                    started = true;
+                }
+                guard::Token::Open { name, .. } => {
+                    *self.html_format(name).ok_or_else(raw_html)? += 1;
+                    if self.fmt_sup > 0 && self.fmt_sub > 0 {
+                        return Err(MdError::UnsupportedStructure {
+                            detail: "superscript and subscript at once".to_string(),
+                        });
+                    }
+                    self.html_open.push(name.to_string());
+                }
+                guard::Token::Close(name) => {
+                    if self.html_open.pop().as_deref() != Some(name) {
+                        return Err(MdError::UnsupportedStructure {
+                            detail: format!("HTML </{name}> does not close the innermost open tag"),
+                        });
+                    }
+                    if name == "a" {
+                        self.end_link_tag();
+                    } else {
+                        let count = self.html_format(name).ok_or_else(raw_html)?;
+                        *count -= 1;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The counter of an HTML format tag; `None` for any other tag.
+    fn html_format(&mut self, name: &str) -> Option<&mut u32> {
+        Some(match name {
+            "strong" => &mut self.fmt_bold,
+            "em" => &mut self.fmt_italic,
+            "del" => &mut self.fmt_strike,
+            "u" => &mut self.fmt_underline,
+            "sup" => &mut self.fmt_sup,
+            "sub" => &mut self.fmt_sub,
+            _ => return None,
+        })
+    }
+
+    /// Text from HTML (a `<br>` too) into the note definition being read,
+    /// or where Markdown text goes.
+    fn push_html_text(&mut self, text: &str) -> MdResult<()> {
+        if text.is_empty() {
+            Ok(())
+        } else if self.definition_capture.is_some() {
+            self.push_definition_text(text)
+        } else {
+            self.push_text(text)
+        }
+    }
+
+    /// Fails when an HTML format or link is still open where its paragraph,
+    /// item, cell or block ends: it must not run on into the next one.
+    /// 이것을 실패시키는 것: 이 검사 삭제(`html_formats_must_close_in_their_paragraph`).
+    fn html_closed(&self) -> MdResult<()> {
+        match self.html_open.last() {
+            Some(tag) => {
+                Err(MdError::UnsupportedStructure { detail: format!("HTML <{tag}> is not closed") })
+            }
+            None => Ok(()),
+        }
     }
 
     /// 각주/미주 참조 — 빈 컨트롤을 참조 지점에 꽂고 라벨을 순서 큐에 기록한다
@@ -811,13 +1029,17 @@ impl<'a> DecoderState<'a> {
                 Ok(())
             }
             Event::End(TagEnd::Paragraph) => {
+                self.html_closed()?;
                 let capture = self.definition_capture.as_mut().expect("capture active");
                 if let Some(builder) = capture.current.take() {
                     capture.paragraphs.push(builder.build());
                 }
                 Ok(())
             }
-            Event::End(TagEnd::FootnoteDefinition) => self.finish_footnote_definition(),
+            Event::End(TagEnd::FootnoteDefinition) => {
+                self.html_closed()?;
+                self.finish_footnote_definition()
+            }
             Event::Text(text) => self.push_definition_text(text.as_ref()),
             Event::Code(code) => {
                 self.push_definition_text("`")?;
@@ -942,12 +1164,18 @@ impl<'a> DecoderState<'a> {
         }
     }
 
-    fn start_link_tag(&mut self, dest_url: &str) {
+    /// A link inside a link (HTML `<a>` and Markdown either way) fails.
+    /// 이것을 실패시키는 것: 이 검사 삭제(`html_link_and_picture_take_the_markdown_paths`).
+    fn start_link_tag(&mut self, dest_url: &str) -> MdResult<()> {
+        if self.pending_link.is_some() {
+            return Err(MdError::UnsupportedStructure { detail: "link inside a link".to_string() });
+        }
         if !self.is_in_table_cell() {
             self.ensure_paragraph();
         }
         self.pending_link =
             Some(PendingLink { dest_url: encode_pending_link_url(dest_url), text: String::new() });
+        Ok(())
     }
 
     fn start_image_tag(&mut self, dest_url: &str) {
@@ -1166,11 +1394,15 @@ impl<'a> DecoderState<'a> {
         self.derived_char_shape(base)
     }
 
-    /// Bitset of active inline formats: bit0 bold, bit1 italic, bit2 strike.
+    /// Bitset of active inline formats: bit0 bold, bit1 italic, bit2 strike,
+    /// bit3 underline, bit4 superscript, bit5 subscript.
     fn format_flags(&self) -> u8 {
         u8::from(self.fmt_bold > 0)
             | (u8::from(self.fmt_italic > 0) << 1)
             | (u8::from(self.fmt_strike > 0) << 2)
+            | (u8::from(self.fmt_underline > 0) << 3)
+            | (u8::from(self.fmt_sup > 0) << 4)
+            | (u8::from(self.fmt_sub > 0) << 5)
     }
 
     /// Returns `base` when no inline format is active; otherwise returns a
@@ -1199,6 +1431,16 @@ impl<'a> DecoderState<'a> {
         }
         if flags & 4 != 0 && derived.strikeout_shape == StrikeoutShape::None {
             derived.strikeout_shape = StrikeoutShape::Solid;
+        }
+        // An underline the base has keeps its shape and colour.
+        if flags & 8 != 0 && derived.underline_type == UnderlineType::None {
+            derived.underline_type = UnderlineType::Bottom;
+        }
+        if flags & 16 != 0 {
+            derived.vertical_position = VerticalPosition::Superscript;
+        }
+        if flags & 32 != 0 {
+            derived.vertical_position = VerticalPosition::Subscript;
         }
         let idx = CharShapeIndex::new(self.registry.char_shapes.len());
         self.registry.char_shapes.push(derived);
@@ -1764,19 +2006,296 @@ mod tests {
         assert_eq!(doc.sections()[1].paragraphs[0].text_content(), "Second");
     }
 
-    /// The section marker comment is read; the chart and memo comments are
-    /// rejected as raw HTML, and so is the section marker in a table cell.
-    /// 이것을 실패시키는 것: 분류된 주석이면 모두 받기(`comment_kind(raw).is_some()`).
+    /// The section marker splits sections in the body only: in a table
+    /// cell, a note definition or across an open HTML format it fails.
+    /// 이것을 실패시키는 것: 셀 검사 삭제 · 열린 서식 검사 삭제.
     #[test]
-    fn decode_reads_only_the_section_marker_comment() {
+    fn section_marker_comment_splits_only_in_the_body() {
         let template = default_template();
-        for markdown in
-            ["a <!-- chart -->", "<!-- memo: m -->", "| a |\n|---|\n| <!-- hwpforge:section --> |"]
-        {
-            let err = MdDecoder::decode(markdown, &template).unwrap_err();
-            assert!(err.to_string().contains("raw HTML"), "{markdown}: {err}");
+        for markdown in [
+            "| a |\n|---|\n| <!-- hwpforge:section --> |",
+            "<u>a <!-- hwpforge:section --> b</u>",
+            "x[^1]\n\n[^1]: a <!-- hwpforge:section --> b",
+        ] {
+            assert!(MdDecoder::decode(markdown, &template).is_err(), "{markdown}");
         }
-        assert!(MdDecoder::decode("a\n\n<!-- hwpforge:section -->\n\nb", &template).is_ok());
+        let doc = MdDecoder::decode("a <!-- hwpforge:section --> b", &template).unwrap().document;
+        assert_eq!(doc.sections().len(), 2);
+    }
+
+    /// The text of each top-level paragraph of the first section.
+    fn texts(md: &MdDocument) -> Vec<String> {
+        md.document.sections()[0].paragraphs.iter().map(|p| p.text_content()).collect()
+    }
+
+    /// The character shape of each run of the first paragraph.
+    fn run_shapes(md: &MdDocument) -> Vec<(String, hwpforge_blueprint::style::CharShape)> {
+        md.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .map(|run| {
+                let text = match &run.content {
+                    RunContent::Text(t) => t.clone(),
+                    other => format!("{other:?}"),
+                };
+                (text, md.style_registry.char_shape(run.char_shape_id).unwrap().clone())
+            })
+            .collect()
+    }
+
+    /// Each HTML format the encoder writes becomes that property of the
+    /// run's character shape, and only of that run.
+    /// 이것을 실패시키는 것: 태그와 카운터 대응 하나씩 바꾸기 · 밑줄·위첨자·아래첨자
+    /// 파생 삭제.
+    #[test]
+    fn html_formats_become_character_shapes() {
+        use hwpforge_blueprint::style::CharShape;
+        let checks: [(&str, fn(&CharShape) -> bool); 6] = [
+            ("strong", |c| c.bold),
+            ("em", |c| c.italic),
+            ("del", |c| c.strikeout_shape == StrikeoutShape::Solid),
+            ("u", |c| c.underline_type == UnderlineType::Bottom),
+            ("sup", |c| c.vertical_position == VerticalPosition::Superscript),
+            ("sub", |c| c.vertical_position == VerticalPosition::Subscript),
+        ];
+        for (tag, has) in checks {
+            let md = MdDecoder::decode_with_default(&format!("a<{tag}>b</{tag}>c")).unwrap();
+            let runs = run_shapes(&md);
+            let found: Vec<(&str, bool)> = runs.iter().map(|(t, c)| (t.as_str(), has(c))).collect();
+            assert_eq!(found, [("a", false), ("b", true), ("c", false)], "{tag}");
+        }
+    }
+
+    /// HTML formats nest, repeat and cross Markdown emphasis: each syntax
+    /// closes its own range.
+    /// 이것을 실패시키는 것: 닫기에서 카운터를 0 으로(같은 서식 중첩이 풀림).
+    #[test]
+    fn html_and_markdown_formats_nest_and_cross() {
+        let md = MdDecoder::decode_with_default("<u><u>a</u>b</u> <u>c **d</u> e**").unwrap();
+        let found: Vec<(String, bool, bool)> = run_shapes(&md)
+            .into_iter()
+            .map(|(t, c)| (t, c.bold, c.underline_type == UnderlineType::Bottom))
+            .collect();
+        let expected = [
+            ("ab", false, true),
+            (" ", false, false),
+            ("c ", false, true),
+            ("d", true, true),
+            (" e", true, false),
+        ];
+        let expected: Vec<(String, bool, bool)> =
+            expected.iter().map(|(t, b, u)| (t.to_string(), *b, *u)).collect();
+        assert_eq!(found, expected);
+    }
+
+    /// An HTML format or link left open where its paragraph, list item,
+    /// table cell, note definition or HTML block ends fails (every inline
+    /// scope ends at one of these, the last one in the input too), and so
+    /// does a close that is not the innermost open tag.
+    /// 이것을 실패시키는 것: `html_closed` 를 늘 통과 · 블록 끝 검사 삭제 · 닫기 순서 검사 삭제.
+    #[test]
+    fn html_formats_must_close_in_their_paragraph() {
+        for markdown in [
+            "<u>a\n\nb",
+            "- <u>a\n- b",
+            "| <u>a |\n|---|",
+            "x[^1]\n\n[^1]: <u>a",
+            "<a href=\"https://e.invalid\">a\n\nb",
+            "<u>\na",
+            "a</u>",
+            "<u><em>a</u></em>",
+        ] {
+            assert!(MdDecoder::decode_with_default(markdown).is_err(), "{markdown}");
+        }
+    }
+
+    /// Superscript and subscript at once have no character shape.
+    /// 이것을 실패시키는 것: 동시 검사 삭제.
+    #[test]
+    fn superscript_and_subscript_at_once_fail() {
+        assert!(MdDecoder::decode_with_default("<sup>a<sub>b</sub></sup>").is_err());
+    }
+
+    /// `<a href>` and `<img src alt>` take the Markdown link and picture
+    /// paths: the same URL policy, a link's `<br>` in its text, the same
+    /// picture; a link inside a link and a picture inside a picture fail,
+    /// and so does either without its target or in a note definition
+    /// (whose Markdown links and pictures fail too).
+    /// 이것을 실패시키는 것: 링크 안 링크 검사 삭제 · 그림 안 그림 검사 삭제 ·
+    /// 정의 안 거부 삭제.
+    #[test]
+    fn html_link_and_picture_take_the_markdown_paths() {
+        let first = |md: &str| {
+            MdDecoder::decode_with_default(md).unwrap().document.sections()[0].paragraphs[0]
+                .runs
+                .clone()
+        };
+        let link = &first("<a href=\"https://e.invalid/?a=1&amp;b=2\">t<br>u</a>")[0];
+        assert!(matches!(&link.content, RunContent::Control(c) if matches!(
+            c.as_ref(),
+            Control::Hyperlink { text, url } if text == "t\nu" && url == "https://e.invalid/?a=1&b=2"
+        )));
+        assert_eq!(
+            first("<a href=\"javascript:x\">t</a>"),
+            first("[t](javascript:x)"),
+            "an unsafe URL is text, as in Markdown"
+        );
+        assert_eq!(first("<img src=\"images/a.png\" alt=\"x\"/>"), first("![x](images/a.png)"));
+        for markdown in [
+            "<a href=\"https://a.invalid\"><a href=\"https://b.invalid\">t</a></a>",
+            "[a <a href=\"https://b.invalid\">b</a>](https://a.invalid)",
+            "![a <img src=\"b.png\" alt=\"b\"/>](a.png)",
+            "<a>t</a>",
+            "<img alt=\"x\"/>",
+            "x[^1]\n\n[^1]: <a href=\"https://e.invalid\">t</a>",
+            "x[^1]\n\n[^1]: <img src=\"a.png\" alt=\"a\"/>",
+        ] {
+            assert!(MdDecoder::decode_with_default(markdown).is_err(), "{markdown}");
+        }
+    }
+
+    /// `<br>` is a line break in body text and in a note definition, as a
+    /// Markdown hard break is; in a table cell it fails for now (a cell's
+    /// `<br>` separates its paragraphs, which this reader does not build).
+    /// 이것을 실패시키는 것: 셀 검사 삭제 · 정의 안 `<br>` 를 본문으로 보내기.
+    #[test]
+    fn html_line_break_is_a_hard_break() {
+        let md = MdDecoder::decode_with_default("a<br>b[^1]\n\n[^1]: c<br>d").unwrap();
+        assert_eq!(texts(&md)[0], "a\nb");
+        let note = md.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|r| match &r.content {
+                RunContent::Control(c) => match c.as_ref() {
+                    Control::Footnote { paragraphs, .. } => Some(paragraphs[0].text_content()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(note, "c\nd");
+        assert!(MdDecoder::decode_with_default("| a<br>b |\n|---|").is_err());
+    }
+
+    /// A chart comment is left out with one warning each, inline, on its
+    /// own line, and at an item's start with the text after it on the
+    /// same line (as the encoder writes it, an HTML block), which is then
+    /// the item's text.
+    /// 이것을 실패시키는 것: chart 경고 삭제 · 블록 줄 끝을 글로 넣기.
+    #[test]
+    fn chart_comments_are_left_out_and_reported() {
+        let md = MdDecoder::decode_with_default(
+            "a <!-- chart --> b\n\n<!-- chart -->\n\n- <!-- chart -->- x",
+        )
+        .unwrap();
+        assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }; 3]);
+        // The item keeps its marker as text, as every list item does.
+        assert_eq!(texts(&md), ["a  b", "- - x"]);
+    }
+
+    /// A memo comment is left out with one warning; the text around it
+    /// stays.
+    /// 이것을 실패시키는 것: memo 경고 삭제.
+    #[test]
+    fn memo_comments_are_left_out_and_reported() {
+        let md = MdDecoder::decode_with_default("a<!-- memo: \\- m -->b").unwrap();
+        assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "memo" }]);
+        assert_eq!(texts(&md), ["ab"]);
+    }
+
+    /// Entities are read once: in HTML by the scanner, in Markdown text by
+    /// the parser alone, so escaped markup stays text and warns of nothing,
+    /// and an escaped `\&lt;` or one in a code block stays `&lt;`.
+    /// 이것을 실패시키는 것: `&amp;` 먼저 복원 · Markdown 글에 엔티티 복원을 다시 적용.
+    #[test]
+    fn entities_are_read_once() {
+        let md = MdDecoder::decode_with_default(
+            "&amp;lt; &lt;!-- memo: x --&gt; <a href=\"https://e.invalid/?q=&amp;lt;\">t</a>",
+        )
+        .unwrap();
+        assert!(md.warnings.is_empty());
+        let runs = &md.document.sections()[0].paragraphs[0].runs;
+        assert!(matches!(&runs[0].content, RunContent::Text(t) if t == "&lt; <!-- memo: x --> "));
+        assert!(matches!(&runs[1].content, RunContent::Control(c) if matches!(
+            c.as_ref(),
+            Control::Hyperlink { url, .. } if url == "https://e.invalid/?q=&lt;"
+        )));
+        let md = MdDecoder::decode_with_default("\\&lt;\n\n```\n&lt;\n```").unwrap();
+        assert_eq!(texts(&md), ["&lt;", "&lt;\n"]);
+    }
+
+    /// Text in an HTML block keeps the spaces between its content (between
+    /// two formats, before a tag) and a line end written `&#10;`; the
+    /// block's own line end and the spaces around it are layout.
+    /// 이것을 실패시키는 것: 내용 사이 공백 버리기 · 글 끝·글 앞 공백 자르기 ·
+    /// `&#10;` 를 줄 끝으로 읽기 · 마지막 내용 뒤 공백 넣기 · 그림 앞 공백 버리기.
+    #[test]
+    fn html_block_text_keeps_its_spaces() {
+        for (markdown, text) in [
+            ("<!-- chart --><strong>hello</strong> <em>world</em>\n", "hello world"),
+            ("<!-- chart -->hello <em>world</em>", "hello world"),
+            ("<!-- chart --><em>hello</em> world", "hello world"),
+            ("<u>\n  a&#10;b\n  c <em>d</em>&#10;\n</u>\n", "a\nb c d\n"),
+        ] {
+            let md = MdDecoder::decode_with_default(markdown).unwrap();
+            assert_eq!(texts(&md), [text], "{markdown}");
+        }
+        // A picture is content: the space before it stays.
+        let md = MdDecoder::decode_with_default("<!-- chart -->a <img src=\"p.png\" alt=\"\"/>")
+            .unwrap();
+        let runs = &md.document.sections()[0].paragraphs[0].runs;
+        assert!(matches!(&runs[0].content, RunContent::Text(t) if t == "a "), "{runs:?}");
+        assert!(matches!(&runs[1].content, RunContent::Image(_)), "{runs:?}");
+    }
+
+    /// An HTML block in a quote is a quote paragraph: the quote's style, the
+    /// underline on its own run only.
+    /// 이것을 실패시키는 것: 블록 글을 인용 밖 스타일로 넣기.
+    #[test]
+    fn html_block_in_a_quote_keeps_the_quote_style() {
+        let quote = MdDecoder::decode_with_default("> plain").unwrap();
+        let body = MdDecoder::decode_with_default("plain").unwrap();
+        assert_ne!(
+            quote.document.sections()[0].paragraphs[0].style_ref,
+            body.document.sections()[0].paragraphs[0].style_ref,
+            "the quote style must differ from the body's for this test to see it"
+        );
+        let md = MdDecoder::decode_with_default("> <!-- chart --><u>a</u> b").unwrap();
+        let (p, plain) =
+            (&md.document.sections()[0].paragraphs[0], &quote.document.sections()[0].paragraphs[0]);
+        assert_eq!((p.para_shape_id, &p.style_ref), (plain.para_shape_id, &plain.style_ref));
+        let found: Vec<(String, bool)> = run_shapes(&md)
+            .into_iter()
+            .map(|(t, c)| (t, c.underline_type == UnderlineType::Bottom))
+            .collect();
+        assert_eq!(found, [("a".to_string(), true), (" b".to_string(), false)]);
+    }
+
+    /// A comment at the head of a note definition comes as an HTML block
+    /// inside it (the encoder writes it there): it is read as in the body,
+    /// the text after it is the definition's own paragraph.
+    /// 이것을 실패시키는 것: 정의 수집 앞에서 HTML 을 가로채지 않기 · 블록 끝에서 정의
+    /// 문단을 닫지 않기.
+    #[test]
+    fn note_definition_reads_a_leading_comment_block() {
+        let md =
+            MdDecoder::decode_with_default("x[^1]\n\n[^1]: <!-- chart -->remaining\n\n    more")
+                .unwrap();
+        assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }]);
+        let note = md.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|r| match &r.content {
+                RunContent::Control(c) => match c.as_ref() {
+                    Control::Footnote { paragraphs, .. } => {
+                        Some(paragraphs.iter().map(|p| p.text_content()).collect::<Vec<_>>())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(note, ["remaining", "more"]);
     }
 
     /// How pulldown-cmark hands the encoder's HTML to the decoder, pinned
@@ -1899,14 +2418,21 @@ mod tests {
     #[test]
     fn decode_raw_html_returns_unsupported_structure_error() {
         let template = default_template();
-        let markdown = "<div>raw</div>";
-        let err = MdDecoder::decode(markdown, &template).unwrap_err();
-
-        assert!(matches!(
-            err,
-            MdError::UnsupportedStructure { ref detail }
-                if detail.contains("raw HTML")
-        ));
+        // An HTML table is not read yet: its tags are raw HTML too.
+        // 이것을 실패시키는 것: 표 태그를 서식처럼 받기.
+        for markdown in
+            ["<div>raw</div>", "<table>\n<tbody>\n<tr>\n  <td>a</td>\n</tr>\n</tbody>\n</table>"]
+        {
+            let err = MdDecoder::decode(markdown, &template).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    MdError::UnsupportedStructure { ref detail }
+                        if detail.contains("raw HTML")
+                ),
+                "{markdown}"
+            );
+        }
     }
 
     #[test]

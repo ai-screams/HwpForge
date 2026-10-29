@@ -82,8 +82,9 @@ pub(crate) fn comment_kind(comment: &str) -> Option<Comment> {
 /// One piece of an HTML fragment in the encoder's schema.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Token<'a> {
-    /// Text between tags, its entities decoded once.
-    Text(String),
+    /// Text between tags as written: the caller decodes it ([`unescape`])
+    /// after reading what only raw text tells, such as its line ends.
+    Text(&'a str),
     /// An opening tag, or a void one ([`VOID_TAGS`]: `<br>`, `<img …/>`),
     /// with its attributes in order, their values decoded once.
     Open {
@@ -111,7 +112,7 @@ pub(crate) fn tokens(html: &str) -> Option<Vec<Token<'_>>> {
     while !rest.is_empty() {
         let start = rest.find('<').unwrap_or(rest.len());
         if start > 0 {
-            out.push(Token::Text(unescape(&rest[..start])));
+            out.push(Token::Text(&rest[..start]));
         }
         rest = &rest[start..];
         if rest.is_empty() {
@@ -919,17 +920,17 @@ mod tests {
             name,
             attributes: attributes.iter().map(|(a, v)| (*a, v.to_string())).collect(),
         };
-        let html = "<td colspan=\"2\">a &amp;lt;<br><img src=\"x\" alt=\"&quot;\"/>\
+        let html = "<td colspan=\"2\">a &amp;lt;<br><img src=\"x\" alt=\"&amp;quot;\"/>\
                     <a href=\"u?a&amp;b\">t</a></td><!-- chart -->";
         assert_eq!(
             tokens(html),
             Some(vec![
                 open("td", &[("colspan", "2")]),
-                Text("a &lt;".into()),
+                Text("a &amp;lt;"),
                 open("br", &[]),
-                open("img", &[("src", "x"), ("alt", "\"")]),
+                open("img", &[("src", "x"), ("alt", "&quot;")]),
                 open("a", &[("href", "u?a&b")]),
-                Text("t".into()),
+                Text("t"),
                 Close("a"),
                 Close("td"),
                 Token::Comment(Comment::Chart),

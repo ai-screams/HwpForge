@@ -1359,6 +1359,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ContentLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

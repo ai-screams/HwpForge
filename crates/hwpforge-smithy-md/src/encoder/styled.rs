@@ -120,7 +120,7 @@ fn note_marker(prefix: &'static str, n: usize) -> Md {
 fn render_definition(label: &str, paragraphs: &[Md]) -> String {
     let mut out = String::new();
     for (i, para) in paragraphs.iter().enumerate() {
-        let escaped = escape_footnote_paragraph(para.as_str());
+        let escaped = escape_footnote_paragraph(&comments_after_text(para.as_str()));
         if i == 0 {
             out.push_str(&format!("[^{label}]: {escaped}"));
         } else {
@@ -644,13 +644,13 @@ fn encode_paragraph_styled(
             if trimmed.is_empty() {
                 return (String::new(), false);
             }
-            format_list_item(trimmed, kind, level, checked)
+            format_list_item(comments_after_text(trimmed).trim(), kind, level, checked)
         }
         // A continuation is out of the guarantee: as before (G.3 (라)).
         // 이것을 실패시키는 것: continuation 에도 줄 끝내기
         // (`continuation_line_start_comment_is_base_output`).
         ParaKind::Body if body => comment_ends_line(text.trim_start()).0,
-        ParaKind::Body => text.trim_start().to_string(),
+        ParaKind::Body => comments_after_text(text.trim_start()),
     };
     (markdown, body)
 }
@@ -704,6 +704,42 @@ fn comment_ends_line(block: &str) -> (String, Vec<(usize, usize, isize)>) {
         }
     }
     (out, edits)
+}
+
+/// Text outside a Body block (a list item, a list continuation, a note
+/// definition's paragraph, a caption) with each comment that starts a line
+/// (a memo or chart placeholder) moved to the end of the text, in order.
+/// A comment at a line start opens an HTML block that would take the rest
+/// of the line in as raw HTML; here, unlike a Body block
+/// ([`comment_ends_line`]), a line after it would also leave the item or
+/// definition. The comment is left out when read back, so only its place
+/// moves; a line that held only comments goes, so a text of comments only
+/// comes out as it went in.
+/// 이것을 실패시키는 것: 이 함수를 거치지 않기 · 주석만 남은 줄 남기기
+/// (`comment_led_items_and_notes_read_back`).
+fn comments_after_text(text: &str) -> String {
+    let mut moved = String::new();
+    let mut lines = Vec::new();
+    for line in text.split('\n') {
+        let mut rest = line;
+        let mut took = false;
+        while let Some(end) = rest
+            .trim_start_matches([' ', '\t'])
+            .strip_prefix("<!--")
+            .and_then(|body| body.find("-->"))
+        {
+            let start = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+            moved.push_str(&rest[start..start + end + 7]);
+            rest = &rest[start + end + 7..];
+            took = true;
+        }
+        if !(took && rest.trim().is_empty()) {
+            lines.push(if took { rest.trim_start() } else { line });
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push_str(&moved);
+    out
 }
 
 fn list_context_for_paragraph(
@@ -2214,7 +2250,7 @@ fn styled_caption(
         let t = paragraph_text_styled(p, styles, st, ctx);
         if !t.as_str().trim().is_empty() {
             out.push_syntax("\n\n");
-            out.push(t);
+            out.push(t.layout(|t| comments_after_text(&t)));
         }
     }
     out
@@ -4052,6 +4088,16 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "");
+    }
+
+    /// Every comment at a line start moves after the text, in order; a line
+    /// left empty goes; a text of comments only stays as it is.
+    /// 이것을 실패시키는 것: 주석만 남은 줄 남기기.
+    #[test]
+    fn comments_after_text_moves_line_start_comments() {
+        let (c, m) = ("<!-- chart -->", "<!-- memo: m -->");
+        assert_eq!(comments_after_text(&format!("{c} a\n{m}\nb")), format!("a\nb{c}{m}"));
+        assert_eq!(comments_after_text(&format!("{c}{m}")), format!("{c}{m}"));
     }
 
     // --- Memo body is one well-formed comment ---

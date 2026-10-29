@@ -410,7 +410,9 @@ mod cases {
 const BASE: &[(&str, &str, &str)] = &[
     // Written by the base commit (496371cf) from `cases::base_cases`;
     // `g3_memo` and `g10_memo_body` follow the one-line memo comment of
-    // #281 (every `-` in its body escaped).
+    // #281 (every `-` in its body escaped); `g3_list_chart` and the `g11`
+    // continuations its comment moved after the text (#281: a comment at
+    // a line start there opened an HTML block holding the text).
     ("g0_auto", "- 항목처럼 보이는 글\n\n1. 번호처럼 보이는 글\n\n: 정의처럼 보이는 글\n\na | b\n\n--- | ---\n\n들여쓴 글", "항목처럼 보이는 글\n\n번호처럼 보이는 글\n\n: 정의처럼 보이는 글\n\na | b\n\n--- | ---\n\n    들여쓴 글"),
     ("g2_heading_split", "# 1. x", "1. x"),
     ("g2_continuation_after_empty_item", "a\n\n    b", "a\n\nb"),
@@ -423,7 +425,7 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g3_code", "```\n- x\n```", "- x"),
     ("g3_body_table_last", "a\n<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">c</td>\n</tr>\n</tbody>\n</table>", "a\n\n| c |\n| --- |\n\n"),
     ("g3_body_inline_media", "a  ![p](images/p.png) b [t](https://e.invalid/) c<!-- memo: m --> d", "a  ![p](BinData/p.png) b [t](https://e.invalid/) c d"),
-    ("g3_list_chart", "- <!-- chart -->- x", "- x"),
+    ("g3_list_chart", "- - x<!-- chart -->", "- x"),
     ("g3_list_level2", "    - - x", "- x"),
     ("g3_list_table_then_text", "- a\n<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">c</td>\n</tr>\n</tbody>\n</table>\n- x", "a\n\n| c |\n| --- |\n\n\n- x"),
     ("g3_one_table_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |\n\n\n\n- x"),
@@ -444,9 +446,9 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g10_image_caption", "![p](images/p.png)\n\n- x", "![p](BinData/p.png)"),
     // written by fa04fabf; continuations are drawn as at
     // 496371cf there.
-    ("g11_cont_memo_list", "- a\n\n  <!-- memo: m -->- x", "a\n\n- x"),
-    ("g11_cont_chart_number", "- a\n\n  <!-- chart -->1. x", "a\n\n1. x"),
-    ("g11_cont1_memo_list", "  - a\n\n    <!-- memo: m -->- x", "a\n\n- x"),
+    ("g11_cont_memo_list", "- a\n\n  - x<!-- memo: m -->", "a\n\n- x"),
+    ("g11_cont_chart_number", "- a\n\n  1. x<!-- chart -->", "a\n\n1. x"),
+    ("g11_cont1_memo_list", "  - a\n\n    - x<!-- memo: m -->", "a\n\n- x"),
     // Written by commit 61d3631d, before this writer.
     ("g12_table_memo", "a\n| v |\n| --- |\n\n<!-- memo: m -->\n\\*x\\*", "a\n\n| v |\n| --- |\n\n*x*"),
     ("g12_caption_memo", "a\n| v |\n| --- |\n\ncap<!-- memo: m -->\\*x\\*", "a\n\n| v |\n| --- |\n\n\n\ncap\n\n*x*"),
@@ -907,7 +909,7 @@ fn out_of_scope_is_base_output() {
         assert_eq!(fallbacks, 0, "{name}");
     }
     // The two places a classified-shape check would write as plain text.
-    assert_eq!(base("g3_list_chart").0, "- <!-- chart -->- x");
+    assert_eq!(base("g3_list_chart").0, "- - x<!-- chart -->");
     assert_eq!(base("g3_list_level2").0, "    - - x");
 }
 
@@ -1076,8 +1078,9 @@ fn line_start_memo_keeps_comment_and_text() {
 }
 
 /// A memo or chart comment at a continuation's start, then text that looks
-/// like a list item: a continuation is out of the guarantee, so its bytes
-/// are the base's (no line ended after the comment).
+/// like a list item: a continuation is out of the guarantee, so no line is
+/// ended after the comment; the comment moves after the text, as in a list
+/// item (`comments_after_text`), and the text reads as a list item does.
 /// 이것을 실패시키는 것: 줄 끝내기 조건을 `ParaKind::Body` 만으로.
 #[test]
 fn continuation_line_start_comment_is_base_output() {
@@ -2398,5 +2401,65 @@ mod generated {
             prop_assert!(per.values().all(|&n| n <= 1), "{:?}", out.warnings);
             prop_assert_ne!(decodes(md), Some(false), "{:?}", md);
         }
+    }
+}
+
+/// A list item, a note definition and a caption whose text starts with a chart
+/// comment, then bold text and a literal `&lt;`, read back through the
+/// decoder: the comment moved after the text (`comments_after_text`), so
+/// the bold stays bold, `&lt;` stays text and the chart is one warning. A
+/// heading keeps its comment in place.
+/// 이것을 실패시키는 것: 목록·정의·캡션에서 주석 옮기기 삭제.
+#[test]
+fn comment_led_items_and_notes_read_back() {
+    use hwpforge_core::RunContent;
+    let runs = || vec![chart(), styled_t("word", BOLD), t("&lt;")];
+    let item = doc(vec![p(BULLET, runs())]);
+    let note = doc(vec![body(vec![t("x"), footnote(vec![body(runs())])])]);
+    // A heading's text is inline: its comment opens no HTML block.
+    let heading = doc(vec![p(HEADING, runs())]);
+    let caption =
+        doc(vec![body(vec![captioned(one_cell(body(vec![t("c")])), vec![body(runs())])])]);
+    for (name, document) in
+        [("item", item), ("note", note), ("heading", heading), ("caption", caption)]
+    {
+        let (markdown, fallbacks) = styled(&document);
+        assert_eq!(fallbacks, 0, "{name}: {markdown}");
+        let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+        assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }], "{markdown}");
+        let first = &md.document.sections()[0].paragraphs[0];
+        let paragraph = match name {
+            "item" | "heading" => first.clone(),
+            "caption" => md.document.sections()[0].paragraphs[1].clone(),
+            _ => first
+                .runs
+                .iter()
+                .find_map(|r| match &r.content {
+                    RunContent::Control(c) => match c.as_ref() {
+                        hwpforge_core::Control::Footnote { paragraphs, .. } => {
+                            Some(paragraphs[0].clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("note"),
+        };
+        let texts: Vec<(String, bool)> = paragraph
+            .runs
+            .iter()
+            .filter_map(|r| match &r.content {
+                RunContent::Text(t) => Some((
+                    t.clone(),
+                    md.style_registry.char_shape(r.char_shape_id).is_some_and(|c| c.bold),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&("word".to_string(), true)), "{name} {markdown}: {texts:?}");
+        // Bold where the source is: a heading's style is bold throughout.
+        let plain_lt = name == "heading" || texts.iter().any(|(t, b)| t == "&lt;" && !b);
+        assert!(plain_lt && texts.iter().any(|(t, _)| t == "&lt;"), "{name}: {texts:?}");
+        assert!(!texts.iter().any(|(t, _)| t.contains(['*', '\\'])), "{name}: {texts:?}");
     }
 }
