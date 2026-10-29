@@ -235,7 +235,11 @@ fn accepted_depths_encode_on_small_stack() {
 fn json_gates_before_base_and_addresses() {
     child("json_gates_before_base_and_addresses", 2 * 1024 * 1024, || {
         let document = doc(group(33));
-        let exported = ExportedDocument { format_version: 2, document, styles: None };
+        let exported = ExportedDocument {
+            format_version: hwpforge_smithy_hwpx::exchange::FORMAT_VERSION,
+            document,
+            styles: None,
+        };
         let json = serde_json::to_string(&exported).unwrap();
         let error = from_json(&json, &FromJsonOptions::default().with_base(b"invalid".to_vec()))
             .unwrap_err();
@@ -244,7 +248,7 @@ fn json_gates_before_base_and_addresses() {
         );
         let section = Section::with_paragraphs(vec![para(group(33))], PageSettings::a4());
         let exported = ExportedSection {
-            format_version: 2,
+            format_version: hwpforge_smithy_hwpx::exchange::FORMAT_VERSION,
             section_index: 0,
             section,
             styles: None,

@@ -67,3 +67,6 @@ pub mod template;
 
 // Re-export key types for convenience
 pub use border_fill::{Border, BorderFill, BorderSide, Fill, PartialBorderFill};
+
+/// Markdown role selection and paragraph semantics.
+pub mod markdown;

@@ -86,3 +86,27 @@ styles:
       spacing:
         before: 6pt
         after: 12pt
+
+  heading4:
+    char_shape:
+      size: 13pt
+    para_shape:
+      spacing:
+        before: 10pt
+        after: 4pt
+
+  heading5:
+    char_shape:
+      size: 13pt
+    para_shape:
+      spacing:
+        before: 10pt
+        after: 4pt
+
+  heading6:
+    char_shape:
+      size: 13pt
+    para_shape:
+      spacing:
+        before: 10pt
+        after: 4pt

@@ -383,7 +383,7 @@ mod tests {
 
     fn export_value(doc: &Document<Draft>) -> Value {
         serde_json::to_value(ExportedDocument {
-            format_version: 2,
+            format_version: crate::exchange::FORMAT_VERSION,
             document: serde_json::from_value(serde_json::to_value(doc).unwrap()).unwrap(),
             styles: None,
         })

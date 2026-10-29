@@ -1153,7 +1153,7 @@ fn build_paragraph(
         source_origin: 0,
         id: format!("{para_idx}"),
         para_pr_id_ref: sink.output_id("paraPr", para.para_shape_id.get())?,
-        style_id_ref: if let Some(style) = para.style_id {
+        style_id_ref: if let Some(style) = para.style_ref {
             sink.output_id("style", style.get())?
         } else {
             if let Some(refs) = &sink.references {
@@ -4199,57 +4199,57 @@ mod tests {
         assert!(!xml.contains("__HWPFORGE_HYPERLINK_"));
     }
 
-    // ── style_id encoding tests ──────────────────────────────────
+    // ── style_ref encoding tests ──────────────────────────────────
 
     #[test]
     fn style_id_none_encodes_as_zero() {
         let section = simple_section("body text");
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
-        assert!(xml.contains(r#"styleIDRef="0""#), "None style_id should encode as styleIDRef=0");
+        assert!(xml.contains(r#"styleIDRef="0""#), "None style_ref should encode as styleIDRef=0");
     }
 
     #[test]
     fn style_id_some_encodes_correctly() {
-        use hwpforge_foundation::StyleIndex;
+        use hwpforge_foundation::StyleRef;
         let para = Paragraph::with_runs(
             vec![Run::text("heading", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(2));
+        .with_style(StyleRef::new(2));
         let section = Section::with_paragraphs(vec![para], PageSettings::a4());
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
         assert!(
             xml.contains(r#"styleIDRef="2""#),
-            "style_id=Some(2) should encode as styleIDRef=2"
+            "style_ref=Some(2) should encode as styleIDRef=2"
         );
     }
 
     #[test]
     fn decoder_nonzero_style_id_ref_roundtrips() {
-        use hwpforge_foundation::StyleIndex;
+        use hwpforge_foundation::StyleRef;
         let para = Paragraph::with_runs(
             vec![Run::text("outline", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(3));
+        .with_style(StyleRef::new(3));
         let section = Section::with_paragraphs(vec![para], PageSettings::a4());
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
 
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
-        assert_eq!(result.paragraphs[0].style_id, Some(StyleIndex::new(3)));
+        assert_eq!(result.paragraphs[0].style_ref, Some(StyleRef::new(3)));
     }
 
     #[test]
-    fn decoder_zero_style_id_ref_gives_none() {
+    fn decoder_zero_style_id_ref_preserves_entry() {
         let section = simple_section("normal");
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
 
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
-        assert_eq!(result.paragraphs[0].style_id, None);
+        assert_eq!(result.paragraphs[0].style_ref, Some(hwpforge_foundation::StyleRef::new(0)));
     }
 
     // ── TextDirection tests ──────────────────────────────────────

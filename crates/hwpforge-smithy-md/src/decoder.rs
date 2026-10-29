@@ -11,7 +11,7 @@ use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, StyleIndex};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use unicase::UniCase;
 
@@ -103,7 +103,8 @@ impl MdDecoder {
         let mut state = DecoderState::new(&mapping, &mut style_registry);
         state.decode_markdown(extracted.content)?;
         let decoded = state.finish()?;
-        let warnings = decoded.warnings;
+        let mut warnings = mapping.warnings.clone();
+        warnings.extend(decoded.warnings);
 
         let mut sections = split_sections(decoded.paragraphs, &decoded.section_breaks);
         if sections.is_empty() {
@@ -281,12 +282,8 @@ impl ParagraphBuilder {
         }
         let mut para = Paragraph::with_runs(self.runs, self.style.para_shape_id);
         para.heading_level = self.heading_level;
-        if let Some(level) = self.heading_level {
-            if (1..=7).contains(&level) {
-                // 개요 N is at style index N+1 (바탕글=0, 본문=1, 개요1=2, ...)
-                para.style_id = Some(StyleIndex::new((level as usize) + 1));
-            }
-        }
+        para.style_ref = Some(self.style.style_ref);
+
         para
     }
 }
@@ -408,7 +405,8 @@ impl TableBuilder {
                         } else {
                             runs
                         };
-                        let paragraph = Paragraph::with_runs(runs, body_style.para_shape_id);
+                        let paragraph = Paragraph::with_runs(runs, body_style.para_shape_id)
+                            .with_style(body_style.style_ref);
                         TableCell::new(vec![paragraph], cell_width)
                     })
                     .collect();
@@ -502,6 +500,7 @@ impl<'a> DecoderState<'a> {
             registry
                 .get_style(name)
                 .map(|e| MdStyleRef {
+                    style_ref: e.style_ref(),
                     para_shape_id: e.para_shape_id,
                     char_shape_id: e.char_shape_id,
                 })
@@ -1138,7 +1137,8 @@ impl<'a> DecoderState<'a> {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(table, self.mapping.body.char_shape_id)],
             self.mapping.body.para_shape_id,
-        );
+        )
+        .with_style(self.mapping.body.style_ref);
         self.paragraphs.push(paragraph);
         Ok(())
     }
@@ -1370,6 +1370,7 @@ fn level_to_u32(level: HeadingLevel) -> u32 {
 
 fn empty_paragraph(style: MdStyleRef) -> Paragraph {
     Paragraph::with_runs(vec![Run::text("", style.char_shape_id)], style.para_shape_id)
+        .with_style(style.style_ref)
 }
 
 fn default_empty_section() -> Section {
@@ -1970,37 +1971,47 @@ mod tests {
     }
 
     #[test]
-    fn h1_heading_sets_style_id_to_2() {
-        use hwpforge_foundation::StyleIndex;
+    fn h1_heading_uses_selected_entry() {
         let template = default_template();
         let result = MdDecoder::decode("# 제목", &template).unwrap();
         let section = &result.document.sections()[0];
-        assert_eq!(section.paragraphs[0].style_id, Some(StyleIndex::new(2)));
+        assert_eq!(
+            section.paragraphs[0].style_ref,
+            Some(result.style_registry.get_style("heading1").unwrap().style_ref())
+        );
     }
 
     #[test]
-    fn all_heading_levels_map_to_style_id() {
-        use hwpforge_foundation::StyleIndex;
+    fn all_heading_levels_use_selected_entries() {
         let template = default_template();
         for level in 1u8..=6 {
             let md = format!("{} 제목{level}", "#".repeat(level as usize));
             let result = MdDecoder::decode(&md, &template).unwrap();
             let section = &result.document.sections()[0];
             assert_eq!(
-                section.paragraphs[0].style_id,
-                Some(StyleIndex::new((level as usize) + 1)),
-                "H{level} should map to style_id {}",
+                section.paragraphs[0].style_ref,
+                Some(
+                    result
+                        .style_registry
+                        .get_style(&format!("heading{level}"))
+                        .unwrap()
+                        .style_ref()
+                ),
+                "H{level} should map to style_ref {}",
                 (level as usize) + 1
             );
         }
     }
 
     #[test]
-    fn body_paragraph_has_no_style_id() {
+    fn body_paragraph_uses_selected_entry() {
         let template = default_template();
         let result = MdDecoder::decode("본문입니다.", &template).unwrap();
         let section = &result.document.sections()[0];
-        assert_eq!(section.paragraphs[0].style_id, None);
+        assert_eq!(
+            section.paragraphs[0].style_ref,
+            Some(result.style_registry.get_style("body").unwrap().style_ref())
+        );
     }
 
     // -----------------------------------------------------------------------

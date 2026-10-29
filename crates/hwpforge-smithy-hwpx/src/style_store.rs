@@ -23,7 +23,7 @@ use hwpforge_core::{
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShadow, CharShapeIndex, Color, EmbossType,
     EmphasisType, EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType,
-    OutlineType, ParaShapeIndex, StrikeoutShape, StyleIndex, UnderlineShape, UnderlineType,
+    OutlineType, ParaShapeIndex, StrikeoutShape, StyleRef, UnderlineShape, UnderlineType,
     VerticalPosition, WordBreakType,
 };
 
@@ -1174,7 +1174,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 /// let store = HwpxStyleStore::new();
 /// assert!(store.char_shape(CharShapeIndex::new(0)).is_err());
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxStyleStore {
     /// The 한글 version style set used when injecting default styles.
@@ -1183,12 +1183,61 @@ pub struct HwpxStyleStore {
     char_shapes: Vec<HwpxCharShape>,
     para_shapes: Vec<HwpxParaShape>,
     pub(crate) styles: Vec<HwpxStyle>,
+    #[serde(serialize_with = "serialize_positions")]
+    pub(crate) style_positions: std::sync::Arc<Vec<usize>>,
+    #[serde(skip)]
+    style_references: std::sync::Arc<Vec<usize>>,
     border_fills: Vec<HwpxBorderFill>,
     numberings: Vec<NumberingDef>,
     bullets: Vec<BulletDef>,
     tabs: Vec<TabDef>,
     #[serde(default, skip_serializing_if = "fidelity::HeaderFidelity::is_empty")]
     pub(crate) header_fidelity: fidelity::HeaderFidelity,
+}
+
+#[derive(Deserialize)]
+struct StyleStoreWire {
+    style_set: HancomStyleSet,
+    fonts: Vec<HwpxFont>,
+    char_shapes: Vec<HwpxCharShape>,
+    para_shapes: Vec<HwpxParaShape>,
+    pub(crate) styles: Vec<HwpxStyle>,
+    pub(crate) style_positions: Vec<usize>,
+    border_fills: Vec<HwpxBorderFill>,
+    numberings: Vec<NumberingDef>,
+    bullets: Vec<BulletDef>,
+    tabs: Vec<TabDef>,
+    #[serde(default, skip_serializing_if = "fidelity::HeaderFidelity::is_empty")]
+    pub(crate) header_fidelity: fidelity::HeaderFidelity,
+}
+
+fn serialize_positions<S: serde::Serializer>(
+    positions: &std::sync::Arc<Vec<usize>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    positions.as_ref().serialize(serializer)
+}
+
+impl<'de> Deserialize<'de> for HwpxStyleStore {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = StyleStoreWire::deserialize(deserializer)?;
+        let mut store = Self {
+            style_set: wire.style_set,
+            fonts: wire.fonts,
+            char_shapes: wire.char_shapes,
+            para_shapes: wire.para_shapes,
+            styles: wire.styles,
+            border_fills: wire.border_fills,
+            numberings: wire.numberings,
+            bullets: wire.bullets,
+            tabs: wire.tabs,
+            header_fidelity: wire.header_fidelity,
+            style_positions: std::sync::Arc::new(wire.style_positions),
+            style_references: Default::default(),
+        };
+        store.rebuild_style_references().map_err(serde::de::Error::custom)?;
+        Ok(store)
+    }
 }
 
 #[derive(Debug)]
@@ -1199,6 +1248,45 @@ pub(crate) struct RegistryStoreBuild {
 }
 
 impl HwpxStyleStore {
+    fn rebuild_style_references(&mut self) -> HwpxResult<()> {
+        let mut inverse = vec![usize::MAX; self.styles.len()];
+        // 이것을 실패시키는 것: 중복 또는 누락 위치를 허용하거나 역표에 위치를 저장.
+        if self.style_positions.len() != inverse.len() {
+            return Err(crate::paragraph_measure::invalid(
+                "style reference mapping must cover each definition once",
+            ));
+        }
+        for (reference, &position) in self.style_positions.iter().enumerate() {
+            let slot =
+                inverse.get_mut(position).filter(|slot| **slot == usize::MAX).ok_or_else(|| {
+                    crate::paragraph_measure::invalid(
+                        "style reference mapping must cover each definition once",
+                    )
+                })?;
+            *slot = reference;
+        }
+        self.style_references = std::sync::Arc::new(inverse);
+        Ok(())
+    }
+
+    // 이것을 실패시키는 것: styles 정의 비교 생략.
+    pub(crate) fn same_definitions(&self, other: &Self) -> bool {
+        self.style_set == other.style_set
+            && self.fonts == other.fonts
+            && self.char_shapes == other.char_shapes
+            && self.para_shapes == other.para_shapes
+            && self.styles == other.styles
+            && self.border_fills == other.border_fills
+            && self.numberings == other.numberings
+            && self.bullets == other.bullets
+            && self.tabs == other.tabs
+            && self.header_fidelity == other.header_fidelity
+    }
+
+    pub(crate) fn inverse_style_positions(&self) -> std::sync::Arc<Vec<usize>> {
+        self.style_references.clone()
+    }
+
     /// Output labels are dense; all references in the store and Core are positions.
     /// Keep public definition id fields for 0.16 compatibility, but never emit gaps.
     pub(crate) fn numbered_for_output(&self) -> Self {
@@ -1302,7 +1390,7 @@ impl HwpxStyleStore {
     /// - `registry.fonts` → [`HwpxFont`] (copied to all 7 language groups)
     /// - `registry.char_shapes` → [`HwpxCharShape`] (font ref mirrors same index for all lang groups)
     /// - `registry.para_shapes` → [`HwpxParaShape`]
-    /// - `registry.style_entries` → [`HwpxStyle`] (PARA type, Korean langID)
+    /// - `registry.style_entries()` → [`HwpxStyle`] (PARA type, Korean langID)
     pub fn from_registry_with(
         registry: &StyleRegistry,
         style_set: HancomStyleSet,
@@ -1466,7 +1554,57 @@ impl HwpxStyleStore {
     /// Appends a style at the next zero-based position. The supplied `id` is
     /// ignored for lookup and renumbered when encoding.
     pub fn push_style(&mut self, style: HwpxStyle) {
+        std::sync::Arc::make_mut(&mut self.style_positions).push(self.styles.len());
+        std::sync::Arc::make_mut(&mut self.style_references).push(self.styles.len());
         self.styles.push(style);
+    }
+
+    /// Projects an optional reference to the effective output position.
+    pub fn effective_style_position(&self, reference: Option<StyleRef>) -> HwpxResult<usize> {
+        reference.map_or(Ok(0), |r| self.style_position(r))
+    }
+
+    pub(crate) fn project_style_references(&self, value: &mut serde_json::Value) -> HwpxResult<()> {
+        match value {
+            serde_json::Value::Object(fields) => {
+                if fields.get("runs").is_some_and(serde_json::Value::is_array)
+                    && fields.get("para_shape_id").is_some_and(serde_json::Value::is_u64)
+                {
+                    let reference = fields
+                        .get("style_ref")
+                        .and_then(|v| v.as_u64())
+                        .map(|r| StyleRef::new(r as usize));
+                    fields.insert(
+                        "style_ref".into(),
+                        serde_json::json!(self.effective_style_position(reference)?),
+                    );
+                }
+                for value in fields.values_mut() {
+                    self.project_style_references(value)?;
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    self.project_style_references(value)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Resolves a document reference to its wire definition position.
+    pub fn style_position(&self, reference: hwpforge_foundation::StyleRef) -> HwpxResult<usize> {
+        self.style_positions.get(reference.get()).copied().ok_or(HwpxError::IndexOutOfBounds {
+            kind: "style_ref",
+            index: reference.get() as u32,
+            max: self.style_positions.len() as u32,
+        })
+    }
+
+    /// Returns the document reference for a wire definition position.
+    pub fn style_ref_at(&self, position: usize) -> Option<hwpforge_foundation::StyleRef> {
+        self.style_references.get(position).copied().map(hwpforge_foundation::StyleRef::new)
     }
 
     /// Returns the style at the zero-based position `index`, ignoring its `id`.
@@ -1833,7 +1971,7 @@ fn build_store_from_registry_with(
     }
 
     let style_offset = defaults.len();
-    for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
+    for (i, (name, entry)) in registry.style_entries().iter().enumerate() {
         let para_shape_id = registry_shape_map_entry(
             &para_shape_map,
             entry.para_shape_id.get(),
@@ -1857,6 +1995,20 @@ fn build_store_from_registry_with(
         });
     }
 
+    let registry_count = registry.style_count();
+    let mut positions = vec![usize::MAX; store.styles.len()];
+    for (position, entry) in registry.style_entries().values().enumerate() {
+        let reference = entry.style_ref().get();
+        if reference >= registry_count || positions[reference] != usize::MAX {
+            return Err(crate::paragraph_measure::invalid("invalid registry style identity"));
+        }
+        positions[reference] = style_offset + position;
+    }
+    for position in 0..style_offset {
+        positions[registry_count + position] = position;
+    }
+    store.style_positions = std::sync::Arc::new(positions);
+    store.rebuild_style_references()?;
     Ok(RegistryStoreBuild { store, char_shape_map, para_shape_map })
 }
 
@@ -1909,7 +2061,7 @@ pub fn parse_heading_level_from_name(name: &str) -> Option<u8> {
 
 fn heading_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
     if ps.heading_type == HeadingType::Outline {
-        Some(u8::try_from(ps.heading_level).ok()?.saturating_add(1).clamp(1, 6))
+        Some(hwpforge_core::outline::outline_heading_depth(u8::try_from(ps.heading_level).ok()?))
     } else {
         None
     }
@@ -2025,10 +2177,8 @@ impl StyleLookup for HwpxStyleStore {
     }
 
     fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
-        let para_id = crate::header_references::HeaderReferences::build(self)
-            .ok()?
-            .output_ids("paraPr", id.get())
-            .ok()?;
+        let para_id = u32::try_from(id.get()).ok()?;
+        self.para_shapes.get(id.get())?;
         self.styles
             .iter()
             .find(|style| style.style_type == "PARA" && style.para_pr_id_ref == para_id)
@@ -2040,8 +2190,8 @@ impl StyleLookup for HwpxStyleStore {
         heading_level_from_para_shape(ps)
     }
 
-    fn style_name(&self, id: StyleIndex) -> Option<&str> {
-        self.styles.get(id.get()).map(|s| s.name.as_str())
+    fn style_name(&self, id: StyleRef) -> Option<&str> {
+        self.styles.get(self.style_position(id).ok()?).map(|s| s.name.as_str())
     }
 
     fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex> {
@@ -2049,19 +2199,17 @@ impl StyleLookup for HwpxStyleStore {
             .iter()
             .find(|s| s.style_type == "CHAR" && (s.name == name || s.eng_name == name))
             .and_then(|s| {
-                crate::header_references::HeaderReferences::build(self)
-                    .ok()?
-                    .char_index(s.char_pr_id_ref)
-                    .ok()
+                self.char_shapes
+                    .get(s.char_pr_id_ref as usize)
+                    .map(|_| CharShapeIndex::new(s.char_pr_id_ref as usize))
             })
     }
 
-    fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
-        let style = self.styles.get(id.get())?;
-        if let Some(para_shape) = crate::header_references::HeaderReferences::build(self)
-            .ok()
-            .and_then(|r| r.para_index(style.para_pr_id_ref).ok())
-            .and_then(|id| self.para_shapes.get(id.get()))
+    fn style_heading_level(&self, id: StyleRef) -> Option<u8> {
+        let style = self.styles.get(self.style_position(id).ok()?)?;
+        if let Some(para_shape) = self
+            .para_shapes
+            .get(style.para_pr_id_ref as usize)
             .filter(|_| style.style_type == "PARA")
         {
             if let Some(level) = heading_level_from_para_shape(para_shape) {
@@ -2205,6 +2353,30 @@ mod tests {
     };
 
     // ── HwpxStyleStore basic operations ──────────────────────────
+
+    #[test]
+    fn deserialization_validates_and_rebuilds_style_inverse() {
+        // 이것을 실패시키는 것: 역표에 reference 대신 position 저장, 중복/누락 검증 삭제.
+        let mut store = HwpxStyleStore::new();
+        for i in 0..3 {
+            store.push_style(HwpxStyle::new(i, "PARA", "same", "same", 0, 0, 0, 1042, 0));
+        }
+        let mut value = serde_json::to_value(&store).unwrap();
+        value["style_positions"] = serde_json::json!([2, 0, 1]);
+        let back: HwpxStyleStore = serde_json::from_value(value.clone()).unwrap();
+        for (reference, position) in [2, 0, 1].into_iter().enumerate() {
+            assert_eq!(back.style_position(StyleRef::new(reference)).unwrap(), position);
+            assert_eq!(back.style_ref_at(position), Some(StyleRef::new(reference)));
+        }
+        assert_eq!(serde_json::to_value(back).unwrap(), value);
+        for invalid in
+            [serde_json::json!([0, 0, 2]), serde_json::json!([0, 1]), serde_json::json!([0, 1, 3])]
+        {
+            value["style_positions"] = invalid;
+            let error = serde_json::from_value::<HwpxStyleStore>(value.clone()).unwrap_err();
+            assert_eq!(error.to_string(), "Invalid HWPX structure: Contents/header.xml: style reference mapping must cover each definition once");
+        }
+    }
 
     #[test]
     #[cfg(target_pointer_width = "64")]
@@ -3443,7 +3615,7 @@ mod tests {
         let registry = StyleRegistry::from_template(&template).unwrap();
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let defaults_len = HancomStyleSet::Modern.count();
-        for (i, (_, entry)) in registry.style_entries.iter().enumerate() {
+        for (i, (_, entry)) in registry.style_entries().iter().enumerate() {
             let style = store.style(defaults_len + i).unwrap();
             assert_eq!(
                 style.char_pr_id_ref,
@@ -3749,9 +3921,9 @@ mod tests {
     #[test]
     fn style_lookup_style_name() {
         use hwpforge_core::StyleLookup;
-        use hwpforge_foundation::StyleIndex;
+        use hwpforge_foundation::StyleRef;
         let store = style_lookup_test_store();
-        assert_eq!(store.style_name(StyleIndex::new(0)), Some("개요 2"));
+        assert_eq!(store.style_name(StyleRef::new(0)), Some("개요 2"));
     }
 
     #[test]
@@ -3781,9 +3953,9 @@ mod tests {
     #[test]
     fn style_lookup_style_heading_level() {
         use hwpforge_core::StyleLookup;
-        use hwpforge_foundation::StyleIndex;
+        use hwpforge_foundation::StyleRef;
         let store = style_lookup_test_store();
-        assert_eq!(store.style_heading_level(StyleIndex::new(0)), Some(2));
+        assert_eq!(store.style_heading_level(StyleRef::new(0)), Some(2));
     }
 
     #[test]
@@ -3801,25 +3973,25 @@ mod tests {
     #[test]
     fn style_lookup_style_heading_level_prefers_outline_para_shape() {
         use hwpforge_core::StyleLookup;
-        use hwpforge_foundation::StyleIndex;
+        use hwpforge_foundation::StyleRef;
 
         let mut store = style_lookup_test_store();
         store.styles[0].name = "맞춤 제목".to_string();
         store.para_shapes[0].heading_type = HeadingType::Outline;
         store.para_shapes[0].heading_level = 3;
 
-        assert_eq!(store.style_heading_level(StyleIndex::new(0)), Some(4));
+        assert_eq!(store.style_heading_level(StyleRef::new(0)), Some(4));
     }
 
     #[test]
     fn style_lookup_out_of_bounds_returns_none() {
         use hwpforge_core::StyleLookup;
-        use hwpforge_foundation::StyleIndex;
+        use hwpforge_foundation::StyleRef;
         let store = HwpxStyleStore::new();
         assert!(store.char_bold(CharShapeIndex::new(99)).is_none());
         assert!(store.para_alignment(ParaShapeIndex::new(99)).is_none());
-        assert!(store.style_name(StyleIndex::new(99)).is_none());
-        assert!(store.style_heading_level(StyleIndex::new(99)).is_none());
+        assert!(store.style_name(StyleRef::new(99)).is_none());
+        assert!(store.style_heading_level(StyleRef::new(99)).is_none());
     }
 
     #[test]
@@ -3898,5 +4070,199 @@ mod tests {
     fn heading_level_whitespace_trimmed() {
         assert_eq!(parse_heading_level_from_name("  개요 3  "), Some(3));
         assert_eq!(parse_heading_level_from_name("  +제목  "), Some(1));
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use hwpforge_blueprint::{builtins::builtin_default, registry::StyleRegistry};
+
+    #[test]
+    fn registry_identity_survives_all_default_sets() {
+        // 이것을 실패시키는 것: registry 참조를 wire 위치로 직접 사용.
+        let registry = StyleRegistry::from_template(&builtin_default().unwrap()).unwrap();
+        for set in [HancomStyleSet::Classic, HancomStyleSet::Modern, HancomStyleSet::Latest] {
+            let store = HwpxStyleStore::from_registry_with(&registry, set).unwrap();
+            for (ordinal, (name, entry)) in registry.style_entries().iter().enumerate() {
+                let position = store.style_position(entry.style_ref()).unwrap();
+                assert_eq!(position, set.count() + ordinal);
+                assert_eq!(store.style(position).unwrap().name, *name);
+                assert_eq!(store.style_ref_at(position), Some(entry.style_ref()));
+            }
+            let zero = store.style_ref_at(0).unwrap();
+            assert_ne!(zero, StyleRef::new(0));
+            assert_eq!(store.effective_style_position(None).unwrap(), 0);
+            assert_eq!(store.effective_style_position(Some(zero)).unwrap(), 0);
+            assert_ne!(store.effective_style_position(Some(StyleRef::new(0))).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn duplicate_names_keep_distinct_entries() {
+        // 이것을 실패시키는 것: 이름이 같은 스타일을 하나로 합치기.
+        let mut store = HwpxStyleStore::new();
+        for p in 0..2 {
+            store.push_style(HwpxStyle::new(p, "PARA", "바탕글", "Normal", p, 0, 0, 1042, 0));
+        }
+        let a = store.style_ref_at(0).unwrap();
+        let b = store.style_ref_at(1).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(store.style(store.style_position(a).unwrap()).unwrap().para_pr_id_ref, 0);
+        assert_eq!(store.style(store.style_position(b).unwrap()).unwrap().para_pr_id_ref, 1);
+    }
+
+    #[test]
+    fn original_zero_lookup_kind_and_name_matrix() {
+        use hwpforge_core::{
+            classify_paragraph, HeadingSource, ListItemKind, ListSource, ParaKind, Paragraph, Run,
+            StyleLookup,
+        };
+        // 이것을 실패시키는 것: 원본 0 lookup 생략, CHAR에 문단 개요 적용,
+        // 이름 목록 fallback 제거 또는 style의 P 목록을 상속.
+        for kind in ["PARA", "CHAR"] {
+            for heading in
+                [HeadingType::None, HeadingType::Outline, HeadingType::Number, HeadingType::Bullet]
+            {
+                for outline_level in [0, 2, 5, 8] {
+                    for (name, named_heading) in [
+                        ("plain", None),
+                        ("바탕글", None),
+                        ("개요 2", Some(2)),
+                        ("개요 0", Some(1)),
+                        ("개요 7", Some(6)),
+                        ("번호", None),
+                        ("글머리", None),
+                        ("개조", None),
+                    ] {
+                        let mut store = HwpxStyleStore::new();
+                        store.push_para_shape(HwpxParaShape {
+                            heading_type: heading,
+                            heading_level: outline_level,
+                            ..Default::default()
+                        });
+                        store.push_para_shape(HwpxParaShape::default());
+                        store.push_char_shape(HwpxCharShape::default());
+                        let expected_heading = if kind == "PARA" && heading == HeadingType::Outline
+                        {
+                            Some((outline_level as u8 + 1).clamp(1, 6))
+                        } else {
+                            named_heading
+                        };
+                        let expected = if let Some(level) = expected_heading {
+                            ParaKind::Heading { level, source: HeadingSource::Style }
+                        } else if ["번호", "글머리", "개조"].contains(&name) {
+                            ParaKind::ListItem {
+                                kind: if name == "번호" {
+                                    ListItemKind::Number
+                                } else {
+                                    ListItemKind::Bullet
+                                },
+                                level: 0,
+                                checked: None,
+                                source: ListSource::StyleName,
+                            }
+                        } else {
+                            ParaKind::Body
+                        };
+                        for position in 0..2 {
+                            store.push_style(HwpxStyle::new(
+                                position, kind, name, "", 0, 0, 0, 1042, 0,
+                            ));
+                            let reference = store.style_ref_at(position as usize).unwrap();
+                            assert_eq!(store.style_name(reference), Some(name));
+                            assert_eq!(store.style_heading_level(reference), expected_heading);
+                            let paragraph = Paragraph::with_runs(
+                                vec![Run::text("항목", CharShapeIndex::new(0))],
+                                ParaShapeIndex::new(1),
+                            )
+                            .with_style(reference);
+                            assert_eq!(
+                                classify_paragraph(&paragraph, &store),
+                                expected,
+                                "{kind} {heading:?} {name} {position}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_original_names_and_zero_roundtrip() {
+        use hwpforge_core::{Document, ImageStore, Paragraph, Run, Section};
+        // 이것을 실패시키는 것: decode에서 원본 0을 None으로 바꾸거나 이름으로 병합.
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        store.push_char_shape(HwpxCharShape::default());
+        let mut paragraphs = Vec::new();
+        for position in 0..2 {
+            store.push_para_shape(HwpxParaShape::default());
+            store.push_style(HwpxStyle::new(
+                position,
+                "PARA",
+                "바탕글",
+                "Normal",
+                position,
+                0,
+                0,
+                1042,
+                0,
+            ));
+            paragraphs.push(
+                Paragraph::with_runs(
+                    vec![Run::text("text", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(position as usize),
+                )
+                .with_style(store.style_ref_at(position as usize).unwrap()),
+            );
+        }
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(paragraphs, Default::default()));
+        let bytes =
+            crate::HwpxEncoder::encode(&document.validate().unwrap(), &store, &ImageStore::new())
+                .unwrap();
+        let decoded = crate::HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(decoded.style_store.style_count(), 2);
+        for (position, paragraph) in decoded.document.sections()[0].paragraphs.iter().enumerate() {
+            assert_eq!(paragraph.style_ref, decoded.style_store.style_ref_at(position));
+            assert!(paragraph.style_ref.is_some());
+            assert_eq!(
+                decoded.style_store.effective_style_position(paragraph.style_ref).unwrap(),
+                position
+            );
+        }
+        let encoded = crate::HwpxEncoder::encode(
+            &decoded.document.validate().unwrap(),
+            &decoded.style_store,
+            &decoded.image_store,
+        )
+        .unwrap();
+        let again = crate::HwpxDecoder::decode(&encoded).unwrap();
+        assert_eq!(again.document.sections()[0].paragraphs[0].style_ref, Some(StyleRef::new(0)));
+    }
+    #[test]
+    fn cache_projection_keeps_authored_reference_identity() {
+        use hwpforge_core::{Document, ImageStore, Paragraph, Run, Section};
+        // 이것을 실패시키는 것: 비교용 wire 투영을 반환 문서에 남기기.
+        let registry = StyleRegistry::from_template(&builtin_default().unwrap()).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        let reference = registry.style_entries().first().unwrap().1.style_ref();
+        let definition = store.style(store.style_position(reference).unwrap()).unwrap();
+        let paragraph = Paragraph::with_runs(
+            vec![Run::text("항목", CharShapeIndex::new(definition.char_pr_id_ref as usize))],
+            ParaShapeIndex::new(definition.para_pr_id_ref as usize),
+        )
+        .with_style(reference);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![paragraph], Default::default()));
+        let doc = doc.validate().unwrap();
+        let images = ImageStore::new();
+        let bytes = crate::HwpxEncoder::encode(&doc, &store, &images).unwrap();
+        let base = crate::HwpxDecoder::decode(&bytes).unwrap();
+        let (prepared, _, _) =
+            crate::layout_edit::prepare(&bytes, &base, &doc, &store, &images, Default::default())
+                .unwrap();
+        assert_eq!(prepared.sections()[0].paragraphs[0].style_ref, Some(reference));
     }
 }

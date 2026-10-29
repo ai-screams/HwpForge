@@ -58,11 +58,8 @@ impl HwpxRegistryBridge {
     /// - `Paragraph.para_shape_id`
     /// - `Run.char_shape_id`
     ///
-    /// Paragraph `style_id` is intentionally left untouched because current
-    /// Core producers store direct HWPX `styleIDRef` values there already.
-    /// HWPX/HWP5 decode round-trip style ids verbatim, Markdown headings target
-    /// the built-in Hancom style ids, and registry/template rendering does not
-    /// assign registry-local custom style indices to `Paragraph.style_id`.
+    /// Style references retain their document identity; the store resolves them
+    /// to the selected default set's definition positions.
     ///
     /// # Errors
     ///
@@ -147,6 +144,7 @@ impl HwpxRegistryBridge {
     /// The style references of `paragraph` itself and its runs — not of the
     /// paragraphs nested in them, which the traversal visits on its own.
     fn rebind_own(&self, paragraph: &mut Paragraph) -> HwpxResult<()> {
+        self.style_store.effective_style_position(paragraph.style_ref)?;
         paragraph.para_shape_id = self.map_para_shape(paragraph.para_shape_id)?;
         // The end mark's char shape is a char shape reference too.
         // 이것을 실패시키는 것: 이 다시 매기기를 지우기
@@ -195,7 +193,7 @@ mod tests {
     use hwpforge_core::table::{Table, TableCell, TableRow};
     use hwpforge_core::PageSettings;
     use hwpforge_core::StyleLookup;
-    use hwpforge_foundation::{ApplyPageType, HwpUnit, StyleIndex};
+    use hwpforge_foundation::{ApplyPageType, HwpUnit, StyleRef};
 
     fn body_registry() -> (StyleRegistry, CharShapeIndex, ParaShapeIndex) {
         let template = builtin_default().unwrap();
@@ -215,7 +213,7 @@ mod tests {
         let expected_char = bridge.char_shape_map[body_cs.get()];
         let expected_para = bridge.para_shape_map[body_ps.get()];
 
-        let mut root = simple_paragraph(body_cs, body_ps).with_style(StyleIndex::new(2));
+        let mut root = simple_paragraph(body_cs, body_ps).with_style(StyleRef::new(2));
         let table = Table::new(vec![TableRow::new(vec![TableCell::new(
             vec![simple_paragraph(body_cs, body_ps)],
             HwpUnit::from_mm(30.0).unwrap(),
@@ -272,7 +270,7 @@ mod tests {
         let section = &rebound.sections()[0];
         let root = &section.paragraphs[0];
         assert_eq!(root.para_shape_id, expected_para);
-        assert_eq!(root.style_id, Some(StyleIndex::new(2)));
+        assert_eq!(root.style_ref, Some(StyleRef::new(2)));
         assert_eq!(root.runs[0].char_shape_id, expected_char);
 
         let table_run = root.runs[1].content.as_table().unwrap();
@@ -394,14 +392,14 @@ mod tests {
 
         let mut draft = Document::new();
         draft.add_section(Section::with_paragraphs(
-            vec![simple_paragraph(body_cs, body_ps).with_style(StyleIndex::new(2))],
+            vec![simple_paragraph(body_cs, body_ps).with_style(StyleRef::new(2))],
             PageSettings::a4(),
         ));
         let validated = draft.validate().unwrap();
 
         let rebound = bridge.rebind_validated_document(&validated).unwrap();
         assert_eq!(rebound.section_count(), 1);
-        assert_eq!(rebound.sections()[0].paragraphs[0].style_id, Some(StyleIndex::new(2)));
+        assert_eq!(rebound.sections()[0].paragraphs[0].style_ref, Some(StyleRef::new(2)));
         assert_eq!(
             rebound.sections()[0].paragraphs[0].para_shape_id,
             bridge.para_shape_map[body_ps.get()]
@@ -412,20 +410,30 @@ mod tests {
     fn registry_bridge_preserves_builtin_style_id_space() {
         let (mut registry, _, _) = body_registry();
         let body = *registry.get_style("body").unwrap();
-        registry.style_entries.insert("custom-body-copy".to_string(), body);
+        registry
+            .register_style(
+                "custom_body_copy".to_string(),
+                body.char_shape_id,
+                body.para_shape_id,
+                body.font_id,
+            )
+            .unwrap();
 
         let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
-        let default_style_count = HancomStyleSet::default().default_styles().len();
-        let custom_style_id = default_style_count + registry.style_entries.len() - 1;
 
-        assert_eq!(bridge.style_store().style_name(StyleIndex::new(2)), Some("개요 1"));
         assert_eq!(
-            bridge.style_store().style_name(StyleIndex::new(default_style_count)),
+            bridge.style_store().style_name(bridge.style_store().style_ref_at(2).unwrap()),
+            Some("개요 1")
+        );
+        assert_eq!(
+            bridge.style_store().style_name(registry.get_style("body").unwrap().style_ref()),
             Some("body")
         );
         assert_eq!(
-            bridge.style_store().style_name(StyleIndex::new(custom_style_id)),
-            Some("custom-body-copy")
+            bridge
+                .style_store()
+                .style_name(registry.get_style("custom_body_copy").unwrap().style_ref()),
+            Some("custom_body_copy")
         );
     }
 }

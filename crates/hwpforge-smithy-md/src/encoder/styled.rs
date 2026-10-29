@@ -2281,7 +2281,7 @@ mod tests {
         control::{DutmalAlign, DutmalPosition, ShapePoint},
         Document, Image, ImageFormat, Paragraph, Run, Section, Table, TableCell, TableRow,
     };
-    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StyleIndex};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StyleRef};
 
     // -----------------------------------------------------------------------
     // MockStyles
@@ -2352,11 +2352,11 @@ mod tests {
             self.para_style_names.get(&id.get()).map(String::as_str)
         }
 
-        fn style_name(&self, id: StyleIndex) -> Option<&str> {
+        fn style_name(&self, id: StyleRef) -> Option<&str> {
             self.style_names.get(&id.get()).map(String::as_str)
         }
 
-        fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
+        fn style_heading_level(&self, id: StyleRef) -> Option<u8> {
             self.heading_styles.get(&id.get()).copied()
         }
 
@@ -2560,7 +2560,7 @@ mod tests {
             vec![Run::text("Title", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(1));
+        .with_style(StyleRef::new(1));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.heading_styles.insert(1, 1);
@@ -2575,7 +2575,7 @@ mod tests {
             vec![Run::text("Subsection", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(3));
+        .with_style(StyleRef::new(3));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.heading_styles.insert(3, 3);
@@ -2616,7 +2616,7 @@ mod tests {
             vec![Run::text("Priority", CharShapeIndex::new(0))],
             ParaShapeIndex::new(7),
         )
-        .with_style(StyleIndex::new(2));
+        .with_style(StyleRef::new(2));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.heading_paras.insert(7, 4);
@@ -2632,7 +2632,7 @@ mod tests {
             vec![Run::text("bold heading", CharShapeIndex::new(1))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(2));
+        .with_style(StyleRef::new(2));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.bold_ids.push(1);
@@ -2648,7 +2648,7 @@ mod tests {
             vec![Run::text("Deep", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(10));
+        .with_style(StyleRef::new(10));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.heading_styles.insert(10, 7); // exceeds 6
@@ -2663,7 +2663,7 @@ mod tests {
             vec![Run::text("Still a list", CharShapeIndex::new(0))],
             ParaShapeIndex::new(9),
         )
-        .with_style(StyleIndex::new(2));
+        .with_style(StyleRef::new(2));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.list_para_types.insert(9, "NUMBER");
@@ -3397,10 +3397,10 @@ mod tests {
         fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
             self.base.para_style_name(id)
         }
-        fn style_name(&self, id: StyleIndex) -> Option<&str> {
+        fn style_name(&self, id: StyleRef) -> Option<&str> {
             self.base.style_name(id)
         }
-        fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
+        fn style_heading_level(&self, id: StyleRef) -> Option<u8> {
             self.base.style_heading_level(id)
         }
         fn image_data(&self, key: &str) -> Option<&[u8]> {
@@ -3955,7 +3955,7 @@ mod tests {
             vec![Run::text("list item", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(5));
+        .with_style(StyleRef::new(5));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.style_names.insert(5, "글머리 기호".to_string());
@@ -3970,7 +3970,7 @@ mod tests {
             vec![Run::text("step", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(6));
+        .with_style(StyleRef::new(6));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.style_names.insert(6, "번호 목록".to_string());
@@ -4041,7 +4041,7 @@ mod tests {
             vec![Run::text("  ", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
-        .with_style(StyleIndex::new(3));
+        .with_style(StyleRef::new(3));
         let doc = validated_document(vec![para]);
         let mut styles = MockStyles::new();
         styles.heading_styles.insert(3, 1);

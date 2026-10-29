@@ -12,7 +12,7 @@
 use crate::ParagraphMeasure;
 
 use hwpforge_foundation::{
-    Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleIndex, UnderlineType,
+    Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleRef, UnderlineType,
 };
 
 /// Strict definition lookup shared by format decoders and encoders.
@@ -231,7 +231,7 @@ pub trait StyleLookup {
     ///
     /// This is useful for encoders that need to recover semantics carried by a
     /// dedicated paragraph shape even when the paragraph itself has no explicit
-    /// `style_id`.
+    /// `style_ref`.
     fn para_style_name(&self, _id: ParaShapeIndex) -> Option<&str> {
         None
     }
@@ -247,13 +247,13 @@ pub trait StyleLookup {
     }
 
     /// Returns the Korean name of the style at `id`.
-    fn style_name(&self, _id: StyleIndex) -> Option<&str> {
+    fn style_name(&self, _id: StyleRef) -> Option<&str> {
         None
     }
 
     /// Returns the heading level (1–6) of the style at `id`, if it is
     /// a heading style. Returns `None` for non-heading styles.
-    fn style_heading_level(&self, _id: StyleIndex) -> Option<u8> {
+    fn style_heading_level(&self, _id: StyleRef) -> Option<u8> {
         None
     }
 
@@ -374,7 +374,7 @@ pub enum FillKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
+    use hwpforge_foundation::{ParaShapeIndex, StyleRef};
 
     struct NoopStore;
     impl StyleLookup for NoopStore {}
@@ -384,7 +384,7 @@ mod tests {
         let store = NoopStore;
         let cs = CharShapeIndex::new(0);
         let ps = ParaShapeIndex::new(0);
-        let si = StyleIndex::new(0);
+        let si = StyleRef::new(0);
 
         assert!(store.char_bold(cs).is_none());
         assert!(store.char_italic(cs).is_none());

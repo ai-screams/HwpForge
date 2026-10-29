@@ -1687,7 +1687,7 @@ mod tests {
         // 종류별 lookup 생략, 새 문서 char/para 0 예외 제거·확대, 내장/sentinel 거부, 시험 행 누락.
         use hwpforge_core::section::PageBorderFillEntry;
         use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
-        use hwpforge_foundation::{BorderFillIndex, HeadingType, StyleIndex};
+        use hwpforge_foundation::{BorderFillIndex, HeadingType, StyleRef};
         const LANGS: [&str; 7] =
             ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
         // Explicit allowlists are field-specific: paragraph/zone border 0 has
@@ -1807,7 +1807,7 @@ mod tests {
                 }
                 let mut paragraph = Paragraph::with_runs(vec![Run::table(table, cs)], ps);
                 if kind == "style" {
-                    paragraph.style_id = Some(StyleIndex::new(id as usize));
+                    paragraph.style_ref = Some(StyleRef::new(id as usize));
                 }
                 let mut section = Section::with_paragraphs(vec![paragraph], PageSettings::a4());
                 if kind == "border-page" {
@@ -1952,7 +1952,7 @@ mod tests {
         // 이것을 실패시키는 것: 각 정의 조회 생략/출력 기본 정의 선보충, char/para 0 예외 제거, 행 누락.
         // tabPr 0·1·2는 정의 없이도 유효한 내장 값이다. 일반 tabPr 3과 별도로 확인한다.
         use hwpforge_core::{BulletDef, NumberingDef, TabDef, Table, TableCell, TableRow};
-        use hwpforge_foundation::{BorderFillIndex, HeadingType, StyleIndex};
+        use hwpforge_foundation::{BorderFillIndex, HeadingType, StyleRef};
         use std::collections::BTreeSet;
         let cases = [
             ("font:HANGUL", 0),
@@ -2093,7 +2093,7 @@ mod tests {
                 }
                 let mut paragraph = Paragraph::with_runs(vec![Run::table(table, cs)], ps);
                 if kind == "style" {
-                    paragraph.style_id = Some(StyleIndex::new(0));
+                    paragraph.style_ref = Some(StyleRef::new(0));
                 }
                 let mut section = Section::with_paragraphs(vec![paragraph], PageSettings::a4());
                 if kind == "border:page" {

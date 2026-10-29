@@ -440,6 +440,7 @@ pub fn apply_set_cells(
                 let mut paragraph =
                     Paragraph::with_runs(vec![Run::text(&edit.text, char_shape)], para_shape);
                 paragraph.end_char_shape = end_char_shape;
+                paragraph.style_ref = cell.paragraphs.first().and_then(|p| p.style_ref);
                 cell.paragraphs = vec![paragraph];
             }
         }

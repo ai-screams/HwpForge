@@ -334,6 +334,7 @@ const WARNING_MAPPING: Table = &[
     (
         "MdWarning",
         &[
+            ("HeadingListConflict", "HEADING_LIST_CONFLICT"),
             ("ParagraphMeasureLost", "PARAGRAPH_MEASURE_LOST"),
             ("MergedCellsFlattened", "TABLE_MERGE_FLATTENED"),
             ("ImageEmbedSkipped", "IMAGE_EMBED_SKIPPED"),
@@ -974,6 +975,13 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
     all.insert(
         "MdWarning",
         vec![
+            (
+                "HeadingListConflict",
+                OpsWarning::Md(MdWarning::HeadingListConflict {
+                    level: 3,
+                    style_name: "heading".into(),
+                }),
+            ),
             (
                 "ParagraphMeasureLost",
                 OpsWarning::Md(MdWarning::ParagraphMeasureLost {

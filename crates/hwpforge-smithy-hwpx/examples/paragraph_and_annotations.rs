@@ -21,7 +21,7 @@ use hwpforge_core::tab::TabDef;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, EmphasisType, HeadingType, HwpUnit, LineSpacingType,
-    ParaShapeIndex, StyleIndex,
+    ParaShapeIndex, StyleRef,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
@@ -62,9 +62,9 @@ fn text_para(text: &str, cs: usize, ps: usize) -> Paragraph {
     Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(cs))], ParaShapeIndex::new(ps))
 }
 
-fn styled_para(text: &str, cs: usize, ps: usize, style_id: usize) -> Paragraph {
+fn styled_para(text: &str, cs: usize, ps: usize, style_ref: usize) -> Paragraph {
     Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(cs))], ParaShapeIndex::new(ps))
-        .with_style(StyleIndex::new(style_id))
+        .with_style(StyleRef::new(style_ref))
 }
 
 // ---------------------------------------------------------------------------
@@ -653,8 +653,8 @@ fn main() {
     let s2 = &d.sections()[1];
     println!("    Section 2 (Heading/Outline):");
     println!("      Paragraphs: {}", s2.paragraphs.len());
-    // Check outline headings have style_id
-    let styled_count = s2.paragraphs.iter().filter(|p| p.style_id.is_some()).count();
+    // Check outline headings have style_ref
+    let styled_count = s2.paragraphs.iter().filter(|p| p.style_ref.is_some()).count();
     println!("      Paragraphs with styleIDRef: {styled_count}");
 
     // Verify Section 3 (Dutmal/Compose)

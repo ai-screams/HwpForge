@@ -41,7 +41,7 @@ use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     BookmarkType, BorderLineType, CharShapeIndex, Color, HwpUnit, NumberFormatType,
-    PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleIndex, VerticalAlign,
+    PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleRef, VerticalAlign,
 };
 
 use crate::ctrl_ids::{
@@ -1594,9 +1594,7 @@ fn project_paragraph_with_images_flat(
 
     let mut paragraph =
         Paragraph::with_runs(runs, ParaShapeIndex::new(hwp_para.para_shape_id as usize));
-    if hwp_para.style_id > 0 {
-        paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
-    }
+    paragraph = paragraph.with_style(StyleRef::new(hwp_para.style_id as usize));
     paragraph.layout_cache = promote_line_segments(
         &hwp_para.line_segments,
         check_ledger_against_emission(build_flat_ledger(hwp_para), &paragraph.runs),
@@ -2281,9 +2279,7 @@ fn project_paragraph_with_images_structural(
 
     let mut paragraph =
         Paragraph::with_runs(runs, ParaShapeIndex::new(hwp_para.para_shape_id as usize));
-    if hwp_para.style_id > 0 {
-        paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
-    }
+    paragraph = paragraph.with_style(StyleRef::new(hwp_para.style_id as usize));
     paragraph.layout_cache = promote_line_segments(
         &hwp_para.line_segments,
         check_ledger_against_emission(ledger.finish(), &paragraph.runs),
@@ -5849,7 +5845,7 @@ mod tests {
         let para = make_paragraph("text", 0, 0);
         let section = make_section(vec![para], None);
         let (doc, _) = project_to_core(vec![section]).unwrap();
-        assert_eq!(doc.sections()[0].paragraphs[0].style_id, None);
+        assert_eq!(doc.sections()[0].paragraphs[0].style_ref, Some(StyleRef::new(0)));
     }
 
     #[test]
@@ -5857,7 +5853,7 @@ mod tests {
         let para = make_paragraph("text", 0, 5);
         let section = make_section(vec![para], None);
         let (doc, _) = project_to_core(vec![section]).unwrap();
-        assert_eq!(doc.sections()[0].paragraphs[0].style_id, Some(StyleIndex::new(5)));
+        assert_eq!(doc.sections()[0].paragraphs[0].style_ref, Some(StyleRef::new(5)));
     }
 
     #[test]

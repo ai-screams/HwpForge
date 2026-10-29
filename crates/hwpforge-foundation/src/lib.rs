@@ -46,6 +46,6 @@ pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};
 pub use index::{
     BorderFillIndex, BulletIndex, CharShapeIndex, FontIndex, Index, NumberingIndex, ParaShapeIndex,
-    StyleIndex, TabIndex,
+    StyleRef, TabIndex,
 };
 pub use units::{HwpUnit, Insets, Point, Rect, Size};

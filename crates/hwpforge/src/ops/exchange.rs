@@ -160,7 +160,11 @@ pub fn to_json(hwpx: &[u8], opts: &ToJsonOptions) -> Result<ToJsonOutput, OpsErr
     let mut warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
     let styles = opts.styles.then_some(decoded.style_store);
-    let exported = ExportedDocument { format_version: 2, document: decoded.document, styles };
+    let exported = ExportedDocument {
+        format_version: hwpforge_smithy_hwpx::exchange::FORMAT_VERSION,
+        document: decoded.document,
+        styles,
+    };
 
     let mut document = serde_json::to_value(&exported).map_err(OpsError::json_serialize)?;
     let unaddressed = annotate_document_addresses(&mut document, &exported.document)
@@ -456,7 +460,7 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     // reference, and the same tree carries the addresses to verify.
     let mut value: serde_json::Value = serde_json::from_str(json)?;
     let exchange_warnings =
-        hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
+        hwpforge_smithy_hwpx::exchange::read_exchange(&mut value).map_err(OpsError::Exchange)?;
     let mut exported = ExportedDocument::deserialize(&value)?;
     // 이것을 실패시키는 것: typed 관문 삭제 (json_gates_before_base_and_addresses).
     for section in exported.document.sections() {
@@ -940,7 +944,7 @@ impl PatchOutput {
 pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> {
     let mut value: serde_json::Value = serde_json::from_str(&opts.patch)?;
     let exchange_warnings =
-        hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
+        hwpforge_smithy_hwpx::exchange::read_exchange(&mut value).map_err(OpsError::Exchange)?;
     let exported = ExportedSection::deserialize(&value)?;
     exported.section.check_nesting_depth()?;
 

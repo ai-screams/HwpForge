@@ -500,25 +500,13 @@ def test_from_json_reports_the_generated_paragraph_count(table_bytes: bytes) -> 
     assert report["paragraphs"] == expected
 
 
-def test_from_json_without_styles_falls_back_to_the_full_default_registry(
-    table_bytes: bytes,
-) -> None:
-    """No `styles` in the JSON and no `base` still yields a document with real
-    char/paragraph shapes, not a bare font-only stand-in."""
-    exported = _hwpforge.to_json(table_bytes, styles=False)
-    assert "styles" not in exported["document"]
-
-    data, _report = _hwpforge.from_json(json.dumps(exported["document"]))
-
-    insp = _hwpforge.inspect(data)
-    assert insp["sections"] >= 1
-    view = _hwpforge.read(data, section=0, paras="0")
-    assert view["paragraphs"] is not None
-
-    with_styles = _hwpforge.to_json(data, styles=True)["document"]["styles"]
-    assert with_styles["fonts"], "the default preset registry defines fonts"
-    assert with_styles["char_shapes"], "the default preset registry defines char shapes"
-    assert with_styles["para_shapes"], "the default preset registry defines para shapes"
+def test_from_json_without_styles_rejects_document_references(table_bytes: bytes) -> None:
+    # 이것을 실패시키는 것: styles 없는 v3 참조를 default 위치로 추측.
+    exported = _hwpforge.to_json(table_bytes, styles=False)["document"]
+    assert exported["format_version"] == 3
+    assert "styles" not in exported
+    with pytest.raises(Exception, match="style_ref"):
+        _hwpforge.from_json(json.dumps(exported))
 
 
 # ── stamp: apply-phase counters ────────────────────────────────

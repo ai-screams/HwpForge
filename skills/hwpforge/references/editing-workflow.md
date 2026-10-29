@@ -61,7 +61,7 @@ Edit the exported file in place and write it back whole — `patch` replaces the
 | `char_shape_id` / `para_shape_id`, but only to IDs already in this document       | invent style IDs, or edit the `styles` registry (use `--preset` for new documents)  |
 |                                                                                   | touch `layout_cache` or cell `addr` — leave them as exported                        |
 
-Re-export with the same hwpforge version you patch with. `style_id` and `heading_level` are optional per paragraph — copy them only if the source paragraph has them.
+Re-export with the same hwpforge version you patch with. `style_ref` and `heading_level` are optional per paragraph — copy them only if the source paragraph has them.
 
 ### 4a. Write back text-only
 
@@ -114,8 +114,8 @@ new_para = {
     "column_break": False,
     "page_break": False,
 }
-if "style_id" in ref:        # optional — copy only if present
-    new_para["style_id"] = ref["style_id"]
+if "style_ref" in ref:        # optional — copy only if present
+    new_para["style_ref"] = ref["style_ref"]
 paras.append(new_para)
 ```
 

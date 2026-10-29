@@ -84,6 +84,12 @@ styles:
 
 Rust API 에서 결정값 `CharShape.shadow` 는 `ShadowType` 이 아니라 `hwpforge_foundation::CharShadow`(종류·색·간격), 부분값 `PartialCharShape.shadow` 는 `Option<PartialCharShadow>` 입니다(0.17.0 breaking).
 
+### 다단 템플릿 상속의 우선순위
+
+`extends` 체인은 root → parent → leaf 순서로 병합합니다. 같은 필드나 `markdown_mapping` 키를 여러 조상이 정의하면 가장 가까운 명시값이 이기며, leaf가 적은 값은 항상 우선합니다. root의 글자 크기가 12pt, parent가 20pt이고 leaf가 생략하면 결과는 20pt입니다.
+
+이 동작은 먼 조상의 값이 먼저 채워지던 이전 다단 상속 결과를 교정합니다. 이전 결과가 필요하면 leaf에 크기와 mapping을 명시하세요. 스타일 entry도 root의 선언 순서부터 누적하므로 첫 entry를 쓰던 본문 폴백 결과가 달라질 수 있습니다. 종전 선택을 유지하려면 `markdown_mapping.body`를 명시하세요.
+
 ## StyleRegistry: from_template() 사용법
 
 ```rust,no_run

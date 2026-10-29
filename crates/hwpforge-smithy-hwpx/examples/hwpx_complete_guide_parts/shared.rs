@@ -2,7 +2,7 @@ use hwpforge_core::control::Control;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::table::TableCell;
-use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleIndex};
+use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleRef};
 
 pub(crate) const CS_NORMAL: usize = 0;
 pub(crate) const CS_TITLE: usize = 1;
@@ -35,9 +35,9 @@ pub(crate) fn runs_p(runs: Vec<Run>, ps: usize) -> Paragraph {
     Paragraph::with_runs(runs, ParaShapeIndex::new(ps))
 }
 
-pub(crate) fn styled_p(text: &str, cs: usize, ps: usize, style_id: usize) -> Paragraph {
+pub(crate) fn styled_p(text: &str, cs: usize, ps: usize, style_ref: usize) -> Paragraph {
     Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(cs))], ParaShapeIndex::new(ps))
-        .with_style(StyleIndex::new(style_id))
+        .with_style(StyleRef::new(style_ref))
 }
 
 pub(crate) fn csi(idx: usize) -> CharShapeIndex {

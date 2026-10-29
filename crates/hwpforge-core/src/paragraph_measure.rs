@@ -55,8 +55,8 @@ impl CharCount {
 
 /// A paragraph margin or tab position. Equality includes the unit, even at zero.
 ///
-/// The v2 exchange representation is `{ "unit": "hwpunit" | "char",
-/// "value": integer }`. The exchange envelope supplies `format_version: 2`.
+/// The exchange representation is `{ "unit": "hwpunit" | "char",
+/// "value": integer }`. The exchange envelope supplies `format_version: 3`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "unit", content = "value", deny_unknown_fields)]
 #[non_exhaustive]

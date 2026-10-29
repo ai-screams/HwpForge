@@ -19,7 +19,7 @@ pub const GOV_PROPOSAL_YAML: &str = include_str!("../templates/gov_proposal.yaml
 ///
 /// The default template provides:
 /// - A4 page (210mm x 297mm, 20mm margins)
-/// - 7 styles: body, heading1-3, code, blockquote, list_item
+/// - 10 styles: body, heading1-6, code, blockquote, list_item
 /// - 한컴바탕 font, 10pt body, justified alignment
 ///
 /// # Errors
@@ -83,8 +83,18 @@ mod tests {
     #[test]
     fn default_has_expected_styles() {
         let tmpl = builtin_default().unwrap();
-        let expected =
-            ["body", "heading1", "heading2", "heading3", "code", "blockquote", "list_item"];
+        let expected = [
+            "body",
+            "heading1",
+            "heading2",
+            "heading3",
+            "code",
+            "blockquote",
+            "list_item",
+            "heading4",
+            "heading5",
+            "heading6",
+        ];
         for name in &expected {
             assert!(tmpl.styles.contains_key(*name), "missing style: {name}");
         }
@@ -196,7 +206,7 @@ mod tests {
         let tmpl = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&tmpl).unwrap();
 
-        assert_eq!(registry.style_count(), 7);
+        assert_eq!(registry.style_count(), 10);
         assert!(registry.get_style("body").is_some());
         assert!(registry.get_style("heading1").is_some());
     }
@@ -214,7 +224,7 @@ mod tests {
         let registry = StyleRegistry::from_template(&resolved).unwrap();
 
         // 7 from default + 2 from gov (title, subtitle)
-        assert_eq!(registry.style_count(), 9);
+        assert_eq!(registry.style_count(), 12);
         assert!(registry.get_style("title").is_some());
 
         // Font deduplication: 한컴바탕 + D2Coding = 2 unique fonts

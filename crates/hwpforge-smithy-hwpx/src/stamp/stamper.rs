@@ -925,12 +925,25 @@ fn compare_documents(
     let mut doc_b = b.document.clone();
     doc_a.strip_layout_caches();
     doc_b.strip_layout_caches();
-    if doc_a != doc_b {
+    // 이것을 실패시키는 것: 대응표가 다른 문서에도 Core 동등성만 적용.
+    if a.style_store.style_positions != b.style_store.style_positions || doc_a != doc_b {
         // A shape's exact Core value need not survive HWPX storage digit for
         // digit (whole-degree angles, integer sizes): a shape that lands
         // within the exactness tolerance of where it was is the same shape.
-        let va = serde_json::to_value(&doc_a).unwrap_or(serde_json::Value::Null);
+        let mut va = serde_json::to_value(&doc_a).unwrap_or(serde_json::Value::Null);
         let mut vb = serde_json::to_value(&doc_b).unwrap_or(serde_json::Value::Null);
+        a.style_store.project_style_references(&mut va).map_err(|e| {
+            StamperError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: e.to_string(),
+            }
+        })?;
+        b.style_store.project_style_references(&mut vb).map_err(|e| {
+            StamperError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: e.to_string(),
+            }
+        })?;
         if shape_tolerance {
             align_equivalent_shapes(&va, &mut vb);
         }
@@ -941,7 +954,7 @@ fn compare_documents(
             });
         }
     }
-    if a.style_store != b.style_store {
+    if !a.style_store.same_definitions(&b.style_store) {
         return Err(StamperError::NotRoundTripSafe {
             component: "style_store".to_string(),
             diff_path: first_diff_path(&a.style_store, &b.style_store),
@@ -1445,6 +1458,27 @@ mod tests {
     use hwpforge_core::run::Run;
     use hwpforge_core::{Document, Paragraph, Section};
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+    #[test]
+    fn equal_core_requires_equal_reference_positions_for_fast_path() {
+        // 이것을 실패시키는 것: 빠른 경로에서 대응표 비교를 제거.
+        let mut a = doc_with_text("x");
+        a.style_store.push_style(crate::HwpxStyle::new(0, "PARA", "a", "a", 0, 0, 0, 1042, 0));
+        a.style_store.push_style(crate::HwpxStyle::new(1, "PARA", "b", "b", 0, 0, 0, 1042, 0));
+        a.document.sections_mut()[0].paragraphs[0].style_ref =
+            Some(hwpforge_foundation::StyleRef::new(0));
+        let mut b = doc_with_text("x");
+        b.document = a.document.clone();
+        b.style_store = a.style_store.clone();
+        delta_compare(&a, &b).unwrap();
+        let mut value = serde_json::to_value(&b.style_store).unwrap();
+        let count = b.style_store.style_count();
+        value["style_positions"] = serde_json::json!((0..count).rev().collect::<Vec<_>>());
+        b.style_store = serde_json::from_value(value).unwrap();
+        assert!(
+            matches!(delta_compare(&a, &b), Err(StamperError::NotRoundTripSafe { component, .. }) if component == "document")
+        );
+    }
 
     #[test]
     fn fixed_point_encode_failure_is_verification() {

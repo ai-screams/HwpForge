@@ -1,7 +1,7 @@
 //! Header references are zero/one-based list positions (Hancom probes).
 use crate::paragraph_measure::invalid;
 use crate::{HwpxResult, HwpxStyleStore};
-use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleRef};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 /// injected number head, are not looked up.
 #[doc(hidden)]
 pub struct HeaderReferences {
+    style_positions: std::sync::Arc<Vec<usize>>,
+    style_references: std::sync::Arc<Vec<usize>>,
     chars: usize,
     paras: usize,
     pub(crate) styles: usize,
@@ -39,6 +41,8 @@ impl HeaderReferences {
     /// Register definitions before resolving forward references.
     pub fn build(store: &HwpxStyleStore) -> HwpxResult<Self> {
         let refs = Self {
+            style_positions: store.style_positions.clone(),
+            style_references: store.inverse_style_positions(),
             chars: store.char_shape_count(),
             paras: store.para_shape_count(),
             styles: store.style_count(),
@@ -58,10 +62,15 @@ impl HeaderReferences {
     pub fn para_index(&self, id: u32) -> HwpxResult<ParaShapeIndex> {
         position(id as usize, self.paras, "paraPr").map(ParaShapeIndex::new)
     }
-    pub(crate) fn style_index(&self, id: u32) -> HwpxResult<StyleIndex> {
-        position(id as usize, self.styles, "style").map(StyleIndex::new)
+    pub(crate) fn style_index(&self, id: u32) -> HwpxResult<StyleRef> {
+        lookup(self.style_references.get(id as usize).copied(), "style", id).map(StyleRef::new)
     }
     pub(crate) fn output_ids(&self, kind: &str, index: usize) -> HwpxResult<u32> {
+        let index = if kind == "style" {
+            lookup(self.style_positions.get(index).copied(), "style_ref", index)?
+        } else {
+            index
+        };
         let count = match kind {
             "charPr" => self.chars,
             "paraPr" => self.paras,

@@ -9,7 +9,7 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "const": 2
+      "const": 3
     },
     "section_index": {
       "description": "Which section index this was extracted from.",
@@ -200,8 +200,8 @@
           "minimum": 0,
           "maximum": 255
         },
-        "style_id": {
-          "description": "Optional reference to a named style (e.g. 개요 1, 본문).\n`None` means 바탕글 (style 0, the default).",
+        "style_ref": {
+          "description": "Optional document-scoped named style reference.\n`None` leaves the named style unspecified; HWPX emits wire position 0.",
           "anyOf": [
             {
               "$ref": "#/$defs/Index"
@@ -5426,6 +5426,14 @@
             "$ref": "#/$defs/HwpxStyle"
           }
         },
+        "style_positions": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
         "border_fills": {
           "type": "array",
           "items": {
@@ -5460,6 +5468,7 @@
         "char_shapes",
         "para_shapes",
         "styles",
+        "style_positions",
         "border_fills",
         "numberings",
         "bullets",
@@ -6052,7 +6061,7 @@
       "type": "string"
     },
     "ParagraphMeasure": {
-      "description": "A paragraph margin or tab position. Equality includes the unit, even at zero.\n\nThe v2 exchange representation is `{ \"unit\": \"hwpunit\" | \"char\",\n\"value\": integer }`. The exchange envelope supplies `format_version: 2`.",
+      "description": "A paragraph margin or tab position. Equality includes the unit, even at zero.\n\nThe exchange representation is `{ \"unit\": \"hwpunit\" | \"char\",\n\"value\": integer }`. The exchange envelope supplies `format_version: 3`.",
       "oneOf": [
         {
           "description": "Absolute length in 1/100 pt units.",

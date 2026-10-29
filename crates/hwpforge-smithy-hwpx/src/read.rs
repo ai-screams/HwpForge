@@ -709,7 +709,7 @@ mod tests {
     use super::*;
     use hwpforge_core::page::PageSettings;
     use hwpforge_core::{Paragraph, Run};
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleRef};
     use std::collections::HashMap;
 
     // -- unit: heading / bookmark collectors (synthetic sections) ---------
@@ -724,7 +724,7 @@ mod tests {
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
             self.para_headings.get(&id.get()).copied()
         }
-        fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
+        fn style_heading_level(&self, id: StyleRef) -> Option<u8> {
             self.style_headings.get(&id.get()).copied()
         }
     }
@@ -785,7 +785,7 @@ mod tests {
     fn collect_headings_reports_style_source() {
         let mut section = Section::new(PageSettings::default());
         let mut p = text_para(0, "스타일 제목");
-        p.style_id = Some(StyleIndex::new(4));
+        p.style_ref = Some(StyleRef::new(4));
         section.paragraphs.push(p);
 
         let styles = MockStyles { style_headings: [(4, 3)].into(), ..Default::default() };

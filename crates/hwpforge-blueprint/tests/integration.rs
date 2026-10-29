@@ -158,11 +158,22 @@ fn builtin_default_full_pipeline() {
     let registry = StyleRegistry::from_template(&template).unwrap();
 
     // 7 styles, 2 fonts (한컴바탕 + D2Coding)
-    assert_eq!(registry.style_count(), 7);
+    assert_eq!(registry.style_count(), 10);
     assert_eq!(registry.font_count(), 2);
 
     // Verify all styles are accessible
-    for name in &["body", "heading1", "heading2", "heading3", "code", "blockquote", "list_item"] {
+    for name in &[
+        "body",
+        "heading1",
+        "heading2",
+        "heading3",
+        "code",
+        "blockquote",
+        "list_item",
+        "heading4",
+        "heading5",
+        "heading6",
+    ] {
         let entry = registry.get_style(name).unwrap_or_else(|| panic!("missing style: {name}"));
         assert!(registry.char_shape(entry.char_shape_id).is_some());
         assert!(registry.para_shape(entry.para_shape_id).is_some());
@@ -182,7 +193,7 @@ fn builtin_gov_proposal_full_pipeline() {
     let registry = StyleRegistry::from_template(&resolved).unwrap();
 
     // 7 from default + 2 from gov (title, subtitle) = 9
-    assert_eq!(registry.style_count(), 9);
+    assert_eq!(registry.style_count(), 12);
 
     // Title should be centered
     let title = registry.get_style("title").unwrap();

@@ -27,7 +27,7 @@ pub const SECTION_PRESERVATION_VERSION: u32 = 2;
 pub struct ExportedDocument {
     /// Exchange format version, independent of section preservation metadata.
     #[serde(deserialize_with = "deserialize_version")]
-    #[cfg_attr(feature = "schemars", schemars(extend("const" = 2)))]
+    #[cfg_attr(feature = "schemars", schemars(extend("const" = 3)))]
     pub format_version: u32,
     /// The Core document in Draft state.
     pub document: Document<Draft>,
@@ -105,7 +105,7 @@ pub enum TextLocator {
 pub struct ExportedSection {
     /// Exchange format version, independent of section preservation metadata.
     #[serde(deserialize_with = "deserialize_version")]
-    #[cfg_attr(feature = "schemars", schemars(extend("const" = 2)))]
+    #[cfg_attr(feature = "schemars", schemars(extend("const" = 3)))]
     pub format_version: u32,
     /// Which section index this was extracted from.
     pub section_index: usize,
@@ -120,7 +120,7 @@ pub struct ExportedSection {
 }
 
 /// Version of document, section and standalone style exchange.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Standalone style exchange, with the same units and version as document exports.
 #[derive(Debug, Serialize, Deserialize)]
@@ -128,7 +128,7 @@ pub const FORMAT_VERSION: u32 = 2;
 pub struct ExportedStyles {
     /// Exchange format version.
     #[serde(deserialize_with = "deserialize_version")]
-    #[cfg_attr(feature = "schemars", schemars(extend("const" = 2)))]
+    #[cfg_attr(feature = "schemars", schemars(extend("const" = 3)))]
     pub format_version: u32,
     /// Definitions with their source IDs.
     pub styles: HwpxStyleStore,
@@ -149,27 +149,128 @@ fn invalid_exchange(message: impl std::fmt::Display) -> crate::HwpxError {
 const MARGINS: [&str; 5] =
     ["margin_left", "margin_right", "indent", "spacing_before", "spacing_after"];
 
-/// Validates the common exchange envelope and migrates only unversioned legacy margins.
-/// Returned diagnostics must be surfaced by the caller. No tab unit is guessed.
-pub fn read_exchange_v2(
+/// Dispatches the exchange version, migrating v2 positional style references to v3.
+/// Diagnostics must be surfaced by callers. Section references without styles are
+/// interpreted in the submitted patch base, not an inferred source document.
+pub fn read_exchange(
     value: &mut serde_json::Value,
 ) -> crate::HwpxResult<Vec<hwpforge_foundation::diagnostics::WarningInfo>> {
-    use serde_json::Value;
     if !value.is_object() {
         return Err(invalid_exchange("exchange must be an object"));
     }
-    match value.get("format_version") {
-        None => migrate_legacy_exchange(value),
-        Some(v) if v.as_u64() == Some(u64::from(FORMAT_VERSION)) => {
-            if let Some(styles) = value.get("styles").filter(|v| !v.is_null()) {
-                let _: HwpxStyleStore =
-                    serde_json::from_value(styles.clone()).map_err(invalid_exchange)?;
-            }
-            Ok(Vec::new())
-        }
-        Some(Value::Number(v)) => Err(invalid_exchange(format!("unsupported format_version: {v}"))),
-        Some(_) => Err(invalid_exchange("format_version must be the integer 2")),
+    match value.get("format_version").and_then(serde_json::Value::as_u64) {
+        None if value.get("format_version").is_none() => return migrate_legacy_exchange(value),
+        Some(2) => migrate_style_positions(value)?,
+        Some(3) => {}
+        Some(v) => return Err(invalid_exchange(format!("unsupported format_version: {v}"))),
+        None => return Err(invalid_exchange("format_version must be an integer")),
     }
+    let count = if let Some(styles) = value.get("styles").filter(|v| !v.is_null()) {
+        if styles.get("style_positions").is_none() {
+            return Err(invalid_exchange("v3 styles require style_positions"));
+        }
+        let store: HwpxStyleStore =
+            serde_json::from_value(styles.clone()).map_err(invalid_exchange)?;
+        crate::header_references::HeaderReferences::build(&store)?;
+        Some(store.style_count())
+    } else {
+        None
+    };
+    validate_style_refs(value, count, value.get("document").is_some())?;
+    Ok(Vec::new())
+}
+
+/// Compatibility entry point; prefer the version-neutral dispatch function.
+pub fn read_exchange_v2(
+    value: &mut serde_json::Value,
+) -> crate::HwpxResult<Vec<hwpforge_foundation::diagnostics::WarningInfo>> {
+    read_exchange(value)
+}
+
+fn migrate_style_positions(value: &mut serde_json::Value) -> crate::HwpxResult<()> {
+    use serde_json::{json, Value};
+    let mut migrated = value.clone();
+    if migrated.get("document").is_some() && migrated.get("styles").is_none_or(Value::is_null) {
+        migrated["styles"] = serde_json::to_value(
+            crate::style_store_for_preset("default")
+                .ok_or_else(|| invalid_exchange("default styles unavailable"))?,
+        )
+        .map_err(invalid_exchange)?;
+    }
+    if let Some(styles) = migrated.get_mut("styles").filter(|v| !v.is_null()) {
+        let count = styles
+            .get("styles")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid_exchange("missing style definitions"))?
+            .len();
+        styles["style_positions"] = json!((0..count).collect::<Vec<_>>());
+    }
+    fn rename(value: &mut Value) -> crate::HwpxResult<()> {
+        match value {
+            Value::Object(map) => {
+                if map.contains_key("runs") && map.contains_key("para_shape_id") {
+                    if map.contains_key("style_ref") {
+                        return Err(invalid_exchange("v2 paragraphs must use style_id"));
+                    }
+                    if let Some(reference) = map.remove("style_id") {
+                        map.insert("style_ref".into(), reference);
+                    }
+                }
+                for child in map.values_mut() {
+                    rename(child)?;
+                }
+            }
+            Value::Array(items) => {
+                for child in items {
+                    rename(child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    rename(&mut migrated)?;
+    migrated["format_version"] = json!(FORMAT_VERSION);
+    *value = migrated;
+    Ok(())
+}
+
+fn validate_style_refs(
+    value: &serde_json::Value,
+    count: Option<usize>,
+    standalone: bool,
+) -> crate::HwpxResult<()> {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("runs")
+                && map.contains_key("para_shape_id")
+                && map.contains_key("style_id")
+            {
+                return Err(invalid_exchange("v3 paragraphs must use style_ref"));
+            }
+            if let Some(reference) = map.get("style_ref").filter(|v| !v.is_null()) {
+                let reference = reference
+                    .as_u64()
+                    .ok_or_else(|| invalid_exchange("style_ref must be an unsigned integer"))?;
+                if count.is_some_and(|n| reference >= n as u64) || (standalone && count.is_none()) {
+                    return Err(invalid_exchange(
+                        "style_ref requires a matching styles definition",
+                    ));
+                }
+            }
+            for child in map.values() {
+                validate_style_refs(child, count, standalone)?;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                validate_style_refs(child, count, standalone)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Migrates the five legacy packed paragraph margins; all other measurements stay intact.
@@ -218,7 +319,7 @@ pub fn migrate_legacy_exchange(
             }
         }
     }
-    migrated["format_version"] = json!(FORMAT_VERSION);
+    migrated["format_version"] = json!(2);
     // Validate unit objects and ranges before publishing the migration.
     read_exchange_v2(&mut migrated)?;
     *value = migrated;
@@ -232,6 +333,27 @@ pub fn migrate_legacy_exchange(
 mod tests {
     use super::*;
     use serde_json::{json, Value};
+
+    // 이것을 실패시키는 것: v2 위치 이행을 생략하거나 v3 참조를 기본 위치로 추측.
+    #[test]
+    fn version_dispatch_preserves_positions_and_requires_standalone_definitions() {
+        let mut old = styles();
+        old["format_version"] = json!(2);
+        old["styles"].as_object_mut().unwrap().remove("style_positions");
+        old["document"] = json!({"paragraphs": [{"runs": [], "para_shape_id": 0, "style_id": 1}]});
+        read_exchange(&mut old).unwrap();
+        assert_eq!(old["format_version"], 3);
+        assert_eq!(old["document"]["paragraphs"][0]["style_ref"], 1);
+        assert_eq!(old["styles"]["style_positions"][1], 1);
+        let mut missing = old.clone();
+        missing.as_object_mut().unwrap().remove("styles");
+        assert!(read_exchange(&mut missing).is_err());
+        missing.as_object_mut().unwrap().remove("document");
+        missing["section"] = old["document"].clone();
+        assert!(read_exchange(&mut missing).is_ok());
+        old["styles"]["style_positions"][1] = json!(0);
+        assert!(read_exchange(&mut old).is_err());
+    }
 
     fn styles() -> Value {
         serde_json::to_value(ExportedStyles {
@@ -307,7 +429,7 @@ mod tests {
     #[test]
     fn future_mixed_unversioned_objects_and_invalid_measures_are_rejected() {
         let mut value = styles();
-        value["format_version"] = json!(3);
+        value["format_version"] = json!(4);
         assert!(read_exchange_v2(&mut value).is_err());
         value.as_object_mut().unwrap().remove("format_version");
         assert!(read_exchange_v2(&mut value).is_err());
@@ -334,7 +456,7 @@ mod tests {
             schemars::schema_for!(ExportedStyles),
         ] {
             let value = serde_json::to_value(schema).unwrap();
-            assert_eq!(value["properties"]["format_version"]["const"], 2);
+            assert_eq!(value["properties"]["format_version"]["const"], 3);
             assert!(value["properties"].get("styles").is_some());
             assert!(value["$defs"].get("ParagraphMeasure").is_some());
             assert_eq!(value["$defs"]["HwpUnit"]["minimum"], -100000000);
