@@ -241,11 +241,19 @@ fn tag_end(s: &str) -> Option<usize> {
 fn attributes(s: &str) -> Option<Vec<(&str, &str)>> {
     let mut out = Vec::new();
     let mut rest = s;
-    while !rest.trim().is_empty() {
-        if !rest.starts_with(char::is_whitespace) {
+    // Only the whitespace consumed is read, once: the rest is not scanned
+    // again for each attribute.
+    // 이것을 실패시키는 것: 남은 글 전체를 매번 trim(`attribute_scan_is_linear`).
+    loop {
+        let next = rest.trim_start();
+        if next.is_empty() {
+            break;
+        }
+        // Each attribute follows whitespace.
+        if next.len() == rest.len() {
             return None;
         }
-        rest = rest.trim_start();
+        rest = next;
         let eq = rest.find('=')?;
         let name = rest[..eq].trim_end();
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -269,6 +277,7 @@ pub(crate) fn unescape(s: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&#91;", "[")
         .replace("&amp;", "&")
 }
 
@@ -912,6 +921,7 @@ mod tests {
     /// case per condition.
     /// 이것을 실패시키는 것: 중복 속성 검사 삭제 · 닫기 void 태그 검사 삭제 ·
     /// `/>` 형태 검사 삭제 · 속성 이름 검사 삭제 · 이름을 소문자로 바꿔 비교 ·
+    /// 속성 앞 공백 검사 삭제 ·
     /// `&amp;` 를 먼저 복원 · 분류 안 된 주석 통과.
     #[test]
     fn scanner_takes_only_the_schema() {
@@ -941,6 +951,7 @@ mod tests {
             "<div>",
             "<td alt=\"x\">",
             "<td colspan=\"1\" colspan=\"2\">",
+            "<td colspan=\"1\"rowspan=\"2\">",
             "</td colspan=\"2\">",
             "<br/>",
             "<img src=\"x\">",

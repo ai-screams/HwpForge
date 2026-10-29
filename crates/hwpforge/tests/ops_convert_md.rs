@@ -446,3 +446,70 @@ fn notes_lists_and_continuation_use_physical_measures() {
     assert!(md.markdown.contains("  - [x] 안쪽 항목"), "{}", md.markdown);
     assert!(md.warnings.iter().any(|w| w.info().code == "PARAGRAPH_MEASURE_LOST"));
 }
+
+// ── HTML tables ─────────────────────────────────────────────────
+
+/// An HTML table as styled writes it, rows given by `rows`.
+fn html_table(rows: &str) -> String {
+    format!("<table>\n<tbody>\n{rows}\n</tbody>\n</table>\n")
+}
+
+/// Rows and spans are kept as written and Core judges the table: an empty
+/// row a rowspan covers and rows of different widths convert; an empty row
+/// nothing covers fails Core's validation (the decoder adds no cell).
+/// 이것을 실패시키는 것: 빈 행에 칸 보충 · 짧은 행 채우기(GFM 규칙을 HTML 표에).
+#[test]
+fn html_tables_are_judged_by_core() {
+    let opts = ConvertMdOptions::default();
+    for rows in [
+        "<tr>\n  <td rowspan=\"2\">A</td>\n</tr>\n<tr>\n</tr>",
+        "<tr>\n  <td colspan=\"2\">A</td>\n</tr>\n<tr>\n  <td>B</td>\n</tr>",
+    ] {
+        let out = convert_md(&html_table(rows), None, &opts);
+        assert!(out.is_ok(), "{rows}: {:?}", out.err());
+    }
+    let err = convert_md(&html_table("<tr>\n  <td>A</td>\n</tr>\n<tr>\n</tr>"), None, &opts)
+        .expect_err("an empty row nothing covers");
+    assert_eq!(err.code(), OpsCode::ValidationFailed, "{err}");
+}
+
+/// Lossy writes a line break in a cell's text as `<br>` in its GFM cell;
+/// that Markdown converts, the `<br>` ending a cell paragraph (Markdown
+/// cannot tell a line break in a cell from a paragraph end).
+/// 이것을 실패시키는 것: GFM 칸 `<br>` 거부.
+#[test]
+fn lossy_cell_line_breaks_convert() {
+    use hwpforge::core::{
+        Document, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
+    };
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    let para = |t: &str| {
+        Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    };
+    let cell = TableCell::new(vec![para("a\nb")], HwpUnit::new(1000).unwrap());
+    let table = Table::new(vec![TableRow::new(vec![cell])]);
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let markdown = hwpforge::md::MdEncoder::encode_lossy(&doc.validate().unwrap()).unwrap();
+    assert!(markdown.contains("a<br>b"), "{markdown}");
+    let out = convert_md(&markdown, None, &ConvertMdOptions::default()).expect(&markdown);
+    let read = HwpxDecoder::decode(&out.bytes).expect("hwpx");
+    let texts: Vec<String> = read.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| &p.runs)
+        .find_map(|r| match &r.content {
+            hwpforge::core::RunContent::Table(t) => {
+                Some(t.rows[0].cells[0].paragraphs.iter().map(|p| p.text_content()).collect())
+            }
+            _ => None,
+        })
+        .expect("a table");
+    assert_eq!(texts, ["a", "b"]);
+}

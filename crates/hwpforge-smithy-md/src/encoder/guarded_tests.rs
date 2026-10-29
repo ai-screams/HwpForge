@@ -2463,3 +2463,201 @@ fn comment_led_items_and_notes_read_back() {
         assert!(!texts.iter().any(|(t, _)| t.contains(['*', '\\'])), "{name}: {texts:?}");
     }
 }
+
+/// A table styled writes as HTML (a merged cell, a cell of two
+/// paragraphs, bold text, a table in a cell) read back by the decoder:
+/// the same rows, spans, cell paragraphs, bold and nested table.
+/// 이것을 실패시키는 것: HTML 칸 span 버리기 · 칸 문단 합치기 · 중첩 표 버리기.
+#[test]
+fn styled_html_table_reads_back() {
+    use hwpforge_core::{RunContent, Table, TableCell, TableRow};
+    let mut merged_cell =
+        TableCell::new(vec![body(vec![styled_t("a", BOLD)]), body(vec![t("b")])], u(1000));
+    merged_cell.col_span = 2;
+    let inner = one_cell(body(vec![t("d")]));
+    let outer = Table::new(vec![
+        TableRow::new(vec![merged_cell]),
+        TableRow::new(vec![
+            TableCell::new(vec![body(vec![t("c")])], u(1000)),
+            TableCell::new(vec![body(vec![table(inner)])], u(1000)),
+        ]),
+    ]);
+    let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(outer)])]));
+    assert_eq!(fallbacks, 0, "{markdown}");
+    assert!(markdown.starts_with("<table>"), "{markdown}");
+    let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+    let RunContent::Table(read) = &md.document.sections()[0].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    let shape = |r: &hwpforge_core::Run| {
+        (
+            r.content.plain_text().map(|t| t.to_string()),
+            md.style_registry.char_shape(r.char_shape_id).map(|c| c.bold),
+        )
+    };
+    let first = &read.rows[0].cells[0];
+    assert_eq!((first.col_span, first.row_span), (2, 1));
+    let paragraphs: Vec<Vec<_>> =
+        first.paragraphs.iter().map(|p| p.runs.iter().map(shape).collect()).collect();
+    assert_eq!(
+        paragraphs,
+        [vec![(Some("a".to_string()), Some(true))], vec![(Some("b".to_string()), Some(false))]]
+    );
+    assert_eq!(read.rows[1].cells.len(), 2);
+    assert_eq!(read.rows[1].cells[0].paragraphs[0].text_content(), "c");
+    let RunContent::Table(nested) = &read.rows[1].cells[1].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    assert_eq!(nested.rows[0].cells[0].paragraphs[0].text_content(), "d");
+}
+
+/// The single cell of the single table in `markdown` read back.
+fn read_back_cell(markdown: &str) -> (crate::MdDocument, hwpforge_core::TableCell) {
+    use hwpforge_core::RunContent;
+    let md = crate::MdDecoder::decode_with_default(markdown).expect(markdown);
+    let RunContent::Table(read) = &md.document.sections()[0].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    let cell = read.rows[0].cells[0].clone();
+    (md, cell)
+}
+
+/// A merged (HTML) cell's text keeps the spaces between its pieces through
+/// styled and back: before a format, before a link, around a comment.
+/// 이것을 실패시키는 것: 칸 글을 토큰마다 끝 공백을 자르는 별도 경로로 ·
+/// 칸 경계에서 보류 공백 지우기 삭제.
+#[test]
+fn html_cell_text_keeps_its_spaces() {
+    use hwpforge_core::{Control, RunContent};
+    let cell = body(vec![
+        t("hello "),
+        styled_t("world", BOLD),
+        t(" see "),
+        ctrl(Control::hyperlink("x", "https://e.invalid/")),
+        t(" a "),
+        chart(),
+        t(" b"),
+    ]);
+    let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(merged(cell))])]));
+    assert_eq!(fallbacks, 0, "{markdown}");
+    let (md, cell) = read_back_cell(&markdown);
+    assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }]);
+    let runs: Vec<String> = cell.paragraphs[0]
+        .runs
+        .iter()
+        .map(|r| match &r.content {
+            RunContent::Text(t) => t.clone(),
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Hyperlink { text, .. } => format!("<{text}>"),
+                other => format!("{other:?}"),
+            },
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(runs.concat(), "hello world see <x> a  b", "{markdown}");
+    // Whitespace at a cell's end is the cell's edge: it does not move into
+    // the next cell.
+    use hwpforge_core::{Table, TableCell, TableRow};
+    let mut second = TableCell::new(vec![body(vec![t("b")])], u(1000));
+    second.col_span = 2;
+    let row =
+        TableRow::new(vec![TableCell::new(vec![body(vec![t("a "), chart()])], u(1000)), second]);
+    let (markdown, _) = styled(&doc(vec![body(vec![table(Table::new(vec![row]))])]));
+    let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+    let RunContent::Table(read) = &md.document.sections()[0].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    let texts: Vec<String> =
+        read.rows[0].cells.iter().map(|c| c.paragraphs[0].text_content()).collect();
+    assert_eq!(texts, ["a", "b"], "{markdown}");
+}
+
+/// A footnote and an endnote in a merged (HTML) cell read back as notes
+/// with their bodies, through styled and back; document text `[^1]` in the
+/// same cell stays text.
+/// 이것을 실패시키는 것: HTML 칸의 각주 참조를 글로 쓰기 · 칸 글의 `[` 이스케이프 삭제.
+#[test]
+fn html_cell_notes_read_back() {
+    use hwpforge_core::{Control, RunContent};
+    for (note, footnote) in [
+        (Control::footnote(vec![body(vec![t("설명")])]), true),
+        (Control::endnote(vec![body(vec![t("설명")])]), false),
+    ] {
+        let cell = body(vec![t("본문 [^1]"), ctrl(note)]);
+        let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(merged(cell))])]));
+        assert_eq!(fallbacks, 0, "{markdown}");
+        let (_, cell) = read_back_cell(&markdown);
+        let runs = &cell.paragraphs[0].runs;
+        assert!(matches!(&runs[0].content, RunContent::Text(t) if t == "본문 [^1]"), "{runs:?}");
+        let body_text = match &runs[1].content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Footnote { paragraphs, .. } if footnote => paragraphs[0].text_content(),
+                Control::Endnote { paragraphs, .. } if !footnote => paragraphs[0].text_content(),
+                other => panic!("{other:?} in {markdown}"),
+            },
+            other => panic!("{other:?} in {markdown}"),
+        };
+        assert_eq!(body_text, "설명", "{markdown}");
+    }
+}
+
+/// Whether `run` grows linearly with its size: the median of three runs
+/// at `n` and at `4 * n`, compared. Linear work grows about 4 times,
+/// quadratic about 16; the ratio must stay under 8. A ratio holds under a
+/// slower build (coverage instrumentation, a loaded machine) where a fixed
+/// time bound would not; a run that returns after `SAFETY` fails before the
+/// remaining runs start (it does not cut a run short; the test runner's
+/// timeout does that).
+fn grows_linearly(n: usize, run: impl Fn(usize)) -> bool {
+    const SAFETY: std::time::Duration = std::time::Duration::from_secs(20);
+    let median = |size: usize| {
+        let mut times: Vec<std::time::Duration> = (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                run(size);
+                let elapsed = started.elapsed();
+                assert!(elapsed < SAFETY, "{size}: {elapsed:?}");
+                elapsed
+            })
+            .collect();
+        times.sort();
+        times[1]
+    };
+    let (small, large) = (median(n), median(4 * n));
+    // Under a millisecond, timer noise is not growth.
+    large.as_secs_f64() < 8.0 * small.as_secs_f64().max(1e-3)
+}
+
+/// Many unfinished note references in an HTML cell are read in linear
+/// time: a failed scan does not read the rest of the cell again.
+/// 이것을 실패시키는 것: 실패마다 남은 글을 다시 훑기.
+#[test]
+fn cell_note_scan_is_linear() {
+    let cell = |n: usize| "[^".repeat(n);
+    let markdown = |n: usize| {
+        format!("<table>\n<tbody>\n<tr>\n  <td>{}</td>\n</tr>\n</tbody>\n</table>", cell(n))
+    };
+    let md = crate::MdDecoder::decode_with_default(&markdown(10)).expect("decodes");
+    let hwpforge_core::RunContent::Table(read) =
+        &md.document.sections()[0].paragraphs[0].runs[0].content
+    else {
+        panic!("a table")
+    };
+    assert_eq!(read.rows[0].cells[0].paragraphs[0].text_content(), cell(10));
+    assert!(grows_linearly(100_000, |n| {
+        crate::MdDecoder::decode_with_default(&markdown(n)).expect("decodes");
+    }));
+}
+
+/// Many attributes then much whitespace in one tag are parsed in linear
+/// time: the whitespace is not read again for each attribute.
+/// 이것을 실패시키는 것: 남은 글 전체를 매번 trim.
+#[test]
+fn attribute_scan_is_linear() {
+    let tag = |n: usize| format!("<td{}{}>", " colspan=\"1\"".repeat(n), " ".repeat(n));
+    assert!(super::guard::tokens("<td colspan=\"1\"   >").is_some());
+    assert!(grows_linearly(20_000, |n| {
+        // A repeated attribute fails, after every attribute is parsed.
+        assert!(super::guard::tokens(&tag(n)).is_none());
+    }));
+}

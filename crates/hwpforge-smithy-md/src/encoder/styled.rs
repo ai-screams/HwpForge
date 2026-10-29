@@ -1680,7 +1680,7 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             } else {
                 // A definition is Markdown; its marker is written as it is.
                 let body = extract_note_body(paragraphs, styles, st, ctx);
-                Html::text(note_definition(control, body, paragraphs, st, ctx).as_str())
+                Html::note_mark(note_definition(control, body, paragraphs, st, ctx))
             }
         }
         Control::TextBox { paragraphs, .. }

@@ -8,6 +8,7 @@ use hwpforge_blueprint::builtins::builtin_default;
 pub(crate) const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
+use hwpforge_core::table::grid;
 use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
@@ -289,13 +290,42 @@ impl ParagraphBuilder {
     }
 }
 
+/// One cell being read: its finished paragraphs, the paragraph being
+/// written, and its spans (1 for a GFM cell).
+#[derive(Debug, Clone)]
+struct CellBuilder {
+    paragraphs: Vec<Vec<Run>>,
+    runs: Vec<Run>,
+    col_span: u16,
+    row_span: u16,
+}
+
+/// Where an HTML table's reading stands: the tag it may meet next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtmlTableAt {
+    /// After `<table>`: `<tbody>`.
+    Table,
+    /// In `<tbody>`: `<tr>` or `</tbody>`.
+    Body,
+    /// In `<tr>`: `<td>` or `</tr>`.
+    Row,
+    /// In `<td>`: its content or `</td>`.
+    Cell,
+    /// After `</tbody>`: `</table>`.
+    Done,
+}
+
+/// A table being read. A GFM table (`html` is `None`) fills short rows;
+/// an HTML table keeps its rows and spans as written, so Core judges them.
 #[derive(Debug, Clone)]
 struct TableBuilder {
-    rows: Vec<Vec<Vec<Run>>>,
-    current_row: Vec<Vec<Run>>,
-    current_cell: Vec<Run>,
+    rows: Vec<Vec<CellBuilder>>,
+    current_row: Vec<CellBuilder>,
+    current_cell: Option<CellBuilder>,
     row_open: bool,
-    cell_open: bool,
+    /// An HTML table: where it stands, and how many HTML formats were open
+    /// when its cell opened (the cell must close them all).
+    html: Option<(HtmlTableAt, usize)>,
 }
 
 impl TableBuilder {
@@ -303,9 +333,9 @@ impl TableBuilder {
         Self {
             rows: Vec::new(),
             current_row: Vec::new(),
-            current_cell: Vec::new(),
+            current_cell: None,
             row_open: false,
-            cell_open: false,
+            html: None,
         }
     }
 
@@ -325,24 +355,34 @@ impl TableBuilder {
     }
 
     fn start_cell(&mut self) {
+        self.start_spanned_cell(1, 1);
+    }
+
+    fn start_spanned_cell(&mut self, col_span: u16, row_span: u16) {
         self.end_cell();
-        self.current_cell = Vec::new();
-        self.cell_open = true;
+        self.current_cell =
+            Some(CellBuilder { paragraphs: Vec::new(), runs: Vec::new(), col_span, row_span });
     }
 
     fn end_cell(&mut self) {
-        if self.cell_open {
-            self.current_row.push(std::mem::take(&mut self.current_cell));
-            self.cell_open = false;
+        if let Some(mut cell) = self.current_cell.take() {
+            cell.paragraphs.push(std::mem::take(&mut cell.runs));
+            self.current_row.push(cell);
+        }
+    }
+
+    /// A `<br>` in the cell: its paragraph ends, the next begins.
+    fn break_paragraph(&mut self) {
+        if let Some(cell) = self.current_cell.as_mut() {
+            cell.paragraphs.push(std::mem::take(&mut cell.runs));
         }
     }
 
     fn push_text_with_style(&mut self, text: &str, char_shape_id: CharShapeIndex) {
-        if !self.cell_open || text.is_empty() {
+        let Some(cell) = self.current_cell.as_mut().filter(|_| !text.is_empty()) else {
             return;
-        }
-
-        if let Some(last) = self.current_cell.last_mut() {
+        };
+        if let Some(last) = cell.runs.last_mut() {
             if let RunContent::Text(existing) = &mut last.content {
                 if last.char_shape_id == char_shape_id {
                     existing.push_str(text);
@@ -350,18 +390,17 @@ impl TableBuilder {
                 }
             }
         }
-
-        self.current_cell.push(Run::text(text, char_shape_id));
+        cell.runs.push(Run::text(text, char_shape_id));
     }
 
     fn push_run(&mut self, run: Run) {
-        if self.cell_open {
-            self.current_cell.push(run);
+        if let Some(cell) = self.current_cell.as_mut() {
+            cell.runs.push(run);
         }
     }
 
     fn is_in_cell(&self) -> bool {
-        self.cell_open
+        self.current_cell.is_some()
     }
 
     fn into_table(
@@ -370,53 +409,83 @@ impl TableBuilder {
         page: hwpforge_core::PageSettings,
     ) -> MdResult<Table> {
         self.end_row();
-
-        if self.rows.is_empty() {
-            self.rows.push(vec![vec![Run::text("", body_style.char_shape_id)]]);
+        let html = self.html.is_some();
+        let mut gfm_cols = None;
+        let empty = || CellBuilder {
+            paragraphs: vec![Vec::new()],
+            runs: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+        };
+        if !html {
+            if self.rows.is_empty() {
+                self.rows.push(vec![empty()]);
+            }
+            let max_cols = self.rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+            if max_cols > 10_000 {
+                return Err(MdError::UnsupportedStructure {
+                    detail: format!("table has too many columns: {max_cols}"),
+                });
+            }
+            for row in &mut self.rows {
+                row.resize_with(max_cols, empty);
+            }
+            gfm_cols = Some(max_cols);
         }
-
-        let max_cols = self.rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
-        if max_cols > 10_000 {
-            return Err(MdError::UnsupportedStructure {
-                detail: format!("table has too many columns: {max_cols}"),
-            });
+        let paragraph = |runs: Vec<Run>| {
+            let runs =
+                if runs.is_empty() { vec![Run::text("", body_style.char_shape_id)] } else { runs };
+            Paragraph::with_runs(runs, body_style.para_shape_id).with_style(body_style.style_ref)
+        };
+        let mut table = Table::new(
+            self.rows
+                .into_iter()
+                .map(|row| {
+                    TableRow::new(
+                        row.into_iter()
+                            .map(|cell| {
+                                let mut out = TableCell::new(
+                                    cell.paragraphs.into_iter().map(paragraph).collect(),
+                                    HwpUnit::ZERO,
+                                );
+                                out.col_span = cell.col_span;
+                                out.row_span = cell.row_span;
+                                out
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+        );
+        // Widths are a layout default, an equal share of the printable
+        // width per column: they change no span, row or cell.
+        let fallback = HwpUnit::from_mm(40.0)?;
+        let share = table_columns(&table, gfm_cols)
+            .and_then(|cols| i32::try_from(cols).ok())
+            .filter(|&c| c > 0)
+            .map(|c| page.printable_width() / c)
+            .filter(|w| w.as_i32() > 0);
+        for cell in table.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+            cell.width = share
+                .and_then(|w| w.as_i32().checked_mul(i32::from(cell.col_span.max(1))))
+                .and_then(|w| HwpUnit::new(w).ok())
+                .unwrap_or(fallback);
         }
-        let divisor = i32::try_from(max_cols).unwrap_or(1);
-        let mut cell_width = page.printable_width() / divisor;
-        if cell_width.as_i32() <= 0 {
-            cell_width = HwpUnit::from_mm(40.0)?;
-        }
+        Ok(table)
+    }
+}
 
-        let table_rows = self
-            .rows
-            .into_iter()
-            .map(|mut row| {
-                if row.is_empty() {
-                    row.push(vec![Run::text("", body_style.char_shape_id)]);
-                }
-                while row.len() < max_cols {
-                    row.push(vec![Run::text("", body_style.char_shape_id)]);
-                }
-
-                let cells = row
-                    .into_iter()
-                    .map(|runs| {
-                        let runs = if runs.is_empty() {
-                            vec![Run::text("", body_style.char_shape_id)]
-                        } else {
-                            runs
-                        };
-                        let paragraph = Paragraph::with_runs(runs, body_style.para_shape_id)
-                            .with_style(body_style.style_ref);
-                        TableCell::new(vec![paragraph], cell_width)
-                    })
-                    .collect();
-
-                TableRow::new(cells)
-            })
-            .collect();
-
-        Ok(Table::new(table_rows))
+/// The columns a table's widths are shared over: a GFM table's are its
+/// widest row (`gfm_cols`, every span 1), however large; an HTML table's
+/// are its placed grid's, placed only when the area its spans cover is
+/// within Core's limit (`None` past it: nothing is allocated per position).
+/// 이것을 실패시키는 것: GFM 에도 면적 검사 · HTML 에 면적 검사 없이 배치
+/// (`table_columns_check_the_area_of_html_tables_only`, `huge_spans_take_the_fallback_width`).
+fn table_columns(table: &Table, gfm_cols: Option<usize>) -> Option<u32> {
+    match gfm_cols {
+        Some(cols) => u32::try_from(cols).ok(),
+        None => (grid::covered_area(table) <= grid::MAX_GRID_POSITIONS)
+            .then(|| grid::grid_placements(table).cols),
     }
 }
 
@@ -485,7 +554,9 @@ struct DecoderState<'a> {
     endnote_style: MdStyleRef,
     paragraphs: Vec<Paragraph>,
     current: Option<ParagraphBuilder>,
-    table: Option<TableBuilder>,
+    /// The tables being read, innermost last: a GFM table, or HTML tables
+    /// nested in a block (read whole within it).
+    tables: Vec<TableBuilder>,
     blockquote_depth: usize,
     in_code_block: bool,
     in_item: bool,
@@ -537,7 +608,7 @@ impl<'a> DecoderState<'a> {
             derived_shapes: std::collections::HashMap::new(),
             paragraphs: Vec::new(),
             current: None,
-            table: None,
+            tables: Vec::new(),
             blockquote_depth: 0,
             in_code_block: false,
             in_item: false,
@@ -559,7 +630,7 @@ impl<'a> DecoderState<'a> {
     }
 
     fn finish(mut self) -> MdResult<DecodeOutput> {
-        if self.table.is_some() {
+        if !self.tables.is_empty() {
             return Err(MdError::UnsupportedStructure {
                 detail: "table was not properly closed".to_string(),
             });
@@ -616,12 +687,11 @@ impl<'a> DecoderState<'a> {
                                 });
                             };
                             let Some(def) = definitions.get_mut(&canonical) else {
-                                // 정의 없는 참조는 파서가 이벤트를 만들지 않으므로
-                                // 여기 도달 = 내부 불변식 위반.
+                                // Markdown 의 정의 없는 참조는 파서가 이벤트를 만들지
+                                // 않는다. 여기 오는 것은 HTML 칸의 `[^label]` 이다.
                                 return Err(MdError::UnsupportedStructure {
                                     detail: format!(
-                                        "note resolve invariant broken: no definition for \
-                                         referenced label '{}'",
+                                        "note reference '[^{}]' has no definition",
                                         canonical.as_ref()
                                     ),
                                 });
@@ -824,10 +894,11 @@ impl<'a> DecoderState<'a> {
     }
 
     /// Reads HTML as the encoder writes it ([`guard::tokens`]): formats,
-    /// `<br>`, `<a href>`, `<img src alt>` and its comments. Anything else,
-    /// HTML tables included, is raw HTML and fails. In a note definition
-    /// links and pictures fail as their Markdown does; in a table cell so
-    /// does `<br>`.
+    /// `<br>`, `<a href>`, `<img src alt>`, its comments and tables
+    /// ([`Self::html_table_tag`]). Anything else is raw HTML and
+    /// fails. In a note definition links, pictures and tables fail as their
+    /// Markdown does. In a table cell `<br>` ends the cell's paragraph (in a
+    /// link, it is the link text's line break).
     ///
     /// Text (only a block has any) is read as a paragraph's: a raw line end
     /// is a soft break, a space, the line's surrounding spaces dropped; one
@@ -842,6 +913,7 @@ impl<'a> DecoderState<'a> {
         let raw_html = || unsupported_markdown_feature("raw HTML");
         let tokens = guard::tokens(html.trim_end()).ok_or_else(raw_html)?;
         let in_note = self.definition_capture.is_some();
+        let tables = self.tables.len();
         // Where the last content is: whitespace after it is left out.
         let last = tokens.iter().rposition(|t| match t {
             guard::Token::Text(raw) => !raw.trim().is_empty(),
@@ -851,9 +923,49 @@ impl<'a> DecoderState<'a> {
         let mut started = false;
         let mut space = String::new();
         for (i, token) in tokens.into_iter().enumerate() {
+            let structure = matches!(
+                token,
+                guard::Token::Open { name: "table" | "tbody" | "tr" | "td", .. }
+                    | guard::Token::Close("table" | "tbody" | "tr" | "td")
+            );
             let tag = !matches!(token, guard::Token::Text(_) | guard::Token::Comment(_));
-            if tag && last.is_some_and(|last| i <= last) {
+            if structure {
+                // A cell is a paragraph of its own: whitespace at its edges
+                // is layout, as at a block's.
+                // 이것을 실패시키는 것: 칸 경계 공백을 칸 글로 넣기
+                // (`html_cell_text_keeps_its_spaces`).
+                space.clear();
+                started = false;
+            } else if tag && last.is_some_and(|last| i <= last) {
                 self.push_html_text(&std::mem::take(&mut space))?;
+            }
+            // An HTML table is read with the tag names. Outside its cells
+            // only its structure and the layout whitespace between tags may
+            // stand; a cell's text is read as a paragraph's.
+            // 이것을 실패시키는 것: 칸 밖 글·주석·인라인 태그 받기
+            // (`html_table_grammar_is_the_encoders`).
+            let at = self.tables.last().and_then(|t| t.html).map(|(at, _)| at);
+            let outside_cells = at.is_some() && at != Some(HtmlTableAt::Cell);
+            match &token {
+                guard::Token::Open {
+                    name: name @ ("table" | "tbody" | "tr" | "td"),
+                    attributes,
+                } => {
+                    self.html_table_tag(name, true, attributes, !in_note)?;
+                    continue;
+                }
+                guard::Token::Close(name @ ("table" | "tbody" | "tr" | "td")) => {
+                    self.html_table_tag(name, false, &[], !in_note)?;
+                    continue;
+                }
+                guard::Token::Text(raw) if outside_cells => {
+                    if !raw.trim().is_empty() {
+                        return Err(raw_html());
+                    }
+                    continue;
+                }
+                _ if outside_cells => return Err(raw_html()),
+                _ => {}
             }
             match token {
                 guard::Token::Text(raw) => {
@@ -879,7 +991,11 @@ impl<'a> DecoderState<'a> {
                         space.push_str(&text[..text.len() - text.trim_start().len()]);
                     }
                     self.push_html_text(&std::mem::take(&mut space))?;
-                    self.push_html_text(&guard::unescape(core))?;
+                    if at == Some(HtmlTableAt::Cell) {
+                        self.push_cell_text(core)?;
+                    } else {
+                        self.push_html_text(&guard::unescape(core))?;
+                    }
                     space.push_str(&text[text.trim_end().len()..]);
                     started = true;
                 }
@@ -896,10 +1012,12 @@ impl<'a> DecoderState<'a> {
                     self.warnings.push(MdWarning::ContentLost { kind: "memo" });
                 }
                 guard::Token::Open { name: "br", .. } => {
-                    if self.is_in_table_cell() {
-                        return Err(raw_html());
+                    match self.tables.last_mut() {
+                        Some(table) if self.pending_link.is_none() && table.is_in_cell() => {
+                            table.break_paragraph();
+                        }
+                        _ => self.push_html_text("\n")?,
                     }
-                    self.push_html_text("\n")?;
                     started = true;
                 }
                 guard::Token::Open { name: "a", attributes } => {
@@ -944,7 +1062,139 @@ impl<'a> DecoderState<'a> {
                 }
             }
         }
+        // A table is read within the HTML it opened in, so its text is
+        // never Markdown (an inline `<table>` is one tag: it fails here).
+        if self.tables.len() > tables {
+            return Err(MdError::UnsupportedStructure {
+                detail: "HTML table is not closed".to_string(),
+            });
+        }
         Ok(())
+    }
+
+    /// One HTML table tag, in the order the encoder writes them:
+    /// `<table><tbody>` then `<tr>` rows of `<td>` cells, `</tbody></table>`;
+    /// a `<table>` opens at the top (`allowed`: outside a note definition;
+    /// not in a GFM cell) or in an HTML cell, at most
+    /// [`crate::lossless_grammar::MAX_NESTING_DEPTH`] tables deep. A cell
+    /// closes the HTML formats it opened. Rows and cells are kept as
+    /// written, none added: whether the table holds is Core's to judge.
+    /// 이것을 실패시키는 것: 순서 검사 하나씩 삭제 · 깊이 검사 삭제 · 칸의 서식 닫힘 검사 삭제
+    /// (`html_table_grammar_is_the_encoders`, `html_tables_nest_32_deep`).
+    fn html_table_tag(
+        &mut self,
+        name: &str,
+        open: bool,
+        attributes: &[(&str, String)],
+        allowed: bool,
+    ) -> MdResult<()> {
+        use HtmlTableAt::{Body, Cell, Done, Row, Table as Start};
+        let raw_html = || unsupported_markdown_feature(&format!("raw HTML <{name}> here"));
+        let at = self.tables.last().and_then(|t| t.html).map(|(at, _)| at);
+        let set = |me: &mut Self, at: HtmlTableAt| {
+            if let Some(table) = me.tables.last_mut() {
+                table.html = table.html.map(|(_, open)| (at, open));
+            }
+        };
+        match (name, open, at) {
+            ("table", true, None) if allowed && !self.is_in_table_cell() => {
+                self.materialize_pending_item_paragraph_if_needed();
+                self.finalize_paragraph();
+            }
+            ("table", true, Some(Cell)) => {}
+            ("tbody", true, Some(Start)) => set(self, Body),
+            ("tr", true, Some(Body)) => {
+                set(self, Row);
+                self.tables.last_mut().expect("html table").start_row();
+            }
+            ("td", true, Some(Row)) => {
+                let span = |key| match attributes.iter().find(|(n, _)| *n == key) {
+                    None => Some(1),
+                    Some((_, v)) => v
+                        .bytes()
+                        .all(|b| b.is_ascii_digit())
+                        .then(|| v.parse::<u16>().ok())
+                        .flatten()
+                        .filter(|&n| n > 0),
+                };
+                let (Some(cols), Some(rows)) = (span("colspan"), span("rowspan")) else {
+                    return Err(raw_html());
+                };
+                let formats = self.html_open.len();
+                let table = self.tables.last_mut().expect("html table");
+                table.html = Some((Cell, formats));
+                table.start_spanned_cell(cols, rows);
+            }
+            ("td", false, Some(Cell)) => {
+                let formats = self.tables.last().and_then(|t| t.html).map_or(0, |(_, n)| n);
+                if self.html_open.len() != formats {
+                    return Err(MdError::UnsupportedStructure {
+                        detail: "HTML formats left open at the cell's end".to_string(),
+                    });
+                }
+                set(self, Row);
+                self.tables.last_mut().expect("html table").end_cell();
+            }
+            ("tr", false, Some(Row)) => {
+                set(self, Body);
+                self.tables.last_mut().expect("html table").end_row();
+            }
+            ("tbody", false, Some(Body)) => set(self, Done),
+            ("table", false, Some(Done)) => {
+                let builder = self.tables.pop().expect("html table");
+                let table = builder.into_table(self.mapping.body, self.mapping.page_settings)?;
+                if self.tables.last().is_some_and(|t| t.html.is_some()) {
+                    let char_shape_id = self.current_char_shape_id();
+                    self.push_run_to_active_context(Run::table(table, char_shape_id));
+                } else {
+                    self.push_table_paragraph(table);
+                }
+                return Ok(());
+            }
+            _ => return Err(raw_html()),
+        }
+        if name == "table" {
+            let depth = self.tables.iter().filter(|t| t.html.is_some()).count() + 1;
+            if depth > crate::lossless_grammar::MAX_NESTING_DEPTH {
+                return Err(MdError::UnsupportedStructure {
+                    detail: format!(
+                        "HTML tables nested deeper than {}",
+                        crate::lossless_grammar::MAX_NESTING_DEPTH
+                    ),
+                });
+            }
+            let mut table = TableBuilder::new();
+            table.html = Some((Start, 0));
+            self.tables.push(table);
+        }
+        Ok(())
+    }
+
+    /// Text of an HTML cell, raw: a `[^label]` in it is a note reference
+    /// (the encoder writes every `[` of document text there as `&#91;`, so
+    /// a raw one is its own reference), the rest text decoded once.
+    /// 이것을 실패시키는 것: 칸 글의 각주 참조를 글로 넣기 · 엔티티 복원 뒤에 참조 찾기
+    /// (`html_cell_notes_read_back`).
+    fn push_cell_text(&mut self, raw: &str) -> MdResult<()> {
+        // Each character is looked at once: a scan that fails resumes where
+        // it stopped, and with no `]` ahead the rest is text.
+        // 이것을 실패시키는 것: 실패마다 남은 글을 다시 훑기(`cell_note_scan_is_linear`).
+        let (mut text, mut from) = (0, 0);
+        while let Some(found) = raw[from..].find("[^") {
+            let label = from + found + 2;
+            let Some(stop) = raw[label..].find(|c: char| c == ']' || c == '[' || c.is_whitespace())
+            else {
+                break;
+            };
+            let stop = label + stop;
+            if raw[stop..].starts_with(']') && stop > label {
+                self.push_text(&guard::unescape(&raw[text..label - 2]))?;
+                self.handle_footnote_reference(&raw[label..stop])?;
+                text = stop + 1;
+            }
+            from = stop + usize::from(raw[stop..].starts_with(']'));
+        }
+        self.push_text(&guard::unescape(&raw[text..]))
     }
 
     /// The counter of an HTML format tag; `None` for any other tag.
@@ -1149,17 +1399,17 @@ impl<'a> DecoderState<'a> {
     fn start_table_tag(&mut self) {
         self.materialize_pending_item_paragraph_if_needed();
         self.finalize_paragraph();
-        self.table = Some(TableBuilder::new());
+        self.tables.push(TableBuilder::new());
     }
 
     fn start_table_row_tag(&mut self) {
-        if let Some(table) = self.table.as_mut() {
+        if let Some(table) = self.tables.last_mut() {
             table.start_row();
         }
     }
 
     fn start_table_cell_tag(&mut self) {
-        if let Some(table) = self.table.as_mut() {
+        if let Some(table) = self.tables.last_mut() {
             table.start_cell();
         }
     }
@@ -1214,13 +1464,13 @@ impl<'a> DecoderState<'a> {
     }
 
     fn end_table_row_tag(&mut self) {
-        if let Some(table) = self.table.as_mut() {
+        if let Some(table) = self.tables.last_mut() {
             table.end_row();
         }
     }
 
     fn end_table_cell_tag(&mut self) {
-        if let Some(table) = self.table.as_mut() {
+        if let Some(table) = self.tables.last_mut() {
             table.end_cell();
         }
     }
@@ -1285,7 +1535,7 @@ impl<'a> DecoderState<'a> {
         }
 
         let char_shape_id = self.current_char_shape_id();
-        if let Some(table) = self.table.as_mut() {
+        if let Some(table) = self.tables.last_mut() {
             if table.is_in_cell() {
                 table.push_text_with_style(text, char_shape_id);
                 return Ok(());
@@ -1301,7 +1551,7 @@ impl<'a> DecoderState<'a> {
 
     fn push_inline_code(&mut self, code: &str) -> MdResult<()> {
         let char_shape_id = self.current_char_shape_id();
-        if let Some(table) = self.table.as_mut() {
+        if let Some(table) = self.tables.last_mut() {
             if table.is_in_cell() {
                 table.push_text_with_style("`", char_shape_id);
                 table.push_text_with_style(code, char_shape_id);
@@ -1355,18 +1605,23 @@ impl<'a> DecoderState<'a> {
     }
 
     fn finalize_table(&mut self) -> MdResult<()> {
-        let table_builder = self.table.take().ok_or_else(|| MdError::UnsupportedStructure {
+        let table_builder = self.tables.pop().ok_or_else(|| MdError::UnsupportedStructure {
             detail: "table end tag without table start".to_string(),
         })?;
 
         let table = table_builder.into_table(self.mapping.body, self.mapping.page_settings)?;
+        self.push_table_paragraph(table);
+        Ok(())
+    }
+
+    /// A table read at the top: a paragraph of its own.
+    fn push_table_paragraph(&mut self, table: Table) {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(table, self.mapping.body.char_shape_id)],
             self.mapping.body.para_shape_id,
         )
         .with_style(self.mapping.body.style_ref);
         self.paragraphs.push(paragraph);
-        Ok(())
     }
 
     fn style_for_context(&self) -> MdStyleRef {
@@ -1449,12 +1704,12 @@ impl<'a> DecoderState<'a> {
     }
 
     fn is_in_table_cell(&self) -> bool {
-        self.table.as_ref().map(TableBuilder::is_in_cell).unwrap_or(false)
+        self.tables.last().is_some_and(TableBuilder::is_in_cell)
     }
 
     fn push_run_to_active_context(&mut self, run: Run) {
         if self.is_in_table_cell() {
-            if let Some(table) = self.table.as_mut() {
+            if let Some(table) = self.tables.last_mut() {
                 table.push_run(run);
             }
             return;
@@ -2155,9 +2410,8 @@ mod tests {
     }
 
     /// `<br>` is a line break in body text and in a note definition, as a
-    /// Markdown hard break is; in a table cell it fails for now (a cell's
-    /// `<br>` separates its paragraphs, which this reader does not build).
-    /// 이것을 실패시키는 것: 셀 검사 삭제 · 정의 안 `<br>` 를 본문으로 보내기.
+    /// Markdown hard break is (a table cell's is in `cell_line_breaks_*`).
+    /// 이것을 실패시키는 것: 정의 안 `<br>` 를 본문으로 보내기.
     #[test]
     fn html_line_break_is_a_hard_break() {
         let md = MdDecoder::decode_with_default("a<br>b[^1]\n\n[^1]: c<br>d").unwrap();
@@ -2174,7 +2428,161 @@ mod tests {
             })
             .unwrap();
         assert_eq!(note, "c\nd");
-        assert!(MdDecoder::decode_with_default("| a<br>b |\n|---|").is_err());
+    }
+
+    /// The paragraphs of each cell of the first table run, row by row.
+    fn cell_texts(md: &MdDocument) -> Vec<Vec<Vec<String>>> {
+        let table = md.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.runs)
+            .find_map(|r| match &r.content {
+                RunContent::Table(t) => Some(t),
+                _ => None,
+            })
+            .expect("a table");
+        table
+            .rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|c| c.paragraphs.iter().map(|p| p.text_content()).collect())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A `<br>` in a cell ends its paragraph, in an HTML cell and a GFM
+    /// one alike; leading, repeated and trailing ones keep their empty
+    /// paragraphs; in a link it is the link text's line break.
+    /// 이것을 실패시키는 것: 칸 `<br>` 를 줄바꿈 글로 · 링크 안 `<br>` 로 문단 나누기 ·
+    /// 빈 문단 버리기.
+    #[test]
+    fn cell_line_breaks_end_paragraphs() {
+        let html = MdDecoder::decode_with_default(
+            "<table>\n<tbody>\n<tr>\n  <td><br>a<br><br>b<br></td>\n  \
+             <td><a href=\"https://e.invalid\">x<br>y</a></td>\n</tr>\n</tbody>\n</table>",
+        )
+        .unwrap();
+        let s = |v: &[&str]| v.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        assert_eq!(cell_texts(&html), [[s(&["", "a", "", "b", ""]), s(&[""])]]);
+        let RunContent::Table(table) = &html.document.sections()[0].paragraphs[0].runs[0].content
+        else {
+            panic!("a table")
+        };
+        let link = &table.rows[0].cells[1].paragraphs[0].runs[0].content;
+        assert!(
+            matches!(link, RunContent::Control(c) if matches!(
+                c.as_ref(),
+                Control::Hyperlink { text, .. } if text == "x\ny"
+            )),
+            "{link:?}"
+        );
+        let gfm = MdDecoder::decode_with_default("| a<br>b |\n|---|").unwrap();
+        assert_eq!(cell_texts(&gfm), [[s(&["a", "b"])]]);
+    }
+
+    /// Text in an HTML cell is HTML text, read once: Markdown in it stays
+    /// characters, and an escaped `&#91;^1]` is text, not a note.
+    /// 이것을 실패시키는 것: 칸 글을 Markdown 으로 다시 읽기 · 두 번 복원.
+    #[test]
+    fn html_cell_text_is_not_markdown() {
+        let md = MdDecoder::decode_with_default(
+            "<table>\n<tbody>\n<tr>\n  <td>**raw** `c` &#91;^1] a|b &amp;lt;</td>\n</tr>\n</tbody>\n</table>",
+        )
+        .unwrap();
+        assert_eq!(cell_texts(&md), [[["**raw** `c` [^1] a|b &lt;".to_string()]]]);
+    }
+
+    /// The table grammar is the encoder's; each way out of it fails, and a
+    /// span is 1 to 65535 written in digits, once.
+    /// 이것을 실패시키는 것: 순서 검사 하나씩 삭제 · span 0·범위 밖 허용 · 칸 서식 닫힘 검사
+    /// 삭제 · 블록 끝에 열린 표 받기 · 인라인·정의 안 표 받기.
+    #[test]
+    fn html_table_grammar_is_the_encoders() {
+        let table = |rows: &str| format!("<table>\n<tbody>\n{rows}\n</tbody>\n</table>");
+        let ok =
+            MdDecoder::decode_with_default(&table("<tr>\n  <td colspan=\"65535\">a</td>\n</tr>"));
+        assert!(ok.is_ok(), "{ok:?}");
+        for markdown in [
+            "<table>\n<tr>\n  <td>a</td>\n</tr>\n</table>".to_string(),
+            "<table>\n<tbody>\n<tbody>\n</tbody>\n</tbody>\n</table>".to_string(),
+            "<table>\n<tbody>\n</tbody>\n<tbody>\n</tbody>\n</table>".to_string(),
+            table("<td>a</td>\n</tr>"),
+            table("<tr>\n<tr>\n</tr>\n</tr>"),
+            table("<tr>\n  <td><td>a</td></td>\n</tr>"),
+            table("x<tr>\n</tr>"),
+            table("<tr>\n  <!-- chart -->\n</tr>"),
+            table("<br>\n<tr>\n  <td>x</td>\n</tr>"),
+            table("<tr>\n  <td><u>a</td>\n  <td>b</u></td>\n</tr>"),
+            "<table>\n<tbody>\n<tr>\n  <td>a\n\nb\n\n</td>\n</tr>\n</tbody>\n</table>".to_string(),
+            table("<tr>\n  <td colspan=\"0\">a</td>\n</tr>"),
+            table("<tr>\n  <td rowspan=\"65536\">a</td>\n</tr>"),
+            table("<tr>\n  <td colspan=\"+1\">a</td>\n</tr>"),
+            table("<tr>\n  <td colspan=\"1\" colspan=\"2\">a</td>\n</tr>"),
+            "a <table>".to_string(),
+            "x[^1]\n\n[^1]: a\n\n    <table><tbody><tr><td>a</td></tr></tbody></table>".to_string(),
+        ] {
+            assert!(MdDecoder::decode_with_default(&markdown).is_err(), "{markdown}");
+        }
+    }
+
+    /// A GFM table shares the width over its widest row however large it
+    /// is; only an HTML table's spans are checked against Core's area
+    /// limit before its grid is placed.
+    /// 이것을 실패시키는 것: GFM 에도 면적 검사 · HTML 에 면적 검사 삭제.
+    #[test]
+    fn table_columns_check_the_area_of_html_tables_only() {
+        let mut huge = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::ZERO);
+        huge.col_span = 1024;
+        huge.row_span = 1025;
+        let table = Table::new(vec![TableRow::new(vec![huge])]);
+        assert_eq!(table_columns(&table, Some(1024)), Some(1024));
+        assert_eq!(table_columns(&table, None), None);
+        let small = Table::new(vec![TableRow::new(vec![
+            TableCell::new(
+                vec![Paragraph::new(ParaShapeIndex::new(0))],
+                HwpUnit::ZERO
+            );
+            3
+        ])]);
+        assert_eq!(table_columns(&small, None), Some(3));
+    }
+
+    /// HTML tables nest in cells up to the shared depth limit: 32 read,
+    /// 33 fail; the wrappers `tbody`·`tr`·`td` are not counted.
+    /// 이것을 실패시키는 것: 깊이 검사 삭제 · 상한 하나 어긋내기.
+    #[test]
+    fn html_tables_nest_32_deep() {
+        let nested = |depth: usize| {
+            let mut md = String::from("x");
+            for _ in 0..depth {
+                md = format!("<table>\n<tbody>\n<tr>\n  <td>{md}</td>\n</tr>\n</tbody>\n</table>");
+            }
+            md
+        };
+        assert!(MdDecoder::decode_with_default(&nested(32)).is_ok());
+        assert!(MdDecoder::decode_with_default(&nested(33)).is_err());
+    }
+
+    /// A table whose spans cover more than Core's grid limit (20 × 65535
+    /// positions) is read without placing its grid: every cell takes the
+    /// fallback width, the spans as written.
+    /// 이것을 실패시키는 것: 면적 검사 없이 배치.
+    #[test]
+    fn huge_spans_take_the_fallback_width() {
+        let md = MdDecoder::decode_with_default(
+            "<table>\n<tbody>\n<tr>\n  <td colspan=\"20\" rowspan=\"65535\">a</td>\n</tr>\n</tbody>\n</table>",
+        )
+        .unwrap();
+        let table = match &md.document.sections()[0].paragraphs[0].runs[0].content {
+            RunContent::Table(t) => t.clone(),
+            other => panic!("{other:?}"),
+        };
+        let cell = &table.rows[0].cells[0];
+        assert_eq!((cell.col_span, cell.row_span), (20, 65535));
+        assert_eq!(cell.width, HwpUnit::from_mm(40.0).unwrap());
     }
 
     /// A chart comment is left out with one warning each, inline, on its
@@ -2418,11 +2826,9 @@ mod tests {
     #[test]
     fn decode_raw_html_returns_unsupported_structure_error() {
         let template = default_template();
-        // An HTML table is not read yet: its tags are raw HTML too.
-        // 이것을 실패시키는 것: 표 태그를 서식처럼 받기.
-        for markdown in
-            ["<div>raw</div>", "<table>\n<tbody>\n<tr>\n  <td>a</td>\n</tr>\n</tbody>\n</table>"]
-        {
+        // A table tag outside a table is raw HTML too.
+        // 이것을 실패시키는 것: 표 밖 표 태그를 서식처럼 받기.
+        for markdown in ["<div>raw</div>", "a <td>b</td>"] {
             let err = MdDecoder::decode(markdown, &template).unwrap_err();
             assert!(
                 matches!(

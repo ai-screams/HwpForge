@@ -564,6 +564,7 @@ fn html_unescape(s: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&#91;", "[")
         .replace("&amp;", "&")
 }
 
