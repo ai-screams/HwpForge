@@ -113,7 +113,7 @@ impl Observation {
             "stage":stage, "case_id":case_id,
             "alloc_total_bytes":self.a.load(Relaxed), "live_peak_bytes":self.h.load(Relaxed),
             "live_bytes":self.live.load(Relaxed), "Q":self.q.load(Relaxed),
-            "elapsed_ns":self.elapsed.load(Relaxed), "Q_at_first_reject":first, "first_reject_q":first,
+            "elapsed_ns":self.elapsed.load(Relaxed), "Q_at_first_reject":first,
             "timing":format!("{:?}",cfg.timing), "scope":format!("{:?}",cfg.scope), "budget":cfg.budget
         })
     }
@@ -165,49 +165,88 @@ pub(crate) fn run(
         rows.iter_mut().filter(|r| r["stage"] == "call_complete" || r["stage"] == "drop_complete")
     {
         row["api_ok"] = code.is_none().into();
-        row["result_ok"] = code.is_none().into();
         row["error_code"] = serde_json::json!(code);
     }
     rows[0]["call_start_note"] = "MD UTF-8 validation is inside the measurement window.".into();
     experiment::clear_experiment();
-    // Error text needs the owned error. Reproduce it only after all measured
-    // snapshots and rows are saved; never retain that allocation through DROP.
-    if code.is_some() {
-        experiment::set_experiment(config);
-        let detail = match entrypoint {
-            "hwpx-decode" => {
-                hwpforge_smithy_hwpx::HwpxDecoder::decode(bytes).err().map(|e| e.to_string())
-            }
-            "md-decode" => {
-                hwpforge_smithy_md::MdDecoder::decode_with_default(std::str::from_utf8(bytes)?)
-                    .err()
-                    .map(|e| e.to_string())
-            }
-            _ => unreachable!(),
-        };
-        experiment::clear_experiment();
-        for row in rows
-            .iter_mut()
-            .filter(|r| r["stage"] == "call_complete" || r["stage"] == "drop_complete")
-        {
-            row["error_detail"] = serde_json::json!(detail);
-            row["error_detail_source"] = "diagnostic replay after DROP".into();
-        }
-    }
     Ok(rows)
 }
+
+pub(crate) fn error_detail(
+    bytes: &[u8],
+    entrypoint: &str,
+    config: Experiment,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    experiment::set_experiment(config);
+    let detail = match entrypoint {
+        "hwpx-decode" => {
+            hwpforge_smithy_hwpx::HwpxDecoder::decode(bytes).err().map(|e| e.to_string())
+        }
+        "md-decode" => {
+            hwpforge_smithy_md::MdDecoder::decode_with_default(std::str::from_utf8(bytes)?)
+                .err()
+                .map(|e| e.to_string())
+        }
+        _ => return Err("invalid entrypoint".into()),
+    };
+    experiment::clear_experiment();
+    Ok(detail)
+}
+
+pub(crate) fn write_output(
+    rows: &[serde_json::Value],
+    output: &std::path::Path,
+    case_id: &str,
+    error_detail_enabled: bool,
+    replay: impl FnOnce() -> Result<Option<String>, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = std::fs::File::create(output)?;
+    serde_json::to_writer(&mut file, rows)?;
+    file.sync_all()?;
+    // Persist the measured call before a diagnostic replay can fail or be interrupted.
+    if error_detail_enabled {
+        let detail = replay()?;
+        let mut path = output.as_os_str().to_os_string();
+        path.push(".error-detail.json");
+        let mut file = std::fs::File::create(path)?;
+        serde_json::to_writer(
+            &mut file,
+            &serde_json::json!({
+                "case_id": case_id, "error_detail": detail,
+                "error_detail_source": "diagnostic replay after DROP"
+            }),
+        )?;
+        file.sync_all()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 이것을 실패시키는 것: 관측 함수에서 JSON 직렬화로 할당하기, Q 저장 생략.
+    // 이것을 실패시키는 것: 선택 플래그 없이 진단 재실행하기.
+    #[test]
+    fn output_without_detail_does_not_replay() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../target/no-detail-{}.json", std::process::id()));
+        write_output(&[], &path, "test", false, || panic!("unexpected replay")).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[]");
+        assert!(!std::path::PathBuf::from(format!("{}.error-detail.json", path.display())).exists());
+        std::fs::remove_file(path).unwrap();
+    }
+    // 이것을 실패시키는 것: 관측 함수에서 JSON 직렬화로 할당하기, Q 또는 생존량 저장 생략.
     #[test]
     fn observation_does_not_allocate() {
         START.get_or_init(Instant::now);
         let observation = Observation::new();
         let before = THREAD_COUNTS.with(|c| c.get());
+        let live_before = COUNTS.live.load(Relaxed);
         observation.capture(Snapshot { q: 13, first_reject_q: Some(13) });
+        let live_after = COUNTS.live.load(Relaxed);
         let after = THREAD_COUNTS.with(|c| c.get());
         assert_eq!(before, after);
+        assert!((live_before.min(live_after)..=live_before.max(live_after))
+            .contains(&observation.live.load(Relaxed)));
         assert_eq!(observation.q.load(Relaxed), 13);
     }
     // 이것을 실패시키는 것: GlobalAlloc::dealloc의 freed 호출 삭제.

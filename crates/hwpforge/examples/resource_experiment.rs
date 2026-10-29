@@ -4,8 +4,10 @@ mod resource_runner;
 use hwpforge_core::resource_experiment::{Experiment, Scope, Timing};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 8 {
-        return Err("expected input entrypoint timing scope budget output case_id".into());
+    if !(args.len() == 8 || (args.len() == 9 && args[8] == "--error-detail")) {
+        return Err(
+            "expected input entrypoint timing scope budget output case_id [--error-detail]".into(),
+        );
     }
     let timing = match args[3].as_str() {
         "measured" | "M" => Timing::Measured,
@@ -18,11 +20,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("invalid scope".into()),
     };
     let bytes = std::fs::read(&args[1])?;
-    let mut output = std::fs::File::create(&args[6])?;
     let config = Experiment { timing, scope, budget: args[5].parse()? };
 
     let rows = resource_runner::run(&bytes, &args[2], config, &args[7])?;
-    serde_json::to_writer(&mut output, &rows)?;
-    output.sync_all()?;
+    resource_runner::write_output(
+        &rows,
+        std::path::Path::new(&args[6]),
+        &args[7],
+        args.len() == 9,
+        || resource_runner::error_detail(&bytes, &args[2], config),
+    )?;
     Ok(())
 }

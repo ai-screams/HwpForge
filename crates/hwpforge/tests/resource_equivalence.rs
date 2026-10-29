@@ -116,13 +116,14 @@ mod recovery {
         out.finish().unwrap().into_inner()
     }
 
-    // 이것을 실패시키는 것: 항상 성공 또는 첫 거부를 실패로 기록하기, 오류 코드·전문 기록 삭제.
+    // 이것을 실패시키는 것: 항상 성공 또는 첫 거부를 실패로 기록하기, 오류 코드 기록 삭제.
     #[test]
     fn runner_records_api_result_and_swallowed_rejection() {
         use hwpforge_core::resource_experiment::*;
         let bytes = package(&para(&run(&(begin(7, "FORMULA") + "<hp:t>open</hp:t>")), &[]));
         let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
         let mut budget = 0;
+        // 디코더 읽기 순서가 바뀌면 이 두 목록을 함께 고친다
         for name in [
             "mimetype",
             "Contents/content.hpf",
@@ -148,9 +149,10 @@ mod recovery {
             .unwrap();
             let row = rows.iter().find(|r| r["stage"] == "call_complete").unwrap();
             assert_eq!(row["api_ok"], ok);
-            assert_eq!(row["result_ok"], ok);
+            assert!(row.get("result_ok").is_none());
+            assert!(row.get("first_reject_q").is_none());
             assert_eq!(row["error_code"].is_null(), ok);
-            assert_eq!(!row["first_reject_q"].is_null(), reject);
+            assert_eq!(!row["Q_at_first_reject"].is_null(), reject);
         }
         for timing in [Timing::Measured, Timing::Post] {
             for (limit, ok, reject) in
@@ -165,12 +167,18 @@ mod recovery {
                 .unwrap();
                 let row = rows.iter().find(|r| r["stage"] == "call_complete").unwrap();
                 assert_eq!(row["api_ok"], ok);
-                assert_eq!(row["result_ok"], ok);
+                assert!(row.get("result_ok").is_none());
+                assert!(row.get("first_reject_q").is_none());
                 assert_eq!(row["error_code"].is_null(), ok);
-                if !ok {
-                    assert!(row["error_detail"].as_str().is_some_and(|s| !s.is_empty()));
-                }
-                assert_eq!(!row["first_reject_q"].is_null(), reject);
+                assert!(row.get("error_detail").is_none());
+                let detail = super::resource_runner::error_detail(
+                    &bytes,
+                    "hwpx-decode",
+                    Experiment { timing, scope: Scope::Document, budget: limit },
+                )
+                .unwrap();
+                assert_eq!(detail.is_none(), ok);
+                assert_eq!(!row["Q_at_first_reject"].is_null(), reject);
                 if let Ok(dir) = std::env::var("RESOURCE_SMOKE_DIR") {
                     std::fs::create_dir_all(&dir).unwrap();
                     std::fs::write(

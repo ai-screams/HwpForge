@@ -28,6 +28,7 @@ fn costs(bytes: &[u8]) -> (Vec<usize>, Vec<usize>) {
         .collect();
     // Decoder reads mimetype, content for ordering, container, header, content
     // for metadata, content for master-page references, then each section.
+    // 디코더 읽기 순서가 바뀌면 이 두 목록을 함께 고친다
     let mut units = [
         "mimetype",
         "Contents/content.hpf",
@@ -74,11 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for n in [b - 1, b, b + 1, 2 * b] {
         cases.push(("cumulative", vec![n], true));
     }
-    // One-section B/4 cannot be redistributed; preserve the other sum levels.
-    for r in [2, 4, 8, 12] {
-        let mut sizes = vec![b / 4; r];
-        sizes[0] -= b / 8;
-        sizes[if r > 9 { r - 1 } else { 1 }] += b / 8;
+    for sizes in holdout_sizes(b) {
         cases.push(("unequal", sizes, false));
     }
     let mut manifest = Vec::new();
@@ -131,4 +128,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn holdout_sizes(b: usize) -> Vec<Vec<usize>> {
+    let cases = [2, 4, 8, 12]
+        .into_iter()
+        .map(|r| {
+            if r == 12 {
+                let size = 2 * b / r;
+                let mut sizes = vec![size; r];
+                sizes[r - 1] = 2 * b - size * (r - 1);
+                sizes
+            } else {
+                let mut sizes = vec![b / 4; r];
+                sizes[0] -= b / 8;
+                sizes[1] += b / 8;
+                sizes
+            }
+        })
+        .collect::<Vec<_>>();
+    // 이것을 실패시키는 것: 보류 분배가 개발 합계 수준을 벗어나기.
+    assert!(cases.iter().all(|sizes| [b / 4, b / 2, b, 2 * b].contains(&sizes.iter().sum())));
+    cases
+}
+
+#[test]
+fn holdout_totals_preserve_development_levels() {
+    let cases = holdout_sizes(65536);
+    assert_eq!(cases.last().unwrap().len(), 12);
 }
