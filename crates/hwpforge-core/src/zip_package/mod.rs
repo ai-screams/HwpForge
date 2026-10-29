@@ -162,9 +162,44 @@ impl Package<'_> {
         let mut data = Vec::new();
         // Allow one overflow probe byte, bounded by both remaining budgets.
         let limit = self.limits.entry.min(self.limits.total - self.total_read);
+        #[cfg(feature = "resource-experiment")]
+        let experiment = crate::resource_experiment::configuration();
+        #[cfg(feature = "resource-experiment")]
+        let limit = match experiment {
+            Some(cfg) if cfg.timing == crate::resource_experiment::Timing::Measured => {
+                let used = match cfg.scope {
+                    crate::resource_experiment::Scope::Local => 0,
+                    crate::resource_experiment::Scope::Document => {
+                        crate::resource_experiment::snapshot().q
+                    }
+                };
+                limit.min(cfg.budget.saturating_sub(used))
+            }
+            _ => limit,
+        };
         let result = file.take(limit + 1).read_to_end(&mut data);
         // Partial output consumes the budget even when reading or validation fails.
         self.total_read = self.total_read.saturating_add(data.len() as u64);
+        #[cfg(feature = "resource-experiment")]
+        {
+            use crate::resource_experiment::{self, Scope};
+            // Unlike production total_read (per package), this counter spans the decode call.
+            resource_experiment::record_read(data.len() as u64);
+            if let Some(cfg) = experiment {
+                let cost = match cfg.scope {
+                    Scope::Local => data.len() as u64,
+                    Scope::Document => resource_experiment::snapshot().q,
+                };
+                if cost > cfg.budget {
+                    // Prefer budget rejection to read errors so their observation times stay distinct.
+                    resource_experiment::reject();
+                    return Err(invalid_structure(format!(
+                        "experimental output exceeds {}-byte budget",
+                        cfg.budget
+                    )));
+                }
+            }
+        }
         result.map_err(|e| zip_error(format!("read '{path}': {e}")))?;
         if data.len() as u64 > self.limits.entry {
             return Err(invalid_structure(format!(
@@ -304,3 +339,68 @@ mod tests {
 
 #[cfg(test)]
 mod name_policy_tests;
+
+#[cfg(all(test, feature = "resource-experiment"))]
+mod experiment_tests {
+    use super::*;
+    use crate::resource_experiment::*;
+    use std::io::Write;
+    #[test]
+    // 이것을 실패시키는 것: scope를 Local로 고정하거나 Measured 제한 읽기를 제거하기.
+    fn timing_scope_boundaries() {
+        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        static REJECT_Q: AtomicU64 = AtomicU64::new(0);
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("a", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"1234").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        for timing in [Timing::Measured, Timing::Post] {
+            for scope in [Scope::Local, Scope::Document] {
+                // 이것을 실패시키는 것: 허용 경계의 >를 >=로 바꾸기.
+                set_experiment(Experiment { timing, scope, budget: 4 });
+                let mut exact = open_package(&bytes, PackageLimits::default()).unwrap();
+                assert_eq!(exact.read(0).unwrap(), b"1234");
+                assert_eq!(snapshot().first_reject_q, None);
+                clear_experiment();
+                set_experiment(Experiment { timing, scope, budget: 6 });
+                REJECT_Q.store(0, Relaxed);
+                // 이것을 실패시키는 것: 첫 거부 observer 호출 또는 첫 거부 기록 생략.
+                set_rejection_observer(|s| REJECT_Q.store(s.q, Relaxed));
+                let mut package = open_package(&bytes, PackageLimits::default()).unwrap();
+                assert_eq!(package.read(0).unwrap(), b"1234");
+                assert_eq!(package.read(0).is_err(), scope == Scope::Document);
+                let q = if timing == Timing::Measured && scope == Scope::Document { 7 } else { 8 };
+                assert_eq!(snapshot().q, q);
+                assert_eq!(snapshot().first_reject_q, (scope == Scope::Document).then_some(q));
+                assert_eq!(REJECT_Q.load(Relaxed), snapshot().first_reject_q.unwrap_or(0));
+                clear_experiment();
+            }
+        }
+    }
+    // 이것을 실패시키는 것: Local 비용을 0으로, Measured Local 제한 제거, 호출 Q 덮어쓰기.
+    #[test]
+    fn oversized_unit_and_second_package() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [("a", "12"), ("b", "12345678")] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(data.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        for timing in [Timing::Measured, Timing::Post] {
+            for scope in [Scope::Local, Scope::Document] {
+                set_experiment(Experiment { timing, scope, budget: 4 });
+                open_package(&bytes, PackageLimits::default()).unwrap().read(0).unwrap();
+                let mut second = open_package(&bytes, PackageLimits::default()).unwrap();
+                assert!(second.read(1).is_err());
+                let q = match (timing, scope) {
+                    (Timing::Measured, Scope::Local) => 7,
+                    (Timing::Measured, Scope::Document) => 5,
+                    _ => 10,
+                };
+                assert_eq!(snapshot().q, q);
+                assert_eq!(snapshot().first_reject_q, Some(q));
+                clear_experiment();
+            }
+        }
+    }
+}

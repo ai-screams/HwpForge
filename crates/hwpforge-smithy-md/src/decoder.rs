@@ -613,11 +613,43 @@ impl<'a> DecoderState<'a> {
                                 });
                             };
                             def.reference_count += 1;
-                            *expanded_bytes += def
+                            let cost = def
                                 .paragraphs
                                 .iter()
                                 .map(|p| p.text_content().len())
                                 .sum::<usize>();
+                            #[cfg(feature = "resource-experiment")]
+                            if let Some(cfg) = hwpforge_core::resource_experiment::configuration() {
+                                use hwpforge_core::resource_experiment::{self, Scope, Timing};
+                                let policy_cost = match cfg.scope {
+                                    Scope::Local => cost as u64,
+                                    Scope::Document => resource_experiment::snapshot()
+                                        .q
+                                        .saturating_add(cost as u64),
+                                };
+                                if cfg.timing == Timing::Measured && policy_cost > cfg.budget {
+                                    resource_experiment::reject();
+                                    return Err(MdError::NoteExpansionBudgetExceeded {
+                                        budget: cfg.budget as usize,
+                                    });
+                                }
+                                match control.as_mut() {
+                                    Control::Footnote { paragraphs, .. }
+                                    | Control::Endnote { paragraphs, .. } => {
+                                        *paragraphs = def.paragraphs.clone();
+                                    }
+                                    _ => unreachable!("guarded by is_empty_note"),
+                                }
+                                resource_experiment::record_read(cost as u64);
+                                if policy_cost > cfg.budget {
+                                    resource_experiment::reject();
+                                    return Err(MdError::NoteExpansionBudgetExceeded {
+                                        budget: cfg.budget as usize,
+                                    });
+                                }
+                                continue;
+                            }
+                            *expanded_bytes += cost;
                             if *expanded_bytes > MAX_EXPANDED_NOTE_BYTES {
                                 return Err(MdError::NoteExpansionBudgetExceeded {
                                     budget: MAX_EXPANDED_NOTE_BYTES,
@@ -2358,6 +2390,7 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 설정 없는 공통 경로의 확장 상한 검사 삭제 (모든 feature 빌드 포함).
     fn expansion_budget_rejects_pathological_duplication() {
         let template = default_template();
         // 큰 본문 1개를 다수 참조 — 전개 총량이 예산을 넘으면 typed 에러.

@@ -68,9 +68,9 @@ fn psi(idx: u32) -> ParaShapeIndex {
     ParaShapeIndex::new(idx as usize)
 }
 
-fn p(text: &str, cs: u32, ps: u32) -> Paragraph {
-    Paragraph::with_runs(vec![Run::text(text, csi(cs))], psi(ps))
-}
+#[path = "support/plain.rs"]
+mod plain;
+use plain::p;
 
 fn empty() -> Paragraph {
     Paragraph::with_runs(vec![Run::text("", csi(CS_NORMAL))], psi(PS_LEFT))
@@ -254,7 +254,7 @@ fn gen_01_text() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("01_text.hwpx", &store, &doc, &images);
 }
 
@@ -318,7 +318,7 @@ fn gen_02_rich_text() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("02_rich_text.hwpx", &store, &doc, &images);
 }
 
@@ -513,7 +513,7 @@ fn gen_03_table() {
     paras.push(Paragraph::with_runs(vec![Run::table(t5, csi(CS_NORMAL))], psi(PS_LEFT)));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("03_table.hwpx", &store, &doc, &images);
 }
 
@@ -782,7 +782,7 @@ fn gen_05_footnote_endnote() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("05_footnote_endnote.hwpx", &store, &doc, &images);
 }
 
@@ -972,7 +972,7 @@ fn gen_06_textbox() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("06_textbox.hwpx", &store, &doc, &images);
 }
 
@@ -1083,7 +1083,7 @@ fn gen_07_line() {
     }
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("07_line.hwpx", &store, &doc, &images);
 }
 
@@ -1196,7 +1196,7 @@ fn gen_08_ellipse() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("08_ellipse.hwpx", &store, &doc, &images);
 }
 
@@ -1345,7 +1345,7 @@ fn gen_09_polygon() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("09_polygon.hwpx", &store, &doc, &images);
 }
 
@@ -1543,7 +1543,7 @@ fn gen_11_image() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("11_image.hwpx", &store, &doc, &images);
 }
 
@@ -1747,7 +1747,7 @@ fn gen_12_hyperlink() {
     ));
 
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
+    doc.add_section(plain::section(paras));
     encode_and_save("12_hyperlink.hwpx", &store, &doc, &images);
 }
 

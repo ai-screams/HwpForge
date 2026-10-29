@@ -31,4 +31,9 @@ unicase = "2"
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.18.0" }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 zip = { workspace = true }
+
+[features]
+resource-experiment = ["hwpforge-core/resource-experiment"]

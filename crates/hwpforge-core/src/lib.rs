@@ -154,3 +154,6 @@ pub mod field_view;
 
 #[doc(hidden)]
 pub mod zip_package;
+
+#[cfg(feature = "resource-experiment")]
+pub mod resource_experiment;
