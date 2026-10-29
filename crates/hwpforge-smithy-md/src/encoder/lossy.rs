@@ -13,8 +13,6 @@ use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
 use crate::mapper::{resolve_mapping, MdMapping, ParagraphKind};
 
-const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
-
 pub(crate) fn encode_with_template(
     document: &Document<Validated>,
     template: &Template,
@@ -66,7 +64,7 @@ fn encode_body(
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
             blocks.push(Block {
-                markdown: SECTION_MARKER_COMMENT.to_string(),
+                markdown: super::guard::SECTION_MARKER.to_string(),
                 source: None,
                 body: false,
             });

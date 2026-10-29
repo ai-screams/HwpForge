@@ -527,10 +527,19 @@ impl Html {
     }
 
     /// Document text: `& < > " '` as entities, line endings `<br>` (a blank
-    /// line would end the HTML block and let the rest be read as Markdown).
-    /// 이것을 실패시키는 것: 줄 끝 처리 삭제(`markup_safety` 의 병합 칸 빈 줄).
+    /// line would end the HTML block and let the rest be read as Markdown),
+    /// `[` as `&#91;` (a raw `[^label]` in a cell is the encoder's note
+    /// reference, [`Html::note_mark`]).
+    /// 이것을 실패시키는 것: 줄 끝 처리 삭제(`markup_safety` 의 병합 칸 빈 줄) ·
+    /// `[` 이스케이프 삭제(`html_cell_notes_read_back`).
     pub(crate) fn text(raw: &str) -> Self {
-        Self(escape_html(&lines(raw)).replace('\n', "<br>"))
+        Self(escape_html(&lines(raw)).replace('\n', "<br>").replace('[', "&#91;"))
+    }
+
+    /// A note reference the encoder registered (`[^1]`, `[^e1]`), written
+    /// as it is: the decoder reads a raw `[^label]` in a cell as one.
+    pub(crate) fn note_mark(mark: Md) -> Self {
+        Self(mark.into_string())
     }
 
     /// `<tag>inner</tag>` for one of the encoder's inline tags.
@@ -559,7 +568,11 @@ impl Html {
         if rowspan > 1 {
             let _ = write!(attrs, " rowspan=\"{rowspan}\"");
         }
-        Self(format!("  <td{attrs}>{}</td>", inner.0.trim()))
+        // Layout whitespace only (ASCII, as the decoder reads it): a
+        // no-break space at the cell's edge is text.
+        // 이것을 실패시키는 것: `trim()` 으로 되돌리기(`html_cell_text_keeps_its_spaces`).
+        let inner = inner.0.trim_matches([' ', '\t', '\n', '\r']);
+        Self(format!("  <td{attrs}>{inner}</td>"))
     }
 
     /// Appends HTML.

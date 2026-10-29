@@ -4,9 +4,9 @@
 //! decoder's options: tables, footnotes, strikethrough, task lists,
 //! definition lists, GFM — no math) to check what a renderer would see:
 //!
-//! - raw HTML is only what the encoder itself writes ([`ALLOWED_TAGS`],
-//!   comments), with `a href` an allowed URL put in and `img src` an asset
-//!   key;
+//! - raw HTML is only what the encoder itself writes: the guard's schema
+//!   ([`super::guard::tokens`]: its tags, attributes and comments), with
+//!   `a href` an allowed URL put in and `img src` an asset key;
 //! - every link destination is a URL put in and allowed, every image
 //!   destination is the picture's own key (styled: an `images` key; lossy:
 //!   its path);
@@ -18,8 +18,9 @@
 //!   attack makes no block structure the same output for `a` does not
 //!   have. Elsewhere (a caption, a note, a memo, a code block) styled is as
 //!   it was: its output must be byte for byte the base output
-//!   (`fixtures/markup_safety_base.txt`, written by the commit before the
-//!   guarantee), and lossy's everywhere.
+//!   (`tests/fixtures/markup_safety_base.txt`, written by the commit before the
+//!   guarantee; its `styled Memo` lines by the one-line memo comment of
+//!   #281, the one change since), and lossy's everywhere.
 //!
 //! - the final check (re-parsing the output) never has to step in: the
 //!   escaping rules hold on their own (`MarkupWrittenAsText` fails it).
@@ -28,108 +29,436 @@
 //! only what CommonMark reads as raw HTML, links, images or entities is
 //! escaped), so only the safety properties are checked for it.
 
-#[path = "support/document.rs"]
-mod document;
-use document::{para, text, u};
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use hwpforge_core::caption::{Caption, CaptionSide};
-use hwpforge_core::control::{Control, RefTarget};
-use hwpforge_core::image::{Image, ImageFormat};
-use hwpforge_core::{
-    Document, PageSettings, Paragraph, Run, Section, StyleLookup, Table, TableCell, TableRow,
-    Validated,
-};
-use hwpforge_foundation::{CharShapeIndex, FieldType, UnderlineType};
-use hwpforge_smithy_md::{MdEncoder, MdWarning};
+use hwpforge_core::Run;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
-/// Attack strings: each tries to make the output write markup.
-const ATTACKS: &[&str] = &[
-    "<img src=x onerror=alert(1)>",
-    "<img title='' src=x onerror=alert(1)>",
-    "`<img src=x onerror=alert(1)>`",
-    "<script>alert(1)</script>",
-    "<b>bold</b>",
-    "<div 가",
-    "<!-- c --> -->",
-    "[x](javascript:alert(1))",
-    "![x](javascript:alert(1))",
-    "a](javascript:x)[b",
-    ")[x](javascript:alert(1))",
-    "x)<img/src=x/onerror=y>",
-    "x\\",
-    "\\",
-    "x\\)",
-    "<https://evil.invalid>",
-    "<a@evil.invalid>",
-    "[a]: javascript:alert(1)",
-    "> [a]: javascript:alert(1)",
-    "- [a]: javascript:alert(1)",
-    "1. > [a]: javascript:alert(1)",
-    "[a\nb]: javascript:alert(1)",
-    "(javascript:alert(1))",
-    "`",
-    "``x``",
-    "```",
-    "~~~",
-    "*x* _y_ **z**",
-    "!",
-    "&lt;img src=x onerror=y&gt; &amp;",
-    "%3Cimg%3E",
-    "x|y",
-    "|",
-    "a\nb",
-    "a\rb",
-    "a\r\nb",
-    "a\n\nb",
-    "a\r\rb",
-    "a\n \n[x](javascript:z)",
-    "```\n<img src=x onerror=y>\n```",
-    "$x$",
-    "#",
-];
+use super::guard::{tokens, Token};
+use crate::{MdEncoder, MdWarning};
+use cases::*;
 
-/// The tags the encoder writes itself (lower case).
-const ALLOWED_TAGS: &[&str] =
-    &["table", "tbody", "tr", "td", "br", "strong", "em", "del", "u", "sup", "sub", "a", "img"];
+// ---- cases: public API only (also built against the base commit) ----
+#[allow(dead_code)]
+mod cases {
+    use std::collections::BTreeMap;
 
-/// The allowed URL a link carrier uses (`ATTACK` is appended for the
-/// destination carrier).
-const URL: &str = "https://e.invalid/";
+    use hwpforge_core::caption::{Caption, CaptionSide};
+    use hwpforge_core::control::{Control, RefTarget};
+    use hwpforge_core::image::{Image, ImageFormat};
+    use hwpforge_core::{
+        Document, PageSettings, Paragraph, Run, Section, StyleLookup, Table, TableCell, TableRow,
+        Validated,
+    };
+    use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex, UnderlineType};
 
-/// Character shapes the style lookup answers for.
-const PLAIN: usize = 0;
-const UNDERLINE: usize = 1;
-const CODE: usize = 2;
-const BOLD: usize = 3;
-
-struct Styles;
-
-impl StyleLookup for Styles {
-    fn char_bold(&self, id: CharShapeIndex) -> Option<bool> {
-        Some(id.get() == BOLD)
+    pub fn u(v: i32) -> HwpUnit {
+        HwpUnit::new(v).unwrap()
     }
-    fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType> {
-        (id.get() == UNDERLINE).then_some(UnderlineType::Bottom)
+
+    pub fn para(runs: Vec<Run>) -> Paragraph {
+        Paragraph::with_runs(runs, ParaShapeIndex::new(0))
     }
-    fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
-        Some(if id.get() == CODE { "D2Coding" } else { "Batang" })
+
+    pub fn text(t: &str) -> Run {
+        Run::text(t, CharShapeIndex::new(0))
+    }
+
+    /// Attack strings: each tries to make the output write markup.
+    pub const ATTACKS: &[&str] = &[
+        "<img src=x onerror=alert(1)>",
+        "<img title='' src=x onerror=alert(1)>",
+        "`<img src=x onerror=alert(1)>`",
+        "<script>alert(1)</script>",
+        "<b>bold</b>",
+        "<div 가",
+        "<!-- c --> -->",
+        "[x](javascript:alert(1))",
+        "![x](javascript:alert(1))",
+        "a](javascript:x)[b",
+        ")[x](javascript:alert(1))",
+        "x)<img/src=x/onerror=y>",
+        "x\\",
+        "\\",
+        "x\\)",
+        "<https://evil.invalid>",
+        "<a@evil.invalid>",
+        "[a]: javascript:alert(1)",
+        "> [a]: javascript:alert(1)",
+        "- [a]: javascript:alert(1)",
+        "1. > [a]: javascript:alert(1)",
+        "[a\nb]: javascript:alert(1)",
+        "(javascript:alert(1))",
+        "`",
+        "``x``",
+        "```",
+        "~~~",
+        "*x* _y_ **z**",
+        "!",
+        "&lt;img src=x onerror=y&gt; &amp;",
+        "%3Cimg%3E",
+        "x|y",
+        "|",
+        "a\nb",
+        "a\rb",
+        "a\r\nb",
+        "a\n\nb",
+        "a\r\rb",
+        "a\n \n[x](javascript:z)",
+        "```\n<img src=x onerror=y>\n```",
+        "$x$",
+        "#",
+    ];
+
+    /// The allowed URL a link carrier uses (`ATTACK` is appended for the
+    /// destination carrier).
+    pub const URL: &str = "https://e.invalid/";
+
+    /// Character shapes the style lookup answers for.
+    pub const PLAIN: usize = 0;
+    pub const UNDERLINE: usize = 1;
+    pub const CODE: usize = 2;
+    pub const BOLD: usize = 3;
+
+    pub struct Styles;
+
+    impl StyleLookup for Styles {
+        fn char_bold(&self, id: CharShapeIndex) -> Option<bool> {
+            Some(id.get() == BOLD)
+        }
+        fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType> {
+            (id.get() == UNDERLINE).then_some(UnderlineType::Bottom)
+        }
+        fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
+            Some(if id.get() == CODE { "D2Coding" } else { "Batang" })
+        }
+    }
+
+    pub fn cs(i: usize) -> CharShapeIndex {
+        CharShapeIndex::new(i)
+    }
+
+    pub fn ctrl(c: Control) -> Run {
+        Run::control(c, cs(PLAIN))
+    }
+
+    pub fn picture(path: &str) -> Image {
+        Image::new(path, u(1000), u(1000), ImageFormat::Png)
+    }
+
+    /// Where an attack string is put: the runs of one paragraph.
+    #[derive(Clone, Copy, Debug)]
+    pub enum Carrier {
+        /// Plain text, split into two runs at every char boundary.
+        Split,
+        Underline,
+        Bold,
+        /// A paragraph in a code font (styled: a code block).
+        Code,
+        LinkLabel,
+        LinkUrl,
+        /// A raw `!` text run, then a link whose label is the attack.
+        BangThenLink,
+        /// The attack split at every point around a link (`t`, an allowed URL).
+        AroundLink,
+        /// The attack split at every point around a cross reference with no
+        /// display text (written as `[b]`).
+        AroundCrossRef,
+        /// The attack split at every point into plain then underlined text.
+        FormatSplit,
+        PicturePath,
+        Compose,
+        DutmalMain,
+        DutmalSub,
+        CrossRef,
+        Field,
+        FieldBoundary,
+        Unknown,
+        TextBox,
+        Footnote,
+        Equation,
+    }
+
+    pub const CARRIERS: &[Carrier] = &[
+        Carrier::Split,
+        Carrier::Underline,
+        Carrier::Bold,
+        Carrier::Code,
+        Carrier::LinkLabel,
+        Carrier::LinkUrl,
+        Carrier::BangThenLink,
+        Carrier::AroundLink,
+        Carrier::AroundCrossRef,
+        Carrier::FormatSplit,
+        Carrier::PicturePath,
+        Carrier::Compose,
+        Carrier::DutmalMain,
+        Carrier::DutmalSub,
+        Carrier::CrossRef,
+        Carrier::Field,
+        Carrier::FieldBoundary,
+        Carrier::Unknown,
+        Carrier::TextBox,
+        Carrier::Footnote,
+        Carrier::Equation,
+    ];
+
+    /// The runs carrying `attack`, one variant per split for [`Carrier::Split`].
+    pub fn carry(carrier: Carrier, attack: &str) -> Vec<Vec<Run>> {
+        match carrier {
+            Carrier::Split => {
+                let mut out = vec![vec![text(attack)]];
+                for (i, _) in attack.char_indices().skip(1) {
+                    out.push(vec![text(&attack[..i]), text(&attack[i..])]);
+                }
+                out
+            }
+            Carrier::Underline => vec![vec![Run::text(attack, cs(UNDERLINE))]],
+            Carrier::Bold => vec![vec![Run::text(attack, cs(BOLD))]],
+            Carrier::Code => vec![vec![Run::text(attack, cs(CODE))]],
+            Carrier::LinkLabel => vec![vec![ctrl(Control::hyperlink(attack, URL))]],
+            Carrier::LinkUrl => {
+                vec![vec![ctrl(Control::hyperlink("t", &format!("{URL}{attack}")))]]
+            }
+            Carrier::BangThenLink => vec![vec![text("!"), ctrl(Control::hyperlink(attack, URL))]],
+            Carrier::AroundLink | Carrier::AroundCrossRef | Carrier::FormatSplit => {
+                let mut points: Vec<usize> = attack.char_indices().map(|(i, _)| i).collect();
+                points.push(attack.len());
+                points
+                    .into_iter()
+                    .map(|i| {
+                        let (l, r) = attack.split_at(i);
+                        match carrier {
+                            Carrier::AroundLink => {
+                                vec![text(l), ctrl(Control::hyperlink("t", URL)), text(r)]
+                            }
+                            Carrier::AroundCrossRef => {
+                                vec![text(l), ctrl(empty_cross_ref()), text(r)]
+                            }
+                            _ => vec![text(l), Run::text(r, cs(UNDERLINE))],
+                        }
+                    })
+                    .collect()
+            }
+            Carrier::PicturePath => {
+                vec![vec![Run::image(picture(&format!("BinData/{attack}.png")), cs(PLAIN))]]
+            }
+            Carrier::Compose => vec![vec![ctrl(Control::compose(attack))]],
+            Carrier::DutmalMain => vec![vec![ctrl(Control::dutmal(attack, "s"))]],
+            Carrier::DutmalSub => vec![vec![ctrl(Control::dutmal("m", attack))]],
+            Carrier::CrossRef => {
+                let mut c = empty_cross_ref();
+                if let Control::CrossRef { display_text, .. } = &mut c {
+                    *display_text = attack.to_string();
+                }
+                vec![vec![ctrl(c)]]
+            }
+            Carrier::FieldBoundary => {
+                use hwpforge_core::control::{FieldBoundary, FieldParameter, FieldStart};
+                let mut s = FieldStart::default();
+                s.id = attack.into();
+                s.kind = "FORMULA".into();
+                s.name = attack.into();
+                s.parameters.push(FieldParameter::String {
+                    name: attack.into(),
+                    value: attack.into(),
+                    xml_space: attack.into(),
+                });
+                vec![vec![
+                    ctrl(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(s)) }),
+                    text(attack),
+                    ctrl(Control::FieldBoundary {
+                        boundary: FieldBoundary::End {
+                            begin_id: attack.into(),
+                            field_id: attack.into(),
+                        },
+                    }),
+                ]]
+            }
+            Carrier::Field => vec![vec![ctrl(Control::Field {
+                field_type: FieldType::ClickHere,
+                hint_text: None,
+                help_text: None,
+                name: None,
+                display_text: attack.to_string(),
+            })]],
+            Carrier::Unknown => {
+                vec![vec![ctrl(Control::Unknown { tag: attack.to_string(), data: None })]]
+            }
+            Carrier::TextBox => {
+                vec![vec![ctrl(Control::text_box(
+                    vec![para(vec![text(attack)])],
+                    u(1000),
+                    u(1000),
+                ))]]
+            }
+            Carrier::Footnote => {
+                vec![vec![ctrl(Control::footnote(vec![para(vec![text(attack)])]))]]
+            }
+            Carrier::Equation => vec![vec![ctrl(Control::equation(attack))]],
+        }
+    }
+
+    /// A cross reference to bookmark `b` with no display text.
+    pub fn empty_cross_ref() -> Control {
+        Control::cross_ref(RefTarget::Name("b".into()), Default::default(), Default::default())
+    }
+
+    /// Where the carrying paragraph is put.
+    #[derive(Clone, Copy, Debug)]
+    pub enum Container {
+        Body,
+        /// A one-cell GFM table.
+        Cell,
+        /// A table in a cell (styled: an HTML table).
+        NestedCell,
+        /// A merged cell (styled: an HTML table).
+        MergedCell,
+        /// A table's caption.
+        Caption,
+        /// A text box holding the paragraph.
+        TextBox,
+        /// A footnote holding the paragraph (styled: its definition).
+        Footnote,
+        Memo,
+    }
+
+    pub const CONTAINERS: &[Container] = &[
+        Container::Body,
+        Container::Cell,
+        Container::NestedCell,
+        Container::MergedCell,
+        Container::Caption,
+        Container::TextBox,
+        Container::Footnote,
+        Container::Memo,
+    ];
+
+    pub fn one_cell(p: Paragraph) -> Table {
+        Table::new(vec![TableRow::new(vec![TableCell::new(vec![p], u(1000))])])
+    }
+
+    /// The document: the carrying paragraph in `container`, then a paragraph
+    /// using the reference label `[a]` (so a written definition would link).
+    pub fn document(container: Container, runs: Vec<Run>) -> Document<Validated> {
+        let p = para(runs);
+        let top = match container {
+            Container::Body => p,
+            Container::Cell => para(vec![Run::table(one_cell(p), cs(PLAIN))]),
+            Container::NestedCell => {
+                let inner = Run::table(one_cell(p), cs(PLAIN));
+                para(vec![Run::table(one_cell(para(vec![inner])), cs(PLAIN))])
+            }
+            Container::MergedCell => {
+                let mut cell = TableCell::new(vec![p], u(1000));
+                cell.col_span = 2;
+                para(vec![Run::table(Table::new(vec![TableRow::new(vec![cell])]), cs(PLAIN))])
+            }
+            Container::Caption => {
+                let mut table = one_cell(para(vec![text("c")]));
+                table.caption = Some(Caption::new(vec![p], CaptionSide::Bottom));
+                para(vec![Run::table(table, cs(PLAIN))])
+            }
+            Container::TextBox => {
+                para(vec![ctrl(Control::text_box(vec![p], u(1000), u(1000))), text("z")])
+            }
+            Container::Footnote => para(vec![text("z"), ctrl(Control::footnote(vec![p]))]),
+            Container::Memo => para(vec![text("z"), ctrl(Control::memo(vec![p]))]),
+        };
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![top, para(vec![text("[a] [a b]")])],
+            PageSettings::a4(),
+        ));
+        doc.validate().expect("valid")
+    }
+
+    /// Whether styled guarantees here that document text makes no block: a
+    /// Body paragraph, a text box in one, a table cell — not a caption, a note
+    /// or a memo, and not a note carrier or a Body code block (their blocks
+    /// are the encoder's). A code-font paragraph in a cell or text box is
+    /// ordinary guarded text.
+    /// 이것을 실패시키는 것: 범위 안 조합을 범위 밖으로 돌리기(기준 바이트 비교가
+    /// 실패) · 범위 밖 조합을 범위 안으로(차분 검사가 실패).
+    pub fn in_scope(container: Container, carrier: Carrier) -> bool {
+        matches!(
+            container,
+            Container::Body
+                | Container::TextBox
+                | Container::Cell
+                | Container::NestedCell
+                | Container::MergedCell
+        ) && !matches!(carrier, Carrier::Footnote)
+            && !(matches!(carrier, Carrier::Code) && matches!(container, Container::Body))
+    }
+
+    /// Output that must stay the base's, folded per view, container and
+    /// carrier (FNV-1a 64 over each output and a separator, in case order).
+    pub type Digests = BTreeMap<String, u64>;
+
+    pub fn digest(
+        digests: &mut Digests,
+        view: &str,
+        container: Container,
+        carrier: Carrier,
+        out: &str,
+    ) {
+        let h = digests
+            .entry(format!("{view} {container:?} {carrier:?}"))
+            .or_insert(0xcbf2_9ce4_8422_2325);
+        for b in out.bytes().chain([0xff]) {
+            *h = (*h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    /// The digests as lines (`view container carrier hash`).
+    pub fn digest_lines(digests: &Digests) -> String {
+        digests.iter().map(|(k, h)| format!("{k} {h:016x}\n")).collect()
+    }
+
+    /// Every case's digests (the harness loop without its checks): what the
+    /// base commit wrote, for `tests/fixtures/markup_safety_base.txt`, with
+    /// `styled` and `lossy` the views' Markdown.
+    ///
+    /// To write the fixture again, run this module against the base commit's
+    /// crates (`496371cf`, before the guarantee) from the workspace root.
+    /// The `styled Memo` lines were written the same way from the crates of
+    /// #281 (the path deps pointing at this checkout), after the memo
+    /// comment became one line with every `-` escaped; only those lines
+    /// changed:
+    ///
+    /// ```sh
+    /// git worktree add /tmp/g-base 496371cf
+    /// mkdir -p /tmp/g-gen/src
+    /// printf '[package]\nname = "g-gen"\nversion = "0.0.0"\nedition = "2021"\n[workspace]\n[dependencies]\nhwpforge-core = { path = "/tmp/g-base/crates/hwpforge-core" }\nhwpforge-foundation = { path = "/tmp/g-base/crates/hwpforge-foundation" }\nhwpforge-smithy-md = { path = "/tmp/g-base/crates/hwpforge-smithy-md" }\n' > /tmp/g-gen/Cargo.toml
+    /// sed -n '/^mod cases {/,/^}/p' crates/hwpforge-smithy-md/src/encoder/markup_safety_tests.rs > /tmp/g-gen/src/cases.rs
+    /// printf '#![allow(dead_code, unused_imports)]\nuse hwpforge_smithy_md::MdEncoder;\ninclude!("cases.rs");\nfn main() { print!("{}", cases::base_digests(|d| MdEncoder::encode_styled(d, &cases::Styles).markdown, |d| MdEncoder::encode_lossy_with_report(d).expect("lossy").0)); }\n' > /tmp/g-gen/src/main.rs
+    /// cargo run --release -q --manifest-path /tmp/g-gen/Cargo.toml > crates/hwpforge-smithy-md/tests/fixtures/markup_safety_base.txt
+    /// git worktree remove /tmp/g-base
+    /// ```
+    pub fn base_digests(
+        styled: impl Fn(&Document<Validated>) -> String,
+        lossy: impl Fn(&Document<Validated>) -> String,
+    ) -> String {
+        let mut base = Digests::new();
+        for &attack in ATTACKS {
+            for &carrier in CARRIERS {
+                for runs in carry(carrier, attack) {
+                    for &container in CONTAINERS {
+                        let doc = document(container, runs.clone());
+                        if !in_scope(container, carrier) {
+                            digest(&mut base, "styled", container, carrier, &styled(&doc));
+                        }
+                        digest(&mut base, "lossy", container, carrier, &lossy(&doc));
+                    }
+                }
+            }
+        }
+        digest_lines(&base)
     }
 }
-
-fn cs(i: usize) -> CharShapeIndex {
-    CharShapeIndex::new(i)
-}
-
-fn ctrl(c: Control) -> Run {
-    Run::control(c, cs(PLAIN))
-}
-
-fn picture(path: &str) -> Image {
-    Image::new(path, u(1000), u(1000), ImageFormat::Png)
-}
+// ---- cases end ----
 
 /// 빈 틀에는 링크/자산이 없지만 캡션은 그대로 읽을 수 있다.
 /// 이것을 실패시키는 것: styled Markdown/HTML 또는 lossy 빈 경로 가드 삭제.
@@ -169,265 +498,23 @@ fn assetless_picture_does_not_insert_a_separator() {
     }
 }
 
-/// Where an attack string is put: the runs of one paragraph.
-#[derive(Clone, Copy, Debug)]
-enum Carrier {
-    /// Plain text, split into two runs at every char boundary.
-    Split,
-    Underline,
-    Bold,
-    /// A paragraph in a code font (styled: a code block).
-    Code,
-    LinkLabel,
-    LinkUrl,
-    /// A raw `!` text run, then a link whose label is the attack.
-    BangThenLink,
-    /// The attack split at every point around a link (`t`, an allowed URL).
-    AroundLink,
-    /// The attack split at every point around a cross reference with no
-    /// display text (written as `[b]`).
-    AroundCrossRef,
-    /// The attack split at every point into plain then underlined text.
-    FormatSplit,
-    PicturePath,
-    Compose,
-    DutmalMain,
-    DutmalSub,
-    CrossRef,
-    Field,
-    FieldBoundary,
-    Unknown,
-    TextBox,
-    Footnote,
-    Equation,
-}
-
-const CARRIERS: &[Carrier] = &[
-    Carrier::Split,
-    Carrier::Underline,
-    Carrier::Bold,
-    Carrier::Code,
-    Carrier::LinkLabel,
-    Carrier::LinkUrl,
-    Carrier::BangThenLink,
-    Carrier::AroundLink,
-    Carrier::AroundCrossRef,
-    Carrier::FormatSplit,
-    Carrier::PicturePath,
-    Carrier::Compose,
-    Carrier::DutmalMain,
-    Carrier::DutmalSub,
-    Carrier::CrossRef,
-    Carrier::Field,
-    Carrier::FieldBoundary,
-    Carrier::Unknown,
-    Carrier::TextBox,
-    Carrier::Footnote,
-    Carrier::Equation,
-];
-
-/// The runs carrying `attack`, one variant per split for [`Carrier::Split`].
-fn carry(carrier: Carrier, attack: &str) -> Vec<Vec<Run>> {
-    match carrier {
-        Carrier::Split => {
-            let mut out = vec![vec![text(attack)]];
-            for (i, _) in attack.char_indices().skip(1) {
-                out.push(vec![text(&attack[..i]), text(&attack[i..])]);
-            }
-            out
-        }
-        Carrier::Underline => vec![vec![Run::text(attack, cs(UNDERLINE))]],
-        Carrier::Bold => vec![vec![Run::text(attack, cs(BOLD))]],
-        Carrier::Code => vec![vec![Run::text(attack, cs(CODE))]],
-        Carrier::LinkLabel => vec![vec![ctrl(Control::hyperlink(attack, URL))]],
-        Carrier::LinkUrl => vec![vec![ctrl(Control::hyperlink("t", &format!("{URL}{attack}")))]],
-        Carrier::BangThenLink => vec![vec![text("!"), ctrl(Control::hyperlink(attack, URL))]],
-        Carrier::AroundLink | Carrier::AroundCrossRef | Carrier::FormatSplit => {
-            let mut points: Vec<usize> = attack.char_indices().map(|(i, _)| i).collect();
-            points.push(attack.len());
-            points
-                .into_iter()
-                .map(|i| {
-                    let (l, r) = attack.split_at(i);
-                    match carrier {
-                        Carrier::AroundLink => {
-                            vec![text(l), ctrl(Control::hyperlink("t", URL)), text(r)]
-                        }
-                        Carrier::AroundCrossRef => vec![text(l), ctrl(empty_cross_ref()), text(r)],
-                        _ => vec![text(l), Run::text(r, cs(UNDERLINE))],
-                    }
-                })
-                .collect()
-        }
-        Carrier::PicturePath => {
-            vec![vec![Run::image(picture(&format!("BinData/{attack}.png")), cs(PLAIN))]]
-        }
-        Carrier::Compose => vec![vec![ctrl(Control::compose(attack))]],
-        Carrier::DutmalMain => vec![vec![ctrl(Control::dutmal(attack, "s"))]],
-        Carrier::DutmalSub => vec![vec![ctrl(Control::dutmal("m", attack))]],
-        Carrier::CrossRef => {
-            let mut c = empty_cross_ref();
-            if let Control::CrossRef { display_text, .. } = &mut c {
-                *display_text = attack.to_string();
-            }
-            vec![vec![ctrl(c)]]
-        }
-        Carrier::FieldBoundary => {
-            use hwpforge_core::control::{FieldBoundary, FieldParameter, FieldStart};
-            let mut s = FieldStart::default();
-            s.id = attack.into();
-            s.kind = "FORMULA".into();
-            s.name = attack.into();
-            s.parameters.push(FieldParameter::String {
-                name: attack.into(),
-                value: attack.into(),
-                xml_space: attack.into(),
-            });
-            vec![vec![
-                ctrl(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(s)) }),
-                text(attack),
-                ctrl(Control::FieldBoundary {
-                    boundary: FieldBoundary::End {
-                        begin_id: attack.into(),
-                        field_id: attack.into(),
-                    },
-                }),
-            ]]
-        }
-        Carrier::Field => vec![vec![ctrl(Control::Field {
-            field_type: FieldType::ClickHere,
-            hint_text: None,
-            help_text: None,
-            name: None,
-            display_text: attack.to_string(),
-        })]],
-        Carrier::Unknown => {
-            vec![vec![ctrl(Control::Unknown { tag: attack.to_string(), data: None })]]
-        }
-        Carrier::TextBox => {
-            vec![vec![ctrl(Control::text_box(vec![para(vec![text(attack)])], u(1000), u(1000)))]]
-        }
-        Carrier::Footnote => vec![vec![ctrl(Control::footnote(vec![para(vec![text(attack)])]))]],
-        Carrier::Equation => vec![vec![ctrl(Control::equation(attack))]],
-    }
-}
-
-/// A cross reference to bookmark `b` with no display text.
-fn empty_cross_ref() -> Control {
-    Control::cross_ref(RefTarget::Name("b".into()), Default::default(), Default::default())
-}
-
-/// Where the carrying paragraph is put.
-#[derive(Clone, Copy, Debug)]
-enum Container {
-    Body,
-    /// A one-cell GFM table.
-    Cell,
-    /// A table in a cell (styled: an HTML table).
-    NestedCell,
-    /// A merged cell (styled: an HTML table).
-    MergedCell,
-    /// A table's caption.
-    Caption,
-    /// A text box holding the paragraph.
-    TextBox,
-    /// A footnote holding the paragraph (styled: its definition).
-    Footnote,
-    Memo,
-}
-
-const CONTAINERS: &[Container] = &[
-    Container::Body,
-    Container::Cell,
-    Container::NestedCell,
-    Container::MergedCell,
-    Container::Caption,
-    Container::TextBox,
-    Container::Footnote,
-    Container::Memo,
-];
-
-fn one_cell(p: Paragraph) -> Table {
-    Table::new(vec![TableRow::new(vec![TableCell::new(vec![p], u(1000))])])
-}
-
-/// The document: the carrying paragraph in `container`, then a paragraph
-/// using the reference label `[a]` (so a written definition would link).
-fn document(container: Container, runs: Vec<Run>) -> Document<Validated> {
-    let p = para(runs);
-    let top = match container {
-        Container::Body => p,
-        Container::Cell => para(vec![Run::table(one_cell(p), cs(PLAIN))]),
-        Container::NestedCell => {
-            let inner = Run::table(one_cell(p), cs(PLAIN));
-            para(vec![Run::table(one_cell(para(vec![inner])), cs(PLAIN))])
-        }
-        Container::MergedCell => {
-            let mut cell = TableCell::new(vec![p], u(1000));
-            cell.col_span = 2;
-            para(vec![Run::table(Table::new(vec![TableRow::new(vec![cell])]), cs(PLAIN))])
-        }
-        Container::Caption => {
-            let mut table = one_cell(para(vec![text("c")]));
-            table.caption = Some(Caption::new(vec![p], CaptionSide::Bottom));
-            para(vec![Run::table(table, cs(PLAIN))])
-        }
-        Container::TextBox => {
-            para(vec![ctrl(Control::text_box(vec![p], u(1000), u(1000))), text("z")])
-        }
-        Container::Footnote => para(vec![text("z"), ctrl(Control::footnote(vec![p]))]),
-        Container::Memo => para(vec![text("z"), ctrl(Control::memo(vec![p]))]),
-    };
-    let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(
-        vec![top, para(vec![text("[a] [a b]")])],
-        PageSettings::a4(),
-    ));
-    doc.validate().expect("valid")
-}
-
 /// What a check found wrong, with the case that made it.
 fn fail(view: &str, container: Container, carrier: Carrier, attack: &str, why: String) -> String {
     format!("{view} {container:?} {carrier:?} {attack:?}: {why}")
 }
 
-/// The tags of an HTML fragment: comments are skipped, every other `<…>`
-/// must be an allowed tag with allowed attributes. Returns the problems.
+/// The tags of an HTML fragment: everything must be in the guard's schema
+/// ([`tokens`]), a span digits, `a href` a URL put in and `img src` an
+/// asset key. Returns the problems.
 fn check_html(html: &str, assets: &BTreeSet<String>, urls: &BTreeSet<String>) -> Vec<String> {
+    let Some(tokens) = tokens(html) else {
+        return vec![format!("HTML outside the encoder's schema in {html:?}")];
+    };
     let mut problems = Vec::new();
-    let mut rest = html;
-    while let Some(start) = rest.find('<') {
-        rest = &rest[start..];
-        if let Some(body) = rest.strip_prefix("<!--") {
-            match body.find("-->") {
-                Some(end) => rest = &body[end + 3..],
-                None => {
-                    problems.push(format!("unclosed comment in {html:?}"));
-                    break;
-                }
-            }
-            continue;
-        }
-        let Some(end) = html_tag_end(rest) else {
-            problems.push(format!("unclosed tag in {html:?}"));
-            break;
-        };
-        let tag = &rest[1..end];
-        rest = &rest[end + 1..];
-        let tag = tag.trim_start_matches('/').trim_end_matches('/');
-        let name: String =
-            tag.chars().take_while(|c| c.is_ascii_alphanumeric()).collect::<String>();
-        if !ALLOWED_TAGS.contains(&name.to_ascii_lowercase().as_str()) {
-            problems.push(format!("tag <{tag}>"));
-            continue;
-        }
-        let Some(attrs) = attributes(&tag[name.len()..]) else {
-            problems.push(format!("malformed attributes on <{name}>"));
-            continue;
-        };
-        for (attr, value) in attrs {
-            let value = html_unescape(&value);
-            let ok = match (name.as_str(), attr.as_str()) {
+    for token in tokens {
+        let Token::Open { name, attributes } = token else { continue };
+        for (attr, value) in attributes {
+            let ok = match (name, attr) {
                 ("td", "colspan" | "rowspan") => value.chars().all(|c| c.is_ascii_digit()),
                 ("a", "href") => urls.contains(&value),
                 ("img", "src") => assets.contains(&value),
@@ -455,28 +542,6 @@ fn html_tag_end(s: &str) -> Option<usize> {
     None
 }
 
-/// `name="value"` pairs (the encoder quotes every value it writes).
-fn attributes(s: &str) -> Option<Vec<(String, String)>> {
-    let mut out = Vec::new();
-    let mut rest = s;
-    while !rest.trim().is_empty() {
-        if !rest.starts_with(char::is_whitespace) {
-            return None;
-        }
-        let (name, after) = rest.trim_start().split_once('=')?;
-        let name = name.trim_end();
-        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return None;
-        }
-        let after = after.trim_start();
-        let q = after.chars().next().filter(|c| matches!(c, '"' | '\''))?;
-        let (value, tail) = after[1..].split_once(q)?;
-        out.push((name.to_string(), value.to_string()));
-        rest = tail;
-    }
-    Some(out)
-}
-
 #[test]
 fn html_harness_rejects_malformed_attributes() {
     let empty = BTreeSet::new();
@@ -489,7 +554,7 @@ fn html_harness_rejects_malformed_attributes() {
     ] {
         assert!(!check_html(html, &empty, &empty).is_empty(), "{html}");
     }
-    assert!(check_html("<img alt=\">\">", &empty, &empty).is_empty());
+    assert!(check_html("<img alt=\">\"/>", &empty, &empty).is_empty());
 }
 
 fn html_unescape(s: &str) -> String {
@@ -499,6 +564,7 @@ fn html_unescape(s: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&#91;", "[")
         .replace("&amp;", "&")
 }
 
@@ -652,25 +718,6 @@ fn asset_key(path: &str) -> String {
     format!("images/{}", name.replace('(', "%28").replace(')', "%29"))
 }
 
-/// Whether styled guarantees here that document text makes no block: a
-/// Body paragraph, a text box in one, a table cell — not a caption, a note
-/// or a memo, and not a note carrier or a Body code block (their blocks
-/// are the encoder's). A code-font paragraph in a cell or text box is
-/// ordinary guarded text.
-/// 이것을 실패시키는 것: 범위 안 조합을 범위 밖으로 돌리기(기준 바이트 비교가
-/// 실패) · 범위 밖 조합을 범위 안으로(차분 검사가 실패).
-fn in_scope(container: Container, carrier: Carrier) -> bool {
-    matches!(
-        container,
-        Container::Body
-            | Container::TextBox
-            | Container::Cell
-            | Container::NestedCell
-            | Container::MergedCell
-    ) && !matches!(carrier, Carrier::Footnote)
-        && !(matches!(carrier, Carrier::Code) && matches!(container, Container::Body))
-}
-
 /// Whether the styled view's text for `attack` in `carrier` must come back.
 fn text_must_return(container: Container, carrier: Carrier, attack: &str) -> bool {
     // Outside the guarantee a list marker at a paragraph's start makes a
@@ -698,59 +745,6 @@ fn text_must_return(container: Container, carrier: Carrier, attack: &str) -> boo
                 | Carrier::TextBox
                 | Carrier::Footnote
         )
-}
-
-/// Output that must stay the base's, folded per view, container and
-/// carrier (FNV-1a 64 over each output and a separator, in case order).
-type Digests = BTreeMap<String, u64>;
-
-fn digest(digests: &mut Digests, view: &str, container: Container, carrier: Carrier, out: &str) {
-    let h =
-        digests.entry(format!("{view} {container:?} {carrier:?}")).or_insert(0xcbf2_9ce4_8422_2325);
-    for b in out.bytes().chain([0xff]) {
-        *h = (*h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-    }
-}
-
-/// The digests as lines (`view container carrier hash`).
-fn digest_lines(digests: &Digests) -> String {
-    digests.iter().map(|(k, h)| format!("{k} {h:016x}\n")).collect()
-}
-
-/// Every case's digests (the harness loop without its checks): what the
-/// base commit wrote, for `fixtures/markup_safety_base.txt`.
-///
-/// To write the fixture again, run this file against the base commit's
-/// crates (`496371cf`, before the guarantee) from the workspace root:
-///
-/// ```sh
-/// git worktree add /tmp/g-base 496371cf
-/// mkdir -p /tmp/g-gen/src
-/// printf '[package]\nname = "g-gen"\nversion = "0.0.0"\nedition = "2021"\n[workspace]\n[dependencies]\nhwpforge-core = { path = "/tmp/g-base/crates/hwpforge-core" }\nhwpforge-foundation = { path = "/tmp/g-base/crates/hwpforge-foundation" }\nhwpforge-smithy-md = { path = "/tmp/g-base/crates/hwpforge-smithy-md" }\npulldown-cmark = "0.13"\n' > /tmp/g-gen/Cargo.toml
-/// grep -v '^//!' crates/hwpforge-smithy-md/tests/markup_safety.rs > /tmp/g-gen/src/harness.rs
-/// printf '#![allow(dead_code, unused_imports)]\ninclude!("harness.rs");\nfn main() { print!("{}", base_digests()); }\n' > /tmp/g-gen/src/main.rs
-/// cargo run --release -q --manifest-path /tmp/g-gen/Cargo.toml > crates/hwpforge-smithy-md/tests/fixtures/markup_safety_base.txt
-/// git worktree remove /tmp/g-base
-/// ```
-#[allow(dead_code)]
-fn base_digests() -> String {
-    let mut base = Digests::new();
-    for &attack in ATTACKS {
-        for &carrier in CARRIERS {
-            for runs in carry(carrier, attack) {
-                for &container in CONTAINERS {
-                    let doc = document(container, runs.clone());
-                    if !in_scope(container, carrier) {
-                        let styled = MdEncoder::encode_styled(&doc, &Styles);
-                        digest(&mut base, "styled", container, carrier, &styled.markdown);
-                    }
-                    let lossy = MdEncoder::encode_lossy_with_report(&doc).expect("lossy").0;
-                    digest(&mut base, "lossy", container, carrier, &lossy);
-                }
-            }
-        }
-    }
-    digest_lines(&base)
 }
 
 #[test]
@@ -889,7 +883,7 @@ fn readable_views_write_no_markup_from_text() {
     }
     // Outside the guarantee, and lossy everywhere: the base's bytes.
     // 이것을 실패시키는 것: 범위 밖에 규칙 적용 · 범위 밖 표에 빈 줄.
-    let expected = include_str!("fixtures/markup_safety_base.txt");
+    let expected = include_str!("../../tests/fixtures/markup_safety_base.txt");
     let actual = digest_lines(&base);
     for (want, got) in expected.lines().zip(actual.lines()) {
         if want != got {

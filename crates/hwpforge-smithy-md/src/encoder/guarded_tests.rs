@@ -401,14 +401,18 @@ mod cases {
 
 /// The base commit's output for each of [`cases::base_cases`]: (name,
 /// styled, lossy). Written as the harness fixture is (see
-/// `base_digests` in `tests/markup_safety.rs`): the `cases` module, copied
+/// `base_digests` in `markup_safety_tests.rs`): the `cases` module, copied
 /// between its markers into `src/cases.rs` of the same scratch crate, with
 /// a `main` that prints
 /// `println!("    ({name:?}, {styled:?}, {lossy:?}),")` for each case
 /// (`MdEncoder::encode_styled(&doc, &cases::Styles).markdown`,
 /// `MdEncoder::encode_lossy(&doc).unwrap()`).
 const BASE: &[(&str, &str, &str)] = &[
-    // Written by the base commit (496371cf) from `cases::base_cases`.
+    // Written by the base commit (496371cf) from `cases::base_cases`;
+    // `g3_memo` and `g10_memo_body` follow the one-line memo comment of
+    // #281 (every `-` in its body escaped); `g3_list_chart` and the `g11`
+    // continuations its comment moved after the text (#281: a comment at
+    // a line start there opened an HTML block holding the text).
     ("g0_auto", "- 항목처럼 보이는 글\n\n1. 번호처럼 보이는 글\n\n: 정의처럼 보이는 글\n\na | b\n\n--- | ---\n\n들여쓴 글", "항목처럼 보이는 글\n\n번호처럼 보이는 글\n\n: 정의처럼 보이는 글\n\na | b\n\n--- | ---\n\n    들여쓴 글"),
     ("g2_heading_split", "# 1. x", "1. x"),
     ("g2_continuation_after_empty_item", "a\n\n    b", "a\n\nb"),
@@ -421,12 +425,12 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g3_code", "```\n- x\n```", "- x"),
     ("g3_body_table_last", "a\n<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">c</td>\n</tr>\n</tbody>\n</table>", "a\n\n| c |\n| --- |\n\n"),
     ("g3_body_inline_media", "a  ![p](images/p.png) b [t](https://e.invalid/) c<!-- memo: m --> d", "a  ![p](BinData/p.png) b [t](https://e.invalid/) c d"),
-    ("g3_list_chart", "- <!-- chart -->- x", "- x"),
+    ("g3_list_chart", "- - x<!-- chart -->", "- x"),
     ("g3_list_level2", "    - - x", "- x"),
     ("g3_list_table_then_text", "- a\n<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">c</td>\n</tr>\n</tbody>\n</table>\n- x", "a\n\n| c |\n| --- |\n\n\n- x"),
     ("g3_one_table_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |\n\n\n\n- x"),
     ("g3_note_lines", "z[^1]\n\n[^1]: \\- x\n\\1. y", "z(footnote: - x\n1. y)"),
-    ("g3_memo", "z<!-- memo: - x -->", "z"),
+    ("g3_memo", "z<!-- memo: \\- x -->", "z"),
     ("g5_item", "- &amp;", "\\&amp;"),
     ("g5_note", "z[^1]\n\n[^1]: &amp;", "z(footnote: \\&amp;)"),
     ("g5_caption", "| c |\n| --- |\n\n&amp;", "| c |\n| --- |\n\n\n\n\\&amp;"),
@@ -437,14 +441,14 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g10_item", "- - x", ""),
     ("g10_continuation", "- a\n\n  - x", "a"),
     ("g10_note", "z[^1]\n\n[^1]: \\- x", "z(footnote: )"),
-    ("g10_memo_body", "z<!-- memo: - x -->", "z"),
+    ("g10_memo_body", "z<!-- memo: \\- x -->", "z"),
     ("g10_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |"),
     ("g10_image_caption", "![p](images/p.png)\n\n- x", "![p](BinData/p.png)"),
     // written by fa04fabf; continuations are drawn as at
     // 496371cf there.
-    ("g11_cont_memo_list", "- a\n\n  <!-- memo: m -->- x", "a\n\n- x"),
-    ("g11_cont_chart_number", "- a\n\n  <!-- chart -->1. x", "a\n\n1. x"),
-    ("g11_cont1_memo_list", "  - a\n\n    <!-- memo: m -->- x", "a\n\n- x"),
+    ("g11_cont_memo_list", "- a\n\n  - x<!-- memo: m -->", "a\n\n- x"),
+    ("g11_cont_chart_number", "- a\n\n  1. x<!-- chart -->", "a\n\n1. x"),
+    ("g11_cont1_memo_list", "  - a\n\n    - x<!-- memo: m -->", "a\n\n- x"),
     // Written by commit 61d3631d, before this writer.
     ("g12_table_memo", "a\n| v |\n| --- |\n\n<!-- memo: m -->\n\\*x\\*", "a\n\n| v |\n| --- |\n\n*x*"),
     ("g12_caption_memo", "a\n| v |\n| --- |\n\ncap<!-- memo: m -->\\*x\\*", "a\n\n| v |\n| --- |\n\n\n\ncap\n\n*x*"),
@@ -905,7 +909,7 @@ fn out_of_scope_is_base_output() {
         assert_eq!(fallbacks, 0, "{name}");
     }
     // The two places a classified-shape check would write as plain text.
-    assert_eq!(base("g3_list_chart").0, "- <!-- chart -->- x");
+    assert_eq!(base("g3_list_chart").0, "- - x<!-- chart -->");
     assert_eq!(base("g3_list_level2").0, "    - - x");
 }
 
@@ -1051,14 +1055,14 @@ fn memo_anchor_out_of_scope_is_base_output() {
 /// A memo at a paragraph's start, as saved by Hancom:
 /// its comment stays, the text after it reads as written, and the memo's
 /// body does not mix into the text. Also with the memo body over two
-/// lines.
+/// lines, folded into one comment line.
 /// 이것을 실패시키는 것: 줄머리 주석의 줄 끝내기 삭제 · 뒤 글의 앞 공백 남기기.
 #[test]
 fn line_start_memo_keeps_comment_and_text() {
     use hwpforge_core::control::Control;
     for (memo_body, comment) in [
         ("쇠부리야 여기가 메모야", "<!-- memo: 쇠부리야 여기가 메모야 -->"),
-        ("첫 줄\n둘째 줄", "<!-- memo: 첫 줄\n둘째 줄 -->"),
+        ("첫 줄\n둘째 줄", "<!-- memo: 첫 줄 둘째 줄 -->"),
     ] {
         let memo = ctrl(Control::memo_with_anchor(
             vec![body(vec![t(memo_body)])],
@@ -1074,8 +1078,9 @@ fn line_start_memo_keeps_comment_and_text() {
 }
 
 /// A memo or chart comment at a continuation's start, then text that looks
-/// like a list item: a continuation is out of the guarantee, so its bytes
-/// are the base's (no line ended after the comment).
+/// like a list item: a continuation is out of the guarantee, so no line is
+/// ended after the comment; the comment moves after the text, as in a list
+/// item (`comments_after_text`), and the text reads as a list item does.
 /// 이것을 실패시키는 것: 줄 끝내기 조건을 `ParaKind::Body` 만으로.
 #[test]
 fn continuation_line_start_comment_is_base_output() {
@@ -2397,4 +2402,315 @@ mod generated {
             prop_assert_ne!(decodes(md), Some(false), "{:?}", md);
         }
     }
+}
+
+/// A list item, a note definition and a caption whose text starts with a chart
+/// comment, then bold text and a literal `&lt;`, read back through the
+/// decoder: the comment moved after the text (`comments_after_text`), so
+/// the bold stays bold, `&lt;` stays text and the chart is one warning. A
+/// heading keeps its comment in place.
+/// 이것을 실패시키는 것: 목록·정의·캡션에서 주석 옮기기 삭제.
+#[test]
+fn comment_led_items_and_notes_read_back() {
+    use hwpforge_core::RunContent;
+    let runs = || vec![chart(), styled_t("word", BOLD), t("&lt;")];
+    let item = doc(vec![p(BULLET, runs())]);
+    let note = doc(vec![body(vec![t("x"), footnote(vec![body(runs())])])]);
+    // A heading's text is inline: its comment opens no HTML block.
+    let heading = doc(vec![p(HEADING, runs())]);
+    let caption =
+        doc(vec![body(vec![captioned(one_cell(body(vec![t("c")])), vec![body(runs())])])]);
+    for (name, document) in
+        [("item", item), ("note", note), ("heading", heading), ("caption", caption)]
+    {
+        let (markdown, fallbacks) = styled(&document);
+        assert_eq!(fallbacks, 0, "{name}: {markdown}");
+        let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+        assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }], "{markdown}");
+        let first = &md.document.sections()[0].paragraphs[0];
+        let paragraph = match name {
+            "item" | "heading" => first.clone(),
+            "caption" => md.document.sections()[0].paragraphs[1].clone(),
+            _ => first
+                .runs
+                .iter()
+                .find_map(|r| match &r.content {
+                    RunContent::Control(c) => match c.as_ref() {
+                        hwpforge_core::Control::Footnote { paragraphs, .. } => {
+                            Some(paragraphs[0].clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("note"),
+        };
+        let texts: Vec<(String, bool)> = paragraph
+            .runs
+            .iter()
+            .filter_map(|r| match &r.content {
+                RunContent::Text(t) => Some((
+                    t.clone(),
+                    md.style_registry.char_shape(r.char_shape_id).is_some_and(|c| c.bold),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&("word".to_string(), true)), "{name} {markdown}: {texts:?}");
+        // Bold where the source is: a heading's style is bold throughout.
+        let plain_lt = name == "heading" || texts.iter().any(|(t, b)| t == "&lt;" && !b);
+        assert!(plain_lt && texts.iter().any(|(t, _)| t == "&lt;"), "{name}: {texts:?}");
+        assert!(!texts.iter().any(|(t, _)| t.contains(['*', '\\'])), "{name}: {texts:?}");
+    }
+}
+
+/// A table styled writes as HTML (a merged cell, a cell of two
+/// paragraphs, bold text, a table in a cell) read back by the decoder:
+/// the same rows, spans, cell paragraphs, bold and nested table.
+/// 이것을 실패시키는 것: HTML 칸 span 버리기 · 칸 문단 합치기 · 중첩 표 버리기.
+#[test]
+fn styled_html_table_reads_back() {
+    use hwpforge_core::{RunContent, Table, TableCell, TableRow};
+    let mut merged_cell =
+        TableCell::new(vec![body(vec![styled_t("a", BOLD)]), body(vec![t("b")])], u(1000));
+    merged_cell.col_span = 2;
+    let inner = one_cell(body(vec![t("d")]));
+    let outer = Table::new(vec![
+        TableRow::new(vec![merged_cell]),
+        TableRow::new(vec![
+            TableCell::new(vec![body(vec![t("c")])], u(1000)),
+            TableCell::new(vec![body(vec![table(inner)])], u(1000)),
+        ]),
+    ]);
+    let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(outer)])]));
+    assert_eq!(fallbacks, 0, "{markdown}");
+    assert!(markdown.starts_with("<table>"), "{markdown}");
+    let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+    let RunContent::Table(read) = &md.document.sections()[0].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    let shape = |r: &hwpforge_core::Run| {
+        (
+            r.content.plain_text().map(|t| t.to_string()),
+            md.style_registry.char_shape(r.char_shape_id).map(|c| c.bold),
+        )
+    };
+    let first = &read.rows[0].cells[0];
+    assert_eq!((first.col_span, first.row_span), (2, 1));
+    let paragraphs: Vec<Vec<_>> =
+        first.paragraphs.iter().map(|p| p.runs.iter().map(shape).collect()).collect();
+    assert_eq!(
+        paragraphs,
+        [vec![(Some("a".to_string()), Some(true))], vec![(Some("b".to_string()), Some(false))]]
+    );
+    assert_eq!(read.rows[1].cells.len(), 2);
+    assert_eq!(read.rows[1].cells[0].paragraphs[0].text_content(), "c");
+    let RunContent::Table(nested) = &read.rows[1].cells[1].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    assert_eq!(nested.rows[0].cells[0].paragraphs[0].text_content(), "d");
+}
+
+/// The single cell of the single table in `markdown` read back.
+fn read_back_cell(markdown: &str) -> (crate::MdDocument, hwpforge_core::TableCell) {
+    use hwpforge_core::RunContent;
+    let md = crate::MdDecoder::decode_with_default(markdown).expect(markdown);
+    let RunContent::Table(read) = &md.document.sections()[0].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    let cell = read.rows[0].cells[0].clone();
+    (md, cell)
+}
+
+/// A merged (HTML) cell's text keeps its spaces through styled and back,
+/// as the document has them: between its pieces (before a format, before
+/// a link, around a comment), at its edges (a space before a closing
+/// comment, a space at the start of bold text) and a no-break space.
+/// 이것을 실패시키는 것: 칸 글을 토큰마다 끝 공백을 자르는 별도 경로로 ·
+/// 칸 경계에서 보류 공백 지우기 삭제 · 칸 글의 가장자리 공백 버리기 ·
+/// 유니코드 공백을 레이아웃으로.
+#[test]
+fn html_cell_text_keeps_its_spaces() {
+    use hwpforge_core::{Control, RunContent};
+    let cell = body(vec![
+        t("hello "),
+        styled_t("world", BOLD),
+        t(" see "),
+        ctrl(Control::hyperlink("x", "https://e.invalid/")),
+        t(" a "),
+        chart(),
+        t(" b"),
+    ]);
+    let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(merged(cell))])]));
+    assert_eq!(fallbacks, 0, "{markdown}");
+    let (md, cell) = read_back_cell(&markdown);
+    assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }]);
+    let runs: Vec<String> = cell.paragraphs[0]
+        .runs
+        .iter()
+        .map(|r| match &r.content {
+            RunContent::Text(t) => t.clone(),
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Hyperlink { text, .. } => format!("<{text}>"),
+                other => format!("{other:?}"),
+            },
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(runs.concat(), "hello world see <x> a  b", "{markdown}");
+    // A space at a cell's end stays in that cell, not the next.
+    use hwpforge_core::{Table, TableCell, TableRow};
+    let mut second = TableCell::new(vec![body(vec![t("b")])], u(1000));
+    second.col_span = 2;
+    let row =
+        TableRow::new(vec![TableCell::new(vec![body(vec![t("a "), chart()])], u(1000)), second]);
+    let (markdown, _) = styled(&doc(vec![body(vec![table(Table::new(vec![row]))])]));
+    let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+    let RunContent::Table(read) = &md.document.sections()[0].paragraphs[0].runs[0].content else {
+        panic!("{markdown}")
+    };
+    let texts: Vec<String> =
+        read.rows[0].cells.iter().map(|c| c.paragraphs[0].text_content()).collect();
+    assert_eq!(texts, ["a ", "b"], "{markdown}");
+    // A space at the start of bold text, a no-break space at the end.
+    let cell = body(vec![styled_t(" hello", BOLD), t("world\u{a0}")]);
+    let (markdown, _) = styled(&doc(vec![body(vec![table(merged(cell))])]));
+    let (_, cell) = read_back_cell(&markdown);
+    let runs: Vec<String> = cell.paragraphs[0]
+        .runs
+        .iter()
+        .filter_map(|r| r.content.plain_text().map(|t| t.to_string()))
+        .collect();
+    assert_eq!(runs, [" hello", "world\u{a0}"], "{markdown}");
+}
+
+/// A footnote and an endnote in a merged (HTML) cell read back as notes
+/// with their bodies, through styled and back; document text `[^1]` in the
+/// same cell stays text.
+/// 이것을 실패시키는 것: HTML 칸의 각주 참조를 글로 쓰기 · 칸 글의 `[` 이스케이프 삭제.
+#[test]
+fn html_cell_notes_read_back() {
+    use hwpforge_core::{Control, RunContent};
+    for (note, footnote) in [
+        (Control::footnote(vec![body(vec![t("설명")])]), true),
+        (Control::endnote(vec![body(vec![t("설명")])]), false),
+    ] {
+        let cell = body(vec![t("본문 [^1]"), ctrl(note)]);
+        let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(merged(cell))])]));
+        assert_eq!(fallbacks, 0, "{markdown}");
+        let (_, cell) = read_back_cell(&markdown);
+        let runs = &cell.paragraphs[0].runs;
+        assert!(matches!(&runs[0].content, RunContent::Text(t) if t == "본문 [^1]"), "{runs:?}");
+        let body_text = match &runs[1].content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Footnote { paragraphs, .. } if footnote => paragraphs[0].text_content(),
+                Control::Endnote { paragraphs, .. } if !footnote => paragraphs[0].text_content(),
+                other => panic!("{other:?} in {markdown}"),
+            },
+            other => panic!("{other:?} in {markdown}"),
+        };
+        assert_eq!(body_text, "설명", "{markdown}");
+    }
+}
+
+/// Whether `run` grows linearly with its size: three runs at `n` and three
+/// at `4 * n`, taken in turn (`n`, `4n`, `n`, …) so a slowdown partway
+/// through falls on both sizes, their medians compared. Linear work grows
+/// about 4 times, quadratic about 16; the ratio must stay under 8. A ratio
+/// holds under a slower build (coverage instrumentation, a loaded machine)
+/// where a fixed time bound would not. Each run's time is checked against
+/// `SAFETY` after it returns, and a run past it fails the test without
+/// taking the remaining measurements; stopping a run still going is the
+/// test runner's timeout.
+fn grows_linearly(n: usize, run: impl Fn(usize)) -> bool {
+    const SAFETY: std::time::Duration = std::time::Duration::from_secs(20);
+    let time = |size: usize| {
+        let started = std::time::Instant::now();
+        run(size);
+        let elapsed = started.elapsed();
+        assert!(elapsed < SAFETY, "{size}: {elapsed:?}");
+        elapsed
+    };
+    let (mut small, mut large) = (Vec::new(), Vec::new());
+    for _ in 0..3 {
+        small.push(time(n));
+        large.push(time(4 * n));
+    }
+    small.sort();
+    large.sort();
+    // Under a millisecond, timer noise is not growth.
+    large[1].as_secs_f64() < 8.0 * small[1].as_secs_f64().max(1e-3)
+}
+
+/// Many unfinished note references in an HTML cell are read in linear
+/// time: a failed scan does not read the rest of the cell again.
+/// 이것을 실패시키는 것: 실패마다 남은 글을 다시 훑기.
+#[test]
+fn cell_note_scan_is_linear() {
+    let cell = |n: usize| "[^".repeat(n);
+    let markdown = |n: usize| {
+        format!("<table>\n<tbody>\n<tr>\n  <td>{}</td>\n</tr>\n</tbody>\n</table>", cell(n))
+    };
+    let md = crate::MdDecoder::decode_with_default(&markdown(10)).expect("decodes");
+    let hwpforge_core::RunContent::Table(read) =
+        &md.document.sections()[0].paragraphs[0].runs[0].content
+    else {
+        panic!("a table")
+    };
+    assert_eq!(read.rows[0].cells[0].paragraphs[0].text_content(), cell(10));
+    assert!(grows_linearly(100_000, |n| {
+        crate::MdDecoder::decode_with_default(&markdown(n)).expect("decodes");
+    }));
+}
+
+/// Many attributes then much whitespace in one tag are parsed in linear
+/// time: the whitespace is not read again for each attribute.
+/// 이것을 실패시키는 것: 남은 글 전체를 매번 trim.
+#[test]
+fn attribute_scan_is_linear() {
+    let tag = |n: usize| format!("<td{}{}>", " colspan=\"1\"".repeat(n), " ".repeat(n));
+    assert!(super::guard::tokens("<td colspan=\"1\"   >").is_some());
+    assert!(grows_linearly(20_000, |n| {
+        // A repeated attribute fails, after every attribute is parsed.
+        assert!(super::guard::tokens(&tag(n)).is_none());
+    }));
+}
+
+/// A footnote whose body is only a chart and an endnote whose body is only
+/// a memo: styled writes each definition as its comment alone; read back,
+/// the note stays with one empty paragraph and the comment is reported.
+/// A definition written empty is still an error.
+/// 이것을 실패시키는 것: 생략으로 빈 본문도 오류로 · 빈 문단 없이 보존.
+#[test]
+fn comment_only_notes_read_back() {
+    use hwpforge_core::{Control, RunContent};
+    let note_body = |run| vec![body(vec![run])];
+    let document = doc(vec![body(vec![
+        t("x"),
+        ctrl(Control::footnote(note_body(chart()))),
+        ctrl(Control::endnote(note_body(memo(vec![body(vec![t("m")])])))),
+    ])]);
+    let (markdown, fallbacks) = styled(&document);
+    assert_eq!(fallbacks, 0, "{markdown}");
+    let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+    assert_eq!(
+        md.warnings,
+        vec![MdWarning::ContentLost { kind: "chart" }, MdWarning::ContentLost { kind: "memo" }],
+        "{markdown}"
+    );
+    let notes: Vec<Vec<String>> = md.document.sections()[0].paragraphs[0]
+        .runs
+        .iter()
+        .filter_map(|r| match &r.content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+                    Some(paragraphs.iter().map(|p| p.text_content()).collect())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes, [vec![String::new()], vec![String::new()]], "{markdown}");
+    assert!(crate::MdDecoder::decode_with_default("x[^1]\n\n[^1]: <u></u>").is_err());
 }

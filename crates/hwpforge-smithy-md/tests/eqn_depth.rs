@@ -49,6 +49,9 @@ const NOTICE: &str = "[수식 변환 생략: 중첩 깊이 초과] ";
 /// The notice as ordinary Markdown text renders it (`[`/`]` escaped).
 const NOTICE_MD: &str = "\\[수식 변환 생략: 중첩 깊이 초과\\] ";
 
+/// The notice as HTML cell text renders it (`[` as a character reference).
+const NOTICE_HTML: &str = "&#91;수식 변환 생략: 중첩 깊이 초과]";
+
 /// Style lookup with every property unset (plain text, no headings).
 struct PlainStyles;
 
@@ -328,7 +331,7 @@ fn eqn_depth_fallback_is_gfm_cell_text() {
 fn eqn_depth_fallback_is_html_cell_text() {
     let (eqn, text) = render_equation_and_text(html_table_with);
     assert_eq!(eqn, text);
-    assert!(eqn.contains(NOTICE.trim_end()), "{eqn}");
+    assert!(eqn.contains(NOTICE_HTML), "{eqn}");
     assert!(eqn.contains("&lt;tag&gt;") && !eqn.contains("<tag>"), "{eqn}");
 }
 
@@ -386,8 +389,11 @@ fn eqn_depth_fallback_cannot_inject_blocks_in_html_cell() {
         render_doc_on_small_stack(move || document(vec![html_table_with(equation(&script))]));
     let line = markdown
         .lines()
-        .find(|line| line.contains(NOTICE.trim_end()))
+        .find(|line| line.contains(NOTICE_HTML))
         .unwrap_or_else(|| panic!("fallback notice missing: {markdown}"));
-    assert!(line.contains("![x](http://e/x.png) z"), "fallback must stay on one line: {markdown}");
+    assert!(
+        line.contains("!&#91;x](http://e/x.png) z"),
+        "fallback must stay on one line: {markdown}"
+    );
     assert_eq!(injected_structure(&markdown), Vec::<String>::new(), "{markdown}");
 }

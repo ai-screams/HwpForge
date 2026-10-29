@@ -1,12 +1,14 @@
 //! Core -> Markdown encoders.
 
-mod guard;
+pub(crate) mod guard;
 #[cfg(test)]
 mod guarded_tests;
 mod list_format;
 mod lossless;
 mod lossy;
 mod markup;
+#[cfg(test)]
+mod markup_safety_tests;
 mod styled;
 
 use hwpforge_blueprint::template::Template;
@@ -94,6 +96,14 @@ pub enum MdWarning {
         /// Index of the section's top-level paragraph.
         paragraph: usize,
     },
+    /// MD→HWPX: a comment the styled view writes in place of content it
+    /// cannot show was left out — a chart (`<!-- chart -->`, its data is
+    /// not in the Markdown) or a memo (`<!-- memo: … -->`, its body is not
+    /// read back). One per comment, in source order.
+    ContentLost {
+        /// What was left out: `"chart"` or `"memo"`.
+        kind: &'static str,
+    },
 }
 
 impl core::fmt::Display for MdWarning {
@@ -120,6 +130,10 @@ impl core::fmt::Display for MdWarning {
                 f,
                 "paragraph written as plain text: its Markdown held markup the encoder \
                  does not write (section {section}, paragraph {paragraph})"
+            ),
+            Self::ContentLost { kind } => write!(
+                f,
+                "{kind} comment left out: its content is not read back from Markdown"
             ),
             Self::EquationAsText { section, paragraph } => write!(
                 f,

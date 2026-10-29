@@ -207,6 +207,16 @@ def test_convert_md_builds_a_document() -> None:
     assert result.report["assets"] == []
 
 
+def test_convert_md_reports_content_lost() -> None:
+    """A chart comment is left out and reported with the ops warning code.
+
+    이것을 실패시키는 것: 바인딩이 ops 경고를 `report["warnings"]` 에 싣지 않는 것.
+    """
+    result = hwpforge.convert_md("a <!-- chart --> b\n")
+
+    assert [w["code"] for w in result.report["warnings"]] == ["CONTENT_LOST"]
+
+
 def test_from_json_rebuilds_what_to_json_exported(document: Document) -> None:
     exported = document.to_json()
 

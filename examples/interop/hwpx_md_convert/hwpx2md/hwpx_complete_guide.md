@@ -2,15 +2,17 @@
 
 ![image1](images/image1.png)
 
+\[그림 1\] 쇠부리 (SoeBuri) — 한컴 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리 🔥
+
 HwpForge는 한국의 HWP/HWPX 문서 포맷을 프로그래밍으로 제어하는 **순수 Rust 라이브러리**입니다. 프로젝트 마스코트인 <strong>오리너구리(Platypus)</strong>는 HWPX 포맷의 독특한 특성을 상징합니다 — XML 기반이면서 독자적인 네임스페이스와 규격을 가진 독특한 포맷입니다.
 
-<strong>1. HWPX 문서 포맷이란?</strong>
+<strong>1\. HWPX 문서 포맷이란?</strong>
 
 HWPX는 대한민국 국가표준 KS X 6101[^1]에 정의된 XML 기반 문서 포맷입니다. ZIP 컨테이너 안에 여러 XML 파일이 구조화되어 저장됩니다.
 
 상세 사양은 [한국정보통신기술협회(TTA)](https://www.tta.or.kr) 홈페이지에서 확인할 수 있습니다.
 
-**2. ZIP 컨테이너 파일 구성**
+**2\. ZIP 컨테이너 파일 구성**
 
 HWPX 파일은 확장자가 .hwpx인 ZIP 아카이브입니다. 내부에는 다음과 같은 XML 파일들이 포함됩니다:
 
@@ -52,13 +54,15 @@ HWPX 파일은 확장자가 .hwpx인 ZIP 아카이브입니다. 내부에는 다
 </tbody>
 </table>
 
-**3. 섹션(Section) 구조**
+표 1. HWPX ZIP 컨테이너 내부 파일 구성
+
+**3\. 섹션(Section) 구조**
 
 HWPX 문서는 하나 이상의 섹션으로 구성됩니다. 각 섹션은 독립적인 페이지 설정(용지 크기, 여백, 방향)을 가질 수 있어, 세로 페이지와 가로 페이지를 하나의 문서에 혼합할 수 있습니다.
 
 각 섹션의 XML은 &lt;hp:sec&gt; 루트 아래 &lt;hp:p&gt;(문단) 요소들로 구성됩니다. 문단 안에는 &lt;hp:run&gt;(텍스트 런), &lt;hp:ctrl&gt;(컨트롤), &lt;hp:tbl&gt;(표) 등이 포함됩니다.
 
-**4. header.xml 스타일 시스템**
+**4\. header.xml 스타일 시스템**
 
 header.xml에는 문서 전체의 스타일 정의가 담깁니다: <strong>fontface(폰트)</strong>, <strong>charShape(글자 모양)</strong>, <strong>paraShape(문단 모양)</strong>. 본문의 각 요소는 인덱스(IDRef)로 이 정의를 참조합니다.
 
@@ -70,7 +74,7 @@ header.xml에는 문서 전체의 스타일 정의가 담깁니다: <strong>font
 
 **텍스트 서식 시스템**
 
-<strong>1. 문단 정렬 (Paragraph Alignment)</strong>
+<strong>1\. 문단 정렬 (Paragraph Alignment)</strong>
 
 양쪽 정렬(Justify): 본문에서 가장 일반적으로 사용되는 정렬입니다. 양쪽 여백에 맞춰 글자 간격이 자동 조절됩니다.
 
@@ -82,37 +86,37 @@ header.xml에는 문서 전체의 스타일 정의가 담깁니다: <strong>font
 
 배분 정렬(Distribute): 글자를 균등하게 분배합니다.
 
-<strong>2. 덧말 (Dutmal / Ruby Text)</strong>
+<strong>2\. 덧말 (Dutmal / Ruby Text)</strong>
 
 덧말은 한자 위나 아래에 한글 읽기를 표시하는 기능입니다:
 
 위쪽 덧말: 大韓民國(대한민국) 아래쪽 덧말: 漢字(한자) 오른쪽 덧말: 情報(정보)
 
-<strong>3. 글자겹침 (Compose)</strong>
+<strong>3\. 글자겹침 (Compose)</strong>
 
 글자겹침 기능: 12 (숫자 1과 2를 겹침)
 
-<strong>4. 필드 (Field)</strong>
+<strong>4\. 필드 (Field)</strong>
 
 누름틀(ClickHere): 이름을 입력하세요
 
-날짜 필드(Date): ____
+날짜 필드(Date): 2026-03-21
 
-쪽 번호 필드(autoNum): 현재 ____쪽
+쪽 번호 필드(autoNum): 현재 쪽
 
-<strong>5. 미주 (Endnote)</strong>
+<strong>5\. 미주 (Endnote)</strong>
 
 글자 모양(charShape)은 폰트, 크기, 색상, 굵기, 기울임, 밑줄, 취소선 등을 정의합니다[^e1].
 
-<strong>6. 메모 (Memo)</strong>
+<strong>6\. 메모 (Memo)</strong>
 
-이 문단에는 검토 메모가 첨부되어 있습니다.<!-- memo(): <strong>검토 의견:</strong> charShape 설명을 표 형태로 정리하면 더 좋겠습니다. 다음 버전에 반영 부탁드립니다. -->
+이 문단에는 검토 메모가 첨부되어 있습니다.<!-- memo: <strong>검토 의견:</strong> charShape 설명을 표 형태로 정리하면 더 좋겠습니다. 다음 버전에 반영 부탁드립니다. -->
 
-<strong>7. 상호참조 (CrossRef)</strong>
+<strong>7\. 상호참조 (CrossRef)</strong>
 
-HWPX 문서 정의는 섹션 1의 [HWPX정의]쪽을 참조하세요. ZIP 파일 구조는 [헤더구조]쪽에 설명되어 있습니다.
+HWPX 문서 정의는 섹션 1의 HWPX정의쪽을 참조하세요. ZIP 파일 구조는 헤더구조쪽에 설명되어 있습니다.
 
-**8. 글자 서식 변화 시연**
+**8\. 글자 서식 변화 시연**
 
 기본 **굵게** 파랑 _기울임 녹색_ 작은 글씨 **제목 크기** 회색 워터마크
 
@@ -257,6 +261,8 @@ HWPX는 OOXML(Office Open XML) 차트 형식을 사용합니다. Chart XML은 ZI
 </tbody>
 </table>
 
+표 2. HWPX 문서 요소 분류
+
 **4.4 페이지 테두리 (PageBorderFill) + BeginNum**
 
 이 섹션에는 페이지 테두리(borderFillIDRef=3, 검은 실선)가 설정되어 있으며, 페이지 번호는 1부터 새로 시작합니다.
@@ -293,7 +299,7 @@ HWPX는 OOXML(Office Open XML) 차트 형식을 사용합니다. Chart XML은 ZI
 
 스타일스토어: Font, CharShape(8종), ParaShape(5종), BorderFill(4종), Numbering, Tab
 
-<strong>=== HWPX 문서 구조 완전 가이드 끝 ===</strong>
+<strong>\=== HWPX 문서 구조 완전 가이드 끝 ===</strong>
 
 [^1]: KS X 6101: 한국산업표준(Korean Industrial Standards)에서 제정한 문서 파일 형식 표준. 2014년 최초 제정, 2021년 개정.
 

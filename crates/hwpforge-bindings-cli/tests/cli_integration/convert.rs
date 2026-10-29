@@ -86,6 +86,23 @@ fn convert_json_mode() {
     assert!(val["size_bytes"].as_u64().unwrap() > 0);
 }
 
+/// A chart and a memo comment are left out with exit 0, one
+/// `CONTENT_LOST` warning each in the JSON report.
+/// 이것을 실패시키는 것: CLI 가 `ContentLost` 를 코드 없는 Display 로 쓰기.
+#[test]
+fn convert_json_reports_content_lost() {
+    let tmp = test_tmp();
+    let md = create_test_md(&tmp, "a <!-- chart --> b\n\n<!-- memo: m -->\n");
+    let out = tmp.join("output.hwpx");
+    let (val, _, code) = run_json(&["convert", md.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0, "{val}");
+    let warnings: Vec<&str> =
+        val["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap()).collect();
+    assert_eq!(warnings.len(), 2, "{val}");
+    assert!(warnings[0].starts_with("CONTENT_LOST chart"), "{val}");
+    assert!(warnings[1].starts_with("CONTENT_LOST memo"), "{val}");
+}
+
 #[test]
 fn convert_nonexistent_file() {
     let tmp = test_tmp();

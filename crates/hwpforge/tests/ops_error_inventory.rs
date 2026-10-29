@@ -341,6 +341,7 @@ const WARNING_MAPPING: Table = &[
             ("ContainerTooDeep", "CONTAINER_TOO_DEEP"),
             ("EquationAsText", "EQUATION_AS_TEXT"),
             ("MarkupWrittenAsText", "MARKUP_WRITTEN_AS_TEXT"),
+            ("ContentLost", "CONTENT_LOST"),
         ],
     ),
     (
@@ -1020,6 +1021,7 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                 "MarkupWrittenAsText",
                 OpsWarning::Md(MdWarning::MarkupWrittenAsText { section: 0, paragraph: 0 }),
             ),
+            ("ContentLost", OpsWarning::Md(MdWarning::ContentLost { kind: "chart" })),
         ],
     );
     all.insert(
