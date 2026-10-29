@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use hwpforge::md::MdWarning;
 use hwpforge::ops::{convert_md, ConvertMdOptions, OpsError, OpsWarning};
 use hwpforge_smithy_hwpx::{builtin_presets, EncodeWarning};
 
@@ -123,7 +124,13 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
         .map(|w| {
             let line = match w {
                 OpsWarning::Encode(inner) => encode_warning_line(inner),
-                OpsWarning::Md(inner) => inner.to_string(),
+                // Content left out is a new warning with no legacy line: it
+                // takes the `"{code} {message}"` form below, so `--json`
+                // carries `CONTENT_LOST`.
+                // 이것을 실패시키는 것: 이 갈래를 Display 로(`convert_json_reports_content_lost`).
+                OpsWarning::Md(inner) if !matches!(inner, MdWarning::ContentLost { .. }) => {
+                    inner.to_string()
+                }
                 other => {
                     let info = other.info();
                     format!("{} {}", info.code, info.message)

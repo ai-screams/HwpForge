@@ -513,3 +513,194 @@ fn lossy_cell_line_breaks_convert() {
         .expect("a table");
     assert_eq!(texts, ["a", "b"]);
 }
+
+// ── what the Markdown says, at both ends ────────────────────────
+
+/// The Markdown the styled view writes for a small document of two
+/// sections: every format, a link, a picture, a footnote, a chart and a
+/// memo comment, and an HTML table with a merged cell of two paragraphs.
+const MEANING_MD: &str = "**b** *i* ~~s~~ <u>u</u> <sup>p</sup> <sub>q</sub> \
+[L](https://e.invalid/) ![g](p.png)[^1]
+
+<!-- chart -->
+
+<!-- hwpforge:section -->
+
+<table>
+<tbody>
+<tr>
+  <td colspan=\"2\">A<br>B</td>
+</tr>
+<tr>
+  <td>C</td>
+  <td><strong>D</strong> <!-- memo: m --></td>
+</tr>
+</tbody>
+</table>
+
+[^1]: note
+";
+
+/// Bold, italic, strikeout, underline, superscript, subscript.
+type Fmt = [bool; 6];
+
+/// What a paragraph says: its text by format, links, pictures, notes and
+/// tables (cell spans and cell paragraphs), styles and positions aside.
+#[derive(Debug, PartialEq)]
+enum Item {
+    Text(String, Fmt),
+    Link(String, String),
+    Picture,
+    Note(Vec<Vec<Item>>),
+    Table(Vec<Vec<(u16, u16, Vec<Vec<Item>>)>>),
+}
+
+fn meaning(
+    paragraphs: &[hwpforge::core::Paragraph],
+    fmt: &dyn Fn(hwpforge::foundation::CharShapeIndex) -> Fmt,
+) -> Vec<Vec<Item>> {
+    use hwpforge::core::{Control, RunContent};
+    paragraphs
+        .iter()
+        .map(|p| {
+            let mut out: Vec<Item> = Vec::new();
+            for run in &p.runs {
+                let item = match &run.content {
+                    RunContent::Text(t) if t.is_empty() => continue,
+                    RunContent::Text(t) => Item::Text(t.clone(), fmt(run.char_shape_id)),
+                    RunContent::Image(_) => Item::Picture,
+                    RunContent::Table(t) => Item::Table(
+                        t.rows
+                            .iter()
+                            .map(|r| {
+                                r.cells
+                                    .iter()
+                                    .map(|c| (c.col_span, c.row_span, meaning(&c.paragraphs, fmt)))
+                                    .collect()
+                            })
+                            .collect(),
+                    ),
+                    RunContent::Control(c) => match c.as_ref() {
+                        Control::Hyperlink { text, url } => Item::Link(text.clone(), url.clone()),
+                        Control::Footnote { paragraphs, .. } => {
+                            Item::Note(meaning(paragraphs, fmt))
+                        }
+                        other => panic!("{other:?}"),
+                    },
+                    other => panic!("{other:?}"),
+                };
+                // Runs split anywhere in the same format say the same.
+                match (out.last_mut(), &item) {
+                    (Some(Item::Text(a, fa)), Item::Text(b, fb)) if fa == fb => a.push_str(b),
+                    _ => out.push(item),
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+/// The meaning of [`MEANING_MD`], written out by hand: its two sections.
+fn expected_meaning() -> Vec<Vec<Vec<Item>>> {
+    let t = |s: &str, f: Fmt| Item::Text(s.to_string(), f);
+    let plain = [false; 6];
+    let only = |i: usize| {
+        let mut f = plain;
+        f[i] = true;
+        f
+    };
+    let para = |s: &str| vec![t(s, plain)];
+    vec![
+        vec![vec![
+            t("b", only(0)),
+            t(" ", plain),
+            t("i", only(1)),
+            t(" ", plain),
+            t("s", only(2)),
+            t(" ", plain),
+            t("u", only(3)),
+            t(" ", plain),
+            t("p", only(4)),
+            t(" ", plain),
+            t("q", only(5)),
+            t(" ", plain),
+            Item::Link("L".into(), "https://e.invalid/".into()),
+            t(" ", plain),
+            Item::Picture,
+            Item::Note(vec![para("note")]),
+        ]],
+        vec![vec![Item::Table(vec![
+            vec![(2, 1, vec![para("A"), para("B")])],
+            vec![(1, 1, vec![para("C")]), (1, 1, vec![vec![t("D", only(0))]])],
+        ])]],
+    ]
+}
+
+/// The meaning [`MEANING_MD`] states, section by section, holds right
+/// after the Markdown is decoded and again after it is converted to HWPX
+/// and that is decoded, its picture the file's bytes there:
+/// each end is compared with the hand-written expectation, not with the
+/// other, so a fault the reader and a writer share is still seen.
+/// 이것을 실패시키는 것: 디코더와 styled 인코더가 함께 칸 순서를 뒤집기 · 구역 표지
+/// 무시 · 자산 저장소에 다른 유효한 1픽셀 PNG 넣기(`image_data` 단언).
+#[test]
+fn markdown_meaning_survives_decode_and_hwpx() {
+    let dir = scratch("meaning");
+    std::fs::write(dir.join("p.png"), ONE_PIXEL_PNG).expect("write image");
+    let opts = ConvertMdOptions::default();
+
+    let decoded = decode_md(MEANING_MD, &opts).expect("decode");
+    assert_eq!(codes(&decoded.warnings), ["CONTENT_LOST", "CONTENT_LOST"]);
+    let registry = &decoded.style_registry;
+    let md_fmt = |id| {
+        let c = registry.char_shape(id).expect("char shape");
+        [
+            c.bold,
+            c.italic,
+            c.strikeout_shape != hwpforge::foundation::StrikeoutShape::None,
+            c.underline_type != hwpforge::foundation::UnderlineType::None,
+            c.vertical_position == hwpforge::foundation::VerticalPosition::Superscript,
+            c.vertical_position == hwpforge::foundation::VerticalPosition::Subscript,
+        ]
+    };
+    let sections = |doc: &[hwpforge::core::Section], fmt: &dyn Fn(_) -> Fmt| {
+        doc.iter().map(|s| meaning(&s.paragraphs, fmt)).collect::<Vec<_>>()
+    };
+    assert_eq!(sections(decoded.document.sections(), &md_fmt), expected_meaning());
+    // The picture is the file the Markdown names.
+    assert_eq!(pictures(&decoded.document.sections()[0].paragraphs), ["p.png"]);
+
+    let out = convert_md(MEANING_MD, Some(&dir), &opts).expect("convert");
+    let read = HwpxDecoder::decode(&out.bytes).expect("hwpx");
+    let store = &read.style_store;
+    let hwpx_fmt = |id| {
+        let c = store.char_shape(id).expect("char shape");
+        [
+            c.bold,
+            c.italic,
+            c.strikeout_shape != hwpforge::foundation::StrikeoutShape::None,
+            c.underline_type != hwpforge::foundation::UnderlineType::None,
+            c.vertical_position == hwpforge::foundation::VerticalPosition::Superscript,
+            c.vertical_position == hwpforge::foundation::VerticalPosition::Subscript,
+        ]
+    };
+    assert_eq!(sections(read.document.sections(), &hwpx_fmt), expected_meaning());
+    // The picture in the package is the file's bytes.
+    let keys = pictures(&read.document.sections()[0].paragraphs);
+    assert_eq!(keys.len(), 1);
+    let lookup = hwpforge::hwpx::HwpxStyleLookup::new(&read.style_store, &read.image_store);
+    let bytes = hwpforge::core::StyleLookup::image_data(&lookup, &keys[0]);
+    assert_eq!(bytes, Some(ONE_PIXEL_PNG), "{keys:?}");
+}
+
+/// The paths of the pictures in `paragraphs`, in order.
+fn pictures(paragraphs: &[hwpforge::core::Paragraph]) -> Vec<String> {
+    paragraphs
+        .iter()
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| match &r.content {
+            hwpforge::core::RunContent::Image(image) => Some(image.path.clone()),
+            _ => None,
+        })
+        .collect()
+}

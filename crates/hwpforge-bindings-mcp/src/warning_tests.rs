@@ -186,6 +186,21 @@ async fn wm_w_convert_reports_warning_objects_and_summarizes_messages() {
 }
 
 #[tokio::test]
+// 이것을 실패시키는 것: ops 가 `ContentLost` 를 `CONTENT_LOST` 로 매핑하지 않는 것.
+async fn wm_w_convert_reports_content_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let envelope = envelope(
+        "hwpforge_convert",
+        json!({"markdown": "a <!-- chart --> b\n", "is_file": false,
+               "output_path": out(&dir, "c.hwpx")}),
+    )
+    .await;
+    let warnings = envelope["data"]["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 1, "{envelope}");
+    assert_warning(&warnings[0], "CONTENT_LOST");
+}
+
+#[tokio::test]
 // 이것을 실패시키는 것: `FromJsonData::warnings` 를 `Vec<String>` 으로 되돌리는 것.
 // 이것을 실패시키는 것: 입력 layout cache 제거 (실제 음성 대조 실행).
 async fn wm_w_from_json_reports_warning_objects() {
