@@ -568,7 +568,11 @@ impl Html {
         if rowspan > 1 {
             let _ = write!(attrs, " rowspan=\"{rowspan}\"");
         }
-        Self(format!("  <td{attrs}>{}</td>", inner.0.trim()))
+        // Layout whitespace only (ASCII, as the decoder reads it): a
+        // no-break space at the cell's edge is text.
+        // 이것을 실패시키는 것: `trim()` 으로 되돌리기(`html_cell_text_keeps_its_spaces`).
+        let inner = inner.0.trim_matches([' ', '\t', '\n', '\r']);
+        Self(format!("  <td{attrs}>{inner}</td>"))
     }
 
     /// Appends HTML.

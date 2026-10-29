@@ -475,6 +475,12 @@ impl TableBuilder {
     }
 }
 
+/// Whitespace HTML layout may hold between tags and at a block's edges:
+/// ASCII space, tab and line ends. Any other whitespace is content.
+fn layout(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
+}
+
 /// The columns a table's widths are shared over: a GFM table's are its
 /// widest row (`gfm_cols`, every span 1), however large; an HTML table's
 /// are its placed grid's, placed only when the area its spans cover is
@@ -492,6 +498,12 @@ fn table_columns(table: &Table, gfm_cols: Option<usize>) -> Option<u32> {
 /// 전개된 각주/미주 본문의 총량 상한 (다중 참조 복제 증폭 방어).
 const MAX_EXPANDED_NOTE_BYTES: usize = 8 * 1024 * 1024;
 
+/// What one copied paragraph or run counts against
+/// [`MAX_EXPANDED_NOTE_BYTES`], about the bytes it takes: a body of many
+/// empty paragraphs copied per reference costs its structure, not only its
+/// text.
+const NOTE_STRUCTURE_COST: usize = 64;
+
 /// 각주/미주 정의의 해석 상태 (소비하지 않고 참조 수만 센다).
 #[derive(Debug)]
 struct NoteDefinition {
@@ -501,6 +513,9 @@ struct NoteDefinition {
     paragraphs: Vec<Paragraph>,
     /// resolve 에서 이 정의를 참조한 횟수. 0 이면 고아 (에러).
     reference_count: u32,
+    /// What one copy of the body costs against the expansion budget: its
+    /// text bytes and [`NOTE_STRUCTURE_COST`] per paragraph and run.
+    cost: usize,
 }
 
 /// 정의 수집 모드 — 본문 빌더와 **격리**된 캡처.
@@ -518,6 +533,10 @@ struct DefinitionCapture {
     current: Option<ParagraphBuilder>,
     /// 본문 문단 스타일 (builtin "각주"/"미주" — 없으면 body 폴백).
     style: MdStyleRef,
+    /// A chart or memo comment in the body was left out
+    /// ([`MdWarning::ContentLost`]): an empty body is then what is left,
+    /// not a definition written empty.
+    left_out: bool,
 }
 
 #[derive(Debug)]
@@ -654,8 +673,8 @@ impl<'a> DecoderState<'a> {
     /// 걷고 `Table` run 을 만나면 그 자리에서 셀 문단을 재귀한다. 기존
     /// `walk_paragraphs_mut` 는 문단을 먼저 방문(`f(self)` 후 run 재귀)해
     /// `[표, 컨트롤]` 순서 문단에서 소스 순서와 어긋날 수 있어 쓰지 않는다.
-    /// 이 보장의 계약 범위는 MD 디코더가 생성 가능한 형상(본문 문단 +
-    /// 비병합 GFM 표 셀)뿐이다.
+    /// 이 보장의 계약 범위는 MD 디코더가 생성 가능한 형상이다: 본문 문단,
+    /// GFM 표 셀, HTML 표 셀(병합 칸 포함)과 칸 안에 중첩된 HTML 표의 셀.
     fn resolve_notes(&mut self) -> MdResult<()> {
         let mut queue = std::mem::take(&mut self.pending_notes).into_iter();
         let mut expanded_bytes = 0usize;
@@ -697,11 +716,7 @@ impl<'a> DecoderState<'a> {
                                 });
                             };
                             def.reference_count += 1;
-                            *expanded_bytes += def
-                                .paragraphs
-                                .iter()
-                                .map(|p| p.text_content().len())
-                                .sum::<usize>();
+                            *expanded_bytes = expanded_bytes.saturating_add(def.cost);
                             if *expanded_bytes > MAX_EXPANDED_NOTE_BYTES {
                                 return Err(MdError::NoteExpansionBudgetExceeded {
                                     budget: MAX_EXPANDED_NOTE_BYTES,
@@ -911,12 +926,12 @@ impl<'a> DecoderState<'a> {
     /// (`html_*` 시험들).
     fn read_html(&mut self, html: &str) -> MdResult<()> {
         let raw_html = || unsupported_markdown_feature("raw HTML");
-        let tokens = guard::tokens(html.trim_end()).ok_or_else(raw_html)?;
+        let tokens = guard::tokens(html.trim_end_matches(layout)).ok_or_else(raw_html)?;
         let in_note = self.definition_capture.is_some();
         let tables = self.tables.len();
         // Where the last content is: whitespace after it is left out.
         let last = tokens.iter().rposition(|t| match t {
-            guard::Token::Text(raw) => !raw.trim().is_empty(),
+            guard::Token::Text(raw) => !raw.trim_matches(layout).is_empty(),
             guard::Token::Open { name, .. } => matches!(*name, "br" | "img"),
             _ => false,
         });
@@ -930,10 +945,12 @@ impl<'a> DecoderState<'a> {
             );
             let tag = !matches!(token, guard::Token::Text(_) | guard::Token::Comment(_));
             if structure {
-                // A cell is a paragraph of its own: whitespace at its edges
-                // is layout, as at a block's.
-                // 이것을 실패시키는 것: 칸 경계 공백을 칸 글로 넣기
-                // (`html_cell_text_keeps_its_spaces`).
+                // A table starts and ends a paragraph: whitespace held back
+                // before it does not go into its first cell, and text after
+                // it in the same block leaves out its leading layout
+                // whitespace.
+                // 이것을 실패시키는 것: 보류 공백 지우기 삭제 · 되돌리기 삭제
+                // (`html_block_text_keeps_its_spaces`).
                 space.clear();
                 started = false;
             } else if tag && last.is_some_and(|last| i <= last) {
@@ -959,7 +976,7 @@ impl<'a> DecoderState<'a> {
                     continue;
                 }
                 guard::Token::Text(raw) if outside_cells => {
-                    if !raw.trim().is_empty() {
+                    if !raw.trim_matches(layout).is_empty() {
                         return Err(raw_html());
                     }
                     continue;
@@ -969,18 +986,32 @@ impl<'a> DecoderState<'a> {
             }
             match token {
                 guard::Token::Text(raw) => {
-                    // A raw line end is a soft break: it and the spaces
-                    // around it fold into one space.
+                    // What is layout and what is content, in one place: a
+                    // raw line end is a soft break, folded with the layout
+                    // whitespace around it into one space. A cell's text is
+                    // content as written, its edges too: the encoder writes
+                    // a cell's text right after `<td>` and up to `</td>`.
+                    // A block's text is a paragraph's: layout whitespace
+                    // before its first content and after its last is left
+                    // out, whitespace between content kept. Layout
+                    // whitespace is ASCII (space, tab, line ends): a no-break
+                    // space or a `&#10;` is content.
+                    // 이것을 실패시키는 것: 칸 글의 가장자리 공백 버리기 · 유니코드 공백을 레이아웃으로
+                    // (`html_cell_text_keeps_its_spaces`, `html_block_text_keeps_its_spaces`).
                     let mut text = String::new();
                     for (n, line) in raw.split('\n').enumerate() {
                         if n > 0 {
-                            text.truncate(text.trim_end().len());
+                            text.truncate(text.trim_end_matches(layout).len());
                             text.push(' ');
                         }
-                        text.push_str(if n > 0 { line.trim_start() } else { line });
+                        text.push_str(if n > 0 { line.trim_start_matches(layout) } else { line });
                     }
-                    // Whitespace is raw whitespace: a `&#10;` is content.
-                    let core = text.trim();
+                    if at == Some(HtmlTableAt::Cell) {
+                        self.push_cell_text(&text)?;
+                        started = true;
+                        continue;
+                    }
+                    let core = text.trim_matches(layout);
                     if core.is_empty() {
                         if started {
                             space.push_str(&text);
@@ -988,15 +1019,11 @@ impl<'a> DecoderState<'a> {
                         continue;
                     }
                     if started {
-                        space.push_str(&text[..text.len() - text.trim_start().len()]);
+                        space.push_str(&text[..text.len() - text.trim_start_matches(layout).len()]);
                     }
                     self.push_html_text(&std::mem::take(&mut space))?;
-                    if at == Some(HtmlTableAt::Cell) {
-                        self.push_cell_text(core)?;
-                    } else {
-                        self.push_html_text(&guard::unescape(core))?;
-                    }
-                    space.push_str(&text[text.trim_end().len()..]);
+                    self.push_html_text(&guard::unescape(core))?;
+                    space.push_str(&text[text.trim_end_matches(layout).len()..]);
                     started = true;
                 }
                 guard::Token::Comment(guard::Comment::Section) => {
@@ -1005,11 +1032,12 @@ impl<'a> DecoderState<'a> {
                     }
                     self.push_section_marker();
                 }
-                guard::Token::Comment(guard::Comment::Chart) => {
-                    self.warnings.push(MdWarning::ContentLost { kind: "chart" });
-                }
-                guard::Token::Comment(guard::Comment::Memo) => {
-                    self.warnings.push(MdWarning::ContentLost { kind: "memo" });
+                guard::Token::Comment(kind @ (guard::Comment::Chart | guard::Comment::Memo)) => {
+                    let kind = if kind == guard::Comment::Chart { "chart" } else { "memo" };
+                    self.warnings.push(MdWarning::ContentLost { kind });
+                    if let Some(capture) = self.definition_capture.as_mut() {
+                        capture.left_out = true;
+                    }
                 }
                 guard::Token::Open { name: "br", .. } => {
                     match self.tables.last_mut() {
@@ -1265,6 +1293,7 @@ impl<'a> DecoderState<'a> {
             paragraphs: Vec::new(),
             current: None,
             style,
+            left_out: false,
         });
         Ok(())
     }
@@ -1349,9 +1378,23 @@ impl<'a> DecoderState<'a> {
             capture.paragraphs.push(builder.build());
         }
         let has_content = capture.paragraphs.iter().any(|p| !p.text_content().trim().is_empty());
-        if !has_content {
+        // A body with no text left after leaving out a chart or memo is kept
+        // as it is (the paragraphs it has, empty ones too; one empty
+        // paragraph if it has none): the note stays, its loss reported. A
+        // body written empty is still an error.
+        // 이것을 실패시키는 것: 생략으로 빈 본문도 오류로 · 빈 문단 없이 보존
+        // (`comment_only_notes_read_back`).
+        if !has_content && !capture.left_out {
             return Err(MdError::EmptyNoteDefinition { label: capture.label });
         }
+        if capture.paragraphs.is_empty() {
+            capture.paragraphs.push(ParagraphBuilder::new(capture.style).build());
+        }
+        // 이것을 실패시키는 것: 글 바이트만 세기(`empty_note_paragraphs_count_against_the_budget`).
+        let cost = capture.paragraphs.iter().fold(0usize, |cost, p| {
+            cost.saturating_add(p.text_content().len())
+                .saturating_add(NOTE_STRUCTURE_COST.saturating_mul(1 + p.runs.len()))
+        });
         let canonical = UniCase::new(capture.label.clone());
         self.note_definitions.insert(
             canonical,
@@ -1359,6 +1402,7 @@ impl<'a> DecoderState<'a> {
                 label: capture.label,
                 paragraphs: capture.paragraphs,
                 reference_count: 0,
+                cost,
             },
         );
         Ok(())
@@ -2636,6 +2680,7 @@ mod tests {
     /// two formats, before a tag) and a line end written `&#10;`; the
     /// block's own line end and the spaces around it are layout.
     /// 이것을 실패시키는 것: 내용 사이 공백 버리기 · 글 끝·글 앞 공백 자르기 ·
+    /// 유니코드 공백(no-break space)을 레이아웃으로 · 표 뒤 글의 앞 공백 넣기 ·
     /// `&#10;` 를 줄 끝으로 읽기 · 마지막 내용 뒤 공백 넣기 · 그림 앞 공백 버리기.
     #[test]
     fn html_block_text_keeps_its_spaces() {
@@ -2643,11 +2688,24 @@ mod tests {
             ("<!-- chart --><strong>hello</strong> <em>world</em>\n", "hello world"),
             ("<!-- chart -->hello <em>world</em>", "hello world"),
             ("<!-- chart --><em>hello</em> world", "hello world"),
+            ("<!-- chart -->a\u{a0}\n", "a\u{a0}"),
             ("<u>\n  a&#10;b\n  c <em>d</em>&#10;\n</u>\n", "a\nb c d\n"),
         ] {
             let md = MdDecoder::decode_with_default(markdown).unwrap();
             assert_eq!(texts(&md), [text], "{markdown}");
         }
+        // Text before a table keeps its trailing space out of the first
+        // cell; text after it is a paragraph of its own.
+        let md = MdDecoder::decode_with_default(
+            "<!-- chart -->a <table><tbody><tr><td><strong>b</strong></td></tr></tbody></table>",
+        )
+        .unwrap();
+        assert_eq!(cell_texts(&md), [[["b".to_string()]]]);
+        let md = MdDecoder::decode_with_default(
+            "<table>\n<tbody>\n<tr>\n  <td>c</td>\n</tr>\n</tbody>\n</table>\nx",
+        )
+        .unwrap();
+        assert_eq!(texts(&md).last().map(String::as_str), Some("x"));
         // A picture is content: the space before it stays.
         let md = MdDecoder::decode_with_default("<!-- chart -->a <img src=\"p.png\" alt=\"\"/>")
             .unwrap();
@@ -3376,6 +3434,21 @@ mod tests {
         let refs: String = (0..20).map(|_| "x[^1] ").collect();
         let md = format!("{refs}\n\n[^1]: {big}\n");
         let err = MdDecoder::decode(&md, &template).unwrap_err();
+        assert!(matches!(&err, MdError::NoteExpansionBudgetExceeded { .. }), "got: {err:?}");
+    }
+
+    /// A body of many empty paragraphs (kept because a chart comment was
+    /// left out) copied per reference costs its paragraphs and runs: 200
+    /// such paragraphs referenced 1,000 times pass the budget, though their
+    /// text is empty. The same body referenced once is read.
+    /// 이것을 실패시키는 것: 글 바이트만 세기.
+    #[test]
+    fn empty_note_paragraphs_count_against_the_budget() {
+        let body = "\n\n    **<u></u>**".repeat(200);
+        let note =
+            |refs: usize| format!("{}\n\n[^1]: <!-- chart -->{body}\n", "x[^1]".repeat(refs));
+        assert!(MdDecoder::decode_with_default(&note(1)).is_ok());
+        let err = MdDecoder::decode_with_default(&note(1_000)).unwrap_err();
         assert!(matches!(&err, MdError::NoteExpansionBudgetExceeded { .. }), "got: {err:?}");
     }
 }

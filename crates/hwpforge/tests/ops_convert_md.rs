@@ -631,7 +631,8 @@ fn expected_meaning() -> Vec<Vec<Vec<Item>>> {
         ]],
         vec![vec![Item::Table(vec![
             vec![(2, 1, vec![para("A"), para("B")])],
-            vec![(1, 1, vec![para("C")]), (1, 1, vec![vec![t("D", only(0))]])],
+            // A cell's text is as written: the space before the memo stays.
+            vec![(1, 1, vec![para("C")]), (1, 1, vec![vec![t("D", only(0)), t(" ", plain)]])],
         ])]],
     ]
 }

@@ -2522,10 +2522,13 @@ fn read_back_cell(markdown: &str) -> (crate::MdDocument, hwpforge_core::TableCel
     (md, cell)
 }
 
-/// A merged (HTML) cell's text keeps the spaces between its pieces through
-/// styled and back: before a format, before a link, around a comment.
+/// A merged (HTML) cell's text keeps its spaces through styled and back,
+/// as the document has them: between its pieces (before a format, before
+/// a link, around a comment), at its edges (a space before a closing
+/// comment, a space at the start of bold text) and a no-break space.
 /// 이것을 실패시키는 것: 칸 글을 토큰마다 끝 공백을 자르는 별도 경로로 ·
-/// 칸 경계에서 보류 공백 지우기 삭제.
+/// 칸 경계에서 보류 공백 지우기 삭제 · 칸 글의 가장자리 공백 버리기 ·
+/// 유니코드 공백을 레이아웃으로.
 #[test]
 fn html_cell_text_keeps_its_spaces() {
     use hwpforge_core::{Control, RunContent};
@@ -2555,8 +2558,7 @@ fn html_cell_text_keeps_its_spaces() {
         })
         .collect();
     assert_eq!(runs.concat(), "hello world see <x> a  b", "{markdown}");
-    // Whitespace at a cell's end is the cell's edge: it does not move into
-    // the next cell.
+    // A space at a cell's end stays in that cell, not the next.
     use hwpforge_core::{Table, TableCell, TableRow};
     let mut second = TableCell::new(vec![body(vec![t("b")])], u(1000));
     second.col_span = 2;
@@ -2569,7 +2571,17 @@ fn html_cell_text_keeps_its_spaces() {
     };
     let texts: Vec<String> =
         read.rows[0].cells.iter().map(|c| c.paragraphs[0].text_content()).collect();
-    assert_eq!(texts, ["a", "b"], "{markdown}");
+    assert_eq!(texts, ["a ", "b"], "{markdown}");
+    // A space at the start of bold text, a no-break space at the end.
+    let cell = body(vec![styled_t(" hello", BOLD), t("world\u{a0}")]);
+    let (markdown, _) = styled(&doc(vec![body(vec![table(merged(cell))])]));
+    let (_, cell) = read_back_cell(&markdown);
+    let runs: Vec<String> = cell.paragraphs[0]
+        .runs
+        .iter()
+        .filter_map(|r| r.content.plain_text().map(|t| t.to_string()))
+        .collect();
+    assert_eq!(runs, [" hello", "world\u{a0}"], "{markdown}");
 }
 
 /// A footnote and an endnote in a merged (HTML) cell read back as notes
@@ -2601,31 +2613,33 @@ fn html_cell_notes_read_back() {
     }
 }
 
-/// Whether `run` grows linearly with its size: the median of three runs
-/// at `n` and at `4 * n`, compared. Linear work grows about 4 times,
-/// quadratic about 16; the ratio must stay under 8. A ratio holds under a
-/// slower build (coverage instrumentation, a loaded machine) where a fixed
-/// time bound would not; a run that returns after `SAFETY` fails before the
-/// remaining runs start (it does not cut a run short; the test runner's
-/// timeout does that).
+/// Whether `run` grows linearly with its size: three runs at `n` and three
+/// at `4 * n`, taken in turn (`n`, `4n`, `n`, …) so a slowdown partway
+/// through falls on both sizes, their medians compared. Linear work grows
+/// about 4 times, quadratic about 16; the ratio must stay under 8. A ratio
+/// holds under a slower build (coverage instrumentation, a loaded machine)
+/// where a fixed time bound would not. Each run's time is checked against
+/// `SAFETY` after it returns, and a run past it fails the test without
+/// taking the remaining measurements; stopping a run still going is the
+/// test runner's timeout.
 fn grows_linearly(n: usize, run: impl Fn(usize)) -> bool {
     const SAFETY: std::time::Duration = std::time::Duration::from_secs(20);
-    let median = |size: usize| {
-        let mut times: Vec<std::time::Duration> = (0..3)
-            .map(|_| {
-                let started = std::time::Instant::now();
-                run(size);
-                let elapsed = started.elapsed();
-                assert!(elapsed < SAFETY, "{size}: {elapsed:?}");
-                elapsed
-            })
-            .collect();
-        times.sort();
-        times[1]
+    let time = |size: usize| {
+        let started = std::time::Instant::now();
+        run(size);
+        let elapsed = started.elapsed();
+        assert!(elapsed < SAFETY, "{size}: {elapsed:?}");
+        elapsed
     };
-    let (small, large) = (median(n), median(4 * n));
+    let (mut small, mut large) = (Vec::new(), Vec::new());
+    for _ in 0..3 {
+        small.push(time(n));
+        large.push(time(4 * n));
+    }
+    small.sort();
+    large.sort();
     // Under a millisecond, timer noise is not growth.
-    large.as_secs_f64() < 8.0 * small.as_secs_f64().max(1e-3)
+    large[1].as_secs_f64() < 8.0 * small[1].as_secs_f64().max(1e-3)
 }
 
 /// Many unfinished note references in an HTML cell are read in linear
@@ -2660,4 +2674,43 @@ fn attribute_scan_is_linear() {
         // A repeated attribute fails, after every attribute is parsed.
         assert!(super::guard::tokens(&tag(n)).is_none());
     }));
+}
+
+/// A footnote whose body is only a chart and an endnote whose body is only
+/// a memo: styled writes each definition as its comment alone; read back,
+/// the note stays with one empty paragraph and the comment is reported.
+/// A definition written empty is still an error.
+/// 이것을 실패시키는 것: 생략으로 빈 본문도 오류로 · 빈 문단 없이 보존.
+#[test]
+fn comment_only_notes_read_back() {
+    use hwpforge_core::{Control, RunContent};
+    let note_body = |run| vec![body(vec![run])];
+    let document = doc(vec![body(vec![
+        t("x"),
+        ctrl(Control::footnote(note_body(chart()))),
+        ctrl(Control::endnote(note_body(memo(vec![body(vec![t("m")])])))),
+    ])]);
+    let (markdown, fallbacks) = styled(&document);
+    assert_eq!(fallbacks, 0, "{markdown}");
+    let md = crate::MdDecoder::decode_with_default(&markdown).expect(&markdown);
+    assert_eq!(
+        md.warnings,
+        vec![MdWarning::ContentLost { kind: "chart" }, MdWarning::ContentLost { kind: "memo" }],
+        "{markdown}"
+    );
+    let notes: Vec<Vec<String>> = md.document.sections()[0].paragraphs[0]
+        .runs
+        .iter()
+        .filter_map(|r| match &r.content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+                    Some(paragraphs.iter().map(|p| p.text_content()).collect())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes, [vec![String::new()], vec![String::new()]], "{markdown}");
+    assert!(crate::MdDecoder::decode_with_default("x[^1]\n\n[^1]: <u></u>").is_err());
 }
