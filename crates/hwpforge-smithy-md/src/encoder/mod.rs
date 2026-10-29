@@ -1,12 +1,14 @@
 //! Core -> Markdown encoders.
 
-mod guard;
+pub(crate) mod guard;
 #[cfg(test)]
 mod guarded_tests;
 mod list_format;
 mod lossless;
 mod lossy;
 mod markup;
+#[cfg(test)]
+mod markup_safety_tests;
 mod styled;
 
 use hwpforge_blueprint::template::Template;

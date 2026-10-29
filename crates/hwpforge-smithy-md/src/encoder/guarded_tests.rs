@@ -401,14 +401,16 @@ mod cases {
 
 /// The base commit's output for each of [`cases::base_cases`]: (name,
 /// styled, lossy). Written as the harness fixture is (see
-/// `base_digests` in `tests/markup_safety.rs`): the `cases` module, copied
+/// `base_digests` in `markup_safety_tests.rs`): the `cases` module, copied
 /// between its markers into `src/cases.rs` of the same scratch crate, with
 /// a `main` that prints
 /// `println!("    ({name:?}, {styled:?}, {lossy:?}),")` for each case
 /// (`MdEncoder::encode_styled(&doc, &cases::Styles).markdown`,
 /// `MdEncoder::encode_lossy(&doc).unwrap()`).
 const BASE: &[(&str, &str, &str)] = &[
-    // Written by the base commit (496371cf) from `cases::base_cases`.
+    // Written by the base commit (496371cf) from `cases::base_cases`;
+    // `g3_memo` and `g10_memo_body` follow the one-line memo comment of
+    // #281 (every `-` in its body escaped).
     ("g0_auto", "- 항목처럼 보이는 글\n\n1. 번호처럼 보이는 글\n\n: 정의처럼 보이는 글\n\na | b\n\n--- | ---\n\n들여쓴 글", "항목처럼 보이는 글\n\n번호처럼 보이는 글\n\n: 정의처럼 보이는 글\n\na | b\n\n--- | ---\n\n    들여쓴 글"),
     ("g2_heading_split", "# 1. x", "1. x"),
     ("g2_continuation_after_empty_item", "a\n\n    b", "a\n\nb"),
@@ -426,7 +428,7 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g3_list_table_then_text", "- a\n<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">c</td>\n</tr>\n</tbody>\n</table>\n- x", "a\n\n| c |\n| --- |\n\n\n- x"),
     ("g3_one_table_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |\n\n\n\n- x"),
     ("g3_note_lines", "z[^1]\n\n[^1]: \\- x\n\\1. y", "z(footnote: - x\n1. y)"),
-    ("g3_memo", "z<!-- memo: - x -->", "z"),
+    ("g3_memo", "z<!-- memo: \\- x -->", "z"),
     ("g5_item", "- &amp;", "\\&amp;"),
     ("g5_note", "z[^1]\n\n[^1]: &amp;", "z(footnote: \\&amp;)"),
     ("g5_caption", "| c |\n| --- |\n\n&amp;", "| c |\n| --- |\n\n\n\n\\&amp;"),
@@ -437,7 +439,7 @@ const BASE: &[(&str, &str, &str)] = &[
     ("g10_item", "- - x", ""),
     ("g10_continuation", "- a\n\n  - x", "a"),
     ("g10_note", "z[^1]\n\n[^1]: \\- x", "z(footnote: )"),
-    ("g10_memo_body", "z<!-- memo: - x -->", "z"),
+    ("g10_memo_body", "z<!-- memo: \\- x -->", "z"),
     ("g10_caption", "| c |\n| --- |\n\n- x", "| c |\n| --- |"),
     ("g10_image_caption", "![p](images/p.png)\n\n- x", "![p](BinData/p.png)"),
     // written by fa04fabf; continuations are drawn as at
@@ -1051,14 +1053,14 @@ fn memo_anchor_out_of_scope_is_base_output() {
 /// A memo at a paragraph's start, as saved by Hancom:
 /// its comment stays, the text after it reads as written, and the memo's
 /// body does not mix into the text. Also with the memo body over two
-/// lines.
+/// lines, folded into one comment line.
 /// 이것을 실패시키는 것: 줄머리 주석의 줄 끝내기 삭제 · 뒤 글의 앞 공백 남기기.
 #[test]
 fn line_start_memo_keeps_comment_and_text() {
     use hwpforge_core::control::Control;
     for (memo_body, comment) in [
         ("쇠부리야 여기가 메모야", "<!-- memo: 쇠부리야 여기가 메모야 -->"),
-        ("첫 줄\n둘째 줄", "<!-- memo: 첫 줄\n둘째 줄 -->"),
+        ("첫 줄\n둘째 줄", "<!-- memo: 첫 줄 둘째 줄 -->"),
     ] {
         let memo = ctrl(Control::memo_with_anchor(
             vec![body(vec![t(memo_body)])],

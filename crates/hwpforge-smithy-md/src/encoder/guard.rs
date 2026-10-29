@@ -14,7 +14,8 @@ use pulldown_cmark::{Event, Options, Parser, Tag};
 
 /// What a view may write besides text.
 pub(crate) struct Allowed<'a> {
-    /// HTML tag names (lower case); comments are always allowed.
+    /// HTML tag names, from [`STYLED_TAGS`] or [`LOSSY_TAGS`]; the
+    /// attributes are [`ATTRIBUTES`], the comments [`Comment`].
     pub(crate) tags: &'static [&'static str],
     /// Link and image destinations the encoder wrote (`a href`, `img src`).
     pub(crate) destinations: &'a HashSet<String>,
@@ -31,6 +32,133 @@ pub(crate) const STYLED_TAGS: &[&str] =
 
 /// The tags the lossy view writes.
 pub(crate) const LOSSY_TAGS: &[&str] = &["br"];
+
+/// The tags written without a closing tag: `<br>`, `<img …/>`.
+const VOID_TAGS: &[&str] = &["br", "img"];
+
+/// The attributes each tag may carry; a tag not listed carries none.
+pub(crate) const ATTRIBUTES: &[(&str, &[&str])] =
+    &[("td", &["colspan", "rowspan"]), ("a", &["href"]), ("img", &["src", "alt"])];
+
+/// The comment between sections, in both views.
+pub(crate) const SECTION_MARKER: &str = "<!-- hwpforge:section -->";
+
+/// The comment styled writes for a chart.
+pub(crate) const CHART_COMMENT: &str = "<!-- chart -->";
+
+/// A memo comment is its body between these, on one line; the body
+/// escapes every `-`, so it holds no `--`.
+pub(crate) const MEMO_OPEN: &str = "<!-- memo: ";
+/// See [`MEMO_OPEN`].
+pub(crate) const MEMO_CLOSE: &str = " -->";
+
+/// The comments the encoder writes; any other comment is foreign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Comment {
+    /// [`SECTION_MARKER`].
+    Section,
+    /// [`CHART_COMMENT`].
+    Chart,
+    /// [`MEMO_OPEN`] … [`MEMO_CLOSE`].
+    Memo,
+}
+
+/// Which of the encoder's comments `comment` is: the whole comment, from
+/// `<!--` to `-->`, exactly as written.
+/// 이것을 실패시키는 것: 정확 비교를 접두 비교로 · memo 닫기 앞 공백 검사 삭제 ·
+/// 빈 본문 허용 · 본문 안 `--` 허용(`comment_kinds_are_exactly_what_the_encoder_writes`).
+pub(crate) fn comment_kind(comment: &str) -> Option<Comment> {
+    match comment {
+        SECTION_MARKER => Some(Comment::Section),
+        CHART_COMMENT => Some(Comment::Chart),
+        _ => comment
+            .strip_prefix(MEMO_OPEN)
+            .and_then(|rest| rest.strip_suffix(MEMO_CLOSE))
+            .filter(|body| !body.is_empty() && !body.contains("--"))
+            .map(|_| Comment::Memo),
+    }
+}
+
+/// One piece of an HTML fragment in the encoder's schema.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Token<'a> {
+    /// Text between tags, its entities decoded once.
+    Text(String),
+    /// An opening tag, or a void one ([`VOID_TAGS`]: `<br>`, `<img …/>`),
+    /// with its attributes in order, their values decoded once.
+    Open {
+        /// The tag name.
+        name: &'a str,
+        /// `(name, value)` pairs.
+        attributes: Vec<(&'a str, String)>,
+    },
+    /// A closing tag.
+    Close(&'a str),
+    /// One of the encoder's comments.
+    Comment(Comment),
+}
+
+/// `html` as tokens when everything in it is written as the encoder writes
+/// it: a tag of [`STYLED_TAGS`] or [`LOSSY_TAGS`] in lower case, its
+/// attributes from [`ATTRIBUTES`] each once and double-quoted, a closing
+/// tag bare, `<br>` and `<img …/>` with no closing tag, comments of
+/// [`Comment`]. `None` (unsupported HTML) for anything else. Whether tags
+/// nest or close in order is the caller's.
+/// 이것을 실패시키는 것: 각 거부 조건 하나씩 삭제(`scanner_takes_only_the_schema`).
+pub(crate) fn tokens(html: &str) -> Option<Vec<Token<'_>>> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while !rest.is_empty() {
+        let start = rest.find('<').unwrap_or(rest.len());
+        if start > 0 {
+            out.push(Token::Text(unescape(&rest[..start])));
+        }
+        rest = &rest[start..];
+        if rest.is_empty() {
+            break;
+        }
+        if rest.starts_with("<!--") {
+            let end = rest[4..].find("-->")? + 7;
+            out.push(Token::Comment(comment_kind(&rest[..end])?));
+            rest = &rest[end..];
+            continue;
+        }
+        let end = tag_end(rest)?;
+        let inner = &rest[1..end];
+        rest = &rest[end + 1..];
+        out.push(tag(inner)?);
+    }
+    Some(out)
+}
+
+/// A tag's inside (between `<` and `>`) as a token, if in the schema.
+fn tag(inner: &str) -> Option<Token<'_>> {
+    let known = |name: &str| STYLED_TAGS.contains(&name) || LOSSY_TAGS.contains(&name);
+    if let Some(name) = inner.strip_prefix('/') {
+        return (known(name) && !VOID_TAGS.contains(&name)).then_some(Token::Close(name));
+    }
+    let name_end = inner.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(inner.len());
+    let name = &inner[..name_end];
+    if !known(name) {
+        return None;
+    }
+    let mut rest = &inner[name_end..];
+    // `/>` closes `img` and nothing else, as the encoder writes it.
+    match rest.strip_suffix('/') {
+        Some(open) if name == "img" => rest = open,
+        None if name != "img" => {}
+        _ => return None,
+    }
+    let names = ATTRIBUTES.iter().find(|(tag, _)| *tag == name).map_or(&[][..], |(_, a)| a);
+    let mut attributes: Vec<(&str, String)> = Vec::new();
+    for (attr, value) in self::attributes(rest)? {
+        if !names.contains(&attr) || attributes.iter().any(|(seen, _)| *seen == attr) {
+            return None;
+        }
+        attributes.push((attr, unescape(value)));
+    }
+    Some(Token::Open { name, attributes })
+}
 
 /// Whether `markdown` holds markup the encoder does not write.
 /// 이것을 실패시키는 것: 갈래 하나씩 삭제(`guard_finds_what_the_encoder_does_not_write`).
@@ -75,41 +203,23 @@ pub(crate) fn foreign_markup(markdown: &str, allowed: &Allowed<'_>) -> bool {
     !html.is_empty() && foreign_html(&html, allowed)
 }
 
-/// Whether an HTML fragment holds a tag or attribute the encoder does not
-/// write. Comments are skipped whole.
+/// Whether an HTML fragment holds what the encoder does not write: outside
+/// the schema ([`tokens`]), a tag this view does not write, a span that is
+/// not digits, or a destination the encoder did not write.
 fn foreign_html(html: &str, allowed: &Allowed<'_>) -> bool {
-    let mut rest = html;
-    while let Some(start) = rest.find('<') {
-        rest = &rest[start..];
-        if let Some(body) = rest.strip_prefix("<!--") {
-            match body.find("-->") {
-                Some(end) => rest = &body[end + 3..],
-                None => return true,
-            }
-            continue;
+    let Some(tokens) = tokens(html) else { return true };
+    tokens.iter().any(|token| match token {
+        Token::Open { name, attributes } => {
+            !allowed.tags.contains(name)
+                || attributes.iter().any(|(attr, value)| match (*name, *attr) {
+                    ("td", _) => !value.chars().all(|c| c.is_ascii_digit()),
+                    ("a", _) | ("img", "src") => !allowed.destinations.contains(value),
+                    _ => false,
+                })
         }
-        let Some(end) = tag_end(rest) else { return true };
-        let tag = rest[1..end].trim_start_matches('/').trim_end_matches('/');
-        rest = &rest[end + 1..];
-        let name: String = tag.chars().take_while(char::is_ascii_alphanumeric).collect();
-        if !allowed.tags.contains(&name.to_ascii_lowercase().as_str()) {
-            return true;
-        }
-        let Some(attrs) = attributes(&tag[name.len()..]) else { return true };
-        for (attr, value) in attrs {
-            let value = unescape_attr(&value);
-            let ok = match (name.as_str(), attr.as_str()) {
-                ("td", "colspan" | "rowspan") => value.chars().all(|c| c.is_ascii_digit()),
-                ("a", "href") | ("img", "src") => allowed.destinations.contains(&value),
-                ("img", "alt") => true,
-                _ => false,
-            };
-            if !ok {
-                return true;
-            }
-        }
-    }
-    false
+        Token::Close(name) => !allowed.tags.contains(name),
+        Token::Text(_) | Token::Comment(_) => false,
+    })
 }
 
 /// A tag ends only outside quoted attribute values.
@@ -127,7 +237,7 @@ fn tag_end(s: &str) -> Option<usize> {
 }
 
 /// `name="value"` pairs; malformed or unquoted values fail the entire tag.
-fn attributes(s: &str) -> Option<Vec<(String, String)>> {
+fn attributes(s: &str) -> Option<Vec<(&str, &str)>> {
     let mut out = Vec::new();
     let mut rest = s;
     while !rest.trim().is_empty() {
@@ -142,14 +252,16 @@ fn attributes(s: &str) -> Option<Vec<(String, String)>> {
         }
         let after = rest[eq + 1..].trim_start().strip_prefix('"')?;
         let close = after.find('"')?;
-        out.push((name.to_string(), after[..close].to_string()));
+        out.push((name, &after[..close]));
         rest = &after[close + 1..];
     }
     Some(out)
 }
 
-/// An attribute value as the encoder escaped it, decoded.
-fn unescape_attr(s: &str) -> String {
+/// HTML text or an attribute value as the encoder escaped it, decoded
+/// once: `&amp;` last, so `&amp;lt;` gives `&lt;`. Other references stay
+/// as written.
+pub(crate) fn unescape(s: &str) -> String {
     s.replace("&#10;", "\n")
         .replace("&#13;", "\r")
         .replace("&lt;", "<")
@@ -672,7 +784,7 @@ mod tests {
         }
         assert!(foreign_html("<img alt=\"unfinished>", &allowed));
         assert!(foreign_html("<img alt=\"x\"src=\"x\">", &allowed));
-        assert!(!foreign_markup("<img alt=\">\">", &allowed));
+        assert!(!foreign_markup("<img alt=\">\"/>", &allowed));
     }
 
     /// A deep subtree is not visited, including when collection starts
@@ -763,6 +875,83 @@ mod tests {
         let lossy = Allowed { tags: LOSSY_TAGS, destinations: &dests, decoder_structure: false };
         assert!(foreign_markup("<strong>b</strong>", &lossy));
         assert!(!foreign_markup("a<br>b <!-- hwpforge:section -->", &lossy));
+    }
+
+    /// Only the encoder's own comments pass the guard, inline or as a block.
+    /// 이것을 실패시키는 것: 분류되지 않은 주석도 통과시키기(`unwrap_or(Comment::Memo)`).
+    #[test]
+    fn guard_passes_only_the_encoders_comments() {
+        let dests = HashSet::new();
+        let allowed = Allowed { tags: STYLED_TAGS, destinations: &dests, decoder_structure: true };
+        assert!(!foreign_markup("a <!-- chart --> b\n\n<!-- memo: m -->", &allowed));
+        assert!(foreign_markup("x <!-- c -->", &allowed));
+        assert!(foreign_markup("<!-- c -->", &allowed));
+    }
+
+    /// The three comments as the encoder writes them, nothing near them:
+    /// one case per condition.
+    /// 이것을 실패시키는 것: 정확 비교를 접두 비교로 · memo 닫기 앞 공백 검사 삭제 ·
+    /// 빈 본문 허용 · 본문 안 `--` 허용.
+    #[test]
+    fn comment_kinds_are_exactly_what_the_encoder_writes() {
+        for (comment, kind) in [
+            ("<!-- hwpforge:section -->", Some(Comment::Section)),
+            ("<!-- chart -->", Some(Comment::Chart)),
+            ("<!-- memo: \\-\\-\\- m -->", Some(Comment::Memo)),
+            ("<!-- chart x -->", None),
+            ("<!-- memo: m-->", None),
+            ("<!-- memo:  -->", None),
+            ("<!-- memo: a -- b -->", None),
+        ] {
+            assert_eq!(comment_kind(comment), kind, "{comment}");
+        }
+    }
+
+    /// The scanner takes what the encoder writes and nothing near it: one
+    /// case per condition.
+    /// 이것을 실패시키는 것: 중복 속성 검사 삭제 · 닫기 void 태그 검사 삭제 ·
+    /// `/>` 형태 검사 삭제 · 속성 이름 검사 삭제 · 이름을 소문자로 바꿔 비교 ·
+    /// `&amp;` 를 먼저 복원 · 분류 안 된 주석 통과.
+    #[test]
+    fn scanner_takes_only_the_schema() {
+        use Token::{Close, Open, Text};
+        let open = |name, attributes: &[(&'static str, &str)]| Open {
+            name,
+            attributes: attributes.iter().map(|(a, v)| (*a, v.to_string())).collect(),
+        };
+        let html = "<td colspan=\"2\">a &amp;lt;<br><img src=\"x\" alt=\"&quot;\"/>\
+                    <a href=\"u?a&amp;b\">t</a></td><!-- chart -->";
+        assert_eq!(
+            tokens(html),
+            Some(vec![
+                open("td", &[("colspan", "2")]),
+                Text("a &lt;".into()),
+                open("br", &[]),
+                open("img", &[("src", "x"), ("alt", "\"")]),
+                open("a", &[("href", "u?a&b")]),
+                Text("t".into()),
+                Close("a"),
+                Close("td"),
+                Token::Comment(Comment::Chart),
+            ])
+        );
+        for html in [
+            "<Td>",
+            "<div>",
+            "<td alt=\"x\">",
+            "<td colspan=\"1\" colspan=\"2\">",
+            "</td colspan=\"2\">",
+            "<br/>",
+            "<img src=\"x\">",
+            "</br>",
+            "<!-- c -->",
+            "<!-- chart",
+            "<td",
+            "<!DOCTYPE x>",
+            "a < b",
+        ] {
+            assert_eq!(tokens(html), None, "{html}");
+        }
     }
 
     /// A block with foreign markup is written as plain text and reported;

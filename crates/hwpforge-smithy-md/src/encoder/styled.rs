@@ -12,7 +12,7 @@ use hwpforge_core::{
 };
 use hwpforge_foundation::UnderlineType;
 
-use super::guard::{Block, Source, TOO_DEEP};
+use super::guard::{Block, Source, MEMO_CLOSE, MEMO_OPEN, TOO_DEEP};
 use super::list_format::{format_list_continuation, format_list_item};
 use super::markup::{Cell, Html, Md};
 use super::{MdWarning, Part};
@@ -37,8 +37,6 @@ pub struct MdOutput {
     /// empty for most documents.
     pub warnings: Vec<super::MdWarning>,
 }
-
-const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
 
 #[derive(Debug, Clone, Copy)]
 struct ListContinuationContext {
@@ -498,7 +496,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
             blocks.push(Block {
-                markdown: SECTION_MARKER_COMMENT.to_string(),
+                markdown: super::guard::SECTION_MARKER.to_string(),
                 source: None,
                 body: false,
             });
@@ -1570,7 +1568,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
             // `EquationAsText`, which is for the safety fallback only.
             EqnRender::RawFallback(raw) => math_free_text(&raw, ctx),
         },
-        Control::Chart { .. } => Md::syntax("<!-- chart -->"),
+        Control::Chart { .. } => Md::syntax(super::guard::CHART_COMMENT),
         Control::Dutmal { main_text, sub_text, .. } => {
             let mut md = text(main_text, ctx);
             md.push_syntax("(");
@@ -1660,7 +1658,7 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             EqnRender::Latex(latex) => Html::text(&latex),
             EqnRender::RawFallback(raw) => Html::text(&raw),
         },
-        Control::Chart { .. } => Html::syntax("<!-- chart -->"),
+        Control::Chart { .. } => Html::syntax(super::guard::CHART_COMMENT),
         Control::Dutmal { main_text, sub_text, .. } => {
             Html::text(&format!("{main_text}({sub_text})"))
         }
@@ -1737,9 +1735,11 @@ fn math_free_text(raw: &str, ctx: Ctx) -> Md {
     md
 }
 
-/// A memo as `<!-- memo: … -->`, its body drawn as Markdown with `--`
-/// broken up so it cannot close the comment. Author/date are no longer
-/// carried (Memo): HWPX wire never surfaced them.
+/// A memo as a one-line `<!-- memo: … -->`, its body drawn as Markdown:
+/// line endings (blank lines too) folded to one space, so the parser reads
+/// one comment and not text, and every `-` escaped, so the body holds no
+/// `--` and cannot close the comment ([`super::guard::comment_kind`]).
+/// Author/date are no longer carried (Memo): HWPX wire never surfaced them.
 fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
     let Some(inner) = ctx.enter() else { return Md::syntax(TOO_DEEP) };
     let inner = Ctx { in_comment: true, guarded: false, ..inner };
@@ -1749,7 +1749,11 @@ fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ct
     if body.as_str().trim().is_empty() {
         return Md::new();
     }
-    body.layout(|b| format!("<!-- memo: {} -->", b.trim().replace("--", "\\-\\-")))
+    body.layout(|b| {
+        let line: Vec<&str> =
+            b.split(['\n', '\r']).map(str::trim).filter(|l| !l.is_empty()).collect();
+        format!("{MEMO_OPEN}{}{MEMO_CLOSE}", line.join(" ").replace('-', "\\-"))
+    })
 }
 
 /// A note body's paragraphs in Markdown, each drawn on its own
@@ -4050,13 +4054,17 @@ mod tests {
         assert_eq!(output.markdown, "");
     }
 
-    // --- Memo body sanitizes double-dash ---
+    // --- Memo body is one well-formed comment ---
 
+    /// Every `-` is escaped (an odd run too: no `--` is left to close the
+    /// comment) and line endings, a blank line too, fold to one space, so
+    /// the parser reads one comment, which the guard classifies as a memo.
+    /// 이것을 실패시키는 것: `--` 쌍만 이스케이프 · 줄바꿈 접기 삭제.
     #[test]
     fn control_memo_sanitizes_double_dash_to_prevent_comment_breakout() {
         use hwpforge_core::control::MemoMetadata;
         let memo_body = Paragraph::with_runs(
-            vec![Run::text("bad -- content", CharShapeIndex::new(0))],
+            vec![Run::text("bad --- con\n\ntent", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         );
         let doc = validated_document(vec![Paragraph::with_runs(
@@ -4073,12 +4081,16 @@ mod tests {
         let styles = MockStyles::new();
 
         let output = encode_styled(&doc, &styles);
-        // The raw double-dash in the memo body should be escaped to \-\-
-        assert!(output.markdown.contains("\\-\\-"), "double-dash should be escaped");
-        // The unescaped " -- " sequence (space-dash-dash-space) should not appear in the body
+        assert_eq!(output.markdown, "<!-- memo: bad \\-\\-\\- con tent -->");
+        let events: Vec<_> =
+            pulldown_cmark::Parser::new_ext(&output.markdown, super::super::md_options()).collect();
         assert!(
-            !output.markdown.contains(" -- "),
-            "raw double-dash should not appear in memo body"
+            matches!(events.as_slice(), [_, pulldown_cmark::Event::Html(h), _] if h.as_ref() == output.markdown),
+            "{events:?}"
+        );
+        assert_eq!(
+            super::super::guard::comment_kind(&output.markdown),
+            Some(super::super::guard::Comment::Memo)
         );
     }
 

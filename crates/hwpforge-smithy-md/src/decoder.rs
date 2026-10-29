@@ -15,14 +15,12 @@ use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShap
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use unicase::UniCase;
 
-use crate::encoder::MdWarning;
+use crate::encoder::{guard, MdWarning};
 use crate::error::{MdError, MdResult};
 use crate::frontmatter::{apply_to_metadata, extract_frontmatter};
 use crate::mapper::{image_format_from_path, resolve_mapping, MdMapping, MdStyleRef};
 
 mod lossless;
-
-const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
 
 /// Returns `true` if the URL uses a safe scheme for hyperlinks.
 ///
@@ -761,7 +759,7 @@ impl<'a> DecoderState<'a> {
 
     fn handle_html_event(&mut self, html: &str) -> MdResult<()> {
         let raw = html.trim();
-        if raw == SECTION_MARKER_COMMENT && !self.is_in_table_cell() {
+        if guard::comment_kind(raw) == Some(guard::Comment::Section) && !self.is_in_table_cell() {
             self.push_section_marker();
             return Ok(());
         }
@@ -1764,6 +1762,76 @@ mod tests {
         assert_eq!(doc.sections().len(), 2);
         assert_eq!(doc.sections()[0].paragraphs[0].text_content(), "First");
         assert_eq!(doc.sections()[1].paragraphs[0].text_content(), "Second");
+    }
+
+    /// The section marker comment is read; the chart and memo comments are
+    /// rejected as raw HTML, and so is the section marker in a table cell.
+    /// 이것을 실패시키는 것: 분류된 주석이면 모두 받기(`comment_kind(raw).is_some()`).
+    #[test]
+    fn decode_reads_only_the_section_marker_comment() {
+        let template = default_template();
+        for markdown in
+            ["a <!-- chart -->", "<!-- memo: m -->", "| a |\n|---|\n| <!-- hwpforge:section --> |"]
+        {
+            let err = MdDecoder::decode(markdown, &template).unwrap_err();
+            assert!(err.to_string().contains("raw HTML"), "{markdown}: {err}");
+        }
+        assert!(MdDecoder::decode("a\n\n<!-- hwpforge:section -->\n\nb", &template).is_ok());
+    }
+
+    /// How pulldown-cmark hands the encoder's HTML to the decoder, pinned
+    /// for #281: an inline tag is its own `InlineHtml` event, the text
+    /// between tags ordinary events; an HTML table is one `HtmlBlock` with
+    /// one `Html` event per physical line, a cell's formatting inside that
+    /// line's string; a comment in a paragraph is `InlineHtml`, one on its
+    /// own line an `HtmlBlock`.
+    /// 이것을 실패시키는 것: 연속한 `Html` 줄 이벤트를 하나로 합쳐 보기.
+    #[test]
+    fn html_event_shapes_are_pinned() {
+        use pulldown_cmark::CowStr;
+        let events = |md: &str| -> Vec<Event<'static>> {
+            Parser::new_ext(md, crate::encoder::md_options()).map(Event::into_static).collect()
+        };
+        let html = |s: &str| Event::Html(CowStr::from(s.to_string()));
+        let inline = |s: &str| Event::InlineHtml(CowStr::from(s.to_string()));
+        let text = |s: &str| Event::Text(CowStr::from(s.to_string()));
+        let para = |inner: Vec<Event<'static>>| {
+            let mut out = vec![Event::Start(Tag::Paragraph)];
+            out.extend(inner);
+            out.push(Event::End(TagEnd::Paragraph));
+            out
+        };
+        let block = |lines: &[&str]| {
+            let mut out = vec![Event::Start(Tag::HtmlBlock)];
+            out.extend(lines.iter().map(|l| html(l)));
+            out.push(Event::End(TagEnd::HtmlBlock));
+            out
+        };
+        assert_eq!(
+            events("a <u>b</u><br>z<!-- memo: m -->"),
+            para(vec![
+                text("a "),
+                inline("<u>"),
+                text("b"),
+                inline("</u>"),
+                inline("<br>"),
+                text("z"),
+                inline("<!-- memo: m -->"),
+            ])
+        );
+        assert_eq!(
+            events("<table>\n<tbody>\n<tr>\n  <td>**raw** <strong>x</strong></td>\n</tr>\n</tbody>\n</table>"),
+            block(&[
+                "<table>\n",
+                "<tbody>\n",
+                "<tr>\n",
+                "  <td>**raw** <strong>x</strong></td>\n",
+                "</tr>\n",
+                "</tbody>\n",
+                "</table>",
+            ])
+        );
+        assert_eq!(events("<!-- chart -->"), block(&["<!-- chart -->"]));
     }
 
     #[test]

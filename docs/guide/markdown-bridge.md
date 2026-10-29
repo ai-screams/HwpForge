@@ -367,15 +367,15 @@ lossy 는 문서 글자를 거의 그대로 씁니다. CommonMark 가 글자가 
 
 마지막으로 두 보기 모두 완성된 Markdown 을 다시 파싱해 검사합니다. 인코더가 쓰지 않는 마크업 — 아래 목록 밖의 HTML, 인코더가 만들지 않은 링크·그림, 링크 참조 정의 — 이 나오면, 그 최상위 문단을 모든 구두점을 escape 한 평문으로 다시 쓰고 `MdWarning::MarkupWrittenAsText`(경고 코드 `MARKUP_WRITTEN_AS_TEXT`)로 알립니다. 문단 하나로는 문제가 없는데 문단끼리 작용해 생긴 경우(다른 문단의 참조 정의 등)에는 모든 문단을 평문으로 씁니다. 위 규칙들이 제대로 동작하면 이 경고는 나오지 않습니다. 측정 코퍼스(한컴 HWPX·HWP5)에서도 0 건입니다.
 
-두 보기가 직접 쓰는 HTML 은 아래 것뿐입니다. 이 밖의 HTML 은 문서 글자에서 생기지 않습니다(`tests/markup_safety.rs` 가 공격 문자열을 모든 자리에 넣고 출력을 파싱해 확인합니다).
+두 보기가 직접 쓰는 HTML 은 아래 것뿐입니다. 이 밖의 HTML 은 문서 글자에서 생기지 않습니다(`src/encoder/markup_safety_tests.rs` 가 공격 문자열을 모든 자리에 넣고 출력을 파싱해 확인합니다).
 
-| HTML                                                            | 쓰는 곳                                                         |
-| --------------------------------------------------------------- | --------------------------------------------------------------- |
-| `<br>`                                                          | 표 칸 안 줄바꿈(GFM 칸·HTML 칸), HTML 칸 캡션                   |
-| `<table>`·`<tbody>`·`<tr>`·`<td colspan rowspan>`               | styled 병합 칸·표 안 표                                         |
-| `<strong>`·`<em>`·`<del>`·`<u>`·`<sup>`·`<sub>`                 | styled 서식                                                     |
-| `<a href>`·`<img src alt>`                                      | styled HTML 칸 링크·그림(속성은 HTML escape, 줄 끝은 문자 참조) |
-| `<!-- hwpforge:section -->`·`<!-- chart -->`·`<!-- memo: … -->` | 구역 경계·차트 자리·메모(메모 본문의 `--` 는 `\-\-`)            |
+| HTML                                                            | 쓰는 곳                                                                 |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `<br>`                                                          | 표 칸 안 줄바꿈(GFM 칸·HTML 칸), HTML 칸 캡션                           |
+| `<table>`·`<tbody>`·`<tr>`·`<td colspan rowspan>`               | styled 병합 칸·표 안 표                                                 |
+| `<strong>`·`<em>`·`<del>`·`<u>`·`<sup>`·`<sub>`                 | styled 서식                                                             |
+| `<a href>`·`<img src alt>`                                      | styled HTML 칸 링크·그림(속성은 HTML escape, 줄 끝은 문자 참조)         |
+| `<!-- hwpforge:section -->`·`<!-- chart -->`·`<!-- memo: … -->` | 구역 경계·차트 자리·메모(메모 본문은 한 줄, 줄바꿈은 공백, `-` 는 `\-`) |
 
 styled 의 결과 `MdOutput` 에는 `markdown`·`images`·`warnings` 세 필드가 있습니다. `#[non_exhaustive]` 구조체라서 크레이트 밖에서는 구조체 리터럴로 만들 수 없고, `MdEncoder::encode_styled` 로만 만듭니다. 필드를 읽거나 `let MdOutput { markdown, images, .. } = out;` 처럼 `..` 를 넣어 분해합니다.
 
