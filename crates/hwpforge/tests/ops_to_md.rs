@@ -324,3 +324,77 @@ fn an_unknown_mode_name_is_rejected_rather_than_defaulted() {
 
     assert_eq!(err.code(), OpsCode::InvalidInput, "{err}");
 }
+
+/// The lossy view reads lists from the document's own styles: a numbered
+/// body paragraph is a numbered item, and a bullet paragraph in a table
+/// cell, which the view writes as cell text, is reported with its path.
+/// 이것을 실패시키는 것: lossy 에 원본 스타일 대신 스타일 없는 함수 쓰기.
+#[test]
+fn lossy_reads_lists_from_the_original_styles() {
+    use hwpforge::core::table::{Table, TableCell, TableRow};
+    use hwpforge::core::{
+        BulletDef, Document, ImageStore, NumberingDef, PageSettings, ParaHead, Paragraph, Run,
+        Section,
+    };
+    use hwpforge::foundation::{
+        CharShapeIndex, HeadingType, HwpUnit, NumberFormatType, ParaShapeIndex,
+    };
+    use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+    use hwpforge::hwpx::HwpxEncoder;
+
+    let mut store = HwpxStyleStore::new();
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+    store.push_numbering(NumberingDef::default_outline());
+    store.push_bullet(BulletDef {
+        id: 1,
+        bullet_char: "•".into(),
+        checked_char: None,
+        use_image: false,
+        para_head: ParaHead {
+            start: 0,
+            level: 1,
+            num_format: NumberFormatType::Digit,
+            text: String::new(),
+            checkable: false,
+        },
+    });
+    for (heading_type, id_ref) in [(HeadingType::Number, 1), (HeadingType::Bullet, 1)] {
+        let mut shape = HwpxParaShape::default();
+        shape.heading_type = heading_type;
+        shape.heading_id_ref = id_ref;
+        store.push_para_shape(shape);
+    }
+    let text = |s: &str, shape| {
+        Paragraph::with_runs(vec![Run::text(s, CharShapeIndex::new(0))], ParaShapeIndex::new(shape))
+    };
+    let cell = TableCell::new(vec![text("in cell", 2)], HwpUnit::from_mm(80.0).expect("width"));
+    let table = Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![text("first", 1), Paragraph::with_runs(vec![table], ParaShapeIndex::new(0))],
+        PageSettings::a4(),
+    ));
+    let bytes = HwpxEncoder::encode(&doc.validate().expect("validate"), &store, &ImageStore::new())
+        .expect("encode");
+
+    let out = to_md(&bytes, &MdExportOptions::default().with_mode(MdMode::Lossy)).expect("to_md");
+
+    assert!(out.markdown.starts_with("1. first\n"), "{}", out.markdown);
+    let lost: Vec<_> = out
+        .warnings
+        .iter()
+        .map(|w| w.info())
+        .filter(|w| w.code == "LIST_SEMANTICS_LOST")
+        .map(|w| w.message)
+        .collect();
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert!(
+        lost[0].contains("section 0, paragraphs[1].runs[0].table.rows[0].cells[0].paragraphs[0]"),
+        "{}",
+        lost[0]
+    );
+}

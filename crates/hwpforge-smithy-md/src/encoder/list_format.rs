@@ -1,4 +1,7 @@
-use hwpforge_core::ListItemKind;
+use hwpforge_core::field_inventory::FieldInventory;
+use hwpforge_core::{ListItemKind, Paragraph, ParagraphListRef, Section, StyleLookup};
+
+use super::MdWarning;
 
 /// The open list items of the Markdown being written, so that a nested item
 /// starts at its parent's content column. A fixed indent per level does not
@@ -16,7 +19,8 @@ use hwpforge_core::ListItemKind;
 ///
 /// - a list item ([`Self::item`], [`Self::mapped_item`]), its text empty or
 ///   not: the items of its level and deeper close, it opens;
-/// - a continuation ([`Self::continuation`]): nothing changes;
+/// - a continuation of the open item of its level ([`Self::resume_continuation`]):
+///   the deeper items close; with no open item of its level, all close;
 /// - any other block, and a table or picture written as a block of its own
 ///   ([`Self::reset`]): all close.
 ///
@@ -106,6 +110,42 @@ impl ListIndent {
         lay_out(&" ".repeat(column), text.trim_start_matches([' ', '\t', '\n']), column)
     }
 
+    /// A finished block (a table, a picture) the last open item holds, each
+    /// of its lines at the item's content column with its bytes kept (no
+    /// line is trimmed, a blank line stays empty).
+    /// 이것을 실패시키는 것: 줄 앞 공백 지우기(`list_paragraph_holds_its_one_table`).
+    pub(super) fn block(&mut self, block: &str) -> String {
+        let head = std::mem::take(&mut self.empty_head);
+        self.separator.get_or_insert(head);
+        let indent = " ".repeat(self.column());
+        block
+            .split('\n')
+            .map(|line| if line.is_empty() { String::new() } else { format!("{indent}{line}") })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Selects the open item of `level` for a continuation of that level:
+    /// the items deeper than it close, and it holds what is written next.
+    /// With no open item of `level` (it was closed, or never written), all
+    /// close and `false` says the paragraph is not a continuation: it is
+    /// never joined to a shallower or the last item.
+    /// 이것을 실패시키는 것: 마지막 항목 열 사용(`continuation_returns_to_its_parent`) ·
+    /// 없는 수준을 마지막 항목에(`continuation_of_a_closed_level_stands_alone`) · 빈 머리
+    /// 표시 남기기(`continuation_returns_to_its_parent`).
+    pub(super) fn resume_continuation(&mut self, level: u8) -> bool {
+        let Some(at) = self.open.iter().rposition(|&(open, _)| open == level) else {
+            self.reset();
+            return false;
+        };
+        if at + 1 < self.open.len() {
+            self.open.truncate(at + 1);
+            // The item resumed already holds the closed deeper items.
+            self.empty_head = false;
+        }
+        true
+    }
+
     /// Whether the block being written is joined to the one before with one
     /// line ending ([`super::guard::Block::tight`]), as its first laid-out
     /// piece decided; asked once per block.
@@ -133,6 +173,91 @@ impl ListIndent {
     /// The content column of the last open item (0 for none).
     fn column(&self) -> usize {
         self.open.last().map_or(0, |&(_, column)| column)
+    }
+}
+
+/// Why a list paragraph's semantics did not reach the Markdown
+/// ([`MdWarning::ListSemanticsLost`]): it is in a flow a view writes as text
+/// (a table cell, a shape's text, a note, a caption, a header or footer).
+pub(super) const CONTAINER_PROJECTION: &str = "container_projection";
+/// … a block in the section-body list paragraph is written outside its item.
+pub(super) const BODY_CARRIER_PROJECTION: &str = "body_carrier_projection";
+/// … the section-body list paragraph was written as plain text.
+pub(super) const MARKUP_FALLBACK: &str = "markup_fallback";
+
+/// The list semantics a paragraph is written with as a Markdown list item:
+/// [`StyleLookup::para_list`] other than an outline (a heading).
+pub(super) fn item_list(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+) -> Option<ParagraphListRef> {
+    styles
+        .para_list(paragraph.para_shape_id)
+        .filter(|list| !matches!(list, ParagraphListRef::Outline { .. }))
+}
+
+/// The level of the list item a paragraph continues by its original
+/// styles: its paragraph shape's reserved continuation style name, on a
+/// shape with no list or heading semantics of its own. Both views read a
+/// continuation through this one rule.
+pub(super) fn continuation_level(paragraph: &Paragraph, styles: &dyn StyleLookup) -> Option<u8> {
+    let id = paragraph.para_shape_id;
+    if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
+        return None;
+    }
+    styles.para_style_name(id).and_then(crate::internal_styles::parse_list_continuation_style_name)
+}
+
+/// One [`MdWarning::ListSemanticsLost`] per list paragraph outside the
+/// section body, found by its original styles: the views write those
+/// flows as text, so no Markdown list holds them. Each paragraph is its
+/// own warning, even when several share one paragraph shape.
+/// 이것을 실패시키는 것: 본문 밖 흐름 건너뛰기 · 문단 모양별로 합치기
+/// (`cell_list_paragraphs_are_reported_one_by_one`).
+pub(super) fn container_list_losses(
+    sections: &[Section],
+    styles: &dyn StyleLookup,
+    warnings: &mut Vec<MdWarning>,
+) {
+    FieldInventory::visit_flows(sections, |section, paragraphs, path| {
+        if path == "paragraphs" {
+            return;
+        }
+        for (index, paragraph) in paragraphs.iter().enumerate() {
+            if let Some(list) = item_list(paragraph, styles) {
+                warnings.push(MdWarning::ListSemanticsLost {
+                    section,
+                    path: format!("{path}[{index}]"),
+                    list,
+                    reason: CONTAINER_PROJECTION,
+                });
+            }
+        }
+    });
+}
+
+/// One [`MdWarning::ListSemanticsLost`] for the section-body list paragraph
+/// at `at` (section, paragraph), unless it is not one or was reported.
+pub(super) fn body_list_loss(
+    warnings: &mut Vec<MdWarning>,
+    sections: &[Section],
+    styles: &dyn StyleLookup,
+    at: (usize, usize),
+    reason: &'static str,
+) {
+    let Some(list) = sections
+        .get(at.0)
+        .and_then(|section| section.paragraphs.get(at.1))
+        .and_then(|paragraph| item_list(paragraph, styles))
+    else {
+        return;
+    };
+    let path = format!("paragraphs[{}]", at.1);
+    let reported = warnings.iter().any(|w| {
+        matches!(w, MdWarning::ListSemanticsLost { section, path: p, .. } if *section == at.0 && *p == path)
+    });
+    if !reported {
+        warnings.push(MdWarning::ListSemanticsLost { section: at.0, path, list, reason });
     }
 }
 

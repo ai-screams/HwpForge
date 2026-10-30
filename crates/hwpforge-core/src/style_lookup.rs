@@ -201,29 +201,13 @@ pub trait StyleLookup {
         None
     }
 
-    /// Returns the list type for a paragraph shape: `"BULLET"`, `"NUMBER"`, or `None`.
+    /// Returns the list semantics of the paragraph shape at `id`: outline,
+    /// numbered, bullet or checkable bullet, with its level and definition.
     ///
-    /// Returns `None` if the paragraph has no list heading or if the heading
-    /// type is `NONE` / `OUTLINE`.
-    fn para_list_type(&self, _id: ParaShapeIndex) -> Option<&str> {
-        None
-    }
-
-    /// Returns the zero-based list nesting level for a paragraph shape.
-    ///
-    /// This is only meaningful for numbered/bulleted list semantics. Outline
-    /// headings should use [`para_heading_level`](Self::para_heading_level)
-    /// instead.
-    fn para_list_level(&self, _id: ParaShapeIndex) -> Option<u8> {
-        None
-    }
-
-    /// Returns the checkbox state for a paragraph shape when it is a checkable bullet.
-    ///
-    /// `Some(true)` means a checked checkbox item, `Some(false)` means an
-    /// unchecked checkbox item, and `None` means the paragraph is not a
-    /// checkable bullet.
-    fn para_checked_state(&self, _id: ParaShapeIndex) -> Option<bool> {
+    /// `None` means the paragraph shape has no list semantics, or a value the
+    /// shared reference cannot carry (a broken definition reference, a level
+    /// past [`ParagraphListRef::MAX_LEVEL`](crate::ParagraphListRef::MAX_LEVEL)).
+    fn para_list(&self, _id: ParaShapeIndex) -> Option<crate::ParagraphListRef> {
         None
     }
 
@@ -398,9 +382,7 @@ mod tests {
         assert!(store.para_alignment(ps).is_none());
         assert!(store.para_indent_left(ps).is_none());
         assert!(store.para_indent_first_line(ps).is_none());
-        assert!(store.para_list_type(ps).is_none());
-        assert!(store.para_list_level(ps).is_none());
-        assert!(store.para_checked_state(ps).is_none());
+        assert!(store.para_list(ps).is_none());
         assert!(store.para_style_name(ps).is_none());
         assert!(store.para_heading_level(ps).is_none());
         assert!(store.style_name(si).is_none());

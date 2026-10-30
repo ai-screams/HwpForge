@@ -253,3 +253,30 @@ fn synthetic_six_short_bullets_keep_slots_and_two_dash_paragraphs() {
     });
     assert_eq!(paragraphs, ["가상 탐험대의 첫 번째 문장", "가상 탐험대의 두 번째 문장"]);
 }
+
+/// A converted HWP5 store answers the shared typed list lookup: the
+/// paragraphs on the first bullet slot read as level-0 bullets of the
+/// first definition, the rest as no list.
+/// 이것을 실패시키는 것: 저장소 조회에서 `idRef − 1` 대신 `idRef`.
+#[test]
+fn converted_bullet_paragraphs_read_as_typed_bullets() {
+    use hwpforge_core::{ParagraphListRef, StyleLookup};
+    use hwpforge_foundation::BulletIndex;
+    let glyphs = ['-', '○'];
+    let raw = decode_hwp5_to_core(&synthetic_hwp(&[], &glyphs)).unwrap();
+    let (store, _) = hwpforge_convert::hwp5_style_store_to_hwpx(&raw.style_store).unwrap();
+    let mut lists = Vec::new();
+    raw.document.for_each_paragraph(|p| {
+        if let Some(list) = store.para_list(p.para_shape_id) {
+            lists.push((p.text_content(), list));
+        }
+    });
+    let bullet = ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 };
+    assert_eq!(
+        lists,
+        [
+            ("가상 탐험대의 첫 번째 문장".to_string(), bullet),
+            ("가상 탐험대의 두 번째 문장".to_string(), bullet),
+        ]
+    );
+}

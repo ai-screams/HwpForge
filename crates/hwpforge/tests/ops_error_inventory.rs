@@ -342,6 +342,7 @@ const WARNING_MAPPING: Table = &[
             ("EquationAsText", "EQUATION_AS_TEXT"),
             ("MarkupWrittenAsText", "MARKUP_WRITTEN_AS_TEXT"),
             ("ContentLost", "CONTENT_LOST"),
+            ("ListSemanticsLost", "LIST_SEMANTICS_LOST"),
         ],
     ),
     (
@@ -1022,6 +1023,18 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                 OpsWarning::Md(MdWarning::MarkupWrittenAsText { section: 0, paragraph: 0 }),
             ),
             ("ContentLost", OpsWarning::Md(MdWarning::ContentLost { kind: "chart" })),
+            (
+                "ListSemanticsLost",
+                OpsWarning::Md(MdWarning::ListSemanticsLost {
+                    section: 0,
+                    path: "paragraphs[0].runs[0].table.rows[0].cells[0].paragraphs[1]".into(),
+                    list: hwpforge::core::ParagraphListRef::Number {
+                        numbering_id: hwpforge::foundation::NumberingIndex::new(0),
+                        level: 1,
+                    },
+                    reason: "container_projection",
+                }),
+            ),
         ],
     );
     all.insert(

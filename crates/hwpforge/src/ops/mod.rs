@@ -918,6 +918,7 @@ fn md_warning_code(warning: &MdWarning) -> &'static str {
         MdWarning::EquationAsText { .. } => "EQUATION_AS_TEXT",
         MdWarning::MarkupWrittenAsText { .. } => "MARKUP_WRITTEN_AS_TEXT",
         MdWarning::ContentLost { .. } => "CONTENT_LOST",
+        MdWarning::ListSemanticsLost { .. } => "LIST_SEMANTICS_LOST",
         _ => UNCLASSIFIED,
     }
 }

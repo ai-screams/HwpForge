@@ -13,11 +13,10 @@ use hwpforge_core::{
 use hwpforge_foundation::UnderlineType;
 
 use super::guard::{Block, Source, MEMO_CLOSE, MEMO_OPEN, TOO_DEEP};
-use super::list_format::ListIndent;
+use super::list_format::{self, ListIndent};
 use super::markup::{Cell, Html, Md};
 use super::{MdWarning, Part};
 use crate::eqn::{render_equation, EqnRender};
-use crate::internal_styles::parse_list_continuation_style_name;
 
 /// Output of style-aware markdown encoding.
 ///
@@ -36,11 +35,6 @@ pub struct MdOutput {
     /// written as its script text ([`super::MdWarning::EquationAsText`]);
     /// empty for most documents.
     pub warnings: Vec<super::MdWarning>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ListContinuationContext {
-    level: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +486,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             }
         },
     );
+    list_format::container_list_losses(document.sections(), styles, &mut st.warnings);
     // The plain-text fallback of a block: its paragraphs' raw text.
     let source = |texts: Vec<String>, at: Vec<(usize, usize)>| {
         Some(Source { prefix: String::new(), texts, at })
@@ -523,8 +518,6 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 code.clear();
             }
         };
-        let mut continuation: Option<ListContinuationContext> = None;
-
         for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
             st.at = (section_index, paragraph_index);
             // Page break
@@ -536,14 +529,13 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     body: false,
                     tight: false,
                 });
-                continuation = None;
                 st.lists.reset();
             }
 
             // Code block detection: all text runs with code font.
             // InlineText runs (inline-tab carry) fold to
             // their `\t`-bearing plain string.
-            if is_code_paragraph(paragraph, styles) {
+            let as_item = if is_code_paragraph(paragraph, styles) {
                 let text = paragraph
                     .runs
                     .iter()
@@ -551,42 +543,56 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     .map(|cow| cow.into_owned())
                     .collect::<String>();
                 code.push((text, st.at));
-                continuation = None;
                 st.lists.reset();
-                continue;
-            }
-            flush_code(&mut code, &mut blocks);
-
-            let continuation_level = continuation
-                .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
-            let (markdown, drawn) =
-                encode_paragraph_styled(paragraph, styles, &mut st, continuation_level.is_some());
-            let written = !markdown.trim().is_empty();
-            if written {
-                let text =
-                    fallback(std::slice::from_ref(paragraph), 0, &mut st).remove(0).into_string();
-                // A continuation is its own block (`join` writes the same
-                // blank line before it as appending did), so it can fall
-                // back alone and a Body block's check never sees it.
-                // 이것을 실패시키는 것: 직전 블록에 붙이기
-                // (`continuation_is_its_own_block`).
-                let markdown = match continuation_level {
-                    Some(_) => st.lists.continuation(&markdown),
-                    None => {
-                        if drawn != Drawn::Item {
+                false
+            } else {
+                flush_code(&mut code, &mut blocks);
+                // A continuation joins the open item of its level, never the
+                // last or a shallower one (`ListIndent::resume_continuation`).
+                let continuation = list_format::continuation_level(paragraph, styles)
+                    .is_some_and(|level| st.lists.resume_continuation(level));
+                let (markdown, drawn) =
+                    encode_paragraph_styled(paragraph, styles, &mut st, continuation);
+                if !markdown.trim().is_empty() {
+                    let text = fallback(std::slice::from_ref(paragraph), 0, &mut st)
+                        .remove(0)
+                        .into_string();
+                    // A continuation is its own block (`join` writes the same
+                    // blank line before it as appending did), so it can fall
+                    // back alone and a Body block's check never sees it.
+                    // 이것을 실패시키는 것: 직전 블록에 붙이기
+                    // (`continuation_is_its_own_block`).
+                    let markdown = match (continuation, drawn) {
+                        (true, Drawn::Block) => st.lists.block(&markdown),
+                        (true, _) => st.lists.continuation(&markdown),
+                        (false, Drawn::Item) => markdown,
+                        (false, _) => {
                             st.lists.reset();
+                            markdown
                         }
-                        markdown
-                    }
-                };
-                let body = drawn == Drawn::Body;
-                let tight = st.lists.take_tight();
-                let source = source(vec![text], vec![st.at]);
-                blocks.push(Block { markdown, source, body, tight });
-            }
-
-            if continuation_level.is_none() {
-                continuation = list_context_for_paragraph(paragraph, styles);
+                    };
+                    let body = drawn == Drawn::Body;
+                    let tight = st.lists.take_tight();
+                    let source = source(vec![text], vec![st.at]);
+                    blocks.push(Block { markdown, source, body, tight });
+                }
+                drawn == Drawn::Item
+            };
+            // What the paragraph was written as decides, here only, whether
+            // a section-body list paragraph keeps its list: written as
+            // anything but an item (a code line, a block of its own) it
+            // loses it. An item the guard later writes as plain text is
+            // reported after the guard (`MARKUP_FALLBACK`).
+            // 이것을 실패시키는 것: 이 보고 삭제 · 코드 문단을 항목으로 세기
+            // (`code_list_paragraph_is_reported_once`).
+            if !as_item {
+                list_format::body_list_loss(
+                    &mut st.warnings,
+                    document.sections(),
+                    styles,
+                    st.at,
+                    list_format::BODY_CARRIER_PROJECTION,
+                );
             }
         }
 
@@ -604,7 +610,16 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         destinations: &st.destinations,
         decoder_structure: true,
     };
-    let markdown = super::guard::checked(blocks, &allowed, &mut st.warnings);
+    let (markdown, fell_back) = super::guard::checked(blocks, &allowed, &mut st.warnings);
+    for at in fell_back {
+        list_format::body_list_loss(
+            &mut st.warnings,
+            document.sections(),
+            styles,
+            at,
+            list_format::MARKUP_FALLBACK,
+        );
+    }
 
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }
@@ -614,9 +629,12 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 enum Drawn {
     /// A Body block: not a continuation, drawn by the body branch.
     Body,
-    /// A list item ([`ListIndent::item`]).
+    /// A list item ([`ListIndent::item`]), a one-table or one-picture list
+    /// paragraph too (its marker and the block it holds).
     Item,
-    /// A heading, a continuation, or a one-table or one-picture paragraph.
+    /// A one-table or one-picture paragraph that is not a list item.
+    Block,
+    /// A heading or a continuation's text.
     Other,
 }
 
@@ -640,27 +658,41 @@ fn encode_paragraph_styled(
     // group holds a single picture (WS: the group is drawn as its children).
     // The caption is not guarded (`Ctx::guarded`); a table that is not a
     // continuation is.
-    if paragraph.runs.len() == 1 {
-        match &paragraph.runs[0].content {
-            RunContent::Table(table) => {
-                let table_ctx = Ctx { guarded: !continuation, ..ctx };
-                let mut md = table_to_styled_markdown(table, styles, false, st, table_ctx);
-                md.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
-                return (md.into_string(), Drawn::Other);
-            }
-            RunContent::Image(image) => {
-                let mut md = emit_picture(image, styles, st, ctx);
-                md.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
-                return (md.into_string(), Drawn::Other);
-            }
-            _ => {}
-        }
-    }
-
     // Shared outline/list classification (hwpforge-core). Classification is
     // text-blind, so it decides the context before drawing. Empty headings
     // render as nothing; empty list items render as their marker alone.
     let kind = classify_paragraph(paragraph, styles);
+    if paragraph.runs.len() == 1 {
+        let block = match &paragraph.runs[0].content {
+            RunContent::Table(table) => {
+                let table_ctx = Ctx { guarded: !continuation, ..ctx };
+                let mut md = table_to_styled_markdown(table, styles, false, st, table_ctx);
+                md.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
+                Some(md.into_string())
+            }
+            RunContent::Image(image) => {
+                let mut md = emit_picture(image, styles, st, ctx);
+                md.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
+                Some(md.into_string())
+            }
+            _ => None,
+        };
+        if let Some(block) = block {
+            // A list paragraph holding one table or picture is an item whose
+            // marker holds that block, both in this paragraph's one block.
+            // 이것을 실패시키는 것: 분류 전에 블록으로 반환
+            // (`list_paragraph_holds_its_one_table`).
+            return match kind {
+                ParaKind::ListItem { kind, level, checked, .. } if !continuation => {
+                    let head = st.lists.item("", kind, level, checked);
+                    let block = st.lists.block(&block);
+                    (format!("{head}\n{block}"), Drawn::Item)
+                }
+                _ => (block, Drawn::Block),
+            };
+        }
+    }
+
     let body = !continuation && matches!(kind, ParaKind::Body);
     let guarded = !matches!(kind, ParaKind::Heading { .. });
     let text = paragraph_text_styled(paragraph, styles, st, Ctx { guarded, ..ctx }).into_string();
@@ -788,34 +820,6 @@ fn comments_after_text(text: &str) -> String {
     let mut out = lines.join("\n");
     out.push_str(&moved);
     out
-}
-
-fn list_context_for_paragraph(
-    paragraph: &Paragraph,
-    styles: &dyn StyleLookup,
-) -> Option<ListContinuationContext> {
-    let para_shape_id = paragraph.para_shape_id;
-    let _list_type = styles.para_list_type(para_shape_id)?;
-    let level = styles.para_list_level(para_shape_id).unwrap_or(0);
-    Some(ListContinuationContext { level })
-}
-
-fn continuation_level_for_paragraph(
-    paragraph: &Paragraph,
-    styles: &dyn StyleLookup,
-    context: ListContinuationContext,
-) -> Option<u8> {
-    let para_shape_id = paragraph.para_shape_id;
-    if styles.para_heading_level(para_shape_id).is_some()
-        || styles.para_list_type(para_shape_id).is_some()
-    {
-        return None;
-    }
-
-    styles
-        .para_style_name(para_shape_id)
-        .and_then(parse_list_continuation_style_name)
-        .filter(|level| *level == context.level)
 }
 
 /// A paragraph in Markdown with inline formatting applied (`ctx.html` is
@@ -2350,7 +2354,13 @@ fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
     // decoder carry is still detected as code if it would
     // have qualified before.
     let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
-    if text_runs.is_empty() {
+    // A code block holds only the paragraph's text: a table or picture
+    // beside code-font text keeps the paragraph out of it, or it would be
+    // dropped.
+    // 이것을 실패시키는 것: 이 검사 삭제(`code_list_paragraph_is_reported_once`).
+    if text_runs.is_empty()
+        || paragraph.runs.iter().any(|r| r.content.is_table() || r.content.is_image())
+    {
         return false;
     }
     text_runs.iter().all(|run| {
@@ -2424,16 +2434,26 @@ mod tests {
             self.heading_paras.get(&id.get()).copied()
         }
 
-        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
-            self.list_para_types.get(&id.get()).copied()
-        }
-
-        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
-            self.list_para_levels.get(&id.get()).copied()
-        }
-
-        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
-            self.list_para_checked.get(&id.get()).copied()
+        /// The wire triple (type, level, checked) of a store, as typed list
+        /// semantics on definition 0.
+        fn para_list(&self, id: ParaShapeIndex) -> Option<hwpforge_core::ParagraphListRef> {
+            use hwpforge_core::ParagraphListRef;
+            use hwpforge_foundation::{BulletIndex, NumberingIndex};
+            let level = self.list_para_levels.get(&id.get()).copied().unwrap_or(0);
+            Some(
+                match (*self.list_para_types.get(&id.get())?, self.list_para_checked.get(&id.get()))
+                {
+                    ("NUMBER", _) => {
+                        ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level }
+                    }
+                    (_, Some(&checked)) => ParagraphListRef::CheckBullet {
+                        bullet_id: BulletIndex::new(0),
+                        level,
+                        checked,
+                    },
+                    _ => ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level },
+                },
+            )
         }
 
         fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
@@ -3777,14 +3797,8 @@ mod tests {
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
             self.base.para_heading_level(id)
         }
-        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
-            self.base.para_list_type(id)
-        }
-        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
-            self.base.para_list_level(id)
-        }
-        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
-            self.base.para_checked_state(id)
+        fn para_list(&self, id: ParaShapeIndex) -> Option<hwpforge_core::ParagraphListRef> {
+            self.base.para_list(id)
         }
         fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
             self.base.para_style_name(id)
@@ -5214,7 +5228,7 @@ mod tests {
                         destinations: &st.destinations,
                         decoder_structure: true,
                     };
-                    let md = super::super::guard::checked(blocks, &allowed, &mut st.warnings);
+                    let (md, _) = super::super::guard::checked(blocks, &allowed, &mut st.warnings);
                     assert!(md.ends_with(&super::super::guard::plain_text(expected)), "{md}");
                     if expected == TOO_DEEP {
                         assert!(!md.contains("core"));

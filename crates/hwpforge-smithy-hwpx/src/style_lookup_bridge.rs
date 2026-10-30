@@ -71,9 +71,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment>;
         fn para_indent_left(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure>;
         fn para_indent_first_line(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure>;
-        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str>;
-        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8>;
-        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool>;
+        fn para_list(&self, id: ParaShapeIndex) -> Option<hwpforge_core::ParagraphListRef>;
         fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str>;
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn style_name(&self, id: StyleRef) -> Option<&str>;
@@ -162,7 +160,10 @@ mod tests {
         assert_eq!(lookup.char_bold(CharShapeIndex::new(0)), Some(true));
         assert_eq!(lookup.char_font_name(CharShapeIndex::new(0)), Some("함초롬돋움"));
         assert_eq!(lookup.para_heading_level(ParaShapeIndex::new(0)), Some(2));
-        assert_eq!(lookup.para_checked_state(ParaShapeIndex::new(1)), Some(true));
+        assert_eq!(
+            lookup.para_list(ParaShapeIndex::new(1)).and_then(|list| list.checked()),
+            Some(true)
+        );
     }
 
     #[test]

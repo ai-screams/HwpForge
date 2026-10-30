@@ -6,7 +6,7 @@
 //! is allowed to translate between those representations.
 
 use hwpforge_core::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
-use hwpforge_foundation::{HeadingType, NumberFormatType};
+use hwpforge_foundation::{BulletIndex, HeadingType, NumberFormatType, NumberingIndex};
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{HxBullet, HxBulletParaHead, HxHeading};
@@ -34,7 +34,7 @@ pub(crate) fn list_ref_to_wire_parts(
         Some(ParagraphListRef::Outline { level }) => Ok(WireListParts {
             heading_type: HeadingType::Outline,
             id_ref: 0,
-            level: u32::from(level),
+            level: wire_level(level)?,
             checked: false,
         }),
         Some(ParagraphListRef::Number { numbering_id, level }) => Ok(WireListParts {
@@ -47,7 +47,7 @@ pub(crate) fn list_ref_to_wire_parts(
                     max: numberings.len() as u32,
                 })
                 .map(|_| numbering_id.get() as u32 + 1)?,
-            level: u32::from(level),
+            level: wire_level(level)?,
             checked: false,
         }),
         Some(ParagraphListRef::Bullet { bullet_id, level }) => {
@@ -63,7 +63,7 @@ pub(crate) fn list_ref_to_wire_parts(
             Ok(WireListParts {
                 heading_type: HeadingType::Bullet,
                 id_ref: bullet_id.get() as u32 + 1,
-                level: u32::from(level),
+                level: wire_level(level)?,
                 checked: false,
             })
         }
@@ -80,7 +80,7 @@ pub(crate) fn list_ref_to_wire_parts(
             Ok(WireListParts {
                 heading_type: HeadingType::Bullet,
                 id_ref: bullet_id.get() as u32 + 1,
-                level: u32::from(level),
+                level: wire_level(level)?,
                 checked,
             })
         }
@@ -102,14 +102,79 @@ pub(crate) fn wire_parts_to_heading(
     HxHeading { heading_type: heading_type.to_hwpx_str().into(), id_ref, level }
 }
 
-/// Converts a HWPX heading type into the `para_list_type()` string used by the
-/// Markdown bridge.
-pub(crate) fn heading_type_to_para_list_type(heading_type: HeadingType) -> Option<&'static str> {
-    match heading_type {
-        HeadingType::Bullet => Some("BULLET"),
-        HeadingType::Number => Some("NUMBER"),
-        _ => None,
-    }
+/// Converts HWPX wire components back into shared list semantics, the
+/// reverse of [`list_ref_to_wire_parts`]: a NUMBER or BULLET `idRef` is the
+/// 1-based position of its definition, a BULLET is a [`ParagraphListRef::CheckBullet`]
+/// exactly when its definition is checkable, and `checked` is read only
+/// there (a plain NUMBER or BULLET has no checked state to carry).
+///
+/// # Errors
+///
+/// A reference to no definition (`idRef` 0 or past the table) or a level
+/// outside `0..=9` cannot be carried; it is an error, never another
+/// definition or a clamped level.
+pub(crate) fn wire_parts_to_list_ref(
+    parts: WireListParts,
+    numberings: &[NumberingDef],
+    bullets: &[BulletDef],
+) -> HwpxResult<Option<ParagraphListRef>> {
+    let list = match parts.heading_type {
+        HeadingType::None => return Ok(None),
+        HeadingType::Outline => ParagraphListRef::Outline { level: shared_level(parts.level)? },
+        HeadingType::Number => ParagraphListRef::Number {
+            numbering_id: NumberingIndex::new(definition_position(
+                parts.id_ref,
+                numberings.len(),
+                "numbering definition",
+            )?),
+            level: shared_level(parts.level)?,
+        },
+        HeadingType::Bullet => {
+            let index = definition_position(parts.id_ref, bullets.len(), "bullet definition")?;
+            let (bullet_id, level) = (BulletIndex::new(index), shared_level(parts.level)?);
+            // 이것을 실패시키는 것: 체크 판정을 정의 대신 `checked` 로
+            // (`wire_parts_to_list_ref_reads_checked_only_on_checkable_bullets`).
+            if bullets[index].is_checkable() {
+                ParagraphListRef::CheckBullet { bullet_id, level, checked: parts.checked }
+            } else {
+                ParagraphListRef::Bullet { bullet_id, level }
+            }
+        }
+        other => {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!("heading type {other:?} has no shared list semantics"),
+            })
+        }
+    };
+    Ok(Some(list))
+}
+
+/// The definition index a 1-based wire `idRef` selects.
+/// 이것을 실패시키는 것: `idRef − 1` 대신 `idRef`
+/// (`wire_parts_to_list_ref_inverts_list_ref_to_wire_parts`) · 0 을 첫 정의로
+/// (`wire_parts_to_list_ref_rejects_what_it_cannot_carry`).
+fn definition_position(id_ref: u32, count: usize, kind: &'static str) -> HwpxResult<usize> {
+    (id_ref as usize)
+        .checked_sub(1)
+        .filter(|&index| index < count)
+        .ok_or(HwpxError::IndexOutOfBounds { kind, index: id_ref, max: count as u32 })
+}
+
+/// A wire `heading@level` as a shared list level, the one level check of
+/// both directions.
+/// 이것을 실패시키는 것: 상한 검사 삭제(`wire_parts_to_list_ref_rejects_what_it_cannot_carry`).
+fn shared_level(level: u32) -> HwpxResult<u8> {
+    u8::try_from(level).ok().filter(|&level| level <= ParagraphListRef::MAX_LEVEL).ok_or_else(
+        || HwpxError::InvalidStructure {
+            detail: format!("list level {level} is outside 0..={}", ParagraphListRef::MAX_LEVEL),
+        },
+    )
+}
+
+/// A shared list level as a wire `heading@level`, checked as the reverse
+/// direction checks it.
+fn wire_level(level: u8) -> HwpxResult<u32> {
+    shared_level(u32::from(level)).map(u32::from)
 }
 
 /// Converts a shared bullet definition into the HWPX bullet schema type.
@@ -220,7 +285,6 @@ fn number_format_from_hwpx(format: &str) -> NumberFormatType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{BulletIndex, NumberingIndex};
 
     #[test]
     fn list_ref_to_wire_parts_uses_positions_not_definition_labels() {
@@ -346,6 +410,144 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, HwpxError::InvalidStructure { .. }));
+    }
+
+    /// Definitions with sparse labels (42, 7, 8): positions, not labels,
+    /// are what a reference selects.
+    fn sparse_definitions() -> (Vec<NumberingDef>, Vec<BulletDef>) {
+        let numbering = |id| NumberingDef { id, start: 0, levels: Vec::new() };
+        let plain = BulletDef {
+            id: 7,
+            bullet_char: "•".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: default_bullet_para_head(),
+        };
+        let checkable = BulletDef {
+            id: 8,
+            bullet_char: "☐".into(),
+            checked_char: Some("☑".into()),
+            use_image: false,
+            para_head: ParaHead { checkable: true, ..default_bullet_para_head() },
+        };
+        (vec![numbering(42), numbering(3)], vec![plain, checkable])
+    }
+
+    fn wire(heading_type: HeadingType, id_ref: u32, level: u32, checked: bool) -> WireListParts {
+        WireListParts { heading_type, id_ref, level, checked }
+    }
+
+    /// Every carried reference comes back from its wire components.
+    /// 이것을 실패시키는 것: `idRef − 1` 대신 `idRef`.
+    #[test]
+    fn wire_parts_to_list_ref_inverts_list_ref_to_wire_parts() {
+        let (numberings, bullets) = sparse_definitions();
+        for level in [0, 1, 2, 9] {
+            let refs = [
+                ParagraphListRef::Outline { level },
+                ParagraphListRef::Number { numbering_id: NumberingIndex::new(1), level },
+                ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level },
+                ParagraphListRef::CheckBullet {
+                    bullet_id: BulletIndex::new(1),
+                    level,
+                    checked: false,
+                },
+                ParagraphListRef::CheckBullet {
+                    bullet_id: BulletIndex::new(1),
+                    level,
+                    checked: true,
+                },
+            ];
+            for list in refs {
+                let parts = list_ref_to_wire_parts(Some(list), &numberings, &bullets).unwrap();
+                assert_eq!(
+                    wire_parts_to_list_ref(parts, &numberings, &bullets).unwrap(),
+                    Some(list),
+                    "{parts:?}"
+                );
+            }
+        }
+        assert_eq!(
+            wire_parts_to_list_ref(wire(HeadingType::Number, 2, 3, false), &numberings, &bullets)
+                .unwrap(),
+            Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(1), level: 3 })
+        );
+    }
+
+    /// Wire components the shared reference does not keep come back in
+    /// their one spelling: no list is NONE 0/0/false, an outline has no
+    /// idRef and no checked state, a NUMBER no checked state.
+    /// 이것을 실패시키는 것: NONE 을 개요로 읽기.
+    #[test]
+    fn list_ref_to_wire_parts_of_a_read_back_is_canonical() {
+        let (numberings, bullets) = sparse_definitions();
+        let cases = [
+            (wire(HeadingType::None, 2, 4, true), wire(HeadingType::None, 0, 0, false)),
+            (wire(HeadingType::Outline, 3, 1, true), wire(HeadingType::Outline, 0, 1, false)),
+            (wire(HeadingType::Number, 1, 2, true), wire(HeadingType::Number, 1, 2, false)),
+            (wire(HeadingType::Bullet, 2, 1, true), wire(HeadingType::Bullet, 2, 1, true)),
+        ];
+        for (input, canonical) in cases {
+            let list = wire_parts_to_list_ref(input, &numberings, &bullets).unwrap();
+            assert_eq!(
+                list_ref_to_wire_parts(list, &numberings, &bullets).unwrap(),
+                canonical,
+                "{input:?}"
+            );
+        }
+    }
+
+    /// A BULLET is checkable by its definition; `paraPr@checked` on a plain
+    /// bullet is not a checkbox.
+    /// 이것을 실패시키는 것: 체크 판정을 정의 대신 `checked` 로.
+    #[test]
+    fn wire_parts_to_list_ref_reads_checked_only_on_checkable_bullets() {
+        let (numberings, bullets) = sparse_definitions();
+        let read = |parts| wire_parts_to_list_ref(parts, &numberings, &bullets).unwrap();
+        assert_eq!(
+            read(wire(HeadingType::Bullet, 1, 0, true)),
+            Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 })
+        );
+        assert_eq!(
+            read(wire(HeadingType::Bullet, 2, 0, false)),
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id: BulletIndex::new(1),
+                level: 0,
+                checked: false
+            })
+        );
+    }
+
+    /// No definition and a level past 9 are errors: never the first
+    /// definition, never a clamped level.
+    /// 이것을 실패시키는 것: `idRef` 0 을 첫 정의로(`checked_sub` 대신 `saturating_sub`).
+    #[test]
+    fn wire_parts_to_list_ref_rejects_what_it_cannot_carry() {
+        let (numberings, bullets) = sparse_definitions();
+        for parts in [
+            wire(HeadingType::Number, 0, 0, false),
+            wire(HeadingType::Number, 3, 0, false),
+            wire(HeadingType::Bullet, 0, 0, false),
+            wire(HeadingType::Bullet, 3, 0, false),
+        ] {
+            let err = wire_parts_to_list_ref(parts, &numberings, &bullets).unwrap_err();
+            assert!(matches!(err, HwpxError::IndexOutOfBounds { .. }), "{parts:?}: {err}");
+        }
+        for heading_type in [HeadingType::Outline, HeadingType::Number, HeadingType::Bullet] {
+            let err =
+                wire_parts_to_list_ref(wire(heading_type, 1, 10, false), &numberings, &bullets)
+                    .unwrap_err();
+            assert!(matches!(err, HwpxError::InvalidStructure { .. }), "{heading_type:?}: {err}");
+        }
+    }
+
+    /// The writing direction checks the level as reading does.
+    /// 이것을 실패시키는 것: 쓰기 쪽 `wire_level` 을 `u32::from` 으로.
+    #[test]
+    fn list_ref_to_wire_parts_rejects_a_level_past_nine() {
+        let err = list_ref_to_wire_parts(Some(ParagraphListRef::Outline { level: 10 }), &[], &[])
+            .unwrap_err();
+        assert!(matches!(err, HwpxError::InvalidStructure { .. }), "{err}");
     }
 
     #[test]

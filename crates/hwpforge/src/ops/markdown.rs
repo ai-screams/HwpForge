@@ -241,8 +241,11 @@ pub fn to_md(hwpx: &[u8], opts: &MdExportOptions) -> Result<MdExportOutput, OpsE
             (output.markdown, output.images.into_iter().collect())
         }
         MdMode::Lossy => {
-            let (markdown, lossy) =
-                MdEncoder::encode_lossy_with_report(&document).map_err(OpsError::md_encode)?;
+            // The original styles: list items keep their kind, level and
+            // checked state, and what the view cannot hold is reported.
+            let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+            let (markdown, lossy) = MdEncoder::encode_lossy_with_styles(&document, &lookup)
+                .map_err(OpsError::md_encode)?;
             warnings.extend(lossy.into_iter().map(OpsWarning::Md));
             (markdown, BTreeMap::new())
         }
