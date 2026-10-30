@@ -118,6 +118,24 @@ fn encode_body(
 
         for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
             let at = (section_index, paragraph_index);
+            // A code block a list item holds is a fence of its own, in the
+            // open item of its level, its text's bytes kept
+            // (`ListIndent::block`); no open item, at column 0.
+            // 이것을 실패시키는 것: 일반 continuation 배치(`code_in_an_item_keeps_its_text`).
+            if let Some(level) = code_continuation_level(paragraph, mapping, styles) {
+                let fence = Md::code_fence(&raw_text(paragraph)).into_string();
+                let markdown = if lists.resume_continuation(level) {
+                    lists.block(&fence)
+                } else {
+                    lists.reset();
+                    fence
+                };
+                let text = fallback_text(paragraph, &mut destinations);
+                let source = Source { prefix: String::new(), texts: vec![text], at: vec![at] };
+                let tight = lists.take_tight();
+                blocks.push(Block { markdown, source: Some(source), body: false, tight });
+                continue;
+            }
             // A continuation joins the open item of its level, never the
             // last or a shallower one (`ListIndent::resume_continuation`).
             let continuation = continuation_level(paragraph, mapping, styles)
@@ -421,6 +439,19 @@ fn continuation_level(
     mapping
         .and_then(|m| m.continuation_level(paragraph.para_shape_id))
         .or_else(|| list_format::continuation_level(paragraph, styles?))
+}
+
+/// The level of the list item whose code block a paragraph is: the
+/// template's code-continuation shape, or the original styles'
+/// ([`list_format::code_continuation_level`]).
+fn code_continuation_level(
+    paragraph: &Paragraph,
+    mapping: Option<&MdMapping>,
+    styles: Option<&dyn StyleLookup>,
+) -> Option<u8> {
+    mapping
+        .and_then(|m| m.code_continuation_level(paragraph.para_shape_id))
+        .or_else(|| list_format::code_continuation_level(paragraph, styles?))
 }
 
 fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> {
@@ -2202,7 +2233,7 @@ mod tests {
                         ParaShapeIndex::new(registry.para_shapes.len() - 1)
                     }
                     Li::Item => mapping.list_item.para_shape_id,
-                    Li::Task(level) => mapping.task_list.unchecked[level],
+                    Li::Task(level) => mapping.lists.unchecked.unwrap()[level].para_shape_id,
                     Li::Cont(level) => mapping.list_continuation(level).para_shape_id,
                     Li::Body => mapping.body.para_shape_id,
                 };
@@ -2498,11 +2529,11 @@ mod tests {
 
         let unchecked = Paragraph::with_runs(
             vec![Run::text("todo", CharShapeIndex::new(0))],
-            mapping.task_list.unchecked[0],
+            mapping.lists.unchecked.unwrap()[0].para_shape_id,
         );
         let checked = Paragraph::with_runs(
             vec![Run::text("done", CharShapeIndex::new(0))],
-            mapping.task_list.checked[1],
+            mapping.lists.checked.unwrap()[1].para_shape_id,
         );
         // The level-1 item nests under the level-0 item before it.
         let mut lists = ListIndent::default();
@@ -2813,8 +2844,8 @@ mod tests {
         for style in [
             mapping.heading1.para_shape_id,
             mapping.list_item.para_shape_id,
-            mapping.task_list.unchecked[0],
-            mapping.task_list.checked[1],
+            mapping.lists.unchecked.unwrap()[0].para_shape_id,
+            mapping.lists.checked.unwrap()[1].para_shape_id,
         ] {
             for (lead, tail) in [(false, false), (false, true), (true, true)] {
                 let mut children = vec![table()];
@@ -2874,16 +2905,14 @@ mod tests {
         use hwpforge_core::caption::{Caption, CaptionSide};
         use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
         for numbered in [false, true] {
-            let mut template = builtin_default().unwrap();
-            if numbered {
-                template.numberings.push(hwpforge_core::NumberingDef::default_outline());
-                template.styles.get_mut("list_item").unwrap().para_shape.as_mut().unwrap().list =
-                    Some(hwpforge_blueprint::style::PartialParagraphListRef::Number {
-                        numbering_id: 1,
-                        level: 0,
-                    });
-            }
+            let template = builtin_default().unwrap();
             let (mapping, _) = resolve_mapping(&template).unwrap();
+            // The plain item: the template's numbered or bullet item.
+            let item = if numbered {
+                mapping.lists.number.unwrap()[0].para_shape_id
+            } else {
+                mapping.list_item.para_shape_id
+            };
             let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
             let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
             let p = |runs| Paragraph::with_runs(runs, mapping.body.para_shape_id);
@@ -2895,9 +2924,9 @@ mod tests {
             };
             for (style, heading, checked) in [
                 (mapping.heading1.para_shape_id, true, None),
-                (mapping.list_item.para_shape_id, false, None),
-                (mapping.task_list.unchecked[0], false, Some(false)),
-                (mapping.task_list.checked[1], false, Some(true)),
+                (item, false, None),
+                (mapping.lists.unchecked.unwrap()[0].para_shape_id, false, Some(false)),
+                (mapping.lists.checked.unwrap()[1].para_shape_id, false, Some(true)),
             ] {
                 for kind in ["table-caption", "image-caption", "container-table"] {
                     for lead in [false, true] {
@@ -3009,7 +3038,7 @@ mod tests {
                             if heading { 0 } else { formatted },
                             "{md}"
                         );
-                        if style == mapping.list_item.para_shape_id {
+                        if style == item {
                             assert_eq!(
                                 events
                                     .iter()

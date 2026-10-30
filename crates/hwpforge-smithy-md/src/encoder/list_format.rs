@@ -1,3 +1,6 @@
+use hwpforge_blueprint::markdown::{
+    parse_code_continuation_style_name, parse_list_continuation_style_name,
+};
 use hwpforge_core::field_inventory::FieldInventory;
 use hwpforge_core::{ListItemKind, Paragraph, ParagraphListRef, Section, StyleLookup};
 
@@ -205,7 +208,21 @@ pub(super) fn continuation_level(paragraph: &Paragraph, styles: &dyn StyleLookup
     if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
         return None;
     }
-    styles.para_style_name(id).and_then(crate::internal_styles::parse_list_continuation_style_name)
+    styles.para_style_name(id).and_then(parse_list_continuation_style_name)
+}
+
+/// The level of the list item whose code block a paragraph is, by its
+/// original styles: its paragraph shape's reserved code-continuation style
+/// name, on a shape with no list or heading semantics of its own.
+pub(super) fn code_continuation_level(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+) -> Option<u8> {
+    let id = paragraph.para_shape_id;
+    if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
+        return None;
+    }
+    styles.para_style_name(id).and_then(parse_code_continuation_style_name)
 }
 
 /// One [`MdWarning::ListSemanticsLost`] per list paragraph outside the

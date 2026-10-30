@@ -1371,6 +1371,24 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ListDefinitionMissing",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ListLevelClamped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ListStartNormalized",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

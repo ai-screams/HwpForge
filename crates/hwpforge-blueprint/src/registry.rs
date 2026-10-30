@@ -417,6 +417,8 @@ fn validate_mapping_references(
         ("code", &md.code),
         ("blockquote", &md.blockquote),
         ("list_item", &md.list_item),
+        ("numbered_item", &md.numbered_item),
+        ("check_item", &md.check_item),
     ];
     for &(field_name, ref_opt) in fields {
         if let Some(style_name) = ref_opt {

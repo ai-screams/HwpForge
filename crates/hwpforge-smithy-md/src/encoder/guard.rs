@@ -604,15 +604,21 @@ pub(crate) fn checked(
     allowed: &Allowed<'_>,
     warnings: &mut Vec<super::MdWarning>,
 ) -> (String, Vec<(usize, usize)>) {
-    // An empty block (a note with no text) writes nothing, not a gap.
-    // 이것을 실패시키는 것: `tight` 무시(`empty_item_holds_its_first_block`).
+    // An empty block (a note with no text) writes nothing, not a gap. A
+    // block written as plain text holds no list item: neither it nor the
+    // block after it is joined by one line ending (`tight`), which only an
+    // empty item's first block is.
+    // 이것을 실패시키는 것: `tight` 무시(`empty_item_holds_its_first_block`) · 평문으로
+    // 쓴 블록 뒤에도 붙이기(`fallback_head_unties_its_first_block`).
     let join = |blocks: &[Block]| {
         let mut out = String::new();
+        let mut item_before = false;
         for b in blocks.iter().filter(|b| !b.markdown.is_empty()) {
             if !out.is_empty() {
-                out.push_str(if b.tight { "\n" } else { "\n\n" });
+                out.push_str(if b.tight && item_before { "\n" } else { "\n\n" });
             }
             out.push_str(&b.markdown);
+            item_before = b.source.is_some();
         }
         out
     };
@@ -630,6 +636,7 @@ pub(crate) fn checked(
     let mut fell_back = Vec::new();
     let mut fall_back = |b: &mut Block, warnings: &mut Vec<super::MdWarning>| {
         if let Some(src) = b.source.take() {
+            b.tight = false;
             b.markdown = format!("{}{}", src.prefix, src.texts.join("\n\n"));
             for at in src.at {
                 written_as_text(warnings, &mut warned, at);
@@ -1034,5 +1041,30 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         let (out, _) = checked(vec![block("x", "x", (0, 0))], &allowed, &mut Vec::new());
         assert_eq!(out, "x");
+    }
+
+    /// A block an empty item holds first is joined to it by one line ending
+    /// only while both are list markup: when either is written as plain
+    /// text, a blank line parts them.
+    /// 이것을 실패시키는 것: 평문 블록의 `tight` 남기기 · 평문 뒤 블록 붙이기.
+    #[test]
+    fn fallback_head_unties_its_first_block() {
+        let dests = HashSet::new();
+        let allowed = Allowed { tags: LOSSY_TAGS, destinations: &dests, decoder_structure: false };
+        let block = |md: &str, at, tight| Block {
+            markdown: md.to_string(),
+            source: Some(Source { prefix: String::new(), texts: vec!["t".into()], at: vec![at] }),
+            body: false,
+            tight,
+        };
+        let bad = "<img src=x onerror=y>";
+        for (blocks, expected) in [
+            (vec![block("-", (0, 0), false), block("  - c", (0, 1), true)], "-\n  - c"),
+            (vec![block("-", (0, 0), false), block(bad, (0, 1), true)], "-\n\nt"),
+            (vec![block(bad, (0, 0), false), block("  - c", (0, 1), true)], "t\n\n  - c"),
+        ] {
+            let (out, _) = checked(blocks, &allowed, &mut Vec::new());
+            assert_eq!(out, expected);
+        }
     }
 }

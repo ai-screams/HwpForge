@@ -22,11 +22,11 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, NumberFormatType, ParaShapeIndex};
+use hwpforge_foundation::{BulletIndex, CharShapeIndex, NumberFormatType, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use list_visual::{
-    build_base_visual_style_ids, build_continuation_shape_array, build_list_shape_array,
-    bullet_def, checkable_bullet_def, para_head, push_bullet, push_numbering, BaseVisualStyleIds,
+    build_base_visual_style_ids, build_continuation_shape_array, build_list_shape_array, para_head,
+    push_numbering, BaseVisualStyleIds,
 };
 
 const OUT_DIR: &str = "temp/list_acceptance_visual";
@@ -140,9 +140,20 @@ fn build_list_visual_shapes(
     registry: &mut StyleRegistry,
     body_ps: ParaShapeIndex,
 ) -> ListVisualShapes {
+    // The default template's bullets (its first plain one and its check
+    // bullet); the numbering, with a format per level, is this pack's own,
+    // under an id the template does not use.
     let numbering = push_numbering(registry, numbering_def(20));
-    let plain_bullet = push_bullet(registry, bullet_def(1, ""));
-    let check_bullet = push_bullet(registry, checkable_bullet_def(2, "☐", "☑"));
+    let bullet_at = |checkable: bool| {
+        let at = registry
+            .bullets
+            .iter()
+            .position(|bullet| bullet.is_checkable() == checkable)
+            .expect("default template bullet");
+        BulletIndex::new(at)
+    };
+    let plain_bullet = bullet_at(false);
+    let check_bullet = bullet_at(true);
 
     let bullet = build_list_shape_array(registry, body_ps, |level| ParagraphListRef::Bullet {
         bullet_id: plain_bullet,

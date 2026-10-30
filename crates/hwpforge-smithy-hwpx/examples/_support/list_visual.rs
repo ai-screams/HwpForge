@@ -1,9 +1,9 @@
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::style::{CharShape, ParaShape};
-use hwpforge_core::numbering::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
+use hwpforge_core::numbering::{NumberingDef, ParaHead, ParagraphListRef};
 use hwpforge_foundation::{
-    Alignment, BreakType, BulletIndex, CharShapeIndex, Color, HwpUnit, NumberFormatType,
-    NumberingIndex, ParaShapeIndex,
+    Alignment, BreakType, CharShapeIndex, Color, HwpUnit, NumberFormatType, NumberingIndex,
+    ParaShapeIndex,
 };
 
 #[derive(Clone, Copy)]
@@ -123,45 +123,6 @@ pub(super) fn push_numbering(
     let idx = NumberingIndex::new(registry.numberings.len());
     registry.numberings.push(numbering);
     idx
-}
-
-pub(super) fn push_bullet(registry: &mut StyleRegistry, bullet: BulletDef) -> BulletIndex {
-    let idx = BulletIndex::new(registry.bullets.len());
-    registry.bullets.push(bullet);
-    idx
-}
-
-pub(super) fn bullet_def(id: u32, bullet_char: &str) -> BulletDef {
-    BulletDef {
-        id,
-        bullet_char: bullet_char.to_string(),
-        checked_char: None,
-        use_image: false,
-        para_head: ParaHead {
-            start: 0,
-            level: 1,
-            num_format: NumberFormatType::Digit,
-            text: String::new(),
-            checkable: false,
-        },
-    }
-}
-
-#[allow(dead_code)]
-pub(super) fn checkable_bullet_def(id: u32, bullet_char: &str, checked_char: &str) -> BulletDef {
-    BulletDef {
-        id,
-        bullet_char: bullet_char.to_string(),
-        checked_char: Some(checked_char.to_string()),
-        use_image: false,
-        para_head: ParaHead {
-            start: 0,
-            level: 1,
-            num_format: NumberFormatType::Digit,
-            text: String::new(),
-            checkable: true,
-        },
-    }
 }
 
 pub(super) fn para_head(

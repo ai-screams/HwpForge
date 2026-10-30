@@ -919,6 +919,9 @@ fn md_warning_code(warning: &MdWarning) -> &'static str {
         MdWarning::MarkupWrittenAsText { .. } => "MARKUP_WRITTEN_AS_TEXT",
         MdWarning::ContentLost { .. } => "CONTENT_LOST",
         MdWarning::ListSemanticsLost { .. } => "LIST_SEMANTICS_LOST",
+        MdWarning::ListDefinitionMissing { .. } => "LIST_DEFINITION_MISSING",
+        MdWarning::ListLevelClamped { .. } => "LIST_LEVEL_CLAMPED",
+        MdWarning::ListStartNormalized { .. } => "LIST_START_NORMALIZED",
         _ => UNCLASSIFIED,
     }
 }

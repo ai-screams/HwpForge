@@ -313,6 +313,16 @@ fn merge_markdown_mappings(
             if c.list_item.is_some() {
                 merged.list_item.clone_from(&c.list_item);
             }
+            if c.numbered_item.is_some() {
+                merged.numbered_item.clone_from(&c.numbered_item);
+            }
+            if c.check_item.is_some() {
+                merged.check_item.clone_from(&c.check_item);
+            }
+            // A child's array replaces the parent's whole.
+            if c.bullet_levels.is_some() {
+                merged.bullet_levels.clone_from(&c.bullet_levels);
+            }
             Some(merged)
         }
     }

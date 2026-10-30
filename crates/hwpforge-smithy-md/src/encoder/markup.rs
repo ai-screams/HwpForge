@@ -228,6 +228,20 @@ impl Md {
         Self::of(format!("{fence}\n{text}\n{fence}"))
     }
 
+    /// A code block's text, as read from a fence, in a fence again: its
+    /// bytes as they are (its lines' whitespace, tabs and blank lines), the
+    /// closing fence on the line after its last line ending. Text read from
+    /// a closed fence ends with a line ending of its own, so none is added;
+    /// text with no last line ending (read from a fence the document ended)
+    /// gets one.
+    /// 이것을 실패시키는 것: 끝 줄바꿈을 늘 더하기(`code_in_an_item_keeps_its_text`).
+    pub(crate) fn code_fence(raw: &str) -> Self {
+        let text = lines(raw);
+        let fence = "`".repeat((longest_run(&text, '`') + 1).max(3));
+        let end = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
+        Self::of(format!("{fence}\n{text}{end}{fence}"))
+    }
+
     /// A LaTeX equation as `$…$` in Markdown text, `None` when it cannot be
     /// written there without making a link or raw HTML: `<` and `>` become
     /// `\lt ` and `\gt ` (the same symbols to a math renderer, no tag to a

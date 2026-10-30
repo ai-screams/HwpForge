@@ -343,6 +343,9 @@ const WARNING_MAPPING: Table = &[
             ("MarkupWrittenAsText", "MARKUP_WRITTEN_AS_TEXT"),
             ("ContentLost", "CONTENT_LOST"),
             ("ListSemanticsLost", "LIST_SEMANTICS_LOST"),
+            ("ListDefinitionMissing", "LIST_DEFINITION_MISSING"),
+            ("ListLevelClamped", "LIST_LEVEL_CLAMPED"),
+            ("ListStartNormalized", "LIST_START_NORMALIZED"),
         ],
     ),
     (
@@ -1034,6 +1037,21 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     },
                     reason: "container_projection",
                 }),
+            ),
+            (
+                "ListDefinitionMissing",
+                OpsWarning::Md(MdWarning::ListDefinitionMissing {
+                    kind: hwpforge::core::ListItemKind::Number,
+                    checkable: false,
+                }),
+            ),
+            (
+                "ListLevelClamped",
+                OpsWarning::Md(MdWarning::ListLevelClamped { requested: 10, supported: 9 }),
+            ),
+            (
+                "ListStartNormalized",
+                OpsWarning::Md(MdWarning::ListStartNormalized { requested: 3, used: 1 }),
             ),
         ],
     );

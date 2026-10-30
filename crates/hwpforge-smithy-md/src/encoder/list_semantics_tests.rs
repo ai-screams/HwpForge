@@ -165,33 +165,37 @@ fn code_font_text_with_a_block_is_a_body_paragraph() {
     }
 }
 
-/// A list paragraph the styled view writes as a code line (all its text
-/// in a code font) loses its list: one loss each, a checked bullet too. A
-/// code-font list paragraph with a table is no code line: it stays an item
-/// holding its table, no loss. The lossy view reads no code font: each is
-/// an item, the table written outside its item as always
+/// A list paragraph the styled view writes as code (all its text in a
+/// code font) stays an item: its marker holds the code as a fence, with its
+/// kind and checked state, no loss. A code-font list paragraph with a table
+/// is no code: it stays an item holding its table. The lossy view reads no
+/// code font: each is an item, the table written outside its item as always
 /// (`lossy_block_outside_its_item_is_reported`).
-/// 이것을 실패시키는 것: 한 곳의 보고 삭제 · 코드 문단을 항목으로 세기 · 코드 판정의
-/// 표·그림 검사 삭제.
+/// 이것을 실패시키는 것: 코드 글꼴 판정을 소유 항목 판정보다 먼저 · 코드 판정의 표·그림
+/// 검사 삭제.
 #[test]
-fn code_list_paragraph_is_reported_once() {
+fn code_list_paragraph_stays_an_item() {
+    use pulldown_cmark::{Tag, TagEnd};
     let doc = doc(vec![
         p(NUMBER, vec![styled_t("x", CODE)]),
         p(CHECKED, vec![styled_t("y", CODE)]),
         p(BULLET, vec![styled_t("z", CODE), table(one_cell(body(vec![t("w")])))]),
     ]);
-    let number = ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 0 };
-    let checked =
-        ParagraphListRef::CheckBullet { bullet_id: BulletIndex::new(1), level: 0, checked: true };
     let [(_, styled, styled_warnings), (_, lossy, lossy_warnings)] = views(&doc);
-    assert_eq!((depth(&styled, "x\ny"), depth(&styled, "w")), (None, Some(1)), "{styled}");
-    assert_eq!(
-        list_losses(&styled_warnings),
-        [
-            (0, "paragraphs[0]", number, list_format::BODY_CARRIER_PROJECTION),
-            (0, "paragraphs[1]", checked, list_format::BODY_CARRIER_PROJECTION),
-        ]
-    );
+    // Each code block, with how many items hold it; each task marker.
+    let (mut depth_now, mut code, mut tasks) = (0, Vec::new(), Vec::new());
+    for event in Parser::new_ext(&styled, md_options()) {
+        match event {
+            Event::Start(Tag::Item) => depth_now += 1,
+            Event::End(TagEnd::Item) => depth_now -= 1,
+            Event::Start(Tag::CodeBlock(_)) => code.push(depth_now),
+            Event::TaskListMarker(checked) => tasks.push(checked),
+            _ => {}
+        }
+    }
+    assert_eq!((code, tasks), (vec![1, 1], vec![true]), "{styled}");
+    assert_eq!(depth(&styled, "w"), Some(1), "{styled}");
+    assert_eq!(list_losses(&styled_warnings), [], "{styled}");
     assert_eq!(depth(&lossy, "x"), Some(1), "{lossy}");
     let bullet = ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 };
     assert_eq!(
