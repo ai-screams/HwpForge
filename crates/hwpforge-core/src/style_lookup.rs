@@ -207,6 +207,15 @@ pub trait StyleLookup {
     /// `None` means the paragraph shape has no list semantics, or a value the
     /// shared reference cannot carry (a broken definition reference, a level
     /// past [`ParagraphListRef::MAX_LEVEL`](crate::ParagraphListRef::MAX_LEVEL)).
+    ///
+    /// This one method replaces the earlier `para_list_type`,
+    /// `para_list_level` and `para_checked_state`: an implementation returns
+    /// the whole reference, with its definition index (`Number`'s numbering,
+    /// `Bullet`'s and `CheckBullet`'s bullet), its level and, for a checkable
+    /// bullet, its checked state. Callers read the kind by matching the
+    /// variant, the level with [`ParagraphListRef::level`](crate::ParagraphListRef::level)
+    /// and the checked state with
+    /// [`ParagraphListRef::checked`](crate::ParagraphListRef::checked).
     fn para_list(&self, _id: ParaShapeIndex) -> Option<crate::ParagraphListRef> {
         None
     }
