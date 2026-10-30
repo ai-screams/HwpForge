@@ -561,7 +561,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 let fence = Md::code_fence(&text).into_string();
                 let (markdown, as_item) = match (item, code_level.or(text_level)) {
                     (Some((kind, level, checked)), None) => {
-                        let head = st.lists.item("", kind, level, checked);
+                        let numbering = list_format::numbering_of(paragraph, styles);
+                        let head = st.lists.item("", kind, level, checked, numbering);
                         (format!("{head}\n{}", st.lists.block(&fence)), true)
                     }
                     (_, Some(level)) if st.lists.resume_continuation(level) => {
@@ -642,6 +643,13 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         // Flush remaining code block at section end
         flush_code(&mut code, &mut blocks);
     }
+
+    st.warnings.extend(
+        st.lists
+            .take_presentation_lost()
+            .into_iter()
+            .map(|numbering_id| MdWarning::NumberingPresentationLost { numbering_id }),
+    );
 
     // Footnote/endnote definitions at the end.
     let notes = std::mem::replace(&mut st.notes, FootnoteCollector::new());
@@ -727,7 +735,8 @@ fn encode_paragraph_styled(
             // (`list_paragraph_holds_its_one_table`).
             return match kind {
                 ParaKind::ListItem { kind, level, checked, .. } if !continuation => {
-                    let head = st.lists.item("", kind, level, checked);
+                    let numbering = list_format::numbering_of(paragraph, styles);
+                    let head = st.lists.item("", kind, level, checked, numbering);
                     let block = st.lists.block(&block);
                     (format!("{head}\n{block}"), Drawn::Item)
                 }
@@ -752,7 +761,8 @@ fn encode_paragraph_styled(
             let content = list_text(paragraph, comments_after_text(text.trim()), st);
             // An empty item is written as its marker alone.
             // 이것을 실패시키는 것: 빈 항목 쓰지 않기(`empty_item_holds_its_first_block`).
-            let item = st.lists.item(content.trim(), kind, level, checked);
+            let numbering = super::list_format::numbering_of(paragraph, styles);
+            let item = st.lists.item(content.trim(), kind, level, checked, numbering);
             return (item, Drawn::Item);
         }
         ParaKind::Body if body => comment_ends_line(text.trim_start()).0,

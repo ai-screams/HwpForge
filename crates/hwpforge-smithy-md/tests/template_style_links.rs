@@ -735,9 +735,11 @@ fn parsed_blocks(markdown: &str) -> (Vec<(String, usize)>, Vec<usize>) {
     (code, tables)
 }
 
-/// The three views of a Markdown document converted to HWPX: styled and
-/// lossy with the HWPX styles, and lossy with the template.
-fn views(markdown: &str) -> [(&'static str, String); 3] {
+/// The views of a Markdown document converted to HWPX: styled and lossy
+/// with the HWPX styles, and lossy with the template when the document
+/// needs nothing the template does not have (a numbered list after the
+/// first adds a numbering group the template, read again, does not know).
+fn views(markdown: &str) -> Vec<(&'static str, String)> {
     let template = builtin_default().unwrap();
     let bytes = wire(markdown, &template, HancomStyleSet::Modern);
     let back = HwpxDecoder::decode(&bytes).unwrap();
@@ -745,11 +747,16 @@ fn views(markdown: &str) -> [(&'static str, String); 3] {
     let document = back.document.validate().unwrap();
     let styled = MdEncoder::encode_styled(&document, &lookup).markdown;
     let lossy = MdEncoder::encode_lossy_with_styles(&document, &lookup).unwrap().0;
+    let mut out = vec![("styled", styled), ("lossy", lossy)];
     let decoded = MdDecoder::decode(markdown, &template).unwrap();
-    let template_lossy =
-        MdEncoder::encode(&decoded.document.validate().unwrap(), &template).unwrap();
-    let body = template_lossy.splitn(2, "\n---\n").last().unwrap().trim_start().to_string();
-    [("styled", styled), ("lossy", lossy), ("template", body)]
+    let plain = MdDecoder::decode("", &template).unwrap();
+    if decoded.style_registry.numbering_count() == plain.style_registry.numbering_count() {
+        let template_lossy =
+            MdEncoder::encode(&decoded.document.validate().unwrap(), &template).unwrap();
+        let body = template_lossy.splitn(2, "\n---\n").last().unwrap().trim_start().to_string();
+        out.push(("template", body));
+    }
+    out
 }
 
 /// Markdown lists become Hancom list paragraphs: each item's paraPr holds
@@ -771,9 +778,11 @@ fn markdown_lists_are_hancom_list_paragraphs() {
         ("a", "BULLET", "1", "0", "0"),
         ("a1", "BULLET", "2", "1", "0"),
         ("a2", "BULLET", "3", "2", "0"),
+        // Each numbered list is a numbering group: the first takes the
+        // template's (2), the nested ones copies after it (3, 4).
         ("b", "NUMBER", "2", "0", "0"),
-        ("b1", "NUMBER", "2", "1", "0"),
-        ("b2", "NUMBER", "2", "2", "0"),
+        ("b1", "NUMBER", "3", "1", "0"),
+        ("b2", "NUMBER", "4", "2", "0"),
         ("c", "BULLET", "11", "0", "0"),
         ("d", "BULLET", "11", "1", "1"),
         ("e", "BULLET", "11", "2", "0"),
@@ -920,5 +929,49 @@ fn code_font_list_text_stays_in_its_item() {
             "{:?}",
             out.warnings
         );
+    }
+}
+
+/// Each Markdown list as the parser reads it: how many items hold it and,
+/// numbered, its start.
+fn parsed_lists(markdown: &str) -> Vec<(usize, Option<u64>)> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TASKLISTS);
+    let mut depth = 0;
+    let mut out = Vec::new();
+    for event in Parser::new_ext(markdown, options) {
+        match event {
+            Event::Start(Tag::List(start)) => out.push((depth, start)),
+            Event::Start(Tag::Item) => depth += 1,
+            Event::End(TagEnd::Item) => depth -= 1,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Two numbered lists side by side (no block between them, or under one
+/// parent) stay two lists through HWPX and back: the second takes the
+/// other delimiter, and each starts at 1; one list with a continuation in
+/// it stays one.
+/// 이것을 실패시키는 것: 다른 번호에도 같은 구분자 · 같은 번호에 바꾼 구분자 · 다른 부모의
+/// 닫힌 항목과 비교.
+#[test]
+fn adjacent_numbering_groups_alternate_delimiters() {
+    for (md, lists) in [
+        ("1. a\n1) b", vec![(0, Some(1)), (0, Some(1))]),
+        ("1. a\n1) b\n1. c", vec![(0, Some(1)), (0, Some(1)), (0, Some(1))]),
+        (
+            "1. parent\n   1. a\n   2. a2\n\n   1) b\n   2) b2\n2. next\n   1. c",
+            vec![(0, Some(1)), (1, Some(1)), (1, Some(1)), (1, Some(1))],
+        ),
+        ("1. a\n\n   tail\n2. b", vec![(0, Some(1))]),
+    ] {
+        assert_eq!(parsed_lists(md), lists, "{md:?}");
+        for (view, out) in views(md) {
+            assert_eq!(parsed_lists(&out), lists, "{view}: {md:?} -> {out:?}");
+            assert_eq!(parsed_items(&out), parsed_items(md), "{view}: {out:?}");
+        }
     }
 }

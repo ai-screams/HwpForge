@@ -922,6 +922,7 @@ fn md_warning_code(warning: &MdWarning) -> &'static str {
         MdWarning::ListDefinitionMissing { .. } => "LIST_DEFINITION_MISSING",
         MdWarning::ListLevelClamped { .. } => "LIST_LEVEL_CLAMPED",
         MdWarning::ListStartNormalized { .. } => "LIST_START_NORMALIZED",
+        MdWarning::NumberingPresentationLost { .. } => "NUMBERING_PRESENTATION_LOST",
         _ => UNCLASSIFIED,
     }
 }

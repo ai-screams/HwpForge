@@ -325,3 +325,75 @@ fn body_list_loss_is_once_per_paragraph() {
         [(0, "paragraphs[0]", bullet, list_format::BODY_CARRIER_PROJECTION)]
     );
 }
+
+/// Hancom counts a numbering at each level across whatever is between its
+/// items, until an item of it at a shallower level starts the level again;
+/// a Markdown list starts at 1. An item that starts a new Markdown list
+/// while its numbering counts at its level is reported, once per
+/// numbering, in both views: after a block at the top; under one parent
+/// after another numbering's list (A, B, A); after its parent's
+/// continuation. Not reported: the first item of a level (even with the
+/// numbering used at another level before), items one after another, a
+/// child level started again by its parent's next item.
+/// 이것을 실패시키는 것: 보고 삭제 · 같은 목록 잇기에도 보고 · 수준 없이 번호만 기록 ·
+/// 부모 continuation 뒤 목록 잇기 · 깊은 수준 다시 세기 삭제 · 번호마다 한 번 대신 매번.
+#[test]
+fn numbering_continuing_past_a_block_is_reported() {
+    let lost = |w: &[MdWarning]| {
+        w.iter()
+            .filter_map(|w| match w {
+                MdWarning::NumberingPresentationLost { numbering_id } => Some(numbering_id.get()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let n = |text: &str| p(NUMBER, vec![t(text)]);
+    // NUMBER is numbering 0 at level 0, NUMBER1 numbering 0 at level 1,
+    // NUMBER_B1 numbering 1 at level 1.
+    let n1 = |text: &str| p(NUMBER1, vec![t(text)]);
+    let b1 = |text: &str| p(NUMBER_B1, vec![t(text)]);
+    let b = |text: &str| body(vec![t(text)]);
+    for (name, paragraphs, expected) in [
+        ("block between", vec![n("a"), b("text"), n("b"), b("more"), n("c")], vec![0]),
+        ("one list", vec![n("a"), n("b"), p(CONT0, vec![t("tail")]), n("c")], vec![]),
+        ("A B A under a parent", vec![p(BULLET, vec![t("p")]), n1("a"), b1("x"), n1("c")], vec![0]),
+        (
+            "after the parent's continuation",
+            vec![p(BULLET, vec![t("p")]), n1("a"), p(CONT0, vec![t("tail")]), n1("c")],
+            vec![0],
+        ),
+        ("other level first", vec![n1("deep"), b("text"), n("top")], vec![]),
+        ("restarted by the parent", vec![n("p"), n1("a"), n("q"), n1("b")], vec![]),
+        (
+            "after an empty continuation",
+            vec![p(BULLET, vec![t("p")]), n1("a"), p(CONT0, vec![t("")]), n1("c")],
+            vec![],
+        ),
+        (
+            "after an empty continuation of one empty picture",
+            vec![p(BULLET, vec![t("p")]), n1("a"), p(CONT0, vec![image("", None)]), n1("c")],
+            vec![],
+        ),
+        (
+            "after an empty continuation, another numbering before",
+            vec![p(BULLET, vec![t("p")]), b1("b"), n1("a"), p(CONT0, vec![t("")]), n1("c")],
+            vec![],
+        ),
+    ] {
+        for (view, md, warnings) in views(&doc(paragraphs.clone())) {
+            assert_eq!(lost(&warnings), expected, "{name} {view}: {md}");
+            // An empty continuation writes nothing: `a` and `c` stay one
+            // list (one delimiter), after `b`'s list if there is one.
+            if name.starts_with("after an empty continuation") {
+                let lists = Parser::new_ext(&md, md_options())
+                    .filter(|e| matches!(e, Event::Start(pulldown_cmark::Tag::List(Some(_)))))
+                    .count();
+                assert_eq!(
+                    lists,
+                    if name.ends_with("before") { 2 } else { 1 },
+                    "{name} {view}: {md}"
+                );
+            }
+        }
+    }
+}

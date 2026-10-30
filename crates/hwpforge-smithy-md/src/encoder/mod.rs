@@ -156,6 +156,19 @@ pub enum MdWarning {
         /// The level written.
         supported: u8,
     },
+    /// A numbering whose numbers the conversion cannot show as they are,
+    /// once per numbering:
+    ///
+    /// - MD→HWPX: a Markdown numbered list's level text refers to a
+    ///   shallower level's number (`^1.^2`); each Markdown numbered list is a
+    ///   numbering group of its own, so that number counts in this group,
+    ///   not in the list around it. The definition is written as it is.
+    /// - HWPX→MD: a numbering's items continue after a block that is not
+    ///   one of them; the Markdown starts its numbers again at 1.
+    NumberingPresentationLost {
+        /// The numbering definition.
+        numbering_id: hwpforge_foundation::NumberingIndex,
+    },
     /// A numbered Markdown list starting at a number other than 1: it is
     /// written starting at `used`.
     ListStartNormalized {
@@ -209,6 +222,11 @@ impl core::fmt::Display for MdWarning {
             Self::ListLevelClamped { requested, supported } => write!(
                 f,
                 "list nested at level {requested} is written at level {supported}, the deepest"
+            ),
+            Self::NumberingPresentationLost { numbering_id } => write!(
+                f,
+                "numbering {} is not shown as it numbers: a level refers to another group's number, or the numbers continue past other blocks",
+                numbering_id.get()
             ),
             Self::ListStartNormalized { requested, used } => {
                 write!(f, "numbered list starting at {requested} is written starting at {used}")

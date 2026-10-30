@@ -345,6 +345,7 @@ const WARNING_MAPPING: Table = &[
             ("ListSemanticsLost", "LIST_SEMANTICS_LOST"),
             ("ListDefinitionMissing", "LIST_DEFINITION_MISSING"),
             ("ListLevelClamped", "LIST_LEVEL_CLAMPED"),
+            ("NumberingPresentationLost", "NUMBERING_PRESENTATION_LOST"),
             ("ListStartNormalized", "LIST_START_NORMALIZED"),
         ],
     ),
@@ -1048,6 +1049,12 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
             (
                 "ListLevelClamped",
                 OpsWarning::Md(MdWarning::ListLevelClamped { requested: 10, supported: 9 }),
+            ),
+            (
+                "NumberingPresentationLost",
+                OpsWarning::Md(MdWarning::NumberingPresentationLost {
+                    numbering_id: hwpforge::foundation::NumberingIndex::new(2),
+                }),
             ),
             (
                 "ListStartNormalized",

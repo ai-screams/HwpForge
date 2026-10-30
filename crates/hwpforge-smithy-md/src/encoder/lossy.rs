@@ -206,6 +206,13 @@ fn encode_body(
         }
     }
 
+    warnings.extend(
+        lists
+            .take_presentation_lost()
+            .into_iter()
+            .map(|numbering_id| super::MdWarning::NumberingPresentationLost { numbering_id }),
+    );
+
     // The finished Markdown, parsed again, may hold only what lossy writes.
     let allowed = super::guard::Allowed {
         tags: super::guard::LOSSY_TAGS,
@@ -288,9 +295,11 @@ fn encode_paragraph(
                 .trim_matches('\n')
                 .to_string();
             let markdown = match item {
+                _ if continuation && block.trim().is_empty() => String::new(),
                 _ if continuation => lists.block(&block),
                 Some((kind, level, checked)) => {
-                    let head = lists.item("", kind, level, checked);
+                    let numbering = styles.and_then(|s| list_format::numbering_of(paragraph, s));
+                    let head = lists.item("", kind, level, checked, numbering);
                     if block.trim().is_empty() {
                         head
                     } else {
@@ -425,7 +434,8 @@ fn format_list_item(
     lists: &mut ListIndent,
 ) -> Option<String> {
     let (kind, level, checked) = list_item_kind(paragraph, styles)?;
-    Some(lists.item(text, kind, level, checked))
+    let numbering = styles.and_then(|s| list_format::numbering_of(paragraph, s));
+    Some(lists.item(text, kind, level, checked, numbering))
 }
 
 /// The level of the list item a paragraph continues: the template's

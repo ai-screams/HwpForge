@@ -1385,6 +1385,12 @@
           "discriminant": null
         },
         {
+          "name": "NumberingPresentationLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "ListStartNormalized",
           "shape": "struct",
           "cfg": [],

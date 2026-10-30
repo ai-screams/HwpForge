@@ -30,7 +30,7 @@ pub struct MdStyleRef {
 }
 
 impl MdStyleRef {
-    fn from_entry(entry: &StyleEntry) -> Self {
+    pub(crate) fn from_entry(entry: &StyleEntry) -> Self {
         Self {
             style_ref: entry.style_ref(),
             para_shape_id: entry.para_shape_id,
@@ -59,6 +59,9 @@ pub struct MdListStyles {
     pub code_continuation: [MdStyleRef; LIST_LEVELS],
     /// An item of a kind the template defines no list for.
     pub plain_fallback: MdStyleRef,
+    /// The numbered items' registry entries, to copy into a new numbering
+    /// group ([`hwpforge_blueprint::markdown::restart_markdown_numbering`]).
+    pub number_entries: Option<[StyleEntry; LIST_LEVELS]>,
 }
 
 impl MdListStyles {
@@ -72,6 +75,7 @@ impl MdListStyles {
             continuation: all(&shapes.continuation),
             code_continuation: all(&shapes.code_continuation),
             plain_fallback: MdStyleRef::from_entry(&shapes.plain_fallback),
+            number_entries: shapes.number,
         }
     }
 }

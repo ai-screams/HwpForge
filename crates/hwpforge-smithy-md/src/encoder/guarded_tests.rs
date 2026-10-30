@@ -66,6 +66,8 @@ pub(super) mod cases {
     /// A level-2 heading whose shape also carries a level-0 number list,
     /// as a caller's lookup may say: the heading wins.
     pub const HEADING_NUMBER: usize = 12;
+    /// A level-1 numbered item of a second numbering.
+    pub const NUMBER_B1: usize = 13;
 
     pub struct Styles;
 
@@ -116,6 +118,10 @@ pub(super) mod cases {
                 NUMBER | NUMBER1 | HEADING_NUMBER => Some(ParagraphListRef::Number {
                     numbering_id: NumberingIndex::new(0),
                     level: u8::from(id.get() == NUMBER1),
+                }),
+                NUMBER_B1 => Some(ParagraphListRef::Number {
+                    numbering_id: NumberingIndex::new(1),
+                    level: 1,
                 }),
                 CHECKED => Some(ParagraphListRef::CheckBullet {
                     bullet_id: BulletIndex::new(1),

@@ -396,6 +396,85 @@ pub fn apply_markdown_list_levels(
     })
 }
 
+/// A new numbering group for Markdown numbered items: a copy of the
+/// numbering the `base` items refer to, appended to the registry under a
+/// new id (one past the largest), starting at `start`, and the ten item
+/// shapes of `base` referring to it. Each independent Markdown numbered
+/// list takes its own group, so its numbers start again; two groups are
+/// never merged, even when equal. Existing definitions and shapes do not
+/// move. The copy keeps every level's format and text: a level text that
+/// refers to a shallower level's number (`^1.^2`) counts that level in
+/// the copy, not in another group.
+///
+/// Only `start` 1 is supported: which start fields Hancom shows as the
+/// first number is not yet known.
+///
+/// # Errors
+///
+/// [`BlueprintError::StyleResolution`] for a `start` other than 1, `base`
+/// items that are not numbered items of one numbering, or no numbering id
+/// left.
+pub fn restart_markdown_numbering(
+    registry: &mut StyleRegistry,
+    base: &[StyleEntry; LEVELS],
+    start: u32,
+) -> BlueprintResult<[StyleEntry; LEVELS]> {
+    let error = |field: &str| BlueprintError::StyleResolution {
+        style_name: "restart_markdown_numbering".into(),
+        field: field.into(),
+    };
+    // 이것을 실패시키는 것: 이 검사 삭제(`numbering_restart_copies_one_group`).
+    if start != 1 {
+        return Err(error("start 1 (other starts are not supported)"));
+    }
+    let mut shapes = Vec::with_capacity(LEVELS);
+    let mut source = None;
+    for entry in base {
+        let shape =
+            registry.para_shape(entry.para_shape_id).cloned().ok_or_else(|| error("para_shape"))?;
+        match shape.list {
+            Some(ParagraphListRef::Number { numbering_id, .. })
+                if source.is_none_or(|id| id == numbering_id) =>
+            {
+                source = Some(numbering_id);
+            }
+            _ => return Err(error("para_shape.list (numbered items of one numbering)")),
+        }
+        shapes.push(shape);
+    }
+    let source =
+        source.ok_or_else(|| error("para_shape.list (numbered items of one numbering)"))?;
+    let mut numbering = registry
+        .numberings
+        .get(source.get())
+        .cloned()
+        .ok_or_else(|| error("para_shape.list (a declared numbering)"))?;
+    // 이것을 실패시키는 것: overflow 를 포화로(`numbering_restart_copies_one_group`).
+    numbering.id = registry
+        .numberings
+        .iter()
+        .map(|n| n.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| error("a numbering id below u32::MAX"))?;
+    numbering.start = start;
+    for head in &mut numbering.levels {
+        head.start = start;
+    }
+    registry.numberings.push(numbering);
+    let group = hwpforge_foundation::NumberingIndex::new(registry.numberings.len() - 1);
+    let mut out = *base;
+    for (entry, mut shape) in out.iter_mut().zip(shapes) {
+        if let Some(ParagraphListRef::Number { level, .. }) = shape.list {
+            shape.list = Some(ParagraphListRef::Number { numbering_id: group, level });
+        }
+        registry.para_shapes.push(shape);
+        entry.para_shape_id = ParaShapeIndex::new(registry.para_shapes.len() - 1);
+    }
+    Ok(out)
+}
+
 /// A role's entry and paragraph shape.
 fn role(
     registry: &StyleRegistry,
@@ -790,6 +869,56 @@ mod tests {
             &format!("  list_item: list_item\n{}", ten("5, 30, 5, 30, 5, 30, 5, 30, 5, 30")),
         );
         assert!(derived(&template, &[]).is_ok());
+    }
+
+    /// A restart copies the numbered items' numbering once, after every
+    /// existing one (the outline's first slot and the existing shapes do not
+    /// move), starting at 1, and refers the ten copied shapes to it; each
+    /// restart is a group of its own; only start 1 is taken, and an id past
+    /// the largest that cannot be made is an error.
+    /// 이것을 실패시키는 것: 시작 검사 삭제 · 기존 정의 재사용 · overflow 를 포화로 ·
+    /// 수준 바꾸기.
+    #[test]
+    fn numbering_restart_copies_one_group() {
+        let (mut registry, shapes) = derived(&builtin_default().unwrap(), &[]).unwrap();
+        let base = shapes.number.unwrap();
+        let before = registry.clone();
+        let first = restart_markdown_numbering(&mut registry, &base, 1).unwrap();
+        let second = restart_markdown_numbering(&mut registry, &base, 1).unwrap();
+        assert_eq!(registry.numberings.len(), before.numberings.len() + 2);
+        assert_eq!(registry.numberings[0], before.numberings[0]);
+        assert_eq!(registry.para_shapes[..before.para_shapes.len()], before.para_shapes[..]);
+        for (group, entries, id) in [(2, first, 3), (3, second, 4)] {
+            let copy = &registry.numberings[group];
+            assert_eq!((copy.id, copy.start), (id, 1));
+            for (head, original) in copy.levels.iter().zip(&before.numberings[1].levels) {
+                assert_eq!(
+                    (head.start, head.level, &head.text),
+                    (1, original.level, &original.text)
+                );
+                assert_eq!(head.num_format, original.num_format);
+            }
+            for (level, (entry, original)) in entries.iter().zip(&base).enumerate() {
+                let shape = registry.para_shape(entry.para_shape_id).unwrap();
+                assert_eq!(
+                    shape.list,
+                    Some(ParagraphListRef::Number {
+                        numbering_id: NumberingIndex::new(group),
+                        level: level as u8,
+                    })
+                );
+                let original_shape = registry.para_shape(original.para_shape_id).unwrap();
+                assert_eq!(
+                    ParaShape { list: None, ..shape.clone() },
+                    ParaShape { list: None, ..original_shape.clone() }
+                );
+                assert_eq!(entry.style_ref(), original.style_ref());
+            }
+        }
+        assert!(restart_markdown_numbering(&mut registry, &base, 3).is_err());
+        assert!(restart_markdown_numbering(&mut registry, &shapes.bullet.unwrap(), 1).is_err());
+        registry.numberings.last_mut().unwrap().id = u32::MAX;
+        assert!(restart_markdown_numbering(&mut registry, &base, 1).is_err());
     }
 
     /// A numbered or check item role is named, or a style of its role's own
