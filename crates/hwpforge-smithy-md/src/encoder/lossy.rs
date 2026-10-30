@@ -3,10 +3,12 @@
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
-    Control, Document, ListItemKind, Paragraph, ParagraphListRef, RunContent, Table, Validated,
+    classify_paragraph, Control, Document, ListItemKind, ParaKind, Paragraph, ParagraphListRef,
+    RunContent, StyleLookup, Table, Validated,
 };
+use hwpforge_foundation::ParaShapeIndex;
 
-use super::list_format::ListIndent;
+use super::list_format::{self, ListIndent};
 use super::markup::{Cell, Md, Piece};
 use super::Part;
 use crate::error::MdResult;
@@ -26,7 +28,8 @@ pub(crate) fn encode_with_template_report(
 ) -> MdResult<(String, Vec<super::MdWarning>)> {
     let mut warnings = Vec::new();
     let (mapping, registry) = resolve_mapping(template)?;
-    let body = encode_body(document, Some(&mapping), Some(&registry), &mut warnings);
+    let lists = RegistryLists(&registry);
+    let body = encode_body(document, Some(&mapping), Some(&lists), false, &mut warnings);
 
     let frontmatter = from_metadata(document.metadata(), Some(template.meta.name.as_str()));
     let rendered = render_frontmatter(&frontmatter)?;
@@ -46,20 +49,60 @@ pub(crate) fn encode_without_template_report(
     document: &Document<Validated>,
 ) -> MdResult<(String, Vec<super::MdWarning>)> {
     let mut warnings = Vec::new();
-    let body = encode_body(document, None, None, &mut warnings);
+    let body = encode_body(document, None, None, false, &mut warnings);
     Ok((body, warnings))
 }
 
+/// The lossy view with paragraph semantics read from the document's
+/// original styles: list items, outline headings and continuations as
+/// `styles` says, and list paragraphs the view writes without their list
+/// semantics reported ([`super::MdWarning::ListSemanticsLost`]).
+pub(crate) fn encode_with_styles_report(
+    document: &Document<Validated>,
+    styles: &dyn StyleLookup,
+) -> MdResult<(String, Vec<super::MdWarning>)> {
+    let mut warnings = Vec::new();
+    list_format::container_list_losses(document.sections(), styles, &mut warnings);
+    let body = encode_body(document, None, Some(styles), true, &mut warnings);
+    Ok((body, warnings))
+}
+
+/// A template's registry read through the shared lookup: its paragraph
+/// shapes' list semantics, so one classification serves the template and
+/// the original-styles views.
+struct RegistryLists<'a>(&'a StyleRegistry);
+
+impl StyleLookup for RegistryLists<'_> {
+    fn para_list(&self, id: ParaShapeIndex) -> Option<ParagraphListRef> {
+        self.0.para_shape(id)?.list
+    }
+}
+
+/// A paragraph as the lossy view wrote it.
+struct Written {
+    markdown: String,
+    /// Already laid out in its item: a list paragraph's one table or
+    /// picture under its marker, or a continuation's.
+    laid: bool,
+    /// Written whole as a list item: its marker, and every block of it
+    /// inside the item. Anything else (a heading, a body paragraph, a
+    /// block written outside its item) is not.
+    as_item: bool,
+}
+
+/// The section bodies as blocks, checked. `report`: `styles` are the
+/// document's own, so a list paragraph written without its list semantics
+/// is reported.
 fn encode_body(
     document: &Document<Validated>,
     mapping: Option<&MdMapping>,
-    registry: Option<&StyleRegistry>,
+    styles: Option<&dyn StyleLookup>,
+    report: bool,
     warnings: &mut Vec<super::MdWarning>,
 ) -> String {
     use super::guard::{Block, Source};
     let mut destinations = std::collections::HashSet::new();
     let mut blocks: Vec<Block> = Vec::new();
-    let mut continuation_level: Option<u8> = None;
     let mut lists = ListIndent::default();
 
     for (section_index, section) in document.sections().iter().enumerate() {
@@ -70,23 +113,25 @@ fn encode_body(
                 body: false,
                 tight: false,
             });
-            continuation_level = None;
             lists.reset();
         }
 
         for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
-            let current_continuation_level = mapping
-                .and_then(|mapping| mapping.continuation_level(paragraph.para_shape_id))
-                .filter(|level| continuation_level == Some(*level));
+            let at = (section_index, paragraph_index);
+            // A continuation joins the open item of its level, never the
+            // last or a shallower one (`ListIndent::resume_continuation`).
+            let continuation = continuation_level(paragraph, mapping, styles)
+                .is_some_and(|level| lists.resume_continuation(level));
             // A list item's level, from the paragraph's shape.
-            let item_level = registry
-                .and_then(|registry| format_registry_list_level(paragraph, registry))
+            let item_level = list_item_kind(paragraph, styles)
+                .map(|(_, level, _)| level)
                 .or_else(|| mapping.and_then(|mapping| mapping_list_level(paragraph, mapping)));
             let first_new = warnings.len();
-            let markdown = encode_paragraph(
+            let written = encode_paragraph(
                 paragraph,
                 mapping,
-                registry,
+                styles,
+                continuation,
                 warnings,
                 &mut destinations,
                 &mut lists,
@@ -99,49 +144,46 @@ fn encode_body(
                     *paragraph = paragraph_index;
                 }
             }
+            // What the paragraph was written as decides, here only, whether
+            // a section-body list paragraph keeps its list: written as
+            // anything but a whole item, it loses it. An item the guard
+            // later writes as plain text is reported after the guard.
+            // 이것을 실패시키는 것: 이 보고 삭제(`heading_over_a_list_is_reported_once`,
+            // `lossy_block_outside_its_item_is_reported`).
+            if let Some(styles) = styles.filter(|_| report && !written.as_item) {
+                list_format::body_list_loss(
+                    warnings,
+                    document.sections(),
+                    styles,
+                    at,
+                    list_format::BODY_CARRIER_PROJECTION,
+                );
+            }
             // An empty item is written as its marker alone.
             // 이것을 실패시키는 것: 빈 항목 쓰지 않기(`lossy_empty_item_holds_its_first_block`).
             let markdown = match item_level {
-                Some(_) if markdown.trim().is_empty() => registry
-                    .and_then(|registry| {
-                        format_registry_list_item("", paragraph, registry, &mut lists)
-                    })
-                    .unwrap_or_else(|| lists.mapped_item("")),
-                _ => markdown,
+                Some(_) if written.markdown.trim().is_empty() => {
+                    format_list_item("", paragraph, styles, &mut lists)
+                        .unwrap_or_else(|| lists.mapped_item(""))
+                }
+                _ => written.markdown,
             };
             if !markdown.trim().is_empty() {
                 let text = fallback_text(paragraph, &mut destinations);
-                let at = (section_index, paragraph_index);
-                match (current_continuation_level, blocks.last_mut()) {
-                    (Some(_), Some(last)) => {
-                        let laid = lists.continuation(&markdown);
-                        last.markdown.push_str(if lists.take_tight() { "\n" } else { "\n\n" });
-                        last.markdown.push_str(&laid);
-                        if let Some(src) = &mut last.source {
-                            src.texts.push(text);
-                            src.at.push(at);
-                        }
+                // A continuation is its own block, as in the styled view.
+                let markdown = if written.laid {
+                    markdown
+                } else if continuation {
+                    lists.continuation(&markdown)
+                } else {
+                    if item_level.is_none() {
+                        lists.reset();
                     }
-                    (level, _) => {
-                        let markdown = match level {
-                            Some(_) => lists.continuation(&markdown),
-                            None => {
-                                if item_level.is_none() {
-                                    lists.reset();
-                                }
-                                markdown
-                            }
-                        };
-                        let source =
-                            Source { prefix: String::new(), texts: vec![text], at: vec![at] };
-                        let tight = lists.take_tight();
-                        blocks.push(Block { markdown, source: Some(source), body: false, tight });
-                    }
-                }
-            }
-
-            if current_continuation_level.is_none() {
-                continuation_level = item_level;
+                    markdown
+                };
+                let source = Source { prefix: String::new(), texts: vec![text], at: vec![at] };
+                let tight = lists.take_tight();
+                blocks.push(Block { markdown, source: Some(source), body: false, tight });
             }
         }
     }
@@ -152,7 +194,19 @@ fn encode_body(
         destinations: &destinations,
         decoder_structure: false,
     };
-    super::guard::checked(blocks, &allowed, warnings)
+    let (markdown, fell_back) = super::guard::checked(blocks, &allowed, warnings);
+    if let Some(styles) = styles.filter(|_| report) {
+        for at in fell_back {
+            list_format::body_list_loss(
+                warnings,
+                document.sections(),
+                styles,
+                at,
+                list_format::MARKUP_FALLBACK,
+            );
+        }
+    }
+    markdown
 }
 
 /// A paragraph's plain-text fallback in the lossy view: its text escaped,
@@ -195,70 +249,85 @@ impl super::guard::Keeper for Kept<'_> {
 fn encode_paragraph(
     paragraph: &Paragraph,
     mapping: Option<&MdMapping>,
-    registry: Option<&StyleRegistry>,
+    styles: Option<&dyn StyleLookup>,
+    continuation: bool,
     warnings: &mut Vec<super::MdWarning>,
     destinations: &mut std::collections::HashSet<String>,
     lists: &mut ListIndent,
-) -> String {
+) -> Written {
+    let item = list_item_kind(paragraph, styles);
     if paragraph.runs.len() == 1 {
-        match &paragraph.runs[0].content {
-            RunContent::Table(_) | RunContent::Image(_) => {
-                // Standalone objects keep their existing style exemption, but
-                // use the same piece writer as mixed paragraphs and containers.
-                // Written at column 0 unless a continuation indents it, it
-                // ends the list (`ListIndent`).
-                // 이것을 실패시키는 것: 닫기 삭제(`lossy_blocks_in_item_paragraph`).
-                if !is_continuation(paragraph, mapping) {
-                    lists.reset();
+        if let RunContent::Table(_) | RunContent::Image(_) = &paragraph.runs[0].content {
+            // Standalone objects keep their existing style exemption, but
+            // use the same piece writer as mixed paragraphs and containers.
+            // In a continuation or a list paragraph (under its marker) it is
+            // in its item; otherwise, at column 0, it ends the list
+            // (`ListIndent`).
+            // 이것을 실패시키는 것: 닫기 삭제(`lossy_blocks_in_item_paragraph`) · 분류 전에
+            // 블록으로 반환 · 항목으로 쓴 것을 항목 아님으로(`list_paragraph_holds_its_one_table`).
+            let block = paragraph_text_markdown(paragraph, warnings, destinations)
+                .as_str()
+                .trim_matches('\n')
+                .to_string();
+            let markdown = match item {
+                _ if continuation => lists.block(&block),
+                Some((kind, level, checked)) => {
+                    let head = lists.item("", kind, level, checked);
+                    if block.trim().is_empty() {
+                        head
+                    } else {
+                        format!("{head}\n{}", lists.block(&block))
+                    }
                 }
-                return paragraph_text_markdown(paragraph, warnings, destinations)
-                    .as_str()
-                    .trim_matches('\n')
-                    .to_string();
-            }
-            _ => {}
+                None => {
+                    lists.reset();
+                    return Written { markdown: block, laid: false, as_item: false };
+                }
+            };
+            return Written { markdown, laid: true, as_item: item.is_some() && !continuation };
         }
     }
 
     // Keep the existing raw-text code projection and unstyled paragraph path.
-    if mapping.is_none()
-        || mapping
-            .is_some_and(|m| m.classify_para_shape(paragraph.para_shape_id) == ParagraphKind::Code)
+    let list = continuation
+        || item.is_some()
+        || mapping.and_then(|m| mapping_list_level(paragraph, m)).is_some();
+    if mapping
+        .is_some_and(|m| m.classify_para_shape(paragraph.para_shape_id) == ParagraphKind::Code)
+        || (mapping.is_none() && !list)
     {
-        return format_paragraph_text(
+        let markdown = format_paragraph_text(
             paragraph_text_markdown(paragraph, warnings, destinations).into_string(),
             paragraph,
             mapping,
-            registry,
+            styles,
             lists,
         );
+        return Written { markdown, laid: false, as_item: false };
     }
 
     let pieces = paragraph_pieces_at::<Md>(paragraph, warnings, destinations, 0);
     let mut out = Vec::new();
     let mut inline = Vec::new();
+    let mut as_item = item.is_some();
     // A block piece is written at column 0, after the item text before it,
     // and ends the list there; text after it starts again (`ListIndent`). A
-    // continuation's blocks are indented with it, inside its item.
-    // 이것을 실패시키는 것: 블록 조각에서 닫기 삭제(`lossy_blocks_in_item_paragraph`).
-    let continuation = is_continuation(paragraph, mapping);
-    // A list item's or a continuation's text makes no structure it did not
-    // mean and does not close its item, a template item's first line too.
-    // 이것을 실패시키는 것: 보호 삭제(`lossy_item_text_stays_in_its_item`).
-    let list = continuation
-        || registry.and_then(|registry| format_registry_list_level(paragraph, registry)).is_some()
-        || mapping.and_then(|m| mapping_list_level(paragraph, m)).is_some();
-    let flush_inline =
-        |inline: &mut Vec<Piece<Md>>, out: &mut Vec<Piece<Md>>, lists: &mut ListIndent| {
-            let pieces = std::mem::take(inline);
-            let text =
-                if list { Md::lossy_list_paragraph(pieces) } else { Md::from_pieces(pieces) };
-            if !text.as_str().trim().is_empty() {
-                out.push(Piece::Markup(text.layout(|text| {
-                    format_paragraph_text(text, paragraph, mapping, registry, lists)
-                })));
-            }
-        };
+    // continuation's blocks are indented with it, inside its item. A list
+    // item's text makes no structure it did not mean and does not close its
+    // item, a template item's first line too.
+    // 이것을 실패시키는 것: 블록 조각에서 닫기 삭제(`lossy_blocks_in_item_paragraph`) ·
+    // 보호 삭제(`lossy_item_text_stays_in_its_item`).
+    let flush_inline = |inline: &mut Vec<Piece<Md>>,
+                        out: &mut Vec<Piece<Md>>,
+                        lists: &mut ListIndent| {
+        let pieces = std::mem::take(inline);
+        let text = if list { Md::lossy_list_paragraph(pieces) } else { Md::from_pieces(pieces) };
+        if !text.as_str().trim().is_empty() {
+            out.push(Piece::Markup(
+                text.layout(|text| format_paragraph_text(text, paragraph, mapping, styles, lists)),
+            ));
+        }
+    };
     for piece in pieces {
         match piece {
             // Preserve block identity until the common piece writer joins it
@@ -269,6 +338,8 @@ fn encode_paragraph(
                 out.push(Piece::Block(block));
                 if !continuation {
                     lists.reset();
+                    // 이것을 실패시키는 것: 이 표시 삭제(`lossy_block_outside_its_item_is_reported`).
+                    as_item = false;
                 }
             }
             Piece::Block(_) => {}
@@ -276,34 +347,27 @@ fn encode_paragraph(
         }
     }
     flush_inline(&mut inline, &mut out, lists);
-    Md::from_pieces(out).into_string()
+    Written { markdown: Md::from_pieces(out).into_string(), laid: false, as_item }
 }
 
 fn format_paragraph_text(
     text: String,
     paragraph: &Paragraph,
     mapping: Option<&MdMapping>,
-    registry: Option<&StyleRegistry>,
+    styles: Option<&dyn StyleLookup>,
     lists: &mut ListIndent,
 ) -> String {
     let trimmed = text.trim();
 
     if !trimmed.is_empty() {
-        if let Some(markdown) = registry
-            .and_then(|registry| format_registry_list_item(trimmed, paragraph, registry, lists))
-        {
+        if let Some(markdown) = format_list_item(trimmed, paragraph, styles, lists) {
             return markdown;
         }
     }
 
-    if let Some(hwpforge_core::ParagraphListRef::Outline { level }) =
-        registry.and_then(|r| r.para_shape(paragraph.para_shape_id)).and_then(|p| p.list)
+    if let Some(ParaKind::Heading { level, .. }) = styles.map(|s| classify_paragraph(paragraph, s))
     {
-        return format!(
-            "{} {}",
-            "#".repeat(usize::from(hwpforge_core::outline::outline_heading_depth(level))),
-            trimmed
-        );
+        return format!("{} {}", "#".repeat(usize::from(level)), trimmed);
     }
     if let Some(mapping) = mapping {
         match mapping.classify_para_shape(paragraph.para_shape_id) {
@@ -324,40 +388,39 @@ fn format_paragraph_text(
     }
 }
 
-fn format_registry_list_item(
+/// The list item a paragraph is written as, by the shared classification
+/// of its styles: marker family, level and checked state.
+fn list_item_kind(
+    paragraph: &Paragraph,
+    styles: Option<&dyn StyleLookup>,
+) -> Option<(ListItemKind, u8, Option<bool>)> {
+    match classify_paragraph(paragraph, styles?) {
+        ParaKind::ListItem { kind, level, checked, .. } => Some((kind, level, checked)),
+        ParaKind::Heading { .. } | ParaKind::Body => None,
+    }
+}
+
+fn format_list_item(
     text: &str,
     paragraph: &Paragraph,
-    registry: &StyleRegistry,
+    styles: Option<&dyn StyleLookup>,
     lists: &mut ListIndent,
 ) -> Option<String> {
-    let list = registry.para_shape(paragraph.para_shape_id)?.list?;
-    match list {
-        ParagraphListRef::Outline { .. } => None,
-        ParagraphListRef::Number { level, .. } => {
-            Some(lists.item(text, ListItemKind::Number, level, None))
-        }
-        ParagraphListRef::Bullet { level, .. } => {
-            Some(lists.item(text, ListItemKind::Bullet, level, None))
-        }
-        ParagraphListRef::CheckBullet { level, checked, .. } => {
-            Some(lists.item(text, ListItemKind::Bullet, level, Some(checked)))
-        }
-    }
+    let (kind, level, checked) = list_item_kind(paragraph, styles)?;
+    Some(lists.item(text, kind, level, checked))
 }
 
-/// Whether the template mapping draws `paragraph` as a list continuation.
-fn is_continuation(paragraph: &Paragraph, mapping: Option<&MdMapping>) -> bool {
-    mapping.is_some_and(|m| m.continuation_level(paragraph.para_shape_id).is_some())
-}
-
-fn format_registry_list_level(paragraph: &Paragraph, registry: &StyleRegistry) -> Option<u8> {
-    let list = registry.para_shape(paragraph.para_shape_id)?.list?;
-    match list {
-        ParagraphListRef::Outline { .. } => None,
-        ParagraphListRef::Number { level, .. }
-        | ParagraphListRef::Bullet { level, .. }
-        | ParagraphListRef::CheckBullet { level, .. } => Some(level),
-    }
+/// The level of the list item a paragraph continues: the template's
+/// continuation shape, or the original styles' continuation
+/// ([`list_format::continuation_level`]).
+fn continuation_level(
+    paragraph: &Paragraph,
+    mapping: Option<&MdMapping>,
+    styles: Option<&dyn StyleLookup>,
+) -> Option<u8> {
+    mapping
+        .and_then(|m| m.continuation_level(paragraph.para_shape_id))
+        .or_else(|| list_format::continuation_level(paragraph, styles?))
 }
 
 fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> {
@@ -1429,10 +1492,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.contains("| A | B |"));
         assert!(md.contains("| --- | --- |"));
         assert!(md.contains("| 1 | 2 |"));
@@ -1458,10 +1523,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.contains("A\\|B"));
     }
 
@@ -1493,10 +1560,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.contains("[Rust](https://www.rust-lang.org)"));
     }
 
@@ -1785,7 +1854,7 @@ mod tests {
         let allowed =
             Allowed { tags: LOSSY_TAGS, destinations: &destinations, decoder_structure: false };
         let mut warnings = Vec::new();
-        assert_eq!(checked(vec![block], &allowed, &mut warnings), text);
+        assert_eq!(checked(vec![block], &allowed, &mut warnings).0, text);
         assert_eq!(warnings.len(), 1);
         // Its leading whitespace is dropped (four spaces would make code).
         let indented = Paragraph::with_runs(
@@ -1813,10 +1882,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert_eq!(md, "![photo](path/to/photo.jpg)");
     }
 
@@ -1839,10 +1910,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.contains("![figure_1]"));
     }
 
@@ -1904,10 +1977,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert_eq!(md, "| |\n| --- |");
     }
 
@@ -1934,10 +2009,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         // 이것을 실패시키는 것: 빈 행 패딩 중 행/셀 누락.
         assert_eq!(
             gfm_blocks(&md),
@@ -1965,10 +2042,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.contains(r"path\\to\\file"));
     }
 
@@ -1992,10 +2071,12 @@ mod tests {
             &paragraph,
             None,
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.contains("<br>"));
     }
 
@@ -2077,10 +2158,12 @@ mod tests {
             &paragraph,
             Some(&mapping),
             None,
+            false,
             &mut Vec::new(),
             &mut Default::default(),
             &mut Default::default(),
-        );
+        )
+        .markdown;
         assert!(md.starts_with("```\n"));
         assert!(md.ends_with("\n```"));
         assert!(md.contains("let x = 1;"));
@@ -2127,7 +2210,13 @@ mod tests {
             })
             .collect();
         let doc = validated_document(paragraphs);
-        let md = encode_body(&doc, Some(&mapping), Some(&registry), &mut Vec::new());
+        let md = encode_body(
+            &doc,
+            Some(&mapping),
+            Some(&RegistryLists(&registry)),
+            false,
+            &mut Vec::new(),
+        );
         let depths = super::super::list_format::item_depths(&md);
         (md, depths)
     }
@@ -2195,12 +2284,13 @@ mod tests {
         assert_eq!(out, want, "{md}");
     }
 
-    /// An item paragraph's table is written as its own block at column 0:
-    /// after it the list is closed, and item text after it starts a new
-    /// one, whatever the order (text then table, table then text, text,
-    /// table, text). The deeper item after the paragraph nests under the
-    /// last item written.
-    /// 이것을 실패시키는 것: 블록 조각에서 닫기 삭제 · 단독 표 문단에서 닫기 삭제 ·
+    /// An item paragraph's table among its text is written as its own block
+    /// at column 0: after it the list is closed, and item text after it
+    /// starts a new one, whatever the order (text then table, table then
+    /// text, text, table, text). The deeper item after the paragraph nests
+    /// under the last item written. An item paragraph that is one table
+    /// holds it under its marker.
+    /// 이것을 실패시키는 것: 블록 조각에서 닫기 삭제 · 단독 표 문단을 블록으로 반환 ·
     /// continuation 의 블록에서도 닫기.
     #[test]
     fn lossy_blocks_in_item_paragraph() {
@@ -2226,14 +2316,15 @@ mod tests {
             (t("c"), Li::Num(2)),
         ]);
         assert_eq!(md, "1. a\n\n\n\n| KEEP |\n| --- |\n\n1. b\n\n   1. c");
-        // An item paragraph that is one table is a block at column 0.
+        // An item paragraph that is one table is an item whose marker holds
+        // the table; the deeper item after it nests under it.
         let (md, out) = lossy_list(vec![
             (t("a"), Li::Num(0)),
             (t("b"), Li::Num(1)),
             (vec![table()], Li::Num(1)),
             (t("c"), Li::Num(2)),
         ]);
-        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("KEEP", 0), ("c", 1)]), "{md}");
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("KEEP", 2), ("c", 3)]), "{md}");
         // A continuation's table is inside its item: the item stays open.
         let (md, out) = lossy_list(vec![
             (t("a"), Li::Num(0)),
@@ -2420,22 +2511,26 @@ mod tests {
             encode_paragraph(
                 &unchecked,
                 Some(&mapping),
-                Some(&registry),
+                Some(&RegistryLists(&registry)),
+                false,
                 &mut Vec::new(),
                 &mut Default::default(),
                 &mut lists,
-            ),
+            )
+            .markdown,
             "- [ ] todo"
         );
         assert_eq!(
             encode_paragraph(
                 &checked,
                 Some(&mapping),
-                Some(&registry),
+                Some(&RegistryLists(&registry)),
+                false,
                 &mut Vec::new(),
                 &mut Default::default(),
                 &mut lists,
-            ),
+            )
+            .markdown,
             "  - [x] done"
         );
     }
@@ -2760,10 +2855,12 @@ mod tests {
                         &paragraph,
                         Some(&mapping),
                         None,
+                        false,
                         &mut Vec::new(),
                         &mut Default::default(),
                         &mut Default::default(),
-                    );
+                    )
+                    .markdown;
                     assert_eq!(gfm_blocks(&fallback), expected);
                 }
             }

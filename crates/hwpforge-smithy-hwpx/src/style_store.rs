@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod fidelity;
 
 use crate::color::{parse_hex_color_or_black, parse_hex_color_raw};
-use crate::list_bridge::{heading_type_to_para_list_type, list_ref_to_wire_parts};
+use crate::list_bridge::{list_ref_to_wire_parts, wire_parts_to_list_ref, WireListParts};
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::ParagraphMeasure;
 use hwpforge_core::{
-    BorderFillLines, BorderLine, BorderLineKind, BulletDef, FillKind, NumberingDef, StyleLookup,
-    TabDef,
+    BorderFillLines, BorderLine, BorderLineKind, BulletDef, FillKind, NumberingDef,
+    ParagraphListRef, StyleLookup, TabDef,
 };
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShadow, CharShapeIndex, Color, EmbossType,
@@ -2059,19 +2059,41 @@ pub fn parse_heading_level_from_name(name: &str) -> Option<u8> {
     }
 }
 
-fn heading_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
-    if ps.heading_type == HeadingType::Outline {
-        Some(hwpforge_core::outline::outline_heading_depth(u8::try_from(ps.heading_level).ok()?))
-    } else {
-        None
+impl HwpxParaShape {
+    /// The paragraph-list wire components this shape stores (`heading`
+    /// type, idRef, level and `paraPr@checked`).
+    pub(crate) fn list_wire_parts(&self) -> WireListParts {
+        WireListParts {
+            heading_type: self.heading_type,
+            id_ref: self.heading_id_ref,
+            level: self.heading_level,
+            checked: self.checked,
+        }
     }
 }
 
-fn list_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
-    match ps.heading_type {
-        HeadingType::Number | HeadingType::Bullet => u8::try_from(ps.heading_level).ok(),
-        HeadingType::Outline | HeadingType::None => None,
-        _ => None,
+impl HwpxStyleStore {
+    /// The shared list semantics of a paragraph shape's wire components, or
+    /// why they cannot be carried ([`wire_parts_to_list_ref`]).
+    pub(crate) fn para_list_ref(
+        &self,
+        shape: &HwpxParaShape,
+    ) -> HwpxResult<Option<ParagraphListRef>> {
+        wire_parts_to_list_ref(shape.list_wire_parts(), &self.numberings, &self.bullets)
+    }
+
+    /// The heading depth of a paragraph shape's outline, read from its
+    /// shared list semantics ([`Self::para_list_ref`]): an outline level
+    /// the shared semantics cannot carry is no heading.
+    /// 이것을 실패시키는 것: 원래 `heading_level` 을 직접 읽기
+    /// (`invalid_outline_level_reads_as_body`).
+    fn outline_heading_level(&self, shape: &HwpxParaShape) -> Option<u8> {
+        match self.para_list_ref(shape) {
+            Ok(Some(ParagraphListRef::Outline { level })) => {
+                Some(hwpforge_core::outline::outline_heading_depth(level))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -2157,23 +2179,10 @@ impl StyleLookup for HwpxStyleStore {
         self.para_shapes.get(id.get()).map(|p| p.indent)
     }
 
-    fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
-        let ps = self.para_shapes.get(id.get())?;
-        heading_type_to_para_list_type(ps.heading_type)
-    }
-
-    fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
-        let ps = self.para_shapes.get(id.get())?;
-        list_level_from_para_shape(ps)
-    }
-
-    fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
-        let ps = self.para_shapes.get(id.get())?;
-        if ps.heading_type != HeadingType::Bullet {
-            return None;
-        }
-        let bullet = self.iter_bullets().nth(ps.heading_id_ref.checked_sub(1)? as usize)?;
-        bullet.is_checkable().then_some(ps.checked)
+    // A wire value the shared reference cannot carry reads as no list; the
+    // decoder reports it once (`ContentLost` `list_semantics`).
+    fn para_list(&self, id: ParaShapeIndex) -> Option<ParagraphListRef> {
+        self.para_list_ref(self.para_shapes.get(id.get())?).ok().flatten()
     }
 
     fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
@@ -2186,8 +2195,7 @@ impl StyleLookup for HwpxStyleStore {
     }
 
     fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
-        let ps = self.para_shapes.get(id.get())?;
-        heading_level_from_para_shape(ps)
+        self.outline_heading_level(self.para_shapes.get(id.get())?)
     }
 
     fn style_name(&self, id: StyleRef) -> Option<&str> {
@@ -2212,7 +2220,7 @@ impl StyleLookup for HwpxStyleStore {
             .get(style.para_pr_id_ref as usize)
             .filter(|_| style.style_type == "PARA")
         {
-            if let Some(level) = heading_level_from_para_shape(para_shape) {
+            if let Some(level) = self.outline_heading_level(para_shape) {
                 return Some(level);
             }
         }
@@ -2387,14 +2395,12 @@ mod tests {
         shape.font_ref.hangul = FontIndex::new(usize::try_from(u64::from(u32::MAX) + 1).unwrap());
         let id = store.push_char_shape(shape);
         assert_eq!(store.char_font_name(id), None);
-        assert_eq!(
-            heading_level_from_para_shape(&HwpxParaShape {
-                heading_type: HeadingType::Outline,
-                heading_level: 256,
-                ..Default::default()
-            }),
-            None
-        );
+        let shape = store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Outline,
+            heading_level: 256,
+            ..Default::default()
+        });
+        assert_eq!(store.para_heading_level(shape), None);
     }
 
     #[test]
@@ -3870,7 +3876,7 @@ mod tests {
     }
 
     #[test]
-    fn style_lookup_para_checked_state_reads_checkable_bullets_only() {
+    fn style_lookup_para_list_reads_checked_on_checkable_bullets_only() {
         use hwpforge_core::{BulletDef, ParaHead, StyleLookup};
         use hwpforge_foundation::NumberFormatType;
 
@@ -3914,8 +3920,21 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(store.para_checked_state(ParaShapeIndex::new(0)), Some(true));
-        assert_eq!(store.para_checked_state(ParaShapeIndex::new(1)), None);
+        assert_eq!(
+            store.para_list(ParaShapeIndex::new(0)),
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id: hwpforge_foundation::BulletIndex::new(0),
+                level: 0,
+                checked: true,
+            })
+        );
+        assert_eq!(
+            store.para_list(ParaShapeIndex::new(1)),
+            Some(ParagraphListRef::Bullet {
+                bullet_id: hwpforge_foundation::BulletIndex::new(1),
+                level: 0,
+            })
+        );
     }
 
     #[test]

@@ -137,6 +137,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
     }
 
     crate::header_references::HeaderReferences::build(&store)?;
+    warnings.extend(list_semantics_losses(&store));
     Ok(HeaderParseResult {
         style_store: store,
         begin_num,
@@ -146,6 +147,33 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
         track_change_author_count,
         requires_header_normalization: normalize_measures,
     })
+}
+
+/// A paragraph list reference the shared list semantics cannot carry (a
+/// NUMBER or BULLET with `idRef` 0, a level past 9): its wire value stays in
+/// the store, and the shared view (`StyleLookup::para_list`) reads it as no
+/// list. Reported once per paraPr here, since a lookup has no warning sink.
+/// 이것을 실패시키는 것: 이 보고 삭제(`unreadable_list_reference_is_reported_and_kept`).
+fn list_semantics_losses(store: &HwpxStyleStore) -> Vec<super::DecodeWarning> {
+    store
+        .iter_para_shapes()
+        .enumerate()
+        .filter_map(|(index, shape)| {
+            let error = store.para_list_ref(shape).err()?;
+            Some(super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".into(),
+                path: super::ParagraphPath::default(),
+                kind: "list_semantics".into(),
+                reason: format!(
+                    "paraPr {index} heading {} idRef {} level {}: {error}; the wire value is kept, \
+                     the shared list view reads no list",
+                    shape.heading_type.to_hwpx_str(),
+                    shape.heading_id_ref,
+                    shape.heading_level
+                ),
+            })
+        })
+        .collect()
 }
 
 /// Hancom reads header references by list position, ignoring id and itemCnt.
@@ -1052,6 +1080,26 @@ fn convert_para_pr(
         .heading
         .as_ref()
         .map_or(HeadingType::None, |heading| HeadingType::from_hwpx_str(&heading.heading_type));
+    // A heading type this decoder does not know reads as no list. It is
+    // reported here, while the raw type is still in hand, with the same
+    // kind as an unreadable list reference (`list_semantics_losses`). A
+    // missing attribute is NONE, not an unknown type.
+    // 이것을 실패시키는 것: 이 보고 삭제 · 빈 type 제외 삭제
+    // (`unknown_heading_type_is_reported`).
+    if let Some(heading) = pp.heading.as_ref().filter(|heading| {
+        !heading.heading_type.is_empty() && heading.heading_type != heading_type.to_hwpx_str()
+    }) {
+        warnings.push(super::DecodeWarning::ContentLost {
+            part: "Contents/header.xml".into(),
+            path: super::ParagraphPath::default(),
+            kind: "list_semantics".into(),
+            reason: format!(
+                "paraPr {} heading {} idRef {} level {}: unknown heading type; it is read as NONE \
+                 and re-encoded as NONE",
+                pp.id, heading.heading_type, heading.id_ref, heading.level
+            ),
+        });
+    }
     let heading_id_ref = pp.heading.as_ref().map_or(0, |heading| heading.id_ref);
     let heading_level = pp.heading.as_ref().map_or(0, |heading| heading.level);
     let checked = pp.checked != 0;
@@ -2198,6 +2246,118 @@ mod tests {
         assert_eq!(bullet.bullet_char, "");
         assert!(bullet.use_image);
         assert_eq!(bullet.para_head.level, 1);
+    }
+
+    /// A BULLET with `idRef` 0 (seen in a government document) has no
+    /// definition: one `list_semantics` loss, the wire value kept, and no
+    /// list read from it; a valid reference beside it reads.
+    #[test]
+    fn unreadable_list_reference_is_reported_and_kept() {
+        use hwpforge_core::{ParagraphListRef, StyleLookup};
+        use hwpforge_foundation::{BulletIndex, ParaShapeIndex};
+        let para = |id: u32, heading: &str| {
+            format!(
+                r#"<paraPr id="{id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1"
+                        suppressLineNumbers="0" checked="0">
+                        <align horizontal="JUSTIFY" vertical="BASELINE"/>
+                        {heading}
+                    </paraPr>"#
+            )
+        };
+        let xml = format!(
+            r#"<head version="1.4" secCnt="1">
+            <refList>
+                <bullets itemCnt="1">
+                    <bullet id="1" char="•" useImage="0">
+                        <paraHead level="0" align="LEFT" useInstWidth="0" autoIndent="1"
+                            widthAdjust="0" textOffsetType="PERCENT" textOffset="50"
+                            numFormat="DIGIT" charPrIDRef="4294967295" checkable="0"/>
+                    </bullet>
+                </bullets>
+                <paraProperties itemCnt="2">{}{}</paraProperties>
+            </refList>
+        </head>"#,
+            para(0, r#"<heading type="BULLET" idRef="0" level="1"/>"#),
+            para(1, r#"<heading type="BULLET" idRef="1" level="1"/>"#),
+        );
+
+        let result = parse_header(&xml).unwrap();
+        let losses: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::DecodeWarning::ContentLost { kind, reason, .. }
+                    if kind == "list_semantics" =>
+                {
+                    Some(reason.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(losses.len(), 1, "{:?}", result.warnings);
+        assert!(losses[0].starts_with("paraPr 0 heading BULLET idRef 0 level 1"), "{}", losses[0]);
+        let store = &result.style_store;
+        let kept = store.para_shape(ParaShapeIndex::new(0)).unwrap();
+        assert_eq!(
+            (kept.heading_type, kept.heading_id_ref, kept.heading_level),
+            (HeadingType::Bullet, 0, 1)
+        );
+        assert_eq!(store.para_list(ParaShapeIndex::new(0)), None);
+        assert_eq!(
+            store.para_list(ParaShapeIndex::new(1)),
+            Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 1 })
+        );
+    }
+
+    /// A heading type the decoder does not know is one `list_semantics`
+    /// loss naming the raw type and its paraPr; NONE and a heading with no
+    /// type are no list and no loss.
+    /// 이것을 실패시키는 것: `convert_para_pr` 의 미지 type 보고 삭제 · 빈 type 제외 삭제.
+    #[test]
+    fn unknown_heading_type_is_reported() {
+        let para = |id: u32, heading: &str| {
+            format!(
+                r#"<paraPr id="{id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1"
+                        suppressLineNumbers="0" checked="0">
+                        <align horizontal="JUSTIFY" vertical="BASELINE"/>
+                        {heading}
+                    </paraPr>"#
+            )
+        };
+        let xml = format!(
+            r#"<head version="1.4" secCnt="1">
+            <refList>
+                <paraProperties itemCnt="3">{}{}{}</paraProperties>
+            </refList>
+        </head>"#,
+            para(0, r#"<heading type="NONE" idRef="0" level="0"/>"#),
+            para(1, r#"<heading idRef="0" level="0"/>"#),
+            para(2, r#"<heading type="MYSTERY" idRef="3" level="4"/>"#),
+        );
+
+        let result = parse_header(&xml).unwrap();
+        let losses: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::DecodeWarning::ContentLost { part, kind, reason, .. }
+                    if kind == "list_semantics" =>
+                {
+                    Some((part.as_str(), reason.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            losses,
+            [(
+                "Contents/header.xml",
+                "paraPr 2 heading MYSTERY idRef 3 level 4: unknown heading type; it is read as NONE \
+                 and re-encoded as NONE"
+            )],
+            "{:?}",
+            result.warnings
+        );
     }
 
     // ── Styles ───────────────────────────────────────────────────

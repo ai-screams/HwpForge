@@ -7,9 +7,8 @@
 //!
 //! 1. paragraph-shape outline level ([`StyleLookup::para_heading_level`]) —
 //!    the format-agnostic truth source for headings
-//! 2. paragraph-shape list semantics ([`StyleLookup::para_list_type`] plus
-//!    [`para_list_level`](StyleLookup::para_list_level) /
-//!    [`para_checked_state`](StyleLookup::para_checked_state))
+//! 2. paragraph-shape list semantics ([`StyleLookup::para_list`]); an
+//!    outline reference there is a heading too
 //! 3. style heading level ([`StyleLookup::style_heading_level`])
 //! 4. style-name list heuristic — Korean style names containing `글머리` or
 //!    `개조` imply a bullet list, `번호` a numbered list. This is a documented
@@ -24,7 +23,7 @@
 //! never consulted. Renderers keep their own empty-text guards (an empty
 //! heading or list item renders as nothing, but that is a rendering concern).
 
-use crate::{Paragraph, StyleLookup};
+use crate::{Paragraph, ParagraphListRef, StyleLookup};
 
 /// Which axis produced a [`ParaKind::Heading`] classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,7 +39,7 @@ pub enum HeadingSource {
 /// Which axis produced a [`ParaKind::ListItem`] classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListSource {
-    /// Paragraph-shape list heading ([`StyleLookup::para_list_type`]) —
+    /// Paragraph-shape list semantics ([`StyleLookup::para_list`]) —
     /// second priority.
     ParaShape,
     /// Style-name heuristic (`글머리`/`개조`/`번호`) — lowest priority.
@@ -90,21 +89,34 @@ pub enum ParaKind {
 
 /// Classifies `paragraph` through the shared outline/list precedence chain.
 ///
-/// Unknown [`StyleLookup::para_list_type`] strings degrade to
-/// [`ListItemKind::Bullet`], mirroring the historical Markdown renderer
-/// (only `"NUMBER"` selects the numbered family).
+/// A [`ParagraphListRef::Outline`] from [`StyleLookup::para_list`] is a
+/// heading at [`outline_heading_depth`]; a checkable bullet is a
+/// [`ListItemKind::Bullet`] carrying its checked state.
 #[must_use]
 pub fn classify_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> ParaKind {
     if let Some(level) = styles.para_heading_level(paragraph.para_shape_id) {
         return ParaKind::Heading { level: level.clamp(1, 6), source: HeadingSource::ParaShape };
     }
 
-    if let Some(list_type) = styles.para_list_type(paragraph.para_shape_id) {
-        let kind = if list_type == "NUMBER" { ListItemKind::Number } else { ListItemKind::Bullet };
+    if let Some(list) = styles.para_list(paragraph.para_shape_id) {
+        let kind = match list {
+            // 이것을 실패시키는 것: 개요 수준을 `level.clamp(1, 6)` 로
+            // (`outline_list_ref_is_a_heading_at_its_depth`).
+            ParagraphListRef::Outline { level } => {
+                return ParaKind::Heading {
+                    level: outline_heading_depth(level),
+                    source: HeadingSource::ParaShape,
+                };
+            }
+            ParagraphListRef::Number { .. } => ListItemKind::Number,
+            ParagraphListRef::Bullet { .. } | ParagraphListRef::CheckBullet { .. } => {
+                ListItemKind::Bullet
+            }
+        };
         return ParaKind::ListItem {
             kind,
-            level: styles.para_list_level(paragraph.para_shape_id).unwrap_or(0),
-            checked: styles.para_checked_state(paragraph.para_shape_id),
+            level: list.level(),
+            checked: list.checked(),
             source: ListSource::ParaShape,
         };
     }
@@ -144,15 +156,13 @@ pub fn outline_heading_depth(level: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{ParaShapeIndex, StyleRef};
+    use hwpforge_foundation::{BulletIndex, NumberingIndex, ParaShapeIndex, StyleRef};
     use std::collections::HashMap;
 
     #[derive(Default)]
     struct MockStyles {
         para_headings: HashMap<usize, u8>,
-        para_list_types: HashMap<usize, &'static str>,
-        para_list_levels: HashMap<usize, u8>,
-        para_checked: HashMap<usize, bool>,
+        para_lists: HashMap<usize, ParagraphListRef>,
         style_headings: HashMap<usize, u8>,
         style_names: HashMap<usize, &'static str>,
     }
@@ -161,14 +171,8 @@ mod tests {
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
             self.para_headings.get(&id.get()).copied()
         }
-        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
-            self.para_list_types.get(&id.get()).copied()
-        }
-        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
-            self.para_list_levels.get(&id.get()).copied()
-        }
-        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
-            self.para_checked.get(&id.get()).copied()
+        fn para_list(&self, id: ParaShapeIndex) -> Option<ParagraphListRef> {
+            self.para_lists.get(&id.get()).copied()
         }
         fn style_heading_level(&self, id: StyleRef) -> Option<u8> {
             self.style_headings.get(&id.get()).copied()
@@ -180,6 +184,10 @@ mod tests {
 
     fn para(shape: usize) -> Paragraph {
         Paragraph::new(ParaShapeIndex::new(shape))
+    }
+
+    fn number(numbering: usize, level: u8) -> ParagraphListRef {
+        ParagraphListRef::Number { numbering_id: NumberingIndex::new(numbering), level }
     }
 
     fn styled_para(shape: usize, style: usize) -> Paragraph {
@@ -224,27 +232,19 @@ mod tests {
         );
     }
 
+    /// An outline reference is a heading at its depth (level 2 is `###`),
+    /// as the HWPX outline heading reads, not a clamped level.
+    /// 이것을 실패시키는 것: 개요 수준을 `level.clamp(1, 6)` 로.
     #[test]
-    fn unknown_list_type_string_degrades_to_bullet() {
-        let styles = MockStyles { para_list_types: [(0, "WEIRD")].into(), ..Default::default() };
+    fn outline_list_ref_is_a_heading_at_its_depth() {
+        let styles = MockStyles {
+            para_lists: [(0, ParagraphListRef::Outline { level: 2 })].into(),
+            ..Default::default()
+        };
         assert_eq!(
             classify_paragraph(&para(0), &styles),
-            ParaKind::ListItem {
-                kind: ListItemKind::Bullet,
-                level: 0,
-                checked: None,
-                source: ListSource::ParaShape,
-            }
+            ParaKind::Heading { level: 3, source: HeadingSource::ParaShape }
         );
-    }
-
-    #[test]
-    fn missing_list_level_defaults_to_zero() {
-        let styles = MockStyles { para_list_types: [(0, "BULLET")].into(), ..Default::default() };
-        let ParaKind::ListItem { level, .. } = classify_paragraph(&para(0), &styles) else {
-            panic!("expected list item");
-        };
-        assert_eq!(level, 0);
     }
 
     // -- precedence chain -------------------------------------------------
@@ -253,7 +253,7 @@ mod tests {
     fn para_heading_beats_para_list() {
         let styles = MockStyles {
             para_headings: [(0, 2)].into(),
-            para_list_types: [(0, "NUMBER")].into(),
+            para_lists: [(0, number(0, 0))].into(),
             ..Default::default()
         };
         assert_eq!(
@@ -265,7 +265,11 @@ mod tests {
     #[test]
     fn para_list_beats_style_heading() {
         let styles = MockStyles {
-            para_list_types: [(0, "BULLET")].into(),
+            para_lists: [(
+                0,
+                ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 },
+            )]
+            .into(),
             style_headings: [(1, 1)].into(),
             ..Default::default()
         };
@@ -288,13 +292,10 @@ mod tests {
 
     // -- normal cases -----------------------------------------------------
 
+    /// 이것을 실패시키는 것: Number 를 Bullet 으로.
     #[test]
-    fn number_list_type_maps_to_number_kind() {
-        let styles = MockStyles {
-            para_list_types: [(0, "NUMBER")].into(),
-            para_list_levels: [(0, 2)].into(),
-            ..Default::default()
-        };
+    fn number_list_ref_maps_to_number_kind() {
+        let styles = MockStyles { para_lists: [(0, number(3, 2))].into(), ..Default::default() };
         assert_eq!(
             classify_paragraph(&para(0), &styles),
             ParaKind::ListItem {
@@ -306,22 +307,30 @@ mod tests {
         );
     }
 
+    /// The checked state comes from the typed reference only: a plain
+    /// bullet has none.
+    /// 이것을 실패시키는 것: `checked: None` 고정.
     #[test]
     fn checkable_bullet_carries_checked_state() {
+        let check = |checked| ParagraphListRef::CheckBullet {
+            bullet_id: BulletIndex::new(1),
+            level: 1,
+            checked,
+        };
+        let plain = ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 };
         let styles = MockStyles {
-            para_list_types: [(0, "BULLET")].into(),
-            para_checked: [(0, true)].into(),
+            para_lists: [(0, check(true)), (1, check(false)), (2, plain)].into(),
             ..Default::default()
         };
-        assert_eq!(
-            classify_paragraph(&para(0), &styles),
-            ParaKind::ListItem {
-                kind: ListItemKind::Bullet,
-                level: 0,
-                checked: Some(true),
-                source: ListSource::ParaShape,
-            }
-        );
+        let item = |level, checked| ParaKind::ListItem {
+            kind: ListItemKind::Bullet,
+            level,
+            checked,
+            source: ListSource::ParaShape,
+        };
+        assert_eq!(classify_paragraph(&para(0), &styles), item(1, Some(true)));
+        assert_eq!(classify_paragraph(&para(1), &styles), item(1, Some(false)));
+        assert_eq!(classify_paragraph(&para(2), &styles), item(0, None));
     }
 
     #[test]

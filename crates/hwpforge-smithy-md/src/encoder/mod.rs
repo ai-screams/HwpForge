@@ -4,6 +4,8 @@ pub(crate) mod guard;
 #[cfg(test)]
 mod guarded_tests;
 mod list_format;
+#[cfg(test)]
+mod list_semantics_tests;
 mod lossless;
 mod lossy;
 mod markup;
@@ -104,6 +106,25 @@ pub enum MdWarning {
         /// What was left out: `"chart"` or `"memo"`.
         kind: &'static str,
     },
+    /// HWPX→MD (views given the original styles): a list paragraph was not
+    /// written as a Markdown list item — its kind, level and checked state
+    /// are lost, its text is kept. One per paragraph, even when several
+    /// share a paragraph shape.
+    ListSemanticsLost {
+        /// Index of the section holding it.
+        section: usize,
+        /// Its path in the section, as the shared paragraph flows name it
+        /// (`paragraphs[2].runs[0].table.rows[0].cells[0].paragraphs[1]`).
+        path: String,
+        /// The list semantics it had.
+        list: hwpforge_core::ParagraphListRef,
+        /// Why: `"container_projection"` (a flow written as text: a table
+        /// cell, a shape's text, a note, a caption, a header or footer),
+        /// `"body_carrier_projection"` (a block of the paragraph written
+        /// outside its item) or `"markup_fallback"` (the paragraph written as
+        /// plain text).
+        reason: &'static str,
+    },
 }
 
 impl core::fmt::Display for MdWarning {
@@ -135,6 +156,19 @@ impl core::fmt::Display for MdWarning {
                 f,
                 "{kind} comment left out: its content is not read back from Markdown"
             ),
+            Self::ListSemanticsLost { section, path, list, reason } => {
+                let kind = match list {
+                    hwpforge_core::ParagraphListRef::Outline { .. } => "outline",
+                    hwpforge_core::ParagraphListRef::Number { .. } => "numbered",
+                    hwpforge_core::ParagraphListRef::Bullet { .. } => "bullet",
+                    hwpforge_core::ParagraphListRef::CheckBullet { .. } => "checkable bullet",
+                };
+                write!(f, "{kind} list item level {}", list.level())?;
+                if let Some(checked) = list.checked() {
+                    write!(f, " checked={checked}")?;
+                }
+                write!(f, " written without its list semantics ({reason}; section {section}, {path})")
+            }
             Self::EquationAsText { section, paragraph } => write!(
                 f,
                 "equation written as its script text, its LaTeX cannot be written \
@@ -164,6 +198,19 @@ impl MdEncoder {
         document: &Document<Validated>,
     ) -> MdResult<(String, Vec<MdWarning>)> {
         lossy::encode_without_template_report(document)
+    }
+
+    /// Like [`MdEncoder::encode_lossy_with_report`], reading paragraph
+    /// semantics from the document's original styles: list items keep their
+    /// kind, level and checked state, an outline paragraph is a heading. A
+    /// list paragraph the view writes without its list semantics (in a table
+    /// cell, a note, a caption, …) is reported
+    /// ([`MdWarning::ListSemanticsLost`]).
+    pub fn encode_lossy_with_styles(
+        document: &Document<Validated>,
+        styles: &dyn StyleLookup,
+    ) -> MdResult<(String, Vec<MdWarning>)> {
+        lossy::encode_with_styles_report(document, styles)
     }
 
     /// Like [`MdEncoder::encode`], additionally reporting what the lossy

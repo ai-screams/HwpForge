@@ -594,14 +594,16 @@ pub(crate) struct Source {
 /// makes block structure ([`body_structure`]) is written as plain text;
 /// then each block holding foreign markup on its own is; if the whole
 /// still fails (a block's markup working with another's), every block is.
-/// One warning per paragraph written as plain text.
+/// One warning per paragraph written as plain text. With the joined
+/// Markdown, the (section, paragraph) of each block written as plain text
+/// here, so a view can say what else the paragraph lost.
 /// 이것을 실패시키는 것: 검사 삭제 · 대체 삭제(`guard_falls_back_to_plain_text`) ·
 /// Body 단계 삭제(`body_check_and_table_end_close_the_rest`).
 pub(crate) fn checked(
     mut blocks: Vec<Block>,
     allowed: &Allowed<'_>,
     warnings: &mut Vec<super::MdWarning>,
-) -> String {
+) -> (String, Vec<(usize, usize)>) {
     // An empty block (a note with no text) writes nothing, not a gap.
     // 이것을 실패시키는 것: `tight` 무시(`empty_item_holds_its_first_block`).
     let join = |blocks: &[Block]| {
@@ -625,11 +627,13 @@ pub(crate) fn checked(
             _ => None,
         })
         .collect();
+    let mut fell_back = Vec::new();
     let mut fall_back = |b: &mut Block, warnings: &mut Vec<super::MdWarning>| {
         if let Some(src) = b.source.take() {
             b.markdown = format!("{}{}", src.prefix, src.texts.join("\n\n"));
             for at in src.at {
                 written_as_text(warnings, &mut warned, at);
+                fell_back.push(at);
             }
         }
     };
@@ -640,7 +644,7 @@ pub(crate) fn checked(
     }
     let all = join(&blocks);
     if !foreign_markup(&all, allowed) {
-        return all;
+        return (all, fell_back);
     }
     for b in &mut blocks {
         if b.source.is_some() && foreign_markup(&b.markdown, allowed) {
@@ -649,12 +653,12 @@ pub(crate) fn checked(
     }
     let all = join(&blocks);
     if !foreign_markup(&all, allowed) {
-        return all;
+        return (all, fell_back);
     }
     for b in &mut blocks {
         fall_back(b, warnings);
     }
-    join(&blocks)
+    (join(&blocks), fell_back)
 }
 
 /// Records that the paragraph at `at` was written as plain text: one
@@ -859,7 +863,7 @@ mod tests {
                     decoder_structure: true,
                 };
                 let mut warnings = Vec::new();
-                assert_eq!(checked(vec![block], &allowed, &mut warnings), plain_text(expected));
+                assert_eq!(checked(vec![block], &allowed, &mut warnings).0, plain_text(expected));
                 assert_eq!(warnings.len(), 1);
             }
         }
@@ -998,7 +1002,7 @@ mod tests {
             tight: false,
         };
         let mut warnings = Vec::new();
-        let out = checked(
+        let (out, fell_back) = checked(
             vec![
                 block("ok", "ok", (0, 0)),
                 block("<img src=x onerror=y>", "<img src=x onerror=y>", (0, 1)),
@@ -1007,6 +1011,10 @@ mod tests {
             &mut warnings,
         );
         assert_eq!(out, "ok\n\n\\<img src\\=x onerror\\=y\\>");
+        // Where the paragraphs written as plain text came from, for a view
+        // to report what else they lost.
+        // 이것을 실패시키는 것: 위치 기록 삭제.
+        assert_eq!(fell_back, [(0, 1)]);
         assert_eq!(
             warnings,
             vec![super::super::MdWarning::MarkupWrittenAsText { section: 0, paragraph: 1 }]
@@ -1014,7 +1022,7 @@ mod tests {
         // A definition in one block used by another: neither fails alone
         // as a link, the definition does; both are checked as a whole too.
         let mut warnings = Vec::new();
-        let out = checked(
+        let (out, _) = checked(
             vec![
                 block("[a]", "[a]", (0, 0)),
                 block("[a]: https://x.invalid", "[a]: https://x.invalid", (0, 1)),
@@ -1024,7 +1032,7 @@ mod tests {
         );
         assert_eq!(out, "[a]\n\n\\[a\\]\\: https\\:\\/\\/x\\.invalid");
         assert_eq!(warnings.len(), 1);
-        let out = checked(vec![block("x", "x", (0, 0))], &allowed, &mut Vec::new());
+        let (out, _) = checked(vec![block("x", "x", (0, 0))], &allowed, &mut Vec::new());
         assert_eq!(out, "x");
     }
 }

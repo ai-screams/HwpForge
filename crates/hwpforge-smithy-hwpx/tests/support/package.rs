@@ -13,6 +13,12 @@ pub(crate) fn section_xml_unchecked(bytes: &[u8]) -> String {
 /// Replaces `from` with `to` in `Contents/section0.xml` — the only way to get
 /// a character the encoder refuses into a base package.
 pub(crate) fn splice(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
+    splice_part(bytes, SECTION0, from, to)
+}
+
+/// Replaces `from` with `to` in the package part `part` — the way to get a
+/// wire value the encoder never writes into a base package.
+pub(crate) fn splice_part(bytes: &[u8], part: &str, from: &str, to: &str) -> Vec<u8> {
     let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..zin.len() {
@@ -21,7 +27,7 @@ pub(crate) fn splice(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
         let method = entry.compression();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).expect("read");
-        if name == SECTION0 {
+        if name == part {
             let text = String::from_utf8(data).expect("utf-8");
             assert!(text.contains(from), "{from:?} not in {text}");
             data = text.replace(from, to).into_bytes();

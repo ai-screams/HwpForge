@@ -24,7 +24,7 @@ use cases::*;
 
 // ---- cases: public API only (also built against the base commit) ----
 #[allow(dead_code)]
-mod cases {
+pub(super) mod cases {
     use hwpforge_core::caption::{Caption, CaptionSide};
     use hwpforge_core::control::{
         AutoNumberFormat, AutoNumberKind, Control, RefTarget, ShapePoint,
@@ -55,6 +55,17 @@ mod cases {
     pub const HEADING: usize = 5;
     pub const CONT0: usize = 6;
     pub const CONT1: usize = 7;
+    /// A checked checkable bullet at level 0.
+    pub const CHECKED: usize = 8;
+    /// A number item at level 1 (a child of `NUMBER`).
+    pub const NUMBER1: usize = 9;
+    /// A level-1 bullet and an outline heading whose styles also carry the
+    /// reserved level-0 continuation name.
+    pub const NAMED_BULLET1: usize = 10;
+    pub const NAMED_HEADING: usize = 11;
+    /// A level-2 heading whose shape also carries a level-0 number list,
+    /// as a caller's lookup may say: the heading wins.
+    pub const HEADING_NUMBER: usize = 12;
 
     pub struct Styles;
 
@@ -88,25 +99,37 @@ mod cases {
             Some(if id.get() == CODE { "D2Coding" } else { "Batang" })
         }
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
-            (id.get() == HEADING).then_some(1)
-        }
-        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
             match id.get() {
-                BULLET | BULLET1 | BULLET2 => Some("BULLET"),
-                NUMBER => Some("NUMBER"),
+                HEADING | NAMED_HEADING => Some(1),
+                HEADING_NUMBER => Some(2),
                 _ => None,
             }
         }
-        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
+        fn para_list(&self, id: ParaShapeIndex) -> Option<hwpforge_core::ParagraphListRef> {
+            use hwpforge_core::ParagraphListRef;
+            use hwpforge_foundation::{BulletIndex, NumberingIndex};
+            let bullet = |level| ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level };
             match id.get() {
-                BULLET1 => Some(1),
-                BULLET2 => Some(2),
-                _ => Some(0),
+                BULLET => Some(bullet(0)),
+                BULLET1 | NAMED_BULLET1 => Some(bullet(1)),
+                BULLET2 => Some(bullet(2)),
+                NUMBER | NUMBER1 | HEADING_NUMBER => Some(ParagraphListRef::Number {
+                    numbering_id: NumberingIndex::new(0),
+                    level: u8::from(id.get() == NUMBER1),
+                }),
+                CHECKED => Some(ParagraphListRef::CheckBullet {
+                    bullet_id: BulletIndex::new(1),
+                    level: 0,
+                    checked: true,
+                }),
+                _ => None,
             }
         }
         fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
             match id.get() {
-                CONT0 => Some("__hwpforge_md_list_continuation_level_0"),
+                CONT0 | NAMED_BULLET1 | NAMED_HEADING => {
+                    Some("__hwpforge_md_list_continuation_level_0")
+                }
                 CONT1 => Some("__hwpforge_md_list_continuation_level_1"),
                 _ => None,
             }
@@ -895,7 +918,6 @@ fn continuation_is_its_own_block() {
 #[test]
 fn out_of_scope_is_base_output() {
     for name in [
-        "g3_list_one_table",
         "g3_heading_one_image",
         "g3_note_paragraphs",
         "g3_code",
@@ -933,6 +955,8 @@ fn list_text_is_guarded() {
         ),
         ("g5_item", "- \\&amp;"),
         ("g5_item_cell", "- a\n  | \\&amp; |\n  | --- |"),
+        // A list paragraph of one table: its marker holds the table.
+        ("g3_list_one_table", "-\n  | x |\n  | --- |"),
         ("g10_item", "- <strong>\\- x</strong>"),
         ("g10_continuation", "- a\n\n  <strong>\\- x</strong>"),
         ("g11_cont_memo_list", "- a\n\n  \\- x<!-- memo: m -->"),
@@ -992,7 +1016,7 @@ fn definition_lists_never_reach_the_decoder() {
     let allowed =
         Allowed { tags: super::guard::STYLED_TAGS, destinations: &dests, decoder_structure: true };
     let mut warnings = Vec::new();
-    let out = checked(vec![block("a", (0, 0)), block(": b", (0, 1))], &allowed, &mut warnings);
+    let (out, _) = checked(vec![block("a", (0, 0)), block(": b", (0, 1))], &allowed, &mut warnings);
     assert!(no_list(&out), "{out}");
     assert_eq!(decodes(&out), Some(true));
     assert_eq!(warnings.len(), 2);
@@ -2166,7 +2190,7 @@ fn lossy_definition_shapes() {
         tight: false,
     };
     let mut warnings = Vec::new();
-    assert_eq!(checked(vec![block], &lossy, &mut warnings), "\\- x \t\\[\\^r\\]\\: y");
+    assert_eq!(checked(vec![block], &lossy, &mut warnings).0, "\\- x \t\\[\\^r\\]\\: y");
     assert_eq!(warnings.len(), 1);
 }
 

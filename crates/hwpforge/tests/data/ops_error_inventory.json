@@ -1365,6 +1365,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ListSemanticsLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },
