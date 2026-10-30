@@ -316,7 +316,7 @@ fn nested_bullet_para_shape_preserves_indentation() {
     </sec>"#;
 
     let output = decode_and_convert(&make_hwpx(&header, &[section]));
-    assert_eq!(output.markdown, "- 상위\n\n    - 하위");
+    assert_eq!(output.markdown, "- 상위\n\n  - 하위");
 }
 
 /// Table conversion: a table run should produce GFM table syntax or HTML table markup.

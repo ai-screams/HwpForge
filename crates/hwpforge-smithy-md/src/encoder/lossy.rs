@@ -6,7 +6,7 @@ use hwpforge_core::{
     Control, Document, ListItemKind, Paragraph, ParagraphListRef, RunContent, Table, Validated,
 };
 
-use super::list_format::{format_list_continuation, format_list_item};
+use super::list_format::ListIndent;
 use super::markup::{Cell, Md, Piece};
 use super::Part;
 use crate::error::MdResult;
@@ -60,6 +60,7 @@ fn encode_body(
     let mut destinations = std::collections::HashSet::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut continuation_level: Option<u8> = None;
+    let mut lists = ListIndent::default();
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
@@ -67,17 +68,29 @@ fn encode_body(
                 markdown: super::guard::SECTION_MARKER.to_string(),
                 source: None,
                 body: false,
+                tight: false,
             });
             continuation_level = None;
+            lists.reset();
         }
 
         for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
             let current_continuation_level = mapping
                 .and_then(|mapping| mapping.continuation_level(paragraph.para_shape_id))
                 .filter(|level| continuation_level == Some(*level));
+            // A list item's level, from the paragraph's shape.
+            let item_level = registry
+                .and_then(|registry| format_registry_list_level(paragraph, registry))
+                .or_else(|| mapping.and_then(|mapping| mapping_list_level(paragraph, mapping)));
             let first_new = warnings.len();
-            let markdown =
-                encode_paragraph(paragraph, mapping, registry, warnings, &mut destinations);
+            let markdown = encode_paragraph(
+                paragraph,
+                mapping,
+                registry,
+                warnings,
+                &mut destinations,
+                &mut lists,
+            );
             // Place the depth warnings this paragraph raised.
             // 이것을 실패시키는 것: 이 자리 채우기 삭제(`nested_tables_stay_small`).
             for warning in &mut warnings[first_new..] {
@@ -86,13 +99,24 @@ fn encode_body(
                     *paragraph = paragraph_index;
                 }
             }
+            // An empty item is written as its marker alone.
+            // 이것을 실패시키는 것: 빈 항목 쓰지 않기(`lossy_empty_item_holds_its_first_block`).
+            let markdown = match item_level {
+                Some(_) if markdown.trim().is_empty() => registry
+                    .and_then(|registry| {
+                        format_registry_list_item("", paragraph, registry, &mut lists)
+                    })
+                    .unwrap_or_else(|| lists.mapped_item("")),
+                _ => markdown,
+            };
             if !markdown.trim().is_empty() {
                 let text = fallback_text(paragraph, &mut destinations);
                 let at = (section_index, paragraph_index);
                 match (current_continuation_level, blocks.last_mut()) {
-                    (Some(level), Some(last)) => {
-                        last.markdown.push_str("\n\n");
-                        last.markdown.push_str(&format_list_continuation(&markdown, level));
+                    (Some(_), Some(last)) => {
+                        let laid = lists.continuation(&markdown);
+                        last.markdown.push_str(if lists.take_tight() { "\n" } else { "\n\n" });
+                        last.markdown.push_str(&laid);
                         if let Some(src) = &mut last.source {
                             src.texts.push(text);
                             src.at.push(at);
@@ -100,20 +124,24 @@ fn encode_body(
                     }
                     (level, _) => {
                         let markdown = match level {
-                            Some(level) => format_list_continuation(&markdown, level),
-                            None => markdown,
+                            Some(_) => lists.continuation(&markdown),
+                            None => {
+                                if item_level.is_none() {
+                                    lists.reset();
+                                }
+                                markdown
+                            }
                         };
                         let source =
                             Source { prefix: String::new(), texts: vec![text], at: vec![at] };
-                        blocks.push(Block { markdown, source: Some(source), body: false });
+                        let tight = lists.take_tight();
+                        blocks.push(Block { markdown, source: Some(source), body: false, tight });
                     }
                 }
             }
 
             if current_continuation_level.is_none() {
-                continuation_level = registry
-                    .and_then(|registry| format_registry_list_level(paragraph, registry))
-                    .or_else(|| mapping.and_then(|mapping| mapping_list_level(paragraph, mapping)));
+                continuation_level = item_level;
             }
         }
     }
@@ -170,12 +198,19 @@ fn encode_paragraph(
     registry: Option<&StyleRegistry>,
     warnings: &mut Vec<super::MdWarning>,
     destinations: &mut std::collections::HashSet<String>,
+    lists: &mut ListIndent,
 ) -> String {
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(_) | RunContent::Image(_) => {
                 // Standalone objects keep their existing style exemption, but
                 // use the same piece writer as mixed paragraphs and containers.
+                // Written at column 0 unless a continuation indents it, it
+                // ends the list (`ListIndent`).
+                // 이것을 실패시키는 것: 닫기 삭제(`lossy_blocks_in_item_paragraph`).
+                if !is_continuation(paragraph, mapping) {
+                    lists.reset();
+                }
                 return paragraph_text_markdown(paragraph, warnings, destinations)
                     .as_str()
                     .trim_matches('\n')
@@ -195,34 +230,52 @@ fn encode_paragraph(
             paragraph,
             mapping,
             registry,
+            lists,
         );
     }
 
     let pieces = paragraph_pieces_at::<Md>(paragraph, warnings, destinations, 0);
     let mut out = Vec::new();
     let mut inline = Vec::new();
-    let flush_inline = |inline: &mut Vec<Piece<Md>>, out: &mut Vec<Piece<Md>>| {
-        let text = Md::from_pieces(std::mem::take(inline));
-        if !text.as_str().trim().is_empty() {
-            out.push(Piece::Markup(
-                text.layout(|text| format_paragraph_text(text, paragraph, mapping, registry)),
-            ));
-        }
-    };
+    // A block piece is written at column 0, after the item text before it,
+    // and ends the list there; text after it starts again (`ListIndent`). A
+    // continuation's blocks are indented with it, inside its item.
+    // 이것을 실패시키는 것: 블록 조각에서 닫기 삭제(`lossy_blocks_in_item_paragraph`).
+    let continuation = is_continuation(paragraph, mapping);
+    // A list item's or a continuation's text makes no structure it did not
+    // mean and does not close its item, a template item's first line too.
+    // 이것을 실패시키는 것: 보호 삭제(`lossy_item_text_stays_in_its_item`).
+    let list = continuation
+        || registry.and_then(|registry| format_registry_list_level(paragraph, registry)).is_some()
+        || mapping.and_then(|m| mapping_list_level(paragraph, m)).is_some();
+    let flush_inline =
+        |inline: &mut Vec<Piece<Md>>, out: &mut Vec<Piece<Md>>, lists: &mut ListIndent| {
+            let pieces = std::mem::take(inline);
+            let text =
+                if list { Md::lossy_list_paragraph(pieces) } else { Md::from_pieces(pieces) };
+            if !text.as_str().trim().is_empty() {
+                out.push(Piece::Markup(text.layout(|text| {
+                    format_paragraph_text(text, paragraph, mapping, registry, lists)
+                })));
+            }
+        };
     for piece in pieces {
         match piece {
             // Preserve block identity until the common piece writer joins it
             // to the formatted inline pieces; do not infer it from whitespace.
             // 이것을 실패시키는 것: 블록을 Markup으로 낮춰 캡션 뒤 접두사 경계 우회.
             Piece::Block(block) if !block.as_str().trim().is_empty() => {
-                flush_inline(&mut inline, &mut out);
+                flush_inline(&mut inline, &mut out, lists);
                 out.push(Piece::Block(block));
+                if !continuation {
+                    lists.reset();
+                }
             }
             Piece::Block(_) => {}
             piece => inline.push(piece),
         }
     }
-    flush_inline(&mut inline, &mut out);
+    flush_inline(&mut inline, &mut out, lists);
     Md::from_pieces(out).into_string()
 }
 
@@ -231,12 +284,13 @@ fn format_paragraph_text(
     paragraph: &Paragraph,
     mapping: Option<&MdMapping>,
     registry: Option<&StyleRegistry>,
+    lists: &mut ListIndent,
 ) -> String {
     let trimmed = text.trim();
 
     if !trimmed.is_empty() {
-        if let Some(markdown) =
-            registry.and_then(|registry| format_registry_list_item(trimmed, paragraph, registry))
+        if let Some(markdown) = registry
+            .and_then(|registry| format_registry_list_item(trimmed, paragraph, registry, lists))
         {
             return markdown;
         }
@@ -261,14 +315,7 @@ fn format_paragraph_text(
             ParagraphKind::BlockQuote => {
                 text.lines().map(|line| format!("> {line}")).collect::<Vec<_>>().join("\n")
             }
-            ParagraphKind::ListItem => {
-                let trimmed = text.trim_start();
-                if starts_with_list_marker(trimmed) {
-                    trimmed.to_string()
-                } else {
-                    format!("- {trimmed}")
-                }
-            }
+            ParagraphKind::ListItem => lists.mapped_item(text.trim_start()),
             ParagraphKind::ListContinuation(_) => text,
             ParagraphKind::Body => text,
         }
@@ -281,20 +328,26 @@ fn format_registry_list_item(
     text: &str,
     paragraph: &Paragraph,
     registry: &StyleRegistry,
+    lists: &mut ListIndent,
 ) -> Option<String> {
     let list = registry.para_shape(paragraph.para_shape_id)?.list?;
     match list {
         ParagraphListRef::Outline { .. } => None,
         ParagraphListRef::Number { level, .. } => {
-            Some(format_list_item(text, ListItemKind::Number, level, None))
+            Some(lists.item(text, ListItemKind::Number, level, None))
         }
         ParagraphListRef::Bullet { level, .. } => {
-            Some(format_list_item(text, ListItemKind::Bullet, level, None))
+            Some(lists.item(text, ListItemKind::Bullet, level, None))
         }
         ParagraphListRef::CheckBullet { level, checked, .. } => {
-            Some(format_list_item(text, ListItemKind::Bullet, level, Some(checked)))
+            Some(lists.item(text, ListItemKind::Bullet, level, Some(checked)))
         }
     }
+}
+
+/// Whether the template mapping draws `paragraph` as a list continuation.
+fn is_continuation(paragraph: &Paragraph, mapping: Option<&MdMapping>) -> bool {
+    mapping.is_some_and(|m| m.continuation_level(paragraph.para_shape_id).is_some())
 }
 
 fn format_registry_list_level(paragraph: &Paragraph, registry: &StyleRegistry) -> Option<u8> {
@@ -730,23 +783,6 @@ fn table_bytes(rows: &[Vec<Cell>], width: usize, nested: bool) -> u64 {
 
 fn image_alt_text(path: &str) -> String {
     path.rsplit('/').next().and_then(|name| name.split('.').next()).unwrap_or("image").to_string()
-}
-
-fn starts_with_list_marker(text: &str) -> bool {
-    if text.starts_with("- ") || text.starts_with("* ") || text.starts_with("+ ") {
-        return true;
-    }
-
-    let mut digits = 0usize;
-    for ch in text.chars() {
-        if ch.is_ascii_digit() {
-            digits += 1;
-            continue;
-        }
-        return digits > 0 && ch == '.';
-    }
-
-    false
 }
 
 #[cfg(test)]
@@ -1389,7 +1425,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert!(md.contains("| A | B |"));
         assert!(md.contains("| --- | --- |"));
         assert!(md.contains("| 1 | 2 |"));
@@ -1411,7 +1454,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert!(md.contains("A\\|B"));
     }
 
@@ -1439,7 +1489,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert!(md.contains("[Rust](https://www.rust-lang.org)"));
     }
 
@@ -1723,6 +1780,7 @@ mod tests {
                 at: vec![(0, 0)],
             }),
             body: false,
+            tight: false,
         };
         let allowed =
             Allowed { tags: LOSSY_TAGS, destinations: &destinations, decoder_structure: false };
@@ -1751,7 +1809,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert_eq!(md, "![photo](path/to/photo.jpg)");
     }
 
@@ -1770,7 +1835,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert!(md.contains("![figure_1]"));
     }
 
@@ -1828,7 +1900,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert_eq!(md, "| |\n| --- |");
     }
 
@@ -1851,7 +1930,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         // 이것을 실패시키는 것: 빈 행 패딩 중 행/셀 누락.
         assert_eq!(
             gfm_blocks(&md),
@@ -1875,7 +1961,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert!(md.contains(r"path\\to\\file"));
     }
 
@@ -1895,7 +1988,14 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
+        let md = encode_paragraph(
+            &paragraph,
+            None,
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+            &mut Default::default(),
+        );
         assert!(md.contains("<br>"));
     }
 
@@ -1908,16 +2008,37 @@ mod tests {
         assert_eq!(result.join("\n"), expected);
     }
 
+    /// A template item (no registry list) is always `- ` then its text:
+    /// a marker in its text (`10. `, `* `), a thematic break (`*\t*\t*`), a
+    /// marker alone on its first line, with any line ending, is text, so a
+    /// child after it nests under it. An earlier decoder wrote numbers as
+    /// such text; `10. x` is now written `- 10\. x`, by intent.
+    /// 이것을 실패시키는 것: 첫 줄 보호 삭제 · 원문 표지 보존 경로 되살리기.
     #[test]
-    fn encode_list_item_without_marker_adds_dash() {
-        // starts_with_list_marker returns false → "- " prefix is added
-        assert!(!starts_with_list_marker("no marker here"));
-        assert!(starts_with_list_marker("- already a list"));
-        assert!(starts_with_list_marker("* bullet"));
-        assert!(starts_with_list_marker("+ plus"));
-        assert!(starts_with_list_marker("1. ordered"));
-        assert!(!starts_with_list_marker("1x not ordered"));
-        assert!(!starts_with_list_marker(""));
+    fn lossy_mapped_item_text_is_text() {
+        for (text, read) in [
+            ("no marker here", "no marker here"),
+            ("- already a list", "- already a list"),
+            ("* bullet", "* bullet"),
+            ("1. ordered", "1. ordered"),
+            ("10. x", "10. x"),
+            ("*\t*\t*", "*\t*\t*"),
+            ("* * *", "* * *"),
+            ("-\t-\t-", "-\t-\t-"),
+        ] {
+            let (md, out) = lossy_list(vec![(t(text), Li::Item), (t("child"), Li::Task(1))]);
+            assert_eq!(out, depths(&[(read, 1), ("child", 2)]), "{md}");
+        }
+        assert_eq!(lossy_list(vec![(t("10. x"), Li::Item)]).0, "- 10\\. x");
+        // A marker alone on the first line, then a blank line: text in the
+        // item, whatever the line ending.
+        for ending in ["\n", "\r\n", "\r"] {
+            let text = format!("10.{ending}{ending}text");
+            let (md, out) = lossy_list(vec![(t(&text), Li::Item), (t("child"), Li::Task(1))]);
+            assert_eq!(out, depths(&[("10.", 1), ("text", 1), ("child", 2)]), "{md}");
+            let (md, out) = lossy_list(vec![(t(&format!("10.{ending}")), Li::Item)]);
+            assert_eq!(out, depths(&[("10.", 1)]), "{md}");
+        }
     }
 
     #[test]
@@ -1958,10 +2079,325 @@ mod tests {
             None,
             &mut Vec::new(),
             &mut Default::default(),
+            &mut Default::default(),
         );
         assert!(md.starts_with("```\n"));
         assert!(md.ends_with("\n```"));
         assert!(md.contains("let x = 1;"));
+    }
+
+    /// A paragraph of [`lossy_list`].
+    enum Li {
+        /// A numbered item at a level (a registry list).
+        Num(u8),
+        /// The template's plain list item (no registry list).
+        Item,
+        /// An unchecked task item at a level.
+        Task(usize),
+        /// A continuation at a level.
+        Cont(u8),
+        Body,
+    }
+
+    /// Lossy Markdown of one paragraph per `(runs, kind)` with the default
+    /// template, and each text with how many list items hold it.
+    fn lossy_list(paras: Vec<(Vec<Run>, Li)>) -> (String, Vec<(String, Option<usize>)>) {
+        let template = builtin_default().unwrap();
+        let (mapping, mut registry) = resolve_mapping(&template).unwrap();
+        let base = registry.para_shape(mapping.body.para_shape_id).unwrap().clone();
+        let paragraphs = paras
+            .into_iter()
+            .map(|(runs, kind)| {
+                let shape = match kind {
+                    Li::Num(level) => {
+                        let mut para = base.clone();
+                        para.list = Some(ParagraphListRef::Number {
+                            numbering_id: hwpforge_foundation::NumberingIndex::new(0),
+                            level,
+                        });
+                        registry.para_shapes.push(para);
+                        ParaShapeIndex::new(registry.para_shapes.len() - 1)
+                    }
+                    Li::Item => mapping.list_item.para_shape_id,
+                    Li::Task(level) => mapping.task_list.unchecked[level],
+                    Li::Cont(level) => mapping.list_continuation(level).para_shape_id,
+                    Li::Body => mapping.body.para_shape_id,
+                };
+                Paragraph::with_runs(runs, shape)
+            })
+            .collect();
+        let doc = validated_document(paragraphs);
+        let md = encode_body(&doc, Some(&mapping), Some(&registry), &mut Vec::new());
+        let depths = super::super::list_format::item_depths(&md);
+        (md, depths)
+    }
+
+    fn t(text: &str) -> Vec<Run> {
+        vec![Run::text(text, CharShapeIndex::new(0))]
+    }
+
+    fn depths(pairs: &[(&str, usize)]) -> Vec<(String, Option<usize>)> {
+        pairs.iter().map(|&(text, depth)| (text.to_string(), Some(depth))).collect()
+    }
+
+    /// The lossy encoder nests numbered items, keeps a numbered item's
+    /// continuation inside it, and starts a new list after a Body paragraph
+    /// at column 0, as the styled one does.
+    /// 이것을 실패시키는 것: lossy 에서 항목 들여쓰기를 수준당 두 칸으로 ·
+    /// 목록이 아닌 블록에서 열린 항목 비우기 삭제.
+    #[test]
+    fn lossy_numbered_lists_nest_and_reset() {
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (t("b"), Li::Num(1)),
+            (t("c"), Li::Num(2)),
+            (t("c2"), Li::Cont(2)),
+            (t("x"), Li::Body),
+            (t("d"), Li::Num(2)),
+        ]);
+        let want = depths(&[("a", 1), ("b", 2), ("c", 3), ("c2", 3), ("x", 0), ("d", 1)]);
+        assert_eq!(out, want, "{md}");
+    }
+
+    /// The template's plain list item, which has no registry list, is a
+    /// parent like any other: a task child nests under it, a continuation
+    /// stays in it, and a source marker (`10. `) remains text after a bullet.
+    /// 이것을 실패시키는 것: `mapped_item` 등록 삭제.
+    #[test]
+    fn lossy_mapped_item_parents_children() {
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Item),
+            (t("b"), Li::Task(1)),
+            (t("x"), Li::Body),
+            (t("c"), Li::Item),
+            (t("c2"), Li::Cont(0)),
+            (t("y"), Li::Body),
+            (t("10. d"), Li::Item),
+            (t("e"), Li::Task(1)),
+            (t("z"), Li::Body),
+            (t("1.2 version"), Li::Item),
+            (t("f"), Li::Task(1)),
+        ]);
+        let want = depths(&[
+            ("a", 1),
+            ("b", 2),
+            ("x", 0),
+            ("c", 1),
+            ("c2", 1),
+            ("y", 0),
+            // The number is text after `- `, by intent.
+            ("10. d", 1),
+            ("e", 2),
+            ("z", 0),
+            ("1.2 version", 1),
+            ("f", 2),
+        ]);
+        assert_eq!(out, want, "{md}");
+    }
+
+    /// An item paragraph's table is written as its own block at column 0:
+    /// after it the list is closed, and item text after it starts a new
+    /// one, whatever the order (text then table, table then text, text,
+    /// table, text). The deeper item after the paragraph nests under the
+    /// last item written.
+    /// 이것을 실패시키는 것: 블록 조각에서 닫기 삭제 · 단독 표 문단에서 닫기 삭제 ·
+    /// continuation 의 블록에서도 닫기.
+    #[test]
+    fn lossy_blocks_in_item_paragraph() {
+        let table = || Run::table(sparse_table(1), CharShapeIndex::new(0));
+        let text = |s: &str| t(s).remove(0);
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (vec![text("b"), table()], Li::Num(1)),
+            (t("c"), Li::Num(2)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("KEEP", 0), ("c", 1)]), "{md}");
+        let item = |runs: Vec<Run>| lossy_list(vec![(runs, Li::Item), (t("c"), Li::Task(1))]);
+        let (md, out) = item(vec![text("p"), table()]);
+        assert_eq!(out, depths(&[("p", 1), ("KEEP", 0), ("c", 1)]), "{md}");
+        let (md, out) = item(vec![table(), text("p")]);
+        assert_eq!(out, depths(&[("KEEP", 0), ("p", 1), ("c", 2)]), "{md}");
+        let (md, out) = item(vec![text("p"), table(), text("q")]);
+        assert_eq!(out, depths(&[("p", 1), ("KEEP", 0), ("q", 1), ("c", 2)]), "{md}");
+        // A registry item after the table starts at column 0.
+        let (md, _) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (vec![table(), text("b")], Li::Num(1)),
+            (t("c"), Li::Num(2)),
+        ]);
+        assert_eq!(md, "1. a\n\n\n\n| KEEP |\n| --- |\n\n1. b\n\n   1. c");
+        // An item paragraph that is one table is a block at column 0.
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (t("b"), Li::Num(1)),
+            (vec![table()], Li::Num(1)),
+            (t("c"), Li::Num(2)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("KEEP", 0), ("c", 1)]), "{md}");
+        // A continuation's table is inside its item: the item stays open.
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (vec![text("x"), table()], Li::Cont(0)),
+            (t("b"), Li::Num(1)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("x", 1), ("KEEP", 1), ("b", 2)]), "{md}");
+    }
+
+    /// An item's text stays in its item and makes no structure, read back with its
+    /// characters: a blank line then `- x` is text in the item (not a list
+    /// that closes it), a blank line then indented text is text in the
+    /// item (not a code block); the next deeper item nests under it. A
+    /// template item is always a bullet, with its source marker as text.
+    /// 이것을 실패시키는 것: 줄 머리 보호 삭제 · 뒷줄 들여쓰기 삭제 · 앞 공백 남기기.
+    #[test]
+    fn lossy_item_text_stays_in_its_item() {
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (t("b\n\n- x"), Li::Num(1)),
+            (t("c"), Li::Num(2)),
+        ]);
+        assert_eq!(out, depths(&[("a", 1), ("b", 2), ("- x", 2), ("c", 3)]), "{md}");
+        let (md, out) = lossy_list(vec![
+            (t("a"), Li::Num(0)),
+            (t("b"), Li::Num(1)),
+            (t("c\n\n   x\n\n    y"), Li::Num(2)),
+            (t("d"), Li::Num(3)),
+        ]);
+        assert_eq!(
+            out,
+            depths(&[("a", 1), ("b", 2), ("c", 3), ("x", 3), ("y", 3), ("d", 4)]),
+            "{md}"
+        );
+        // Pieces joined into a marker (`1` then a composed `. x`) are judged
+        // together.
+        let joined =
+            vec![t("1").remove(0), Run::control(Control::compose(". x"), CharShapeIndex::new(0))];
+        let (md, out) =
+            lossy_list(vec![(t("a"), Li::Num(0)), (joined, Li::Num(1)), (t("c"), Li::Num(2))]);
+        assert_eq!(out, depths(&[("a", 1), ("1. x", 2), ("c", 3)]), "{md}");
+        let (md, out) = lossy_list(vec![(t("p\n\n# q"), Li::Item), (t("c"), Li::Task(1))]);
+        assert_eq!(out, depths(&[("p", 1), ("# q", 1), ("c", 2)]), "{md}");
+    }
+
+    /// Protection sees the same line starts as list layout, including a
+    /// continuation's first line. Source indentation is layout, not text.
+    // 이것을 실패시키는 것: 보호 전 공백 제거 삭제 · 탭만 남기기 · 공백만 남기기 ·
+    // 줄 머리 조건 삭제 · 첫 줄/후속 줄 공백 남기기.
+    #[test]
+    fn lossy_indented_list_syntax_stays_text() {
+        use pulldown_cmark::{Event, Parser, Tag};
+        for syntax in ["```", "~~~", "[ref]: /target"] {
+            for indent in ["    ", "        ", "\t"] {
+                for continuation in [false, true] {
+                    let text = format!("{indent}{syntax}");
+                    let gap = if syntax.starts_with('[') { "\n\n" } else { "\n" };
+                    let paras = if continuation {
+                        vec![(t("parent"), Li::Item), (t(&text), Li::Cont(0))]
+                    } else {
+                        vec![(t(&format!("parent{gap}{text}")), Li::Item)]
+                    };
+                    let (md, out) =
+                        lossy_list(paras.into_iter().chain([(t("child"), Li::Task(1))]).collect());
+                    let want = if continuation || gap == "\n\n" {
+                        depths(&[("parent", 1), (syntax, 1), ("child", 2)])
+                    } else {
+                        depths(&[(&format!("parent\n{syntax}"), 1), ("child", 2)])
+                    };
+                    assert_eq!(
+                        out, want,
+                        "{indent:?} {syntax:?} continuation={continuation}: {md}"
+                    );
+                    assert!(
+                        !Parser::new_ext(&md, super::super::md_options())
+                            .any(|event| matches!(event, Event::Start(Tag::CodeBlock(_)))),
+                        "{md}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An empty item is written as its marker alone and holds what follows
+    /// it, its first block joined with one line ending: a deeper item, a
+    /// continuation (`- child` as text), a template item's too. A sibling
+    /// is not joined, and the items closed before it stay closed.
+    /// 이것을 실패시키는 것: 빈 항목 쓰지 않기 · `tight` 무시(이어 붙이는 continuation
+    /// 포함) · 닫기 삭제.
+    #[test]
+    fn lossy_empty_item_holds_its_first_block() {
+        let (md, _) = lossy_list(vec![(t(""), Li::Num(0)), (t("child"), Li::Num(1))]);
+        assert_eq!(md, "1.\n   1. child");
+        let (md, _) = lossy_list(vec![(t(""), Li::Item), (t("child"), Li::Task(1))]);
+        assert_eq!(md, "-\n  - [ ] child");
+        let (md, _) = lossy_list(vec![(t(""), Li::Num(0)), (t("b"), Li::Num(0))]);
+        assert_eq!(md, "1.\n\n1. b");
+        // The first block's join is set by its first piece: a table after
+        // the child's text does not undo it.
+        let table = || Run::table(sparse_table(1), CharShapeIndex::new(0));
+        let (md, out) =
+            lossy_list(vec![(t(""), Li::Num(0)), (vec![t("b").remove(0), table()], Li::Num(1))]);
+        assert_eq!(out, depths(&[("b", 2), ("KEEP", 0)]), "{md}");
+        let (md, out) = lossy_list(vec![
+            (t(""), Li::Num(0)),
+            (vec![t("b").remove(0), table(), t("q").remove(0)], Li::Num(1)),
+        ]);
+        assert_eq!(out, depths(&[("b", 2), ("KEEP", 0), ("q", 1)]), "{md}");
+        // A continuation's leading blank lines and leading table stay in
+        // the empty item.
+        let (md, out) = lossy_list(vec![(t(""), Li::Num(0)), (t("\n\ntext"), Li::Cont(0))]);
+        assert_eq!(out, depths(&[("text", 1)]), "{md}");
+        let (md, out) =
+            lossy_list(vec![(t(""), Li::Num(0)), (vec![table(), t("t").remove(0)], Li::Cont(0))]);
+        assert_eq!(out, depths(&[("KEEP", 1), ("t", 1)]), "{md}");
+        for (paras, want) in [
+            (
+                vec![
+                    (t("a"), Li::Num(0)),
+                    (t("b"), Li::Num(1)),
+                    (t(""), Li::Num(0)),
+                    (t("c"), Li::Cont(0)),
+                ],
+                depths(&[("a", 1), ("b", 2), ("c", 1)]),
+            ),
+            (
+                vec![
+                    (t("a"), Li::Item),
+                    (t("b"), Li::Task(1)),
+                    (t(""), Li::Item),
+                    (t("c"), Li::Cont(0)),
+                ],
+                depths(&[("a", 1), ("b", 2), ("c", 1)]),
+            ),
+            (
+                vec![(t("a"), Li::Num(0)), (t(""), Li::Num(1)), (t("c"), Li::Cont(1))],
+                depths(&[("a", 1), ("c", 2)]),
+            ),
+            (vec![(t(""), Li::Num(1)), (t("- child"), Li::Cont(1))], depths(&[("- child", 1)])),
+            (
+                vec![
+                    (t("a"), Li::Num(0)),
+                    (t("b"), Li::Num(1)),
+                    (t(""), Li::Num(0)),
+                    (t("d"), Li::Num(1)),
+                ],
+                depths(&[("a", 1), ("b", 2), ("d", 2)]),
+            ),
+        ] {
+            let (md, out) = lossy_list(paras);
+            assert_eq!(out, want, "{md}");
+        }
+    }
+
+    /// A number and a tab at a template item's start are text after `- `
+    /// (no longer kept as the item's marker, by intent): a child nests
+    /// under the item.
+    /// 이것을 실패시키는 것: 원문 표지 보존 경로 되살리기.
+    #[test]
+    fn lossy_mapped_item_tab_marker_is_text() {
+        for text in ["10.\tparent", "1.\tparent"] {
+            let (md, out) = lossy_list(vec![(t(text), Li::Item), (t("c"), Li::Task(1))]);
+            assert_eq!(out, depths(&[(text, 1), ("c", 2)]), "{md}");
+        }
     }
 
     #[test]
@@ -1977,6 +2413,8 @@ mod tests {
             vec![Run::text("done", CharShapeIndex::new(0))],
             mapping.task_list.checked[1],
         );
+        // The level-1 item nests under the level-0 item before it.
+        let mut lists = ListIndent::default();
 
         assert_eq!(
             encode_paragraph(
@@ -1984,7 +2422,8 @@ mod tests {
                 Some(&mapping),
                 Some(&registry),
                 &mut Vec::new(),
-                &mut Default::default()
+                &mut Default::default(),
+                &mut lists,
             ),
             "- [ ] todo"
         );
@@ -1994,7 +2433,8 @@ mod tests {
                 Some(&mapping),
                 Some(&registry),
                 &mut Vec::new(),
-                &mut Default::default()
+                &mut Default::default(),
+                &mut lists,
             ),
             "  - [x] done"
         );
@@ -2321,6 +2761,7 @@ mod tests {
                         Some(&mapping),
                         None,
                         &mut Vec::new(),
+                        &mut Default::default(),
                         &mut Default::default(),
                     );
                     assert_eq!(gfm_blocks(&fallback), expected);

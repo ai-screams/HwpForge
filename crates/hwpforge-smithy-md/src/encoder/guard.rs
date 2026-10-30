@@ -572,6 +572,11 @@ pub(crate) struct Block {
     /// [`checked`] parses it alone and writes it as plain text if it does.
     /// Set by the branch that drew it, never guessed again.
     pub(crate) body: bool,
+    /// Joined to the block before with one line ending, not a blank line:
+    /// the first block an empty list item holds (an item that starts with
+    /// a blank line ends there). Set from the list's state
+    /// (`ListIndent::take_tight`), never from the output.
+    pub(crate) tight: bool,
 }
 
 /// Where a block came from, for its plain-text fallback.
@@ -598,10 +603,16 @@ pub(crate) fn checked(
     warnings: &mut Vec<super::MdWarning>,
 ) -> String {
     // An empty block (a note with no text) writes nothing, not a gap.
+    // 이것을 실패시키는 것: `tight` 무시(`empty_item_holds_its_first_block`).
     let join = |blocks: &[Block]| {
-        let parts: Vec<&str> =
-            blocks.iter().map(|b| b.markdown.as_str()).filter(|m| !m.is_empty()).collect();
-        parts.join("\n\n")
+        let mut out = String::new();
+        for b in blocks.iter().filter(|b| !b.markdown.is_empty()) {
+            if !out.is_empty() {
+                out.push_str(if b.tight { "\n" } else { "\n\n" });
+            }
+            out.push_str(&b.markdown);
+        }
+        out
     };
     // Paragraphs already written as plain text by the renderer (a guarded
     // paragraph's emphasis, `styled.rs`) keep their one warning.
@@ -670,7 +681,7 @@ pub(crate) fn written_as_text(
 /// HTML blocks and inline events are allowed.
 /// 이것을 실패시키는 것: 금지 항목 하나씩 삭제 · `Rule` 삭제 · 주석 꼬리 검사 삭제
 /// (`body_structure_finds_what_body_text_must_not_make`).
-fn body_structure(markdown: &str) -> bool {
+pub(crate) fn body_structure(markdown: &str) -> bool {
     let mut html: Option<String> = None;
     for event in Parser::new_ext(markdown, super::md_options()) {
         match event {
@@ -839,6 +850,7 @@ mod tests {
                         at: vec![(0, 0)],
                     }),
                     body: false,
+                    tight: false,
                 };
                 let destinations = HashSet::new();
                 let allowed = Allowed {
@@ -983,6 +995,7 @@ mod tests {
                 at: vec![at],
             }),
             body: false,
+            tight: false,
         };
         let mut warnings = Vec::new();
         let out = checked(
