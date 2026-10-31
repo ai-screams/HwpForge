@@ -1383,7 +1383,12 @@ impl<'a> DecoderState<'a> {
         if let Some(builder) = capture.current.take() {
             capture.paragraphs.push(builder.build());
         }
-        let has_content = capture.paragraphs.iter().any(|p| !p.text_content().trim().is_empty());
+        let has_content = capture.paragraphs.iter().any(|p| {
+            p.runs
+                .iter()
+                .filter_map(|r| r.content.plain_text())
+                .any(|text| text.chars().any(|c| !c.is_whitespace()))
+        });
         // A body with no text left after leaving out a chart or memo is kept
         // as it is (the paragraphs it has, empty ones too; one empty
         // paragraph if it has none): the note stays, its loss reported. A
@@ -3277,10 +3282,57 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 본문 유무 검사를 항상 true로 고정.
     fn empty_definition_is_typed_error() {
         let template = default_template();
-        let err = MdDecoder::decode("본문[^1]\n\n[^1]:\n", &template).unwrap_err();
-        assert!(matches!(&err, MdError::EmptyNoteDefinition { label } if label == "1"));
+        for md in [
+            "본문[^1]\n\n[^1]: &#32;&#9;  \n    &#32;&#8195;\n",
+            "본문[^1]\n\n[^1]:\n",
+            "본문[^1]\n\n[^1]:  \t\n    \t\n",
+        ] {
+            let err = MdDecoder::decode(md, &template).unwrap_err();
+            assert!(
+                matches!(&err, MdError::EmptyNoteDefinition { label } if label == "1"),
+                "got: {err:?} for {md:?}"
+            );
+        }
+    }
+
+    #[test]
+    // 이것을 실패시키는 것: 각 문단의 첫 run만 검사.
+    fn definition_after_whitespace_run_preserves_body() {
+        let template = default_template();
+        let md = "본문[^1]\n\n[^1]: &#32;**글자**\n";
+        let result = MdDecoder::decode(md, &template).unwrap();
+        assert_eq!(collect_notes(&result.document), vec![(false, vec![" 글자".to_string()])]);
+        let paragraphs = result.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|run| match &run.content {
+                RunContent::Control(c) => match c.as_ref() {
+                    Control::Footnote { paragraphs, .. } => Some(paragraphs),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("footnote control must exist");
+        let runs = &paragraphs[0].runs;
+        assert_eq!(runs.len(), 2, "formatting must split whitespace and text runs");
+        assert_eq!(runs[0].content.plain_text().as_deref(), Some(" "));
+        assert_eq!(runs[1].content.plain_text().as_deref(), Some("글자"));
+        assert!(result.style_registry.char_shape(runs[1].char_shape_id).unwrap().bold);
+    }
+
+    #[test]
+    // 이것을 실패시키는 것: 정의의 첫 문단만 검사.
+    fn definition_after_whitespace_paragraph_is_registered() {
+        let template = default_template();
+        let md = "본문[^1]\n\n[^1]: &#32;\n\n    둘째 문단\n";
+        let result = MdDecoder::decode(md, &template).unwrap();
+        assert_eq!(
+            collect_notes(&result.document),
+            vec![(false, vec![" ".to_string(), "둘째 문단".to_string()])]
+        );
     }
 
     #[test]
