@@ -112,7 +112,6 @@ styles:
         value: '160%'
       indent:
         left: 20pt
-        first_line: -10pt
       list: { kind: bullet, bullet_id: 1, level: 0 }
 
   heading4:
@@ -172,7 +171,6 @@ styles:
         value: '160%'
       indent:
         left: 20pt
-        first_line: -10pt
       list: { kind: number, numbering_id: 2, level: 0 }
 
   check_item:
@@ -187,9 +185,11 @@ styles:
         value: '160%'
       indent:
         left: 20pt
-        first_line: -10pt
       list: { kind: check_bullet, bullet_id: 11, level: 0, checked: false }
 
+# List styles set no first-line indent: Hancom aligns an item's wrapped lines to
+# where the text starts after the marker and adds any indent on top of that.
+#
 # List definitions. The first numbering is the outline's (headings number
 # with it); Markdown numbered items use the second. Bullets 1-10 are the
 # bullet items of levels 0-9 (markdown_mapping.bullet_levels); 11 is the

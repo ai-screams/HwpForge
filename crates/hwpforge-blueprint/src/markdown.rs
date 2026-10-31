@@ -266,6 +266,8 @@ pub fn apply_markdown_list_levels(
         HwpUnit::from_pt(20.0)?
     };
     let left = |level: usize| list_para.indent_left + step * level as i32;
+    // Hancom aligns an item's wrapped lines to where the text starts after the
+    // marker and adds this indent on top, so the built-in templates leave it 0.
     let first_line = list_para.indent_first_line;
     let mismatch = |style_name: &Option<String>, field: &str| BlueprintError::StyleResolution {
         style_name: style_name.clone().unwrap_or_default(),
@@ -617,9 +619,12 @@ mod tests {
     /// the outline is the first numbering, untouched; numbered items use the
     /// second; each bullet level its own glyph; every level 20pt deeper;
     /// continuations and code at the item's margin with no list; the role
-    /// entries' own shapes unchanged; a second application adds nothing.
+    /// entries' own shapes unchanged; a second application adds nothing. No
+    /// item has a first-line indent: Hancom aligns wrapped lines to the text
+    /// after the marker by itself and adds any indent on top of that.
     /// 이것을 실패시키는 것: 수준 여백 계산 · 수준별 기호 선택 · 개요 슬롯 변경 · 재적용 시
-    /// 모양 추가(`list_shape` 를 늘 push).
+    /// 모양 추가(`list_shape` 를 늘 push) · `default.yaml` 목록 스타일 셋 중 어느 것에든
+    /// `first_line: -10pt`.
     #[test]
     fn default_template_derives_list_levels() {
         for (template, others) in [
@@ -655,10 +660,7 @@ mod tests {
                 let item = |e: StyleEntry, list| {
                     let p = shape(e);
                     assert_eq!(p.list, Some(list), "level {level}");
-                    assert_eq!(
-                        (p.indent_left.as_i32(), p.indent_first_line.as_i32()),
-                        (left, -1000)
-                    );
+                    assert_eq!((p.indent_left.as_i32(), p.indent_first_line.as_i32()), (left, 0));
                 };
                 item(
                     shapes.bullet.unwrap()[l],
@@ -690,6 +692,10 @@ mod tests {
                     let role = registry.get_style(role).unwrap();
                     assert_eq!(entry.char_shape_id, role.char_shape_id);
                 }
+            }
+            for name in ["list_item", "numbered_item", "check_item"] {
+                let role = shape(registry.get_style(name).copied().unwrap());
+                assert_eq!(role.indent_first_line.as_i32(), 0, "{name}");
             }
             let plain = shape(shapes.plain_fallback);
             assert_eq!(plain.list, None);
@@ -729,6 +735,32 @@ mod tests {
 
     fn style(name: &str, list: &str) -> String {
         format!("  {name}:\n{STYLE}    para_shape:\n      indent: {{ left: 10pt }}\n      list: {list}\n")
+    }
+
+    /// A template's own first-line indent reaches the items of every kind and
+    /// level as written; only the continuations stay at 0.
+    /// 이것을 실패시키는 것: `shape.indent_first_line = first_line` 을 `HwpUnit::ZERO` 로.
+    #[test]
+    fn template_first_line_indent_reaches_every_item() {
+        let styles = format!(
+            "{}{}{}",
+            style("list_item", "{ kind: bullet, bullet_id: 5, level: 0 }")
+                .replace("left: 10pt", "left: 10pt, first_line: -3pt"),
+            style("numbered_item", "{ kind: number, numbering_id: 2, level: 0 }"),
+            style("check_item", "{ kind: check_bullet, bullet_id: 7, level: 0, checked: false }"),
+        );
+        let defs = format!("numberings:\n{}{}{BULLETS}", numbering(1), numbering(2));
+        let template = yaml(&styles, &defs, "  list_item: list_item\n");
+        let (registry, shapes) = derived(&template, &[]).unwrap();
+        let first_line = |e: StyleEntry| {
+            registry.para_shape(e.para_shape_id).unwrap().indent_first_line.as_i32()
+        };
+        for l in 0..10 {
+            for items in [shapes.bullet, shapes.number, shapes.unchecked, shapes.checked] {
+                assert_eq!(first_line(items.unwrap()[l]), -300, "level {l}");
+            }
+            assert_eq!(first_line(shapes.continuation[l]), 0, "level {l}");
+        }
     }
 
     const BULLETS: &str = "bullets:\n  - { id: 5, bullet_char: a, use_image: false, para_head: { start: 0, level: 1, num_format: Digit, text: '', checkable: false } }\n  - { id: 30, bullet_char: b, use_image: false, para_head: { start: 0, level: 1, num_format: Digit, text: '', checkable: false } }\n  - { id: 7, bullet_char: c, checked_char: d, use_image: false, para_head: { start: 0, level: 1, num_format: Digit, text: '', checkable: true } }\n";
