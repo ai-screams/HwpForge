@@ -92,30 +92,30 @@ above is not optional.
 
 A failure raises `HwpForgeError`, whose `code` is the stable string to branch on. The codes
 below are the ones each operation raises for its own characteristic failure; any operation
-that has to decode the document first can also raise `DECODE_FAILED`.
+that has to decode the document first can also raise `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX).
 
 ### `Document` methods
 
-| Method                                                            | Returns                            | Characteristic failures                                                                    |
-| ----------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------ |
-| `inspect(*, styles=False)`                                        | `InspectReport`                    | `DECODE_FAILED`                                                                            |
-| `outline()`                                                       | `OutlineReport`                    | `DECODE_FAILED`                                                                            |
-| `fields()`                                                        | `FieldsReport`                     | `DECODE_FAILED`                                                                            |
-| `validate()`                                                      | `ValidateReport`                   | `DECODE_FAILED` (an invalid document reports, not raises)                                  |
-| `read(*, section, paras, table, field)`                           | `ReadReport`                       | `READ_TARGET_REQUIRED`, `READ_PARAS_INVALID`, `READ_PARA_RANGE_INVALID`, `TABLE_NOT_FOUND` |
-| `diff(revised)`                                                   | `DiffReport`                       | `DECODE_FAILED`                                                                            |
-| `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                            |
-| `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                            |
-| `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                     |
-| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"`: see the note below)                                    |
-| `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                        |
-| `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                               |
-| `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                           |
-| `patch(*, section, patch)`                                        | `DocumentResult[PatchReport]`      | `JSON_PARSE_FAILED`, `PATCH_FAILED`, `PROTECTED_FIELD_RANGE`                               |
-| `insert_para(*, section, anchor, text, before=False)`             | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                      |
-| `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                      |
-| `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                        |
-| `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                 |
+| Method                                                            | Returns                            | Characteristic failures                                                                                 |
+| ----------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `inspect(*, styles=False)`                                        | `InspectReport`                    | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)                                           |
+| `outline()`                                                       | `OutlineReport`                    | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)                                           |
+| `fields()`                                                        | `FieldsReport`                     | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)                                           |
+| `validate()`                                                      | `ValidateReport`                   | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX) (an invalid document reports, not raises) |
+| `read(*, section, paras, table, field)`                           | `ReadReport`                       | `READ_TARGET_REQUIRED`, `READ_PARAS_INVALID`, `READ_PARA_RANGE_INVALID`, `TABLE_NOT_FOUND`              |
+| `diff(revised)`                                                   | `DiffReport`                       | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)                                           |
+| `stamp_plan()`                                                    | `StampPlanReport`                  | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)                                           |
+| `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)                                           |
+| `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                                  |
+| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"`: see the note below)                                                 |
+| `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                                     |
+| `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                                            |
+| `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                        |
+| `patch(*, section, patch)`                                        | `DocumentResult[PatchReport]`      | `JSON_PARSE_FAILED`, `PATCH_FAILED`, `PROTECTED_FIELD_RANGE`                                            |
+| `insert_para(*, section, anchor, text, before=False)`             | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                                   |
+| `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                                   |
+| `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                                     |
+| `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                              |
 
 `to_md(mode="lossless")` keeps what the preservation scope lists, raises `ENCODE_FAILED` for
 an object the scope lists as refused, and may leave out anything else (paragraph styles,

@@ -100,7 +100,16 @@ impl DiffOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn diff(base: &[u8], revised: &[u8]) -> Result<DiffOutput, OpsError> {
-    let diagnosed = HwpxDiffer::diff_with_diagnostics(base, revised).map_err(OpsError::decode)?;
+    let diagnosed = HwpxDiffer::diff_with_diagnostics(base, revised).map_err(|error| {
+        // The differ drops the input role. Recheck only on failure, in its
+        // original base-first order; keep the original error as the cause.
+        // If both initial decodes succeeded, both packages open as ZIP and
+        // the classifier leaves later package-comparison errors unchanged.
+        // 이것을 실패시키는 것: base 재디코드를 ZIP probe로 대체하거나 입력 순서를 뒤집기.
+        let failed_input =
+            if hwpforge_smithy_hwpx::HwpxDecoder::decode(base).is_ok() { revised } else { base };
+        super::input::classify_decode_failure(failed_input, OpsError::decode(error))
+    })?;
 
     // Base first, then revised — the documented provenance rule.
     let warnings: Vec<OpsWarning> = diagnosed

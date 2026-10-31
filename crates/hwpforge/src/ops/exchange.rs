@@ -156,7 +156,8 @@ impl ToJsonOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn to_json(hwpx: &[u8], opts: &ToJsonOptions) -> Result<ToJsonOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     let mut warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
     let styles = opts.styles.then_some(decoded.style_store);
@@ -295,7 +296,8 @@ pub fn export_section(
     opts: &ExportSectionOptions,
 ) -> Result<ExportSectionOutput, OpsError> {
     let diagnosed =
-        HwpxPatcher::export_section_for_edit_with_diagnostics(hwpx, opts.section, opts.styles)?;
+        HwpxPatcher::export_section_for_edit_with_diagnostics(hwpx, opts.section, opts.styles)
+            .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     let outcome = diagnosed.value;
     let exported = outcome.exported;
     // Merge order (documented on `ExportSectionOutput::warnings`):
@@ -470,7 +472,8 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         .base
         .as_ref()
         .map(|bytes| {
-            hwpforge_smithy_hwpx::decoder::HwpxEditBase::read(bytes).map_err(OpsError::decode)
+            hwpforge_smithy_hwpx::decoder::HwpxEditBase::read(bytes)
+                .map_err(|e| super::input::classify_decode_failure(bytes, OpsError::decode(e)))
         })
         .transpose()?;
     if let Some(base) = &base {
@@ -951,7 +954,8 @@ pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> 
     verify_section_addresses(&value, &exported.section, exported.section_index)?;
 
     let diagnosed =
-        HwpxPatcher::patch_exported_section_with_codec_diagnostics(hwpx, opts.section, &exported)?;
+        HwpxPatcher::patch_exported_section_with_codec_diagnostics(hwpx, opts.section, &exported)
+            .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     let SectionPatchOutcome { mut bytes, patched_section, sections } = diagnosed.value;
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();

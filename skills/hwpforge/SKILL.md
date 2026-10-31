@@ -55,7 +55,7 @@ t = Document.open("form.hwpx").read(table=0)["table"]   # ordinals: doc.outline(
 ## Decision tree
 
 ```text
-.hwp input  → convert-hwp5 first (outline/read/edits refuse it: DECODE_FAILED); to-pdf takes it directly
+.hwp input  → convert-hwp5 first (outline/read/edits refuse it: HWP5_INPUT); to-pdf takes it directly
 Read        → outline → read; to-md for people; to-json only for machine editing
 Edit        → locate first (fields for 누름틀, else outline), then the narrowest surface:
   named 누름틀                       fields → fill                        works on 한컴-saved

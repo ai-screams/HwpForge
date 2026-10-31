@@ -183,6 +183,22 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: Hwp5Input 메시지 손실·공용 힌트 변경·details 추가.
+    fn hwp5_input_keeps_code_cause_message_and_conversion_hint() {
+        let error =
+            hwpforge::ops::fields(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).unwrap_err();
+        let parts = ops_parts(&error);
+        assert_eq!(parts.code, "HWP5_INPUT");
+        assert_eq!(parts.message, error.to_string());
+        assert!(parts.message.starts_with("HWP5 (.hwp) input"));
+        assert!(parts.message.contains("ZIP"));
+        let hint = parts.hint.unwrap();
+        assert_eq!(hint, "Convert the HWP5 (.hwp) document to HWPX before using this operation.");
+        assert!(parts.cause.is_none());
+        assert!(parts.details.is_none());
+    }
+
+    #[test]
     fn a_plain_failure_keeps_its_own_sentence_code_and_hint() {
         let error = OpsError::PresetNotFound { name: "gov".into() };
 

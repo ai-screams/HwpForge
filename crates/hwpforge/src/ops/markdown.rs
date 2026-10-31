@@ -186,7 +186,8 @@ pub struct MdExportMeta {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn to_md(hwpx: &[u8], opts: &MdExportOptions) -> Result<MdExportOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     let mut warnings: Vec<OpsWarning> =
         decoded.warnings.iter().cloned().map(OpsWarning::Decode).collect();
     let mut seen = std::collections::BTreeSet::new();

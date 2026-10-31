@@ -104,7 +104,8 @@ impl OutlineOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn outline(hwpx: &[u8]) -> Result<OutlineOutput, OpsError> {
-    let diagnosed = HwpxReader::outline_with_diagnostics(hwpx).map_err(OpsError::decode)?;
+    let diagnosed = HwpxReader::outline_with_diagnostics(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     Ok(OutlineOutput {
         outline: diagnosed.value,
         warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
@@ -177,7 +178,8 @@ impl FieldsOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn fields(hwpx: &[u8]) -> Result<FieldsOutput, OpsError> {
-    let diagnosed = HwpxFiller::list_fields_with_diagnostics(hwpx).map_err(OpsError::decode)?;
+    let diagnosed = HwpxFiller::list_fields_with_diagnostics(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     Ok(FieldsOutput {
         fields: diagnosed.value,
         warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
@@ -350,7 +352,8 @@ pub fn read(hwpx: &[u8], opts: &ReadOptions) -> Result<ReadOutput, OpsError> {
 
     if let Some(section) = opts.section {
         let range = opts.paras.as_deref().map(parse_paras).transpose()?;
-        let diagnosed = HwpxReader::read_paragraphs_with_diagnostics(hwpx, section, range)?;
+        let diagnosed = HwpxReader::read_paragraphs_with_diagnostics(hwpx, section, range)
+            .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
         return Ok(ReadOutput {
             paragraphs: Some(diagnosed.value),
             table: None,
@@ -360,7 +363,8 @@ pub fn read(hwpx: &[u8], opts: &ReadOptions) -> Result<ReadOutput, OpsError> {
     }
 
     if let Some(ordinal) = opts.table {
-        let diagnosed = HwpxReader::read_table_with_diagnostics(hwpx, ordinal)?;
+        let diagnosed = HwpxReader::read_table_with_diagnostics(hwpx, ordinal)
+            .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
         return Ok(ReadOutput {
             paragraphs: None,
             table: Some(diagnosed.value),
@@ -370,7 +374,8 @@ pub fn read(hwpx: &[u8], opts: &ReadOptions) -> Result<ReadOutput, OpsError> {
     }
 
     let name = opts.field.as_deref().expect("target validation leaves field as the only target");
-    let diagnosed = HwpxReader::read_field_with_diagnostics(hwpx, name)?;
+    let diagnosed = HwpxReader::read_field_with_diagnostics(hwpx, name)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     Ok(ReadOutput {
         paragraphs: None,
         table: None,

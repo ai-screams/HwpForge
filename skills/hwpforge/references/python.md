@@ -82,9 +82,9 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 
 | `Document` method                                                                           | Returns          | Characteristic failures                                                 |
 | ------------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------- |
-| `inspect(*, styles=False)`, `outline()`, `fields()`, `validate()`, `stamp_plan()`           | report           | `DECODE_FAILED`                                                         |
+| `inspect(*, styles=False)`, `outline()`, `fields()`, `validate()`, `stamp_plan()`           | report           | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)           |
 | `read(*, section, paras, table, field)` — exactly one target; `paras="0..3"` with `section` | `ReadReport`     | `READ_TARGET_REQUIRED`, `TABLE_NOT_FOUND`, `READ_PARA_RANGE_INVALID`    |
-| `diff(revised)`                                                                             | `DiffReport`     | `DECODE_FAILED`                                                         |
+| `diff(revised)`                                                                             | `DiffReport`     | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)           |
 | `to_json(*, styles=True)`, `export_section(*, section, styles=True)`                        | `TextResult`     | `SECTION_OUT_OF_RANGE`                                                  |
 | `to_md(*, mode="styled")` (`"lossy"`, `"lossless"`)                                         | `TextResult`     | `ENCODE_FAILED`                                                         |
 | `to_pdf(*, font_dirs=(), discovery="explicit", degraded=False, partial_cache_reject=False)` | `BytesResult`    | `PDF_RENDER_FAILED` — pass `discovery="platform"`; see [pdf.md](pdf.md) |

@@ -45,13 +45,32 @@ macro_rules! row {
     ($tool:ident, $code:ident) => {
         Row { tool: Tool::$tool, code: OpsCode::$code, hint: None }
     };
-    ($tool:ident, $code:ident, $hint:literal) => {
+    ($tool:ident, $code:ident, $hint:expr) => {
         Row { tool: Tool::$tool, code: OpsCode::$code, hint: Some($hint) }
     };
 }
 
+const HWP5_INPUT_HINT: &str = "This server reads HWPX only. Convert HWP5 first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.";
+
 #[rustfmt::skip]
 const TABLE: &[Row] = &[
+    row!(Inspect, Hwp5Input, HWP5_INPUT_HINT),
+    row!(ToJson, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Outline, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Diff, Hwp5Input, HWP5_INPUT_HINT),
+    row!(DeletePara, Hwp5Input, HWP5_INPUT_HINT),
+    row!(InsertPara, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Read, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Fields, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Fill, Hwp5Input, HWP5_INPUT_HINT),
+    row!(SetCell, Hwp5Input, HWP5_INPUT_HINT),
+    row!(StampPlan, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Stamp, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Patch, Hwp5Input, HWP5_INPUT_HINT),
+    row!(ToMd, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Validate, Hwp5Input, HWP5_INPUT_HINT),
+    row!(Restyle, Hwp5Input, HWP5_INPUT_HINT),
+
     row!(ConvertMd, PresetNotFound, "Use hwpforge_templates to see available presets."),
     row!(ConvertMd, MdDecodeFailed, "Check Markdown syntax. Use GFM (GitHub Flavored Markdown)."),
     row!(ConvertMd, StyleStoreFailed, "Check paragraph list references in the resolved style registry."),
@@ -143,7 +162,6 @@ const TABLE: &[Row] = &[
     row!(DeletePara, InputEntriesNotCarried, "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
     row!(InsertPara, UpstreamUnmapped, "The structural edit was refused."),
     row!(DeletePara, UpstreamUnmapped, "The structural edit was refused."),
-
 
     row!(Stamp, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill을 사용하세요"),
     row!(Stamp, InputEntriesNotCarried, "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),

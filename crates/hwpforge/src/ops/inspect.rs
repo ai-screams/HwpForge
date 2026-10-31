@@ -309,7 +309,8 @@ pub struct ParaShapeSummary {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     let document = &decoded.document;
     let metadata = document.metadata();
 

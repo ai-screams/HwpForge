@@ -222,7 +222,8 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
         .font
         .clone();
 
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     reject_input_content_loss(&decoded.warnings)?;
     let decode_warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
@@ -342,7 +343,8 @@ pub struct ValidateReport {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn validate(hwpx: &[u8]) -> Result<ValidateOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     let warnings: Vec<OpsWarning> = decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
 
     // Measured before `validate` takes the document, so a failed verdict

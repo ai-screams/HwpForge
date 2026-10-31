@@ -398,6 +398,7 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 
 | 실패 단계·원인                                           | 코드                                                        |
 | -------------------------------------------------------- | ----------------------------------------------------------- |
+| HWPX 입력 연산에 HWP5(.hwp)를 전달                       | `HWP5_INPUT` (종료 2)                                       |
 | 입력 HWPX / Markdown / HWP5 해석                         | `DECODE_FAILED` / `MD_DECODE_FAILED` / `HWP5_DECODE_FAILED` |
 | 편집 전 no-op 검증·인코드·재디코드 또는 의미 왕복 불일치 | `INPUT_NOT_ROUNDTRIP_SAFE`                                  |
 | 입력 ZIP 엔트리 미보존                                   | `INPUT_ENTRIES_NOT_CARRIED`                                 |
@@ -407,6 +408,8 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 | 보호 필드 침범 / 내부 불변식 파손                        | `PROTECTED_FIELD_RANGE` / `INTERNAL_INVARIANT`              |
 | 보존 patch의 변경·metadata 거부 / fill 고유 거부         | `PATCH_FAILED` / `FILL_FAILED`                              |
 | 아직 분류하지 않은 상류 variant                          | `UPSTREAM_UNMAPPED`                                         |
+
+`HWP5_INPUT`이면 먼저 `hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>`로 변환하세요. 확장자가 아닌 내용으로 판정하며, ZIP으로 열리는 접두사 HWPX는 이 코드로 재분류하지 않습니다.
 
 `INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
 

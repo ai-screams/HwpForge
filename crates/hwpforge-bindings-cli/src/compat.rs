@@ -107,8 +107,27 @@ fn lookup(cmd: Command, matches: impl Fn(&Row) -> bool) -> Option<&'static Row> 
     TABLE.iter().find(|row| row.cmd == cmd && matches(row))
 }
 
+const HWP5_INPUT_HINT: &str =
+    "Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.";
+
 #[rustfmt::skip]
 const TABLE: &[Row] = &[
+    row!(Inspect, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(ToJson, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(FromJson, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Outline, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Diff, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(DeletePara, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(InsertPara, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Read, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Fields, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Fill, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(SetCell, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(StampPlan, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Stamp, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Patch, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(ToMd, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Validate, Hwp5Input, 2, HWP5_INPUT_HINT),
 
     row!(ConvertHwp5, Hwp5DecodeFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
     row!(ConvertHwp5, Hwp5ConvertFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),

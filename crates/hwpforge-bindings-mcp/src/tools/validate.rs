@@ -22,31 +22,21 @@ pub struct ValidateData {
     /// — present whether the document validated or the decoded document
     /// simply failed `Document::validate`; empty when there are none. An
     /// input `ops::validate` cannot even decode never reaches this struct at
-    /// all — it is reported as a `DECODE_FAILED` error instead (see the
-    /// module docs). Omitted when empty.
+    /// all — it is reported as `DECODE_FAILED`, or `HWP5_INPUT` for an
+    /// HWP5 container. Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Validate an HWPX file structure and integrity.
 ///
-/// `ops::validate` treats an undecodable package as an
-/// [`ops::OpsError::Decode`] (a *query cannot be answered* failure). Before
-/// an audit flagged this (HIGH-2), the tool folded that into a `valid:
-/// false` payload just like a failed `Document::validate` check — so a
-/// genuine HWP5 file, or anything else `HwpxDecoder` cannot even open, was
-/// reported as "Invalid HWPX" rather than as a decode failure. `Err(err)`
-/// now routes through [`compat::tool_error`] (`Tool::Validate`'s dedicated
-/// match arm reuses the same `DECODE_FAILED` code and "convert with
-/// hwpforge_convert first" hint every other decode-gated tool already
-/// carries). This is an intentional MCP contract change: a caller that used
-/// to branch on `valid: false` for this case now needs to handle a
-/// `DECODE_FAILED` error. A *decoded-but-invalid* document — `HwpxDecoder`
-/// reads it fine but `Document::validate` then rejects it — keeps the
-/// pre-migration payload shape unchanged: `valid: false` with the rejection
-/// folded into `issues`. Decoder warnings from a *successful* decode
-/// (`ops::ValidateOutput::warnings`) are surfaced through
-/// `ValidateData::warnings` regardless of `valid`.
+/// An undecodable input returns a structured error through
+/// [`compat::tool_error`]: `HWP5_INPUT` for an HWP5 container and
+/// `DECODE_FAILED` for other decode failures. HWP5 must first be converted
+/// with CLI `convert-hwp5` or Python `convert_hwp5`.
+/// A document that decodes but fails Core validation keeps `valid: false`
+/// and its rejection in `issues`. Successful decode warnings are surfaced
+/// through `ValidateData::warnings` regardless of `valid`.
 pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
@@ -102,14 +92,10 @@ mod tests {
         assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
     }
 
-    /// HIGH-2: an undecodable package must be a structured error, not a
-    /// `valid: false` payload with the decode failure folded into `issues`
-    /// — the bug that made a genuine HWP5 file read as "Invalid HWPX".
-    /// Covers both an outright-garbage package and a real `.hwp` file,
-    /// since a `.hwp` file is the case the audit actually measured (it is
-    /// not even a ZIP archive, so `HwpxDecoder` fails immediately).
+    /// Unreadable input is a structured error; only decoded documents can
+    /// receive a valid:false verdict. HWP5 gets a conversion-specific code.
     #[test]
-    // 이것을 실패시키는 것: 정상 ZIP 입력으로 decode-failure 조건 제거 (실제 음성 대조 실행).
+    // 이것을 실패시키는 것: HWP5 재분류 제거 또는 MCP의 Hwp5Input 메시지 손실·details 추가.
     fn validate_reports_decode_failure_as_an_error_not_as_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.hwpx");
@@ -130,7 +116,12 @@ mod tests {
             .into_owned();
         let err = run_validate(&hwp_path)
             .expect_err("a real .hwp file must be an error, not a valid:false payload");
-        assert_eq!(err.code, "DECODE_FAILED");
+        assert_eq!(err.code, "HWP5_INPUT");
+        assert_eq!(
+            err.message,
+            hwpforge::ops::validate(&std::fs::read(&hwp_path).unwrap()).unwrap_err().to_string()
+        );
+        assert!(serde_json::to_value(&err).unwrap().get("details").is_none());
         assert!(
             err.hint.contains("hwpforge convert-hwp5"),
             "hint must name the CLI command that converts an HWP5 file: {:?}",
