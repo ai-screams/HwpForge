@@ -250,6 +250,18 @@ pub trait StyleLookup {
         None
     }
 
+    /// Returns the character shape the **paragraph** style at `id` gives
+    /// its text by default: the shape a run of a paragraph with that style
+    /// has unless the run's own shape says otherwise.
+    ///
+    /// `None` when the style is unknown, is not a paragraph style (a
+    /// character style has no paragraph default), or refers to no character
+    /// shape; and in the default implementation, which reports no style
+    /// table.
+    fn style_char_shape(&self, _id: StyleRef) -> Option<CharShapeIndex> {
+        None
+    }
+
     /// Resolves a `binaryItemIDRef` (e.g. `"BinData/image1"`) to the actual
     /// filename with extension (e.g. `"image1.png"`).
     ///

@@ -5,7 +5,7 @@ use hwpforge_blueprint::{
     registry::StyleRegistry,
     template::Template,
 };
-use hwpforge_core::{image::ImageStore, ParagraphListRef};
+use hwpforge_core::{image::ImageStore, ParagraphListRef, StyleLookup};
 use hwpforge_smithy_hwpx::{
     HancomStyleSet, HwpxDecoder, HwpxEncoder, HwpxRegistryBridge, HwpxStyleLookup,
 };
@@ -102,10 +102,16 @@ fn builtin_headings_keep_appearance_and_roundtrip_semantics() {
         let bytes = wire(md, &template, HancomStyleSet::Modern);
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
         let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+        // The heading styles are bold: their runs stay bold in the HWPX,
+        // and styled Markdown writes no emphasis the style already gives.
+        for p in decoded.document.sections()[0].paragraphs.iter().take(6) {
+            assert!(p.runs.iter().all(|r| lookup.char_bold(r.char_shape_id) == Some(true)));
+        }
         let styled = MdEncoder::encode_styled(&decoded.document.validate().unwrap(), &lookup);
+        let headings = ["# One", "## Two", "### Three", "#### Four", "##### Five", "###### Six"];
         assert_eq!(
-            styled.markdown.lines().find(|line| line.starts_with("######")),
-            Some("###### **Six**")
+            styled.markdown.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>(),
+            headings
         );
         assert_eq!(
             styled.markdown.lines().find(|line| line.contains("nested")),
@@ -118,8 +124,9 @@ fn builtin_headings_keep_appearance_and_roundtrip_semantics() {
             MdEncoder::encode_styled(&decoded.document.validate().unwrap(), &lookup)
                 .markdown
                 .lines()
-                .find(|line| line.starts_with("######")),
-            Some("###### **Six**")
+                .filter(|line| line.starts_with('#'))
+                .collect::<Vec<_>>(),
+            headings
         );
     }
 }
@@ -1051,4 +1058,45 @@ fn adjacent_numbering_groups_alternate_delimiters() {
             assert_eq!(parsed_items(&out), parsed_items(md), "{view}: {out:?}");
         }
     }
+}
+
+/// In a heading whose style is bold, an explicit `**` adds nothing the
+/// HWPX shows: styled writes the heading plain, and an added emphasis the
+/// style does not give (italic) stays; the second round trip is the same.
+/// The heading runs stay bold in the HWPX.
+/// 이것을 실패시키는 것: 제목 스타일 기준 무시 · 기울임까지 지우기.
+#[test]
+fn explicit_heading_emphasis_follows_the_style() {
+    for template in [builtin_default().unwrap(), builtin_gov_proposal().unwrap()] {
+        let mut md = "# **One**\n\n## *Two*\n\nBody **bold**".to_string();
+        let expected = ["# One", "## *Two*", "Body **bold**"];
+        for _ in 0..2 {
+            let bytes = wire(&md, &template, HancomStyleSet::Modern);
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+            for p in decoded.document.sections()[0].paragraphs.iter().take(2) {
+                assert!(p.runs.iter().all(|r| lookup.char_bold(r.char_shape_id) == Some(true)));
+            }
+            md = MdEncoder::encode_styled(&decoded.document.validate().unwrap(), &lookup).markdown;
+            assert_eq!(md.split("\n\n").collect::<Vec<_>>(), expected, "{md}");
+        }
+    }
+}
+
+/// A list item's and its continuation's text is compared with their own
+/// styles too: with a bold list style, bold item and continuation text is
+/// written plain, an added italic stays, and body text keeps its bold.
+/// 이것을 실패시키는 것: 목록·continuation 문단에 기준을 쓰지 않기.
+#[test]
+fn list_text_emphasis_follows_its_style() {
+    let template = Template::from_yaml(
+        "meta:\n  name: bold_lists\n  version: 1.0.0\n  extends: default\nstyles:\n  list_item:\n    char_shape:\n      bold: true\n",
+    )
+    .unwrap();
+    let md = "- **a** *i*\n\n  **b**\n\n**c**";
+    let bytes = wire(md, &template, HancomStyleSet::Modern);
+    let back = HwpxDecoder::decode(&bytes).unwrap();
+    let lookup = HwpxStyleLookup::new(&back.style_store, &back.image_store);
+    let styled = MdEncoder::encode_styled(&back.document.validate().unwrap(), &lookup).markdown;
+    assert_eq!(styled, "- a *i*\n\n  b\n\n**c**");
 }

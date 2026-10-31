@@ -899,6 +899,7 @@ fn paragraph_text_styled(
     }
     let mut kept = None;
     let paragraph = expanded(paragraph, st, &mut kept);
+    let base = style_base(paragraph, styles);
     let mut output = Md::new();
 
     // Group consecutive text runs by InlineFormat for proper wrapping.
@@ -922,7 +923,7 @@ fn paragraph_text_styled(
                 let Some(cow) = content.plain_text() else {
                     continue;
                 };
-                let fmt = InlineFormat::from_style(cs, styles);
+                let fmt = InlineFormat::from_style(cs, styles).beyond(base);
                 if fmt != current_format {
                     if !current_text.is_empty() {
                         output.push(current_format.wrap(&current_text, ctx));
@@ -974,11 +975,12 @@ fn guarded_runs(
 ) {
     let mut kept = None;
     let paragraph = expanded(paragraph, st, &mut kept);
+    let base = style_base(paragraph, styles);
     for (part, cs) in super::spread_groups(&paragraph.runs) {
         match part {
             Part::Text(content) => {
                 if let Some(cow) = content.plain_text() {
-                    line.text(&cow, InlineFormat::from_style(cs, styles));
+                    line.text(&cow, InlineFormat::from_style(cs, styles).beyond(base));
                 }
             }
             Part::Image(image) => {
@@ -1959,7 +1961,7 @@ fn shape_text_html(
 // ---------------------------------------------------------------------------
 
 /// Inline formatting state derived from a character shape.
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 struct InlineFormat {
     bold: bool,
     italic: bool,
@@ -1980,6 +1982,35 @@ impl InlineFormat {
             superscript: styles.char_superscript(id).unwrap_or(false),
             subscript: styles.char_subscript(id).unwrap_or(false),
         }
+    }
+
+    /// What this format adds to its paragraph style's default (`base`):
+    /// each property on here and off in the base, compared by value (two
+    /// character shapes of the same format are the same, whatever their
+    /// numbers). With no base, this format as it is.
+    /// 이것을 실패시키는 것: 기준 무시 · 속성 하나 빼먹기
+    /// (`emphasis_the_style_gives_is_not_written`).
+    fn beyond(self, base: Option<Self>) -> Self {
+        let Some(base) = base else { return self };
+        Self {
+            bold: self.bold && !base.bold,
+            italic: self.italic && !base.italic,
+            strikeout: self.strikeout && !base.strikeout,
+            underline: self.underline && !base.underline,
+            superscript: self.superscript && !base.superscript,
+            subscript: self.subscript && !base.subscript,
+        }
+    }
+
+    /// Whether this format turns off a property the base has on: Markdown
+    /// cannot write an emphasis taken away.
+    fn clears(self, base: Self) -> bool {
+        (base.bold && !self.bold)
+            || (base.italic && !self.italic)
+            || (base.strikeout && !self.strikeout)
+            || (base.underline && !self.underline)
+            || (base.superscript && !self.superscript)
+            || (base.subscript && !self.subscript)
     }
 
     /// Wraps text with inline formatting (hybrid markdown/HTML).
@@ -2007,7 +2038,7 @@ impl InlineFormat {
         // Move leading/trailing whitespace outside formatting markers.
         // CommonMark: `** text**` fails (space after opening marker).
         let trimmed = text.trim();
-        if trimmed.is_empty() {
+        if !shows_emphasis(text) {
             return Md::text(text);
         }
         let leading = &text[..text.len() - text.trim_start().len()];
@@ -2077,7 +2108,7 @@ impl InlineFormat {
             || trimmed.chars().any(|c| matches!(c, '*' | '_' | '~'))
             || trimmed.chars().next().is_some_and(|c| c.is_ascii_punctuation())
             || trimmed.chars().next_back().is_some_and(|c| c.is_ascii_punctuation());
-        if !has_basic || html || trimmed.is_empty() {
+        if !has_basic || html || !shows_emphasis(text) {
             return None;
         }
         let marks =
@@ -2093,6 +2124,9 @@ impl InlineFormat {
             return Html::new();
         }
         let mut result = Html::text(text);
+        if !shows_emphasis(text) {
+            return result;
+        }
         for (on, tag) in [
             (self.bold, "strong"),
             (self.italic, "em"),
@@ -2226,6 +2260,37 @@ fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: C
     Html::join(lines, "\n")
 }
 
+/// Whether `text` can show an emphasis: nothing or whitespace alone is
+/// written without markers or tags by every writer ([`InlineFormat::wrap`],
+/// [`InlineFormat::marks`], [`InlineFormat::wrap_html`]), so it shows no
+/// emphasis and no contrast.
+/// 이것을 실패시키는 것: 공백 run 을 해제로 보기 · HTML 에서 공백만 태그로 감싸기
+/// (`whitespace_runs_turn_no_emphasis_off`).
+fn shows_emphasis(text: &str) -> bool {
+    !text.trim().is_empty()
+}
+
+/// The emphasis a paragraph's text is written against: the default
+/// character shape of the paragraph's own style
+/// ([`StyleLookup::style_char_shape`]), so a heading whose style is bold is
+/// not written bold again. `None`, and every run's format written as it
+/// is, when the paragraph has no style, the styles do not give its default,
+/// or one of its text runs that shows emphasis ([`shows_emphasis`]: not a
+/// run of whitespace alone) turns off a property the default has on (that
+/// contrast would be lost: Markdown has no way to take emphasis away). Each
+/// paragraph is asked again, a cell's, a shape's or a note's too.
+/// 이것을 실패시키는 것: 해제 run 이 있어도 기준 쓰기 · `style_ref` 없이 추정
+/// (`emphasis_the_style_gives_is_not_written`).
+fn style_base(paragraph: &Paragraph, styles: &dyn StyleLookup) -> Option<InlineFormat> {
+    let base = InlineFormat::from_style(styles.style_char_shape(paragraph.style_ref?)?, styles);
+    let clears = paragraph
+        .runs
+        .iter()
+        .filter(|run| run.content.plain_text().is_some_and(|text| shows_emphasis(&text)))
+        .any(|run| InlineFormat::from_style(run.char_shape_id, styles).clears(base));
+    (!clears).then_some(base)
+}
+
 /// Extracts text from a paragraph using HTML inline formatting.
 fn extract_paragraph_text_html(
     paragraph: &Paragraph,
@@ -2235,6 +2300,7 @@ fn extract_paragraph_text_html(
 ) -> Html {
     let mut kept = None;
     let paragraph = expanded(paragraph, st, &mut kept);
+    let base = style_base(paragraph, styles);
     let mut output = Html::new();
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
@@ -2253,7 +2319,7 @@ fn extract_paragraph_text_html(
                 let Some(cow) = content.plain_text() else {
                     continue;
                 };
-                let fmt = InlineFormat::from_style(cs, styles);
+                let fmt = InlineFormat::from_style(cs, styles).beyond(base);
                 if fmt != current_format {
                     if !current_text.is_empty() {
                         output.push(current_format.wrap_html(&current_text));

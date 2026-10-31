@@ -2594,6 +2594,32 @@ fn read_back_cell(markdown: &str) -> (crate::MdDocument, hwpforge_core::TableCel
     (md, cell)
 }
 
+/// Whitespace at a merged cell's edges, or in its middle, is the document's
+/// text: it reads back character for character, plain or with an emphasis
+/// that whitespace alone does not show. Text of whitespace alone keeps its
+/// characters without tags.
+/// 이것을 실패시키는 것: 칸 가장자리 공백 지우기 · 공백 글 빼기.
+#[test]
+fn html_cell_edges_keep_their_whitespace() {
+    let plain = |s: &str| t(s);
+    let bold = |s: &str| styled_t(s, BOLD);
+    for (runs, text) in [
+        (vec![bold(" "), plain("x")], " x"),
+        (vec![plain("x"), bold(" ")], "x "),
+        (vec![plain("x"), bold("\t")], "x\t"),
+        (vec![plain("a"), bold(" "), plain("b")], "a b"),
+        (vec![plain(" x ")], " x "),
+        (vec![plain("\tx")], "\tx"),
+        (vec![bold(" ")], " "),
+    ] {
+        let (markdown, fallbacks) = styled(&doc(vec![body(vec![table(merged(body(runs)))])]));
+        assert_eq!(fallbacks, 0, "{markdown}");
+        assert!(!markdown.contains("<strong>"), "{markdown}");
+        let (_, cell) = read_back_cell(&markdown);
+        assert_eq!(cell.paragraphs[0].text_content(), text, "{markdown}");
+    }
+}
+
 /// A merged (HTML) cell's text keeps its spaces through styled and back,
 /// as the document has them: between its pieces (before a format, before
 /// a link, around a comment), at its edges (a space before a closing
