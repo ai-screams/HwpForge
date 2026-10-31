@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.18.0...hwpforge-smithy-hwpx-v0.19.0) - 2026-10-31
+
+### Changed
+
+- *(core)* **BREAKING** [#296] read paragraph lists as one typed reference ([#301](https://github.com/ai-screams/HwpForge/pull/301))
+
+- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+- *(smithy-hwpx)* [#280] define repeated HWPX wire values in one place ([#292](https://github.com/ai-screams/HwpForge/pull/292))
+
+- *(smithy-hwpx)* [#282] drop the unused MAX_STYLE_INDEX checks ([#290](https://github.com/ai-screams/HwpForge/pull/290))
+
+
+### Fixed
+
+- *(smithy-hwpx)* [#286] read XML references in chart values and CLI text records ([#289](https://github.com/ai-screams/HwpForge/pull/289))
+
+- *(smithy-hwpx)* [#282] drop only the metadata value that is lost and report it ([#287](https://github.com/ai-screams/HwpForge/pull/287))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.1...hwpforge-smithy-hwpx-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)

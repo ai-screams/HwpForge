@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.18.0...hwpforge-foundation-v0.19.0) - 2026-10-31
+
+### Changed
+
+- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.17.1...hwpforge-foundation-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)
