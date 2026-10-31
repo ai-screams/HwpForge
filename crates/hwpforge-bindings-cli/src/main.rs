@@ -4,6 +4,7 @@ mod analysis;
 mod commands;
 mod compat;
 mod error;
+mod input;
 
 use std::path::PathBuf;
 
@@ -215,6 +216,11 @@ enum Commands {
         long_about = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     DeletePara {
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Outputs are HWPX. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
         /// HWPX file to edit.
         file: PathBuf,
 
@@ -236,6 +242,11 @@ enum Commands {
         long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, preserving every other byte.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     InsertPara {
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Outputs are HWPX. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
         /// HWPX file to edit.
         file: PathBuf,
 
@@ -291,6 +302,11 @@ enum Commands {
         long_about = "Fill named click-here fields (누름틀) by name, byte-preserving every untouched package entry.\n\nAll requested values are validated first (unknown/duplicate/unfillable names, empty values) and nothing is written unless every one passes. Use `fields` to discover names."
     )]
     Fill {
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Outputs are HWPX. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
         /// HWPX file to fill.
         file: PathBuf,
 
@@ -309,6 +325,11 @@ enum Commands {
         long_about = "Edit table cells by logical grid address, all-or-nothing behind the fail-closed admission gate.\n\nAddress a cell with --table N (to-json export order) plus one of --at \"r,c\" (covered positions resolve to their merge anchor), --right-of LABEL, or --below LABEL (normalized exact match). --text \"\" clears the cell. Batch edits go through --map (JSON array of CellSpec)."
     )]
     SetCell {
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Outputs are HWPX. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
         /// HWPX file to edit.
         file: PathBuf,
 
@@ -356,6 +377,11 @@ enum Commands {
         long_about = "Apply a stamp spec map all-or-nothing behind a fail-closed admission gate (no-op round-trip + ZIP closed-world), then write the stamped HWPX and a manifest.\n\nThe map is a JSON array of StampSpec (from `stamp-plan --json` candidates plus an action per candidate). The stamped output is immediately usable with `fields`/`fill`."
     )]
     Stamp {
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Outputs are HWPX. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
         /// HWPX file to stamp.
         file: PathBuf,
 
@@ -491,12 +517,34 @@ fn main() {
         Commands::Diff { base, revised, output } => {
             commands::diff::run(&base, &revised, output.as_ref(), cli.json);
         }
-        Commands::DeletePara { file, section, indices, output } => {
-            commands::structural::run_delete(&file, section, &indices, &output, cli.json);
+        Commands::DeletePara { file, section, indices, output, accept_conversion_loss } => {
+            commands::structural::run_delete(
+                &file,
+                section,
+                &indices,
+                &output,
+                cli.json,
+                accept_conversion_loss,
+            );
         }
-        Commands::InsertPara { file, section, anchor, before, texts, output } => {
+        Commands::InsertPara {
+            file,
+            section,
+            anchor,
+            before,
+            texts,
+            output,
+            accept_conversion_loss,
+        } => {
             commands::structural::run_insert(
-                &file, section, anchor, before, &texts, &output, cli.json,
+                &file,
+                section,
+                anchor,
+                before,
+                &texts,
+                &output,
+                cli.json,
+                accept_conversion_loss,
             );
         }
         Commands::Read { file, section, paras, table, field } => {
@@ -512,10 +560,20 @@ fn main() {
         Commands::Fields { file } => {
             commands::fields::run(&file, cli.json);
         }
-        Commands::Fill { file, sets, output } => {
-            commands::fill::run(&file, &sets, &output, cli.json);
+        Commands::Fill { file, sets, output, accept_conversion_loss } => {
+            commands::fill::run(&file, &sets, &output, cli.json, accept_conversion_loss);
         }
-        Commands::SetCell { file, output, table, at, right_of, below, text, map } => {
+        Commands::SetCell {
+            file,
+            output,
+            table,
+            at,
+            right_of,
+            below,
+            text,
+            map,
+            accept_conversion_loss,
+        } => {
             commands::set_cell::run(
                 &file,
                 &output,
@@ -528,13 +586,21 @@ fn main() {
                 },
                 map.as_ref(),
                 cli.json,
+                accept_conversion_loss,
             );
         }
         Commands::StampPlan { file } => {
             commands::stamp::run_plan(&file, cli.json);
         }
-        Commands::Stamp { file, map, output, manifest } => {
-            commands::stamp::run(&file, &map, &output, manifest.as_deref(), cli.json);
+        Commands::Stamp { file, map, output, manifest, accept_conversion_loss } => {
+            commands::stamp::run(
+                &file,
+                &map,
+                &output,
+                manifest.as_deref(),
+                cli.json,
+                accept_conversion_loss,
+            );
         }
         Commands::Patch { base, section, section_json, output } => {
             commands::patch::run(&base, section, &section_json, &output, cli.json);

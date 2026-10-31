@@ -2790,7 +2790,11 @@ fn hwp5_face_metadata_unsupported_values_warn() {
     ]);
     assert_eq!(
         font_warnings(&warnings),
-        ["style.font.font_type", "style.font.type_info", "style.font.substitute"],
+        [
+            "style.font.font_type",
+            hwpforge_smithy_hwp5::Hwp5Warning::FONT_TYPE_INFO_SUBJECT,
+            "style.font.substitute"
+        ],
         "{warnings:?}"
     );
     assert_eq!(fonts[0].font_type, None);

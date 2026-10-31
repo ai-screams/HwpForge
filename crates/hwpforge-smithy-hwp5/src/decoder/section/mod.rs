@@ -2219,7 +2219,7 @@ impl BodyTextParserState {
                     let id = u16::from_le_bytes([bytes[0], bytes[1]]);
                     if id > 1 {
                         self.warnings.push(Hwp5Warning::ParserFallback {
-                            subject: "section.outlineShapeIDRef",
+                            subject: Hwp5Warning::OUTLINE_SHAPE_SUBJECT,
                             reason: format!("original numbering {id}: section outline selection is not carried; HWPX output selects 1"),
                         });
                     }
@@ -3315,7 +3315,7 @@ pub(crate) mod tests {
             .concat();
             let result = parse_body_text(&stream, &version()).unwrap();
             assert_eq!(result.warnings.iter().any(|w| matches!(w,
-                Hwp5Warning::ParserFallback { subject: "section.outlineShapeIDRef", reason } if reason.contains(&id.to_string()))), id > 1);
+                Hwp5Warning::ParserFallback { subject: Hwp5Warning::OUTLINE_SHAPE_SUBJECT, reason } if reason.contains(&id.to_string()))), id > 1);
         }
     }
 

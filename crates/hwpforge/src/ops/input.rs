@@ -5,26 +5,33 @@ use hwpforge_core::zip_package::open_package;
 use hwpforge_core::CoreError;
 use hwpforge_foundation::OpsCode;
 
-/// OLE2/CFB signature used only to advise callers after decoding fails.
-pub(crate) const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-
 use super::OpsError;
 
+/// OLE2/CFB signature used only to advise callers after decoding fails.
+const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
 pub(super) fn classify_decode_failure(bytes: &[u8], error: OpsError) -> OpsError {
-    // Reuse the existing stage mapping, including nested codec failures.
-    // 이것을 실패시키는 것: 단계 조건 삭제, CFB 조건 삭제, ZIP 실패 조건 삭제.
-    if error.code() == OpsCode::DecodeFailed
-        && bytes.starts_with(&CFB_MAGIC)
-        // Core's ZIP package policy failures must retain their decode code.
-        // Its existing framing error is narrower than any package-open failure.
-        && matches!(open_package(bytes, Default::default()),
-            Err(CoreError::InvalidStructure { context, reason })
-                if context == "ZIP" && reason == "invalid ZIP central directory framing")
-    {
+    // 이것을 실패시키는 것: DecodeFailed 단계 조건 삭제 또는 공용 판별 우회.
+    if error.code() == OpsCode::DecodeFailed && is_hwp5_input(bytes) {
         OpsError::Hwp5Input { source: Box::new(error) }
     } else {
         error
     }
+}
+
+/// Whether bytes need HWP5 conversion before an HWPX operation.
+///
+/// A CFB signature alone is insufficient: prefixed ZIP packages remain HWPX.
+/// Only the ZIP reader's central-directory framing failure qualifies. Package
+/// policy and XML errors retain their original classification. Non-CFB inputs
+/// never invoke the ZIP reader, preserving argument-error precedence.
+#[must_use]
+fn is_hwp5_input(bytes: &[u8]) -> bool {
+    // 이것을 실패시키는 것: CFB 조건 삭제, ZIP 실패 조건 삭제, 정책 오류까지 재분류.
+    bytes.starts_with(&CFB_MAGIC)
+        && matches!(open_package(bytes, Default::default()),
+            Err(CoreError::InvalidStructure { context, reason })
+                if context == "ZIP" && reason == "invalid ZIP central directory framing")
 }
 
 #[cfg(test)]

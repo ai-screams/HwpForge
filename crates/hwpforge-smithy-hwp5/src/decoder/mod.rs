@@ -111,6 +111,36 @@ pub enum Hwp5Warning {
     },
 }
 
+impl Hwp5Warning {
+    /// Font classification metadata omitted from the converted style definitions.
+    pub const FONT_TYPE_INFO_SUBJECT: &'static str = "style.font.type_info";
+    /// Section outline definition reference omitted from projection.
+    pub const OUTLINE_SHAPE_SUBJECT: &'static str = "section.outlineShapeIDRef";
+    /// Memo shape definition omitted from projection.
+    pub const MEMO_SHAPE_DEFINITION_SUBJECT: &'static str = "header.memo_shape_definition";
+
+    /// Change tracking content or author definition omitted from projection.
+    pub const TRACK_CHANGE_DEFINITION_SUBJECT: &'static str = "header.track_change_definition";
+
+    /// Whether conversion may have discarded document meaning.
+    ///
+    /// Policy exempts layout caches, font classification metadata and memo shape
+    /// definitions. The latter two are excluded by explicit conversion policy,
+    /// not by a verified claim about their visual effect.
+    /// Unknown tags, streams, controls and fallback subjects fail closed,
+    /// including nested section settings whose equivalence is not proven.
+    #[must_use]
+    pub fn is_semantic_loss(&self) -> bool {
+        // 이것을 실패시키는 것: 개요 참조·변경 추적을 비손실로 허용하거나 메모 모양 예외 제거.
+        !matches!(
+            self,
+            Self::LayoutCacheDropped { .. }
+                | Self::ProjectionFallback { subject: Self::FONT_TYPE_INFO_SUBJECT, .. }
+                | Self::ParserFallback { subject: Self::MEMO_SHAPE_DEFINITION_SUBJECT, .. }
+        )
+    }
+}
+
 /// Shared parser output before Core projection or semantic adaptation.
 #[derive(Debug)]
 pub(crate) struct DecodedHwp5Intermediate {

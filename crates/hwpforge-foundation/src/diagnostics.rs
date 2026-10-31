@@ -244,6 +244,8 @@ ops_codes! {
     // ── conversion (HWP5 · PDF) ────────────────────────────────────
     /// An HWPX operation received HWP5 (.hwp); convert it to HWPX first.
     Hwp5Input => "HWP5_INPUT",
+    /// Editing refused because HWP5 conversion lost document meaning.
+    Hwp5ConversionLoss => "HWP5_CONVERSION_LOSS",
     /// HWP5 input could not be decoded.
     Hwp5DecodeFailed => "HWP5_DECODE_FAILED",
     /// HWP5 → HWPX conversion failed.

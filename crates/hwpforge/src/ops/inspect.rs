@@ -295,6 +295,8 @@ pub struct ParaShapeSummary {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Decode`] (code `DECODE_FAILED`) when the bytes are not a
 /// decodable HWPX package.
 ///

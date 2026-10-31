@@ -136,6 +136,8 @@ impl ToJsonOutput {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Decode`] (code `DECODE_FAILED`) when the bytes are not a
 ///   decodable HWPX package.
 /// - [`OpsError::JsonSerialize`] (code `JSON_SERIALIZE_FAILED`) when the
@@ -271,6 +273,8 @@ impl ExportSectionOutput {
 /// `PRESERVATION_METADATA_UNAVAILABLE` warning.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::SectionWorkflow`] for an undecodable package (code
 ///   `DECODE_FAILED`) or a section index outside the document (code
@@ -433,6 +437,8 @@ impl FromJsonOutput {
 /// number the encoder writes it under.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::Json`] (code `JSON_PARSE_FAILED`) when the text is not JSON
 ///   or does not match the exported-document schema.
@@ -918,6 +924,8 @@ impl PatchOutput {
 /// one section's content over another's.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::Json`] (code `JSON_PARSE_FAILED`) when the patch text is not
 ///   JSON or does not match the exported-section schema.

@@ -184,6 +184,8 @@ pub struct RestyleMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::PresetNotFound`] — no built-in preset has that name.
 /// - [`OpsError::Decode`] (`DECODE_FAILED`) — the bytes are not a decodable
 ///   HWPX package.
@@ -328,6 +330,8 @@ pub struct ValidateReport {
 /// decode this function already paid for.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// [`OpsError::Decode`] (`DECODE_FAILED`) when the bytes are not a decodable
 /// HWPX package.

@@ -237,6 +237,7 @@ struct Inventory {
     functions: Vec<(String, syn::Signature)>,
     structs: BTreeMap<String, syn::ItemStruct>,
     owner: String,
+    trait_impl: bool,
 }
 impl<'ast> Visit<'ast> for Inventory {
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
@@ -247,11 +248,13 @@ impl<'ast> Visit<'ast> for Inventory {
     fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
         let previous =
             std::mem::replace(&mut self.owner, node.self_ty.to_token_stream().to_string());
+        let previous_trait = std::mem::replace(&mut self.trait_impl, node.trait_.is_some());
         syn::visit::visit_item_impl(self, node);
+        self.trait_impl = previous_trait;
         self.owner = previous;
     }
     fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        if matches!(node.vis, syn::Visibility::Public(_)) {
+        if self.trait_impl || matches!(node.vis, syn::Visibility::Public(_)) {
             self.functions.push((format!("{}::{}", self.owner, node.sig.ident), node.sig.clone()));
         }
     }
@@ -303,6 +306,9 @@ fn byte_slots(
 fn inventory_slots(inventory: &Inventory) -> BTreeSet<(String, String)> {
     let mut actual = BTreeSet::new();
     for (name, signature) in &inventory.functions {
+        if name == "is_hwp5_input" {
+            continue;
+        }
         for arg in &signature.inputs {
             if let syn::FnArg::Typed(arg) = arg {
                 // This builder only stores bytes. from_json's opts.base entry
@@ -457,7 +463,7 @@ fn hwp5_input_preserves_the_original_error_chain() {
     );
     assert_eq!(
         error.hint(),
-        Some("Convert the HWP5 (.hwp) document to HWPX before using this operation.")
+        Some("Convert the HWP5 (.hwp) document with convert_hwp5 (CLI: convert-hwp5) before using this operation.")
     );
 }
 
@@ -504,6 +510,7 @@ fn cfb_signatures_match_the_container_literal() {
     for source in [
         include_str!("../src/ops/input.rs"),
         include_str!("../../hwpforge-convert/src/ops/pdf.rs"),
+        include_str!("../../hwpforge-convert/src/ops/input.rs"),
         include_str!("../../hwpforge-bindings-cli/src/commands/to_pdf.rs"),
     ] {
         let file = syn::parse_file(source).unwrap();
@@ -529,4 +536,21 @@ fn cfb_signatures_match_the_container_literal() {
             .collect();
         assert_eq!(bytes, [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
     }
+}
+
+#[test]
+// 이것을 실패시키는 것: trait impl 메서드의 공개 입력 수집 제거.
+fn input_inventory_includes_trait_methods() {
+    let mut inventory = Inventory::default();
+    let source = r#"
+        impl TryFrom<&[u8]> for Reader {
+            type Error = ();
+            fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> { todo!() }
+        }
+    "#;
+    inventory.visit_file(&syn::parse_file(source).unwrap());
+    assert_eq!(
+        inventory_slots(&inventory),
+        BTreeSet::from([("Reader::try_from".into(), "bytes".into())])
+    );
 }

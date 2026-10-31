@@ -5,7 +5,7 @@
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -16,7 +16,7 @@ use hwpforge_smithy_hwpx::PackageReader;
 
 use crate::analysis::hwpx_paths::collect_section_path_inventory;
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_input, CliError};
+use crate::error::{check_file_size, CliError};
 
 #[derive(Serialize)]
 struct InspectResult {
@@ -87,9 +87,9 @@ struct SectionInfo {
 /// The paragraph counts do come from the decode, because paragraph presence
 /// is never silently dropped that way — a decoded count and a raw count of
 /// the same bytes are deterministically identical there.
-pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
+pub fn run(file: &Path, show_styles: bool, json_mode: bool) {
     check_file_size(file, json_mode, Command::Inspect);
-    let bytes = read_input(file, json_mode, Command::Inspect);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::Inspect);
 
     let out = match ops::inspect(&bytes, &InspectOptions::default().with_styles(show_styles)) {
         Ok(o) => o,
@@ -134,7 +134,7 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     };
 
     if json_mode {
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
     } else {
         for w in &result.warnings {
             eprintln!("[inspect] {}: {}", w.code, w.message);

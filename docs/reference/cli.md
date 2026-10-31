@@ -398,7 +398,9 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 
 | 실패 단계·원인                                           | 코드                                                        |
 | -------------------------------------------------------- | ----------------------------------------------------------- |
-| HWPX 입력 연산에 HWP5(.hwp)를 전달                       | `HWP5_INPUT` (종료 2)                                       |
+| 보류 명령의 HWPX 입력에 HWP5(.hwp)를 전달                | `HWP5_INPUT` (종료 2)                                       |
+| HWP5 변환의 의미 손실로 편집 거부                        | `HWP5_CONVERSION_LOSS` (종료 1)                             |
+| 편집 문서 출력이 `.hwp` / HWP5 입력과 같은 파일          | `INVALID_EXTENSION` / `INVALID_OUTPUT_PATH` (종료 1)        |
 | 입력 HWPX / Markdown / HWP5 해석                         | `DECODE_FAILED` / `MD_DECODE_FAILED` / `HWP5_DECODE_FAILED` |
 | 편집 전 no-op 검증·인코드·재디코드 또는 의미 왕복 불일치 | `INPUT_NOT_ROUNDTRIP_SAFE`                                  |
 | 입력 ZIP 엔트리 미보존                                   | `INPUT_ENTRIES_NOT_CARRIED`                                 |
@@ -475,3 +477,25 @@ v3 문단의 `style_ref`는 문서 내부 참조입니다. `styles.style_positio
 MCP from-json의 문자열 인자 안 JSON도 같은 계약입니다. 별도 MCP schema 도구는 없으며 CLI schema를 사용합니다. Python의 dict 반환 타입과 callable은 그대로이고, 그 내부 데이터 계약만 v3로 바뀝니다.
 
 v3에서 Core JSON의 `style_id`는 `style_ref`로 바뀌었으며, 교환에는 envelope를 사용하세요. `to-json --no-styles`로 내보낸 v3 문서는 non-null 참조에 필요한 styles가 없어 그대로 `from-json`에 넣으면 거절됩니다.
+
+자동 변환 대상은 `inspect`, `outline`, `read`, `fields`, `to-md`, `to-json`,
+`validate`, `diff`, `stamp-plan`, `fill`, `set-cell`, `insert-para`, `delete-para`,
+`stamp`입니다. 편집 결과는 HWPX이며, 변환 손실은 `--accept-conversion-loss`로만
+수락할 수 있습니다. 이 옵션도 편집 admission을 해제하지 않습니다.
+`HWP5_CONVERSION_LOSS`의 JSON `details.warnings`는 거부된 경고만 담으며 각 항목은
+`{stage, code, message, location?}`입니다. 기존 성공 `warnings`는 유지하고 별도
+`conversion: {source_format: "hwp5", warnings: [...]}`를 더합니다. `diff`의 conversion은
+`base`·`revised`별이며 문서 내보내기 본문에는 들어가지 않습니다.
+
+**Breaking change:** 자동 변환 대상의 HWP5 입력은 기존 `HWP5_INPUT` 대신 변환 결과나
+`HWP5_DECODE_FAILED`, `HWP5_CONVERT_FAILED`, `VALIDATION_FAILED`, `ENCODE_FAILED`를
+반환합니다. 변환 실패는 기존 ops 인자 검사보다 먼저입니다. 변환 손실 거부는 기존
+편집 검사 다음이며 쓰기 전입니다. 기존 코드의 명령별 종료 값은 유지합니다
+(`set-cell`의 validation/encode 오류는 1, 나머지 변환 오류는 2).
+`.hwp` 출력 거부도 기존 동작의 변경입니다. `from-json --base`, `patch`와 Python/MCP
+입력은 자동 변환 대상이 아닙니다.
+
+HWP5 입력 보호는 이미 존재하는 문서·manifest 출력의 파일 정체성을 비교합니다.
+실행 도중 다른 프로세스가 경로를 바꾸는 경우는 보장하지 않습니다. HWPX 제자리
+편집은 계속 허용합니다. 정체성 확인 실패는 `FILE_WRITE_FAILED`이며 `fill`, `set-cell`,
+`stamp`는 종료 1, `insert-para`, `delete-para`는 종료 2입니다.

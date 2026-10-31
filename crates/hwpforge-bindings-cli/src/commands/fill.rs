@@ -3,17 +3,23 @@ use crate::error::{CliCode, CliOnly};
 use hwpforge_foundation::diagnostics::OpsCode;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hwpforge::ops::edit::{fill as ops_fill, FillOptions};
 use hwpforge::ops::OpsWarning;
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_input, CliError};
+use crate::error::{check_file_size, CliError};
 
 /// Run the fill command.
-pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
+pub fn run(
+    file: &Path,
+    sets: &[String],
+    output: &PathBuf,
+    json_mode: bool,
+    accept_conversion_loss: bool,
+) {
     let values = parse_sets(sets, json_mode);
     if values.is_empty() {
         CliError::new(CliCode::Ops(OpsCode::NoValues), "no --set name=value pairs given")
@@ -22,7 +28,7 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     }
 
     check_file_size(file, json_mode, Command::Fill);
-    let bytes = read_input(file, json_mode, Command::Fill);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::Fill);
 
     let values: Vec<(String, String)> = values.into_iter().collect();
     let outcome = match ops_fill(&bytes, &values, &FillOptions::default()) {
@@ -35,6 +41,7 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     // stderr line each in text mode.
     let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();
 
+    bytes.check_edit(file, output, None, accept_conversion_loss, json_mode, Command::Fill);
     if let Err(e) = std::fs::write(output, &outcome.bytes) {
         CliError::new(
             CliCode::Ops(OpsCode::FileWriteFailed),
@@ -53,7 +60,7 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
         if !warnings.is_empty() {
             result["warnings"] = serde_json::to_value(&warnings).unwrap();
         }
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
     } else {
         for w in &warnings {
             eprintln!("[fill] {}: {}", w.code, w.message);

@@ -145,6 +145,8 @@ pub struct FillMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Rejected`] with [`OpsCode::NoValues`] when `values` is
 ///   empty (the frontends call this `NO_VALUES`).
 /// - [`OpsError::InvalidInput`] when `values` names a field twice —
@@ -320,6 +322,8 @@ pub struct SetCellMeta {
 /// admission gate, and an encode that loses meaning produces no bytes.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::Rejected`] with [`OpsCode::InvalidSetCellArgs`] for an
 ///   unusable option combination, or [`OpsCode::InvalidSetCellMap`] for an
@@ -546,6 +550,8 @@ pub struct StructuralMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Rejected`] with [`OpsCode::InsertTextRequired`] when `text`
 ///   is empty (the MCP server calls this `INSERT_TEXT_REQUIRED`; the CLI's
 ///   own `--text` clap guard already refuses an empty list ahead of this
@@ -594,6 +600,8 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
 /// an `INDEX_MARK_REMOVED` warning beside the edited bytes.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::Rejected`] with [`OpsCode::DeleteNoTarget`] when `indexes`
 ///   is empty (the frontends call this `DELETE_NO_TARGET`). The library

@@ -326,7 +326,7 @@ fn editors_share_decode_and_admission_fixtures() {
 }
 
 #[test]
-// 이것을 실패시키는 것: inspect 입력 재분류·CLI 힌트 삭제 또는 Hwp5Input 메시지 손실·details 추가.
+// 이것을 실패시키는 것: inspect 변환 경로 제거 또는 변환 오류 코드·원인 변경.
 fn hwp5_with_hwpx_extension_reports_conversion_hint() {
     let tmp = test_tmp();
     let input = tmp.join("renamed.hwpx");
@@ -336,15 +336,12 @@ fn hwp5_with_hwpx_extension_reports_conversion_hint() {
     let (_, stderr, code) = run(&["inspect", input.to_str().unwrap(), "--json"]);
     let error: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(code, 2);
-    assert_eq!(error["code"], "HWP5_INPUT");
+    assert_eq!(error["code"], "HWP5_DECODE_FAILED");
     assert_eq!(
         error["message"],
-        hwpforge::ops::inspect(original, &Default::default()).unwrap_err().to_string()
+        hwpforge_convert::ops::convert_hwp5(original, &Default::default()).unwrap_err().to_string()
     );
     assert!(error.get("details").is_none());
-    assert_eq!(
-        error["hint"],
-        "Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
-    );
+    assert_eq!(error["hint"], serde_json::Value::Null);
     assert_eq!(std::fs::read(input).unwrap(), original);
 }

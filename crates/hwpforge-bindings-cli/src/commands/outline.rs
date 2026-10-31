@@ -1,17 +1,17 @@
 //! Document navigation map: headings, tables, fields, bookmarks.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use hwpforge::ops::{self, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_input};
+use crate::error::check_file_size;
 
 /// Run the outline command.
-pub fn run(file: &PathBuf, json_mode: bool) {
+pub fn run(file: &Path, json_mode: bool) {
     check_file_size(file, json_mode, Command::Outline);
-    let bytes = read_input(file, json_mode, Command::Outline);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::Outline);
 
     // Decoder warnings (`OutlineOutput::warnings`) were not surfaced previously
     // (the pre-migration CLI never captured them; the migration kept that byte-for-byte).
@@ -29,7 +29,7 @@ pub fn run(file: &PathBuf, json_mode: bool) {
         if !warnings.is_empty() {
             result["warnings"] = serde_json::to_value(&warnings).unwrap();
         }
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
         return;
     }
     for w in &warnings {

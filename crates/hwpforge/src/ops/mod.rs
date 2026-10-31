@@ -136,6 +136,10 @@ pub use style::{
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
     /// HWP5 input passed to an operation requiring HWPX. Convert it first.
+    ///
+    /// Display deliberately includes the original cause for callers that only
+    /// print the message. `source()` also preserves it for structured walkers;
+    /// those walkers should not append it to the already complete message.
     #[error("HWP5 (.hwp) input requires conversion to HWPX first; cause: {source}")]
     Hwp5Input {
         /// The original input decode failure, including its source chain.
@@ -461,7 +465,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
     }
     Some(match code {
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
-        OpsCode::Hwp5Input => "Convert the HWP5 (.hwp) document to HWPX before using this operation.",
+        OpsCode::Hwp5Input => "Convert the HWP5 (.hwp) document with convert_hwp5 (CLI: convert-hwp5) before using this operation.",
         OpsCode::EmptyFieldValue => {
             "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요"
         }

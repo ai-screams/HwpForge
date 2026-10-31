@@ -86,6 +86,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ConvertError, ConvertWarning};
 
+mod input;
+pub use input::{
+    open_as_hwpx, ConversionMeta, ConversionReport, ConversionWarning, OpenOptions, OpenedHwpx,
+    SourceFormat,
+};
+
 pub use hwp5::{convert_hwp5, ConvertHwp5Options, ConvertHwp5Output, Hwp5Meta};
 pub use pdf::{to_pdf, PdfMeta, ToPdfOptions, ToPdfOutput};
 
@@ -102,6 +108,12 @@ const OTHER: &str = "OTHER";
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ConvertOpsError {
+    /// Editing refused because the preceding HWP5 conversion lost meaning.
+    #[error("HWP5 conversion lost document meaning; accept conversion loss explicitly to edit the HWPX result")]
+    ConversionLoss {
+        /// Only the rejected semantic-loss warnings, in pipeline order.
+        warnings: Vec<ConversionWarning>,
+    },
     /// HWP5 read or HWP5 → HWPX conversion failure, with the stage that
     /// raised it.
     ///
@@ -189,6 +201,9 @@ impl ConvertOpsError {
     /// `HWP5_CONVERT_FAILED` is left for the layout-hint replay alone; it is
     /// never an alias for a decode, validation or encode failure.
     ///
+    /// [`ConversionLoss`](Self::ConversionLoss) is `HWP5_CONVERSION_LOSS`; its
+    /// warnings contain only the semantic losses rejected after editing.
+    ///
     /// # The rest
     ///
     /// [`Decode`](Self::Decode) is `DECODE_FAILED`, [`Core`](Self::Core) is
@@ -212,6 +227,7 @@ impl ConvertOpsError {
     #[must_use]
     pub fn code(&self) -> OpsCode {
         match self {
+            Self::ConversionLoss { .. } => OpsCode::Hwp5ConversionLoss,
             Self::Convert(e) => convert_code(e),
             Self::Decode(_) => OpsCode::DecodeFailed,
             Self::Core(_) => OpsCode::ValidationFailed,
@@ -275,7 +291,8 @@ impl ConvertOpsError {
             | Self::Decode(_)
             | Self::Core(_)
             | Self::UnrecognizedFormat
-            | Self::Rejected { .. } => None,
+            | Self::Rejected { .. }
+            | Self::ConversionLoss { .. } => None,
         }
     }
 
@@ -331,6 +348,7 @@ impl ConvertOpsError {
 
 fn hint_for(code: OpsCode) -> Option<&'static str> {
     Some(match code {
+        OpsCode::Hwp5ConversionLoss => "Review the conversion warnings before accepting conversion loss; editing admission remains enforced",
         OpsCode::Hwp5DecodeFailed => "Check that the file is a valid HWP5 document",
         OpsCode::Hwp5ConvertFailed => {
             "Check that the source is a supported HWP5 document"
@@ -575,6 +593,17 @@ pub struct WarningParts {
 }
 
 impl ConvertOpsWarning {
+    /// Whether this diagnostic reports meaning that cannot be preserved.
+    #[must_use]
+    pub fn is_semantic_loss(&self) -> bool {
+        match self {
+            Self::Convert(warning) => warning.is_semantic_loss(),
+            // These stages are not produced by open_as_hwpx; never silently
+            // accept a new stage if it is added to conversion later.
+            _ => true,
+        }
+    }
+
     /// Which pipeline stage raised this warning: `"convert"`, `"decode"` or
     /// `"render"`.
     ///

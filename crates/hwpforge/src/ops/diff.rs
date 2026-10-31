@@ -80,6 +80,8 @@ impl DiffOutput {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Decode`] (code `DECODE_FAILED`) when either input is not a
 /// decodable HWPX package. The error does not say which one; the CLI does not
 /// either.

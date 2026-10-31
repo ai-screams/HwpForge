@@ -38,11 +38,20 @@ class PdfCause(TypedDict):
 
 # What an `ENCODE_SEMANTIC_LOSS` refusal carries as `HwpForgeError.details`:
 # the semantic-loss warnings that caused it, and the non-semantic warnings the
-# same encode produced, kept rather than discarded. `None` on every other
-# failure.
+# same encode produced, kept rather than discarded.
 class SemanticLossDetails(TypedDict):
     warnings: list[WarningInfo]
     others: list[WarningInfo]
+
+# Conversion refusal payload; automatic Python input conversion is not enabled.
+class ConversionWarning(TypedDict):
+    stage: str
+    code: str
+    message: str
+    location: NotRequired[str]
+
+class ConversionLossDetails(TypedDict):
+    warnings: list[ConversionWarning]
 
 class GridCoord(TypedDict):
     row: int

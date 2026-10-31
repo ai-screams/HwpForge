@@ -61,6 +61,8 @@ Text-only map (legacy array form):
 ]
 ```
 
+For `.hwp` input, v2 `source_sha256` hashes the converted HWPX bytes.
+
 With cells, use the v2 object form (`source_sha256` copied from the plan):
 
 ```json

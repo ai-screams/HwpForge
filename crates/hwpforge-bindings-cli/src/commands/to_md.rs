@@ -23,6 +23,8 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
         }
     };
 
+    let bytes = crate::input::open_input_hwpx(bytes, json_mode, Command::ToMd);
+
     let ops_mode = match mode {
         MdMode::Styled => OpsMdMode::Styled,
         MdMode::Lossy => OpsMdMode::Lossy,
@@ -70,6 +72,22 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
         }
     };
 
+    // Preflight the entire artifact set before creating directories or files.
+    let image_outputs: Vec<_> = images
+        .iter()
+        .map(|(rel_path, data)| {
+            let filename = std::path::Path::new(rel_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image");
+            (out_dir.join("images").join(filename), data)
+        })
+        .collect();
+    bytes.protect_source(input, &md_path, json_mode, Command::ToMd);
+    for (path, _) in &image_outputs {
+        bytes.protect_source(input, path, json_mode, Command::ToMd);
+    }
+
     // 5. Create output directory if needed
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
         CliError::new(
@@ -99,13 +117,8 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
             )
             .exit(json_mode, Command::ToMd);
         }
-        for (rel_path, data) in &images {
-            let img_filename = std::path::Path::new(rel_path.as_str())
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("image");
-            let img_path = images_dir.join(img_filename);
-            if let Err(e) = std::fs::write(&img_path, data) {
+        for (img_path, data) in &image_outputs {
+            if let Err(e) = std::fs::write(img_path, data) {
                 CliError::new(
                     CliCode::Ops(OpsCode::FileWriteFailed),
                     format!("Cannot write '{}': {e}", img_path.display()),
@@ -123,7 +136,7 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
     });
 
     if json_mode {
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
     } else {
         println!(
             "Converted {} → {} ({} image{})",

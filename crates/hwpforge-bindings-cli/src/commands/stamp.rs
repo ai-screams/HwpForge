@@ -17,12 +17,12 @@ use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{parse_stamp_map, StampMap};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_bounded_string, read_input, CliError};
+use crate::error::{check_file_size, read_bounded_string, CliError};
 
 /// Run the `stamp-plan` command (candidate discovery, both classes).
-pub fn run_plan(file: &PathBuf, json_mode: bool) {
+pub fn run_plan(file: &Path, json_mode: bool) {
     check_file_size(file, json_mode, Command::StampPlan);
-    let bytes = read_input(file, json_mode, Command::StampPlan);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::StampPlan);
     let out = match ops_stamp_plan(&bytes) {
         Ok(o) => o,
         Err(e) => compat::exit_ops_error(Command::StampPlan, e, json_mode),
@@ -48,7 +48,7 @@ pub fn run_plan(file: &PathBuf, json_mode: bool) {
         if !warnings.is_empty() {
             result["warnings"] = serde_json::to_value(&warnings).unwrap();
         }
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
         return;
     }
     for w in &warnings {
@@ -111,14 +111,15 @@ pub fn run_plan(file: &PathBuf, json_mode: bool) {
 
 /// Run the `stamp` command (admission-gated apply + manifest).
 pub fn run(
-    file: &PathBuf,
+    file: &Path,
     map: &PathBuf,
     output: &PathBuf,
     manifest_path: Option<&Path>,
     json_mode: bool,
+    accept_conversion_loss: bool,
 ) {
     check_file_size(file, json_mode, Command::Stamp);
-    let bytes = read_input(file, json_mode, Command::Stamp);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::Stamp);
 
     let map_text = match read_bounded_string(map) {
         Ok(t) => t,
@@ -172,6 +173,14 @@ pub fn run(
     let manifest =
         result.manifest.as_ref().expect("StampOptions::default() always requests a manifest");
     let manifest_json = serde_json::to_string_pretty(manifest).unwrap();
+    bytes.check_edit(
+        file,
+        output,
+        Some(&manifest_file),
+        accept_conversion_loss,
+        json_mode,
+        Command::Stamp,
+    );
     write_artifacts(output, &manifest_file, &result.bytes, &manifest_json, json_mode);
 
     match &parsed {
@@ -189,7 +198,7 @@ pub fn run(
                 if !warnings.is_empty() {
                     out["warnings"] = serde_json::to_value(&warnings).unwrap();
                 }
-                println!("{}", serde_json::to_string(&out).unwrap());
+                println!("{}", bytes.json(&out).unwrap());
             } else {
                 for w in &warnings {
                     eprintln!("[stamp] {}: {}", w.code, w.message);
@@ -222,7 +231,7 @@ pub fn run(
                 if !warnings.is_empty() {
                     out["warnings"] = serde_json::to_value(&warnings).unwrap();
                 }
-                println!("{}", serde_json::to_string(&out).unwrap());
+                println!("{}", bytes.json(&out).unwrap());
             } else {
                 for w in &warnings {
                     eprintln!("[stamp] {}: {}", w.code, w.message);

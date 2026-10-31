@@ -66,6 +66,9 @@ pub struct CliError {
     /// coarse contract; `cause` refines it without breaking consumers).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<ErrorCause>,
+    /// Structured refusal details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 /// Machine-readable refinement of a coarse [`CliError::code`].
@@ -86,7 +89,14 @@ pub struct ErrorCause {
 impl CliError {
     /// Creates a new error with the given code and message.
     pub fn new(code: CliCode, message: impl Into<String>) -> Self {
-        Self { status: "error", code, message: message.into(), hint: None, cause: None }
+        Self {
+            status: "error",
+            code,
+            message: message.into(),
+            hint: None,
+            cause: None,
+            details: None,
+        }
     }
 
     /// Adds a hint to this error.

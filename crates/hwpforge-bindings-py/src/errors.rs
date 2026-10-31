@@ -30,6 +30,13 @@ struct SemanticLossDetails<'a> {
     others: &'a [WarningInfo],
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+enum LossDetails<'a> {
+    Encode(SemanticLossDetails<'a>),
+    Conversion { warnings: &'a [hwpforge_convert::ops::ConversionWarning] },
+}
+
 /// The five arguments `HwpForgeError(code, message, hint, cause, details)`
 /// takes.
 struct ErrorParts<'a> {
@@ -44,7 +51,7 @@ struct ErrorParts<'a> {
     /// `{stage, code, kind?, location?}` object the command line prints.
     cause: Option<PdfCause>,
     /// The failure's structured payload, when the class of failure has one.
-    details: Option<SemanticLossDetails<'a>>,
+    details: Option<LossDetails<'a>>,
 }
 
 /// Turns an operation failure into the Python exception.
@@ -119,7 +126,7 @@ fn ops_parts(error: &OpsError) -> ErrorParts<'_> {
         cause: None,
         details: match error {
             OpsError::EncodeSemanticLoss { warnings, others } => {
-                Some(SemanticLossDetails { warnings, others })
+                Some(LossDetails::Encode(SemanticLossDetails { warnings, others }))
             }
             _ => None,
         },
@@ -133,13 +140,18 @@ fn ops_parts(error: &OpsError) -> ErrorParts<'_> {
 /// met. The second one is the actionable half, so it crosses as the same
 /// `{stage, code, kind?, location?}` object the command line prints under
 /// `cause`, rather than being flattened to a code or folded into the message.
-fn convert_parts(error: &ConvertOpsError) -> ErrorParts<'static> {
+fn convert_parts(error: &ConvertOpsError) -> ErrorParts<'_> {
     ErrorParts {
         code: error.code().as_str(),
         message: error.to_string(),
         hint: error.hint(),
         cause: error.cause_info(),
-        details: None,
+        details: match error {
+            ConvertOpsError::ConversionLoss { warnings } => {
+                Some(LossDetails::Conversion { warnings })
+            }
+            _ => None,
+        },
     }
 }
 
@@ -178,6 +190,25 @@ mod tests {
     use super::*;
     use hwpforge_foundation::diagnostics::OpsCode;
 
+    #[test]
+    // 이것을 실패시키는 것: 변환 손실 details 또는 code 매핑 제거.
+    fn conversion_loss_keeps_rejected_warnings() {
+        let error = ConvertOpsError::ConversionLoss {
+            warnings: vec![hwpforge_convert::ops::ConversionWarning {
+                stage: "convert".into(),
+                code: "CONTENT_LOST".into(),
+                message: "lost".into(),
+                location: Some("s0".into()),
+            }],
+        };
+        let parts = convert_parts(&error);
+        assert_eq!(parts.code, "HWP5_CONVERSION_LOSS");
+        assert_eq!(
+            serde_json::to_value(parts.details.unwrap()).unwrap(),
+            serde_json::json!({"warnings":[{"stage":"convert","code":"CONTENT_LOST","message":"lost","location":"s0"}]})
+        );
+    }
+
     fn info(code: &str, message: &str) -> WarningInfo {
         WarningInfo::new(code, message)
     }
@@ -193,7 +224,7 @@ mod tests {
         assert!(parts.message.starts_with("HWP5 (.hwp) input"));
         assert!(parts.message.contains("ZIP"));
         let hint = parts.hint.unwrap();
-        assert_eq!(hint, "Convert the HWP5 (.hwp) document to HWPX before using this operation.");
+        assert_eq!(hint, "Convert the HWP5 (.hwp) document with convert_hwp5 (CLI: convert-hwp5) before using this operation.");
         assert!(parts.cause.is_none());
         assert!(parts.details.is_none());
     }

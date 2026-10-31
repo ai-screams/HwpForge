@@ -2,20 +2,20 @@
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hwpforge::ops::{self, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_input, CliError};
+use crate::error::{check_file_size, CliError};
 
 /// Run the diff command.
-pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mode: bool) {
+pub fn run(base: &Path, revised: &Path, output: Option<&PathBuf>, json_mode: bool) {
     check_file_size(base, json_mode, Command::Diff);
     check_file_size(revised, json_mode, Command::Diff);
-    let base_bytes = read_input(base, json_mode, Command::Diff);
-    let revised_bytes = read_input(revised, json_mode, Command::Diff);
+    let base_bytes = crate::input::read_input_hwpx(base, json_mode, Command::Diff);
+    let revised_bytes = crate::input::read_input_hwpx(revised, json_mode, Command::Diff);
 
     // Decoder warnings from both inputs (`DiffOutput::warnings`) were not
     // surfaced previously (the pre-migration CLI never captured them either).
@@ -29,6 +29,8 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     let diff = out.diff;
 
     if let Some(path) = output {
+        base_bytes.protect_source(base, path, json_mode, Command::Diff);
+        revised_bytes.protect_source(revised, path, json_mode, Command::Diff);
         let report = serde_json::to_string_pretty(&diff).unwrap();
         if let Err(e) = std::fs::write(path, report) {
             CliError::new(
@@ -43,6 +45,16 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
         let mut result = serde_json::json!({ "status": "ok", "diff": diff });
         if !warnings.is_empty() {
             result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
+        let conversions: serde_json::Map<String, serde_json::Value> =
+            [("base", base_bytes.metadata()), ("revised", revised_bytes.metadata())]
+                .into_iter()
+                .filter_map(|(role, meta)| {
+                    meta.map(|m| (role.into(), serde_json::to_value(m).unwrap()))
+                })
+                .collect();
+        if !conversions.is_empty() {
+            result["conversion"] = conversions.into();
         }
         println!("{}", serde_json::to_string(&result).unwrap());
         return;

@@ -89,6 +89,8 @@ impl OutlineOutput {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Decode`] (code `DECODE_FAILED`) when the bytes are not a
 /// decodable HWPX package.
 ///
@@ -163,6 +165,8 @@ impl FieldsOutput {
 /// sees in 한글.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// [`OpsError::Decode`] (code `DECODE_FAILED`) when the bytes are not a
 /// decodable HWPX package.
@@ -316,6 +320,8 @@ impl ReadOutput {
 /// that a duplicate name is visible rather than silently resolved.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - Code `READ_TARGET_REQUIRED` when the number of targets is not exactly
 ///   one, `READ_PARAS_WITHOUT_SECTION` when `paras` is set without `section`,

@@ -167,6 +167,8 @@ pub struct MdExportMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Decode`] (`DECODE_FAILED`) — the bytes are not a decodable
 ///   HWPX package.
 /// - [`OpsError::Core`] (`VALIDATION_FAILED`) — the decoded document does

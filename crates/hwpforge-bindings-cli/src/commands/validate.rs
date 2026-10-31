@@ -108,7 +108,7 @@ struct ValidateResult {
 /// all, so stderr is their only channel in either mode).
 pub fn run(file: &Path, json_mode: bool) {
     check_file_size(file, json_mode, Command::Validate);
-    let bytes = crate::error::read_input(file, json_mode, Command::Validate);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::Validate);
 
     let out = match ops::validate(&bytes) {
         Ok(o) => o,
@@ -142,7 +142,7 @@ pub fn run(file: &Path, json_mode: bool) {
         // same "the result value refused to serialize" condition; unlike
         // that command's rows, this one has no pre-migration legacy to
         // audit (module docs) — new code, not a divergence.
-        match serde_json::to_string(&result) {
+        match bytes.json(&result) {
             Ok(s) => println!("{s}"),
             Err(e) => {
                 CliError::new(

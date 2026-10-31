@@ -171,6 +171,8 @@ pub struct StampPlanMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Stamper`] (code `DECODE_FAILED`) when the bytes fail to
 /// decode.
 ///
@@ -332,6 +334,8 @@ pub struct StampMeta {
 /// touched.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::Stamper`] for every library rejection: the admission
 ///   refusals (`INPUT_NOT_ROUNDTRIP_SAFE`, `INPUT_ENTRIES_NOT_CARRIED`),
