@@ -53,6 +53,7 @@ mod convert;
 mod edit;
 mod errors;
 mod exchange;
+mod input;
 mod markdown;
 mod queries;
 mod results;
@@ -87,6 +88,8 @@ mod _hwpforge {
     use crate::edit::{delete_para, fill, insert_para, restyle, set_cell, stamp};
     #[pymodule_export]
     use crate::exchange::{export_section, from_json, patch, to_json};
+    #[pymodule_export]
+    use crate::input::_prepare_save;
     #[pymodule_export]
     use crate::markdown::{convert_md, to_md};
     #[pymodule_export]

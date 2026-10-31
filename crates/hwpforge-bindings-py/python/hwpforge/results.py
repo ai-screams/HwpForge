@@ -27,7 +27,8 @@ class DocumentResult(Generic[R]):
     Attributes:
         document: The edited document. The document the method was called on is
             unchanged.
-        report: What the operation did, including any warnings.
+        report: What the operation did, including warnings. Supported HWP5 input
+            adds typed ``conversion`` metadata; existing warnings stay unchanged.
     """
 
     __slots__ = ("document", "report")
@@ -42,7 +43,8 @@ class TextResult(Generic[R]):
 
     Attributes:
         text: The exported Markdown or JSON.
-        report: What the operation did, including any warnings.
+        report: What the operation did, including warnings. Supported HWP5 input
+            adds typed ``conversion`` metadata; existing warnings stay unchanged.
     """
 
     __slots__ = ("report", "text")
@@ -57,7 +59,8 @@ class BytesResult(Generic[R]):
 
     Attributes:
         data: The exported document, for example a PDF.
-        report: What the operation did, including any warnings.
+        report: What the operation did, including warnings. Supported HWP5 input
+            adds typed ``conversion`` metadata; existing warnings stay unchanged.
     """
 
     __slots__ = ("data", "report")

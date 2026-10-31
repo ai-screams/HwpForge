@@ -46,7 +46,7 @@ with open("table0.csv", "w", newline="", encoding="utf-8-sig") as f:   # utf-8-s
     csv.writer(f).writerows(grid)
 ```
 
-Run on a 3×2 form whose `비고` label spans two rows (the HwpForge repo's `tests/fixtures/tables/merged_grid_form.hwpx`) this prints `[(0, 3, 2)]` and writes `성명,` / `비고,` / `비고,`. `read(table=N)` returns `{"table": {"ordinal", "at", "rows", "cols", "cells": [{"row","col","row_span","col_span","text"}]}, "paragraphs": None, "fields": None, "warnings": [...]}`; an out-of-range ordinal raises `TABLE_NOT_FOUND`. `.hwp` input must go through `convert_hwp5` first.
+Run on a 3×2 form whose `비고` label spans two rows (the HwpForge repo's `tests/fixtures/tables/merged_grid_form.hwpx`) this prints `[(0, 3, 2)]` and writes `성명,` / `비고,` / `비고,`. `read(table=N)` returns `{"table": {"ordinal", "at", "rows", "cols", "cells": [{"row","col","row_span","col_span","text"}]}, "paragraphs": None, "fields": None, "warnings": [...]}`; an out-of-range ordinal raises `TABLE_NOT_FOUND`. `.hwp` input is converted automatically; see the conversion policy below.
 
 ## Example: fill a 한컴-saved form and verify
 
@@ -80,20 +80,20 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 
 ## API
 
-| `Document` method                                                                           | Returns          | Characteristic failures                                                 |
-| ------------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------- |
-| `inspect(*, styles=False)`, `outline()`, `fields()`, `validate()`, `stamp_plan()`           | report           | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)           |
-| `read(*, section, paras, table, field)` — exactly one target; `paras="0..3"` with `section` | `ReadReport`     | `READ_TARGET_REQUIRED`, `TABLE_NOT_FOUND`, `READ_PARA_RANGE_INVALID`    |
-| `diff(revised)`                                                                             | `DiffReport`     | `HWP5_INPUT` (HWP5 input) or `DECODE_FAILED` (malformed HWPX)           |
-| `to_json(*, styles=True)`, `export_section(*, section, styles=True)`                        | `TextResult`     | `SECTION_OUT_OF_RANGE`                                                  |
-| `to_md(*, mode="styled")` (`"lossy"`, `"lossless"`)                                         | `TextResult`     | `ENCODE_FAILED`                                                         |
-| `to_pdf(*, font_dirs=(), discovery="explicit", degraded=False, partial_cache_reject=False)` | `BytesResult`    | `PDF_RENDER_FAILED` — pass `discovery="platform"`; see [pdf.md](pdf.md) |
-| `fill(values)`                                                                              | `DocumentResult` | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`            |
-| `patch(*, section, patch)` — `patch` is the JSON text                                       | `DocumentResult` | `JSON_PARSE_FAILED`, `PATCH_FAILED`, `PROTECTED_FIELD_RANGE`            |
-| `set_cell(*, table, at, right_of, below, text, specs)`                                      | `DocumentResult` | `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                           |
-| `insert_para(*, section, anchor, text, before=False)`, `delete_para(*, section, indexes)`   | `DocumentResult` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                   |
-| `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                             |
-| `restyle(*, preset)`                                                                        | `DocumentResult` | `PRESET_NOT_FOUND` — lossy, see [templates.md](templates.md)            |
+| `Document` method                                                                           | Returns          | Characteristic failures                                                   |
+| ------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------- |
+| `inspect(*, styles=False)`, `outline()`, `fields()`, `validate()`, `stamp_plan()`           | report           | `HWP5_DECODE_FAILED` (malformed HWP5) or `DECODE_FAILED` (malformed HWPX) |
+| `read(*, section, paras, table, field)` — exactly one target; `paras="0..3"` with `section` | `ReadReport`     | `READ_TARGET_REQUIRED`, `TABLE_NOT_FOUND`, `READ_PARA_RANGE_INVALID`      |
+| `diff(revised)`                                                                             | `DiffReport`     | `HWP5_DECODE_FAILED` (malformed HWP5) or `DECODE_FAILED` (malformed HWPX) |
+| `to_json(*, styles=True)`, `export_section(*, section, styles=True)`                        | `TextResult`     | `SECTION_OUT_OF_RANGE`                                                    |
+| `to_md(*, mode="styled")` (`"lossy"`, `"lossless"`)                                         | `TextResult`     | `ENCODE_FAILED`                                                           |
+| `to_pdf(*, font_dirs=(), discovery="explicit", degraded=False, partial_cache_reject=False)` | `BytesResult`    | `PDF_RENDER_FAILED` — pass `discovery="platform"`; see [pdf.md](pdf.md)   |
+| `fill(values)`                                                                              | `DocumentResult` | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`              |
+| `patch(*, section, patch)` — `patch` is the JSON text                                       | `DocumentResult` | `JSON_PARSE_FAILED`, `PATCH_FAILED`, `PROTECTED_FIELD_RANGE`              |
+| `set_cell(*, table, at, right_of, below, text, specs)`                                      | `DocumentResult` | `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                             |
+| `insert_para(*, section, anchor, text, before=False)`, `delete_para(*, section, indexes)`   | `DocumentResult` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                     |
+| `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                               |
+| `restyle(*, preset)`                                                                        | `DocumentResult` | `PRESET_NOT_FOUND` — lossy, see [templates.md](templates.md)              |
 
 | Module function                                                               | Returns                                                            |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -103,3 +103,15 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 | `templates()`, `schema(*, kind="document")`                                   | report                                                             |
 
 Python names some refusals differently from the CLI (for example `INPUT_ENTRIES_NOT_CARRIED` where the CLI says `INPUT_ENTRIES_NOT_CARRIED`) — see [errors.md](errors.md).
+
+## HWP5 input and loss acceptance
+
+`Document.open("form.hwp")` and `Document.from_bytes(data)` accept HWP5 input. `inspect`, `outline`, `read`, `fields`, `validate`, `diff` (both inputs), `stamp_plan`, `to_md`, `to_json`, `export_section`, and the five edits convert through the shared HWP5-to-HWPX path. Outputs are HWPX.
+
+`fill`, `set_cell`, `insert_para`, `delete_para`, and `stamp` default to `accept_conversion_loss=False`. Semantic conversion loss raises `HWP5_CONVERSION_LOSS` with rejected warnings in `error.details["warnings"]`. Review them before explicitly passing `accept_conversion_loss=True`. The order is conversion, existing operation, then conversion-loss refusal; existing editing admission checks remain in force. Reads report warnings.
+
+Existing `warnings` are unchanged. HWP5 input adds a separate report key: `conversion = {"source_format": "hwp5", "warnings": [...]}`. Each warning has `stage`, `code`, `message`, and optional `location`. Diff reports converted roles under `conversion.base` and `conversion.revised`. JSON and Markdown payloads contain no conversion metadata.
+
+`save` rejects `.hwp` (case insensitive) with `INVALID_EXTENSION`. Saving raw HWP5 converts to HWPX and also requires `accept_conversion_loss=True` if lossy. The identity of the file read by `Document.open` is retained through instance edits. Saving over that HWP5 file, including symlink and hard-link aliases, raises `INVALID_OUTPUT_PATH` even after its original path is deleted or replaced. Protection applies to the file read at open time, not the file currently at that path. Only the output identity is looked up when saving; lookup failures other than an absent output raise `FILE_WRITE_FAILED`. New targets and HWPX in-place saves remain allowed. Output paths must remain stable while saving.
+
+Bytes-only constructors and the generating functions `convert_hwp5`, `convert_md`, and `from_json` have no source file identity to protect; callers must keep outputs separate from their original files. Bytes/text results perform no writes. Automatic HWP5 conversion for `from_json(base=...)`, `patch`, and `restyle` is out of scope: they still raise `HWP5_INPUT`; explicitly convert their input first.

@@ -7,6 +7,7 @@ use pyo3::pybacked::{PyBackedBytes, PyBackedStr};
 use pyo3::types::PyBytes;
 
 use crate::errors::OrPy;
+use crate::input;
 use crate::results::{bytes_and_meta, meta};
 
 /// Exports a document as the editable JSON tree.
@@ -15,7 +16,7 @@ use crate::results::{bytes_and_meta, meta};
 /// operations expect, exactly as the command line writes them.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
 ///     styles: Whether to include the style definitions.
 ///
 /// Returns:
@@ -27,16 +28,17 @@ pub(crate) fn to_json<'py>(
     data: PyBackedBytes,
     styles: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let options = ops::ToJsonOptions::default().with_styles(styles);
     let output = py.detach(|| ops::to_json(bytes, &options)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Exports one section as the JSON tree `patch` takes back.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
 ///     section: Index of the section to export.
 ///     styles: Whether to include the style definitions.
 ///
@@ -50,10 +52,11 @@ pub(crate) fn export_section<'py>(
     section: usize,
     styles: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let options = ops::ExportSectionOptions::default().with_section(section).with_styles(styles);
     let output = py.detach(|| ops::export_section(bytes, &options)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Builds a document from the JSON tree `to_json` produces.

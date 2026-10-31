@@ -37,7 +37,7 @@ class HwpForgeError(Exception):
             ``{"code", "message"}`` shape as a report warning. ``None`` for
             every other failure except ``HWP5_CONVERSION_LOSS``, whose details
             contain only ``warnings`` with ``stage``, ``code``, ``message`` and
-            optional ``location``. Automatic Python input conversion is not enabled.
+            optional ``location``. MCP does not automatically convert HWP5 inputs.
     """
 
     code: str

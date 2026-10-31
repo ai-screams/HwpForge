@@ -40,15 +40,16 @@ __all__ = ["Document"]
 
 
 class Document:
-    """An HWPX document held in memory.
+    """An HWPX or HWP5 document held in memory.
 
     A document is an immutable value: two documents are equal when their bytes
     are equal, and every editing method returns a new document rather than
     changing this one.
 
-    The format runs one way: an old binary HWP5 file can be read in through
-    [`convert_hwp5`][hwpforge.convert_hwp5], but everything from there on is
-    HWPX, and there is no path back from HWPX to HWP5.
+    HWP5 (.hwp) input is converted by supported operations; edits produce HWPX.
+    Conversion warnings are in the report under ``conversion``. Semantic loss
+    requires ``accept_conversion_loss=True`` for edits and saving raw HWP5.
+    ``patch``, ``restyle`` and ``from_json(base=...)`` still require HWPX.
 
     Example:
         >>> doc = Document.open("proposal.hwpx")  # doctest: +SKIP
@@ -56,17 +57,17 @@ class Document:
         >>> doc.save("filled.hwpx")  # doctest: +SKIP
     """
 
-    __slots__ = ("_data",)
+    __slots__ = ("_data", "_hwp5_source", "_source_identity")
 
     def __init__(self, data: bytes) -> None:
-        """Wrap HWPX bytes.
+        """Wrap HWPX or HWP5 bytes without decoding.
 
         Prefer [`Document.open`][hwpforge.Document.open] or
         [`Document.from_bytes`][hwpforge.Document.from_bytes], which say where
         the bytes came from.
 
         Args:
-            data: The bytes of an HWPX package.
+            data: HWPX package or HWP5 (.hwp) bytes.
 
         Raises:
             TypeError: If `data` is not `bytes`.
@@ -74,12 +75,14 @@ class Document:
         if not isinstance(data, bytes):
             raise TypeError(f"Document takes bytes, not {type(data).__name__}")
         object.__setattr__(self, "_data", data)
+        object.__setattr__(self, "_source_identity", None)
+        object.__setattr__(self, "_hwp5_source", False)
 
     # ── constructors ────────────────────────────────────────────
 
     @classmethod
     def open(cls, path: str | os.PathLike[str]) -> Document:
-        """Read an HWPX package from a file.
+        """Read an HWPX or HWP5 (.hwp) document from a file.
 
         Bounded by the same input size limit the CLI and the MCP server
         enforce on their own file reads (`_hwpforge.MAX_FILE_SIZE`, 100 MB).
@@ -121,6 +124,8 @@ class Document:
         try:
             with open(path, "rb") as handle:
                 data = handle.read(max_size + 1)
+                # 이것을 실패시키는 것: 읽은 핸들 대신 원본 경로의 정체성 조회.
+                source = os.fstat(handle.fileno())
         except FileNotFoundError as exc:
             raise HwpForgeFileNotFoundError(
                 _hwpforge.FILE_NOT_FOUND, str(exc), os_error=exc
@@ -133,17 +138,19 @@ class Document:
                 f"File '{os.fspath(path)}' exceeds {max_size // (1024 * 1024)} MB limit",
                 "Use a smaller file or split the document into sections.",
             )
-        return cls(data)
+        document = cls(data)
+        object.__setattr__(document, "_source_identity", (source.st_dev, source.st_ino))
+        return document
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Document:
-        """Take an HWPX package that is already in memory.
+        """Take HWPX or HWP5 bytes already in memory, without a source path.
 
         Unlike [`open`][hwpforge.Document.open], this has no size limit: the
         caller already holds the bytes, so there is no read left to bound.
 
         Args:
-            data: The bytes of an HWPX package.
+            data: HWPX package or HWP5 (.hwp) bytes.
 
         Returns:
             The document those bytes hold.
@@ -153,30 +160,64 @@ class Document:
     # ── the bytes back out ──────────────────────────────────────
 
     def to_bytes(self) -> bytes:
-        """Return the document's bytes, which are always an HWPX package.
+        """Return the original bytes, or HWPX bytes after an edit.
 
         Returns:
-            The HWPX package, byte for byte as it is held.
+            The original HWP5/HWPX input, or the HWPX edit result, without conversion.
         """
         return self._data
 
-    def save(self, path: str | os.PathLike[str]) -> None:
+    def save(self, path: str | os.PathLike[str], *, accept_conversion_loss: bool = False) -> None:
         """Write the document to a file, always as an HWPX package.
 
-        HwpForge does not write the old binary HWP5 format, whatever the
-        document was read from, so name the file `.hwpx`.
+        HWP5 input is converted before writing. Use a `.hwpx` name: `.hwp`
+        (case insensitive) raises ``INVALID_EXTENSION``. The identity of the file
+        read by ``open`` is retained through edits. Aliases of that HWP5 file
+        raise ``INVALID_OUTPUT_PATH`` even after its original path is deleted
+        or replaced; the file currently at that path is not the protected source.
+        Bytes-only constructors and conversion results have no file identity
+        to protect. Output identity lookup failures raise ``FILE_WRITE_FAILED``;
+        absent outputs are allowed. Output paths must stay stable during saving.
+        Refusal order is extension, conversion/loss, identity; the CLI checks identity before loss.
 
         Args:
             path: The file to write. An existing file is replaced.
+            accept_conversion_loss: Allow semantic loss when saving raw HWP5.
 
         Raises:
             HwpForgeIOError: If the file cannot be written (also an ``OSError``).
         """
+        # 이것을 실패시키는 것: 확장자 검사 제거 또는 대소문자 정규화 제거.
+        if os.path.splitext(os.fsdecode(path))[1].lower() == ".hwp":
+            raise HwpForgeError(
+                "INVALID_EXTENSION", "Save the HWPX result as .hwpx; .hwp output is unsupported."
+            )
+        data, converted = _hwpforge._prepare_save(
+            self._data, accept_conversion_loss=accept_conversion_loss
+        )
         try:
+            # 이것을 실패시키는 것: 변환 출처/상속/정체성 조건 제거 또는 HWPX도 보호.
+            if (converted or self._hwp5_source) and self._source_identity is not None:
+                try:
+                    target = os.stat(path)
+                except FileNotFoundError:
+                    target = None
+                # 이것을 실패시키는 것: 원본 경로 재조회 또는 장치·inode 중 하나만 비교.
+                if target is not None and self._source_identity == (target.st_dev, target.st_ino):
+                    raise HwpForgeError(
+                        "INVALID_OUTPUT_PATH", "Output would overwrite the HWP5 input."
+                    )
             with open(path, "wb") as handle:
-                handle.write(self._data)
+                handle.write(self._data if data is None else data)
         except OSError as exc:
             raise HwpForgeIOError(_hwpforge.FILE_WRITE_FAILED, str(exc), os_error=exc) from exc
+
+    def _edited(self, data: bytes, report: Mapping[str, Any]) -> Document:
+        """Carry the opened file identity through immutable edits for save protection."""
+        document = Document(data)
+        object.__setattr__(document, "_source_identity", self._source_identity)
+        object.__setattr__(document, "_hwp5_source", self._hwp5_source or "conversion" in report)
+        return document
 
     # ── value semantics ─────────────────────────────────────────
 
@@ -246,7 +287,7 @@ class Document:
 
         A document that fails validation reports ``ok: False`` rather than
         raising; only a document that cannot be decoded at all is an error.
-        HWP5 input raises ``HWP5_INPUT``; convert it with ``convert_hwp5`` first.
+        HWP5 input is converted and diagnostics are reported under ``conversion``.
         A document whose nesting exceeds the depth limit (32) cannot be
         decoded, so it raises ``HwpForgeError`` (code ``DECODE_FAILED``)
         instead of returning ``ok: False``.
@@ -416,11 +457,17 @@ class Document:
 
     # ── edits ───────────────────────────────────────────────────
 
-    def fill(self, values: Mapping[str, str]) -> DocumentResult[FillReport]:
+    def fill(
+        self, values: Mapping[str, str], *, accept_conversion_loss: bool = False
+    ) -> DocumentResult[FillReport]:
         """Return a new document with the named fields filled; the receiver is unchanged.
+
+        HWP5 (.hwp) input is converted first; results are HWPX.
+        Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
 
         Args:
             values: The text to put in each field, by field name.
+            accept_conversion_loss: Explicitly accept semantic conversion loss.
 
         Returns:
             The filled document, and a report listing what each field held
@@ -429,8 +476,10 @@ class Document:
         Raises:
             HwpForgeError: If a named field does not exist or cannot be filled.
         """
-        data, report = _hwpforge.fill(self._data, values=dict(values))
-        return DocumentResult(Document(data), report)
+        data, report = _hwpforge.fill(
+            self._data, values=dict(values), accept_conversion_loss=accept_conversion_loss
+        )
+        return DocumentResult(self._edited(data, report), report)
 
     def set_cell(
         self,
@@ -441,6 +490,7 @@ class Document:
         below: str | None = None,
         text: str | None = None,
         specs: Sequence[CellSpec] | None = None,
+        accept_conversion_loss: bool = False,
     ) -> DocumentResult[SetCellReport]:
         """Return a new document with table cells rewritten; the receiver is unchanged.
 
@@ -454,6 +504,9 @@ class Document:
         re-encode. Use [`patch`][hwpforge.Document.patch] to change such a
         document's cell text instead.
 
+        HWP5 (.hwp) input is converted first; results are HWPX.
+        Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
+
         Args:
             table: The ordinal of the table to edit.
             at: The cell to write, as zero-based ``"row,col"``, for example
@@ -462,6 +515,7 @@ class Document:
             below: Write the cell below the one holding this label.
             text: The text to write into the named cell.
             specs: Several cells to write at once.
+            accept_conversion_loss: Explicitly accept semantic conversion loss.
 
         Returns:
             The edited document, and a report saying which cell each write
@@ -481,8 +535,9 @@ class Document:
             below=below,
             text=text,
             specs=specs,
+            accept_conversion_loss=accept_conversion_loss,
         )
-        return DocumentResult(Document(data), report)
+        return DocumentResult(self._edited(data, report), report)
 
     def patch(self, *, section: int, patch: str) -> DocumentResult[PatchReport]:
         """Return a new document with one section replaced; the receiver is unchanged.
@@ -500,10 +555,10 @@ class Document:
                 a grid address that no longer matches.
         """
         data, report = _hwpforge.patch(self._data, section=section, patch=patch)
-        return DocumentResult(Document(data), report)
+        return DocumentResult(self._edited(data, report), report)
 
     def delete_para(
-        self, *, section: int, indexes: Sequence[int]
+        self, *, section: int, indexes: Sequence[int], accept_conversion_loss: bool = False
     ) -> DocumentResult[StructuralReport]:
         """Return a new document with paragraphs removed; the receiver is unchanged.
 
@@ -511,9 +566,13 @@ class Document:
         it refuses a document carrying entries the encoder would not keep —
         `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
 
+        HWP5 (.hwp) input is converted first; results are HWPX.
+        Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
+
         Args:
             section: The index of the section to edit.
             indexes: The paragraphs to delete, by index within the section.
+            accept_conversion_loss: Explicitly accept semantic conversion loss.
 
         Returns:
             The edited document, and a report counting what was deleted.
@@ -524,17 +583,31 @@ class Document:
                 package entries a re-encode would not keep
                 (``INPUT_ENTRIES_NOT_CARRIED``).
         """
-        data, report = _hwpforge.delete_para(self._data, section=section, indexes=indexes)
-        return DocumentResult(Document(data), report)
+        data, report = _hwpforge.delete_para(
+            self._data,
+            section=section,
+            indexes=indexes,
+            accept_conversion_loss=accept_conversion_loss,
+        )
+        return DocumentResult(self._edited(data, report), report)
 
     def insert_para(
-        self, *, section: int, anchor: int, text: str | Sequence[str], before: bool = False
+        self,
+        *,
+        section: int,
+        anchor: int,
+        text: str | Sequence[str],
+        before: bool = False,
+        accept_conversion_loss: bool = False,
     ) -> DocumentResult[StructuralReport]:
         """Return a new document with paragraphs inserted; the receiver is unchanged.
 
         Like the other structural edits this re-encodes the whole package, so
         it refuses a document carrying entries the encoder would not keep —
         `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
+
+        HWP5 (.hwp) input is converted first; results are HWPX.
+        Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
 
         Args:
             section: The index of the section to edit.
@@ -543,6 +616,7 @@ class Document:
                 string is a single paragraph, never one paragraph per
                 character.
             before: Insert above the anchor instead of below it.
+            accept_conversion_loss: Explicitly accept semantic conversion loss.
 
         Returns:
             The edited document, and a report counting what was inserted.
@@ -553,11 +627,18 @@ class Document:
                 (``INPUT_ENTRIES_NOT_CARRIED``).
         """
         data, report = _hwpforge.insert_para(
-            self._data, section=section, anchor=anchor, text=text, before=before
+            self._data,
+            section=section,
+            anchor=anchor,
+            text=text,
+            before=before,
+            accept_conversion_loss=accept_conversion_loss,
         )
-        return DocumentResult(Document(data), report)
+        return DocumentResult(self._edited(data, report), report)
 
-    def stamp(self, request: StampRequest, *, manifest: bool = True) -> DocumentResult[StampReport]:
+    def stamp(
+        self, request: StampRequest, *, manifest: bool = True, accept_conversion_loss: bool = False
+    ) -> DocumentResult[StampReport]:
         """Return a new document with the template stamped; the receiver is unchanged.
 
         This operation re-encodes the whole document, so it refuses to produce
@@ -566,11 +647,15 @@ class Document:
         document carrying package entries the encoder would not keep —
         `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
 
+        HWP5 (.hwp) input is converted first; results are HWPX.
+        Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
+
         Args:
             request: What to stamp where, either as a list of stamps or as the
                 versioned request object [`stamp_plan`][hwpforge.Document.stamp_plan]
                 describes.
             manifest: Include the manifest of what was stamped in the report.
+            accept_conversion_loss: Explicitly accept semantic conversion loss.
 
         Returns:
             The stamped document, and a report holding the manifest (unless
@@ -584,8 +669,13 @@ class Document:
                 (``INPUT_ENTRIES_NOT_CARRIED``, ``INPUT_NOT_ROUNDTRIP_SAFE``),
                 or if encoding would lose meaning.
         """
-        data, report = _hwpforge.stamp(self._data, request=request, manifest=manifest)
-        return DocumentResult(Document(data), report)
+        data, report = _hwpforge.stamp(
+            self._data,
+            request=request,
+            manifest=manifest,
+            accept_conversion_loss=accept_conversion_loss,
+        )
+        return DocumentResult(self._edited(data, report), report)
 
     def restyle(self, *, preset: str) -> DocumentResult[RestyleReport]:
         """Return a new document in a different house style; the receiver is unchanged.
@@ -607,7 +697,7 @@ class Document:
                 lose meaning.
         """
         data, report = _hwpforge.restyle(self._data, preset=preset)
-        return DocumentResult(Document(data), report)
+        return DocumentResult(self._edited(data, report), report)
 
 
 def _dumps(value: Any) -> str:

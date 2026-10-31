@@ -120,5 +120,4 @@ The CLI read commands and five editors may report `HWP5_DECODE_FAILED`,
 `HWP5_CONVERT_FAILED`, `VALIDATION_FAILED` or `ENCODE_FAILED` before their HWPX
 operation. Existing exit values remain; validation/encode failures in `set-cell`
 use 1. `.hwp` document output (case insensitive) is `INVALID_EXTENSION`/1.
-MCP and Python do not automatically convert HWP5 inputs. Their canonical mapping
-recognizes `HWP5_CONVERSION_LOSS`; Python details uses the same rejected warning list.
+MCP does not automatically convert HWP5 inputs. Supported Python operations convert HWP5 inputs; their canonical mapping recognizes `HWP5_CONVERSION_LOSS`, and Python details uses the same rejected warning list (see [conversion policy](python.md#hwp5-input-and-loss-acceptance)).

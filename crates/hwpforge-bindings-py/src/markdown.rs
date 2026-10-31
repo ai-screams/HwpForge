@@ -9,6 +9,7 @@ use pyo3::pybacked::{PyBackedBytes, PyBackedStr};
 use pyo3::types::PyBytes;
 
 use crate::errors::OrPy;
+use crate::input;
 use crate::results::{bytes_and_meta, text_and_meta};
 
 /// Builds a document from Markdown.
@@ -45,7 +46,7 @@ pub(crate) fn convert_md<'py>(
 /// Exports a document as Markdown.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///     mode: `"styled"` for GFM with a style frontmatter, `"lossy"` for plain
 ///         GFM, `"lossless"` for a machine-oriented view of what the
 ///         preservation scope keeps (`convert_md` refuses it; edit through
@@ -62,9 +63,10 @@ pub(crate) fn to_md<'py>(
     data: PyBackedBytes,
     mode: &str,
 ) -> PyResult<(String, Bound<'py, PyAny>)> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let options = ops::MdExportOptions::default().with_mode_name(mode).or_py(py)?;
     let output = py.detach(|| ops::to_md(bytes, &options)).or_py(py)?;
-    let meta = output.meta();
+    let meta = input::metadata(output.meta(), &input);
     text_and_meta(py, output.markdown, &meta)
 }

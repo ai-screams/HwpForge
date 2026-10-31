@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 
 import _stub
@@ -13,14 +14,25 @@ from hwpforge import _hwpforge
 
 def test_pyi_matches_ffi() -> None:
     """The stub, the shared name list and the loaded module declare the same functions."""
+    # 이것을 실패시키는 것: 내부 저장 함수를 스텁에서 제거하거나 Protocol 변수로 선언.
+    internal = {"_prepare_save"}
     exported = {
         name
         for name, value in vars(_hwpforge).items()
         if not name.startswith("_") and inspect.isroutine(value)
     }
 
-    assert set(_stub.function_names()) == set(FFI_FUNCTIONS)
+    assert set(_stub.function_names()) == set(FFI_FUNCTIONS) | internal
     assert exported == set(FFI_FUNCTIONS)
+    assert all(inspect.isroutine(getattr(_hwpforge, name)) for name in internal)
+    # 이것을 실패시키는 것: 무변환 반환값의 None을 스텁에서 제거.
+    prepare = next(
+        node
+        for node in _stub._module().body
+        if isinstance(node, ast.FunctionDef) and node.name == "_prepare_save"
+    )
+    assert prepare.returns is not None
+    assert ast.unparse(prepare.returns) == "tuple[bytes | None, bool]"
 
 
 def test_the_name_list_has_no_duplicates() -> None:

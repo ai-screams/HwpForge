@@ -492,8 +492,7 @@ v3에서 Core JSON의 `style_id`는 `style_ref`로 바뀌었으며, 교환에는
 반환합니다. 변환 실패는 기존 ops 인자 검사보다 먼저입니다. 변환 손실 거부는 기존
 편집 검사 다음이며 쓰기 전입니다. 기존 코드의 명령별 종료 값은 유지합니다
 (`set-cell`의 validation/encode 오류는 1, 나머지 변환 오류는 2).
-`.hwp` 출력 거부도 기존 동작의 변경입니다. `from-json --base`, `patch`와 Python/MCP
-입력은 자동 변환 대상이 아닙니다.
+`.hwp` 출력 거부도 기존 동작의 변경입니다. `from-json --base`, `patch`와 MCP 입력은 자동 변환 대상이 아닙니다. Python의 지원 연산은 HWP5 입력을 변환합니다([변환 손실과 저장 보호](../guide/python/editing.md#hwp5-입력과-변환-손실)).
 
 HWP5 입력 보호는 이미 존재하는 문서·manifest 출력의 파일 정체성을 비교합니다.
 실행 도중 다른 프로세스가 경로를 바꾸는 경우는 보장하지 않습니다. HWPX 제자리

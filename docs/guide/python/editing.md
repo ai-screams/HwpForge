@@ -12,6 +12,25 @@ doc = result.document          # 이 줄이 없으면 아무것도 바뀌지 않
 
 편집기는 두 부류입니다. **보존 우선(preserve-first)** 편집기(`fill`·`patch`)는 건드리는 XML 조각만 바꾸고 나머지 바이트를 그대로 두며, **재인코드** 편집기(`set_cell`·`stamp`·`restyle`)는 문서를 모델로 디코드해 고친 뒤 패키지를 다시 씁니다. `insert_para`/`delete_para`는 구역 XML에서 해당 문단만 넣고 빼지만, 재인코드 편집기와 같은 사전 검사(원본 패키지의 엔트리가 재인코드 뒤에도 남는지, 디코드–인코드 왕복이 안전한지)를 통과해야 합니다. 이 차이가 아래 "한컴 저장 문서" 표를 만듭니다.
 
+## HWP5 입력과 변환 손실
+
+`Document.open("form.hwp")` 또는 `Document.from_bytes(data)`로 HWP5 입력을 받습니다. `inspect`, `outline`, `read`, `fields`, `validate`, `diff`(양쪽), `stamp_plan`, `to_md`, `to_json`, `export_section`과 편집 5종은 연산 전에 HWPX로 변환합니다. 확장자가 아니라 내용으로 판별하며, 편집 결과는 `.hwpx`입니다.
+
+`fill`, `set_cell`, `insert_para`, `delete_para`, `stamp`는 의미 손실이 있으면 `HWP5_CONVERSION_LOSS`로 거부합니다. 거부 경고는 `error.details["warnings"]`에 있습니다. 경고를 검토한 뒤에만 키워드 `accept_conversion_loss=True`로 허용하세요. 변환 → 기존 연산의 검증·편집 → 변환 손실 거부 순서이며, 이 옵션은 편집 자체의 손실 거부를 해제하지 않습니다. 읽기는 변환 경고를 보고하며 손실 때문에 거부하지 않습니다.
+
+```python
+doc = hwpforge.Document.open("form.hwp")
+print(doc.fields().get("conversion"))
+result = doc.fill({"name": "홍길동"}, accept_conversion_loss=True)
+result.document.save("filled.hwpx")
+```
+
+기존 `warnings`의 형과 내용은 그대로입니다. 변환된 입력에는 별도 `conversion = {"source_format": "hwp5", "warnings": [...]}`가 더해집니다. 각 경고는 `stage`, `code`, `message`와 선택적인 `location`을 갖습니다. `diff`는 `conversion.base`·`conversion.revised`에 변환된 쪽만 싣습니다. JSON·Markdown 문서 본문에는 이 메타데이터를 넣지 않습니다.
+
+`save`는 `.hwp` 확장자(대소문자 무시)를 `INVALID_EXTENSION`으로 거부합니다. 원본 HWP5를 그대로 저장하려면 HWPX로 변환하며, 의미 손실은 기본 거부합니다 (`save(..., accept_conversion_loss=True)`로 명시적 허용). `open`이 읽은 파일의 정체성은 편집 결과에도 이어집니다. 원본 경로가 삭제되거나 교체되어도 당시 읽은 HWP5 파일의 심볼릭 링크·하드 링크·상대 경로 별칭에 저장하면 `INVALID_OUTPUT_PATH`로 거부합니다. 보호 대상은 `open` 때 읽은 파일이며 현재 그 경로가 가리키는 파일이 아닙니다. 저장 시 출력의 정체성만 조회하며, 출력 부재는 허용하고 그 밖의 조회 실패는 `FILE_WRITE_FAILED`입니다. HWPX의 제자리 저장은 허용합니다. 저장 호출 중 다른 프로세스가 출력 경로를 바꾸는 상황은 보호하지 않습니다.
+
+`Document(data)`·`from_bytes`, `convert_hwp5`·`convert_md`·`from_json`의 생성 결과에는 원본 파일 정체성이 없습니다. 이 경우 원본 별칭인지 판별할 수 없으므로 호출자가 출력 경로를 구분해야 합니다. bytes·텍스트를 반환하는 연산은 파일을 쓰지 않습니다. `from_json(base=...)`, `patch`, `restyle`의 HWP5 자동 변환은 이번 범위 밖이며 계속 `HWP5_INPUT`을 반환합니다. 명시적으로 변환한 HWPX를 넘기세요.
+
 ## 한컴 저장 문서에서 되는 것과 안 되는 것
 
 한컴 오피스가 저장한 `.hwpx`에는 HwpForge 인코더가 재현하지 않는 패키지 엔트리(`Preview/PrvText.txt`·`Preview/PrvImage.png`·`META-INF/container.rdf`)가 들어 있습니다. 네 연산은 이런 문서를 조용히 손상시키는 대신 **fail-closed로 거부**합니다.
