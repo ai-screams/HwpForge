@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/v0.18.0...v0.19.0) - 2026-10-31
+
+### Added
+
+- *(smithy-md)* [#281] read back the HTML that to-md writes ([#298](https://github.com/ai-screams/HwpForge/pull/298))
+
+
+### Changed
+
+- *(core)* **BREAKING** [#296] read paragraph lists as one typed reference ([#301](https://github.com/ai-screams/HwpForge/pull/301))
+
+- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+
+### Fixed
+
+- *(smithy-md)* [#281] describe lossless Markdown as a view and refuse it in convert ([#299](https://github.com/ai-screams/HwpForge/pull/299))
+
+- *(smithy-hwpx)* [#282] drop only the metadata value that is lost and report it ([#287](https://github.com/ai-screams/HwpForge/pull/287))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/v0.17.1...v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)
