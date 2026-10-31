@@ -17,6 +17,13 @@ const CODE_CONTINUATION_STYLE_PREFIX: &str = "__hwpforge_md_code_continuation_le
 /// The list item paragraph of a kind the template defines no list for.
 const LIST_PLAIN_STYLE_NAME: &str = "__hwpforge_md_list_plain";
 
+/// The width of a list marker and the gap after it, in points, added to the
+/// left margin of an item's continuation paragraphs. Hancom starts an item's
+/// text after the marker, but a paragraph with no list starts at the margin;
+/// 15pt is that distance measured with a bullet in the default body font, so
+/// another font size or a wider marker can land slightly off the item's text.
+const LIST_MARKER_WIDTH_PT: f64 = 15.0;
+
 /// Selects concrete style names for every Markdown role.
 ///
 /// Explicit mappings must refer to existing definitions. Missing conventions
@@ -222,11 +229,11 @@ pub struct MarkdownListShapes {
     pub unchecked: Option<[StyleEntry; LEVELS]>,
     /// Checked task items.
     pub checked: Option<[StyleEntry; LEVELS]>,
-    /// An item's later paragraphs and the tables it holds: at its text's
-    /// left margin, no list ([`list_continuation_style_name`]).
+    /// An item's later paragraphs and the tables it holds: at about where
+    /// its text starts, no list ([`list_continuation_style_name`]).
     pub continuation: [StyleEntry; LEVELS],
-    /// A code block an item holds: the code role's look at the item's left
-    /// margin, no list ([`code_continuation_style_name`]).
+    /// A code block an item holds: the code role's look at about where the
+    /// item's text starts, no list ([`code_continuation_style_name`]).
     pub code_continuation: [StyleEntry; LEVELS],
     /// An item of a kind the template defines no list for: the list item's
     /// look, no list.
@@ -361,9 +368,10 @@ pub fn apply_markdown_list_levels(
         })
     });
 
+    let marker_width = HwpUnit::from_pt(LIST_MARKER_WIDTH_PT)?;
     let unlisted = |para: &ParaShape, level: usize| {
         let mut shape = para.clone();
-        shape.indent_left = left(level);
+        shape.indent_left = left(level) + marker_width;
         shape.indent_first_line = HwpUnit::ZERO;
         shape.list = None;
         shape
@@ -618,13 +626,14 @@ mod tests {
     /// The default template (and the government template inheriting it):
     /// the outline is the first numbering, untouched; numbered items use the
     /// second; each bullet level its own glyph; every level 20pt deeper;
-    /// continuations and code at the item's margin with no list; the role
+    /// continuations and code 15pt past the item's margin, at its text, with
+    /// no list; the role
     /// entries' own shapes unchanged; a second application adds nothing. No
     /// item has a first-line indent: Hancom aligns wrapped lines to the text
     /// after the marker by itself and adds any indent on top of that.
     /// 이것을 실패시키는 것: 수준 여백 계산 · 수준별 기호 선택 · 개요 슬롯 변경 · 재적용 시
     /// 모양 추가(`list_shape` 를 늘 push) · `default.yaml` 목록 스타일 셋 중 어느 것에든
-    /// `first_line: -10pt`.
+    /// `first_line: -10pt` · 이어지는 문단 여백에서 기호 폭 빼기.
     #[test]
     fn default_template_derives_list_levels() {
         for (template, others) in [
@@ -687,7 +696,10 @@ mod tests {
                 ] {
                     let p = shape(entry);
                     assert_eq!(p.list, None);
-                    assert_eq!((p.indent_left.as_i32(), p.indent_first_line.as_i32()), (left, 0));
+                    assert_eq!(
+                        (p.indent_left.as_i32(), p.indent_first_line.as_i32()),
+                        (left + 1500, 0)
+                    );
                     assert_eq!(name_of(&registry, entry), name);
                     let role = registry.get_style(role).unwrap();
                     assert_eq!(entry.char_shape_id, role.char_shape_id);

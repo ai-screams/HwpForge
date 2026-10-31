@@ -2463,7 +2463,11 @@ mod tests {
             Some(ParagraphListRef::CheckBullet { level: 0, checked: false, .. })
         ));
         assert_eq!(continuation_shape.list, None);
-        assert_eq!(continuation_shape.indent_left, first_shape.indent_left);
+        // The item's margin plus the marker's width: its text, not its marker.
+        assert_eq!(
+            continuation_shape.indent_left.as_i32(),
+            first_shape.indent_left.as_i32() + 1500
+        );
         assert_eq!(continuation_shape.indent_first_line, HwpUnit::ZERO);
     }
 
