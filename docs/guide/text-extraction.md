@@ -2,7 +2,7 @@
 
 HwpForge의 Core DOM을 활용하여 문서에서 텍스트를 추출하고, 문서 구조(섹션, 문단, 표, 각주 등)를 보존하는 방법을 설명합니다.
 
-> **포맷 지원 현황**: 현재 HWPX(`.hwpx`)와 Markdown(`.md`)는 이 가이드의 예제대로 바로 텍스트 추출할 수 있습니다. 레거시 HWP5(`.hwp`)는 전용 crate/CLI 경로가 이미 존재하지만, top-level guide는 아직 HWPX/Markdown 중심으로 설명합니다. 자세한 내용은 [이중 포맷 파이프라인](./format-pipeline.md)을 참고하세요.
+> **포맷 지원 현황**: CLI·Python의 지원 읽기 연산은 HWPX(`.hwpx`)와 HWP5(`.hwp`) 입력을 받습니다. HWP5는 메모리에서 HWPX로 자동 변환하며 변환 경고를 보고합니다. 아래 Rust 예제는 HWPX·Markdown 경로를 사용하며, HWP5의 전용 디코더 예제는 [레거시 파일 처리](#레거시-hwp5-파일-처리)에 있습니다.
 
 ## 문서 구조 개요
 
@@ -226,11 +226,11 @@ println!("{}", markdown);
 
 ## 레거시 HWP5 파일 처리
 
-레거시 HWP5(`.hwp`) 파일은 현재도 다룰 수 있습니다. 다만 public guide의 중심 경로는 아직 HWPX/Markdown 쪽입니다.
+CLI에서는 `hwpforge read legacy.hwp --section 0`, `hwpforge to-md legacy.hwp -o extracted`처럼 HWP5를 직접 전달합니다. Python에서도 `Document.open("legacy.hwp").read(section=0)`으로 읽습니다. 자동 변환 경고와 보류 연산은 [입력 정책](../reference/cli.md#hwp-입력과-hwpx-출력)을 참고합니다.
 
 현재 선택지는 이렇습니다.
 
-1. **CLI workflow 사용**: `convert-hwp5`, `audit-hwp5`, `census-hwp5`
+1. **CLI·Python 자동 변환**: `outline`, `read`, `to-md`, `to-json` 등 지원 연산에 HWP5를 직접 전달합니다
 2. **전용 crate 사용**: `hwpforge-smithy-hwp5`의 `Hwp5Decoder`
 3. **HWPX로 재출력 후 기존 guide 재사용**: 변환 결과를 HWPX guide와 같은 방식으로 처리
 
@@ -253,4 +253,4 @@ for section in doc.sections() {
 
 - HWP5 경로는 warning-first가 기본입니다.
 - visual parity나 layout fidelity는 HWPX path보다 더 까다롭습니다.
-- stable top-level facade는 여전히 HWPX/Markdown 중심이므로, HWP5는 전용 crate 또는 CLI를 우선 보십시오.
+- Rust의 `hwpforge::ops`와 MCP는 HWP5를 자동 변환하지 않습니다. 전용 디코더를 사용하거나 명시적으로 변환한 HWPX를 전달합니다.

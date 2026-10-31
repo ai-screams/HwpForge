@@ -91,7 +91,7 @@ fn detect_format(path: &Path) -> DocFormat {
 
 ## 2단계: 변환 (HWPX 중심 + HWP5 별도 경로)
 
-기본 migration sample은 HWPX를 중심으로 설명합니다. 다만 현재는 HWP5도 전용 crate와 CLI로 decode, audit, HWPX re-emission 경로를 사용할 수 있습니다.
+이 배치 예제는 HWPX를 중심으로 HWP5를 별도 큐에 분류합니다. CLI·Python의 지원 읽기·편집 연산은 HWP5를 자동 변환할 수 있으므로, 별도 큐는 제품의 입력 제한이 아닌 예제의 운영 선택입니다. 대상 명령과 손실 정책은 [CLI 입력 정책](../reference/cli.md#hwp-입력과-hwpx-출력)을 참고합니다.
 
 ### HWPX 파일 변환
 
@@ -167,13 +167,13 @@ fn convert_hwpx(input: &Path) -> ConvertResult {
 
 ### HWP5 파일 처리
 
-레거시 HWP5(`.hwp`) 파일도 현재 다룰 수 있습니다. 다만 대규모 migration에서는 HWPX 중심 파이프라인과 HWP5 전용 파이프라인을 분리하는 편이 운영이 쉽습니다.
+레거시 HWP5(`.hwp`) 파일은 CLI·Python의 지원 연산에 직접 전달할 수 있습니다. 편집 출력은 `.hwpx`이며 `.hwp` 저장은 지원하지 않습니다. 아래 배치 예제는 변환 경고를 따로 검토하도록 HWP5 큐를 분리합니다.
 
-| 전략             | 설명                                                             | 자동화    |
-| ---------------- | ---------------------------------------------------------------- | --------- |
-| **HwpForge CLI** | `convert-hwp5`, `audit-hwp5`, `census-hwp5`로 decode/점검/재출력 | 완전 자동 |
-| **전용 crate**   | `hwpforge-smithy-hwp5`로 HWP5 decode 후 Core/HWPX 경로 재사용    | 자동      |
-| **별도 분류**    | HWP5 파일만 분리해 별도 queue로 처리                             | 수동      |
+| 전략             | 설명                                                                                     | 자동화    |
+| ---------------- | ---------------------------------------------------------------------------------------- | --------- |
+| **HwpForge CLI** | 지원 읽기·편집의 자동 변환, `convert-hwp5`·`audit-hwp5`·`census-hwp5`의 명시적 변환·점검 | 완전 자동 |
+| **전용 crate**   | `hwpforge-smithy-hwp5`로 HWP5 decode 후 Core/HWPX 경로 재사용                            | 자동      |
+| **별도 분류**    | HWP5 파일만 분리해 별도 queue로 처리                                                     | 수동      |
 
 ```rust,no_run,ignore
 // 현재 — HWP5 직접 decode 후 기존 pipeline에 연결

@@ -19,7 +19,7 @@ hwpforge fields template.hwpx --json      # any fillable 누름틀?
 
 Most real templates were saved by 한컴, so Recipes A and B are the normal path. The full surface table is in [editing-workflow.md](editing-workflow.md).
 
-A legacy `.hwp` template must be converted first — there is no `.hwp` writer. The converted `.hwpx` has no 한컴 package entries, so every route above (including `set-cell` and `stamp`) accepts it:
+Supported CLI/Python reads and the five editors accept a legacy `.hwp` template directly and produce `.hwpx`; there is no `.hwp` writer. Semantic conversion loss is refused unless explicitly accepted after reviewing warnings ([conversion policy](errors.md#hwp5-input-conversion)). MCP, `patch` and `from-json --base` still need explicit conversion. Converted HWPX has no 한컴 package entries, but editing admission checks still apply:
 
 ```bash
 hwpforge convert-hwp5 template.hwp -o template.hwpx

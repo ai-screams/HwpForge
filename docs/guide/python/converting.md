@@ -81,7 +81,7 @@ print(len(converted.document), [w["code"] for w in converted.report["warnings"]]
 converted.document.save("old.hwpx")
 ```
 
-- 인자는 파일 경로가 아니라 **바이트**입니다(`Document.open`은 HWPX 전용입니다). 읽을 수 없는 바이트는 `HWP5_DECODE_FAILED`.
+- `convert_hwp5`의 인자는 파일 경로가 아니라 **바이트**입니다. 지원 읽기·편집 연산은 `Document.open("old.hwp")`으로 연 입력도 자동 변환합니다. HWP5 디코드 실패는 `HWP5_DECODE_FAILED`입니다.
 - 보고서의 `warnings`에 HWP5가 가졌지만 HWPX로 옮기지 못한 것이 전부 나옵니다.
 - 기본값(`carry_layout_cache=True`)은 한컴이 계산해 둔 줄 조판 캐시를 함께 옮깁니다. 결과가 원본의 줄 나눔 자리를 담고, PDF 렌더는 이 캐시를 재생합니다(아래). 줄 시작 자리를 정확히 옮길 수 없는 문단은 캐시를 버리고 `LAYOUT_CACHE_DROPPED`로 알립니다. 캐시 없이 쓰려면 `carry_layout_cache=False`를 줍니다.
 

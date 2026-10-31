@@ -1,6 +1,6 @@
 # Python
 
-`hwpforge` 패키지는 HwpForge Rust 라이브러리를 얇게 감싼 Python 바인딩입니다. HWPX 문서를 읽고, 검사하고, 편집하고, Markdown·JSON·PDF로 내보내며, 옛 HWP5(`.hwp`)를 HWPX로 변환합니다. 연산의 의미는 CLI·MCP 서버와 같은 연산 계층(`hwpforge::ops`)에서 오므로 세 창구가 같은 문서에 같은 결과를 내고, 메서드 이름·인자 표기·일부 실패 코드만 Python의 공개 계약으로 따로 정해져 있습니다.
+`hwpforge` 패키지는 HwpForge Rust 라이브러리를 얇게 감싼 Python 바인딩입니다. HWPX 문서를 읽고, 검사하고, 편집하고, Markdown·JSON·PDF로 내보냅니다. 지원 읽기·편집 연산은 옛 HWP5(`.hwp`) 입력도 자동 변환하며 편집 결과는 HWPX입니다. 연산의 의미는 CLI·MCP 서버와 같은 연산 계층(`hwpforge::ops`)에서 오므로 HWPX 입력에서는 세 창구가 같은 문서에 같은 결과를 내고, 메서드 이름·인자 표기·일부 실패 코드만 Python의 공개 계약으로 따로 정해져 있습니다.
 
 이 페이지는 설치와 핵심 개념을 다루고, 세부는 하위 페이지로 나뉩니다.
 
@@ -97,7 +97,7 @@ except hwpforge.HwpForgeError as exc:
 
 ## 읽기와 쓰기 포맷
 
-읽기는 `.hwpx`, 그리고 `hwpforge.convert_hwp5`를 거친 `.hwp`(HWP5)입니다. 변환은 HWPX로 가는 한 방향이라 원본 `.hwp`로 되돌아가는 길은 없습니다. 쓰기는 `.hwpx`뿐이며(`save`는 무엇을 읽었든 HWPX 패키지를 씁니다), 한컴 오피스는 `.hwpx`를 그대로 엽니다.
+지원 읽기·편집 연산은 `.hwpx`와 `.hwp`(HWP5)를 직접 받습니다. `Document.open` 또는 `Document.from_bytes`로 연 문서의 지원 연산이 HWP5를 자동 변환합니다. 손실 거부·허용과 보류 연산은 [입력 정책](python/editing.md#hwp5-입력과-변환-손실)을 참고합니다. 변환은 HWPX로 가는 한 방향이라 원본 `.hwp`로 되돌아가는 길은 없습니다. 쓰기는 `.hwpx`뿐이며(`save`는 무엇을 읽었든 HWPX 패키지를 씁니다), 한컴 오피스는 `.hwpx`를 그대로 엽니다.
 
 ## 예제에 쓰인 파일
 
