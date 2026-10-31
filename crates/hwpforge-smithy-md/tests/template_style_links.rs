@@ -808,20 +808,66 @@ fn markdown_lists_are_hancom_list_paragraphs() {
     let check = glyph("11");
     assert_eq!((check.attr("char"), check.attr("checkedChar")), (Some("☐"), Some("☑")));
     assert_eq!(check.find("hh:paraHead").attr("checkable"), Some("1"));
-    let decimal = numberings.iter().find(|n| n.attr("id") == Some("2")).unwrap();
-    let heads: Vec<_> = nodes(decimal, "hh:paraHead")
+    let numbered = numberings.iter().find(|n| n.attr("id") == Some("2")).unwrap();
+    assert_eq!(wire_heads(numbered), NUMBERED_HEADS);
+}
+
+/// The default numbered items' wire format and text, level 1 to 10.
+const NUMBERED_HEADS: [(&str, &str); 10] = [
+    ("DIGIT", "^1."),
+    ("HANGUL_SYLLABLE", "^2."),
+    ("DIGIT", "^3)"),
+    ("HANGUL_SYLLABLE", "^4)"),
+    ("DIGIT", "(^5)"),
+    ("HANGUL_SYLLABLE", "(^6)"),
+    ("CIRCLED_DIGIT", "^7"),
+    ("CIRCLED_HANGUL_SYLLABLE", "^8"),
+    ("DIGIT", "^9."),
+    ("DIGIT", "^:."),
+];
+
+fn wire_heads(numbering: &Element) -> Vec<(&str, &str)> {
+    nodes(numbering, "hh:paraHead")
         .iter()
-        .take(3)
-        .map(|h| (h.attr("numFormat").unwrap().to_string(), h.text.clone()))
-        .collect();
-    assert_eq!(
-        heads,
-        [
-            ("DIGIT".into(), "^1.".into()),
-            ("DIGIT".into(), "^2.".into()),
-            ("DIGIT".into(), "^3.".into())
-        ]
-    );
+        .map(|h| (h.attr("numFormat").unwrap(), h.text.as_str()))
+        .collect()
+}
+
+/// Every numbering group a document makes shows the template's level formats:
+/// the template's own and each restarted copy, a nested list and a later one.
+/// 이것을 실패시키는 것: 복제본의 수준 형식을 십진수로 고정 · `default.yaml` 번호 정의의
+/// 수준 하나를 되돌리기.
+#[test]
+fn numbering_groups_keep_the_level_formats() {
+    let md = "1. a\n   1. b\n\ntext\n\n1. c";
+    let bytes = wire(md, &builtin_default().unwrap(), HancomStyleSet::Modern);
+    let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+    let numberings = nodes(&header, "hh:numbering");
+    let groups: Vec<_> =
+        numberings.iter().filter(|n| n.attr("id").is_some_and(|id| id != "1")).collect();
+    assert_eq!(groups.iter().map(|n| n.attr("id").unwrap()).collect::<Vec<_>>(), ["2", "3", "4"]);
+    for group in groups {
+        assert_eq!(wire_heads(group), NUMBERED_HEADS, "{:?}", group.attr("id"));
+    }
+}
+
+/// Number formats are the document's look, not its Markdown: all ten levels
+/// read back as the same numbered items with plain `1.` markers, whatever
+/// the level shows in Hancom, and nothing is reported lost.
+/// 이것을 실패시키는 것: 번호 표지를 `1) ` 로 고정 · `default.yaml` 수준 글을 상위 수준 참조
+/// (`^1.^2`) 로.
+#[test]
+fn numbered_level_formats_leave_markdown_unchanged() {
+    let md: String = (0..10).map(|l| format!("{}1. l{l}\n", " ".repeat(3 * l))).collect();
+    let decoded = MdDecoder::decode(&md, &builtin_default().unwrap()).unwrap();
+    assert_eq!(decoded.warnings, []);
+    for (view, out) in views(&md) {
+        assert_eq!(parsed_items(&out), parsed_items(&md), "{view}: {out:?}");
+        assert_eq!(parsed_lists(&out), parsed_lists(&md), "{view}: {out:?}");
+        for line in out.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(line.trim_start().starts_with("1. "), "{view}: {line:?}");
+        }
+    }
 }
 
 /// Lists written to HWPX and read back in each view are the same lists:

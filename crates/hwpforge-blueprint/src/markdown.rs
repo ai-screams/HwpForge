@@ -600,7 +600,7 @@ mod tests {
     use crate::builtins::{builtin_default, builtin_gov_proposal};
     use crate::inheritance::resolve_template;
     use hwpforge_core::NumberingDef;
-    use hwpforge_foundation::NumberingIndex;
+    use hwpforge_foundation::{NumberFormatType, NumberingIndex};
     use std::collections::HashMap;
 
     /// The registry, its frozen roles and its list shapes, as the Markdown
@@ -623,6 +623,21 @@ mod tests {
         registry.style_entries().iter().find(|(_, e)| **e == entry).unwrap().0
     }
 
+    /// The built-in numbered items' format and text by level: Hancom's own
+    /// default for levels 1 to 8, and a visible decimal for 9 and 10.
+    const NUMBERED_LEVELS: [(NumberFormatType, &str); 10] = [
+        (NumberFormatType::Digit, "^1."),
+        (NumberFormatType::HangulSyllable, "^2."),
+        (NumberFormatType::Digit, "^3)"),
+        (NumberFormatType::HangulSyllable, "^4)"),
+        (NumberFormatType::Digit, "(^5)"),
+        (NumberFormatType::HangulSyllable, "(^6)"),
+        (NumberFormatType::CircledDigit, "^7"),
+        (NumberFormatType::CircledHangulSyllable, "^8"),
+        (NumberFormatType::Digit, "^9."),
+        (NumberFormatType::Digit, "^:."),
+    ];
+
     /// The default template (and the government template inheriting it):
     /// the outline is the first numbering, untouched; numbered items use the
     /// second; each bullet level its own glyph; every level 20pt deeper;
@@ -633,7 +648,8 @@ mod tests {
     /// after the marker by itself and adds any indent on top of that.
     /// 이것을 실패시키는 것: 수준 여백 계산 · 수준별 기호 선택 · 개요 슬롯 변경 · 재적용 시
     /// 모양 추가(`list_shape` 를 늘 push) · `default.yaml` 목록 스타일 셋 중 어느 것에든
-    /// `first_line: -10pt` · 이어지는 문단 여백에서 기호 폭 빼기.
+    /// `first_line: -10pt` · 이어지는 문단 여백에서 기호 폭 빼기 · `default.yaml` 번호 정의의
+    /// 어느 수준이든 십진수로 되돌리기 · 수준 10 의 글을 `^10.` 으로 되돌리기.
     #[test]
     fn default_template_derives_list_levels() {
         for (template, others) in [
@@ -648,13 +664,12 @@ mod tests {
             };
             let (mut registry, shapes) = derived(&template, &others).unwrap();
             assert_eq!(registry.numberings[0], NumberingDef::default_outline());
-            let decimal = &registry.numberings[1];
-            assert_eq!((decimal.id, decimal.start, decimal.levels.len()), (2, 0, 10));
-            for (i, head) in decimal.levels.iter().enumerate() {
+            let numbered = &registry.numberings[1];
+            assert_eq!((numbered.id, numbered.start, numbered.levels.len()), (2, 0, 10));
+            for (i, head) in numbered.levels.iter().enumerate() {
                 assert_eq!(head.start, 1);
                 assert_eq!(head.level, i as u32 + 1);
-                assert_eq!(head.num_format, hwpforge_foundation::NumberFormatType::Digit);
-                assert_eq!(head.text, format!("^{}.", i + 1));
+                assert_eq!((head.num_format, head.text.as_str()), NUMBERED_LEVELS[i]);
                 assert!(!head.checkable);
             }
             let glyphs: Vec<&str> =
@@ -942,6 +957,9 @@ mod tests {
                 );
                 assert_eq!(head.num_format, original.num_format);
             }
+            let formats: Vec<_> =
+                copy.levels.iter().map(|h| (h.num_format, h.text.as_str())).collect();
+            assert_eq!(formats, NUMBERED_LEVELS);
             for (level, (entry, original)) in entries.iter().zip(&base).enumerate() {
                 let shape = registry.para_shape(entry.para_shape_id).unwrap();
                 assert_eq!(
