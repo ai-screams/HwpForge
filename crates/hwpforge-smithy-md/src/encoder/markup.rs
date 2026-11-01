@@ -570,11 +570,11 @@ impl Html {
         if rowspan > 1 {
             let _ = write!(attrs, " rowspan=\"{rowspan}\"");
         }
-        // Layout whitespace only (ASCII, as the decoder reads it): a
-        // no-break space at the cell's edge is text.
-        // 이것을 실패시키는 것: `trim()` 으로 되돌리기(`html_cell_text_keeps_its_spaces`).
-        let inner = inner.0.trim_matches([' ', '\t', '\n', '\r']);
-        Self(format!("  <td{attrs}>{inner}</td>"))
+        // `inner` is written whole: the encoder puts no layout whitespace in
+        // a cell, so a space or tab at its edge is the document's text, and
+        // the decoder reads it as text.
+        // 이것을 실패시키는 것: 가장자리 공백 지우기(`html_cell_edges_keep_their_whitespace`).
+        Self(format!("  <td{attrs}>{}</td>", inner.0))
     }
 
     /// Appends HTML.

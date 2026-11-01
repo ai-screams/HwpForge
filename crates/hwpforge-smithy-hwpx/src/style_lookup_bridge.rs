@@ -76,6 +76,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn style_name(&self, id: StyleRef) -> Option<&str>;
         fn style_heading_level(&self, id: StyleRef) -> Option<u8>;
+        fn style_char_shape(&self, id: StyleRef) -> Option<CharShapeIndex>;
         fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex>;
         fn border_fill_lines(&self, id: u32) -> Option<hwpforge_core::BorderFillLines>;
         fn border_fill_face(&self, id: u32) -> Option<hwpforge_core::FillKind>;
@@ -120,7 +121,7 @@ pub(crate) fn resolve_image_key<'s>(images: &'s ImageStore, key: &str) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+    use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyle, HwpxStyleStore};
     use hwpforge_core::ImageStore;
     use hwpforge_foundation::{CharShapeIndex, HeadingType, NumberFormatType, ParaShapeIndex};
 
@@ -164,6 +165,10 @@ mod tests {
             lookup.para_list(ParaShapeIndex::new(1)).and_then(|list| list.checked()),
             Some(true)
         );
+        // 이것을 실패시키는 것: 위임 삭제(기본 None).
+        store.push_style(HwpxStyle::new(0, "PARA", "바탕글", "Normal", 0, 0, 0, 1042, 0));
+        let lookup = HwpxStyleLookup::new(&store, &images);
+        assert_eq!(lookup.style_char_shape(StyleRef::new(0)), Some(CharShapeIndex::new(0)));
     }
 
     #[test]

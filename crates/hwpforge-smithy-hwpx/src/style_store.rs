@@ -2202,6 +2202,19 @@ impl StyleLookup for HwpxStyleStore {
         self.styles.get(self.style_position(id).ok()?).map(|s| s.name.as_str())
     }
 
+    /// The paragraph style's `charPrIDRef`, found by the style's document
+    /// reference (not its position), when it is a character shape.
+    /// 이것을 실패시키는 것: 참조를 위치로 쓰기 · 글자 스타일도 돌려주기
+    /// (`style_char_shape_reads_paragraph_styles_by_reference`).
+    fn style_char_shape(&self, id: StyleRef) -> Option<CharShapeIndex> {
+        let style = self.styles.get(self.style_position(id).ok()?)?;
+        if style.style_type != "PARA" {
+            return None;
+        }
+        let index = usize::try_from(style.char_pr_id_ref).ok()?;
+        self.char_shapes.get(index).map(|_| CharShapeIndex::new(index))
+    }
+
     fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex> {
         self.styles
             .iter()
@@ -4000,6 +4013,31 @@ mod tests {
         store.para_shapes[0].heading_level = 3;
 
         assert_eq!(store.style_heading_level(StyleRef::new(0)), Some(4));
+    }
+
+    /// A paragraph style's default character shape is found by the style's
+    /// document reference, which may sit at another wire position; a
+    /// character style, a reference to no character shape and an unknown
+    /// reference give none.
+    /// 이것을 실패시키는 것: 참조를 위치로 쓰기 · 글자 스타일도 돌려주기 · 없는 글자 모양 돌려주기.
+    #[test]
+    fn style_char_shape_reads_paragraph_styles_by_reference() {
+        use hwpforge_core::StyleLookup;
+        use hwpforge_foundation::StyleRef;
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_char_shape(HwpxCharShape { bold: true, ..Default::default() });
+        // Positions: 0 = PARA (char 1), 1 = CHAR (char 0), 2 = PARA (char 99).
+        store.push_style(HwpxStyle::new(0, "PARA", "제목", "Title", 0, 1, 0, 1042, 0));
+        store.push_style(HwpxStyle::new(1, "CHAR", "쪽 번호", "Page Number", 0, 0, 0, 1042, 0));
+        store.push_style(HwpxStyle::new(2, "PARA", "깨짐", "Broken", 0, 99, 0, 1042, 0));
+        // References 0, 1, 2 name positions 1, 0, 2.
+        store.style_positions = std::sync::Arc::new(vec![1, 0, 2]);
+        store.rebuild_style_references().unwrap();
+        assert_eq!(store.style_char_shape(StyleRef::new(1)), Some(CharShapeIndex::new(1)));
+        assert_eq!(store.style_char_shape(StyleRef::new(0)), None);
+        assert_eq!(store.style_char_shape(StyleRef::new(2)), None);
+        assert_eq!(store.style_char_shape(StyleRef::new(9)), None);
     }
 
     #[test]

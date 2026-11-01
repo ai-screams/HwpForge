@@ -15,6 +15,8 @@ mod lossy;
 mod markup;
 #[cfg(test)]
 mod markup_safety_tests;
+#[cfg(test)]
+mod style_base_tests;
 mod styled;
 
 use hwpforge_blueprint::template::Template;
