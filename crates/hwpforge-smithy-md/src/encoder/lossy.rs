@@ -10,6 +10,7 @@ use hwpforge_foundation::ParaShapeIndex;
 
 use super::list_format::{self, ListIndent};
 use super::markup::{Cell, Md, Piece};
+use super::measure::{Held, ListMeasures};
 use super::Part;
 use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
@@ -56,7 +57,8 @@ pub(crate) fn encode_without_template_report(
 /// The lossy view with paragraph semantics read from the document's
 /// original styles: list items, outline headings and continuations as
 /// `styles` says, and list paragraphs the view writes without their list
-/// semantics reported ([`super::MdWarning::ListSemanticsLost`]).
+/// semantics ([`super::MdWarning::ListSemanticsLost`]) and margins it cannot
+/// hold ([`super::MdWarning::ParagraphMeasureLost`]) reported.
 pub(crate) fn encode_with_styles_report(
     document: &Document<Validated>,
     styles: &dyn StyleLookup,
@@ -104,6 +106,7 @@ fn encode_body(
     let mut destinations = std::collections::HashSet::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut lists = ListIndent::default();
+    let mut measures = ListMeasures::default();
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
@@ -125,6 +128,8 @@ fn encode_body(
             if let Some(level) = code_continuation_level(paragraph, mapping, styles) {
                 let fence = Md::code_fence(&raw_text(paragraph)).into_string();
                 let markdown = if lists.resume_continuation(level) {
+                    let depth = Held::Continuation(lists.depth());
+                    measures.written(at, paragraph.para_shape_id, depth);
                     lists.block(&fence)
                 } else {
                     lists.reset();
@@ -140,6 +145,7 @@ fn encode_body(
             // last or a shallower one (`ListIndent::resume_continuation`).
             let continuation = continuation_level(paragraph, mapping, styles)
                 .is_some_and(|level| lists.resume_continuation(level));
+            let fills_item = lists.fills_empty_item(paragraph);
             // A list item's level, from the paragraph's shape.
             let item_level = list_item_kind(paragraph, styles)
                 .map(|(_, level, _)| level)
@@ -189,6 +195,15 @@ fn encode_body(
             if !markdown.trim().is_empty() {
                 let text = fallback_text(paragraph, &mut destinations);
                 // A continuation is its own block, as in the styled view.
+                if continuation && !fills_item {
+                    let depth = Held::Continuation(lists.depth());
+                    measures.written(at, paragraph.para_shape_id, depth);
+                } else if written.as_item
+                    && !markdown.contains("\n\n")
+                    && list_format::holds_no_table(paragraph)
+                {
+                    measures.written(at, paragraph.para_shape_id, Held::Item(lists.depth()));
+                }
                 let markdown = if written.laid {
                     markdown
                 } else if continuation {
@@ -221,15 +236,7 @@ fn encode_body(
     };
     let (markdown, fell_back) = super::guard::checked(blocks, &allowed, warnings);
     if let Some(styles) = styles.filter(|_| report) {
-        for at in fell_back {
-            list_format::body_list_loss(
-                warnings,
-                document.sections(),
-                styles,
-                at,
-                list_format::MARKUP_FALLBACK,
-            );
-        }
+        measures.report(fell_back, document, styles, warnings);
     }
     markdown
 }

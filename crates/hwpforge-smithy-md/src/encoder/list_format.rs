@@ -210,6 +210,20 @@ impl ListIndent {
         true
     }
 
+    /// Whether `paragraph`, the next block, is the first an empty item
+    /// holds and reads back as that item's first paragraph: only a paragraph
+    /// of one table stays a continuation.
+    pub(super) fn fills_empty_item(&self, paragraph: &Paragraph) -> bool {
+        self.empty_head && !matches!(paragraph.runs.as_slice(), [only] if only.content.is_table())
+    }
+
+    /// The depth in the Markdown of the innermost open item: a written
+    /// item's or a resumed continuation's, which a skipped level or an
+    /// item with no parent makes less than its level.
+    pub(super) fn depth(&self) -> u8 {
+        self.open.len().saturating_sub(1) as u8
+    }
+
     /// Whether the block being written is joined to the one before with one
     /// line ending ([`super::guard::Block::tight`]), as its first laid-out
     /// piece decided; asked once per block.
@@ -361,6 +375,15 @@ pub(super) fn continuation_level(paragraph: &Paragraph, styles: &dyn StyleLookup
 /// (`code_continuation_keeps_what_is_not_text`).
 pub(super) fn holds_only_text(paragraph: &Paragraph) -> bool {
     paragraph.runs.iter().all(|r| r.content.carries_text())
+}
+
+/// Whether a paragraph holds no table, in a text box or a caption either.
+/// Read back, a table always has a paragraph of its own, in an item a
+/// continuation.
+pub(super) fn holds_no_table(paragraph: &Paragraph) -> bool {
+    let mut tables = 0;
+    paragraph.for_each_table(|_| tables += 1);
+    tables == 0
 }
 
 /// The level of the list item whose code block a paragraph is, by its

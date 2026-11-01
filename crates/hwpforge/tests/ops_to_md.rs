@@ -65,6 +65,61 @@ fn all_modes_report_margin_units_and_char_tab_loss() {
     }
 }
 
+const ROLES: &str = "- 항목\n\n  이어짐\n\n  - 하위\n\n    깊은글\n\n    ```\n    코드\n    ```\n\n1. 번호\n\n- [ ] 할일\n\n- [링크](https://example.test)\n";
+
+fn measure_warnings(bytes: &[u8], mode: MdMode) -> Vec<String> {
+    let out = to_md(bytes, &MdExportOptions::default().with_mode(mode)).unwrap();
+    let warnings = out.warnings.iter().map(|w| w.info());
+    warnings.filter(|w| w.code == "PARAGRAPH_MEASURE_LOST").map(|w| w.message.to_string()).collect()
+}
+
+// 이것을 실패시키는 것: 항목·이어지는 문단·항목 안 코드 가운데 한 역할의 기대값 빼기.
+#[test]
+fn margins_markdown_gives_back_are_not_lost() {
+    use hwpforge::ops::{convert_md, ConvertMdOptions};
+
+    let bytes = convert_md(ROLES, None, &ConvertMdOptions::default()).unwrap().bytes;
+    for mode in [MdMode::Styled, MdMode::Lossy] {
+        assert_eq!(measure_warnings(&bytes, mode), Vec::<String>::new(), "{mode:?}");
+    }
+    assert!(!measure_warnings(&bytes, MdMode::Lossless).is_empty());
+
+    // The views write no quote marker: reading back gives a body paragraph.
+    let quote = convert_md("> 인용\n", None, &ConvertMdOptions::default()).unwrap().bytes;
+    for mode in [MdMode::Styled, MdMode::Lossy] {
+        assert_eq!(measure_warnings(&quote, mode).len(), 1, "{mode:?}");
+    }
+}
+
+// 이것을 실패시키는 것: 기대값과 비교하지 않고 역할의 여백을 모두 경고에서 빼기 ·
+// 0 인 여백을 경고하기.
+#[test]
+fn changed_role_margins_are_reported() {
+    use hwpforge::ops::{
+        convert_md, from_json, to_json, ConvertMdOptions, FromJsonOptions, ToJsonOptions,
+    };
+    use serde_json::json;
+
+    let base = convert_md(ROLES, None, &ConvertMdOptions::default()).unwrap().bytes;
+    let exported = to_json(&base, &ToJsonOptions::default()).unwrap().exported;
+    let exported = serde_json::to_value(exported).unwrap();
+    for text in ["항목", "이어짐", "하위", "깊은글", "코드", "번호", "할일"] {
+        let mut value = exported.clone();
+        let paragraphs = value["document"]["sections"][0]["paragraphs"].as_array().unwrap();
+        let paragraph = paragraphs.iter().find(|p| p.to_string().contains(text)).unwrap();
+        let index = paragraph["para_shape_id"].as_u64().unwrap() as usize;
+        for (margin, expected) in [(1234, 1), (0, 0)] {
+            value["styles"]["para_shapes"][index]["margin_left"]["value"] = json!(margin);
+            let bytes = from_json(&value.to_string(), &FromJsonOptions::default()).unwrap().bytes;
+            for mode in [MdMode::Styled, MdMode::Lossy] {
+                let warnings = measure_warnings(&bytes, mode);
+                assert_eq!(warnings.len(), expected, "{text} {margin} {mode:?}: {warnings:?}");
+                assert!(warnings.iter().all(|w| w.contains("margin_left")), "{warnings:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn all_three_modes_render_the_same_document() {
     for mode in [MdMode::Styled, MdMode::Lossy, MdMode::Lossless] {
