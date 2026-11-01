@@ -15,6 +15,9 @@ mod lossy;
 mod markup;
 #[cfg(test)]
 mod markup_safety_tests;
+mod measure;
+#[cfg(test)]
+mod measure_tests;
 #[cfg(test)]
 mod style_base_tests;
 mod styled;
@@ -282,7 +285,9 @@ impl MdEncoder {
     /// kind, level and checked state, an outline paragraph is a heading. A
     /// list paragraph the view writes without its list semantics (in a table
     /// cell, a note, a caption, …) is reported
-    /// ([`MdWarning::ListSemanticsLost`]).
+    /// ([`MdWarning::ListSemanticsLost`]), and so is a left margin or
+    /// first-line indent Markdown's lists do not give back
+    /// ([`MdWarning::ParagraphMeasureLost`]).
     pub fn encode_lossy_with_styles(
         document: &Document<Validated>,
         styles: &dyn StyleLookup,

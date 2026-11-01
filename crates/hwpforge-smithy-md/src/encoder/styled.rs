@@ -15,6 +15,7 @@ use hwpforge_foundation::UnderlineType;
 use super::guard::{Block, Source, MEMO_CLOSE, MEMO_OPEN, TOO_DEEP};
 use super::list_format::{self, ListIndent};
 use super::markup::{Cell, Html, Md};
+use super::measure::{Held, ListMeasures};
 use super::{MdWarning, Part};
 use crate::eqn::{render_equation, EqnRender};
 
@@ -460,32 +461,7 @@ fn emit_picture_html(
 pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
     let mut blocks: Vec<Block> = Vec::new();
     let mut st = State::new();
-    let mut measured = std::collections::BTreeSet::new();
-    hwpforge_core::field_inventory::FieldInventory::visit_flows(
-        document.sections(),
-        |_, paragraphs, _| {
-            for paragraph in paragraphs {
-                let id = paragraph.para_shape_id;
-                if !measured.insert(id.get()) {
-                    continue;
-                }
-                for (field, measure) in [
-                    ("margin_left", styles.para_indent_left(id)),
-                    ("indent", styles.para_indent_first_line(id)),
-                ] {
-                    if let Some(measure) =
-                        measure.filter(|m| m.as_hwp_unit().is_none_or(|v| v.as_i32() != 0))
-                    {
-                        st.warnings.push(MdWarning::ParagraphMeasureLost {
-                            definition: id.get(),
-                            field: field.into(),
-                            measure,
-                        });
-                    }
-                }
-            }
-        },
-    );
+    let mut measures = ListMeasures::default();
     list_format::container_list_losses(document.sections(), styles, &mut st.warnings);
     // The plain-text fallback of a block: its paragraphs' raw text.
     let source = |texts: Vec<String>, at: Vec<(usize, usize)>| {
@@ -551,6 +527,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             let code_font = is_code_paragraph(paragraph, styles);
             let held =
                 code_level.is_some() || (code_font && (text_level.is_some() || item.is_some()));
+            let mut resumed = false;
+            let mut one_paragraph = false;
             let as_item = if held {
                 flush_code(&mut code, &mut blocks);
                 let text = paragraph
@@ -566,6 +544,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                         (format!("{head}\n{}", st.lists.block(&fence)), true)
                     }
                     (_, Some(level)) if st.lists.resume_continuation(level) => {
+                        resumed = true;
                         (st.lists.block(&fence), false)
                     }
                     _ => {
@@ -596,9 +575,12 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 // last or a shallower one (`ListIndent::resume_continuation`).
                 let continuation = list_format::continuation_level(paragraph, styles)
                     .is_some_and(|level| st.lists.resume_continuation(level));
+                let fills_item = st.lists.fills_empty_item(paragraph);
                 let (markdown, drawn) =
                     encode_paragraph_styled(paragraph, styles, &mut st, continuation);
                 if !markdown.trim().is_empty() {
+                    resumed = continuation && !fills_item;
+                    one_paragraph = !markdown.contains("\n\n");
                     let text = fallback(std::slice::from_ref(paragraph), 0, &mut st)
                         .remove(0)
                         .into_string();
@@ -638,6 +620,12 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     list_format::BODY_CARRIER_PROJECTION,
                 );
             }
+            let depth = st.lists.depth();
+            if as_item && one_paragraph && list_format::holds_no_table(paragraph) {
+                measures.written(st.at, paragraph.para_shape_id, Held::Item(depth));
+            } else if resumed {
+                measures.written(st.at, paragraph.para_shape_id, Held::Continuation(depth));
+            }
         }
 
         // Flush remaining code block at section end
@@ -662,15 +650,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         decoder_structure: true,
     };
     let (markdown, fell_back) = super::guard::checked(blocks, &allowed, &mut st.warnings);
-    for at in fell_back {
-        list_format::body_list_loss(
-            &mut st.warnings,
-            document.sections(),
-            styles,
-            at,
-            list_format::MARKUP_FALLBACK,
-        );
-    }
+    measures.report(fell_back, document, styles, &mut st.warnings);
 
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }

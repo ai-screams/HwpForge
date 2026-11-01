@@ -206,7 +206,9 @@ pub fn to_md(hwpx: &[u8], opts: &MdExportOptions) -> Result<MdExportOutput, OpsE
                 ("spacing_before", para.spacing_before),
                 ("spacing_after", para.spacing_after),
             ] {
-                if opts.mode == MdMode::Styled && matches!(field, "margin_left" | "indent") {
+                // The readable encoders report these two: what they wrote
+                // tells which margins Markdown's lists give back.
+                if opts.mode != MdMode::Lossless && matches!(field, "margin_left" | "indent") {
                     continue;
                 }
                 if measure.as_hwp_unit().is_none_or(|v| v.as_i32() != 0) {
