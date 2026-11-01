@@ -2407,13 +2407,10 @@ fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
     // decoder carry is still detected as code if it would
     // have qualified before.
     let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
-    // A code block holds only the paragraph's text: a table or picture
-    // beside code-font text keeps the paragraph out of it, or it would be
-    // dropped.
+    // A code block holds only the paragraph's text: anything beside
+    // code-font text keeps the paragraph out of it, or it would be dropped.
     // 이것을 실패시키는 것: 이 검사 삭제(`code_list_paragraph_stays_an_item`).
-    if text_runs.is_empty()
-        || paragraph.runs.iter().any(|r| r.content.is_table() || r.content.is_image())
-    {
+    if text_runs.is_empty() || !list_format::holds_only_text(paragraph) {
         return false;
     }
     text_runs.iter().all(|run| {

@@ -347,12 +347,26 @@ pub(super) fn continuation_level(paragraph: &Paragraph, styles: &dyn StyleLookup
     if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
         return None;
     }
-    styles.para_style_name(id).and_then(parse_list_continuation_style_name)
+    let name = styles.para_style_name(id)?;
+    parse_list_continuation_style_name(name).or_else(|| {
+        parse_code_continuation_style_name(name).filter(|_| !holds_only_text(paragraph))
+    })
+}
+
+/// Whether a paragraph holds text and nothing else. A code block holds only
+/// text, so anything else would be dropped from it: a paragraph of a
+/// code-continuation shape that holds more (edited in Hancom) is an
+/// ordinary continuation of its item.
+/// 이것을 실패시키는 것: 코드 continuation 의 표·그림·컨트롤을 fence 로
+/// (`code_continuation_keeps_what_is_not_text`).
+pub(super) fn holds_only_text(paragraph: &Paragraph) -> bool {
+    paragraph.runs.iter().all(|r| r.content.carries_text())
 }
 
 /// The level of the list item whose code block a paragraph is, by its
 /// original styles: its paragraph shape's reserved code-continuation style
-/// name, on a shape with no list or heading semantics of its own.
+/// name, on a shape with no list or heading semantics of its own, holding
+/// only text ([`holds_only_text`]).
 pub(super) fn code_continuation_level(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
@@ -361,7 +375,10 @@ pub(super) fn code_continuation_level(
     if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
         return None;
     }
-    styles.para_style_name(id).and_then(parse_code_continuation_style_name)
+    styles
+        .para_style_name(id)
+        .and_then(parse_code_continuation_style_name)
+        .filter(|_| holds_only_text(paragraph))
 }
 
 /// One [`MdWarning::ListSemanticsLost`] per list paragraph outside the

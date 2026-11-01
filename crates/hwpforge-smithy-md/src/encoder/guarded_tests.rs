@@ -68,6 +68,8 @@ pub(super) mod cases {
     pub const HEADING_NUMBER: usize = 12;
     /// A level-1 numbered item of a second numbering.
     pub const NUMBER_B1: usize = 13;
+    /// A code block of an item at level 0.
+    pub const CODE_CONT0: usize = 14;
 
     pub struct Styles;
 
@@ -137,6 +139,7 @@ pub(super) mod cases {
                     Some("__hwpforge_md_list_continuation_level_0")
                 }
                 CONT1 => Some("__hwpforge_md_list_continuation_level_1"),
+                CODE_CONT0 => Some("__hwpforge_md_code_continuation_level_0"),
                 _ => None,
             }
         }

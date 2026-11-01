@@ -204,6 +204,40 @@ fn code_list_paragraph_stays_an_item() {
     );
 }
 
+/// A code block holds only text. A paragraph of an item's code shape that
+/// also holds a table, a picture or a control (edited in Hancom) stays in
+/// its item as an ordinary continuation, with all it holds, in both views.
+/// One that holds only text stays a fence.
+/// 이것을 실패시키는 것: 코드 continuation 을 fence 로(그 run 이 사라짐) · 일반 continuation
+/// 으로 돌리지 않기(항목 밖으로 나감).
+#[test]
+fn code_continuation_keeps_what_is_not_text() {
+    let code = |other| {
+        doc(vec![
+            p(BULLET, vec![t("item")]),
+            p(CODE_CONT0, vec![styled_t("codeline", CODE), other]),
+            p(BULLET, vec![t("after")]),
+        ])
+    };
+    for (run, kept) in [
+        (table(one_cell(body(vec![t("w")]))), "w"),
+        (image("kept.png", None), "kept.png"),
+        (compose("kept"), "kept"),
+    ] {
+        for (view, md, _) in views(&code(run.clone())) {
+            assert!(md.contains(kept), "{view}: {md}");
+            assert!(!md.contains("```"), "{view}: {md}");
+            let line = md.lines().find(|l| l.contains("codeline")).expect("code text");
+            assert!(line.starts_with("  "), "{view}: {md}");
+            assert_eq!(depth(&md, "after"), Some(1), "{view}: {md}");
+        }
+    }
+    let text_only = doc(vec![p(BULLET, vec![t("item")]), p(CODE_CONT0, vec![styled_t("x", CODE)])]);
+    for (view, md, _) in views(&text_only) {
+        assert!(md.contains("```"), "{view}: {md}");
+    }
+}
+
 /// A continuation of a level with no open item (a level-1 item opened
 /// alone) stands alone at column 0; it is not joined to the last item.
 /// 이것을 실패시키는 것: 없는 수준을 마지막 항목에 붙이기.

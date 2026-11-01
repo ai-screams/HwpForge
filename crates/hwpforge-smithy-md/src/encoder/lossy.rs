@@ -446,8 +446,13 @@ fn continuation_level(
     mapping: Option<&MdMapping>,
     styles: Option<&dyn StyleLookup>,
 ) -> Option<u8> {
+    let id = paragraph.para_shape_id;
     mapping
-        .and_then(|m| m.continuation_level(paragraph.para_shape_id))
+        .and_then(|m| {
+            m.continuation_level(id).or_else(|| {
+                m.code_continuation_level(id).filter(|_| !list_format::holds_only_text(paragraph))
+            })
+        })
         .or_else(|| list_format::continuation_level(paragraph, styles?))
 }
 
@@ -461,6 +466,7 @@ fn code_continuation_level(
 ) -> Option<u8> {
     mapping
         .and_then(|m| m.code_continuation_level(paragraph.para_shape_id))
+        .filter(|_| list_format::holds_only_text(paragraph))
         .or_else(|| list_format::code_continuation_level(paragraph, styles?))
 }
 

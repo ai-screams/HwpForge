@@ -469,13 +469,15 @@ impl TableBuilder {
                 .collect(),
         );
         // Widths are a layout default, an equal share of `width` per
-        // column: they change no span, row or cell.
+        // column, the fallback per column when `width` has no room: they
+        // change no span, row or cell.
+        // 이것을 실패시키는 것: 폭이 없을 때 칸마다 대체 폭
+        // (`merged_cells_span_the_fallback_columns`).
         let fallback = HwpUnit::from_mm(40.0)?;
         let share = table_columns(&table, gfm_cols)
             .and_then(|cols| i32::try_from(cols).ok())
             .filter(|&c| c > 0)
-            .map(|c| width / c)
-            .filter(|w| w.as_i32() > 0);
+            .map(|c| Some(width / c).filter(|w| w.as_i32() > 0).unwrap_or(fallback));
         for cell in table.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
             cell.width = share
                 .and_then(|w| w.as_i32().checked_mul(i32::from(cell.col_span.max(1))))
@@ -2096,19 +2098,15 @@ impl<'a> DecoderState<'a> {
 }
 
 /// Whether a numbering level text (`^1.^2`) refers to the number of a
-/// level shallower than `level` (0-based; its own is `^{level + 1}`).
-/// 이것을 실패시키는 것: 비교를 `<=` 대신 `<`(`ancestor_number_text_is_reported`).
+/// level shallower than `level` (0-based; its own is `^{level + 1}`). A
+/// level is one character, `^1` to `^9` and `^:` for the tenth, which no
+/// level has a shallower one of: `^10` is `^1` and the letter `0`.
+/// 이것을 실패시키는 것: 비교를 `<=` 대신 `<` · 숫자를 이어 읽기
+/// (`ancestor_number_text_is_reported`, `level_text_refers_by_one_character`).
 fn refers_to_shallower(text: &str, level: u8) -> bool {
-    let mut rest = text;
-    while let Some(at) = rest.find('^') {
-        rest = &rest[at + 1..];
-        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-        if rest[..digits].parse::<u32>().is_ok_and(|n| n >= 1 && n <= u32::from(level)) {
-            return true;
-        }
-        rest = &rest[digits..];
-    }
-    false
+    text.split('^')
+        .skip(1)
+        .any(|after| matches!(after.bytes().next(), Some(n @ b'1'..=b'9') if n - b'0' <= level))
 }
 
 fn level_to_u32(level: HeadingLevel) -> u32 {
@@ -2909,6 +2907,21 @@ text
         }
     }
 
+    /// A level is one character in a level text: `^10` refers to the first
+    /// level, and `^:` to the tenth, which is no level's ancestor.
+    #[test]
+    fn level_text_refers_by_one_character() {
+        for (text, level, refers) in [
+            ("^10.", 1, true),
+            ("^2.", 1, false),
+            ("^:.", 9, false),
+            ("^:.^1", 9, true),
+            ("^9.", 9, true),
+        ] {
+            assert_eq!(refers_to_shallower(text, level), refers, "{text} at {level}");
+        }
+    }
+
     /// An item whose first paragraph or HTML block held nothing (an empty
     /// inline tag, tags around raw whitespace, a chart comment) has an empty
     /// first paragraph: what follows is its continuation, not its head.
@@ -3356,6 +3369,29 @@ text
         let cell = &table.rows[0].cells[0];
         assert_eq!((cell.col_span, cell.row_span), (20, 65535));
         assert_eq!(cell.width, HwpUnit::from_mm(40.0).unwrap());
+    }
+
+    /// With no room for a table, the fallback width is per column: a merged
+    /// cell spans its columns' width, in an item and in the body.
+    #[test]
+    fn merged_cells_span_the_fallback_columns() {
+        let mut template = default_template();
+        template.page.as_mut().expect("page").width = HwpUnit::from_mm(40.0).ok();
+        let html = "<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">a</td>\n</tr>\n<tr>\n  <td>b</td>\n  <td>c</td>\n</tr>\n</tbody>\n</table>";
+        for markdown in [html.to_string(), format!("- item\n\n  {}", html.replace('\n', "\n  "))] {
+            let md = MdDecoder::decode(&markdown, &template).unwrap();
+            let carrier = md.document.sections()[0].paragraphs.last().unwrap();
+            let RunContent::Table(table) = &carrier.runs[0].content else {
+                panic!("{markdown:?}: not a table");
+            };
+            let column = HwpUnit::from_mm(40.0).unwrap().as_i32();
+            let widths: Vec<Vec<i32>> = table
+                .rows
+                .iter()
+                .map(|row| row.cells.iter().map(|c| c.width.as_i32()).collect())
+                .collect();
+            assert_eq!(widths, [vec![column * 2], vec![column, column]], "{markdown:?}");
+        }
     }
 
     /// A chart comment is left out with one warning each, inline, on its

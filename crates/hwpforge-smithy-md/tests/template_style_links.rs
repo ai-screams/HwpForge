@@ -978,6 +978,37 @@ fn code_font_list_text_stays_in_its_item() {
     }
 }
 
+/// The template-mapped lossy view reads an item's code shape by the
+/// template: given a table, that paragraph is an ordinary continuation with
+/// all it holds, and the item stays open for what follows.
+/// 이것을 실패시키는 것: 템플릿 경로의 코드 continuation 을 fence 로 · 일반 continuation
+/// 으로 돌리지 않기.
+#[test]
+fn template_mapped_code_paragraph_keeps_its_table() {
+    use hwpforge_core::{Paragraph, Run, Table, TableCell, TableRow};
+    let template = builtin_default().unwrap();
+    let mut md =
+        MdDecoder::decode("- item\n\n  ```\n  codeline\n  ```\n\n- after", &template).unwrap();
+    let paragraph = md.document.sections_mut()[0]
+        .paragraphs
+        .iter_mut()
+        .find(|p| {
+            p.runs.iter().any(|r| r.content.plain_text().is_some_and(|t| t.contains("codeline")))
+        })
+        .unwrap();
+    let (shape, para) = (paragraph.runs[0].char_shape_id, paragraph.para_shape_id);
+    let cell = TableCell::new(
+        vec![Paragraph::with_runs(vec![Run::text("kept", shape)], para)],
+        hwpforge_foundation::HwpUnit::from_mm(40.0).unwrap(),
+    );
+    paragraph.runs.push(Run::table(Table::new(vec![TableRow::new(vec![cell])]), shape));
+    let out = MdEncoder::encode(&md.document.validate().unwrap(), &template).unwrap();
+    assert!(out.contains("kept") && !out.contains("```"), "{out}");
+    let line = out.lines().find(|l| l.contains("codeline")).expect("code text");
+    assert!(line.starts_with("  "), "{out}");
+    assert_eq!(parsed_items(&out).len(), 2, "{out}");
+}
+
 /// Each Markdown list as the parser reads it: how many items hold it and,
 /// numbered, its start.
 fn parsed_lists(markdown: &str) -> Vec<(usize, Option<u64>)> {
