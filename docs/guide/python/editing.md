@@ -27,6 +27,8 @@ result.document.save("filled.hwpx")
 
 기존 `warnings`의 형과 내용은 그대로입니다. 변환된 입력에는 별도 `conversion = {"source_format": "hwp5", "warnings": [...]}`가 더해집니다. 각 경고는 `stage`, `code`, `message`와 선택적인 `location`을 갖습니다. `diff`는 `conversion.base`·`conversion.revised`에 변환된 쪽만 싣습니다. JSON·Markdown 문서 본문에는 이 메타데이터를 넣지 않습니다.
 
+`save`는 `None`을 반환합니다. HWP5를 그 자리에서 변환해 저장하면 파일 기록이 성공한 뒤 수락한 손실과 비손실 변환 경고를 코드와 알려진 위치를 담은 표준 `UserWarning`으로 알립니다. Python 경고 필터가 그대로 적용되어 기본 필터는 같은 경고를 한 번만 보여 주고, `error` 필터는 파일을 쓴 뒤 예외를 냅니다. 전체 목록은 읽기·편집 보고서의 `conversion`이나 `warnings.simplefilter("always")`를 넣은 `warnings.catch_warnings(record=True)`로 받습니다.
+
 `save`는 `.hwp` 확장자(대소문자 무시)를 `INVALID_EXTENSION`으로 거부합니다. 원본 HWP5를 그대로 저장하려면 HWPX로 변환하며, 의미 손실은 기본 거부합니다 (`save(..., accept_conversion_loss=True)`로 명시적 허용). `open`이 읽은 파일의 정체성은 편집 결과에도 이어집니다. 원본 경로가 삭제되거나 교체되어도 당시 읽은 HWP5 파일의 심볼릭 링크·하드 링크·상대 경로 별칭에 저장하면 `INVALID_OUTPUT_PATH`로 거부합니다. 보호 대상은 `open` 때 읽은 파일이며 현재 그 경로가 가리키는 파일이 아닙니다. 저장 시 출력의 정체성만 조회하며, 출력 부재는 허용하고 그 밖의 조회 실패는 `FILE_WRITE_FAILED`입니다. HWPX의 제자리 저장은 허용합니다. 저장 호출 중 다른 프로세스가 출력 경로를 바꾸는 상황은 보호하지 않습니다.
 
 `Document(data)`·`from_bytes`, `convert_hwp5`·`convert_md`·`from_json`의 생성 결과에는 원본 파일 정체성이 없습니다. 이 경우 원본 별칭인지 판별할 수 없으므로 호출자가 출력 경로를 구분해야 합니다. bytes·텍스트를 반환하는 연산은 파일을 쓰지 않습니다. `from_json(base=...)`, `patch`, `restyle`의 HWP5 자동 변환은 이번 범위 밖이며 계속 `HWP5_INPUT`을 반환합니다. 명시적으로 변환한 HWPX를 넘기세요.

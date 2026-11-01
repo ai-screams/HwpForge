@@ -64,11 +64,15 @@ pub(crate) fn _prepare_save<'py>(
     py: Python<'py>,
     data: PyBackedBytes,
     accept_conversion_loss: bool,
-) -> PyResult<(Option<Bound<'py, PyBytes>>, bool)> {
+) -> PyResult<(Option<Bound<'py, PyBytes>>, Bound<'py, PyAny>)> {
     let input = open(py, &data)?;
     accept(py, &input, accept_conversion_loss)?;
-    let converted = input.conversion.is_some();
-    Ok((converted.then(|| PyBytes::new(py, &input.bytes)), converted))
+    // 이것을 실패시키는 것: 저장 준비에서 변환 경고를 빈 메타데이터로 대체.
+    let conversion = input.conversion.as_ref().map(|report| report.meta());
+    Ok((
+        conversion.as_ref().map(|_| PyBytes::new(py, &input.bytes)),
+        crate::results::meta(py, &conversion)?,
+    ))
 }
 
 #[cfg(all(test, not(feature = "extension-module")))]

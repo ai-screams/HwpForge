@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -179,6 +180,8 @@ class Document:
         to protect. Output identity lookup failures raise ``FILE_WRITE_FAILED``;
         absent outputs are allowed. Output paths must stay stable during saving.
         Refusal order is extension, conversion/loss, identity; the CLI checks identity before loss.
+        After a successful write, a save that converts raw HWP5 reports its
+        conversion warnings, including accepted loss and non-loss warnings.
 
         Args:
             path: The file to write. An existing file is replaced.
@@ -186,18 +189,26 @@ class Document:
 
         Raises:
             HwpForgeIOError: If the file cannot be written (also an ``OSError``).
+
+        Warns:
+            UserWarning: One per conversion warning, with its code and any known
+                location. Python's warning filters apply: the default filter shows
+                repeats once, and an ``error`` filter raises after the file is
+                written. For the full list, use the ``conversion`` report of a
+                read or edit, or ``warnings.catch_warnings(record=True)`` with
+                ``warnings.simplefilter("always")`` inside it.
         """
         # 이것을 실패시키는 것: 확장자 검사 제거 또는 대소문자 정규화 제거.
         if os.path.splitext(os.fsdecode(path))[1].lower() == ".hwp":
             raise HwpForgeError(
                 "INVALID_EXTENSION", "Save the HWPX result as .hwpx; .hwp output is unsupported."
             )
-        data, converted = _hwpforge._prepare_save(
+        data, conversion = _hwpforge._prepare_save(
             self._data, accept_conversion_loss=accept_conversion_loss
         )
         try:
             # 이것을 실패시키는 것: 변환 출처/상속/정체성 조건 제거 또는 HWPX도 보호.
-            if (converted or self._hwp5_source) and self._source_identity is not None:
+            if (conversion is not None or self._hwp5_source) and self._source_identity is not None:
                 try:
                     target = os.stat(path)
                 except FileNotFoundError:
@@ -211,6 +222,17 @@ class Document:
                 handle.write(self._data if data is None else data)
         except OSError as exc:
             raise HwpForgeIOError(_hwpforge.FILE_WRITE_FAILED, str(exc), os_error=exc) from exc
+        # 이것을 실패시키는 것: 경고 누락, 위치/코드 제거, 호출자 위치 변경 또는 쓰기 전 경고.
+        if conversion is not None:
+            for warning in conversion["warnings"]:
+                location = warning.get("location")
+                # 이것을 실패시키는 것: 위치를 모르는 경고에 지어낸 위치 표시.
+                where = f"{location}: " if location else ""
+                warnings.warn(
+                    f"[{warning['code']}] {where}{warning['message']}",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     def _edited(self, data: bytes, report: Mapping[str, Any]) -> Document:
         """Carry the opened file identity through immutable edits for save protection."""

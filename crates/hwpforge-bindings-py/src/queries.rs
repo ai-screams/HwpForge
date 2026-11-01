@@ -152,7 +152,14 @@ pub(crate) fn diff<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let (base, revised): (&[u8], &[u8]) = (&base, &revised);
     let base = input::open(py, base)?;
-    let revised = input::open(py, revised)?;
+    let revised = match input::open(py, revised) {
+        Ok(revised) => revised,
+        Err(error) => {
+            // 이것을 실패시키는 것: revised 변환 실패 시 base 디코드 오류 확인 생략.
+            py.detach(|| ops::inspect(&base.bytes, &ops::InspectOptions::default())).or_py(py)?;
+            return Err(error);
+        }
+    };
     let output = py.detach(|| ops::diff(&base.bytes, &revised.bytes)).or_py(py)?;
     meta(py, &input::diff_metadata(output.meta(), &base, &revised))
 }

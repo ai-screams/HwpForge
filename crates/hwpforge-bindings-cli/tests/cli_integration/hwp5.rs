@@ -159,6 +159,55 @@ mod input_editing {
         package.into_inner().into_inner()
     }
 
+    #[test]
+    // 이것을 실패시키는 것: revised 변환 실패 시 base 오류 확인 제거 또는 무조건 base 오류 반환.
+    fn diff_base_error_precedes_revised_conversion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hwp5 = source(false);
+        let hwpx = hwpforge_convert::ops::convert_hwp5(
+            &hwp5,
+            &hwpforge_convert::ops::ConvertHwp5Options::default(),
+        )
+        .unwrap()
+        .bytes;
+        let cfb = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+        let bases: [(&str, &[u8], [Option<&str>; 3]); 4] = [
+            ("hwpx", &hwpx, [None, None, Some("HWP5_DECODE_FAILED")]),
+            ("hwp5", &hwp5, [None, None, Some("HWP5_DECODE_FAILED")]),
+            (
+                "broken",
+                b"broken base",
+                [Some("DECODE_FAILED"), Some("DECODE_FAILED"), Some("DECODE_FAILED")],
+            ),
+            (
+                "cfb",
+                &cfb,
+                [
+                    Some("HWP5_DECODE_FAILED"),
+                    Some("HWP5_DECODE_FAILED"),
+                    Some("HWP5_DECODE_FAILED"),
+                ],
+            ),
+        ];
+        let revisions: [&[u8]; 3] = [&hwpx, &hwp5, &cfb];
+        for (name, base_bytes, expected) in bases {
+            for (column, revised_bytes) in revisions.iter().enumerate() {
+                let base = tmp.path().join("base.bin");
+                let revised = tmp.path().join("revised.bin");
+                std::fs::write(&base, base_bytes).unwrap();
+                std::fs::write(&revised, revised_bytes).unwrap();
+                let (code, value) = cli(&["diff", path(&base), path(&revised)]);
+                if let Some(error) = expected[column] {
+                    assert_eq!(code, 2, "{name}/{column}: {value}");
+                    assert_eq!(value["code"], error, "{name}/{column}: {value}");
+                } else {
+                    assert_eq!(code, 0, "{name}/{column}: {value}");
+                    assert_eq!(value["diff"]["identical"], true);
+                }
+            }
+        }
+    }
+
     fn cli(args: &[&str]) -> (i32, Value) {
         cli_in(Path::new(env!("CARGO_MANIFEST_DIR")), args)
     }

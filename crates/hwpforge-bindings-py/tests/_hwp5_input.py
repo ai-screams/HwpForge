@@ -13,7 +13,7 @@ def paragraph(text: str) -> bytes:
     return record(0x42, 0, header) + record(0x43, 1, wire) + record(0x44, 1, bytes(8))
 
 
-def source(loss: bool = False) -> bytes:
+def source(loss: bool = False, *, memo_shape: bool = False, unknown_tag: bool = False) -> bytes:
     """Build the same text, click-here field, table and unknown-control records as CLI."""
     field_id = int.from_bytes(b"%clk", "big")
 
@@ -49,6 +49,8 @@ def source(loss: bool = False) -> bytes:
     section += record(0x47, 1, b"zzzz") * loss
     header = b"HWP Document File\0" + bytes(14) + struct.pack("<I", 0x05000205) + bytes(220)
     info = record(0x15, 0, bytes(68)) + record(0x19, 0, bytes(42)) + record(0x1A, 0, bytes(14))
+    info += record(0x5C, 0, bytes(22)) * memo_shape
+    info += record(0x3FF, 0, b"") * unknown_tag
     return compound(header, info, section)
 
 

@@ -21,8 +21,15 @@ pub(crate) fn read_input_hwpx(path: &Path, json: bool, command: Command) -> Hwpx
 }
 
 pub(crate) fn open_input_hwpx(bytes: Vec<u8>, json: bool, command: Command) -> HwpxInput {
-    let opened = open_as_hwpx(bytes, &OpenOptions::default())
-        .unwrap_or_else(|error| compat::convert_error(command, error).exit(json, command));
+    try_open_input_hwpx(bytes, json)
+        .unwrap_or_else(|error| compat::convert_error(command, error).exit(json, command))
+}
+
+pub(crate) fn try_open_input_hwpx(
+    bytes: Vec<u8>,
+    json: bool,
+) -> Result<HwpxInput, hwpforge_convert::ops::ConvertOpsError> {
+    let opened = open_as_hwpx(bytes, &OpenOptions::default())?;
     if !json {
         if let Some(report) = &opened.conversion {
             eprintln!(
@@ -39,7 +46,7 @@ pub(crate) fn open_input_hwpx(bytes: Vec<u8>, json: bool, command: Command) -> H
             }
         }
     }
-    HwpxInput(opened)
+    Ok(HwpxInput(opened))
 }
 
 impl HwpxInput {

@@ -25,14 +25,14 @@ def test_pyi_matches_ffi() -> None:
     assert set(_stub.function_names()) == set(FFI_FUNCTIONS) | internal
     assert exported == set(FFI_FUNCTIONS)
     assert all(inspect.isroutine(getattr(_hwpforge, name)) for name in internal)
-    # 이것을 실패시키는 것: 무변환 반환값의 None을 스텁에서 제거.
+    # 이것을 실패시키는 것: 저장 준비 스텁의 ConversionMeta | None을 bool로 되돌림.
     prepare = next(
         node
         for node in _stub._module().body
         if isinstance(node, ast.FunctionDef) and node.name == "_prepare_save"
     )
     assert prepare.returns is not None
-    assert ast.unparse(prepare.returns) == "tuple[bytes | None, bool]"
+    assert ast.unparse(prepare.returns) == "tuple[bytes | None, ConversionMeta | None]"
 
 
 def test_the_name_list_has_no_duplicates() -> None:

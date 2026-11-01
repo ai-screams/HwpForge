@@ -6,6 +6,7 @@ import ast
 import inspect
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
@@ -380,7 +381,7 @@ def test_save_refuses_bytes_hwp_path(tmp_path, monkeypatch):
 
 def test_save_hwpx_reuses_input_bytes(tmp_path, generated_bytes):
     # 이것을 실패시키는 것: 무변환 입력의 새 PyBytes 반환 또는 Python 원본 재사용 제거.
-    assert _hwpforge._prepare_save(generated_bytes) == (None, False)
+    assert _hwpforge._prepare_save(generated_bytes) == (None, None)
     output = tmp_path / "unchanged.hwpx"
     Document(generated_bytes).save(output)
     assert output.read_bytes() == generated_bytes
@@ -396,7 +397,8 @@ def test_save_loss_policy_and_identity_failure(tmp_path, monkeypatch):
         doc.save(output)
     assert caught.value.code == "HWP5_CONVERSION_LOSS"
     assert not output.exists()
-    doc.save(output, accept_conversion_loss=True)
+    with pytest.warns(UserWarning, match="DROPPED_CONTROL"):
+        doc.save(output, accept_conversion_loss=True)
     assert output.read_bytes() == _hwpforge.convert_hwp5(source(True))[0]
 
     def inaccessible(*args, **kwargs):
@@ -484,3 +486,110 @@ def test_conversion_report_shapes_and_existing_warnings():
         {"location"},
     )
     assert _stub.typed_dict_keys("DiffConversionMeta")[1] == {"base", "revised"}
+
+
+@pytest.mark.parametrize(
+    ("base_kind", "expected"),
+    [
+        ("hwpx", [None, None, "HWP5_DECODE_FAILED"]),
+        ("hwp5", [None, None, "HWP5_DECODE_FAILED"]),
+        ("broken", ["DECODE_FAILED", "DECODE_FAILED", "DECODE_FAILED"]),
+        ("cfb", ["HWP5_DECODE_FAILED", "HWP5_DECODE_FAILED", "HWP5_DECODE_FAILED"]),
+    ],
+)
+@pytest.mark.parametrize(("revised_kind", "column"), [("hwpx", 0), ("hwp5", 1), ("cfb", 2)])
+def test_diff_base_error_precedes_revised_conversion(base_kind, expected, revised_kind, column):
+    # 이것을 실패시키는 것: revised 변환 실패 시 base 오류 확인 제거 또는 무조건 base 오류 반환.
+    hwp5 = source()
+    hwpx, _ = _hwpforge.convert_hwp5(hwp5)
+    inputs = {
+        "hwpx": hwpx,
+        "hwp5": hwp5,
+        "broken": b"broken base",
+        "cfb": bytes.fromhex("d0cf11e0a1b11ae1"),
+    }
+    base, revised = Document(inputs[base_kind]), Document(inputs[revised_kind])
+    if expected[column] is None:
+        assert base.diff(revised)["identical"]
+    else:
+        with pytest.raises(HwpForgeError) as caught:
+            base.diff(revised)
+        assert caught.value.code == expected[column]
+
+
+@pytest.mark.parametrize(
+    ("loss", "memo_shape", "unknown_tag"),
+    [(True, False, False), (False, True, False), (True, True, False), (False, False, True)],
+)
+def test_save_emits_each_conversion_warning_after_write(tmp_path, loss, memo_shape, unknown_tag):
+    # 이것을 실패시키는 것: 저장 메타/경고 제거, 비손실 경고 필터, 코드/위치 누락.
+    # 이것을 실패시키는 것: 메시지/경고 종류/stacklevel 또는 None 반환 변경.
+    data = source(loss, memo_shape=memo_shape, unknown_tag=unknown_tag)
+    doc = Document(data)
+    expected = doc.fields()["conversion"]["warnings"]
+    assert len(expected) == int(loss) + int(memo_shape) + int(unknown_tag)
+    output = tmp_path / "saved.hwpx"
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        line = inspect.stack()[0].lineno + 1
+        result = doc.save(output, accept_conversion_loss=loss or unknown_tag)
+    assert result is None
+    assert output.read_bytes() == _hwpforge.convert_hwp5(data)[0]
+    assert len(emitted) == len(expected)
+    for actual, warning in zip(emitted, expected):
+        assert actual.category is UserWarning
+        assert actual.filename == __file__
+        assert actual.lineno == line
+        location = warning.get("location")
+        where = f"{location}: " if location else ""
+        assert str(actual.message) == f"[{warning['code']}] {where}{warning['message']}"
+
+
+def test_save_error_filter_raises_after_the_file_is_written(tmp_path):
+    # 이것을 실패시키는 것: 쓰기 전에 경고하거나 경고를 HwpForgeError로 감싸기.
+    output = tmp_path / "saved.hwpx"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(UserWarning):
+            Document(source(True)).save(output, accept_conversion_loss=True)
+    assert output.exists()
+
+
+@pytest.mark.parametrize("failure", ["loss", "write", "close"])
+def test_save_failure_emits_no_conversion_warnings(tmp_path, monkeypatch, failure):
+    # 이것을 실패시키는 것: 파일 쓰기/닫기 성공 전에 경고 방출 또는 손실 거부 우회.
+    doc = Document(source(True))
+    output = tmp_path / "saved.hwpx"
+    if failure == "write":
+        output = tmp_path / "missing" / "saved.hwpx"
+    elif failure == "close":
+        import io
+
+        class FailedClose(io.BytesIO):
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                super().__exit__(exc_type, exc_val, exc_tb)
+                raise OSError("close failed")
+
+        monkeypatch.setattr("builtins.open", lambda *args, **kwargs: FailedClose())
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        with pytest.raises(HwpForgeError) as caught:
+            doc.save(output, accept_conversion_loss=failure != "loss")
+    assert caught.value.code == (
+        "HWP5_CONVERSION_LOSS" if failure == "loss" else "FILE_WRITE_FAILED"
+    )
+    assert emitted == []
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("kind", ["hwp5", "hwpx"])
+def test_save_clean_inputs_emit_no_warnings(tmp_path, kind):
+    # 이것을 실패시키는 것: 경고 없는 변환 또는 HWPX 저장에 일반 경고 추가.
+    data = source()
+    hwpx, _ = _hwpforge.convert_hwp5(data)
+    output = tmp_path / "saved.hwpx"
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        assert Document(data if kind == "hwp5" else hwpx).save(output) is None
+    assert emitted == []
+    assert output.read_bytes() == hwpx

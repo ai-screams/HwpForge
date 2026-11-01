@@ -15,7 +15,17 @@ pub fn run(base: &Path, revised: &Path, output: Option<&PathBuf>, json_mode: boo
     check_file_size(base, json_mode, Command::Diff);
     check_file_size(revised, json_mode, Command::Diff);
     let base_bytes = crate::input::read_input_hwpx(base, json_mode, Command::Diff);
-    let revised_bytes = crate::input::read_input_hwpx(revised, json_mode, Command::Diff);
+    let revised_bytes = crate::error::read_input(revised, json_mode, Command::Diff);
+    let revised_bytes = match crate::input::try_open_input_hwpx(revised_bytes, json_mode) {
+        Ok(revised) => revised,
+        Err(error) => {
+            // 이것을 실패시키는 것: revised 변환 실패 시 base 디코드 오류 확인 생략.
+            if let Err(error) = ops::inspect(&base_bytes, &ops::InspectOptions::default()) {
+                compat::exit_ops_error(Command::Diff, error, json_mode);
+            }
+            compat::convert_error(Command::Diff, error).exit(json_mode, Command::Diff)
+        }
+    };
 
     // Decoder warnings from both inputs (`DiffOutput::warnings`) were not
     // surfaced previously (the pre-migration CLI never captured them either).
