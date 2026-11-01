@@ -165,39 +165,77 @@ fn code_font_text_with_a_block_is_a_body_paragraph() {
     }
 }
 
-/// A list paragraph the styled view writes as a code line (all its text
-/// in a code font) loses its list: one loss each, a checked bullet too. A
-/// code-font list paragraph with a table is no code line: it stays an item
-/// holding its table, no loss. The lossy view reads no code font: each is
-/// an item, the table written outside its item as always
+/// A list paragraph the styled view writes as code (all its text in a
+/// code font) stays an item: its marker holds the code as a fence, with its
+/// kind and checked state, no loss. A code-font list paragraph with a table
+/// is no code: it stays an item holding its table. The lossy view reads no
+/// code font: each is an item, the table written outside its item as always
 /// (`lossy_block_outside_its_item_is_reported`).
-/// 이것을 실패시키는 것: 한 곳의 보고 삭제 · 코드 문단을 항목으로 세기 · 코드 판정의
-/// 표·그림 검사 삭제.
+/// 이것을 실패시키는 것: 코드 글꼴 판정을 소유 항목 판정보다 먼저 · 코드 판정의 표·그림
+/// 검사 삭제.
 #[test]
-fn code_list_paragraph_is_reported_once() {
+fn code_list_paragraph_stays_an_item() {
+    use pulldown_cmark::{Tag, TagEnd};
     let doc = doc(vec![
         p(NUMBER, vec![styled_t("x", CODE)]),
         p(CHECKED, vec![styled_t("y", CODE)]),
         p(BULLET, vec![styled_t("z", CODE), table(one_cell(body(vec![t("w")])))]),
     ]);
-    let number = ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 0 };
-    let checked =
-        ParagraphListRef::CheckBullet { bullet_id: BulletIndex::new(1), level: 0, checked: true };
     let [(_, styled, styled_warnings), (_, lossy, lossy_warnings)] = views(&doc);
-    assert_eq!((depth(&styled, "x\ny"), depth(&styled, "w")), (None, Some(1)), "{styled}");
-    assert_eq!(
-        list_losses(&styled_warnings),
-        [
-            (0, "paragraphs[0]", number, list_format::BODY_CARRIER_PROJECTION),
-            (0, "paragraphs[1]", checked, list_format::BODY_CARRIER_PROJECTION),
-        ]
-    );
+    // Each code block, with how many items hold it; each task marker.
+    let (mut depth_now, mut code, mut tasks) = (0, Vec::new(), Vec::new());
+    for event in Parser::new_ext(&styled, md_options()) {
+        match event {
+            Event::Start(Tag::Item) => depth_now += 1,
+            Event::End(TagEnd::Item) => depth_now -= 1,
+            Event::Start(Tag::CodeBlock(_)) => code.push(depth_now),
+            Event::TaskListMarker(checked) => tasks.push(checked),
+            _ => {}
+        }
+    }
+    assert_eq!((code, tasks), (vec![1, 1], vec![true]), "{styled}");
+    assert_eq!(depth(&styled, "w"), Some(1), "{styled}");
+    assert_eq!(list_losses(&styled_warnings), [], "{styled}");
     assert_eq!(depth(&lossy, "x"), Some(1), "{lossy}");
     let bullet = ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 };
     assert_eq!(
         list_losses(&lossy_warnings),
         [(0, "paragraphs[2]", bullet, list_format::BODY_CARRIER_PROJECTION)]
     );
+}
+
+/// A code block holds only text. A paragraph of an item's code shape that
+/// also holds a table, a picture or a control (edited in Hancom) stays in
+/// its item as an ordinary continuation, with all it holds, in both views.
+/// One that holds only text stays a fence.
+/// 이것을 실패시키는 것: 코드 continuation 을 fence 로(그 run 이 사라짐) · 일반 continuation
+/// 으로 돌리지 않기(항목 밖으로 나감).
+#[test]
+fn code_continuation_keeps_what_is_not_text() {
+    let code = |other| {
+        doc(vec![
+            p(BULLET, vec![t("item")]),
+            p(CODE_CONT0, vec![styled_t("codeline", CODE), other]),
+            p(BULLET, vec![t("after")]),
+        ])
+    };
+    for (run, kept) in [
+        (table(one_cell(body(vec![t("w")]))), "w"),
+        (image("kept.png", None), "kept.png"),
+        (compose("kept"), "kept"),
+    ] {
+        for (view, md, _) in views(&code(run.clone())) {
+            assert!(md.contains(kept), "{view}: {md}");
+            assert!(!md.contains("```"), "{view}: {md}");
+            let line = md.lines().find(|l| l.contains("codeline")).expect("code text");
+            assert!(line.starts_with("  "), "{view}: {md}");
+            assert_eq!(depth(&md, "after"), Some(1), "{view}: {md}");
+        }
+    }
+    let text_only = doc(vec![p(BULLET, vec![t("item")]), p(CODE_CONT0, vec![styled_t("x", CODE)])]);
+    for (view, md, _) in views(&text_only) {
+        assert!(md.contains("```"), "{view}: {md}");
+    }
 }
 
 /// A continuation of a level with no open item (a level-1 item opened
@@ -320,4 +358,76 @@ fn body_list_loss_is_once_per_paragraph() {
         list_losses(&warnings),
         [(0, "paragraphs[0]", bullet, list_format::BODY_CARRIER_PROJECTION)]
     );
+}
+
+/// Hancom counts a numbering at each level across whatever is between its
+/// items, until an item of it at a shallower level starts the level again;
+/// a Markdown list starts at 1. An item that starts a new Markdown list
+/// while its numbering counts at its level is reported, once per
+/// numbering, in both views: after a block at the top; under one parent
+/// after another numbering's list (A, B, A); after its parent's
+/// continuation. Not reported: the first item of a level (even with the
+/// numbering used at another level before), items one after another, a
+/// child level started again by its parent's next item.
+/// 이것을 실패시키는 것: 보고 삭제 · 같은 목록 잇기에도 보고 · 수준 없이 번호만 기록 ·
+/// 부모 continuation 뒤 목록 잇기 · 깊은 수준 다시 세기 삭제 · 번호마다 한 번 대신 매번.
+#[test]
+fn numbering_continuing_past_a_block_is_reported() {
+    let lost = |w: &[MdWarning]| {
+        w.iter()
+            .filter_map(|w| match w {
+                MdWarning::NumberingPresentationLost { numbering_id } => Some(numbering_id.get()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let n = |text: &str| p(NUMBER, vec![t(text)]);
+    // NUMBER is numbering 0 at level 0, NUMBER1 numbering 0 at level 1,
+    // NUMBER_B1 numbering 1 at level 1.
+    let n1 = |text: &str| p(NUMBER1, vec![t(text)]);
+    let b1 = |text: &str| p(NUMBER_B1, vec![t(text)]);
+    let b = |text: &str| body(vec![t(text)]);
+    for (name, paragraphs, expected) in [
+        ("block between", vec![n("a"), b("text"), n("b"), b("more"), n("c")], vec![0]),
+        ("one list", vec![n("a"), n("b"), p(CONT0, vec![t("tail")]), n("c")], vec![]),
+        ("A B A under a parent", vec![p(BULLET, vec![t("p")]), n1("a"), b1("x"), n1("c")], vec![0]),
+        (
+            "after the parent's continuation",
+            vec![p(BULLET, vec![t("p")]), n1("a"), p(CONT0, vec![t("tail")]), n1("c")],
+            vec![0],
+        ),
+        ("other level first", vec![n1("deep"), b("text"), n("top")], vec![]),
+        ("restarted by the parent", vec![n("p"), n1("a"), n("q"), n1("b")], vec![]),
+        (
+            "after an empty continuation",
+            vec![p(BULLET, vec![t("p")]), n1("a"), p(CONT0, vec![t("")]), n1("c")],
+            vec![],
+        ),
+        (
+            "after an empty continuation of one empty picture",
+            vec![p(BULLET, vec![t("p")]), n1("a"), p(CONT0, vec![image("", None)]), n1("c")],
+            vec![],
+        ),
+        (
+            "after an empty continuation, another numbering before",
+            vec![p(BULLET, vec![t("p")]), b1("b"), n1("a"), p(CONT0, vec![t("")]), n1("c")],
+            vec![],
+        ),
+    ] {
+        for (view, md, warnings) in views(&doc(paragraphs.clone())) {
+            assert_eq!(lost(&warnings), expected, "{name} {view}: {md}");
+            // An empty continuation writes nothing: `a` and `c` stay one
+            // list (one delimiter), after `b`'s list if there is one.
+            if name.starts_with("after an empty continuation") {
+                let lists = Parser::new_ext(&md, md_options())
+                    .filter(|e| matches!(e, Event::Start(pulldown_cmark::Tag::List(Some(_)))))
+                    .count();
+                assert_eq!(
+                    lists,
+                    if name.ends_with("before") { 2 } else { 1 },
+                    "{name} {view}: {md}"
+                );
+            }
+        }
+    }
 }

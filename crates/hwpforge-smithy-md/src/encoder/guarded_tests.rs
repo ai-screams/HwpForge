@@ -66,6 +66,10 @@ pub(super) mod cases {
     /// A level-2 heading whose shape also carries a level-0 number list,
     /// as a caller's lookup may say: the heading wins.
     pub const HEADING_NUMBER: usize = 12;
+    /// A level-1 numbered item of a second numbering.
+    pub const NUMBER_B1: usize = 13;
+    /// A code block of an item at level 0.
+    pub const CODE_CONT0: usize = 14;
 
     pub struct Styles;
 
@@ -117,6 +121,10 @@ pub(super) mod cases {
                     numbering_id: NumberingIndex::new(0),
                     level: u8::from(id.get() == NUMBER1),
                 }),
+                NUMBER_B1 => Some(ParagraphListRef::Number {
+                    numbering_id: NumberingIndex::new(1),
+                    level: 1,
+                }),
                 CHECKED => Some(ParagraphListRef::CheckBullet {
                     bullet_id: BulletIndex::new(1),
                     level: 0,
@@ -131,6 +139,7 @@ pub(super) mod cases {
                     Some("__hwpforge_md_list_continuation_level_0")
                 }
                 CONT1 => Some("__hwpforge_md_list_continuation_level_1"),
+                CODE_CONT0 => Some("__hwpforge_md_code_continuation_level_0"),
                 _ => None,
             }
         }
@@ -2204,11 +2213,11 @@ fn lossy_definition_shapes() {
 #[test]
 fn lossy_definition_rows() {
     let rows: &[(&str, &str, usize, &str, usize, &str)] = &[
-        ("- x\n\n      [r]", "- x\n\n      [r]", 0, "- x\n\n      [r]", 0, "- x/[r]"),
-        ("- x\n\n      [", "- x\n\n      [", 0, "- x\n\n      [", 0, "- x/["),
-        ("- x\n\n\t\t[r]: /u", "- x\n\n\t\t[r]: /u", 0, "- x\n\n\t\t[r]: /u", 0, "- x/  [r]: /u"),
-        ("- x\n    [^r]: y", "- x\n    \\[^r]: y", 0, "- x\n    \\[^r]: y", 0, "- x [^r]: y"),
-        ("- x\n\n    [^r]: y", "- x\n\n    \\[^r]: y", 0, "- x\n\n    \\[^r]: y", 0, "- x/[^r]: y"),
+        ("- x\n\n      [r]", "- x\n\n      [r]", 0, "- x\n\n      [r]", 0, "x/[r]"),
+        ("- x\n\n      [", "- x\n\n      [", 0, "- x\n\n      [", 0, "x/["),
+        ("- x\n\n\t\t[r]: /u", "- x\n\n\t\t[r]: /u", 0, "- x\n\n\t\t[r]: /u", 0, "x/  [r]: /u"),
+        ("- x\n    [^r]: y", "- x\n    \\[^r]: y", 0, "- x\n    \\[^r]: y", 0, "x [^r]: y"),
+        ("- x\n\n    [^r]: y", "- x\n\n    \\[^r]: y", 0, "- x\n\n    \\[^r]: y", 0, "x/[^r]: y"),
         ("- x\n\t[^r]: y", "- x\n\t[^r]: y", 0, "\\- x \t\\[\\^r\\]\\: y", 1, "- x \t[^r]: y"),
         (
             "- x\n  \t[^r]: y",
@@ -2218,32 +2227,32 @@ fn lossy_definition_rows() {
             1,
             "- x   \t[^r]: y",
         ),
-        ("> - x\n>   [^r]: y", "> - x\n>   \\[^r]: y", 0, "> - x\n>   \\[^r]: y", 0, "- x [^r]: y"),
+        ("> - x\n>   [^r]: y", "> - x\n>   \\[^r]: y", 0, "> - x\n>   \\[^r]: y", 0, "x [^r]: y"),
         (
             "> - x\n>     [^r]: y",
             "> - x\n>     \\[^r]: y",
             0,
             "> - x\n>     \\[^r]: y",
             0,
-            "- x [^r]: y",
+            "x [^r]: y",
         ),
-        ("1. x\n    [^r]: y", "1. x\n    \\[^r]: y", 0, "1. x\n    \\[^r]: y", 0, "1. x [^r]: y"),
+        ("1. x\n    [^r]: y", "1. x\n    \\[^r]: y", 0, "1. x\n    \\[^r]: y", 0, "x [^r]: y"),
         (
             "- x\n    [^r]: y\n\n    z[^r]",
             "- x\n    \\[^r]: y\n\n    z[^r]",
             0,
             "- x\n    \\[^r]: y\n\n    z[^r]",
             0,
-            "- x [^r]: y/z[^r]",
+            "x [^r]: y/z[^r]",
         ),
         ("\t[r]: /u", "\t[r]: /u", 0, "\t[r]: /u", 0, "[r]: /u"),
         ("  \t[r]: /u", "  \t[r]: /u", 0, "  \t[r]: /u", 0, "[r]: /u"),
-        ("-\t\t[r]: /u", "-\t\t[r]: /u", 0, "-\t\t[r]: /u", 0, "-   [r]: /u"),
+        ("-\t\t[r]: /u", "-\t\t[r]: /u", 0, "-\t\t[r]: /u", 0, "/  [r]: /u"),
         ("-\t[r]: /u", "\\-\t\\[r\\]\\: \\/u", 1, "\\-\t\\[r\\]\\: \\/u", 1, "-\t[r]: /u"),
         ("-  \t[r]: /u", "\\-  \t\\[r\\]\\: \\/u", 1, "\\-  \t\\[r\\]\\: \\/u", 1, "-  \t[r]: /u"),
         (">\t[r]: /u", "\\>\t\\[r\\]\\: \\/u", 1, "\\>\t\\[r\\]\\: \\/u", 1, ">\t[r]: /u"),
         ("1)\t[r]: /u", "1\\)\t\\[r\\]\\: \\/u", 1, "1\\)\t\\[r\\]\\: \\/u", 1, "1)\t[r]: /u"),
-        ("-\t\t- [r]: /u", "-\t\t- [r]: /u", 0, "-\t\t- [r]: /u", 0, "-   - [r]: /u"),
+        ("-\t\t- [r]: /u", "-\t\t- [r]: /u", 0, "-\t\t- [r]: /u", 0, "/  - [r]: /u"),
         ("x\n    [r]: /u", "x\n    \\[r]: /u", 0, "x\n    \\[r]: /u", 0, "x [r]: /u"),
         ("\t- x\n\n\t[r]: /u", "\t- x\n\n\t[r]: /u", 0, "\t- x\n\n\t[r]: /u", 0, "- x\n\n[r]: /u"),
         ("-x\n    [r]: /u", "-x\n    \\[r]: /u", 0, "-x\n    \\[r]: /u", 0, "-x [r]: /u"),

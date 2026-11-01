@@ -289,9 +289,28 @@ pub struct MarkdownMapping {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blockquote: Option<String>,
 
-    /// List item style.
+    /// List item style: the common list geometry (left margin, first-line
+    /// indent) every list level derives from, and the bullet item role when
+    /// its paragraph shape has a bullet list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_item: Option<String>,
+
+    /// Numbered list item style: its paragraph shape must have a numbering
+    /// list other than the first numbering definition (the outline's). With
+    /// none, numbered items are not supported by the template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbered_item: Option<String>,
+
+    /// Task list item style: its paragraph shape must have a checkable
+    /// bullet list. With none, task items are not supported by the template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_item: Option<String>,
+
+    /// Declared bullet definition ids for bullet items of levels 0 to 9, in
+    /// order: exactly ten plain bullets. With none, the `list_item` bullet
+    /// serves every level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_levels: Option<Vec<u32>>,
 }
 
 // ---------------------------------------------------------------------------

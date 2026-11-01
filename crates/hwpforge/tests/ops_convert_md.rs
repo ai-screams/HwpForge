@@ -51,6 +51,27 @@ fn plain_markdown_decodes_with_an_empty_asset_plan() {
     assert!(decoded.warnings.is_empty());
 }
 
+/// The Markdown decoder's list warnings reach the operation with their
+/// own codes: a numbered list starting at 3, a list nested past level 9.
+/// 이것을 실패시키는 것: 목록 경고 코드 매핑 삭제(`md_warning_code`).
+#[test]
+fn list_warnings_reach_the_operation_with_their_codes() {
+    let mut markdown = "3. x\n\ntext\n\n".to_string();
+    for depth in 0..11 {
+        markdown.push_str(&format!("{}- {depth}\n", "  ".repeat(depth)));
+    }
+    let decoded = decode_md(&markdown, &ConvertMdOptions::default()).expect("decode");
+    assert_eq!(codes(&decoded.warnings), ["LIST_START_NORMALIZED", "LIST_LEVEL_CLAMPED"]);
+    let converted = convert_md(&markdown, None, &ConvertMdOptions::default()).expect("convert");
+    assert_eq!(
+        codes(&converted.warnings)
+            .into_iter()
+            .filter(|c| c.starts_with("LIST_"))
+            .collect::<Vec<_>>(),
+        ["LIST_START_NORMALIZED", "LIST_LEVEL_CLAMPED"]
+    );
+}
+
 #[test]
 fn the_asset_plan_lists_one_entry_per_image_run_in_document_order() {
     let markdown = "![first](a.png)\n\n본문\n\n![second](b.png)\n";

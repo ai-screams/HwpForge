@@ -8,9 +8,11 @@ use hwpforge_blueprint::builtins::builtin_default;
 pub(crate) const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::table::grid;
 use hwpforge_core::{
-    Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
+    Control, Document, Image, ListItemKind, Paragraph, ParagraphListRef, Run, RunContent, Section,
+    Table, TableCell, TableRow,
 };
 use hwpforge_foundation::{
     CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, UnderlineType, VerticalPosition,
@@ -22,6 +24,17 @@ use crate::encoder::{guard, MdWarning};
 use crate::error::{MdError, MdResult};
 use crate::frontmatter::{apply_to_metadata, extract_frontmatter, reject_lossless_view};
 use crate::mapper::{image_format_from_path, resolve_mapping, MdMapping, MdStyleRef};
+use hwpforge_blueprint::markdown::restart_markdown_numbering;
+use hwpforge_blueprint::registry::StyleEntry;
+
+const LIST_LEVELS: usize = ParagraphListRef::MAX_LEVEL as usize + 1;
+
+/// How many numbering copies a document may make (each independent
+/// numbered list after the first is one): each adds a numbering definition
+/// and ten paragraph shapes, about 13 KB of HWPX header, so 1024 keep the
+/// header near 13 MB, well under the 50 MB a HWPX part may decompress to
+/// on reading.
+const MAX_NUMBERING_GROUPS: usize = 1024;
 
 mod lossless;
 
@@ -112,6 +125,16 @@ impl MdDecoder {
         let decoded = state.finish()?;
         let mut warnings = mapping.warnings.clone();
         warnings.extend(decoded.warnings);
+        let count = decoded.paragraphs.len();
+        for (at, list) in decoded.detached {
+            let (section, index) = section_at(at, &decoded.section_breaks, count);
+            warnings.push(MdWarning::ListSemanticsLost {
+                section,
+                path: format!("paragraphs[{index}]"),
+                list,
+                reason: crate::encoder::ITEM_BLOCK_DETACHED,
+            });
+        }
 
         let mut sections = split_sections(decoded.paragraphs, &decoded.section_breaks);
         if sections.is_empty() {
@@ -190,43 +213,29 @@ impl MdDecoder {
     }
 }
 
-#[derive(Debug, Clone)]
+/// A Markdown list being read: its items' kind and level. Its items'
+/// numbers and markers are not kept: a list item is a paragraph whose
+/// style has the list ([`MdMapping::list_item_style`]), never text.
+#[derive(Debug, Clone, Copy)]
 struct ListState {
-    ordered: bool,
-    next_index: u64,
+    kind: ListItemKind,
+    level: u8,
+    /// A numbered list's start other than 1, not yet reported: reported
+    /// once its first numbered (not task) item ends.
+    start: Option<u64>,
+    /// The numbering group its numbered items use, given when its first
+    /// numbered (not task) item's first paragraph is written.
+    group: Option<[MdStyleRef; LIST_LEVELS]>,
 }
 
-impl ListState {
-    fn new(start: Option<u64>) -> Self {
-        Self { ordered: start.is_some(), next_index: start.unwrap_or(1) }
-    }
-}
-
-#[derive(Debug, Clone)]
+/// A list item being read: its kind and level (as its list's when it
+/// started), its task state, and whether its first paragraph is written.
+#[derive(Debug, Clone, Copy)]
 struct PendingItem {
-    prefix: String,
-    prefix_pending: bool,
-    task_checked: Option<bool>,
+    kind: ListItemKind,
+    level: u8,
+    checked: Option<bool>,
     emitted_paragraph: bool,
-}
-
-impl PendingItem {
-    fn new(prefix: String) -> Self {
-        Self { prefix, prefix_pending: true, task_checked: None, emitted_paragraph: false }
-    }
-
-    fn mark_task(&mut self, checked: bool) {
-        self.task_checked = Some(checked);
-        self.prefix_pending = false;
-    }
-
-    fn take_prefix(&mut self) -> Option<String> {
-        if self.prefix_pending && self.task_checked.is_none() {
-            self.prefix_pending = false;
-            return Some(self.prefix.clone());
-        }
-        None
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -409,11 +418,7 @@ impl TableBuilder {
         self.current_cell.is_some()
     }
 
-    fn into_table(
-        mut self,
-        body_style: MdStyleRef,
-        page: hwpforge_core::PageSettings,
-    ) -> MdResult<Table> {
+    fn into_table(mut self, body_style: MdStyleRef, width: HwpUnit) -> MdResult<Table> {
         self.end_row();
         let html = self.html.is_some();
         let mut gfm_cols = None;
@@ -463,14 +468,21 @@ impl TableBuilder {
                 })
                 .collect(),
         );
-        // Widths are a layout default, an equal share of the printable
-        // width per column: they change no span, row or cell.
+        // Widths are a layout default, an equal share of `width` per
+        // column, the fallback per column when `width` has no room, each
+        // less if the whole table would not be a width: they change no
+        // span, row or cell.
+        // 이것을 실패시키는 것: 폭이 없을 때 칸마다 대체 폭 · 열 수로 제한하지 않기
+        // (`merged_cells_span_the_fallback_columns`,
+        // `many_narrow_columns_keep_a_table_width`).
         let fallback = HwpUnit::from_mm(40.0)?;
         let share = table_columns(&table, gfm_cols)
             .and_then(|cols| i32::try_from(cols).ok())
             .filter(|&c| c > 0)
-            .map(|c| page.printable_width() / c)
-            .filter(|w| w.as_i32() > 0);
+            .and_then(|c| {
+                let column = Some(width / c).filter(|w| w.as_i32() > 0).unwrap_or(fallback);
+                HwpUnit::new(column.as_i32().min(HwpUnit::MAX_VALUE / c)).ok()
+            });
         for cell in table.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
             cell.width = share
                 .and_then(|w| w.as_i32().checked_mul(i32::from(cell.col_span.max(1))))
@@ -587,6 +599,22 @@ struct DecoderState<'a> {
     in_item: bool,
     pending_items: Vec<PendingItem>,
     list_stack: Vec<ListState>,
+    /// List kinds (kind, task) already reported as undefined by the template.
+    missing_lists: Vec<(ListItemKind, bool)>,
+    /// Blocks a list item held written outside it (a heading, a rule): the
+    /// paragraph's index among `paragraphs` and the item's list.
+    detached: Vec<(usize, ParagraphListRef)>,
+    /// Whether a numbered list already took the template's numbering: every
+    /// later one takes a copy.
+    numbering_taken: bool,
+    /// Numbering copies made, at most [`MAX_NUMBERING_GROUPS`].
+    numbering_copies: usize,
+    /// Numberings reported as not shown as they number, whatever the cause
+    /// (past the copies, a level referring to a shallower one): once each.
+    numbering_reported: std::collections::HashSet<hwpforge_foundation::NumberingIndex>,
+    /// A failure met where the event handlers return no result (a numbering
+    /// group that could not be made), returned after the event.
+    failure: Option<MdError>,
     pending_link: Option<PendingLink>,
     pending_image: Option<PendingImage>,
     section_breaks: Vec<usize>,
@@ -598,6 +626,7 @@ struct DecodeOutput {
     paragraphs: Vec<Paragraph>,
     section_breaks: Vec<usize>,
     warnings: Vec<MdWarning>,
+    detached: Vec<(usize, ParagraphListRef)>,
 }
 
 impl<'a> DecoderState<'a> {
@@ -639,6 +668,12 @@ impl<'a> DecoderState<'a> {
             in_item: false,
             pending_items: Vec::new(),
             list_stack: Vec::new(),
+            missing_lists: Vec::new(),
+            detached: Vec::new(),
+            numbering_taken: false,
+            numbering_copies: 0,
+            numbering_reported: std::collections::HashSet::new(),
+            failure: None,
             pending_link: None,
             pending_image: None,
             section_breaks: Vec::new(),
@@ -650,6 +685,9 @@ impl<'a> DecoderState<'a> {
         let parser = Parser::new_ext(content, crate::encoder::md_options());
         for event in parser {
             self.handle_event(event)?;
+            if let Some(failure) = self.failure.take() {
+                return Err(failure);
+            }
         }
         Ok(())
     }
@@ -670,6 +708,7 @@ impl<'a> DecoderState<'a> {
             paragraphs: self.paragraphs,
             section_breaks: self.section_breaks,
             warnings: self.warnings,
+            detached: self.detached,
         })
     }
 
@@ -852,9 +891,17 @@ impl<'a> DecoderState<'a> {
 
     fn end_tag(&mut self, tag_end: TagEnd) -> MdResult<()> {
         match tag_end {
-            TagEnd::Paragraph | TagEnd::Heading(_) => {
+            TagEnd::Heading(_) => {
                 self.html_closed()?;
                 self.finalize_paragraph();
+            }
+            // An item's first paragraph that held nothing (an empty inline
+            // tag) is still its first paragraph: its head, empty, is written
+            // here, so the next paragraph stays a continuation.
+            // 이것을 실패시키는 것: 여기서 `finalize_paragraph` 만(`contentless_first_paragraph_is_an_empty_head`).
+            TagEnd::Paragraph => {
+                self.html_closed()?;
+                self.open_item_head();
             }
             TagEnd::BlockQuote(_) => self.end_blockquote_tag(),
             TagEnd::CodeBlock => self.end_code_block_tag(),
@@ -909,7 +956,9 @@ impl<'a> DecoderState<'a> {
                     capture.paragraphs.push(builder.build());
                 }
             }
-            None => self.finalize_paragraph(),
+            // An HTML block that held nothing is still an item's first block.
+            // 이것을 실패시키는 것: 여기서 `finalize_paragraph` 만(`contentless_first_paragraph_is_an_empty_head`).
+            None => self.open_item_head(),
         }
         Ok(())
     }
@@ -1132,8 +1181,7 @@ impl<'a> DecoderState<'a> {
         };
         match (name, open, at) {
             ("table", true, None) if allowed && !self.is_in_table_cell() => {
-                self.materialize_pending_item_paragraph_if_needed();
-                self.finalize_paragraph();
+                self.open_item_head();
             }
             ("table", true, Some(Cell)) => {}
             ("tbody", true, Some(Start)) => set(self, Body),
@@ -1176,12 +1224,13 @@ impl<'a> DecoderState<'a> {
             ("tbody", false, Some(Body)) => set(self, Done),
             ("table", false, Some(Done)) => {
                 let builder = self.tables.pop().expect("html table");
-                let table = builder.into_table(self.mapping.body, self.mapping.page_settings)?;
                 if self.tables.last().is_some_and(|t| t.html.is_some()) {
+                    let width = self.mapping.page_settings.printable_width();
+                    let table = builder.into_table(self.mapping.body, width)?;
                     let char_shape_id = self.current_char_shape_id();
                     self.push_run_to_active_context(Run::table(table, char_shape_id));
                 } else {
-                    self.push_table_paragraph(table);
+                    self.push_table_paragraph(builder)?;
                 }
                 return Ok(());
             }
@@ -1419,11 +1468,19 @@ impl<'a> DecoderState<'a> {
         Ok(())
     }
 
+    /// An item's first paragraph is begun by its first content, not here:
+    /// a task marker that follows the tag still decides its style.
+    /// 이것을 실패시키는 것: 머리 문단을 여기서 만들기(`numbered_lists_are_groups_of_their_own`).
     fn start_paragraph_tag(&mut self) {
+        if self.in_item && self.pending_items.last().is_some_and(|item| !item.emitted_paragraph) {
+            return;
+        }
         self.ensure_paragraph();
     }
 
     fn start_heading_tag(&mut self, level: HeadingLevel) {
+        self.open_item_head();
+        self.note_detached();
         let lvl = level_to_u32(level);
         self.start_paragraph(self.mapping.heading(lvl));
         if let Some(current) = self.current.as_mut() {
@@ -1435,25 +1492,56 @@ impl<'a> DecoderState<'a> {
         self.blockquote_depth += 1;
     }
 
+    /// A code block in a list item is held by the item: its first paragraph
+    /// (empty when the code comes first) is written before it, and it takes
+    /// the item's code-continuation style.
+    /// 이것을 실패시키는 것: 항목 안 코드에 code 스타일(`item_blocks_stay_in_their_item`).
     fn start_code_block_tag(&mut self) {
+        self.open_item_head();
         self.in_code_block = true;
-        self.start_paragraph(self.mapping.code);
+        let style = match self.pending_items.last() {
+            Some(item) if self.in_item => self.mapping.code_continuation(item.level),
+            _ => self.mapping.code,
+        };
+        self.start_paragraph(style);
     }
 
+    /// A list's level is its depth: deeper than 9 is read as 9, reported.
+    /// A numbered list starting at anything but 1 keeps that start to
+    /// report when its first numbered item ends ([`Self::end_item_tag`]).
+    /// 이것을 실패시키는 것: 깊이 경고 삭제(`list_levels_follow_depth`).
     fn start_list_tag(&mut self, start: Option<u64>) {
-        self.list_stack.push(ListState::new(start));
+        self.open_item_head();
+        let depth = self.list_stack.len();
+        let max = ParagraphListRef::MAX_LEVEL;
+        let level = u8::try_from(depth).ok().filter(|&level| level <= max).unwrap_or_else(|| {
+            self.warnings.push(MdWarning::ListLevelClamped { requested: depth, supported: max });
+            max
+        });
+        let kind = if start.is_some() { ListItemKind::Number } else { ListItemKind::Bullet };
+        let start = start.filter(|&n| n != 1);
+        self.list_stack.push(ListState { kind, level, start, group: None });
     }
 
     fn start_item_tag(&mut self) {
         self.finalize_paragraph();
         self.in_item = true;
-        let prefix = self.next_item_prefix();
-        self.pending_items.push(PendingItem::new(prefix));
+        let list = self.list_stack.last().copied().unwrap_or(ListState {
+            kind: ListItemKind::Bullet,
+            level: 0,
+            start: None,
+            group: None,
+        });
+        self.pending_items.push(PendingItem {
+            kind: list.kind,
+            level: list.level,
+            checked: None,
+            emitted_paragraph: false,
+        });
     }
 
     fn start_table_tag(&mut self) {
-        self.materialize_pending_item_paragraph_if_needed();
-        self.finalize_paragraph();
+        self.open_item_head();
         self.tables.push(TableBuilder::new());
     }
 
@@ -1504,15 +1592,30 @@ impl<'a> DecoderState<'a> {
         self.list_stack.pop();
     }
 
+    /// An item with nothing in it is its first paragraph, empty. A kind of
+    /// list the template defines none for is reported once. The first
+    /// numbered item of a list starting at anything but 1 reports that it
+    /// starts at 1 (what start Hancom shows for a first number is not yet
+    /// known); a task item takes no number, so a list of task items alone
+    /// reports nothing.
+    /// 이것을 실패시키는 것: 경고 중복 검사 삭제(`undefined_list_kinds_are_reported_once`) ·
+    /// 시작 경고 삭제 · 체크 항목에도 경고 · 목록마다 한 번 대신 항목마다
+    /// (`numbered_list_start_is_reported`).
     fn end_item_tag(&mut self) {
-        self.finalize_paragraph();
+        self.open_item_head();
         if let Some(item) = self.pending_items.pop() {
-            if !item.emitted_paragraph {
-                let mut paragraph = ParagraphBuilder::new(self.item_style_for(&item));
-                if item.task_checked.is_none() {
-                    paragraph.push_text(item.prefix.trim_end());
+            if item.kind == ListItemKind::Number && item.checked.is_none() {
+                if let Some(requested) = self.list_stack.last_mut().and_then(|l| l.start.take()) {
+                    self.warnings.push(MdWarning::ListStartNormalized { requested, used: 1 });
                 }
-                self.paragraphs.push(paragraph.build());
+            }
+            let task = item.checked.is_some();
+            let kind = if task { ListItemKind::Bullet } else { item.kind };
+            if self.mapping.list_item_style(item.kind, item.checked, item.level).is_none()
+                && !self.missing_lists.contains(&(kind, task))
+            {
+                self.missing_lists.push((kind, task));
+                self.warnings.push(MdWarning::ListDefinitionMissing { kind, checkable: task });
             }
         }
         self.in_item = !self.pending_items.is_empty();
@@ -1645,7 +1748,8 @@ impl<'a> DecoderState<'a> {
     }
 
     fn push_rule(&mut self) {
-        self.finalize_paragraph();
+        self.open_item_head();
+        self.note_detached();
         let mut builder = ParagraphBuilder::new(self.mapping.body);
         builder.push_text("---");
         self.paragraphs.push(builder.build());
@@ -1664,30 +1768,53 @@ impl<'a> DecoderState<'a> {
             detail: "table end tag without table start".to_string(),
         })?;
 
-        let table = table_builder.into_table(self.mapping.body, self.mapping.page_settings)?;
-        self.push_table_paragraph(table);
+        self.push_table_paragraph(table_builder)
+    }
+
+    /// A table read at the top: a paragraph of its own, a continuation of
+    /// the list item that holds it. The default placement measures from
+    /// the column and ignores the paragraph's margin, so a table in an item
+    /// is placed from its paragraph, at the item's text, and is as much
+    /// narrower as to end at the right margin like a table in the body.
+    /// 이것을 실패시키는 것: 항목 안 표에 body 스타일(`item_blocks_stay_in_their_item`) ·
+    /// 기본 배치 · 쪽 폭 그대로 · 본문 표에도 문단 기준(`item_tables_start_at_the_item_text`).
+    fn push_table_paragraph(&mut self, builder: TableBuilder) -> MdResult<()> {
+        let page_width = self.mapping.page_settings.printable_width();
+        let body = self.mapping.body;
+        let (style, table) = match self.pending_items.last() {
+            Some(item) if self.in_item => {
+                let width = page_width - self.mapping.list_text_margin(item.level);
+                let placement = ObjectPlacement::new(
+                    ObjectTextWrap::TopAndBottom,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                )
+                .with_flow_with_text(true);
+                (
+                    self.mapping.list_continuation(item.level),
+                    builder.into_table(body, width)?.with_placement(placement),
+                )
+            }
+            _ => (body, builder.into_table(body, page_width)?),
+        };
+        let paragraph =
+            Paragraph::with_runs(vec![Run::table(table, style.char_shape_id)], style.para_shape_id)
+                .with_style(style.style_ref);
+        self.paragraphs.push(paragraph);
         Ok(())
     }
 
-    /// A table read at the top: a paragraph of its own.
-    fn push_table_paragraph(&mut self, table: Table) {
-        let paragraph = Paragraph::with_runs(
-            vec![Run::table(table, self.mapping.body.char_shape_id)],
-            self.mapping.body.para_shape_id,
-        )
-        .with_style(self.mapping.body.style_ref);
-        self.paragraphs.push(paragraph);
-    }
-
     fn style_for_context(&self) -> MdStyleRef {
-        if self.in_code_block {
-            return self.mapping.code;
-        }
         if self.in_item {
             if let Some(item) = self.pending_items.last() {
-                return self.item_style_for(item);
+                if self.in_code_block {
+                    return self.mapping.code_continuation(item.level);
+                }
+                return self.item_style(item, item.emitted_paragraph);
             }
-            return self.mapping.list_item;
+        }
+        if self.in_code_block {
+            return self.mapping.code;
         }
         if self.blockquote_depth > 0 {
             return self.mapping.blockquote;
@@ -1788,7 +1915,6 @@ impl<'a> DecoderState<'a> {
 
     fn with_materialized_paragraph(&mut self, apply: impl FnOnce(&mut ParagraphBuilder)) {
         self.ensure_paragraph();
-        self.materialize_current_item_prefix_if_needed();
         if let Some(current) = self.current.as_mut() {
             apply(current);
         }
@@ -1824,87 +1950,168 @@ impl<'a> DecoderState<'a> {
         }
     }
 
-    fn next_item_prefix(&mut self) -> String {
-        if let Some(last) = self.list_stack.last_mut() {
-            if last.ordered {
-                let prefix = format!("{}. ", last.next_index);
-                last.next_index += 1;
-                return prefix;
-            }
-            return "- ".to_string();
-        }
-        "- ".to_string()
-    }
-
-    fn current_item_level(&self) -> u8 {
-        u8::try_from(self.list_stack.len().saturating_sub(1)).unwrap_or(u8::MAX)
-    }
-
-    fn item_style_for(&self, item: &PendingItem) -> MdStyleRef {
-        self.item_style_for_state(item.task_checked, item.emitted_paragraph)
-    }
-
-    fn item_style_for_state(&self, task_checked: Option<bool>, continuation: bool) -> MdStyleRef {
+    /// The style of an item's first paragraph (its kind's at its level, or
+    /// the template's plain fallback when it defines no such list), or of
+    /// a later one (`continuation`).
+    fn item_style(&self, item: &PendingItem, continuation: bool) -> MdStyleRef {
         if continuation {
-            return self.mapping.list_continuation(self.current_item_level());
+            return self.mapping.list_continuation(item.level);
         }
-
-        task_checked
-            .map(|checked| self.mapping.task_list(checked, self.current_item_level()))
-            .unwrap_or(self.mapping.list_item)
+        self.mapping
+            .list_item_style(item.kind, item.checked, item.level)
+            .unwrap_or(self.mapping.lists.plain_fallback)
     }
 
     fn start_next_item_paragraph(&mut self) -> MdStyleRef {
-        let continuation =
-            self.pending_items.last().map(|item| item.emitted_paragraph).unwrap_or(false);
-        let task_checked = self.pending_items.last().and_then(|item| item.task_checked);
-        if let Some(item) = self.pending_items.last_mut() {
-            item.emitted_paragraph = true;
-        }
-        self.item_style_for_state(task_checked, continuation)
-    }
-
-    fn materialize_current_item_prefix_if_needed(&mut self) {
-        if !self.in_item {
-            return;
-        }
-
-        let prefix = self.pending_items.last_mut().and_then(PendingItem::take_prefix);
-        if let (Some(prefix), Some(current)) = (prefix, self.current.as_mut()) {
-            if current.runs.is_empty() {
-                current.push_text(&prefix);
+        let Some(item) = self.pending_items.last_mut() else {
+            return self.mapping.list_item;
+        };
+        let continuation = std::mem::replace(&mut item.emitted_paragraph, true);
+        let item = *item;
+        if !continuation && item.kind == ListItemKind::Number && item.checked.is_none() {
+            if let Some(group) = self.numbering_group(item.level) {
+                return group[usize::from(item.level)];
             }
         }
+        self.item_style(&item, continuation)
     }
 
-    fn materialize_pending_item_paragraph_if_needed(&mut self) {
-        if !self.in_item || self.current.is_some() {
+    /// The numbering group of the list being read: given at its first
+    /// numbered item's first paragraph, so a list of task items takes none.
+    /// The document's first numbered list takes the template's numbering
+    /// when it starts as Markdown does (a numbering start of 0, every level
+    /// starting at 1); every other list takes a copy of it
+    /// ([`restart_markdown_numbering`]), so its numbers start again. A level
+    /// text that refers to a shallower level's number counts it in this
+    /// group, reported once per group. `None` when the template has no
+    /// numbered items.
+    /// 이것을 실패시키는 것: 그룹을 목록마다 대신 문서에 하나 · 첫 목록도 복사 · 조상 참조
+    /// 보고 삭제(`numbered_lists_are_groups_of_their_own`, `ancestor_number_text_is_reported`).
+    fn numbering_group(&mut self, level: u8) -> Option<[MdStyleRef; LIST_LEVELS]> {
+        let frame = self.list_stack.len().checked_sub(1)?;
+        if let Some(group) = self.list_stack[frame].group {
+            return Some(group);
+        }
+        let base = self.mapping.lists.number_entries?;
+        let numbering_id = |registry: &StyleRegistry, entry: &StyleEntry| match registry
+            .para_shape(entry.para_shape_id)
+            .and_then(|shape| shape.list)
+        {
+            Some(ParagraphListRef::Number { numbering_id, .. }) => Some(numbering_id),
+            _ => None,
+        };
+        let template = numbering_id(self.registry, &base[0])?;
+        let starts_as_markdown = self.registry.numbering(template).is_some_and(|numbering| {
+            numbering.start == 0 && numbering.levels.iter().all(|head| head.start == 1)
+        });
+        let taken = std::mem::replace(&mut self.numbering_taken, true);
+        // Past the copies a document may make, a list takes the template's
+        // numbering, its numbers continuing from the list before: reported
+        // once (the template numbering's id).
+        // 이것을 실패시키는 것: 한도 삭제 · 한도 넘어 보고 삭제(`numbering_copies_are_bounded`).
+        let over = (taken || !starts_as_markdown) && self.numbering_copies >= MAX_NUMBERING_GROUPS;
+        if over {
+            self.numbering_lost(template);
+        }
+        let entries = if (taken || !starts_as_markdown) && !over {
+            self.numbering_copies += 1;
+            match restart_markdown_numbering(self.registry, &base, 1) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    self.failure = Some(error.into());
+                    return None;
+                }
+            }
+        } else {
+            base
+        };
+        let group = entries.map(|entry| MdStyleRef::from_entry(&entry));
+        self.list_stack[frame].group = Some(group);
+        let id = numbering_id(self.registry, &entries[0])?;
+        let refers_up = self
+            .registry
+            .numbering(id)
+            .and_then(|numbering| numbering.levels.get(usize::from(level)))
+            .is_some_and(|head| refers_to_shallower(&head.text, level));
+        if refers_up {
+            self.numbering_lost(id);
+        }
+        Some(group)
+    }
+
+    /// Ends the paragraph being written; an item whose first block is not
+    /// a paragraph of its text (a nested list, a table, code, a heading, a
+    /// rule, nothing) gets its first paragraph now, empty, so the item's
+    /// marker comes before what it holds.
+    /// 이것을 실패시키는 것: 빈 머리 쓰지 않기(`empty_items_are_their_first_paragraph`).
+    fn open_item_head(&mut self) {
+        self.finalize_paragraph();
+        if !self.in_item || self.pending_items.last().is_none_or(|item| item.emitted_paragraph) {
             return;
         }
-
-        if self.pending_items.last().is_some_and(|item| item.emitted_paragraph) {
-            return;
-        }
-
         let style = self.start_next_item_paragraph();
-        let prefix = self.pending_items.last_mut().and_then(PendingItem::take_prefix);
-
-        let mut paragraph = ParagraphBuilder::new(style);
-        if let Some(prefix) = prefix {
-            paragraph.push_text(&prefix);
-        }
-        self.paragraphs.push(paragraph.build());
+        self.paragraphs.push(ParagraphBuilder::new(style).build());
     }
 
+    /// Reports a numbering not shown as it numbers, once per numbering
+    /// whatever the cause.
+    /// 이것을 실패시키는 것: 원인마다 따로 보고(`numbering_copies_are_bounded`).
+    fn numbering_lost(&mut self, numbering_id: hwpforge_foundation::NumberingIndex) {
+        if self.numbering_reported.insert(numbering_id) {
+            self.warnings.push(MdWarning::NumberingPresentationLost { numbering_id });
+        }
+    }
+
+    /// A heading or a rule in a list item is written as a paragraph of its
+    /// own, outside the item (no list item holds a heading or a rule here):
+    /// the item's list is reported lost for it
+    /// ([`MdWarning::ListSemanticsLost`]). A block quote's paragraphs stay
+    /// the item's continuations.
+    /// 이것을 실패시키는 것: 이 기록 삭제(`item_heading_and_rule_are_reported_detached`).
+    fn note_detached(&mut self) {
+        let Some(item) = self.pending_items.last().copied().filter(|_| self.in_item) else {
+            return;
+        };
+        // A numbered item's list is its group's.
+        let group = self
+            .list_stack
+            .last()
+            .and_then(|list| list.group)
+            .filter(|_| item.kind == ListItemKind::Number && item.checked.is_none());
+        let list = group
+            .map(|group| group[usize::from(item.level)])
+            .or_else(|| self.mapping.list_item_style(item.kind, item.checked, item.level))
+            .and_then(|style| self.registry.para_shape(style.para_shape_id))
+            .and_then(|shape| shape.list);
+        if let Some(list) = list {
+            self.detached.push((self.paragraphs.len(), list));
+        }
+    }
+
+    /// A task marker makes its item a task item: its first paragraph, being
+    /// written or still to come, takes the task style of its state.
+    /// 이것을 실패시키는 것: 다음 항목에 체크 남기기(`list_items_take_kind_level_and_state`).
     fn mark_task_list_item(&mut self, checked: bool) {
-        if let Some(item) = self.pending_items.last_mut() {
-            item.mark_task(checked);
-        }
-        let task_style = self.mapping.task_list(checked, self.current_item_level());
+        let Some(item) = self.pending_items.last_mut() else { return };
+        item.checked = Some(checked);
+        let item = *item;
+        let style = self.item_style(&item, false);
         if let Some(current) = self.current.as_mut() {
-            current.set_style(task_style);
+            current.set_style(style);
         }
     }
+}
+
+/// Whether a numbering level text (`^1.^2`) refers to the number of a
+/// level shallower than `level` (0-based; its own is `^{level + 1}`). A
+/// level is one character, `^1` to `^9` and `^:` for the tenth, which no
+/// level has a shallower one of: `^10` is `^1` and the letter `0`.
+/// 이것을 실패시키는 것: 비교를 `<=` 대신 `<` · 숫자를 이어 읽기
+/// (`ancestor_number_text_is_reported`, `level_text_refers_by_one_character`).
+fn refers_to_shallower(text: &str, level: u8) -> bool {
+    text.split('^')
+        .skip(1)
+        .any(|after| matches!(after.bytes().next(), Some(n @ b'1'..=b'9') if n - b'0' <= level))
 }
 
 fn level_to_u32(level: HeadingLevel) -> u32 {
@@ -1955,6 +2162,22 @@ fn read_checked(path: &Path) -> MdResult<String> {
     Ok(std::fs::read_to_string(path)?)
 }
 
+/// The (section, paragraph) a paragraph at `flat` among `len` lands at
+/// once [`split_sections`] splits them at `section_breaks`.
+fn section_at(flat: usize, section_breaks: &[usize], len: usize) -> (usize, usize) {
+    let (mut start, mut section) = (0, 0);
+    for &break_idx in section_breaks {
+        if break_idx > start && break_idx <= len {
+            if flat < break_idx {
+                break;
+            }
+            section += 1;
+            start = break_idx;
+        }
+    }
+    (section, flat - start)
+}
+
 fn split_sections(paragraphs: Vec<Paragraph>, section_breaks: &[usize]) -> Vec<Vec<Paragraph>> {
     if paragraphs.is_empty() {
         return Vec::new();
@@ -1987,6 +2210,7 @@ mod tests {
     use crate::MdEncoder;
     use hwpforge_blueprint::builtins::builtin_default;
     use hwpforge_core::PageSettings;
+    use hwpforge_foundation::{BulletIndex, NumberingIndex};
 
     fn default_template() -> Template {
         builtin_default().unwrap()
@@ -2162,7 +2386,7 @@ mod tests {
         let texts: Vec<String> =
             doc.sections()[0].paragraphs.iter().map(Paragraph::text_content).collect();
 
-        assert_eq!(texts, vec!["1. alpha", "2. beta"]);
+        assert_eq!(texts, vec!["alpha", "beta"]);
     }
 
     #[test]
@@ -2257,7 +2481,11 @@ mod tests {
             Some(ParagraphListRef::CheckBullet { level: 0, checked: false, .. })
         ));
         assert_eq!(continuation_shape.list, None);
-        assert_eq!(continuation_shape.indent_left, first_shape.indent_left);
+        // The item's margin plus the marker's width: its text, not its marker.
+        assert_eq!(
+            continuation_shape.indent_left.as_i32(),
+            first_shape.indent_left.as_i32() + 1500
+        );
         assert_eq!(continuation_shape.indent_first_line, HwpUnit::ZERO);
     }
 
@@ -2291,7 +2519,7 @@ mod tests {
         let result = MdDecoder::decode("1. parent\n   - [x] child", &template).unwrap();
         let paragraphs = &result.document.sections()[0].paragraphs;
 
-        assert_eq!(paragraphs[0].text_content(), "1. parent");
+        assert_eq!(paragraphs[0].text_content(), "parent");
         assert_eq!(paragraphs[1].text_content(), "child");
 
         let child_shape = result
@@ -2336,6 +2564,514 @@ mod tests {
     /// The text of each top-level paragraph of the first section.
     fn texts(md: &MdDocument) -> Vec<String> {
         md.document.sections()[0].paragraphs.iter().map(|p| p.text_content()).collect()
+    }
+
+    /// Each top-level paragraph of the first section: its text, its list and
+    /// its style's name.
+    fn items(md: &MdDocument) -> Vec<(String, Option<ParagraphListRef>, String)> {
+        md.document.sections()[0]
+            .paragraphs
+            .iter()
+            .map(|p| {
+                let name = md
+                    .style_registry
+                    .style_entries()
+                    .iter()
+                    .find(|(_, e)| Some(e.style_ref()) == p.style_ref)
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_default();
+                let list = md.style_registry.para_shape(p.para_shape_id).unwrap().list;
+                (p.text_content(), list, name)
+            })
+            .collect()
+    }
+
+    // The default template's lists, by hand: bullet level n uses the n-th
+    // bullet, numbered items the second numbering, task items bullet 11.
+    fn bullet(level: u8) -> Option<ParagraphListRef> {
+        Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(level.into()), level })
+    }
+    fn number(level: u8) -> Option<ParagraphListRef> {
+        Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(1), level })
+    }
+    fn group(numbering: usize, level: u8) -> Option<ParagraphListRef> {
+        Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(numbering), level })
+    }
+    fn task(level: u8, checked: bool) -> Option<ParagraphListRef> {
+        Some(ParagraphListRef::CheckBullet { bullet_id: BulletIndex::new(10), level, checked })
+    }
+    fn row(
+        text: &str,
+        list: Option<ParagraphListRef>,
+        name: &str,
+    ) -> (String, Option<ParagraphListRef>, String) {
+        (text.into(), list, name.into())
+    }
+    const CONT0: &str = "__hwpforge_md_list_continuation_level_0";
+    const CODE0: &str = "__hwpforge_md_code_continuation_level_0";
+
+    /// Each item is one paragraph whose style carries its kind, level and
+    /// task state, its text without a marker; tight and loose alike; a task
+    /// state stays with its item.
+    /// 이것을 실패시키는 것: 수준 0 고정 · 체크를 다음 항목에 남기기 · 표지 글 넣기.
+    #[test]
+    fn list_items_take_kind_level_and_state() {
+        let md = MdDecoder::decode_with_default(
+            "- a\n  1. b\n     - [x] c\n- [ ] d\n- e\n\n1. f\n\n2. g\n",
+        )
+        .unwrap();
+        assert_eq!(
+            items(&md),
+            [
+                row("a", bullet(0), "list_item"),
+                row("b", number(1), "numbered_item"),
+                row("c", task(2, true), "check_item"),
+                row("d", task(0, false), "check_item"),
+                row("e", bullet(0), "list_item"),
+                // The second numbered list is a numbering group of its own.
+                row("f", group(2, 0), "numbered_item"),
+                row("g", group(2, 0), "numbered_item"),
+            ]
+        );
+        assert!(md.warnings.is_empty(), "{:?}", md.warnings);
+    }
+
+    /// A list's level is its depth, read as 9 past 9 with one warning per
+    /// list; a numbered list starting past 1 starts at 1 with a warning
+    /// holding the start it gave.
+    /// 이것을 실패시키는 것: 깊이 경고 삭제 · 시작 경고 삭제 · 9 넘는 수준을 그대로.
+    #[test]
+    fn list_levels_follow_depth() {
+        let mut markdown = String::new();
+        for depth in 0..11 {
+            markdown.push_str(&format!("{}- {depth}\n", "  ".repeat(depth)));
+        }
+        let md = MdDecoder::decode_with_default(&markdown).unwrap();
+        let levels: Vec<_> = items(&md).into_iter().map(|(_, list, _)| list).collect();
+        let expected: Vec<_> = (0..11u8).map(|d| bullet(d.min(9))).collect();
+        assert_eq!(levels, expected);
+        assert_eq!(md.warnings, [MdWarning::ListLevelClamped { requested: 10, supported: 9 }]);
+    }
+
+    /// A numbered list starting past 1 is reported once, when its first
+    /// numbered item ends; a list of task items alone takes no number and
+    /// reports nothing; a task item before a numbered one in the same list
+    /// does not use up the report.
+    /// 이것을 실패시키는 것: 시작 경고 삭제 · 1 시작에도 경고 · 체크 항목에도 경고 · 항목마다
+    /// 경고.
+    #[test]
+    fn numbered_list_start_is_reported() {
+        let normalized = |requested| MdWarning::ListStartNormalized { requested, used: 1 };
+        for (markdown, expected) in [
+            ("3. x\n4. y\n\ntext\n\n0. z\n\ntext\n\n1. w", vec![normalized(3), normalized(0)]),
+            ("3. [x] done", vec![]),
+            ("3. [x] done\n4. [ ] open", vec![]),
+            ("3. [x] a\n4. b\n5. c", vec![normalized(3)]),
+        ] {
+            let md = MdDecoder::decode_with_default(markdown).unwrap();
+            assert_eq!(md.warnings, expected, "{markdown:?}");
+        }
+        let md = MdDecoder::decode_with_default("3. x").unwrap();
+        assert_eq!(items(&md), [row("x", number(0), "numbered_item")]);
+    }
+
+    /// An item whose first block is not its text (a nested list, a table,
+    /// code, nothing) has its first paragraph, empty, before that block:
+    /// the parent before its child. A table and code an item holds are its
+    /// continuations, at its level, with no list.
+    /// 이것을 실패시키는 것: 빈 머리 쓰지 않기 · 자식 뒤에 머리 쓰기 · 표에 body 스타일 ·
+    /// 코드에 code 스타일.
+    #[test]
+    fn empty_items_are_their_first_paragraph() {
+        let cases: [(&str, Vec<_>); 6] = [
+            (
+                "-\n  - child",
+                vec![row("", bullet(0), "list_item"), row("child", bullet(1), "list_item")],
+            ),
+            (
+                "1.\n   - child",
+                vec![row("", number(0), "numbered_item"), row("child", bullet(1), "list_item")],
+            ),
+            (
+                "-\n- [ ] \n1.",
+                vec![
+                    row("", bullet(0), "list_item"),
+                    row("", task(0, false), "check_item"),
+                    row("", number(0), "numbered_item"),
+                ],
+            ),
+            (
+                "-\n  | a |\n  | - |\n  | b |",
+                vec![row("", bullet(0), "list_item"), row("", None, CONT0)],
+            ),
+            (
+                "-\n  ```\n  x\n  ```",
+                vec![row("", bullet(0), "list_item"), row("x\n", None, CODE0)],
+            ),
+            (
+                "- t\n\n  ```\n  x\n  ```\n- u",
+                vec![
+                    row("t", bullet(0), "list_item"),
+                    row("x\n", None, CODE0),
+                    row("u", bullet(0), "list_item"),
+                ],
+            ),
+        ];
+        for (markdown, expected) in cases {
+            let md = MdDecoder::decode_with_default(markdown).unwrap();
+            assert_eq!(items(&md), expected, "{markdown:?}");
+        }
+    }
+
+    /// What follows a nested list in an item is the item's continuation, at
+    /// its level: text, a table, code with its bytes as the parser read
+    /// them (spaces, tabs, blank lines, its last line ending).
+    /// 이것을 실패시키는 것: 자식 수준의 continuation · 코드 글 다듬기.
+    #[test]
+    fn item_blocks_stay_in_their_item() {
+        let head = [row("parent", bullet(0), "list_item"), row("child", bullet(1), "list_item")];
+        for (tail, last) in [
+            ("tail", row("tail", None, CONT0)),
+            ("| a |\n  | - |", row("", None, CONT0)),
+            ("```\n  if ready:\n      run()\n  ```", row("if ready:\n    run()\n", None, CODE0)),
+            (
+                "```\n  if ready:\n  \trun()  \n\n  ```",
+                row("if ready:\n\trun()  \n\n", None, CODE0),
+            ),
+        ] {
+            let markdown = format!("- parent\n  - child\n\n  {tail}");
+            let md = MdDecoder::decode_with_default(&markdown).unwrap();
+            let mut expected = head.to_vec();
+            expected.push(last);
+            assert_eq!(items(&md), expected, "{markdown:?}");
+        }
+    }
+
+    /// A table in an item starts at the item's text, in GFM or HTML, and
+    /// ends at the right margin; a table in the body stays at the column
+    /// and takes the whole width.
+    #[test]
+    fn item_tables_start_at_the_item_text() {
+        let html = "<table>\n<tbody>\n<tr>\n  <td>a</td>\n  <td>b</td>\n</tr>\n</tbody>\n</table>";
+        let gfm = "| a | b |\n| - | - |";
+        let indent = |block: &str, by: &str| block.replace('\n', &format!("\n{by}"));
+        let shape_of = |md: &MdDocument, p: &Paragraph| {
+            md.style_registry.para_shape(p.para_shape_id).expect("para shape").clone()
+        };
+        for block in [gfm, html] {
+            for (markdown, level) in [
+                (format!("- item\n\n  {}", indent(block, "  ")), 0),
+                (format!("- item\n  - child\n\n    {}", indent(block, "    ")), 1),
+            ] {
+                let md = MdDecoder::decode_with_default(&markdown).unwrap();
+                let page = md.document.sections()[0].page_settings.printable_width();
+                let carrier = md.document.sections()[0].paragraphs.last().unwrap();
+                let RunContent::Table(table) = &carrier.runs[0].content else {
+                    panic!("{markdown:?}: not a table");
+                };
+                let placement = table.placement.as_ref().expect("placement");
+                assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Para, "{markdown:?}");
+                assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Para, "{markdown:?}");
+                assert!(!placement.treat_as_char, "{markdown:?}");
+                assert!(placement.flow_with_text, "{markdown:?}");
+                let margin = shape_of(&md, carrier).indent_left;
+                assert_eq!(margin.as_i32(), 3500 + 2000 * level, "{markdown:?}");
+                let total: i32 = table.rows[0].cells.iter().map(|c| c.width.as_i32()).sum();
+                assert_eq!(total, (page - margin).as_i32() / 2 * 2, "{markdown:?}");
+            }
+            let md = MdDecoder::decode_with_default(block).unwrap();
+            let page = md.document.sections()[0].page_settings.printable_width();
+            let RunContent::Table(table) = &md.document.sections()[0].paragraphs[0].runs[0].content
+            else {
+                panic!("not a table");
+            };
+            assert_eq!(table.placement, None);
+            let total: i32 = table.rows[0].cells.iter().map(|c| c.width.as_i32()).sum();
+            assert_eq!(total, page.as_i32() / 2 * 2);
+        }
+    }
+
+    /// Each Markdown numbered list is a numbering group of its own: the
+    /// document's first takes the template's numbering, every other one a
+    /// copy, given at its first numbered item (a list of task items takes
+    /// none) and shared by its items only. A nested list is a group apart
+    /// from its parent's, two lists side by side under one parent are two
+    /// groups, the parent's next item keeps the parent's. The outline's
+    /// first numbering does not change.
+    /// 이것을 실패시키는 것: 그룹을 문서에 하나 · 항목마다 복사 · 체크 목록에도 그룹 · 머리
+    /// 문단을 `Start(Paragraph)` 에서 만들기 · 첫 목록도 복사.
+    #[test]
+    fn numbered_lists_are_groups_of_their_own() {
+        let numbering = |md: &MdDocument| -> Vec<(String, Option<usize>)> {
+            items(md)
+                .into_iter()
+                .map(|(text, list, _)| {
+                    let group = match list {
+                        Some(ParagraphListRef::Number { numbering_id, .. }) => {
+                            Some(numbering_id.get())
+                        }
+                        _ => None,
+                    };
+                    (text, group)
+                })
+                .collect()
+        };
+        let row = |text: &str, group: Option<usize>| (text.to_string(), group);
+        for (markdown, expected, count) in [
+            (
+                "1. a
+2. b
+
+text
+
+1. c",
+                vec![row("a", Some(1)), row("b", Some(1)), row("text", None), row("c", Some(2))],
+                3,
+            ),
+            (
+                "1. parent
+   1. a
+   2. a2
+
+   1) b
+   2) b2
+2. next
+   1. c",
+                vec![
+                    row("parent", Some(1)),
+                    row("a", Some(2)),
+                    row("a2", Some(2)),
+                    row("b", Some(3)),
+                    row("b2", Some(3)),
+                    row("next", Some(1)),
+                    row("c", Some(4)),
+                ],
+                5,
+            ),
+            (
+                "1. [x] t
+
+2. [ ] u
+
+text
+
+1. [ ] v
+
+2. d",
+                vec![
+                    row("t", None),
+                    row("u", None),
+                    row("text", None),
+                    row("v", None),
+                    row("d", Some(1)),
+                ],
+                2,
+            ),
+        ] {
+            let md = MdDecoder::decode_with_default(markdown).unwrap();
+            assert_eq!(numbering(&md), expected, "{markdown:?}");
+            assert_eq!(md.style_registry.numbering_count(), count, "{markdown:?}");
+            assert_eq!(
+                md.style_registry.numberings[0],
+                hwpforge_core::NumberingDef::default_outline()
+            );
+        }
+        // A template numbering that does not start as Markdown does is
+        // copied for the first list too.
+        let mut template = default_template();
+        template.numberings[1].start = 1;
+        let md = MdDecoder::decode("1. a", &template).unwrap();
+        assert_eq!(numbering(&md), [row("a", Some(2))]);
+    }
+
+    /// A level text that refers to a shallower level's number (`^1.^2`)
+    /// counts it in its own group, not in the list around it: reported once
+    /// per group, the definition written as it is. A level text of its own
+    /// level only (`(^2)`) is not.
+    /// 이것을 실패시키는 것: 보고 삭제 · 자기 수준도 조상으로 · 조상 수준을 자기로.
+    #[test]
+    fn ancestor_number_text_is_reported() {
+        for (text, reported) in [("^1.^2", true), ("(^2)", false)] {
+            let mut template = default_template();
+            template.numberings[1].levels[1].text = text.into();
+            let md = MdDecoder::decode(
+                "1. p
+   1. c
+   2. c2
+2. q",
+                &template,
+            )
+            .unwrap();
+            let expected: Vec<_> = if reported {
+                vec![MdWarning::NumberingPresentationLost { numbering_id: NumberingIndex::new(2) }]
+            } else {
+                vec![]
+            };
+            assert_eq!(md.warnings, expected, "{text}");
+            assert_eq!(md.style_registry.numberings[2].levels[1].text, text);
+        }
+    }
+
+    /// A level is one character in a level text: `^10` refers to the first
+    /// level, and `^:` to the tenth, which is no level's ancestor.
+    #[test]
+    fn level_text_refers_by_one_character() {
+        for (text, level, refers) in [
+            ("^10.", 1, true),
+            ("^2.", 1, false),
+            ("^:.", 9, false),
+            ("^:.^1", 9, true),
+            ("^9.", 9, true),
+        ] {
+            assert_eq!(refers_to_shallower(text, level), refers, "{text} at {level}");
+        }
+    }
+
+    /// An item whose first paragraph or HTML block held nothing (an empty
+    /// inline tag, tags around raw whitespace, a chart comment) has an empty
+    /// first paragraph: what follows is its continuation, not its head.
+    /// 이것을 실패시키는 것: 문단 끝·HTML 블록 끝에서 빈 머리 확정 삭제.
+    #[test]
+    fn contentless_first_paragraph_is_an_empty_head() {
+        // A space between tags is the head's text, as in any paragraph.
+        for (markdown, text, head) in [
+            ("1. <strong></strong>\n\n   tail", "", number(0)),
+            ("1. <strong> </strong>\n\n   tail", " ", number(0)),
+            ("- <!-- chart -->\n\n  tail", "", bullet(0)),
+        ] {
+            let md = MdDecoder::decode_with_default(markdown).unwrap();
+            let expected = [
+                row(text, head, if head == bullet(0) { "list_item" } else { "numbered_item" }),
+                row("tail", None, CONT0),
+            ];
+            assert_eq!(items(&md), expected, "{markdown:?}");
+        }
+    }
+
+    /// A document makes at most [`MAX_NUMBERING_GROUPS`] numbering copies:
+    /// past them each numbered list takes the template's numbering, reported
+    /// once; the copies before are as usual.
+    /// 이것을 실패시키는 것: 한도 삭제 · 한도 넘어 보고 삭제 · 한 번 대신 매번.
+    #[test]
+    fn numbering_copies_are_bounded() {
+        let lists = MAX_NUMBERING_GROUPS + 3;
+        let markdown: Vec<&str> =
+            (0..lists).map(|i| if i % 2 == 0 { "1. x" } else { "1) x" }).collect();
+        let md = MdDecoder::decode_with_default(&markdown.join("\n")).unwrap();
+        // Outline, the template's numbering, and the copies.
+        assert_eq!(md.style_registry.numbering_count(), 2 + MAX_NUMBERING_GROUPS);
+        assert_eq!(
+            md.warnings,
+            [MdWarning::NumberingPresentationLost { numbering_id: NumberingIndex::new(1) }]
+        );
+        let groups: Vec<usize> = items(&md)
+            .into_iter()
+            .map(|(_, list, _)| match list {
+                Some(ParagraphListRef::Number { numbering_id, .. }) => numbering_id.get(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(groups[..3], [1, 2, 3]);
+        assert_eq!(groups[MAX_NUMBERING_GROUPS], MAX_NUMBERING_GROUPS + 1);
+        assert_eq!(groups[MAX_NUMBERING_GROUPS + 1..], [1, 1]);
+        // The template's numbering referring up at level 1: every group of
+        // child lists reports it, the template's once, past the copies too.
+        let mut template = default_template();
+        template.numberings[1].levels[1].text = "^1.^2".into();
+        let markdown = "- b\n  1. y\n".repeat(MAX_NUMBERING_GROUPS + 3);
+        let md = MdDecoder::decode(&markdown, &template).unwrap();
+        let lost: Vec<usize> = md
+            .warnings
+            .iter()
+            .map(|w| match w {
+                MdWarning::NumberingPresentationLost { numbering_id } => numbering_id.get(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let expected: Vec<usize> = (1..=MAX_NUMBERING_GROUPS + 1).collect();
+        assert_eq!(lost, expected);
+    }
+
+    /// A heading or a rule in a list item is a paragraph outside the item:
+    /// one loss each, with the item's list and the paragraph's path (in its
+    /// section); a block quote stays in the item, no loss.
+    /// 이것을 실패시키는 것: 기록 삭제 · 구역 안 위치 대신 전체 위치.
+    #[test]
+    fn item_heading_and_rule_are_reported_detached() {
+        let md = MdDecoder::decode_with_default(
+            "- # heading
+
+<!-- hwpforge:section -->
+
+1. a
+
+   ---
+- > quote",
+        )
+        .unwrap();
+        let lost =
+            |section, path: &str, list: Option<ParagraphListRef>| MdWarning::ListSemanticsLost {
+                section,
+                path: path.into(),
+                list: list.unwrap(),
+                reason: "item_block_detached",
+            };
+        assert_eq!(
+            md.warnings,
+            [lost(0, "paragraphs[1]", bullet(0)), lost(1, "paragraphs[1]", number(0))]
+        );
+        let second: Vec<_> =
+            md.document.sections()[1].paragraphs.iter().map(|p| p.text_content()).collect();
+        assert_eq!(second, ["a", "---", "quote"]);
+    }
+
+    /// A template with no list definitions: each kind used is reported
+    /// once, its items are plain paragraphs of their text (no marker as
+    /// text); a kind the template defines is a list as usual; a document
+    /// with no list reports nothing.
+    /// 이것을 실패시키는 것: 경고 중복 검사 삭제 · 표지 글 넣기 · 없는 종류를 다른 정의로.
+    #[test]
+    fn undefined_list_kinds_are_reported_once() {
+        let style =
+            "    char_shape: { font: Test, size: 10pt }\n    para_shape:\n      alignment: Left\n";
+        let template = |list_item: &str, defs: &str| {
+            Template::from_yaml(&format!(
+                "meta:\n  name: plain\n  version: 1.0.0\nstyles:\n  body:\n{style}  list_item:\n{style}{list_item}{defs}"
+            ))
+            .unwrap()
+        };
+        let plain = template("", "");
+        let md = MdDecoder::decode("- a\n\n1. b\n\n- [x] c\n\n- d\n\n- \n", &plain).unwrap();
+        assert_eq!(
+            md.warnings,
+            [
+                MdWarning::ListDefinitionMissing { kind: ListItemKind::Bullet, checkable: false },
+                MdWarning::ListDefinitionMissing { kind: ListItemKind::Number, checkable: false },
+                MdWarning::ListDefinitionMissing { kind: ListItemKind::Bullet, checkable: true },
+            ]
+        );
+        let fallback = "__hwpforge_md_list_plain";
+        assert_eq!(
+            items(&md),
+            [
+                row("a", None, fallback),
+                row("b", None, fallback),
+                row("c", None, fallback),
+                row("d", None, fallback),
+                row("", None, fallback),
+            ]
+        );
+        assert!(MdDecoder::decode("text\n\n# h", &plain).unwrap().warnings.is_empty());
+        let bullets = template(
+            "      list: { kind: bullet, bullet_id: 1, level: 0 }\n",
+            "bullets:\n  - { id: 1, bullet_char: x, use_image: false, para_head: { start: 0, level: 1, num_format: Digit, text: '', checkable: false } }\n",
+        );
+        let md = MdDecoder::decode("- a\n\n1. b", &bullets).unwrap();
+        assert_eq!(
+            md.warnings,
+            [MdWarning::ListDefinitionMissing { kind: ListItemKind::Number, checkable: false }]
+        );
+        assert_eq!(items(&md)[0], row("a", bullet(0), "list_item"));
     }
 
     /// The character shape of each run of the first paragraph.
@@ -2640,6 +3376,66 @@ mod tests {
         assert_eq!(cell.width, HwpUnit::from_mm(40.0).unwrap());
     }
 
+    /// With no room for a table, the fallback width is per column: a merged
+    /// cell spans its columns' width, in an item and in the body.
+    #[test]
+    fn merged_cells_span_the_fallback_columns() {
+        let mut template = default_template();
+        template.page.as_mut().expect("page").width = HwpUnit::from_mm(40.0).ok();
+        let html = "<table>\n<tbody>\n<tr>\n  <td colspan=\"2\">a</td>\n</tr>\n<tr>\n  <td>b</td>\n  <td>c</td>\n</tr>\n</tbody>\n</table>";
+        for markdown in [html.to_string(), format!("- item\n\n  {}", html.replace('\n', "\n  "))] {
+            let md = MdDecoder::decode(&markdown, &template).unwrap();
+            let carrier = md.document.sections()[0].paragraphs.last().unwrap();
+            let RunContent::Table(table) = &carrier.runs[0].content else {
+                panic!("{markdown:?}: not a table");
+            };
+            let column = HwpUnit::from_mm(40.0).unwrap().as_i32();
+            let widths: Vec<Vec<i32>> = table
+                .rows
+                .iter()
+                .map(|row| row.cells.iter().map(|c| c.width.as_i32()).collect())
+                .collect();
+            assert_eq!(widths, [vec![column * 2], vec![column, column]], "{markdown:?}");
+        }
+    }
+
+    /// However many columns share no room, every row of the fallback widths
+    /// adds up to one table width that is a valid width.
+    #[test]
+    fn many_narrow_columns_keep_a_table_width() {
+        let cell = |span: u32, n: usize| format!("  <td colspan=\"{span}\">x</td>\n").repeat(n);
+        let grid = |rows: &[String]| {
+            let rows: String = rows.iter().map(|r| format!("<tr>\n{r}</tr>\n")).collect();
+            format!("<table>\n<tbody>\n{rows}</tbody>\n</table>")
+        };
+        let mut narrow = default_template();
+        narrow.page.as_mut().expect("page").width = HwpUnit::from_mm(40.0).ok();
+        let mut past_a_width = default_template();
+        let page = past_a_width.page.as_mut().expect("page");
+        page.width = HwpUnit::new(HwpUnit::MAX_VALUE).ok();
+        page.margin_left = HwpUnit::new(-2).ok();
+        page.margin_right = HwpUnit::new(0).ok();
+        for (markdown, template) in [
+            (grid(&[cell(8800, 22)]), default_template()),
+            (grid(&[cell(9000, 1), cell(4500, 2)]), narrow),
+            (grid(&[cell(2, 1), cell(1, 2)]), past_a_width),
+        ] {
+            let md = MdDecoder::decode(&markdown, &template).unwrap();
+            let RunContent::Table(table) = &md.document.sections()[0].paragraphs[0].runs[0].content
+            else {
+                panic!("not a table");
+            };
+            let totals: Vec<i64> = table
+                .rows
+                .iter()
+                .map(|row| row.cells.iter().map(|c| i64::from(c.width.as_i32())).sum())
+                .collect();
+            assert!(totals.iter().all(|&w| w == totals[0]), "{totals:?}");
+            assert!(totals[0] > 0 && totals[0] <= i64::from(i32::MAX), "{totals:?}");
+            assert!(HwpUnit::new(totals[0] as i32).is_ok(), "{totals:?}");
+        }
+    }
+
     /// A chart comment is left out with one warning each, inline, on its
     /// own line, and at an item's start with the text after it on the
     /// same line (as the encoder writes it, an HTML block), which is then
@@ -2652,8 +3448,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(md.warnings, vec![MdWarning::ContentLost { kind: "chart" }; 3]);
-        // The item keeps its marker as text, as every list item does.
-        assert_eq!(texts(&md), ["a  b", "- - x"]);
+        // The item's text is what follows the comment; its marker is the
+        // paragraph's list, not text.
+        assert_eq!(texts(&md), ["a  b", "- x"]);
     }
 
     /// A memo comment is left out with one warning; the text around it
@@ -2947,18 +3744,6 @@ mod tests {
                         if text == "Rust" && url == "https://www.rust-lang.org"
                 )
         )));
-    }
-
-    #[test]
-    fn decode_nested_list_keeps_outer_prefix_progression() {
-        let template = default_template();
-        let markdown = "1.\n   - child\n2. next";
-        let doc = MdDecoder::decode(markdown, &template).unwrap().document;
-        let texts: Vec<String> =
-            doc.sections()[0].paragraphs.iter().map(Paragraph::text_content).collect();
-
-        assert!(texts.iter().any(|text| text.starts_with("1.")));
-        assert!(texts.iter().any(|text| text.starts_with("2. ")));
     }
 
     #[test]

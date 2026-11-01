@@ -178,6 +178,13 @@ fn inheritance_shared_roles_and_legacy_matrix() {
                     resolved.markdown_mapping.as_ref().unwrap().heading6.as_deref(),
                     Some(if role == 3 { "heading3" } else { "heading6" })
                 );
+                // The list item role shared with a heading has no bullet list,
+                // so the per-level bullets the default template gives are
+                // rejected (#296).
+                if role == 2 && inheritance > 0 {
+                    assert!(MdDecoder::decode("### Three", &resolved).is_err());
+                    continue;
+                }
                 let decoded =
                     MdDecoder::decode("### Three\n\n###### Six\n\nBody", &resolved).unwrap();
                 let registry = &decoded.style_registry;
@@ -330,7 +337,7 @@ fn list_notes_tables_and_inline_runs_keep_selected_identity() {
     let entry = decoded.style_registry.get_style("body").unwrap();
     assert_eq!(body.style_ref, Some(entry.style_ref()));
     assert!(body.runs.iter().any(|r| r.char_shape_id != entry.char_shape_id));
-    let list = decoded.style_registry.get_style("list_item").unwrap();
+    let list = decoded.style_registry.get_style("check_item").unwrap();
     for p in &decoded.document.sections()[0].paragraphs[1..3] {
         assert_eq!(p.style_ref, Some(list.style_ref()));
     }
@@ -375,21 +382,8 @@ fn explicit_lists_preserve_entry_and_isolate_heading_paragraph() {
                 PartialParagraphListRef::Number { numbering_id: 1, level: 0 },
                 PartialParagraphListRef::Bullet { bullet_id: 1, level: 0 },
             ] {
+                // The default template declares numbering 1 and bullet 1.
                 let mut template = builtin_default().unwrap();
-                template.numberings.push(hwpforge_core::NumberingDef::default_outline());
-                template.bullets.push(hwpforge_core::BulletDef {
-                    id: 1,
-                    bullet_char: "•".into(),
-                    checked_char: None,
-                    use_image: false,
-                    para_head: hwpforge_core::ParaHead {
-                        start: 0,
-                        level: 1,
-                        num_format: hwpforge_foundation::NumberFormatType::Digit,
-                        text: String::new(),
-                        checkable: false,
-                    },
-                });
                 template.styles.get_mut("heading3").unwrap().para_shape.as_mut().unwrap().list =
                     Some(list);
                 let md = template.markdown_mapping.as_mut().unwrap();
@@ -419,6 +413,12 @@ fn explicit_lists_preserve_entry_and_isolate_heading_paragraph() {
                     ("parent".into(), parent),
                 ]));
                 let template = resolve_template(&template, &provider).unwrap();
+                // The default template's per-level bullets need a bullet list
+                // on the list item role (#296).
+                if role == 2 && !matches!(list, PartialParagraphListRef::Bullet { .. }) {
+                    assert!(MdDecoder::decode("### Three", &template).is_err());
+                    continue;
+                }
                 let before = StyleRegistry::from_template(&template).unwrap();
                 let original = before
                     .para_shape(before.get_style("heading3").unwrap().para_shape_id)
@@ -494,7 +494,7 @@ fn explicit_alias_mapping_survives_registration_order() {
             template.styles.reverse();
         }
         template.markdown_mapping = Some(md);
-        let decoded = MdDecoder::decode("# Title\n\nBody\n\n- [x] task", &template).unwrap();
+        let decoded = MdDecoder::decode("# Title\n\nBody\n\n- item", &template).unwrap();
         for (p, name) in
             decoded.document.sections()[0].paragraphs.iter().zip(["title", "prose", "items"])
         {
@@ -575,7 +575,7 @@ fn checked_depth_and_ordered_task_roundtrip() {
             for (i, p) in decoded.document.sections()[0].paragraphs.iter().enumerate() {
                 assert_eq!(
                     p.style_ref,
-                    Some(decoded.style_registry.get_style("list_item").unwrap().style_ref())
+                    Some(decoded.style_registry.get_style("check_item").unwrap().style_ref())
                 );
                 assert!(
                     matches!(decoded.style_registry.para_shape(p.para_shape_id).unwrap().list, Some(ParagraphListRef::CheckBullet { level, checked: state, .. }) if usize::from(level) == i && state == checked)
@@ -657,4 +657,398 @@ fn unused_original_heading_shapes_have_no_wire_references() {
             .count(),
         0
     );
+}
+
+/// Each Markdown list item as the parser reads it: its text (before any
+/// nested block), its depth, whether its list is numbered, its task state.
+fn parsed_items(markdown: &str) -> Vec<(String, usize, bool, Option<bool>)> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_TASKLISTS);
+    let mut lists: Vec<bool> = Vec::new();
+    let mut open: Vec<(usize, bool)> = Vec::new();
+    let mut out: Vec<(String, usize, bool, Option<bool>)> = Vec::new();
+    let mut code = 0;
+    for event in Parser::new_ext(markdown, options) {
+        match event {
+            Event::Start(Tag::List(start)) => {
+                if let Some(top) = open.last_mut() {
+                    top.1 = true;
+                }
+                lists.push(start.is_some());
+            }
+            Event::End(TagEnd::List(_)) => {
+                lists.pop();
+            }
+            Event::Start(Tag::Item) => {
+                out.push((String::new(), lists.len(), *lists.last().unwrap(), None));
+                open.push((out.len() - 1, false));
+            }
+            Event::End(TagEnd::Item) => {
+                open.pop();
+            }
+            Event::Start(Tag::CodeBlock(_)) => code += 1,
+            Event::End(TagEnd::CodeBlock) => code -= 1,
+            Event::TaskListMarker(checked) => {
+                let at = open.last().unwrap().0;
+                out[at].3 = Some(checked);
+            }
+            Event::Text(text) if code == 0 => {
+                if let Some(&(at, false)) = open.last() {
+                    out[at].0.push_str(&text);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Each code block's text and how many list items hold it, and each
+/// table's depth, as the parser reads the Markdown.
+fn parsed_blocks(markdown: &str) -> (Vec<(String, usize)>, Vec<usize>) {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_TASKLISTS);
+    let (mut depth, mut code, mut tables) = (0, Vec::new(), Vec::new());
+    let mut text: Option<String> = None;
+    for event in Parser::new_ext(markdown, options) {
+        match event {
+            Event::Start(Tag::Item) => depth += 1,
+            Event::End(TagEnd::Item) => depth -= 1,
+            Event::Start(Tag::Table(_)) => tables.push(depth),
+            Event::Html(html) | Event::InlineHtml(html) if html.starts_with("<table") => {
+                tables.push(depth)
+            }
+            Event::Start(Tag::CodeBlock(_)) => text = Some(String::new()),
+            Event::End(TagEnd::CodeBlock) => code.push((text.take().unwrap(), depth)),
+            Event::Text(t) => {
+                if let Some(text) = text.as_mut() {
+                    text.push_str(&t);
+                }
+            }
+            _ => {}
+        }
+    }
+    (code, tables)
+}
+
+/// The views of a Markdown document converted to HWPX: styled and lossy
+/// with the HWPX styles, and lossy with the template when the document
+/// needs nothing the template does not have (a numbered list after the
+/// first adds a numbering group the template, read again, does not know).
+fn views(markdown: &str) -> Vec<(&'static str, String)> {
+    let template = builtin_default().unwrap();
+    let bytes = wire(markdown, &template, HancomStyleSet::Modern);
+    let back = HwpxDecoder::decode(&bytes).unwrap();
+    let lookup = HwpxStyleLookup::new(&back.style_store, &back.image_store);
+    let document = back.document.validate().unwrap();
+    let styled = MdEncoder::encode_styled(&document, &lookup).markdown;
+    let lossy = MdEncoder::encode_lossy_with_styles(&document, &lookup).unwrap().0;
+    let mut out = vec![("styled", styled), ("lossy", lossy)];
+    let decoded = MdDecoder::decode(markdown, &template).unwrap();
+    let plain = MdDecoder::decode("", &template).unwrap();
+    if decoded.style_registry.numbering_count() == plain.style_registry.numbering_count() {
+        let template_lossy =
+            MdEncoder::encode(&decoded.document.validate().unwrap(), &template).unwrap();
+        let body = template_lossy.splitn(2, "\n---\n").last().unwrap().trim_start().to_string();
+        out.push(("template", body));
+    }
+    out
+}
+
+/// Markdown lists become Hancom list paragraphs: each item's paraPr holds
+/// its kind, level and definition (its 1-based position), checked state on
+/// the paraPr, the bullet's glyph and checkbox on its definition; the text
+/// holds no marker.
+/// 이것을 실패시키는 것: 수준별 기호 선택 삭제 · 체크 상태를 정의로 · 표지를 글로.
+#[test]
+fn markdown_lists_are_hancom_list_paragraphs() {
+    let md =
+        "- a\n  - a1\n    - a2\n\n1. b\n   1. b1\n      1. b2\n\n- [ ] c\n  - [x] d\n    - [ ] e";
+    let bytes = wire(md, &builtin_default().unwrap(), HancomStyleSet::Modern);
+    let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+    let section = Element::parse(&part(&bytes, "Contents/section0.xml"));
+    let shapes = nodes(&header, "hh:paraPr");
+    let bullets = nodes(&header, "hh:bullet");
+    let numberings = nodes(&header, "hh:numbering");
+    let expected = [
+        ("a", "BULLET", "1", "0", "0"),
+        ("a1", "BULLET", "2", "1", "0"),
+        ("a2", "BULLET", "3", "2", "0"),
+        // Each numbered list is a numbering group: the first takes the
+        // template's (2), the nested ones copies after it (3, 4).
+        ("b", "NUMBER", "2", "0", "0"),
+        ("b1", "NUMBER", "3", "1", "0"),
+        ("b2", "NUMBER", "4", "2", "0"),
+        ("c", "BULLET", "11", "0", "0"),
+        ("d", "BULLET", "11", "1", "1"),
+        ("e", "BULLET", "11", "2", "0"),
+    ];
+    let paragraphs = nodes(&section, "hp:p");
+    assert_eq!(paragraphs.len(), expected.len());
+    for (p, (text, kind, id, level, checked)) in paragraphs.iter().zip(expected) {
+        let texts: String = nodes(p, "hp:t").iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, text);
+        let shape = shapes[p.attr("paraPrIDRef").unwrap().parse::<usize>().unwrap()];
+        let heading = shape.find("hh:heading");
+        assert_eq!(
+            (heading.attr("type"), heading.attr("idRef"), heading.attr("level")),
+            (Some(kind), Some(id), Some(level)),
+            "{text}"
+        );
+        assert_eq!(shape.attr("checked"), Some(checked), "{text}");
+    }
+    let glyph = |id: &str| bullets.iter().find(|b| b.attr("id") == Some(id)).unwrap();
+    assert_eq!(glyph("1").attr("char"), Some("•"));
+    assert_eq!(glyph("2").attr("char"), Some("◦"));
+    assert_eq!(glyph("3").attr("char"), Some("▪"));
+    let check = glyph("11");
+    assert_eq!((check.attr("char"), check.attr("checkedChar")), (Some("☐"), Some("☑")));
+    assert_eq!(check.find("hh:paraHead").attr("checkable"), Some("1"));
+    let numbered = numberings.iter().find(|n| n.attr("id") == Some("2")).unwrap();
+    assert_eq!(wire_heads(numbered), NUMBERED_HEADS);
+}
+
+/// The default numbered items' wire format and text, level 1 to 10.
+const NUMBERED_HEADS: [(&str, &str); 10] = [
+    ("DIGIT", "^1."),
+    ("HANGUL_SYLLABLE", "^2."),
+    ("DIGIT", "^3)"),
+    ("HANGUL_SYLLABLE", "^4)"),
+    ("DIGIT", "(^5)"),
+    ("HANGUL_SYLLABLE", "(^6)"),
+    ("CIRCLED_DIGIT", "^7"),
+    ("CIRCLED_HANGUL_SYLLABLE", "^8"),
+    ("DIGIT", "^9."),
+    ("DIGIT", "^:."),
+];
+
+fn wire_heads(numbering: &Element) -> Vec<(&str, &str)> {
+    nodes(numbering, "hh:paraHead")
+        .iter()
+        .map(|h| (h.attr("numFormat").unwrap(), h.text.as_str()))
+        .collect()
+}
+
+/// Every numbering group a document makes shows the template's level formats:
+/// the template's own and each restarted copy, a nested list and a later one.
+/// 이것을 실패시키는 것: 복제본의 수준 형식을 십진수로 고정 · `default.yaml` 번호 정의의
+/// 수준 하나를 되돌리기.
+#[test]
+fn numbering_groups_keep_the_level_formats() {
+    let md = "1. a\n   1. b\n\ntext\n\n1. c";
+    let bytes = wire(md, &builtin_default().unwrap(), HancomStyleSet::Modern);
+    let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+    let numberings = nodes(&header, "hh:numbering");
+    let groups: Vec<_> =
+        numberings.iter().filter(|n| n.attr("id").is_some_and(|id| id != "1")).collect();
+    assert_eq!(groups.iter().map(|n| n.attr("id").unwrap()).collect::<Vec<_>>(), ["2", "3", "4"]);
+    for group in groups {
+        assert_eq!(wire_heads(group), NUMBERED_HEADS, "{:?}", group.attr("id"));
+    }
+}
+
+/// Number formats are the document's look, not its Markdown: all ten levels
+/// read back as the same numbered items with plain `1.` markers, whatever
+/// the level shows in Hancom, and nothing is reported lost.
+/// 이것을 실패시키는 것: 번호 표지를 `1) ` 로 고정 · `default.yaml` 수준 글을 상위 수준 참조
+/// (`^1.^2`) 로.
+#[test]
+fn numbered_level_formats_leave_markdown_unchanged() {
+    let md: String = (0..10).map(|l| format!("{}1. l{l}\n", " ".repeat(3 * l))).collect();
+    let decoded = MdDecoder::decode(&md, &builtin_default().unwrap()).unwrap();
+    assert_eq!(decoded.warnings, []);
+    for (view, out) in views(&md) {
+        assert_eq!(parsed_items(&out), parsed_items(&md), "{view}: {out:?}");
+        assert_eq!(parsed_lists(&out), parsed_lists(&md), "{view}: {out:?}");
+        for line in out.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(line.trim_start().starts_with("1. "), "{view}: {line:?}");
+        }
+    }
+}
+
+/// Lists written to HWPX and read back in each view are the same lists:
+/// item text, order, depth, numbered or not, task state.
+/// 이것을 실패시키는 것: 읽기의 수준 반전 · 체크 상태 고정 · 번호를 글머리표로.
+#[test]
+fn lists_roundtrip_through_hwpx() {
+    for md in [
+        "- a\n  - b\n    - c",
+        "1. a\n   1. b\n      1. c",
+        "- [ ] a\n  - [x] b\n    - [ ] c",
+        "- a\n  1. b\n     - [x] c\n- d",
+    ] {
+        let expected = parsed_items(md);
+        for (view, out) in views(md) {
+            assert_eq!(parsed_items(&out), expected, "{view}: {md:?} -> {out:?}");
+        }
+    }
+}
+
+/// An empty item's first block (a nested item, a table, code) follows its
+/// marker on the next line, inside the item, in every view; code keeps its
+/// text byte for byte; what follows a nested list returns to its parent.
+/// 이것을 실패시키는 것: 빈 머리 뒤 빈 줄 · 코드에 일반 continuation 배치 · 끝 줄바꿈 더하기 ·
+/// 부모 대신 자식 열에 배치.
+#[test]
+fn item_blocks_roundtrip_in_their_item() {
+    let code = |body: &str| format!("```\n{body}```");
+    let indent = |text: &str, n: usize| {
+        text.lines()
+            .map(|l| if l.is_empty() { String::new() } else { format!("{}{l}", " ".repeat(n)) })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let bodies = ["if ready:\n    run()\n", "if ready:\n\trun()  \n\n", "\n", ""];
+    let mut cases = vec![
+        ("-\n  - child".to_string(), 0, 0),
+        ("1.\n   - child".to_string(), 0, 0),
+        ("-\n  | a |\n  | - |\n  | b |".to_string(), 0, 1),
+    ];
+    for body in bodies {
+        cases.push((format!("-\n{}", indent(&code(body), 2)), 1, 0));
+        cases.push((format!("1.\n{}", indent(&code(body), 3)), 1, 0));
+        cases.push((format!("- parent\n  - child\n\n{}", indent(&code(body), 2)), 1, 0));
+    }
+    cases.push(("- parent\n  - child\n\n  | a |\n  | - |\n  | b |".into(), 0, 1));
+    for (md, codes, tables) in cases {
+        let (code_in, table_in) = parsed_blocks(&md);
+        assert_eq!((code_in.len(), table_in.len()), (codes, tables), "{md:?}");
+        for (view, out) in views(&md) {
+            assert_eq!(parsed_items(&out), parsed_items(&md), "{view}: {md:?} -> {out:?}");
+            assert_eq!(parsed_blocks(&out), (code_in.clone(), table_in.clone()), "{view}: {out:?}");
+            // An empty item's first block is on the next line, not after a
+            // blank one.
+            if md.starts_with("-\n") || md.starts_with("1.\n") {
+                let first = out.lines().position(|l| l == "-" || l == "1.").unwrap();
+                assert!(!out.lines().nth(first + 1).unwrap().is_empty(), "{view}: {out:?}");
+            }
+        }
+    } // Code the document ended before its closing fence gets the line
+      // ending a closed fence needs, and nothing else.
+    for (view, out) in views("-\n  ```\n  x") {
+        assert_eq!(parsed_blocks(&out).0, [("x\n".to_string(), 1)], "{view}: {out:?}");
+    }
+}
+
+/// Code-font text a list holds stays in its item in the styled view: a
+/// continuation in the list item's code font is a fence at its item's
+/// content column, a numbered item in a code font is its marker holding the
+/// fence; neither is reported lost, and what follows still joins the item.
+/// 이것을 실패시키는 것: 코드 글꼴 판정을 소유 항목 판정보다 먼저.
+#[test]
+fn code_font_list_text_stays_in_its_item() {
+    let code_font = |styles: &str| {
+        Template::from_yaml(&format!(
+            "meta:\n  name: mono\n  version: 1.0.0\n  extends: default\nstyles:\n{styles}"
+        ))
+        .unwrap()
+    };
+    let font = "    char_shape:\n      font: D2Coding\n";
+    for (template, md, code, items) in [
+        (
+            code_font(&format!("  list_item:\n{font}")),
+            "1. parent\n\n   tail\n\n   more",
+            vec![("tail\n".to_string(), 1), ("more\n".to_string(), 1)],
+            vec![("parent".to_string(), 1, true, None)],
+        ),
+        (
+            code_font(&format!("  numbered_item:\n{font}")),
+            "1. x\n2. y",
+            vec![("x\n".to_string(), 1), ("y\n".to_string(), 1)],
+            vec![(String::new(), 1, true, None), (String::new(), 1, true, None)],
+        ),
+    ] {
+        let bytes = wire(md, &template, HancomStyleSet::Modern);
+        let back = HwpxDecoder::decode(&bytes).unwrap();
+        let lookup = HwpxStyleLookup::new(&back.style_store, &back.image_store);
+        let out = MdEncoder::encode_styled(&back.document.validate().unwrap(), &lookup);
+        assert_eq!(parsed_blocks(&out.markdown).0, code, "{:?}", out.markdown);
+        assert_eq!(parsed_items(&out.markdown), items, "{:?}", out.markdown);
+        assert!(
+            !out.warnings
+                .iter()
+                .any(|w| matches!(w, hwpforge_smithy_md::MdWarning::ListSemanticsLost { .. })),
+            "{:?}",
+            out.warnings
+        );
+    }
+}
+
+/// The template-mapped lossy view reads an item's code shape by the
+/// template: given a table, that paragraph is an ordinary continuation with
+/// all it holds, and the item stays open for what follows.
+/// 이것을 실패시키는 것: 템플릿 경로의 코드 continuation 을 fence 로 · 일반 continuation
+/// 으로 돌리지 않기.
+#[test]
+fn template_mapped_code_paragraph_keeps_its_table() {
+    use hwpforge_core::{Paragraph, Run, Table, TableCell, TableRow};
+    let template = builtin_default().unwrap();
+    let mut md =
+        MdDecoder::decode("- item\n\n  ```\n  codeline\n  ```\n\n- after", &template).unwrap();
+    let paragraph = md.document.sections_mut()[0]
+        .paragraphs
+        .iter_mut()
+        .find(|p| {
+            p.runs.iter().any(|r| r.content.plain_text().is_some_and(|t| t.contains("codeline")))
+        })
+        .unwrap();
+    let (shape, para) = (paragraph.runs[0].char_shape_id, paragraph.para_shape_id);
+    let cell = TableCell::new(
+        vec![Paragraph::with_runs(vec![Run::text("kept", shape)], para)],
+        hwpforge_foundation::HwpUnit::from_mm(40.0).unwrap(),
+    );
+    paragraph.runs.push(Run::table(Table::new(vec![TableRow::new(vec![cell])]), shape));
+    let out = MdEncoder::encode(&md.document.validate().unwrap(), &template).unwrap();
+    assert!(out.contains("kept") && !out.contains("```"), "{out}");
+    let line = out.lines().find(|l| l.contains("codeline")).expect("code text");
+    assert!(line.starts_with("  "), "{out}");
+    assert_eq!(parsed_items(&out).len(), 2, "{out}");
+}
+
+/// Each Markdown list as the parser reads it: how many items hold it and,
+/// numbered, its start.
+fn parsed_lists(markdown: &str) -> Vec<(usize, Option<u64>)> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TASKLISTS);
+    let mut depth = 0;
+    let mut out = Vec::new();
+    for event in Parser::new_ext(markdown, options) {
+        match event {
+            Event::Start(Tag::List(start)) => out.push((depth, start)),
+            Event::Start(Tag::Item) => depth += 1,
+            Event::End(TagEnd::Item) => depth -= 1,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Two numbered lists side by side (no block between them, or under one
+/// parent) stay two lists through HWPX and back: the second takes the
+/// other delimiter, and each starts at 1; one list with a continuation in
+/// it stays one.
+/// 이것을 실패시키는 것: 다른 번호에도 같은 구분자 · 같은 번호에 바꾼 구분자 · 다른 부모의
+/// 닫힌 항목과 비교.
+#[test]
+fn adjacent_numbering_groups_alternate_delimiters() {
+    for (md, lists) in [
+        ("1. a\n1) b", vec![(0, Some(1)), (0, Some(1))]),
+        ("1. a\n1) b\n1. c", vec![(0, Some(1)), (0, Some(1)), (0, Some(1))]),
+        (
+            "1. parent\n   1. a\n   2. a2\n\n   1) b\n   2) b2\n2. next\n   1. c",
+            vec![(0, Some(1)), (1, Some(1)), (1, Some(1)), (1, Some(1))],
+        ),
+        ("1. a\n\n   tail\n2. b", vec![(0, Some(1))]),
+    ] {
+        assert_eq!(parsed_lists(md), lists, "{md:?}");
+        for (view, out) in views(md) {
+            assert_eq!(parsed_lists(&out), lists, "{view}: {md:?} -> {out:?}");
+            assert_eq!(parsed_items(&out), parsed_items(md), "{view}: {out:?}");
+        }
+    }
 }

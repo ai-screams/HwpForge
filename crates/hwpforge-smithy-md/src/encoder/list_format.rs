@@ -1,5 +1,10 @@
+use hwpforge_blueprint::markdown::{
+    parse_code_continuation_style_name, parse_list_continuation_style_name,
+};
 use hwpforge_core::field_inventory::FieldInventory;
 use hwpforge_core::{ListItemKind, Paragraph, ParagraphListRef, Section, StyleLookup};
+use hwpforge_foundation::NumberingIndex;
+use std::collections::HashSet;
 
 use super::MdWarning;
 
@@ -29,10 +34,33 @@ use super::MdWarning;
 /// item or a continuation) is joined to it with one line ending: the block
 /// being written takes that from its first laid-out piece
 /// ([`Self::take_tight`]).
+///
+/// A numbered item writes `1.` or `1)`: two numbered lists side by side at
+/// one level of one parent (no block between them) would read as one
+/// list, so a numbered item whose numbering differs from the item closed
+/// just before it in the same parent (or at the top) takes the other
+/// delimiter; one of the same numbering keeps it. The numbering of an item
+/// is its own; it is never guessed from the output.
+///
+/// Hancom counts a numbering's items at each level on, across whatever is
+/// between them, until an item of that numbering at a shallower level
+/// starts the level again; a Markdown list starts at 1. A numbered item
+/// that starts a new Markdown list while its numbering is still counting
+/// at its level (after another list, a block, or its parent's
+/// continuation) is therefore not shown with its number: its numbering is
+/// reported once ([`Self::take_presentation_lost`]).
 #[derive(Debug, Default)]
 pub(super) struct ListIndent {
-    /// Open items, outermost first: their level and content column.
-    open: Vec<(u8, usize)>,
+    /// Open items, outermost first.
+    open: Vec<Open>,
+    /// The item closed last at the top (no open item holds it).
+    top_closed: Option<Closed>,
+    /// (numbering, level) pairs whose items are counting: an item written
+    /// and no item of that numbering at a shallower level since.
+    counting: HashSet<(NumberingIndex, u8)>,
+    /// Numberings reported, in the order met, and as a set.
+    presentation_lost: Vec<NumberingIndex>,
+    reported: HashSet<NumberingIndex>,
     /// The last open item has no text and holds nothing written yet.
     empty_head: bool,
     /// How the block being written joins the one before, set by its first
@@ -41,10 +69,35 @@ pub(super) struct ListIndent {
     separator: Option<bool>,
 }
 
+/// An open item: its level, content column, numbered group, and the item
+/// it held that closed last.
+#[derive(Debug, Clone, Copy)]
+struct Open {
+    level: u8,
+    column: usize,
+    group: Option<Group>,
+    closed: Option<Closed>,
+}
+
+/// A numbered item's numbering and the delimiter it was written with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Group {
+    numbering: NumberingIndex,
+    delimiter: char,
+}
+
+/// An item that closed: its level and, numbered, its group.
+#[derive(Debug, Clone, Copy)]
+struct Closed {
+    level: u8,
+    group: Option<Group>,
+}
+
 impl ListIndent {
     /// A list item at `level`, indented to the content column of its
     /// nearest open item of a smaller level (0 for none), so a level that
-    /// skips one nests one step deeper. With no text, its marker alone.
+    /// skips one nests one step deeper. With no text, its marker alone. A
+    /// numbered item's `numbering` picks its delimiter (see the type).
     /// 이것을 실패시키는 것: 수준당 고정 칸(`numbered_levels_nest_under_numbered_items`) ·
     /// 수준으로 들여쓰기(`skipped_level_nests_one_step_deeper`) · 번호 표지 폭을
     /// 2로(`mixed_markers_nest_by_parent_marker_width`).
@@ -54,17 +107,23 @@ impl ListIndent {
         kind: ListItemKind,
         level: u8,
         checked: Option<bool>,
+        numbering: Option<NumberingIndex>,
     ) -> String {
         let open = self.open.len();
         self.close_from(level);
         self.separator.get_or_insert(self.empty_head && self.open.len() == open);
         self.empty_head = text.trim().is_empty();
         let indent = self.column();
-        let marker = match kind {
-            ListItemKind::Number => "1. ",
-            ListItemKind::Bullet => "- ",
+        let group = match (kind, numbering) {
+            (ListItemKind::Number, Some(numbering)) => Some(self.group(level, numbering)),
+            _ => None,
         };
-        self.open.push((level, indent + marker.len()));
+        let marker = match (kind, group) {
+            (ListItemKind::Number, Some(Group { delimiter: ')', .. })) => "1) ",
+            (ListItemKind::Number, _) => "1. ",
+            (ListItemKind::Bullet, _) => "- ",
+        };
+        self.open.push(Open { level, column: indent + marker.len(), group, closed: None });
         // A numbered item has no task marker: its checked state is dropped.
         // 이것을 실패시키는 것: 번호 항목에도 `[x]`(`numbered_list_ignores_checked_state`).
         let task = match (kind, checked) {
@@ -88,8 +147,8 @@ impl ListIndent {
     /// item is written as its marker alone.
     /// 이것을 실패시키는 것: 등록 삭제(`lossy_mapped_item_parents_children`).
     pub(super) fn mapped_item(&mut self, text: &str) -> String {
-        self.open.clear();
-        self.open.push((0, 2));
+        self.reset();
+        self.open.push(Open { level: 0, column: 2, group: None, closed: None });
         self.separator.get_or_insert(false);
         self.empty_head = text.trim().is_empty();
         if self.empty_head {
@@ -104,6 +163,7 @@ impl ListIndent {
     /// 이것을 실패시키는 것: `2 * (level + 1)` 칸(`numbered_continuation_stays_in_its_item`) ·
     /// 앞 빈 줄 남기기(`lossy_empty_item_holds_its_first_block`).
     pub(super) fn continuation(&mut self, text: &str) -> String {
+        self.held();
         let head = std::mem::take(&mut self.empty_head);
         self.separator.get_or_insert(head);
         let column = self.column();
@@ -115,6 +175,7 @@ impl ListIndent {
     /// line is trimmed, a blank line stays empty).
     /// 이것을 실패시키는 것: 줄 앞 공백 지우기(`list_paragraph_holds_its_one_table`).
     pub(super) fn block(&mut self, block: &str) -> String {
+        self.held();
         let head = std::mem::take(&mut self.empty_head);
         self.separator.get_or_insert(head);
         let indent = " ".repeat(self.column());
@@ -134,12 +195,15 @@ impl ListIndent {
     /// 없는 수준을 마지막 항목에(`continuation_of_a_closed_level_stands_alone`) · 빈 머리
     /// 표시 남기기(`continuation_returns_to_its_parent`).
     pub(super) fn resume_continuation(&mut self, level: u8) -> bool {
-        let Some(at) = self.open.iter().rposition(|&(open, _)| open == level) else {
+        let Some(at) = self.open.iter().rposition(|open| open.level == level) else {
             self.reset();
             return false;
         };
-        if at + 1 < self.open.len() {
-            self.open.truncate(at + 1);
+        let resumed = at + 1 < self.open.len();
+        while self.open.len() > at + 1 {
+            self.pop();
+        }
+        if resumed {
             // The item resumed already holds the closed deeper items.
             self.empty_head = false;
         }
@@ -161,18 +225,85 @@ impl ListIndent {
     /// 이것을 실패시키는 것: 비우기 삭제(`body_paragraph_resets_open_items`).
     pub(super) fn reset(&mut self) {
         self.open.clear();
+        self.top_closed = None;
         self.empty_head = false;
     }
 
+    /// The numberings reported for continuing past other blocks, each once,
+    /// in the order met.
+    /// 이것을 실패시키는 것: 보고 삭제(`numbering_continuing_past_a_block_is_reported`).
+    pub(super) fn take_presentation_lost(&mut self) -> Vec<NumberingIndex> {
+        std::mem::take(&mut self.presentation_lost)
+    }
+
+    /// The group of a numbered item at `level` of `numbering`, as the item
+    /// closed just before it in the same parent decides: the same numbering
+    /// keeps its delimiter (the item continues that Markdown list), another
+    /// takes the other one. An item starting a new list while its numbering
+    /// counts at its level is reported (see the type); it starts its level
+    /// again for the deeper levels of its numbering.
+    /// 이것을 실패시키는 것: 다른 번호에도 같은 구분자 · 같은 번호에 바꾼 구분자 · 다른 부모의
+    /// 닫힌 항목과 비교(`adjacent_numbering_groups_alternate_delimiters`) · 수준 없이 번호만
+    /// 기록 · 같은 목록 잇기에도 보고 · 깊은 수준 다시 세기 삭제
+    /// (`numbering_continuing_past_a_block_is_reported`).
+    fn group(&mut self, level: u8, numbering: NumberingIndex) -> Group {
+        let before = match self.open.last() {
+            Some(parent) => parent.closed,
+            None => self.top_closed,
+        };
+        let sibling = before.filter(|closed| closed.level == level).and_then(|closed| closed.group);
+        let delimiter = match sibling {
+            Some(group) if group.numbering == numbering => group.delimiter,
+            Some(Group { delimiter: '.', .. }) => ')',
+            _ => '.',
+        };
+        let continues = sibling.is_some_and(|group| group.numbering == numbering);
+        if !continues
+            && self.counting.contains(&(numbering, level))
+            && self.reported.insert(numbering)
+        {
+            self.presentation_lost.push(numbering);
+        }
+        self.counting.insert((numbering, level));
+        for deeper in level + 1..=ParagraphListRef::MAX_LEVEL {
+            self.counting.remove(&(numbering, deeper));
+        }
+        Group { numbering, delimiter }
+    }
+
+    /// The last open item holds a block now written: it ends the Markdown
+    /// list of the items it held before, so its next one starts a new list.
+    /// Only a block written counts: a continuation that writes nothing
+    /// leaves that list going.
+    /// 이것을 실패시키는 것: 이 비우기 삭제 · 쓰이지 않은 continuation 에서 비우기
+    /// (`numbering_continuing_past_a_block_is_reported`).
+    fn held(&mut self) {
+        if let Some(item) = self.open.last_mut() {
+            item.closed = None;
+        }
+    }
+
+    /// Closes the last open item, recording it as the item closed last in
+    /// the item that held it (or at the top).
+    fn pop(&mut self) {
+        if let Some(item) = self.open.pop() {
+            let closed = Some(Closed { level: item.level, group: item.group });
+            match self.open.last_mut() {
+                Some(parent) => parent.closed = closed,
+                None => self.top_closed = closed,
+            }
+        }
+    }
+
     fn close_from(&mut self, level: u8) {
-        while self.open.last().is_some_and(|&(open, _)| open >= level) {
-            self.open.pop();
+        while self.open.last().is_some_and(|open| open.level >= level) {
+            self.pop();
         }
     }
 
     /// The content column of the last open item (0 for none).
     fn column(&self) -> usize {
-        self.open.last().map_or(0, |&(_, column)| column)
+        self.open.last().map_or(0, |open| open.column)
     }
 }
 
@@ -196,6 +327,17 @@ pub(super) fn item_list(
         .filter(|list| !matches!(list, ParagraphListRef::Outline { .. }))
 }
 
+/// The numbering of a numbered list paragraph ([`item_list`]).
+pub(super) fn numbering_of(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+) -> Option<NumberingIndex> {
+    match item_list(paragraph, styles)? {
+        ParagraphListRef::Number { numbering_id, .. } => Some(numbering_id),
+        _ => None,
+    }
+}
+
 /// The level of the list item a paragraph continues by its original
 /// styles: its paragraph shape's reserved continuation style name, on a
 /// shape with no list or heading semantics of its own. Both views read a
@@ -205,7 +347,38 @@ pub(super) fn continuation_level(paragraph: &Paragraph, styles: &dyn StyleLookup
     if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
         return None;
     }
-    styles.para_style_name(id).and_then(crate::internal_styles::parse_list_continuation_style_name)
+    let name = styles.para_style_name(id)?;
+    parse_list_continuation_style_name(name).or_else(|| {
+        parse_code_continuation_style_name(name).filter(|_| !holds_only_text(paragraph))
+    })
+}
+
+/// Whether a paragraph holds text and nothing else. A code block holds only
+/// text, so anything else would be dropped from it: a paragraph of a
+/// code-continuation shape that holds more (edited in Hancom) is an
+/// ordinary continuation of its item.
+/// 이것을 실패시키는 것: 코드 continuation 의 표·그림·컨트롤을 fence 로
+/// (`code_continuation_keeps_what_is_not_text`).
+pub(super) fn holds_only_text(paragraph: &Paragraph) -> bool {
+    paragraph.runs.iter().all(|r| r.content.carries_text())
+}
+
+/// The level of the list item whose code block a paragraph is, by its
+/// original styles: its paragraph shape's reserved code-continuation style
+/// name, on a shape with no list or heading semantics of its own, holding
+/// only text ([`holds_only_text`]).
+pub(super) fn code_continuation_level(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+) -> Option<u8> {
+    let id = paragraph.para_shape_id;
+    if styles.para_heading_level(id).is_some() || styles.para_list(id).is_some() {
+        return None;
+    }
+    styles
+        .para_style_name(id)
+        .and_then(parse_code_continuation_style_name)
+        .filter(|_| holds_only_text(paragraph))
 }
 
 /// One [`MdWarning::ListSemanticsLost`] per list paragraph outside the

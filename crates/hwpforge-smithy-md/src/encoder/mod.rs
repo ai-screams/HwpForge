@@ -4,6 +4,10 @@ pub(crate) mod guard;
 #[cfg(test)]
 mod guarded_tests;
 mod list_format;
+
+/// [`MdWarning::ListSemanticsLost`] reason when reading Markdown: a heading
+/// or rule a list item held is a paragraph outside the item.
+pub(crate) const ITEM_BLOCK_DETACHED: &str = "item_block_detached";
 #[cfg(test)]
 mod list_semantics_tests;
 mod lossless;
@@ -106,24 +110,72 @@ pub enum MdWarning {
         /// What was left out: `"chart"` or `"memo"`.
         kind: &'static str,
     },
-    /// HWPX→MD (views given the original styles): a list paragraph was not
-    /// written as a Markdown list item — its kind, level and checked state
-    /// are lost, its text is kept. One per paragraph, even when several
-    /// share a paragraph shape.
+    /// A list item's membership did not survive a conversion, one per
+    /// paragraph, even when several share a paragraph shape:
+    ///
+    /// - HWPX→MD (views given the original styles): a list paragraph was not
+    ///   written as a Markdown list item. `path` is that paragraph, `list`
+    ///   its own list; its kind, level and checked state are lost, its text
+    ///   is kept.
+    /// - MD→HWPX (`"item_block_detached"`): a heading or rule a Markdown
+    ///   list item held became a paragraph outside the item. `path` is that
+    ///   resulting paragraph, `list` the list of the item that held it.
     ListSemanticsLost {
         /// Index of the section holding it.
         section: usize,
         /// Its path in the section, as the shared paragraph flows name it
         /// (`paragraphs[2].runs[0].table.rows[0].cells[0].paragraphs[1]`).
         path: String,
-        /// The list semantics it had.
+        /// The list semantics lost: the paragraph's own (HWPX→MD) or its
+        /// item's (`"item_block_detached"`).
         list: hwpforge_core::ParagraphListRef,
         /// Why: `"container_projection"` (a flow written as text: a table
         /// cell, a shape's text, a note, a caption, a header or footer),
         /// `"body_carrier_projection"` (a block of the paragraph written
-        /// outside its item) or `"markup_fallback"` (the paragraph written as
-        /// plain text).
+        /// outside its item), `"markup_fallback"` (the paragraph written as
+        /// plain text) or, reading Markdown, `"item_block_detached"` (a
+        /// heading or rule a list item held, written as a paragraph outside
+        /// the item: `path` is that paragraph's, `list` the item's).
         reason: &'static str,
+    },
+    /// A Markdown list of a kind the template defines no list for (no
+    /// bullet, numbering or check bullet role): its items are written as
+    /// plain paragraphs, their text and order kept, their marker, number,
+    /// check state and depth lost. Once per kind in a document.
+    ListDefinitionMissing {
+        /// The kind of item: a task item is a checkable [`ListItemKind::Bullet`].
+        kind: hwpforge_core::ListItemKind,
+        /// Whether the item is a task item.
+        checkable: bool,
+    },
+    /// A Markdown list nested deeper than the deepest list level: its items
+    /// are written at that level.
+    ListLevelClamped {
+        /// The level the nesting asked for (0 for a top-level list).
+        requested: usize,
+        /// The level written.
+        supported: u8,
+    },
+    /// A numbering whose numbers the conversion cannot show as they are,
+    /// once per numbering:
+    ///
+    /// - MD→HWPX: a Markdown numbered list's level text refers to a
+    ///   shallower level's number (`^1.^2`); each Markdown numbered list is a
+    ///   numbering group of its own, so that number counts in this group,
+    ///   not in the list around it. The definition is written as it is.
+    /// - HWPX→MD: a numbering's items continue after a block that is not
+    ///   one of them; the Markdown starts its numbers again at 1.
+    NumberingPresentationLost {
+        /// The numbering definition.
+        numbering_id: hwpforge_foundation::NumberingIndex,
+    },
+    /// A numbered Markdown list starting at a number other than 1: it is
+    /// written starting at `used`.
+    ListStartNormalized {
+        /// The start the Markdown gave.
+        requested: u64,
+        /// The start written.
+        used: u32,
     },
 }
 
@@ -156,6 +208,29 @@ impl core::fmt::Display for MdWarning {
                 f,
                 "{kind} comment left out: its content is not read back from Markdown"
             ),
+            Self::ListDefinitionMissing { kind, checkable } => {
+                let kind = match (kind, checkable) {
+                    (_, true) => "task",
+                    (hwpforge_core::ListItemKind::Bullet, false) => "bullet",
+                    (hwpforge_core::ListItemKind::Number, false) => "numbered",
+                };
+                write!(
+                    f,
+                    "the template defines no {kind} list; {kind} items are written as plain paragraphs"
+                )
+            }
+            Self::ListLevelClamped { requested, supported } => write!(
+                f,
+                "list nested at level {requested} is written at level {supported}, the deepest"
+            ),
+            Self::NumberingPresentationLost { numbering_id } => write!(
+                f,
+                "numbering {} is not shown as it numbers: a level refers to another group's number, or the numbers continue past other blocks",
+                numbering_id.get()
+            ),
+            Self::ListStartNormalized { requested, used } => {
+                write!(f, "numbered list starting at {requested} is written starting at {used}")
+            }
             Self::ListSemanticsLost { section, path, list, reason } => {
                 let kind = match list {
                     hwpforge_core::ParagraphListRef::Outline { .. } => "outline",

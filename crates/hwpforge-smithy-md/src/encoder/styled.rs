@@ -532,10 +532,55 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 st.lists.reset();
             }
 
+            // Who holds a paragraph is decided before how it is drawn: a list
+            // item holds itself, a continuation (of text or code) the open
+            // item of its level. Code-font text a list holds is a fence of
+            // its own in that item, its bytes kept (`ListIndent::block`):
+            // under its marker for an item, at the open item's content
+            // column for a continuation, at column 0 with no open item.
+            // Only code-font text nothing holds joins the code lines.
+            // 이것을 실패시키는 것: 코드 글꼴 continuation·항목을 코드 줄 모으기로
+            // (`code_font_list_text_stays_in_its_item`) · 일반 continuation 배치
+            // (`item_blocks_roundtrip_in_their_item`).
+            let code_level = list_format::code_continuation_level(paragraph, styles);
+            let text_level = list_format::continuation_level(paragraph, styles);
+            let item = match classify_paragraph(paragraph, styles) {
+                ParaKind::ListItem { kind, level, checked, .. } => Some((kind, level, checked)),
+                ParaKind::Heading { .. } | ParaKind::Body => None,
+            };
+            let code_font = is_code_paragraph(paragraph, styles);
+            let held =
+                code_level.is_some() || (code_font && (text_level.is_some() || item.is_some()));
+            let as_item = if held {
+                flush_code(&mut code, &mut blocks);
+                let text = paragraph
+                    .runs
+                    .iter()
+                    .filter_map(|r| r.content.plain_text())
+                    .collect::<String>();
+                let fence = Md::code_fence(&text).into_string();
+                let (markdown, as_item) = match (item, code_level.or(text_level)) {
+                    (Some((kind, level, checked)), None) => {
+                        let numbering = list_format::numbering_of(paragraph, styles);
+                        let head = st.lists.item("", kind, level, checked, numbering);
+                        (format!("{head}\n{}", st.lists.block(&fence)), true)
+                    }
+                    (_, Some(level)) if st.lists.resume_continuation(level) => {
+                        (st.lists.block(&fence), false)
+                    }
+                    _ => {
+                        st.lists.reset();
+                        (fence, false)
+                    }
+                };
+                let tight = st.lists.take_tight();
+                let source = source(vec![super::guard::plain_text(&text)], vec![st.at]);
+                blocks.push(Block { markdown, source, body: false, tight });
+                as_item
             // Code block detection: all text runs with code font.
             // InlineText runs (inline-tab carry) fold to
             // their `\t`-bearing plain string.
-            let as_item = if is_code_paragraph(paragraph, styles) {
+            } else if code_font {
                 let text = paragraph
                     .runs
                     .iter()
@@ -580,11 +625,10 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             };
             // What the paragraph was written as decides, here only, whether
             // a section-body list paragraph keeps its list: written as
-            // anything but an item (a code line, a block of its own) it
-            // loses it. An item the guard later writes as plain text is
-            // reported after the guard (`MARKUP_FALLBACK`).
-            // 이것을 실패시키는 것: 이 보고 삭제 · 코드 문단을 항목으로 세기
-            // (`code_list_paragraph_is_reported_once`).
+            // anything but an item (a heading over its list, a block of its
+            // own) it loses it. An item the guard later writes as plain text
+            // is reported after the guard (`MARKUP_FALLBACK`).
+            // 이것을 실패시키는 것: 이 보고 삭제(`heading_over_a_list_is_reported_once`).
             if !as_item {
                 list_format::body_list_loss(
                     &mut st.warnings,
@@ -599,6 +643,13 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         // Flush remaining code block at section end
         flush_code(&mut code, &mut blocks);
     }
+
+    st.warnings.extend(
+        st.lists
+            .take_presentation_lost()
+            .into_iter()
+            .map(|numbering_id| MdWarning::NumberingPresentationLost { numbering_id }),
+    );
 
     // Footnote/endnote definitions at the end.
     let notes = std::mem::replace(&mut st.notes, FootnoteCollector::new());
@@ -684,7 +735,8 @@ fn encode_paragraph_styled(
             // (`list_paragraph_holds_its_one_table`).
             return match kind {
                 ParaKind::ListItem { kind, level, checked, .. } if !continuation => {
-                    let head = st.lists.item("", kind, level, checked);
+                    let numbering = list_format::numbering_of(paragraph, styles);
+                    let head = st.lists.item("", kind, level, checked, numbering);
                     let block = st.lists.block(&block);
                     (format!("{head}\n{block}"), Drawn::Item)
                 }
@@ -709,7 +761,8 @@ fn encode_paragraph_styled(
             let content = list_text(paragraph, comments_after_text(text.trim()), st);
             // An empty item is written as its marker alone.
             // 이것을 실패시키는 것: 빈 항목 쓰지 않기(`empty_item_holds_its_first_block`).
-            let item = st.lists.item(content.trim(), kind, level, checked);
+            let numbering = super::list_format::numbering_of(paragraph, styles);
+            let item = st.lists.item(content.trim(), kind, level, checked, numbering);
             return (item, Drawn::Item);
         }
         ParaKind::Body if body => comment_ends_line(text.trim_start()).0,
@@ -2354,13 +2407,10 @@ fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
     // decoder carry is still detected as code if it would
     // have qualified before.
     let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
-    // A code block holds only the paragraph's text: a table or picture
-    // beside code-font text keeps the paragraph out of it, or it would be
-    // dropped.
-    // 이것을 실패시키는 것: 이 검사 삭제(`code_list_paragraph_is_reported_once`).
-    if text_runs.is_empty()
-        || paragraph.runs.iter().any(|r| r.content.is_table() || r.content.is_image())
-    {
+    // A code block holds only the paragraph's text: anything beside
+    // code-font text keeps the paragraph out of it, or it would be dropped.
+    // 이것을 실패시키는 것: 이 검사 삭제(`code_list_paragraph_stays_an_item`).
+    if text_runs.is_empty() || !list_format::holds_only_text(paragraph) {
         return false;
     }
     text_runs.iter().all(|run| {
@@ -2844,9 +2894,10 @@ mod tests {
                     styles.list_para_levels.insert(id, level);
                 }
                 Li::Cont(level) => {
-                    styles
-                        .para_style_names
-                        .insert(id, crate::internal_styles::list_continuation_style_name(level));
+                    styles.para_style_names.insert(
+                        id,
+                        hwpforge_blueprint::markdown::list_continuation_style_name(level),
+                    );
                 }
                 Li::Body => {}
             }

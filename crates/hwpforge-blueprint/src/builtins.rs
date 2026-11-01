@@ -94,6 +94,8 @@ mod tests {
             "heading4",
             "heading5",
             "heading6",
+            "numbered_item",
+            "check_item",
         ];
         for name in &expected {
             assert!(tmpl.styles.contains_key(*name), "missing style: {name}");
@@ -206,7 +208,7 @@ mod tests {
         let tmpl = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&tmpl).unwrap();
 
-        assert_eq!(registry.style_count(), 10);
+        assert_eq!(registry.style_count(), 12);
         assert!(registry.get_style("body").is_some());
         assert!(registry.get_style("heading1").is_some());
     }
@@ -223,8 +225,8 @@ mod tests {
         let resolved = resolve_template(&gov, &provider).unwrap();
         let registry = StyleRegistry::from_template(&resolved).unwrap();
 
-        // 7 from default + 2 from gov (title, subtitle)
-        assert_eq!(registry.style_count(), 12);
+        // 12 from default + 2 from gov (title, subtitle)
+        assert_eq!(registry.style_count(), 14);
         assert!(registry.get_style("title").is_some());
 
         // Font deduplication: 한컴바탕 + D2Coding = 2 unique fonts
