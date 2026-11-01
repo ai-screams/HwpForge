@@ -19,10 +19,11 @@ const LIST_PLAIN_STYLE_NAME: &str = "__hwpforge_md_list_plain";
 
 /// The width of a list marker and the gap after it, in points, added to the
 /// left margin of an item's continuation paragraphs. Hancom starts an item's
-/// text after the marker, but a paragraph with no list starts at the margin;
-/// 15pt is that distance measured with a bullet in the default body font, so
-/// another font size or a wider marker can land slightly off the item's text.
-const LIST_MARKER_WIDTH_PT: f64 = 15.0;
+/// text after the marker, but a paragraph with no list starts at the margin.
+/// The HWPX store fixes the marker's width at twice the font size, whatever
+/// the number; 20pt is that at the default 10pt, so another font size lands
+/// off the item's text.
+const LIST_MARKER_WIDTH_PT: f64 = 20.0;
 
 /// Selects concrete style names for every Markdown role.
 ///
@@ -641,7 +642,7 @@ mod tests {
     /// The default template (and the government template inheriting it):
     /// the outline is the first numbering, untouched; numbered items use the
     /// second; each bullet level its own glyph; every level 20pt deeper;
-    /// continuations and code 15pt past the item's margin, at its text, with
+    /// continuations and code 20pt past the item's margin, at its text, with
     /// no list; the role
     /// entries' own shapes unchanged; a second application adds nothing. No
     /// item has a first-line indent: Hancom aligns wrapped lines to the text
@@ -713,7 +714,7 @@ mod tests {
                     assert_eq!(p.list, None);
                     assert_eq!(
                         (p.indent_left.as_i32(), p.indent_first_line.as_i32()),
-                        (left + 1500, 0)
+                        (left + 2000, 0)
                     );
                     assert_eq!(name_of(&registry, entry), name);
                     let role = registry.get_style(role).unwrap();

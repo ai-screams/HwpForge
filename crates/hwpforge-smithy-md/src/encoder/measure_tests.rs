@@ -61,7 +61,7 @@ fn margins_of_what_was_written_are_given_back() {
         p(CONT1, vec![t("e")]),
     ]);
     let margins =
-        &[(BULLET, 2000), (CONT0, 3500), (CODE_CONT0, 3500), (BULLET1, 4000), (CONT1, 5500)];
+        &[(BULLET, 2000), (CONT0, 4000), (CODE_CONT0, 4000), (BULLET1, 4000), (CONT1, 6000)];
     assert_eq!(lost(&doc, margins), [Vec::<usize>::new(), Vec::new()]);
 }
 
@@ -79,7 +79,7 @@ fn an_item_is_measured_at_the_depth_it_was_written() {
 fn a_continuation_with_no_open_item_is_reported() {
     for shape in [CONT0, CODE_CONT0] {
         let doc = doc(vec![p(shape, vec![t("x")])]);
-        assert_eq!(lost(&doc, &[(shape, 3500)]), [vec![shape], vec![shape]]);
+        assert_eq!(lost(&doc, &[(shape, 4000)]), [vec![shape], vec![shape]]);
     }
 }
 
@@ -122,7 +122,7 @@ fn measures_of_a_picture_caption_are_reported() {
 #[test]
 fn the_first_text_of_an_empty_item_is_reported() {
     let doc = doc(vec![p(BULLET, vec![t("")]), p(CONT0, vec![t("b")])]);
-    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 3500)]), [vec![CONT0], vec![CONT0]]);
+    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 4000)]), [vec![CONT0], vec![CONT0]]);
 }
 
 /// An item that holds a table, in a text box too, reads back as an empty
@@ -143,7 +143,7 @@ fn an_item_of_one_table_is_reported() {
 fn a_table_first_in_an_empty_item_is_given_back() {
     let held = table(one_cell(body(vec![t("x")])));
     let doc = doc(vec![p(BULLET, vec![t("")]), p(CONT0, vec![held])]);
-    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 3500)]), [vec![], Vec::<usize>::new()]);
+    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 4000)]), [vec![], Vec::<usize>::new()]);
 }
 
 /// Text before a table is the empty item's first paragraph.
@@ -152,7 +152,7 @@ fn a_table_first_in_an_empty_item_is_given_back() {
 fn text_before_a_table_fills_an_empty_item() {
     let held = table(one_cell(body(vec![t("x")])));
     let doc = doc(vec![p(BULLET, vec![t("")]), p(CONT0, vec![t("a"), held])]);
-    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 3500)]), [vec![CONT0], vec![CONT0]]);
+    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 4000)]), [vec![CONT0], vec![CONT0]]);
 }
 
 /// A table only in a text box's caption is not written, so the text box's
@@ -166,7 +166,7 @@ fn a_table_that_is_not_written_fills_nothing() {
     let held = body(vec![table(one_cell(body(vec![t("y")])))]);
     *caption = Some(Caption::new(vec![held], CaptionSide::Bottom));
     let doc = doc(vec![p(BULLET, vec![t("")]), p(CONT0, vec![boxed])]);
-    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 3500)]), [vec![CONT0], vec![CONT0]]);
+    assert_eq!(lost(&doc, &[(BULLET, 2000), (CONT0, 4000)]), [vec![CONT0], vec![CONT0]]);
 }
 
 /// A picture stays in the item's first paragraph.

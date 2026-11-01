@@ -9,7 +9,7 @@ pub(crate) const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
-use hwpforge_core::table::grid;
+use hwpforge_core::table::{grid, TableMargin};
 use hwpforge_core::{
     Control, Document, Image, ListItemKind, Paragraph, ParagraphListRef, Run, RunContent, Section,
     Table, TableCell, TableRow,
@@ -289,6 +289,15 @@ impl ParagraphBuilder {
         self.runs.push(run);
     }
 
+    /// Drops the line ending of the last line, if there is one.
+    fn drop_last_line_ending(&mut self) {
+        if let Some(Run { content: RunContent::Text(text), .. }) = self.runs.last_mut() {
+            if text.ends_with('\n') {
+                text.pop();
+            }
+        }
+    }
+
     fn set_style(&mut self, style: MdStyleRef) {
         self.style = style;
     }
@@ -489,6 +498,17 @@ impl TableBuilder {
                 .and_then(|w| HwpUnit::new(w).ok())
                 .unwrap_or(fallback);
         }
+        // Line spacing leaves its room below a line, so the default outer
+        // margin puts the next line right under the table while the table
+        // sits 8pt below the line above it. 10pt below evens the two out.
+        // 이것을 실패시키는 것: 이 여백 삭제(`a_table_keeps_room_below_it`).
+        let margin = HwpUnit::new(283)?;
+        table.out_margin = Some(TableMargin {
+            left: margin,
+            right: margin,
+            top: margin,
+            bottom: HwpUnit::from_pt(10.0)?,
+        });
         Ok(table)
     }
 }
@@ -1586,8 +1606,16 @@ impl<'a> DecoderState<'a> {
         self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
     }
 
+    /// The parser ends a code block's last line with a line ending. A
+    /// paragraph ends its own last line, so that one would show as a blank
+    /// line under the code; the blank lines the code has are kept.
+    /// 이것을 실패시키는 것: 끝 줄바꿈 남기기 · 끝 빈 줄까지 지우기
+    /// (`code_block_ends_at_its_last_line`).
     fn end_code_block_tag(&mut self) {
         self.in_code_block = false;
+        if let Some(current) = self.current.as_mut() {
+            current.drop_last_line_ending();
+        }
         self.finalize_paragraph();
     }
 
@@ -2215,6 +2243,21 @@ mod tests {
     use hwpforge_core::PageSettings;
     use hwpforge_foundation::{BulletIndex, NumberingIndex};
 
+    #[test]
+    fn a_table_keeps_room_below_it() {
+        for md in ["| 가 |\n| -- |\n| 1 |\n", "- 항목\n\n  | 가 |\n  | -- |\n  | 1 |\n"] {
+            let decoded = MdDecoder::decode(md, &default_template()).unwrap();
+            let mut margins = Vec::new();
+            for paragraph in &decoded.document.sections()[0].paragraphs {
+                paragraph.for_each_table(|table: &Table| margins.push(table.out_margin));
+            }
+            let side = HwpUnit::new(283).unwrap();
+            let bottom = HwpUnit::from_pt(10.0).unwrap();
+            let expected = TableMargin { left: side, right: side, top: side, bottom };
+            assert_eq!(margins, [Some(expected)], "{md}");
+        }
+    }
+
     fn default_template() -> Template {
         builtin_default().unwrap()
     }
@@ -2487,7 +2530,7 @@ mod tests {
         // The item's margin plus the marker's width: its text, not its marker.
         assert_eq!(
             continuation_shape.indent_left.as_i32(),
-            first_shape.indent_left.as_i32() + 1500
+            first_shape.indent_left.as_i32() + 2000
         );
         assert_eq!(continuation_shape.indent_first_line, HwpUnit::ZERO);
     }
@@ -2707,15 +2750,12 @@ mod tests {
                 "-\n  | a |\n  | - |\n  | b |",
                 vec![row("", bullet(0), "list_item"), row("", None, CONT0)],
             ),
-            (
-                "-\n  ```\n  x\n  ```",
-                vec![row("", bullet(0), "list_item"), row("x\n", None, CODE0)],
-            ),
+            ("-\n  ```\n  x\n  ```", vec![row("", bullet(0), "list_item"), row("x", None, CODE0)]),
             (
                 "- t\n\n  ```\n  x\n  ```\n- u",
                 vec![
                     row("t", bullet(0), "list_item"),
-                    row("x\n", None, CODE0),
+                    row("x", None, CODE0),
                     row("u", bullet(0), "list_item"),
                 ],
             ),
@@ -2736,17 +2776,36 @@ mod tests {
         for (tail, last) in [
             ("tail", row("tail", None, CONT0)),
             ("| a |\n  | - |", row("", None, CONT0)),
-            ("```\n  if ready:\n      run()\n  ```", row("if ready:\n    run()\n", None, CODE0)),
-            (
-                "```\n  if ready:\n  \trun()  \n\n  ```",
-                row("if ready:\n\trun()  \n\n", None, CODE0),
-            ),
+            ("```\n  if ready:\n      run()\n  ```", row("if ready:\n    run()", None, CODE0)),
+            ("```\n  if ready:\n  \trun()  \n\n  ```", row("if ready:\n\trun()  \n", None, CODE0)),
         ] {
             let markdown = format!("- parent\n  - child\n\n  {tail}");
             let md = MdDecoder::decode_with_default(&markdown).unwrap();
             let mut expected = head.to_vec();
             expected.push(last);
             assert_eq!(items(&md), expected, "{markdown:?}");
+        }
+    }
+
+    /// A code block ends at its last line, whatever fence closes it, and
+    /// keeps the blank lines of its text, the last one included.
+    #[test]
+    fn code_block_ends_at_its_last_line() {
+        for (markdown, text) in [
+            ("```\ncode\n```", "code"),
+            ("```\r\ncode\r\n```", "code"),
+            ("```\ncode", "code"),
+            ("```\ncode\n\n```", "code\n"),
+            ("```\n\ncode\n```", "\ncode"),
+            ("```\n\n```", ""),
+            ("```\n```", ""),
+        ] {
+            let md = MdDecoder::decode_with_default(markdown).unwrap();
+            let paragraphs = md.document.sections()[0].paragraphs.as_slice();
+            assert_eq!(paragraphs.len(), 1, "{markdown:?}");
+            let got: String =
+                paragraphs[0].runs.iter().filter_map(|r| r.content.plain_text()).collect();
+            assert_eq!(got, text, "{markdown:?}");
         }
     }
 
@@ -2778,7 +2837,7 @@ mod tests {
                 assert!(!placement.treat_as_char, "{markdown:?}");
                 assert!(placement.flow_with_text, "{markdown:?}");
                 let margin = shape_of(&md, carrier).indent_left;
-                assert_eq!(margin.as_i32(), 3500 + 2000 * level, "{markdown:?}");
+                assert_eq!(margin.as_i32(), 4000 + 2000 * level, "{markdown:?}");
                 let total: i32 = table.rows[0].cells.iter().map(|c| c.width.as_i32()).sum();
                 assert_eq!(total, (page - margin).as_i32() / 2 * 2, "{markdown:?}");
             }
@@ -3484,7 +3543,7 @@ text
             Control::Hyperlink { url, .. } if url == "https://e.invalid/?q=&lt;"
         )));
         let md = MdDecoder::decode_with_default("\\&lt;\n\n```\n&lt;\n```").unwrap();
-        assert_eq!(texts(&md), ["&lt;", "&lt;\n"]);
+        assert_eq!(texts(&md), ["&lt;", "&lt;"]);
     }
 
     /// Text in an HTML block keeps the spaces between its content (between
