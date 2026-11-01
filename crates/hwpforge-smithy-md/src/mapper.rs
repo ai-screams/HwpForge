@@ -57,6 +57,9 @@ pub struct MdListStyles {
     pub continuation: [MdStyleRef; LIST_LEVELS],
     /// A code block an item holds.
     pub code_continuation: [MdStyleRef; LIST_LEVELS],
+    /// The left margin of an item's continuation paragraphs: where its
+    /// text starts.
+    pub text_margin: [HwpUnit; LIST_LEVELS],
     /// An item of a kind the template defines no list for.
     pub plain_fallback: MdStyleRef,
     /// The numbered items' registry entries, to copy into a new numbering
@@ -65,7 +68,7 @@ pub struct MdListStyles {
 }
 
 impl MdListStyles {
-    fn from_shapes(shapes: &MarkdownListShapes) -> Self {
+    fn from_shapes(shapes: &MarkdownListShapes, registry: &StyleRegistry) -> Self {
         let all = |entries: &[StyleEntry; LIST_LEVELS]| entries.map(|e| MdStyleRef::from_entry(&e));
         Self {
             bullet: shapes.bullet.as_ref().map(all),
@@ -74,6 +77,9 @@ impl MdListStyles {
             checked: shapes.checked.as_ref().map(all),
             continuation: all(&shapes.continuation),
             code_continuation: all(&shapes.code_continuation),
+            text_margin: shapes.continuation.map(|e| {
+                registry.para_shape(e.para_shape_id).expect("derived para shape").indent_left
+            }),
             plain_fallback: MdStyleRef::from_entry(&shapes.plain_fallback),
             number_entries: shapes.number,
         }
@@ -140,6 +146,11 @@ impl MdMapping {
             (None, ListItemKind::Number) => self.lists.number,
         };
         shapes.map(|levels| levels[usize::from(level.min(ParagraphListRef::MAX_LEVEL))])
+    }
+
+    /// Returns where the text of an item at the given nesting level starts.
+    pub fn list_text_margin(&self, level: u8) -> HwpUnit {
+        self.lists.text_margin[usize::from(level.min(ParagraphListRef::MAX_LEVEL))]
     }
 
     /// Returns the continuation-paragraph style for the given nesting level.
@@ -252,7 +263,8 @@ pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistr
             para_shape_id: heading_shapes[i],
             ..[heading1, heading2, heading3, heading4, heading5, heading6][i]
         });
-    let lists = MdListStyles::from_shapes(&apply_markdown_list_levels(&mut registry, names)?);
+    let shapes = apply_markdown_list_levels(&mut registry, names)?;
+    let lists = MdListStyles::from_shapes(&shapes, &registry);
     install_note_styles(&mut registry, body)?;
 
     let page_settings = resolved

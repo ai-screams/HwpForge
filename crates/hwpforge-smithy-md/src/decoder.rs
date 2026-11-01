@@ -8,6 +8,7 @@ use hwpforge_blueprint::builtins::builtin_default;
 pub(crate) const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::table::grid;
 use hwpforge_core::{
     Control, Document, Image, ListItemKind, Paragraph, ParagraphListRef, Run, RunContent, Section,
@@ -417,11 +418,7 @@ impl TableBuilder {
         self.current_cell.is_some()
     }
 
-    fn into_table(
-        mut self,
-        body_style: MdStyleRef,
-        page: hwpforge_core::PageSettings,
-    ) -> MdResult<Table> {
+    fn into_table(mut self, body_style: MdStyleRef, width: HwpUnit) -> MdResult<Table> {
         self.end_row();
         let html = self.html.is_some();
         let mut gfm_cols = None;
@@ -471,13 +468,13 @@ impl TableBuilder {
                 })
                 .collect(),
         );
-        // Widths are a layout default, an equal share of the printable
-        // width per column: they change no span, row or cell.
+        // Widths are a layout default, an equal share of `width` per
+        // column: they change no span, row or cell.
         let fallback = HwpUnit::from_mm(40.0)?;
         let share = table_columns(&table, gfm_cols)
             .and_then(|cols| i32::try_from(cols).ok())
             .filter(|&c| c > 0)
-            .map(|c| page.printable_width() / c)
+            .map(|c| width / c)
             .filter(|w| w.as_i32() > 0);
         for cell in table.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
             cell.width = share
@@ -1220,12 +1217,13 @@ impl<'a> DecoderState<'a> {
             ("tbody", false, Some(Body)) => set(self, Done),
             ("table", false, Some(Done)) => {
                 let builder = self.tables.pop().expect("html table");
-                let table = builder.into_table(self.mapping.body, self.mapping.page_settings)?;
                 if self.tables.last().is_some_and(|t| t.html.is_some()) {
+                    let width = self.mapping.page_settings.printable_width();
+                    let table = builder.into_table(self.mapping.body, width)?;
                     let char_shape_id = self.current_char_shape_id();
                     self.push_run_to_active_context(Run::table(table, char_shape_id));
                 } else {
-                    self.push_table_paragraph(table);
+                    self.push_table_paragraph(builder)?;
                 }
                 return Ok(());
             }
@@ -1763,23 +1761,40 @@ impl<'a> DecoderState<'a> {
             detail: "table end tag without table start".to_string(),
         })?;
 
-        let table = table_builder.into_table(self.mapping.body, self.mapping.page_settings)?;
-        self.push_table_paragraph(table);
-        Ok(())
+        self.push_table_paragraph(table_builder)
     }
 
     /// A table read at the top: a paragraph of its own, a continuation of
-    /// the list item that holds it.
-    /// 이것을 실패시키는 것: 항목 안 표에 body 스타일(`item_blocks_stay_in_their_item`).
-    fn push_table_paragraph(&mut self, table: Table) {
-        let style = match self.pending_items.last() {
-            Some(item) if self.in_item => self.mapping.list_continuation(item.level),
-            _ => self.mapping.body,
+    /// the list item that holds it. The default placement measures from
+    /// the column and ignores the paragraph's margin, so a table in an item
+    /// is placed from its paragraph, at the item's text, and is as much
+    /// narrower as to end at the right margin like a table in the body.
+    /// 이것을 실패시키는 것: 항목 안 표에 body 스타일(`item_blocks_stay_in_their_item`) ·
+    /// 기본 배치 · 쪽 폭 그대로 · 본문 표에도 문단 기준(`item_tables_start_at_the_item_text`).
+    fn push_table_paragraph(&mut self, builder: TableBuilder) -> MdResult<()> {
+        let page_width = self.mapping.page_settings.printable_width();
+        let body = self.mapping.body;
+        let (style, table) = match self.pending_items.last() {
+            Some(item) if self.in_item => {
+                let width = page_width - self.mapping.list_text_margin(item.level);
+                let placement = ObjectPlacement::new(
+                    ObjectTextWrap::TopAndBottom,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                )
+                .with_flow_with_text(true);
+                (
+                    self.mapping.list_continuation(item.level),
+                    builder.into_table(body, width)?.with_placement(placement),
+                )
+            }
+            _ => (body, builder.into_table(body, page_width)?),
         };
         let paragraph =
             Paragraph::with_runs(vec![Run::table(table, style.char_shape_id)], style.para_shape_id)
                 .with_style(style.style_ref);
         self.paragraphs.push(paragraph);
+        Ok(())
     }
 
     fn style_for_context(&self) -> MdStyleRef {
@@ -2726,6 +2741,50 @@ mod tests {
             let mut expected = head.to_vec();
             expected.push(last);
             assert_eq!(items(&md), expected, "{markdown:?}");
+        }
+    }
+
+    /// A table in an item starts at the item's text, in GFM or HTML, and
+    /// ends at the right margin; a table in the body stays at the column
+    /// and takes the whole width.
+    #[test]
+    fn item_tables_start_at_the_item_text() {
+        let html = "<table>\n<tbody>\n<tr>\n  <td>a</td>\n  <td>b</td>\n</tr>\n</tbody>\n</table>";
+        let gfm = "| a | b |\n| - | - |";
+        let indent = |block: &str, by: &str| block.replace('\n', &format!("\n{by}"));
+        let shape_of = |md: &MdDocument, p: &Paragraph| {
+            md.style_registry.para_shape(p.para_shape_id).expect("para shape").clone()
+        };
+        for block in [gfm, html] {
+            for (markdown, level) in [
+                (format!("- item\n\n  {}", indent(block, "  ")), 0),
+                (format!("- item\n  - child\n\n    {}", indent(block, "    ")), 1),
+            ] {
+                let md = MdDecoder::decode_with_default(&markdown).unwrap();
+                let page = md.document.sections()[0].page_settings.printable_width();
+                let carrier = md.document.sections()[0].paragraphs.last().unwrap();
+                let RunContent::Table(table) = &carrier.runs[0].content else {
+                    panic!("{markdown:?}: not a table");
+                };
+                let placement = table.placement.as_ref().expect("placement");
+                assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Para, "{markdown:?}");
+                assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Para, "{markdown:?}");
+                assert!(!placement.treat_as_char, "{markdown:?}");
+                assert!(placement.flow_with_text, "{markdown:?}");
+                let margin = shape_of(&md, carrier).indent_left;
+                assert_eq!(margin.as_i32(), 3500 + 2000 * level, "{markdown:?}");
+                let total: i32 = table.rows[0].cells.iter().map(|c| c.width.as_i32()).sum();
+                assert_eq!(total, (page - margin).as_i32() / 2 * 2, "{markdown:?}");
+            }
+            let md = MdDecoder::decode_with_default(block).unwrap();
+            let page = md.document.sections()[0].page_settings.printable_width();
+            let RunContent::Table(table) = &md.document.sections()[0].paragraphs[0].runs[0].content
+            else {
+                panic!("not a table");
+            };
+            assert_eq!(table.placement, None);
+            let total: i32 = table.rows[0].cells.iter().map(|c| c.width.as_i32()).sum();
+            assert_eq!(total, page.as_i32() / 2 * 2);
         }
     }
 
