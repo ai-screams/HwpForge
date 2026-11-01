@@ -469,15 +469,22 @@ impl TableBuilder {
                 .collect(),
         );
         // Widths are a layout default, an equal share of `width` per
-        // column, the fallback per column when `width` has no room: they
-        // change no span, row or cell.
-        // 이것을 실패시키는 것: 폭이 없을 때 칸마다 대체 폭
-        // (`merged_cells_span_the_fallback_columns`).
+        // column, the fallback per column when `width` has no room, less
+        // for so many columns that the whole table would not be a width:
+        // they change no span, row or cell.
+        // 이것을 실패시키는 것: 폭이 없을 때 칸마다 대체 폭 · 열 수로 제한하지 않기
+        // (`merged_cells_span_the_fallback_columns`,
+        // `many_narrow_columns_keep_a_table_width`).
         let fallback = HwpUnit::from_mm(40.0)?;
         let share = table_columns(&table, gfm_cols)
             .and_then(|cols| i32::try_from(cols).ok())
             .filter(|&c| c > 0)
-            .map(|c| Some(width / c).filter(|w| w.as_i32() > 0).unwrap_or(fallback));
+            .map(|c| {
+                Some(width / c)
+                    .filter(|w| w.as_i32() > 0)
+                    .or(HwpUnit::new(fallback.as_i32().min(HwpUnit::MAX_VALUE / c)).ok())
+                    .unwrap_or(fallback)
+            });
         for cell in table.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
             cell.width = share
                 .and_then(|w| w.as_i32().checked_mul(i32::from(cell.col_span.max(1))))
@@ -3391,6 +3398,37 @@ text
                 .map(|row| row.cells.iter().map(|c| c.width.as_i32()).collect())
                 .collect();
             assert_eq!(widths, [vec![column * 2], vec![column, column]], "{markdown:?}");
+        }
+    }
+
+    /// However many columns share no room, every row of the fallback widths
+    /// adds up to one table width that is a valid width.
+    #[test]
+    fn many_narrow_columns_keep_a_table_width() {
+        let cell = |span: u32, n: usize| format!("  <td colspan=\"{span}\">x</td>\n").repeat(n);
+        let grid = |rows: &[String]| {
+            let rows: String = rows.iter().map(|r| format!("<tr>\n{r}</tr>\n")).collect();
+            format!("<table>\n<tbody>\n{rows}</tbody>\n</table>")
+        };
+        let mut narrow = default_template();
+        narrow.page.as_mut().expect("page").width = HwpUnit::from_mm(40.0).ok();
+        for (markdown, template) in [
+            (grid(&[cell(8800, 22)]), default_template()),
+            (grid(&[cell(9000, 1), cell(4500, 2)]), narrow),
+        ] {
+            let md = MdDecoder::decode(&markdown, &template).unwrap();
+            let RunContent::Table(table) = &md.document.sections()[0].paragraphs[0].runs[0].content
+            else {
+                panic!("not a table");
+            };
+            let totals: Vec<i64> = table
+                .rows
+                .iter()
+                .map(|row| row.cells.iter().map(|c| i64::from(c.width.as_i32())).sum())
+                .collect();
+            assert!(totals.iter().all(|&w| w == totals[0]), "{totals:?}");
+            assert!(totals[0] > 0 && totals[0] <= i64::from(i32::MAX), "{totals:?}");
+            assert!(HwpUnit::new(totals[0] as i32).is_ok(), "{totals:?}");
         }
     }
 
