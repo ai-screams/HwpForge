@@ -252,17 +252,27 @@ fn package_name_policy_layout_carry_propagates_opaque_selection() {
     zip.start_file("mimetype", zip::write::SimpleFileOptions::default()).unwrap();
     zip.write_all(b"application/hwp+zip").unwrap();
     let missing = zip.finish().unwrap().into_inner();
-    assert!(crate::layout_carry::carry_line_segs(&missing, &original, &original, &source).is_ok());
+    assert!(crate::layout_carry::carry_line_segs(
+        &missing, &original, &original, &original, &source
+    )
+    .is_ok());
     let undecodable = rewrite(&original, &[("Contents/section0.xml", None, b"\xff")]);
-    assert!(
-        crate::layout_carry::carry_line_segs(&undecodable, &original, &original, &source).is_ok()
-    );
-    for (a, b, c) in [
-        (&opaque, &original, &original),
-        (&original, &opaque, &original),
-        (&original, &original, &opaque),
+    assert!(crate::layout_carry::carry_line_segs(
+        &undecodable,
+        &original,
+        &original,
+        &original,
+        &source
+    )
+    .is_ok());
+    for (a, b, c, probe) in [
+        (&opaque, &original, &original, &original),
+        (&original, &opaque, &original, &original),
+        (&original, &original, &opaque, &original),
+        // 이것을 실패시키는 것: probe 패키지의 opaque 선택 오류 검사 삭제.
+        (&original, &original, &original, &opaque),
     ] {
-        assert!(crate::layout_carry::carry_line_segs(a, b, c, &source).is_err());
+        assert!(crate::layout_carry::carry_line_segs(a, b, c, probe, &source).is_err());
     }
 }
 
@@ -317,7 +327,8 @@ fn package_name_policy_layout_carry_resave_preserves_opaque_names_bytes_and_flag
         )
         .unwrap();
         let (saved, _) =
-            crate::layout_carry::carry_line_segs(&original, &baseline, &output, &source).unwrap();
+            crate::layout_carry::carry_line_segs(&original, &baseline, &output, &output, &source)
+                .unwrap();
         assert_ne!(saved, output, "must exercise the writer, not the no-change return");
         assert!(RawPackage::read(&saved)
             .unwrap()

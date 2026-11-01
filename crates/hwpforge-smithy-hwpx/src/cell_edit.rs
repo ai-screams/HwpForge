@@ -28,6 +28,8 @@
 //!   anchors as well as ancestor/descendant target conflicts (an outer cell
 //!   replacement would destroy a nested table another spec targets).
 
+mod line_keep;
+
 use std::collections::{HashMap, HashSet};
 
 use unicode_normalization::UnicodeNormalization;
@@ -294,6 +296,14 @@ pub fn apply_set_cells(
     document: &mut Document<Draft>,
     specs: &[CellSpec],
 ) -> Result<SetCellOutcome, CellEditError> {
+    let resolved = resolve_edits(document, specs)?;
+    Ok(apply_resolved(document, resolved))
+}
+
+fn resolve_edits(
+    document: &Document<Draft>,
+    specs: &[CellSpec],
+) -> Result<Vec<ResolvedEdit>, CellEditError> {
     for (si, section) in document.sections().iter().enumerate() {
         section.check_nesting_depth().map_err(|error| {
             let reason = match error {
@@ -422,6 +432,10 @@ pub fn apply_set_cells(
         }
     }
 
+    Ok(resolved)
+}
+
+fn apply_resolved(document: &mut Document<Draft>, resolved: Vec<ResolvedEdit>) -> SetCellOutcome {
     // ── mutate (infallible after preflight) ─────────────────────────
     let mut by_table: HashMap<usize, Vec<&ResolvedEdit>> = HashMap::new();
     for edit in &resolved {
@@ -446,7 +460,7 @@ pub fn apply_set_cells(
         }
     });
 
-    Ok(SetCellOutcome {
+    SetCellOutcome {
         cells: resolved
             .into_iter()
             .map(|edit| SetCellResult {
@@ -457,7 +471,7 @@ pub fn apply_set_cells(
                 cleared: edit.text.is_empty(),
             })
             .collect(),
-    })
+    }
 }
 
 /// NFC + Unicode-whitespace trim/collapse.
@@ -582,6 +596,11 @@ impl HwpxCellEditor {
     /// [`apply_set_cells`] → validate → encode. Every failure is
     /// fail-closed: no bytes are produced.
     ///
+    /// Supported single-line text cells retain their caches when the measured
+    /// width bound fits and the source layout properties permit it. Other edits
+    /// invalidate the changed paragraph, its host chain, and later paragraphs
+    /// in those flows.
+    ///
     /// # Errors
     ///
     /// See [`CellEditError`]. The layout-cache carry step
@@ -659,6 +678,23 @@ impl HwpxCellEditor {
             d0.require_source_table(spec.table)
                 .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?;
         }
+        // Each text is cleaned once, before the edit, so the cell holds the
+        // cleaned text and the encoder's part scan finds nothing left of it to
+        // report. The warning names the anchor the edit resolved to, which is
+        // known only after the edit.
+        let table_sections: Vec<usize> =
+            tables_in_document(&d0.document).iter().map(|e| e.section).collect();
+        let (specs, removed): (Vec<CellSpec>, Vec<usize>) = specs
+            .iter()
+            .map(|spec| {
+                let (text, count) = crate::wire_xml::clean_edit_text(&spec.text);
+                (CellSpec { text, ..spec.clone() }, count)
+            })
+            .unzip();
+        let resolved = resolve_edits(&d0.document, &specs)?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let mut candidates = line_keep::candidates(&d0, &package, &resolved);
         let HwpxDocument {
             source_maps: _,
             source_basis: _,
@@ -667,22 +703,8 @@ impl HwpxCellEditor {
             image_store,
             warnings: decode_warnings,
         } = d0;
-        // Each text is cleaned once, before the edit, so the cell holds the
-        // cleaned text and the encoder's part scan finds nothing left of it to
-        // report. The warning names the anchor the edit resolved to, which is
-        // known only after the edit.
-        let table_sections: Vec<usize> =
-            tables_in_document(&document).iter().map(|e| e.section).collect();
-        let (specs, removed): (Vec<CellSpec>, Vec<usize>) = specs
-            .iter()
-            .map(|spec| {
-                let (text, count) = crate::wire_xml::clean_edit_text(&spec.text);
-                (CellSpec { text, ..spec.clone() }, count)
-            })
-            .unzip();
-        let outcome = apply_set_cells(&mut document, &specs)?;
-        let package = crate::patch::RawPackage::read(base)
-            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let outcome = apply_resolved(&mut document, resolved);
+        line_keep::restore_caches(&mut document, &candidates);
         let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
         for (cell, count) in outcome.cells.iter().zip(removed) {
             if count > 0 {
@@ -698,6 +720,7 @@ impl HwpxCellEditor {
                 });
             }
         }
+        let probe_document = (!candidates.is_empty()).then(|| document.clone());
         let validated = document
             .validate()
             .map_err(|e| CellEditError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
@@ -725,8 +748,20 @@ impl HwpxCellEditor {
         // renderer does not reflow (and repaginate) the whole document.
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
-            .map_err(CellEditError::Codec)?;
+        line_keep::cancel_dropped(&source, &mut candidates);
+        let probe = probe_document
+            .map(|document| line_keep::probe(document, &style_store, &image_store, &candidates))
+            .transpose()
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?
+            .flatten();
+        let (bytes, dropped) = crate::layout_carry::carry_line_segs(
+            base,
+            &e0,
+            &bytes,
+            probe.as_deref().unwrap_or(&bytes),
+            &source,
+        )
+        .map_err(CellEditError::Codec)?;
         encode_warnings.extend(dropped);
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },

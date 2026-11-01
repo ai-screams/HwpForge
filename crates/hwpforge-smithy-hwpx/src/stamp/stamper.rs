@@ -425,8 +425,9 @@ impl HwpxStamper {
         // document reflow/repagination in the renderer).
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
-            .map_err(StamperError::Codec)?;
+        let (bytes, dropped) =
+            crate::layout_carry::carry_line_segs(base, &e0, &bytes, &bytes, &source)
+                .map_err(StamperError::Codec)?;
         encode_warnings.extend(dropped);
 
         // ── manifest from the OUTPUT (re-decode is the source of truth) ─
@@ -553,8 +554,9 @@ impl HwpxStamper {
         // document reflow/repagination in the renderer).
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
-            .map_err(StamperError::Codec)?;
+        let (bytes, dropped) =
+            crate::layout_carry::carry_line_segs(base, &e0, &bytes, &bytes, &source)
+                .map_err(StamperError::Codec)?;
         encode_warnings.extend(dropped);
 
         // ── post-encode verification on the re-decoded OUTPUT ───────
