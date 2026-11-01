@@ -898,7 +898,7 @@ fn lists_roundtrip_through_hwpx() {
 /// An empty item's first block (a nested item, a table, code) follows its
 /// marker on the next line, inside the item, in every view; code keeps its
 /// text byte for byte; what follows a nested list returns to its parent.
-/// 이것을 실패시키는 것: 빈 머리 뒤 빈 줄 · 코드에 일반 continuation 배치 · 끝 줄바꿈 더하기 ·
+/// 이것을 실패시키는 것: 빈 머리 뒤 빈 줄 · 코드에 일반 continuation 배치 · 끝 줄바꿈 빼기 ·
 /// 부모 대신 자식 열에 배치.
 #[test]
 fn item_blocks_roundtrip_in_their_item() {
@@ -909,7 +909,7 @@ fn item_blocks_roundtrip_in_their_item() {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let bodies = ["if ready:\n    run()\n", "if ready:\n\trun()  \n\n", "\n", ""];
+    let bodies = ["if ready:\n    run()\n", "if ready:\n\trun()  \n\n", ""];
     let mut cases = vec![
         ("-\n  - child".to_string(), 0, 0),
         ("1.\n   - child".to_string(), 0, 0),
@@ -938,6 +938,11 @@ fn item_blocks_roundtrip_in_their_item() {
       // ending a closed fence needs, and nothing else.
     for (view, out) in views("-\n  ```\n  x") {
         assert_eq!(parsed_blocks(&out).0, [("x\n".to_string(), 1)], "{view}: {out:?}");
+    }
+    // A paragraph is one line at least, so one blank line and no line at all
+    // are the same code paragraph.
+    for (view, out) in views("-\n  ```\n\n  ```") {
+        assert_eq!(parsed_blocks(&out).0, [(String::new(), 1)], "{view}: {out:?}");
     }
 }
 
@@ -1099,4 +1104,53 @@ fn list_text_emphasis_follows_its_style() {
     let lookup = HwpxStyleLookup::new(&back.style_store, &back.image_store);
     let styled = MdEncoder::encode_styled(&back.document.validate().unwrap(), &lookup).markdown;
     assert_eq!(styled, "- a *i*\n\n  b\n\n**c**");
+}
+
+// 이것을 실패시키는 것: 개요 번호나 한컴 문서 머리까지 고정 폭으로 바꾸기 · 복제한 번호 정의를
+// 빠뜨리기 · 글머리표 값 변경 · 이어지는 문단 폭과 표지 폭을 따로 고치기.
+#[test]
+fn an_item_and_its_continuation_start_at_the_same_place() {
+    let md = "1. 하나\n\n   이어짐\n\n글\n\n1. 둘\n\n- 점\n\n  이어짐\n";
+    let bytes = wire(md, &builtin_default().unwrap(), HancomStyleSet::Modern);
+    let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+    let section = Element::parse(&part(&bytes, "Contents/section0.xml"));
+
+    let head = |node: &Element, level: &str| -> (String, String) {
+        let found = nodes(node, "hh:paraHead");
+        let head = found.iter().find(|h| h.attr("level") == Some(level)).unwrap();
+        (head.attr("useInstWidth").unwrap().into(), head.attr("textOffset").unwrap().into())
+    };
+    let numberings = nodes(&header, "hh:numbering");
+    assert!(numberings.len() >= 3, "the outline, the template's, a restart");
+    assert_eq!(head(numberings[0], "1"), ("1".to_string(), "50".to_string()));
+    for numbering in &numberings[1..] {
+        assert_eq!(head(numbering, "1"), ("0".to_string(), "100".to_string()));
+        assert_eq!(head(numbering, "2"), ("0".to_string(), "50".to_string()));
+        assert_eq!(head(numbering, "6"), ("0".to_string(), "0".to_string()));
+    }
+    for bullet in nodes(&header, "hh:bullet") {
+        assert_eq!(head(bullet, "0"), ("0".to_string(), "100".to_string()));
+    }
+
+    let left = |text: &str| -> i32 {
+        let paragraph = nodes(&section, "hp:p")
+            .into_iter()
+            .find(|p| nodes(p, "hp:t").iter().any(|t| t.text == text))
+            .unwrap();
+        let id = paragraph.attr("paraPrIDRef").unwrap();
+        let shapes = nodes(&header, "hh:paraPr");
+        let shape = shapes.iter().find(|s| s.attr("id") == Some(id)).unwrap();
+        shape.find("hc:left").attr("value").unwrap().parse().unwrap()
+    };
+    let char_height: i32 = {
+        let paragraph = nodes(&section, "hp:p")
+            .into_iter()
+            .find(|p| nodes(p, "hp:t").iter().any(|t| t.text == "하나"))
+            .unwrap();
+        let id = paragraph.child("hp:run").attr("charPrIDRef").unwrap();
+        let shapes = nodes(&header, "hh:charPr");
+        let shape = shapes.iter().find(|s| s.attr("id") == Some(id)).unwrap();
+        shape.attr("height").unwrap().parse().unwrap()
+    };
+    assert_eq!(left("이어짐") - left("하나"), 2 * char_height);
 }

@@ -1805,6 +1805,52 @@ fn registry_shape_map_entry<T: Copy>(
     })
 }
 
+/// Fixes the marker width of a template's lists, so an item's text starts
+/// where its continuations do whatever the number. The first numbering is the
+/// outline's: headings have no continuations and keep the marker's own width.
+/// Only a store built from a template gets this: a decoded document keeps the
+/// heads it was saved with.
+fn apply_list_marker_widths(
+    store: &mut HwpxStyleStore,
+    registry: &StyleRegistry,
+) -> HwpxResult<()> {
+    use crate::encoder::wire_rules::{list_text_offset, BULLET_TEXT_OFFSET};
+
+    for (position, numbering) in (1..).zip(&registry.numberings).skip(1) {
+        for head in &numbering.levels {
+            if let Some(offset) = list_text_offset(head) {
+                store.set_paragraph_head_metrics(
+                    HeadingType::Number,
+                    position,
+                    head.level,
+                    Alignment::Left,
+                    false,
+                    true,
+                    0,
+                    offset,
+                    false,
+                    u32::MAX,
+                )?;
+            }
+        }
+    }
+    for (position, bullet) in (1..).zip(&registry.bullets) {
+        store.set_paragraph_head_metrics(
+            HeadingType::Bullet,
+            position,
+            bullet.para_head.level,
+            Alignment::Left,
+            false,
+            true,
+            0,
+            BULLET_TEXT_OFFSET,
+            false,
+            u32::MAX,
+        )?;
+    }
+    Ok(())
+}
+
 fn build_store_from_registry_with(
     registry: &StyleRegistry,
     style_set: HancomStyleSet,
@@ -1905,6 +1951,7 @@ fn build_store_from_registry_with(
     for bullet in &registry.bullets {
         store.push_bullet(bullet.clone());
     }
+    apply_list_marker_widths(&mut store, registry)?;
 
     let tabs = TabDef::merged_with_defaults(registry.tabs.iter());
     let mut para_shape_map = Vec::with_capacity(registry.para_shapes.len());

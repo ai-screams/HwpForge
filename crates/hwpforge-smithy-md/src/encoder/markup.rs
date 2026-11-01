@@ -221,24 +221,16 @@ impl Md {
     }
 
     /// Document text as a fenced code block: the fence is longer than any
-    /// backtick run in it (at least three), so no line can close it.
+    /// backtick run in it (at least three), so no line can close it. The
+    /// closing fence takes a line of its own, so reading the block back gives
+    /// the same text, whitespace, tabs and blank lines included; no text
+    /// takes no line.
+    /// 이것을 실패시키는 것: 빈 코드에 줄 더하기 · 끝 줄바꿈 빼기
+    /// (`item_blocks_roundtrip_in_their_item`).
     pub(crate) fn code_block(raw: &str) -> Self {
         let text = lines(raw);
         let fence = "`".repeat((longest_run(&text, '`') + 1).max(3));
-        Self::of(format!("{fence}\n{text}\n{fence}"))
-    }
-
-    /// A code block's text, as read from a fence, in a fence again: its
-    /// bytes as they are (its lines' whitespace, tabs and blank lines), the
-    /// closing fence on the line after its last line ending. Text read from
-    /// a closed fence ends with a line ending of its own, so none is added;
-    /// text with no last line ending (read from a fence the document ended)
-    /// gets one.
-    /// 이것을 실패시키는 것: 끝 줄바꿈을 늘 더하기(`code_in_an_item_keeps_its_text`).
-    pub(crate) fn code_fence(raw: &str) -> Self {
-        let text = lines(raw);
-        let fence = "`".repeat((longest_run(&text, '`') + 1).max(3));
-        let end = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
+        let end = if text.is_empty() { "" } else { "\n" };
         Self::of(format!("{fence}\n{text}{end}{fence}"))
     }
 

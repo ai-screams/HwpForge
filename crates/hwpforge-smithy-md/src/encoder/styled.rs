@@ -536,7 +536,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     .iter()
                     .filter_map(|r| r.content.plain_text())
                     .collect::<String>();
-                let fence = Md::code_fence(&text).into_string();
+                let fence = Md::code_block(&text).into_string();
                 let (markdown, as_item) = match (item, code_level.or(text_level)) {
                     (Some((kind, level, checked)), None) => {
                         let numbering = list_format::numbering_of(paragraph, styles);

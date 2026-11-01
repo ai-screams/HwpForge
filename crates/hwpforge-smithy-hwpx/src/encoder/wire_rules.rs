@@ -1,7 +1,51 @@
 //! Shared encoder output spellings and fixed control tags.
-use hwpforge_foundation::DropCapStyle;
+use hwpforge_core::ParaHead;
+use hwpforge_foundation::{DropCapStyle, NumberFormatType};
 
 pub(crate) const DEFAULT_DROP_CAP: DropCapStyle = DropCapStyle::None;
+
+/// `textOffset` (percent of the font size) of a bullet: one cell of marker.
+pub(crate) const BULLET_TEXT_OFFSET: i32 = 100;
+
+/// `textOffset` (percent of the font size) that starts a list item's text two
+/// font sizes past its marker, or `None` for a marker that does not fit or
+/// whose width was never measured.
+///
+/// With `useInstWidth="0"` Hancom gives a marker a fixed width: the font size
+/// times the cells of the level's format text plus `textOffset` percent, for
+/// any number. A digit and a literal ASCII character are half a cell, a Hangul
+/// syllable and a circled number are one. At the default 10pt this is 20pt,
+/// the distance `hwpforge_blueprint::markdown` puts continuations at.
+pub(crate) fn list_text_offset(head: &ParaHead) -> Option<i32> {
+    let number = match head.num_format {
+        NumberFormatType::Digit => 1,
+        NumberFormatType::HangulSyllable
+        | NumberFormatType::CircledDigit
+        | NumberFormatType::CircledHangulSyllable => 2,
+        _ => return None,
+    };
+    let own_level = match head.level {
+        1..=9 => char::from_digit(head.level, 10)?,
+        10 => ':',
+        _ => return None,
+    };
+    let (mut half_cells, mut numbers) = (0, 0);
+    let mut chars = head.text.chars();
+    while let Some(c) = chars.next() {
+        if c == '^' {
+            if chars.next()? != own_level {
+                return None;
+            }
+            half_cells += number;
+            numbers += 1;
+        } else if c.is_ascii() {
+            half_cells += 1;
+        } else {
+            return None;
+        }
+    }
+    (numbers == 1 && half_cells <= 4).then_some((4 - half_cells) * 50)
+}
 // Big-endian ASCII control IDs: %clk, %smr, %pat, %xrf.
 pub(crate) const CLICK_HERE_FIELD_ID: u32 = u32::from_be_bytes(*b"%clk");
 pub(crate) const SUMMARY_FIELD_ID: u32 = u32::from_be_bytes(*b"%smr");
@@ -19,6 +63,51 @@ pub(crate) fn series_name_xml(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn head(num_format: NumberFormatType, level: u32, text: &str) -> ParaHead {
+        ParaHead { start: 1, level, num_format, text: text.into(), checkable: false }
+    }
+
+    // 이것을 실패시키는 것: 칸 수 계산 변경 · 형식별 숫자 칸 변경.
+    #[test]
+    fn list_text_offset_fills_two_font_sizes() {
+        use NumberFormatType::{CircledDigit, CircledHangulSyllable, Digit, HangulSyllable};
+        for (format, level, text, offset) in [
+            (Digit, 1, "^1.", 100),
+            (HangulSyllable, 2, "^2.", 50),
+            (Digit, 3, "^3)", 100),
+            (HangulSyllable, 4, "^4)", 50),
+            (Digit, 5, "(^5)", 50),
+            (HangulSyllable, 6, "(^6)", 0),
+            (CircledDigit, 7, "^7", 100),
+            (CircledHangulSyllable, 8, "^8", 100),
+            (Digit, 10, "^:.", 100),
+        ] {
+            assert_eq!(list_text_offset(&head(format, level, text)), Some(offset), "{text}");
+        }
+    }
+
+    // 이것을 실패시키는 것: 넘치는 표지를 음수로 쓰기 · 측정하지 않은 형식이나 글자를 계산하기 ·
+    // 다른 수준의 번호를 이 수준의 형식으로 세기.
+    #[test]
+    fn list_text_offset_leaves_what_was_not_measured() {
+        use NumberFormatType::{Digit, HangulSyllable, RomanCapital};
+        for (format, text) in [
+            (Digit, "((^1))"),
+            (HangulSyllable, "(^1)."),
+            (RomanCapital, "^1."),
+            (Digit, "제^1"),
+            (Digit, "^1.^2."),
+            (Digit, "."),
+            (Digit, "^"),
+            (Digit, "^x."),
+            (Digit, "^2."),
+        ] {
+            assert_eq!(list_text_offset(&head(format, 1, text)), None, "{text}");
+        }
+        assert_eq!(list_text_offset(&head(Digit, 0, "^0.")), None);
+        assert_eq!(list_text_offset(&head(Digit, 11, "^:.")), None);
+    }
 
     // 이것을 실패시키는 것: DEFAULT_DROP_CAP을 DoubleLine으로 변경.
     #[test]

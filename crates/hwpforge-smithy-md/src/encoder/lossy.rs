@@ -126,7 +126,7 @@ fn encode_body(
             // (`ListIndent::block`); no open item, at column 0.
             // 이것을 실패시키는 것: 일반 continuation 배치(`code_in_an_item_keeps_its_text`).
             if let Some(level) = code_continuation_level(paragraph, mapping, styles) {
-                let fence = Md::code_fence(&raw_text(paragraph)).into_string();
+                let fence = Md::code_block(&raw_text(paragraph)).into_string();
                 let markdown = if lists.resume_continuation(level) {
                     let depth = Held::Continuation(lists.depth());
                     measures.written(at, paragraph.para_shape_id, depth);
