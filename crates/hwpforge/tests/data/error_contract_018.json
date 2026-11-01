@@ -4381,6 +4381,12 @@
           "occurrence": 2
         },
         {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Encode",
+          "occurrence": 3
+        },
+        {
           "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
           "function": "carry_line_segs",
           "stage": "Encode",
@@ -4434,6 +4440,12 @@
           "function": "carry_line_segs",
           "stage": "Verification",
           "occurrence": 5
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/layout_carry.rs",
+          "function": "carry_line_segs",
+          "stage": "Verification",
+          "occurrence": 6
         }
       ]
     },
@@ -5086,7 +5098,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "apply_set_cells",
+          "function": "resolve_edits",
           "variant": "CellEditError::NestingTooDeep",
           "occurrence": 1
         }

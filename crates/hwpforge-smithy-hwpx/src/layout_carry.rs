@@ -1,21 +1,18 @@
 //! Selective `<hp:linesegarray>` carry — Hancom's per-paragraph line-layout
 //! cache survives re-encode for paragraphs an edit did not touch.
 //!
-//! Full re-encode surfaces (stamp, set-cell) drop `<hp:linesegarray>`
-//! because the decoder never carried it into Core (a layout CACHE has no
-//! place in the IR). Without the cache the renderer reflows every
-//! paragraph from scratch, and on real government forms the accumulated
-//! drift moves page breaks (blank-HPC: 9 → 8 pages in PDF export).
+//! Default re-encoding omits Core layout caches. Carry restores only caches
+//! whose encoder-validated coordinates still match the edited flow.
 //!
 //! The carry is a wire-order splice:
 //!
 //! 1. scan the BASELINE (no-op re-encode of the pristine document, already
-//!    produced by the admission gate) and the OUTPUT: one slot per `<hp:p>`
+//!    produced by the admission gate) and the PROBE: one slot per `<hp:p>`
 //!    in open order;
 //! 2. scan the SOURCE — the edited document encoded once more with its Core
 //!    caches emitted ([`cache_source`]), which must equal the OUTPUT but for
 //!    those caches;
-//! 3. a paragraph whose OUTPUT slice is byte-identical to its BASELINE
+//! 3. a paragraph whose PROBE slice is byte-identical to its BASELINE
 //!    slice was not touched by the edit → take its cache from the SOURCE
 //!    and insert it before its `</hp:p>` — unless it comes after a changed
 //!    paragraph in the same flow, or after a changed paragraph's host in
@@ -23,6 +20,11 @@
 //!    paragraphs, paragraphs containing edited nested paragraphs,
 //!    id-shifted elements) stays cache-less and the renderer reflows just
 //!    those.
+//!
+//! A cell edit may restore only a supported one-line cell's old Text in the
+//! probe. Nontext changes and unproven edits remain visible. Stamp uses its
+//! output as the probe. Insert positions and flow membership always come
+//! from the actual output.
 //!
 //! The cache comes from the encoder, not from the original XML: its line
 //! starts are written for the tokens the OUTPUT holds (the encoder may add
@@ -169,8 +171,8 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
     }
 }
 
-/// Splices line-layout caches into `output` for paragraphs whose slice is
-/// byte-identical to the baseline's, taking each cache from `source` — the
+/// Splices line-layout caches into `output` for paragraphs whose probe slice
+/// is byte-identical to the baseline's, taking each cache from `source` — the
 /// same edited document encoded with its Core caches emitted, so every line
 /// start is written through the encoder's own token ledger for exactly the
 /// tokens `output` holds (the original cache XML counted
@@ -184,11 +186,17 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
 /// would have kept its cache — the drops the caller reports;
 /// a paragraph the edit changed or moved loses its cache on purpose and is
 /// not among them.
-fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String, Vec<usize>)> {
+fn splice_section(
+    baseline: &str,
+    output: &str,
+    probe: &str,
+    source: &str,
+) -> Option<(String, Vec<usize>)> {
     let base = scan_paragraphs(baseline)?;
     let out = scan_paragraphs(output)?;
     let src = scan_paragraphs(source)?;
-    if base.len() != out.len() || src.len() != out.len() {
+    let comparison = scan_paragraphs(probe)?;
+    if base.len() != out.len() || src.len() != out.len() || comparison.len() != out.len() {
         return None;
     }
     // The caches are the only difference: same tokens, same coordinates.
@@ -204,7 +212,9 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String,
     // 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · 목록 처음부터 지우기
     // (`edit_in_a_cell_drops_the_flow_tail_and_the_host_chain`).
     let changed: Vec<bool> = (0..out.len())
-        .map(|i| baseline[base[i].start..base[i].end] != output[out[i].start..out[i].end])
+        .map(|i| {
+            baseline[base[i].start..base[i].end] != probe[comparison[i].start..comparison[i].end]
+        })
         .collect();
     // The rule `fill` and `patch` use (`cache_flow::stale_paragraphs`), one
     // pass over the paragraphs (walking to the end of
@@ -284,10 +294,11 @@ fn without_caches(xml: &str, slices: &[ParaSlice]) -> String {
 }
 
 /// Carries `<hp:linesegarray>` caches into `output` for every section entry
-/// whose `original` held any, comparing against `baseline` (the pristine
-/// no-op re-encode) to decide which paragraphs an edit left untouched and
-/// taking each cache from `source` ([`cache_source`]). A cache the decoder
-/// dropped is not in Core, so it is not in `source` and is not revived.
+/// whose `original` held any. It compares `baseline` (the pristine no-op
+/// re-encode) with `probe`, which restores only proven cell text and keeps
+/// nontext changes visible. Caches come from `source` ([`cache_source`])
+/// and are inserted into `output`. A cache the decoder dropped is not in
+/// Core, so it is not in `source` and is not revived.
 ///
 /// The warnings returned are the source encode's `LayoutCacheDropped` for
 /// each untouched paragraph whose cache it could not place, so that drop is
@@ -299,6 +310,7 @@ pub(crate) fn carry_line_segs(
     original: &[u8],
     baseline: &[u8],
     output: &[u8],
+    probe: &[u8],
     source: &CacheSource,
 ) -> Result<(Vec<u8>, Vec<crate::EncodeWarning>), CodecFailure> {
     let mut reported = Vec::new();
@@ -306,6 +318,8 @@ pub(crate) fn carry_line_segs(
         RawPackage::read(original).map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
     let base_pkg =
         RawPackage::read(baseline).map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
+    let probe_pkg =
+        RawPackage::read(probe).map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
     let src_pkg = RawPackage::read(&source.bytes)
         .map_err(|e| CodecFailure::hwpx(CodecStage::Verification, &e))?;
     let mut out_pkg =
@@ -321,24 +335,26 @@ pub(crate) fn carry_line_segs(
     for path in section_paths {
         // Alignment/decoding fallback must not suppress a semantic selection
         // error. These borrowed reads do not decompress or reparse metadata.
-        for package in [&orig_pkg, &base_pkg, &out_pkg, &src_pkg] {
+        for package in [&orig_pkg, &base_pkg, &out_pkg, &src_pkg, &probe_pkg] {
             match package.read_entry(&path) {
                 Ok(_) | Err(HwpxError::MissingFile { .. }) => {}
                 Err(error) => return Err(CodecFailure::hwpx(CodecStage::Verification, &error)),
             }
         }
-        let (Ok(orig_xml), Ok(base_xml), Ok(out_xml), Ok(src_xml)) = (
+        let (Ok(orig_xml), Ok(base_xml), Ok(out_xml), Ok(src_xml), Ok(probe_xml)) = (
             orig_pkg.read_text_entry(&path),
             base_pkg.read_text_entry(&path),
             out_pkg.read_text_entry(&path),
             src_pkg.read_text_entry(&path),
+            probe_pkg.read_text_entry(&path),
         ) else {
             continue;
         };
         if !orig_xml.contains("<hp:linesegarray") {
             continue;
         }
-        if let Some((spliced, dropped)) = splice_section(&base_xml, &out_xml, &src_xml) {
+        if let Some((spliced, dropped)) = splice_section(&base_xml, &out_xml, &probe_xml, &src_xml)
+        {
             // a marker's ordinal counts within its own section.
             // 이것을 실패시키는 것: 문서 전체 번호로 읽기(`drops_in_two_sections_are_each_reported`).
             let section_drops = section_index(&path).and_then(|i| source.dropped.get(i));
@@ -367,6 +383,21 @@ pub(crate) struct CacheSource {
     bytes: Vec<u8>,
     dropped: Vec<Vec<crate::EncodeWarning>>,
     warnings: Vec<crate::EncodeWarning>,
+}
+
+impl CacheSource {
+    #[cfg(test)]
+    pub(crate) fn replace_bytes_for_test(&mut self, bytes: Vec<u8>) {
+        self.bytes = bytes;
+    }
+
+    /// Decodes marked output only when a source cache was refused.
+    pub(crate) fn marked_document(&self) -> HwpxResult<Option<crate::HwpxDocument>> {
+        if self.dropped.iter().all(Vec::is_empty) {
+            return Ok(None);
+        }
+        crate::HwpxDecoder::decode(&self.bytes).map(Some)
+    }
 }
 
 /// The section index of a `Contents/sectionN.xml` part name.
@@ -427,7 +458,7 @@ pub(crate) fn carry_prepared(
         let output = out.read_text_entry(&path)?;
         let source = src.read_text_entry(&path)?;
         // 이것을 실패시키는 것: 출처/출력 토큰 검증 없이 캐시를 삽입하기.
-        if let Some((spliced, _)) = splice_section(&output, &output, &source) {
+        if let Some((spliced, _)) = splice_section(&output, &output, &output, &source) {
             out.replace_text_entry(&path, spliced);
         } else {
             warnings.push(crate::EncodeWarning::LayoutCacheDropped {
@@ -459,7 +490,7 @@ mod tests {
         // 이것을 실패시키는 것: carry의 원본 package 읽기 stage를 Decode로 변경.
         let source = CacheSource { bytes: vec![], dropped: vec![], warnings: vec![] };
         let original = RawPackage::read(b"bad").err().unwrap();
-        let error = carry_line_segs(b"bad", b"bad", b"bad", &source).unwrap_err();
+        let error = carry_line_segs(b"bad", b"bad", b"bad", b"bad", &source).unwrap_err();
         assert_eq!(
             error,
             CodecFailure {
@@ -524,7 +555,7 @@ mod tests {
         let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("수정됨", false));
         let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("수정됨", true));
 
-        let (spliced, _) = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &output, &output, &source).unwrap();
         // 첫 문단: 캐시 복원. 둘째 문단: 편집됨 → 캐시 없음.
         assert_eq!(spliced, format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("수정됨", false)));
     }
@@ -533,7 +564,7 @@ mod tests {
     fn splice_noop_roundtrip_restores_everything() {
         let baseline = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
         let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘", true));
-        let (spliced, _) = splice_section(&baseline, &baseline, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &baseline, &baseline, &source).unwrap();
         assert_eq!(spliced, source, "무편집 왕복은 방출한 캐시로 완전 복원");
     }
 
@@ -541,7 +572,7 @@ mod tests {
     fn splice_bails_on_paragraph_count_mismatch() {
         let one = format!("<hs:sec>{}</hs:sec>", p("하나", true));
         let two = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
-        assert!(splice_section(&two, &two, &one).is_none());
+        assert!(splice_section(&two, &two, &two, &one).is_none());
     }
 
     /// A batch edit changing every one of N paragraphs
@@ -557,7 +588,7 @@ mod tests {
         let output = section("b", false);
         let source = section("b", true);
         crate::work::WORK.with(|w| w.set(0));
-        let (spliced, _) = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &output, &output, &source).unwrap();
         let work = crate::work::WORK.with(std::cell::Cell::get);
         assert_eq!(spliced, output);
         assert!(work <= 3 * N, "{work} work units for {N} paragraphs");
@@ -580,7 +611,7 @@ mod tests {
         let baseline = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
         let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("바뀜", false));
         let source = format!("<hs:sec>{}{}</hs:sec>", marked(3, "하나"), marked(5, "바뀜"));
-        let (spliced, dropped) = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, dropped) = splice_section(&baseline, &output, &output, &source).unwrap();
         assert_eq!(spliced, output);
         assert_eq!(dropped, [3]);
     }
@@ -676,7 +707,8 @@ mod tests {
         let images = hwpforge_core::image::ImageStore::new();
         let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
         let source = cache_source(&doc, &styles, &images).unwrap();
-        let (_, reported) = carry_line_segs(&source.bytes, &output, &output, &source).unwrap();
+        let (_, reported) =
+            carry_line_segs(&source.bytes, &output, &output, &output, &source).unwrap();
         let paths: Vec<String> = reported
             .iter()
             .map(|w| match w {
@@ -709,7 +741,8 @@ mod tests {
         let images = hwpforge_core::image::ImageStore::new();
         let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
         let source = cache_source(&doc, &styles, &images).unwrap();
-        let (bytes, reported) = carry_line_segs(&source.bytes, &output, &output, &source).unwrap();
+        let (bytes, reported) =
+            carry_line_segs(&source.bytes, &output, &output, &output, &source).unwrap();
         let xml =
             RawPackage::read(&bytes).unwrap().read_text_entry("Contents/section0.xml").unwrap();
         assert!(!xml.contains("<hp:linesegarray"));
@@ -724,7 +757,7 @@ mod tests {
     fn splice_bails_when_the_source_differs_beyond_caches() {
         let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
         let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘셋", true));
-        assert!(splice_section(&output, &output, &source).is_none());
+        assert!(splice_section(&output, &output, &output, &source).is_none());
     }
 
     /// Cell cache invalidation: editing the second of three cell paragraphs
@@ -745,7 +778,7 @@ mod tests {
         let baseline = section("c1", false);
         let output = section("c1 이 여러 줄로 길어졌다", false);
         let source = section("c1 이 여러 줄로 길어졌다", true);
-        let (spliced, _) = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &output, &output, &source).unwrap();
         let slices = scan_paragraphs(&spliced).unwrap();
         // open order: before, host, c0, c1, c2, after.
         let cached: Vec<bool> = slices.iter().map(|s| s.line_seg.is_some()).collect();
@@ -831,5 +864,48 @@ mod tests {
                 .unwrap(),
             RawPackage::read(&output).unwrap().read_text_entry("Contents/section0.xml").unwrap()
         );
+    }
+    /// 이것을 실패시키는 것: probe 슬롯 수 검사 삭제, source 동일성 검사를 probe 기준으로 바꾸기.
+    #[test]
+    fn probe_changes_only_the_comparison_not_output_alignment() {
+        let base = format!("<hs:sec>{}{}</hs:sec>", p("가", false), p("나", false));
+        let output = format!("<hs:sec>{}{}</hs:sec>", p("힣힣힣", false), p("나", false));
+        let source = format!("<hs:sec>{}{}</hs:sec>", p("힣힣힣", true), p("나", true));
+        assert_eq!(splice_section(&base, &output, &base, &source).unwrap().0, source);
+        let base_flow = format!(
+            "<hs:sec><hp:subList>{}{}</hp:subList>{}</hs:sec>",
+            p("가", false),
+            p("나", false),
+            p("다", false)
+        );
+        let probe_flow = base_flow.replace("가", "힣");
+        let output_flow = format!(
+            "<hs:sec>{}<hp:subList>{}{}</hp:subList></hs:sec>",
+            p("힣", false),
+            p("나", false),
+            p("다", false)
+        );
+        let source_flow = format!(
+            "<hs:sec>{}<hp:subList>{}{}</hp:subList></hs:sec>",
+            p("힣", true),
+            p("나", true),
+            p("다", true)
+        );
+        let expected_flow = format!(
+            "<hs:sec>{}<hp:subList>{}{}</hp:subList></hs:sec>",
+            p("힣", false),
+            p("나", true),
+            p("다", true)
+        );
+        assert_eq!(
+            splice_section(&base_flow, &output_flow, &probe_flow, &source_flow).unwrap().0,
+            expected_flow
+        );
+        let short = format!("<hs:sec>{}</hs:sec>", p("가", false));
+        assert!(splice_section(&base, &output, &short, &source).is_none());
+        assert!(splice_section(&short, &output, &base, &source).is_none());
+        assert!(splice_section(&base, &short, &base, &source).is_none());
+        assert!(splice_section(&base, &output, &base, &short).is_none());
+        assert!(splice_section(&base, &output, &base, &source.replace("힣힣힣", "가")).is_none());
     }
 }
