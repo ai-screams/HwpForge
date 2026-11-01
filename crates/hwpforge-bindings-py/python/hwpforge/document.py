@@ -176,6 +176,8 @@ class Document:
         read by ``open`` is retained through edits. Aliases of that HWP5 file
         raise ``INVALID_OUTPUT_PATH`` even after its original path is deleted
         or replaced; the file currently at that path is not the protected source.
+        Files are identified by device and inode, so a new file that received
+        the deleted source's inode is refused too.
         Bytes-only constructors and conversion results have no file identity
         to protect. Output identity lookup failures raise ``FILE_WRITE_FAILED``;
         absent outputs are allowed. Output paths must stay stable during saving.
@@ -214,6 +216,7 @@ class Document:
                 except FileNotFoundError:
                     target = None
                 # 이것을 실패시키는 것: 원본 경로 재조회 또는 장치·inode 중 하나만 비교.
+                # 크기·수정 시각은 비교하지 않는다. 바뀐 원본까지 덮어쓰게 된다.
                 if target is not None and self._source_identity == (target.st_dev, target.st_ino):
                     raise HwpForgeError(
                         "INVALID_OUTPUT_PATH", "Output would overwrite the HWP5 input."

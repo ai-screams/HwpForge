@@ -222,12 +222,34 @@ def test_save_after_source_removed(tmp_path):
     path = tmp_path / "source.hwp"
     original = source()
     path.write_bytes(original)
-    doc = Document.open(path)
-    path.unlink()
+    # 원본을 지우기 전에 만들어 삭제된 inode를 받지 않게 한다.
     output = tmp_path / "existing.hwpx"
     output.write_bytes(b"old output")
+    doc = Document.open(path)
+    path.unlink()
     doc.save(output)
     assert output.read_bytes() == _hwpforge.convert_hwp5(original)[0]
+
+
+@pytest.mark.parametrize("change", ["touch", "append"])
+def test_save_refuses_alias_after_source_changed(tmp_path, change):
+    # 이것을 실패시키는 것: 정체성 비교에 크기 또는 수정 시각 추가.
+    path = tmp_path / "source.bin"
+    path.write_bytes(source())
+    alias = tmp_path / "keep.hwpx"
+    os.link(path, alias)
+    doc = Document.open(path)
+    if change == "touch":
+        status = path.stat()
+        os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns + 1_000_000_000))
+    else:
+        with path.open("ab") as handle:
+            handle.write(b"added")
+    changed = alias.read_bytes()
+    with pytest.raises(HwpForgeError) as caught:
+        doc.save(alias)
+    assert caught.value.code == "INVALID_OUTPUT_PATH"
+    assert alias.read_bytes() == changed
 
 
 @pytest.mark.parametrize("edit", [None, *EDITS])
