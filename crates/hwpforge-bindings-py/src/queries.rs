@@ -10,12 +10,13 @@ use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
 
 use crate::errors::OrPy;
+use crate::input;
 use crate::results::meta;
 
 /// Counts the structure of a document.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///     styles: Whether to include the font, character and paragraph summaries.
 ///
 /// Returns:
@@ -27,31 +28,33 @@ pub(crate) fn inspect<'py>(
     data: PyBackedBytes,
     styles: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let options = ops::InspectOptions::default().with_styles(styles);
     let output = py.detach(|| ops::inspect(bytes, &options)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Lists the headings of a document in reading order.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///
 /// Returns:
 ///     The outline and the warnings raised while decoding.
 #[pyfunction]
 #[pyo3(signature = (data, /))]
 pub(crate) fn outline<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let output = py.detach(|| ops::outline(bytes)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Lists the click-here fields of a document.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///
 /// Returns:
 ///     ``{"fields", "warnings"}``: the fields in document order and the
@@ -60,28 +63,30 @@ pub(crate) fn outline<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bou
 #[pyfunction]
 #[pyo3(signature = (data, /))]
 pub(crate) fn fields<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let output = py.detach(|| ops::fields(bytes)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Checks a document against the Core invariants.
 ///
 /// A document that fails validation is **not** an error: the report says
 /// `ok: false` and lists what failed. Only bytes that cannot be decoded at all
-/// raise `HwpForgeError(DECODE_FAILED)`.
+/// raise an error; HWP5 conversion failures retain their conversion error codes.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///
 /// Returns:
 ///     The validation report.
 #[pyfunction]
 #[pyo3(signature = (data, /))]
 pub(crate) fn validate<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let output = py.detach(|| ops::validate(bytes)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Reads one addressable part of a document.
@@ -92,7 +97,7 @@ pub(crate) fn validate<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bo
 /// `READ_PARAS_WITHOUT_SECTION`.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///     section: Index of the section to read paragraphs from.
 ///     paras: Inclusive paragraph range, `"A..B"` or a single `"N"`.
 ///     table: Ordinal of the table to read.
@@ -111,7 +116,8 @@ pub(crate) fn read<'py>(
     table: Option<usize>,
     field: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let mut options = ops::ReadOptions::default();
     if let Some(section) = section {
         options = options.with_section(section);
@@ -126,14 +132,14 @@ pub(crate) fn read<'py>(
         options = options.with_field(field);
     }
     let output = py.detach(|| ops::read(bytes, &options)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }
 
 /// Compares two documents on both the Core-structure and ZIP-entry channels.
 ///
 /// Args:
-///     base: The HWPX package to compare from.
-///     revised: The HWPX package to compare to.
+///     base: The HWPX package or HWP5 bytes to compare from.
+///     revised: The HWPX package or HWP5 bytes to compare to.
 ///
 /// Returns:
 ///     The two-channel diff report, plus the decoder warnings of both inputs.
@@ -145,8 +151,17 @@ pub(crate) fn diff<'py>(
     revised: PyBackedBytes,
 ) -> PyResult<Bound<'py, PyAny>> {
     let (base, revised): (&[u8], &[u8]) = (&base, &revised);
-    let output = py.detach(|| ops::diff(base, revised)).or_py(py)?;
-    meta(py, &output.meta())
+    let base = input::open(py, base)?;
+    let revised = match input::open(py, revised) {
+        Ok(revised) => revised,
+        Err(error) => {
+            // 이것을 실패시키는 것: revised 변환 실패 시 base 디코드 오류 확인 생략.
+            py.detach(|| ops::inspect(&base.bytes, &ops::InspectOptions::default())).or_py(py)?;
+            return Err(error);
+        }
+    };
+    let output = py.detach(|| ops::diff(&base.bytes, &revised.bytes)).or_py(py)?;
+    meta(py, &input::diff_metadata(output.meta(), &base, &revised))
 }
 
 /// Enumerates the stamp candidates a document offers.
@@ -156,14 +171,15 @@ pub(crate) fn diff<'py>(
 /// that has since changed.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes; conversion is reported separately.
 ///
 /// Returns:
 ///     The plan, flattened into the report beside `warnings`.
 #[pyfunction]
 #[pyo3(signature = (data, /))]
 pub(crate) fn stamp_plan<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bound<'py, PyAny>> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let output = py.detach(|| ops::stamp_plan(bytes)).or_py(py)?;
-    meta(py, &output.meta())
+    meta(py, &input::metadata(output.meta(), &input))
 }

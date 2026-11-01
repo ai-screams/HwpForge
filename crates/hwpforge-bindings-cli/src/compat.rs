@@ -107,8 +107,89 @@ fn lookup(cmd: Command, matches: impl Fn(&Row) -> bool) -> Option<&'static Row> 
     TABLE.iter().find(|row| row.cmd == cmd && matches(row))
 }
 
+const HWP5_INPUT_HINT: &str =
+    "Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.";
+
 #[rustfmt::skip]
 const TABLE: &[Row] = &[
+    row!(Diff, InvalidOutputPath, 1),
+    row!(ToJson, InvalidOutputPath, 1),
+    row!(ToMd, InvalidOutputPath, 1),
+    row!(Inspect, Hwp5DecodeFailed, 2),
+    row!(Inspect, Hwp5ConvertFailed, 2),
+    row!(Inspect, ValidationFailed, 2),
+    row!(Inspect, EncodeFailed, 2),
+    row!(Outline, Hwp5DecodeFailed, 2),
+    row!(Outline, Hwp5ConvertFailed, 2),
+    row!(Outline, ValidationFailed, 2),
+    row!(Outline, EncodeFailed, 2),
+    row!(Read, Hwp5DecodeFailed, 2),
+    row!(Read, Hwp5ConvertFailed, 2),
+    row!(Read, ValidationFailed, 2),
+    row!(Read, EncodeFailed, 2),
+    row!(Fields, Hwp5DecodeFailed, 2),
+    row!(Fields, Hwp5ConvertFailed, 2),
+    row!(Fields, ValidationFailed, 2),
+    row!(Fields, EncodeFailed, 2),
+    row!(ToMd, Hwp5DecodeFailed, 2),
+    row!(ToMd, Hwp5ConvertFailed, 2),
+    row!(ToJson, Hwp5DecodeFailed, 2),
+    row!(ToJson, Hwp5ConvertFailed, 2),
+    row!(ToJson, ValidationFailed, 2),
+    row!(ToJson, EncodeFailed, 2),
+    row!(Validate, Hwp5DecodeFailed, 2),
+    row!(Validate, Hwp5ConvertFailed, 2),
+    row!(Validate, ValidationFailed, 2),
+    row!(Validate, EncodeFailed, 2),
+    row!(Diff, Hwp5DecodeFailed, 2),
+    row!(Diff, Hwp5ConvertFailed, 2),
+    row!(Diff, ValidationFailed, 2),
+    row!(Diff, EncodeFailed, 2),
+    row!(StampPlan, Hwp5DecodeFailed, 2),
+    row!(StampPlan, Hwp5ConvertFailed, 2),
+    row!(StampPlan, ValidationFailed, 2),
+    row!(StampPlan, EncodeFailed, 2),
+    row!(Fill, Hwp5DecodeFailed, 2),
+    row!(Fill, Hwp5ConvertFailed, 2),
+    row!(Fill, Hwp5ConversionLoss, 1, "Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"),
+    row!(Fill, InvalidExtension, 1),
+    row!(Fill, InvalidOutputPath, 1),
+    row!(SetCell, Hwp5DecodeFailed, 2),
+    row!(SetCell, Hwp5ConvertFailed, 2),
+    row!(SetCell, Hwp5ConversionLoss, 1, "Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"),
+    row!(SetCell, InvalidExtension, 1),
+    row!(SetCell, InvalidOutputPath, 1),
+    row!(InsertPara, Hwp5DecodeFailed, 2),
+    row!(InsertPara, Hwp5ConvertFailed, 2),
+    row!(InsertPara, Hwp5ConversionLoss, 1, "Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"),
+    row!(InsertPara, InvalidExtension, 1),
+    row!(InsertPara, InvalidOutputPath, 1),
+    row!(DeletePara, Hwp5DecodeFailed, 2),
+    row!(DeletePara, Hwp5ConvertFailed, 2),
+    row!(DeletePara, Hwp5ConversionLoss, 1, "Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"),
+    row!(DeletePara, InvalidExtension, 1),
+    row!(DeletePara, InvalidOutputPath, 1),
+    row!(Stamp, Hwp5DecodeFailed, 2),
+    row!(Stamp, Hwp5ConvertFailed, 2),
+    row!(Stamp, Hwp5ConversionLoss, 1, "Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"),
+    row!(Stamp, InvalidExtension, 1),
+    row!(Stamp, InvalidOutputPath, 1),
+    row!(Inspect, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(ToJson, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(FromJson, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Outline, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Diff, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(DeletePara, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(InsertPara, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Read, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Fields, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Fill, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(SetCell, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(StampPlan, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Stamp, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Patch, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(ToMd, Hwp5Input, 2, HWP5_INPUT_HINT),
+    row!(Validate, Hwp5Input, 2, HWP5_INPUT_HINT),
 
     row!(ConvertHwp5, Hwp5DecodeFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
     row!(ConvertHwp5, Hwp5ConvertFailed, 2, "Check that the source is a supported HWP5 document and the output path is writable"),
@@ -439,10 +520,13 @@ pub fn convert_error(cmd: Command, err: ConvertOpsError) -> CliError {
     if cmd == Command::ToPdf && pdf_cause_has_its_own_hint(err.cause()) {
         hint = err.hint();
     }
-    let base = match hint {
+    let mut base = match hint {
         Some(hint) => CliError::new(CliCode::Ops(code), message).with_hint(hint),
         None => CliError::new(CliCode::Ops(code), message),
     };
+    if let ConvertOpsError::ConversionLoss { warnings } = &err {
+        base.details = Some(serde_json::json!({"warnings": warnings}));
+    }
     match err.cause_info() {
         Some(cause) => base.with_cause(ErrorCause {
             stage: cause.stage,

@@ -270,3 +270,83 @@ set-cell	DECODE_FAILED	cell.depth-table-33	@case	"@ops"
 set-cell	DECODE_FAILED	cell.depth-group-32	@case	"@ops"
 set-cell	DECODE_FAILED	cell.depth-xml-broken	@case	"@ops"
 stamp	INPUT_NOT_ROUNDTRIP_SAFE	stamp.v2_admission	@case	"이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
+# added after 0.18: HWP5_INPUT
+inspect	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+to-json	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+from-json	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+outline	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+diff	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+delete-para	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+insert-para	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+read	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+fields	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+fill	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+set-cell	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+stamp-plan	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+stamp	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+patch	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+to-md	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+validate	HWP5_INPUT	-	2	"Convert HWP5 to HWPX first: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."
+# added after 0.18: automatic HWP5 conversion and output protection
+inspect	HWP5_DECODE_FAILED	-	2	null
+inspect	HWP5_CONVERT_FAILED	-	2	null
+inspect	VALIDATION_FAILED	-	2	null
+inspect	ENCODE_FAILED	-	2	null
+outline	HWP5_DECODE_FAILED	-	2	null
+outline	HWP5_CONVERT_FAILED	-	2	null
+outline	VALIDATION_FAILED	-	2	null
+outline	ENCODE_FAILED	-	2	null
+read	HWP5_DECODE_FAILED	-	2	null
+read	HWP5_CONVERT_FAILED	-	2	null
+read	VALIDATION_FAILED	-	2	null
+read	ENCODE_FAILED	-	2	null
+fields	HWP5_DECODE_FAILED	-	2	null
+fields	HWP5_CONVERT_FAILED	-	2	null
+fields	VALIDATION_FAILED	-	2	null
+fields	ENCODE_FAILED	-	2	null
+to-md	HWP5_DECODE_FAILED	-	2	null
+to-md	HWP5_CONVERT_FAILED	-	2	null
+to-json	HWP5_DECODE_FAILED	-	2	null
+to-json	HWP5_CONVERT_FAILED	-	2	null
+to-json	VALIDATION_FAILED	-	2	null
+to-json	ENCODE_FAILED	-	2	null
+validate	HWP5_DECODE_FAILED	-	2	null
+validate	HWP5_CONVERT_FAILED	-	2	null
+validate	VALIDATION_FAILED	-	2	null
+validate	ENCODE_FAILED	-	2	null
+diff	HWP5_DECODE_FAILED	-	2	null
+diff	HWP5_CONVERT_FAILED	-	2	null
+diff	VALIDATION_FAILED	-	2	null
+diff	ENCODE_FAILED	-	2	null
+stamp-plan	HWP5_DECODE_FAILED	-	2	null
+stamp-plan	HWP5_CONVERT_FAILED	-	2	null
+stamp-plan	VALIDATION_FAILED	-	2	null
+stamp-plan	ENCODE_FAILED	-	2	null
+fill	HWP5_DECODE_FAILED	-	2	null
+fill	HWP5_CONVERT_FAILED	-	2	null
+fill	HWP5_CONVERSION_LOSS	-	1	"Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"
+fill	INVALID_EXTENSION	-	1	null
+fill	INVALID_OUTPUT_PATH	-	1	null
+set-cell	HWP5_DECODE_FAILED	-	2	null
+set-cell	HWP5_CONVERT_FAILED	-	2	null
+set-cell	HWP5_CONVERSION_LOSS	-	1	"Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"
+set-cell	INVALID_EXTENSION	-	1	null
+set-cell	INVALID_OUTPUT_PATH	-	1	null
+insert-para	HWP5_DECODE_FAILED	-	2	null
+insert-para	HWP5_CONVERT_FAILED	-	2	null
+insert-para	HWP5_CONVERSION_LOSS	-	1	"Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"
+insert-para	INVALID_EXTENSION	-	1	null
+insert-para	INVALID_OUTPUT_PATH	-	1	null
+delete-para	HWP5_DECODE_FAILED	-	2	null
+delete-para	HWP5_CONVERT_FAILED	-	2	null
+delete-para	HWP5_CONVERSION_LOSS	-	1	"Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"
+delete-para	INVALID_EXTENSION	-	1	null
+delete-para	INVALID_OUTPUT_PATH	-	1	null
+stamp	HWP5_DECODE_FAILED	-	2	null
+stamp	HWP5_CONVERT_FAILED	-	2	null
+stamp	HWP5_CONVERSION_LOSS	-	1	"Review conversion warnings before using --accept-conversion-loss; editing admission remains enforced"
+stamp	INVALID_EXTENSION	-	1	null
+stamp	INVALID_OUTPUT_PATH	-	1	null
+diff	INVALID_OUTPUT_PATH	-	1	null
+to-json	INVALID_OUTPUT_PATH	-	1	null
+to-md	INVALID_OUTPUT_PATH	-	1	null

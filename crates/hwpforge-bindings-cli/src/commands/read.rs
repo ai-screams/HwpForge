@@ -2,19 +2,19 @@
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use hwpforge::ops::{self, OpsWarning, ReadOptions};
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{EmbeddedContent, ParaKindView};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_input, CliError};
+use crate::error::{check_file_size, CliError};
 
 /// Run the read command.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
-    file: &PathBuf,
+    file: &Path,
     section: Option<usize>,
     paras: Option<&str>,
     table: Option<usize>,
@@ -43,7 +43,7 @@ pub fn run(
     }
 
     check_file_size(file, json_mode, Command::Read);
-    let bytes = read_input(file, json_mode, Command::Read);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::Read);
 
     let mut opts = ReadOptions::default();
     if let Some(section) = section {
@@ -81,7 +81,7 @@ pub fn run(
             if !warnings.is_empty() {
                 result["warnings"] = serde_json::to_value(&warnings).unwrap();
             }
-            println!("{}", serde_json::to_string(&result).unwrap());
+            println!("{}", bytes.json(&result).unwrap());
             return;
         }
         for w in &warnings {
@@ -109,7 +109,7 @@ pub fn run(
             if !warnings.is_empty() {
                 result["warnings"] = serde_json::to_value(&warnings).unwrap();
             }
-            println!("{}", serde_json::to_string(&result).unwrap());
+            println!("{}", bytes.json(&result).unwrap());
             return;
         }
         for w in &warnings {
@@ -138,7 +138,7 @@ pub fn run(
         if !warnings.is_empty() {
             result["warnings"] = serde_json::to_value(&warnings).unwrap();
         }
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
         return;
     }
     for w in &warnings {

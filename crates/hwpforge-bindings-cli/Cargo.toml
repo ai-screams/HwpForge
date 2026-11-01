@@ -27,11 +27,13 @@ hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", features = ["schemars
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md" }
 hwpforge-smithy-pdf = { path = "../hwpforge-smithy-pdf" }
 quick-xml = { workspace = true }
+same-file = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+cfb = { workspace = true }
 # Per-variant encode warning samples for the mapping tests (test-only feature).
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", features = ["schemars", "__test-support"] }
 serde_json = { workspace = true }

@@ -120,7 +120,8 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
     Raises:
         HwpForgeError: If the JSON does not describe a document, or if it
             carries a grid address that no longer matches. Also
-            ``DECODE_FAILED`` if `base` cannot be decoded, including when it
+            ``HWP5_INPUT`` if `base` contains HWP5 (convert with ``convert_hwp5``
+            first), or ``DECODE_FAILED`` if HWPX `base` cannot be decoded, including when it
             exceeds the nesting or namespace limits.
     """
     data, report = _hwpforge.from_json(text, base=None if base is None else base.to_bytes())

@@ -2,7 +2,7 @@
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hwpforge::ops::edit::{
     delete_para as ops_delete_para, insert_para as ops_insert_para, DeleteParaOptions,
@@ -31,11 +31,12 @@ use crate::error::{check_file_size, CliError};
 
 /// Run `delete-para`.
 pub fn run_delete(
-    file: &PathBuf,
+    file: &Path,
     section: usize,
     indices: &[usize],
     output: &PathBuf,
     json_mode: bool,
+    accept_conversion_loss: bool,
 ) {
     if indices.is_empty() {
         CliError::new(CliCode::Ops(OpsCode::DeleteNoTarget), "Pass at least one --index")
@@ -59,6 +60,14 @@ pub fn run_delete(
                     eprintln!("warning: {warning}");
                 }
             }
+            bytes.check_edit(
+                file,
+                output,
+                None,
+                accept_conversion_loss,
+                json_mode,
+                Command::DeletePara,
+            );
             write_output(&out.bytes, output, json_mode, Command::DeletePara, |v| {
                 *v = serde_json::json!({
                     "status": "ok",
@@ -68,6 +77,9 @@ pub fn run_delete(
                     "warnings": warnings,
                     "output": output.display().to_string(),
                 });
+                if let Some(meta) = bytes.metadata() {
+                    v["conversion"] = serde_json::to_value(meta).unwrap();
+                }
             });
         }
         // No dynamic/dual-source gap applies to `delete-para`/`insert-para`:
@@ -81,13 +93,14 @@ pub fn run_delete(
 /// Run `insert-para`.
 #[allow(clippy::too_many_arguments)]
 pub fn run_insert(
-    file: &PathBuf,
+    file: &Path,
     section: usize,
     anchor: usize,
     before: bool,
     texts: &[String],
     output: &PathBuf,
     json_mode: bool,
+    accept_conversion_loss: bool,
 ) {
     let bytes = read_input(file, json_mode, Command::InsertPara);
     let opts = InsertParaOptions::default()
@@ -109,6 +122,14 @@ pub fn run_insert(
                     eprintln!("warning: {warning}");
                 }
             }
+            bytes.check_edit(
+                file,
+                output,
+                None,
+                accept_conversion_loss,
+                json_mode,
+                Command::InsertPara,
+            );
             write_output(&out.bytes, output, json_mode, Command::InsertPara, |v| {
                 *v = serde_json::json!({
                     "status": "ok",
@@ -119,15 +140,18 @@ pub fn run_insert(
                     "warnings": warnings,
                     "output": output.display().to_string(),
                 });
+                if let Some(meta) = bytes.metadata() {
+                    v["conversion"] = serde_json::to_value(meta).unwrap();
+                }
             })
         }
         Err(e) => compat::exit_ops_error(Command::InsertPara, e, json_mode),
     }
 }
 
-fn read_input(file: &PathBuf, json_mode: bool, command: Command) -> Vec<u8> {
+fn read_input(file: &Path, json_mode: bool, command: Command) -> crate::input::HwpxInput {
     check_file_size(file, json_mode, command);
-    crate::error::read_input(file, json_mode, command)
+    crate::input::read_input_hwpx(file, json_mode, command)
 }
 
 fn write_output(

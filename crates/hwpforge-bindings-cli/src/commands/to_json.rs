@@ -2,12 +2,12 @@
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hwpforge::ops::{self, ExportSectionOptions, OpsWarning, ToJsonOptions};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_input, CliError};
+use crate::error::{check_file_size, CliError};
 
 // Re-export shared exchange types so existing imports (`crate::commands::to_json::Exported*`) keep working.
 pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
@@ -52,7 +52,7 @@ fn render_pretty(value: &serde_json::Value, json_mode: bool) -> String {
 
 /// Run the to-json command.
 pub fn run(
-    file: &PathBuf,
+    file: &Path,
     output: &PathBuf,
     section_idx: Option<usize>,
     no_styles: bool,
@@ -68,7 +68,7 @@ pub fn run(
         .exit(json_mode, Command::ToJson);
     }
     check_file_size(file, json_mode, Command::ToJson);
-    let bytes = read_input(file, json_mode, Command::ToJson);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::ToJson);
 
     let json_string = if let Some(idx) = section_idx {
         let opts = ExportSectionOptions::default().with_section(idx).with_styles(!no_styles);
@@ -92,6 +92,7 @@ pub fn run(
         render_pretty(&out.document, json_mode)
     };
 
+    bytes.protect_source(file, output, json_mode, Command::ToJson);
     if let Err(e) = std::fs::write(output, &json_string) {
         CliError::new(
             CliCode::Ops(OpsCode::FileWriteFailed),
@@ -108,7 +109,7 @@ pub fn run(
     });
 
     if json_mode {
-        println!("{}", serde_json::to_string(&result).unwrap());
+        println!("{}", bytes.json(&result).unwrap());
     } else {
         println!(
             "Exported {} ({} bytes{})",

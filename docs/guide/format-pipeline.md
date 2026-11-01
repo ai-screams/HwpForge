@@ -53,7 +53,7 @@ HwpForge의 핵심 설계 원칙은 **Core DOM이 포맷에 독립적**이라는
 
 ## 포맷 감지
 
-파일의 첫 바이트(매직 바이트)로 포맷을 판별합니다.
+다음은 매직 바이트로 후보 형식을 분류하는 단순 예제입니다. CLI·Python의 자동 입력 변환은 확장자를 사용하지 않으며, CFB 시그니처가 있어도 정상 ZIP으로 열리면 HWPX로 처리합니다. 이 예제는 그 입력 판별 계약을 대체하지 않습니다.
 
 ```rust,no_run
 /// 파일 포맷 감지
@@ -139,7 +139,7 @@ let markdown_out = MdEncoder::encode_lossy(&validated).unwrap();
 std::fs::write("output.md", &markdown_out).unwrap();
 ```
 
-### 현재: HWP5 전용 crate / CLI 경로
+### HWP5 입력 경로
 
 ```rust,no_run
 use hwpforge_smithy_hwp5::Hwp5Decoder;
@@ -187,22 +187,7 @@ hwpforge to-md report.hwpx
 hwpforge to-pdf report.hwpx -o report.pdf
 ```
 
-`from-json --base`는 원본 이미지와 미편집 문단의 줄 캐시를 보존합니다.
-캐시를 제외한 Core 문서 전체와 스타일·이미지 바이트가 모두 원본과 같으면
-원본 ZIP을 바이트 그대로 반환합니다. Core에 표현되지 않는 내용도 함께 유지하며,
-원본 캐시의 유효성을 새로 인증하거나 수리하는 동작은 아닙니다.
-실제 편집으로 문서를 재생성할 때에는 다음의 지문·흐름 검증을 적용합니다.
-Core의 문단 내용·참조 스타일·쪽/컨테이너 설정이 바뀌면 해당 문단과 같은 흐름의
-후속 문단, 이를 담는 host 사슬의 캐시를 무효화합니다. 스타일은 명시적 ID로
-해석하며 미해결·중복 참조는 보존하지 않습니다. 각주·미주·개요/목록·캡션 자동
-번호가 있는 문서의 편집과 시작 번호 변경은 뒤 구역까지 보수적으로 무효화합니다.
-쪽 번호·전체 쪽 수·상호참조가 있으면 앞 구역도 영향받을 수 있어 문서 전체를
-무효화합니다. 떠 있는 개체가 있는 구역의 편집은 앞 문단에 미치는 영향을 계산할
-수 없으므로 구역 전체를 무효화합니다. 배치가 생략된 표도 떠 있는 개체입니다. 문단 추가·삭제 시에는
-영향받은 목록에서 동일한 앞부분만 대응시키며, 재배열된 문단을 텍스트로 찾아
-다시 연결하지 않습니다. JSON의 `layout_cache`를 직접 수정하거나 삭제해도 그
-값을 신뢰하지 않고 base 캐시를 사용합니다. 대응 불가·의도적 무효화·좌표 검증
-실패는 각각 경고로 보고합니다. `--base`가 없으면 기존처럼 캐시를 생략하고 경고합니다.
+`from-json --base`는 원본 이미지와 미편집 문단의 줄 캐시를 보존합니다. 캐시를 제외한 Core 문서 전체와 스타일·이미지 바이트가 모두 원본과 같으면 원본 ZIP을 바이트 그대로 반환합니다. Core에 표현되지 않는 내용도 함께 유지하며, 원본 캐시의 유효성을 새로 인증하거나 수리하는 동작은 아닙니다. 실제 편집으로 문서를 재생성할 때에는 다음의 지문·흐름 검증을 적용합니다. Core의 문단 내용·참조 스타일·쪽/컨테이너 설정이 바뀌면 해당 문단과 같은 흐름의 후속 문단, 이를 담는 host 사슬의 캐시를 무효화합니다. 스타일은 명시적 ID로 해석하며 미해결·중복 참조는 보존하지 않습니다. 각주·미주·개요/목록·캡션 자동 번호가 있는 문서의 편집과 시작 번호 변경은 뒤 구역까지 보수적으로 무효화합니다. 쪽 번호·전체 쪽 수·상호참조가 있으면 앞 구역도 영향받을 수 있어 문서 전체를 무효화합니다. 떠 있는 개체가 있는 구역의 편집은 앞 문단에 미치는 영향을 계산할 수 없으므로 구역 전체를 무효화합니다. 배치가 생략된 표도 떠 있는 개체입니다. 문단 추가·삭제 시에는 영향받은 목록에서 동일한 앞부분만 대응시키며, 재배열된 문단을 텍스트로 찾아 다시 연결하지 않습니다. JSON의 `layout_cache`를 직접 수정하거나 삭제해도 그 값을 신뢰하지 않고 base 캐시를 사용합니다. 대응 불가·의도적 무효화·좌표 검증 실패는 각각 경고로 보고합니다. `--base`가 없으면 기존처럼 캐시를 생략하고 경고합니다.
 
 HWPX → Markdown은 Rust API(`MdEncoder::encode_lossy(&validated)`)로도 할 수 있습니다.
 
@@ -252,11 +237,11 @@ HWP5 파일 (OLE2 CFB)
 
 | 기능                | HWPX                 | HWP5                                           | Markdown            |
 | ------------------- | -------------------- | ---------------------------------------------- | ------------------- |
-| **읽기 (Decode)**   | ✅ 완전 지원         | 🟡 전용 crate/CLI 경로                         | ✅ 완전 지원        |
+| **읽기 (Decode)**   | ✅ 완전 지원         | 🟡 CLI·Python 자동 변환 / 전용 crate           | ✅ 완전 지원        |
 | **쓰기 (Encode)**   | ✅ 완전 지원         | —                                              | ✅ 완전 지원        |
 | **메타데이터 추출** | ✅ Core DOM          | 🟡 inspect/census summary                      | ✅ YAML Frontmatter |
 | **이미지 추출**     | ✅ ImageStore        | 🟡 decode/projection path                      | —                   |
 | **스타일 보존**     | ✅ HwpxStyleStore    | 🟡 warning-first projection + HWPX re-emission | ✅ StyleRegistry    |
 | **JSON 라운드트립** | ✅ to-json/from-json | —                                              | —                   |
 
-HWP5 읽기 자체는 더 이상 future tense가 아니다. 지금도 `hwpforge-smithy-hwp5`와 CLI를 통해 decode / inspect / convert / audit 경로를 사용할 수 있다. 다만 umbrella crate와 일부 top-level guide는 여전히 HWPX/Markdown 중심이며, HWP5 parity는 warning-first로 점진적으로 넓혀 가는 중이다.
+CLI·Python의 지원 읽기·편집 연산은 HWP5를 HWPX로 자동 변환합니다. 편집 결과는 `.hwpx`이며 `.hwp` 저장은 지원하지 않습니다. 의미 손실은 기본 거부하며 CLI `--accept-conversion-loss` 또는 Python `accept_conversion_loss=True`로 변환 손실만 허용합니다. MCP와 Rust의 `hwpforge::ops`는 자동 변환하지 않습니다. 대상 연산과 보류 경로는 [CLI 입력 정책](../reference/cli.md#hwp-입력과-hwpx-출력)을 참고합니다.

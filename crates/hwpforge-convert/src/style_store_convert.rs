@@ -119,7 +119,7 @@ fn append_face_name_projection_warnings(
     {
         push_projection_fallback(
             warnings,
-            "style.font.type_info",
+            hwpforge_smithy_hwp5::Hwp5Warning::FONT_TYPE_INFO_SUBJECT,
             format!(
                 "face name {raw_id} PANOSE family type {} is undefined; written as FCAT_UNKNOWN",
                 panose[0]

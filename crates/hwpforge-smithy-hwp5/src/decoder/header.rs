@@ -249,8 +249,13 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
                 }
             }
             TagId::MemoShape | TagId::TrackChangeContent | TagId::TrackChangeAuthor => {
+                // Memo shapes and change tracking have different loss policies.
+                let subject = match tag {
+                    TagId::MemoShape => Hwp5Warning::MEMO_SHAPE_DEFINITION_SUBJECT,
+                    _ => Hwp5Warning::TRACK_CHANGE_DEFINITION_SUBJECT,
+                };
                 result.warnings.push(Hwp5Warning::ParserFallback {
-                    subject: "header.unsupported_definition",
+                    subject,
                     reason: format!("{tag:?} definition and its references are not projected; original record counted for IdMappings"),
                 });
             }
@@ -425,12 +430,26 @@ mod tests {
             .warnings
             .iter()
             .any(|w| matches!(w, Hwp5Warning::ParserFallback { subject: "IdMappings.count", .. })));
-        for tag in [0x5c, 0x60, 0x61] {
+    }
+
+    #[test]
+    // 이것을 실패시키는 것: 메모 모양과 변경 추적 내용·작성자 subject를 합치거나 손실 판정 뒤집기.
+    fn memo_and_change_tracking_definitions_have_distinct_loss_policies() {
+        let version = HwpVersion::new(5, 0, 3, 2);
+        for (tag, expected_subject, loss) in [
+            (0x5c, Hwp5Warning::MEMO_SHAPE_DEFINITION_SUBJECT, false),
+            (0x60, Hwp5Warning::TRACK_CHANGE_DEFINITION_SUBJECT, true),
+            (0x61, Hwp5Warning::TRACK_CHANGE_DEFINITION_SUBJECT, true),
+        ] {
             let result = parse_doc_info(&make_record_bytes(tag, &[0; 8]), &version).unwrap();
-            assert!(result.warnings.iter().any(|w| matches!(
-                w,
-                Hwp5Warning::ParserFallback { subject: "header.unsupported_definition", .. }
-            )));
+            assert_eq!(result.warnings.len(), 1, "tag {tag:#x}");
+            let warning = &result.warnings[0];
+            assert!(
+                matches!(warning, Hwp5Warning::ParserFallback { subject, .. }
+                if *subject == expected_subject),
+                "{warning:?}"
+            );
+            assert_eq!(warning.is_semantic_loss(), loss, "tag {tag:#x}");
         }
     }
 

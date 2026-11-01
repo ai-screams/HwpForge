@@ -52,6 +52,15 @@ pub enum ConvertWarning {
 }
 
 impl ConvertWarning {
+    /// Combines the format owners' semantic-loss classifications.
+    #[must_use]
+    pub fn is_semantic_loss(&self) -> bool {
+        match self {
+            Self::Hwp5(warning) => warning.is_semantic_loss(),
+            Self::HwpxEncode(warning) => warning.is_semantic_loss(),
+        }
+    }
+
     /// HWP5 경고면 참조를 돌려준다 (테스트/집계 편의).
     pub fn as_hwp5(&self) -> Option<&Hwp5Warning> {
         match self {

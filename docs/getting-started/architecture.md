@@ -141,7 +141,7 @@ HWPX (.hwpx) ──decode──▶ │  (포맷 독립 IR)    │ ──encode�
 
 모든 Smithy 크레이트는 Core DOM으로/에서 변환만 수행합니다. 비즈니스 로직은 Core에만 의존하므로, 새 포맷(예: smithy-odt)을 추가해도 기존 코드를 수정할 필요가 없습니다.
 
-현재 HWP5 경로는 `hwpforge-smithy-hwp5`와 CLI surface에서 실사용 가능하며, umbrella crate 중심 예제는 여전히 HWPX/Markdown 쪽이 먼저 소개됩니다.
+CLI·Python의 지원 읽기·편집 연산은 `hwpforge-convert`를 통해 HWP5 입력을 HWPX로 자동 변환합니다. 편집 결과는 `.hwpx`이며 `.hwp` 저장은 지원하지 않습니다. Rust의 `hwpforge::ops`와 MCP는 자동 변환하지 않습니다. 대상 연산과 손실 정책은 [CLI 입력 정책](../reference/cli.md#hwp-입력과-hwpx-출력)을 참고합니다.
 
 > 자세한 내용은 [HWP5와 HWPX: 이중 포맷 파이프라인](../guide/format-pipeline.md)을 참고하세요.
 

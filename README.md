@@ -52,7 +52,7 @@ HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스
 | 한글 97 \~ 2010   | HWP5 (.hwp)  | ✅   | —    | —                              |
 
 - **HWPX**: OWPML 국가표준 (KS X 6101) 기반, ZIP + XML 컨테이너
-- **HWP5**: 구형 바이너리 포맷. 현재는 CLI 중심의 읽기/점검/재출력 경로를 제공합니다 (`convert-hwp5`, `audit-hwp5`, `census-hwp5`)
+- **HWP5**: 구형 바이너리 포맷입니다. CLI·Python의 지원 읽기·편집 연산은 `.hwp` 입력을 자동 변환하며, 편집 결과는 `.hwpx`입니다. `.hwp` 저장은 지원하지 않습니다. 의미 손실이 있으면 편집을 거부하며, 경고 검토 후 CLI `--accept-conversion-loss` 또는 Python `accept_conversion_loss=True`로 변환 손실만 허용합니다. 대상 명령과 원본 보호는 [CLI 입력 정책](docs/reference/cli.md#hwp-입력과-hwpx-출력)을 참고합니다.
 - 스타일 세트는 `HancomStyleSet` enum으로 선택 가능 (기본: Modern)
 
 **LLM-first 설계** 🔥 — AI 친화적인 Markdown과 공식 한글 문서 포맷(HWPX), 두 세계를 자연스럽게 잇습니다. LLM이 Markdown으로 작성한 내용은 공문서 규격의 HWPX로 컴파일되고 📜, 반대로 기존 HWPX 문서는 AI가 쉽게 읽을 수 있는 구조로 꺼낼 수 있습니다 ⚒️.
@@ -151,7 +151,7 @@ hwpforge to-pdf legacy.hwp -o legacy.pdf            # HWP5 — 캐시를 실어 
 
 ### 🗜️ Vise — MCP Server (Beta)로 AI가 직접 한글 문서를 다루다
 
-Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집할** 수 있습니다. 현재 MCP surface는 **베타이며**, HWP5 경로는 MCP가 아니라 CLI workflow를 우선합니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
+Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집할** 수 있습니다. 현재 MCP surface는 **베타이며**, MCP의 HWP5 입력은 `HWP5_INPUT`으로 거부합니다. CLI·Python의 지원 연산은 자동 변환하며, MCP에는 명시적으로 변환한 HWPX를 전달합니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
 
 #### AI 도구에 등록
 
@@ -552,7 +552,7 @@ flowchart LR
 
 1. Markdown → HWPX
 2. HWPX → Markdown / JSON
-3. HWP5 → HWPX → audit / inspect
+3. HWP5 → HWPX 자동 변환 → CLI·Python 읽기·편집 (`.hwpx` 출력)
 
 ## 프로젝트 현황
 
@@ -637,7 +637,7 @@ HwpForge/
 
 ### 현재 상태와 다음 단계
 
-- [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
+- [x] HWP5 입력의 CLI·Python 자동 변환과 편집 (`.hwpx` 출력), 명시적 변환·점검 (`convert-hwp5`, `audit-hwp5`, `census-hwp5`)
 - [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
 - [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (19개 도구 + 4 리소스 + 3 프롬프트)
 - [x] CLI 도구 — `hwpforge convert doc.md -o doc.hwpx` 한 줄 변환 (23개 명령어: 20 core + 3 HWP5)

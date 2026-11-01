@@ -84,7 +84,7 @@ crates.io 패키지 이름은 `hwpforge-bindings-mcp`이고 설치되는 바이�
 | `hwpforge_diff`     | 두 HWPX를 semantic·package 두 채널로 비교합니다                               | `base_path`, `revised_path`, `output_path`(선택, 보고서가 인라인 1 MB를 넘으면 필수)                        |
 | `hwpforge_validate` | HWPX 구조와 무결성을 검사합니다                                               | `file_path`                                                                                                 |
 
-`hwpforge_validate`는 디코드할 수 없는 파일(예: `.hwp`)을 "유효하지 않은 문서"가 아니라 `DECODE_FAILED` 오류로 알립니다.
+`hwpforge_validate`는 디코드할 수 없는 HWPX를 "유효하지 않은 문서" 판정이 아니라 `DECODE_FAILED` 오류로 알립니다. HWP5(.hwp)는 `HWP5_INPUT`입니다. MCP는 자동 변환하지 않으므로 CLI `hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>` 또는 Python `convert_hwp5`로 먼저 변환하세요.
 
 ### 편집
 

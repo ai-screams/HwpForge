@@ -20,6 +20,7 @@ fn rendered() -> String {
 }
 
 #[test]
+// 이것을 실패시키는 것: Hwp5Input의 공개 wire 문자열 변경.
 fn wire_strings_match_the_tracked_snapshot() {
     let rendered = rendered();
 

@@ -38,6 +38,46 @@ cargo install --path crates/hwpforge-bindings-cli
 | 편집          | `fill`, `set-cell`, `patch`, `insert-para`, `delete-para`, `stamp-plan`, `stamp` |
 | 부가          | `templates`, `schema`                                                            |
 
+## HWP 입력과 HWPX 출력
+
+다음 14개 명령은 HWPX와 HWP5(`.hwp`) 입력을 받습니다. HWP5는 메모리에서 HWPX로 변환한 뒤 기존 연산에 전달합니다. 확장자가 아니라 내용으로 판별하며, 정상 ZIP으로 열리는 접두사 HWPX는 그대로 처리합니다.
+
+| 용도      | 명령                                                                                                    |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| 읽기·검사 | `inspect`, `outline`, `read`, `fields`, `to-md`, `to-json`, `validate`, `diff`(양쪽 입력), `stamp-plan` |
+| 편집      | `fill`, `set-cell`, `insert-para`, `delete-para`, `stamp`                                               |
+
+편집 문서 결과는 **`.hwpx`**입니다. `.hwp` 저장은 지원하지 않으며, 편집 5개 명령은 `.hwp` 출력 확장자를 대소문자 구분 없이 `INVALID_EXTENSION`으로 거부합니다. 읽기 명령의 JSON·Markdown 출력 형식은 그대로입니다.
+
+```console
+hwpforge inspect form.hwp --json
+hwpforge fill form.hwp --set name=홍길동 -o form.filled.hwpx --json
+```
+
+### 변환 손실 정책
+
+읽기 명령은 변환 경고를 보고합니다. 편집 5개 명령은 의미 손실이 있으면 쓰기 전에 `HWP5_CONVERSION_LOSS`로 거부합니다. 거부된 경고를 확인한 뒤 `--accept-conversion-loss`로 변환 손실을 명시적으로 허용합니다. 이 옵션은 편집 자체의 admission 검사나 인코드 의미 손실 거부(`ENCODE_SEMANTIC_LOSS`)를 해제하지 않습니다.
+
+글꼴 분류 정보(`style.font.type_info`)와 메모 모양 정의(`header.memo_shape_definition`)의 생략은 정책상 비손실이며 경고는 남습니다. 시각적으로 차이가 없다는 보장은 아닙니다. 조판 캐시 생략도 의미 손실 거부 대상이 아닙니다. 개요 번호 모양 참조(`section.outlineShapeIDRef`), 변경 추적 정의, 중첩 구역 설정, 언어별 장평, 자동 간격과 미분류 경고는 손실로 취급합니다.
+
+### 변환 메타데이터
+
+`HWP5_CONVERSION_LOSS`의 JSON `details.warnings`는 거부된 경고만 담으며, 각 항목은 `stage`, `code`, `message`와 선택적인 `location`을 갖습니다. 성공 JSON은 기존 `warnings`의 형과 내용을 유지하고, HWP5 입력일 때만 별도 `conversion: {source_format: "hwp5", warnings: [...]}`를 더합니다. 변환 경고가 없어도 `conversion.warnings`는 빈 배열입니다.
+
+`diff`는 `conversion.base`·`conversion.revised`에 변환된 입력의 메타데이터만 담습니다. `diff -o` 보고서 본문과 `to-json`·`to-md`의 문서 본문에는 변환 메타데이터를 섞지 않습니다. 사람용 모드는 표준 오류로 변환 사실과 경고를 알리고, `--json` 모드는 결과 메타데이터로 전달합니다.
+
+### HWP 원본 보호
+
+HWP5 입력을 자동 변환한 경우, 이미 있는 출력 파일이 입력과 같은 파일이면 `INVALID_OUTPUT_PATH`(종료 1)로 쓰기 전에 거부합니다. 편집 5개 명령의 문서 출력과 `stamp`의 manifest뿐 아니라 `diff -o`(양쪽 입력), `to-json -o`, `to-md`의 Markdown·추출 이미지 출력에도 적용합니다. 상대·절대 경로, 심볼릭 링크, 하드 링크와 대소문자를 구분하지 않는 파일 시스템의 별칭도 파일 정체성으로 비교합니다.
+
+아직 없는 출력은 이 비교로 거부하지 않습니다. 정체성 확인 실패는 `FILE_WRITE_FAILED`이며 `insert-para`·`delete-para`는 종료 2, 나머지 자동 변환 대상 명령은 종료 1입니다. HWPX 입력의 제자리 편집은 계속 허용합니다. 실행 도중 다른 프로세스가 경로를 바꾸는 경우는 보호 범위에 포함하지 않습니다.
+
+### 자동 변환 제외 경로
+
+CLI `from-json --base`·`patch`, Python `from_json(base=...)`·`patch`·`restyle`과 MCP의 문서 입력(`restyle` 포함)은 HWP5를 자동 변환하지 않으며 `HWP5_INPUT`으로 거부합니다. 이 경로에는 `convert-hwp5` 또는 Python `convert_hwp5`로 명시적으로 변환한 HWPX를 전달합니다. Python의 지원 연산과 저장 보호는 [Python 입력 정책](../guide/python/editing.md#hwp5-입력과-변환-손실)을 참고합니다.
+
+자동 변환 도입은 오류 코드 계약의 **breaking change**입니다. 대상 명령의 HWP5 입력은 기존 `HWP5_INPUT` 대신 변환 결과 또는 `HWP5_DECODE_FAILED`, `HWP5_CONVERT_FAILED`, `VALIDATION_FAILED`, `ENCODE_FAILED`를 반환합니다. 변환 실패는 기존 연산의 인자 검사보다 먼저이며, 변환 손실 거부는 기존 편집 검사 다음이면서 쓰기 전입니다. 기존 코드의 명령별 종료 값은 유지합니다(`set-cell`의 validation/encode 오류는 1, 나머지 변환 오류는 2). `.hwp` 출력 거부도 기존 동작의 변경입니다.
+
 ## HWP5 · PDF
 
 ### convert-hwp5
@@ -116,7 +156,7 @@ hwpforge convert [OPTIONS] --output <OUTPUT> <INPUT>
 
 ### to-json
 
-HWPX를 편집 가능한 JSON으로 내보냅니다.
+HWPX 또는 HWP5를 편집 가능한 JSON으로 내보냅니다.
 
 ```console
 hwpforge to-json [OPTIONS] --output <OUTPUT> <FILE>
@@ -168,7 +208,7 @@ hwpforge from-json [OPTIONS] --output <OUTPUT> <INPUT>
 
 ### to-md
 
-HWPX를 Markdown으로 변환합니다.
+HWPX 또는 HWP5를 Markdown으로 변환합니다.
 
 ```console
 hwpforge to-md [OPTIONS] <INPUT>
@@ -183,7 +223,7 @@ hwpforge to-md [OPTIONS] <INPUT>
 
 ### inspect
 
-디코드한 HWPX 문서 구조를 보여 줍니다. **HWPX만** 받습니다. HWP5는 먼저 `convert-hwp5`로 변환하거나 `audit-hwp5`로 비교하세요.
+HWPX 또는 HWP5 문서를 디코드한 구조를 보여 줍니다. HWP5 입력의 변환 경고는 별도로 보고합니다.
 
 ```console
 hwpforge inspect [OPTIONS] <FILE>
@@ -228,7 +268,7 @@ hwpforge read [OPTIONS] <FILE>
 
 ### diff
 
-두 HWPX를 두 채널로 비교해 편집이 실제로 무엇을 바꿨는지 확인합니다.
+HWPX 또는 HWP5 입력 둘을 두 채널로 비교해 편집이 실제로 무엇을 바꿨는지 확인합니다.
 
 ```console
 hwpforge diff [OPTIONS] <BASE> <REVISED>
@@ -242,7 +282,7 @@ hwpforge diff [OPTIONS] <BASE> <REVISED>
 
 ### validate
 
-HWPX가 디코드되고 Core의 구조 불변식(`Document::validate`)을 만족하는지 편집 없이 검사합니다.
+HWPX 또는 HWP5가 디코드되고 Core의 구조 불변식(`Document::validate`)을 만족하는지 편집 없이 검사합니다.
 
 ```console
 hwpforge validate [OPTIONS] <FILE>
@@ -254,12 +294,14 @@ hwpforge validate [OPTIONS] <FILE>
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0         | 문서가 유효합니다                                                                                                                                                                                              |
 | 1         | 파일을 읽을 수 없음(없거나 읽을 수 없거나 크기 상한을 넘는 파일)                                                                                                                                               |
-| 2         | 명령행 인자가 잘못됐거나 바이트가 디코드 가능한 HWPX 패키지가 아닙니다                                                                                                                                         |
+| 2         | 명령행 인자가 잘못됐거나 디코드·HWP5 변환에 실패합니다                                                                                                                                                         |
 | 3         | 디코드는 되지만 검증에 실패합니다(오류가 아니라 판정이며, `--json` 출력의 `errors`를 보세요). 파서는 통과하고 Core 중첩 깊이가 32를 넘는 문서는 디코드에서 거부되므로 3이 아니라 `DECODE_FAILED`(종료 2)입니다 |
 
 인자를 잘못 준 경우(필수 인자 누락, 알 수 없는 옵션)는 clap이 종료 코드 2로 끝냅니다. 아래 오류 계약은 다른 명령의 종료 정책도 함께 설명합니다.
 
 ## 편집
+
+`fill`·`set-cell`·`insert-para`·`delete-para`·`stamp`는 HWP5 입력의 의미 손실을 기본 거부합니다. 공통 옵션 `--accept-conversion-loss`는 변환 손실만 허용하며 편집 문서 출력은 `.hwpx`입니다. 자세한 내용은 [입력 정책](#hwp-입력과-hwpx-출력)을 참고합니다.
 
 `fill`·`set-cell`·`insert-para`·`delete-para`·`stamp`·`patch`는 결과를 `-o`로 지정한 출력 경로에 씁니다(필수 옵션). `stamp-plan`은 파일을 쓰지 않으므로 `-o`가 없습니다. 편집 뒤에는 `diff`로 변경 범위를 확인하세요.
 
@@ -396,17 +438,23 @@ hwpforge schema [OPTIONS] [TYPE_NAME]
 
 CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 같은 실패 단계와 도메인 거부 사유에 같은 `OpsCode` 문자열을 사용합니다. 여러 결함이 있으면 실제로 먼저 실패한 검사로 분류하며, 메시지·힌트·응답 봉투까지 같다는 뜻은 아닙니다. 퇴역 별명과 옛 문자열 lookup은 제공하지 않습니다.
 
-| 실패 단계·원인                                           | 코드                                                        |
-| -------------------------------------------------------- | ----------------------------------------------------------- |
-| 입력 HWPX / Markdown / HWP5 해석                         | `DECODE_FAILED` / `MD_DECODE_FAILED` / `HWP5_DECODE_FAILED` |
-| 편집 전 no-op 검증·인코드·재디코드 또는 의미 왕복 불일치 | `INPUT_NOT_ROUNDTRIP_SAFE`                                  |
-| 입력 ZIP 엔트리 미보존                                   | `INPUT_ENTRIES_NOT_CARRIED`                                 |
-| 명시적 문서 검증·메모리 문서 깊이 검사                   | `VALIDATION_FAILED`                                         |
-| 출력 생성 / 의미 손실 때문에 출력 거부                   | `ENCODE_FAILED` / `ENCODE_SEMANTIC_LOSS`                    |
-| 생성 산출물 읽기·재디코드·대조                           | `SELF_VERIFY_FAILED`                                        |
-| 보호 필드 침범 / 내부 불변식 파손                        | `PROTECTED_FIELD_RANGE` / `INTERNAL_INVARIANT`              |
-| 보존 patch의 변경·metadata 거부 / fill 고유 거부         | `PATCH_FAILED` / `FILL_FAILED`                              |
-| 아직 분류하지 않은 상류 variant                          | `UPSTREAM_UNMAPPED`                                         |
+| 실패 단계·원인                                                                | 코드                                                        |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 보류 명령의 HWPX 입력에 HWP5(.hwp)를 전달                                     | `HWP5_INPUT` (종료 2)                                       |
+| HWP5 변환의 의미 손실로 편집 거부                                             | `HWP5_CONVERSION_LOSS` (종료 1)                             |
+| 편집 문서 출력이 `.hwp`                                                       | `INVALID_EXTENSION` (종료 1)                                |
+| 편집 문서·manifest 또는 `diff`·`to-json`·`to-md` 출력이 HWP5 입력과 같은 파일 | `INVALID_OUTPUT_PATH` (종료 1)                              |
+| 입력 HWPX / Markdown / HWP5 해석                                              | `DECODE_FAILED` / `MD_DECODE_FAILED` / `HWP5_DECODE_FAILED` |
+| 편집 전 no-op 검증·인코드·재디코드 또는 의미 왕복 불일치                      | `INPUT_NOT_ROUNDTRIP_SAFE`                                  |
+| 입력 ZIP 엔트리 미보존                                                        | `INPUT_ENTRIES_NOT_CARRIED`                                 |
+| 명시적 문서 검증·메모리 문서 깊이 검사                                        | `VALIDATION_FAILED`                                         |
+| 출력 생성 / 의미 손실 때문에 출력 거부                                        | `ENCODE_FAILED` / `ENCODE_SEMANTIC_LOSS`                    |
+| 생성 산출물 읽기·재디코드·대조                                                | `SELF_VERIFY_FAILED`                                        |
+| 보호 필드 침범 / 내부 불변식 파손                                             | `PROTECTED_FIELD_RANGE` / `INTERNAL_INVARIANT`              |
+| 보존 patch의 변경·metadata 거부 / fill 고유 거부                              | `PATCH_FAILED` / `FILL_FAILED`                              |
+| 아직 분류하지 않은 상류 variant                                               | `UPSTREAM_UNMAPPED`                                         |
+
+`HWP5_INPUT`이면 먼저 `hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>`로 변환하세요. 확장자가 아닌 내용으로 판정하며, ZIP으로 열리는 접두사 HWPX는 이 코드로 재분류하지 않습니다.
 
 `INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
 

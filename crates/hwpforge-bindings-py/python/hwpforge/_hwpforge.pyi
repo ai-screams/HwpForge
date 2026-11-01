@@ -38,11 +38,28 @@ class PdfCause(TypedDict):
 
 # What an `ENCODE_SEMANTIC_LOSS` refusal carries as `HwpForgeError.details`:
 # the semantic-loss warnings that caused it, and the non-semantic warnings the
-# same encode produced, kept rather than discarded. `None` on every other
-# failure.
+# same encode produced, kept rather than discarded.
 class SemanticLossDetails(TypedDict):
     warnings: list[WarningInfo]
     others: list[WarningInfo]
+
+# Conversion diagnostics are separate from the existing operation warnings.
+class ConversionWarning(TypedDict):
+    stage: str
+    code: str
+    message: str
+    location: NotRequired[str]
+
+class ConversionMeta(TypedDict):
+    source_format: Literal["hwp5"]
+    warnings: list[ConversionWarning]
+
+class DiffConversionMeta(TypedDict):
+    base: NotRequired[ConversionMeta]
+    revised: NotRequired[ConversionMeta]
+
+class ConversionLossDetails(TypedDict):
+    warnings: list[ConversionWarning]
 
 class GridCoord(TypedDict):
     row: int
@@ -107,6 +124,7 @@ class FilledField(TypedDict):
     previous: str
 
 class FillReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     filled: list[FilledField]
     warnings: list[WarningInfo]
 
@@ -118,10 +136,12 @@ class SetCellResult(TypedDict):
     cleared: bool
 
 class SetCellReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     results: list[SetCellResult]
     warnings: list[WarningInfo]
 
 class StructuralReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     inserted: int
     deleted: int
     warnings: list[WarningInfo]
@@ -163,6 +183,7 @@ class CellStampedField(TypedDict):
     original_text: str
 
 class StampReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     manifest: NotRequired[StampManifest]
     stamped: list[StampedField]
     stamped_cells: list[CellStampedField]
@@ -215,15 +236,18 @@ class ToPdfReport(TypedDict):
     warnings: list[WarningInfo]
 
 class ToMdReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     mode: str
     images: dict[str, bytes]
     warnings: list[WarningInfo]
 
 class ToJsonReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     document: Json
     warnings: list[WarningInfo]
 
 class ExportSectionReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     section: Json
     warnings: list[WarningInfo]
 
@@ -312,6 +336,7 @@ class InspectStyles(TypedDict):
     para_shapes: list[ParaShapeSummary]
 
 class InspectReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     metadata: InspectMetadata
     sections: int
     paragraphs: int
@@ -357,6 +382,7 @@ class DocumentOutline(TypedDict):
     bookmarks: list[OutlineBookmark]
 
 class OutlineReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     outline: DocumentOutline
     warnings: list[WarningInfo]
 
@@ -411,12 +437,14 @@ class TableView(TypedDict):
     cells: list[CellView]
 
 class ReadReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     paragraphs: ParagraphsView | None
     table: TableView | None
     fields: list[FieldInfo] | None
     warnings: list[WarningInfo]
 
 class FieldsReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     fields: list[FieldInfo]
     warnings: list[WarningInfo]
 
@@ -434,6 +462,7 @@ class PackageDiff(TypedDict):
     changed: list[str]
 
 class DiffReport(TypedDict):
+    conversion: NotRequired[DiffConversionMeta]
     identical: bool
     note: str
     semantic: SemanticDiff
@@ -471,6 +500,7 @@ class SkippedTable(TypedDict):
     error: str
 
 class StampPlanReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     schema_version: int
     source_sha256: str
     text: list[StampCandidate]
@@ -482,6 +512,7 @@ class StampPlanReport(TypedDict):
 # instead. Left as `ok` (not renamed to match) because that would break the
 # Python API.
 class ValidateReport(TypedDict):
+    conversion: NotRequired[ConversionMeta]
     ok: bool
     sections: int
     paragraphs: int
@@ -540,7 +571,7 @@ def read(
 ) -> ReadReport: ...
 def diff(base: bytes, /, *, revised: bytes) -> DiffReport: ...
 def delete_para(
-    data: bytes, /, *, section: int, indexes: Sequence[int]
+    data: bytes, /, *, section: int, indexes: Sequence[int], accept_conversion_loss: bool = ...
 ) -> tuple[bytes, StructuralReport]: ...
 
 # `text` is one paragraph when it is a string, and one paragraph per element
@@ -553,8 +584,11 @@ def insert_para(
     anchor: int,
     text: str | Sequence[str],
     before: bool = ...,
+    accept_conversion_loss: bool = ...,
 ) -> tuple[bytes, StructuralReport]: ...
-def fill(data: bytes, /, *, values: Mapping[str, str]) -> tuple[bytes, FillReport]: ...
+def fill(
+    data: bytes, /, *, values: Mapping[str, str], accept_conversion_loss: bool = ...
+) -> tuple[bytes, FillReport]: ...
 
 # `at` is zero-based `"row,col"` here; `CellSpec.at` is a `GridCoord` object.
 def set_cell(
@@ -567,9 +601,15 @@ def set_cell(
     below: str | None = ...,
     text: str | None = ...,
     specs: Sequence[CellSpec] | None = ...,
+    accept_conversion_loss: bool = ...,
 ) -> tuple[bytes, SetCellReport]: ...
 def stamp(
-    data: bytes, /, *, request: StampRequest, manifest: bool = ...
+    data: bytes,
+    /,
+    *,
+    request: StampRequest,
+    manifest: bool = ...,
+    accept_conversion_loss: bool = ...,
 ) -> tuple[bytes, StampReport]: ...
 def restyle(data: bytes, /, *, preset: str) -> tuple[bytes, RestyleReport]: ...
 def templates() -> TemplatesReport: ...
@@ -588,3 +628,6 @@ def to_pdf(
     degraded: bool = ...,
     partial_cache_reject: bool = ...,
 ) -> tuple[bytes, ToPdfReport]: ...
+def _prepare_save(
+    data: bytes, /, *, accept_conversion_loss: bool = ...
+) -> tuple[bytes | None, ConversionMeta | None]: ...

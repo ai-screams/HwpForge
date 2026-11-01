@@ -145,6 +145,8 @@ pub struct FillMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Rejected`] with [`OpsCode::NoValues`] when `values` is
 ///   empty (the frontends call this `NO_VALUES`).
 /// - [`OpsError::InvalidInput`] when `values` names a field twice —
@@ -195,7 +197,8 @@ pub fn fill(
         }
     }
 
-    let diagnosed = HwpxFiller::fill_with_codec_diagnostics(hwpx, &map)?;
+    let diagnosed = HwpxFiller::fill_with_codec_diagnostics(hwpx, &map)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
@@ -320,6 +323,8 @@ pub struct SetCellMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Rejected`] with [`OpsCode::InvalidSetCellArgs`] for an
 ///   unusable option combination, or [`OpsCode::InvalidSetCellMap`] for an
 ///   empty `specs` batch (the frontends call these `INVALID_SET_CELL_ARGS`
@@ -343,7 +348,8 @@ pub struct SetCellMeta {
 /// ```
 pub fn set_cell(hwpx: &[u8], opts: &SetCellOptions) -> Result<SetCellOutput, OpsError> {
     let specs = build_specs(opts)?;
-    let diagnosed = HwpxCellEditor::set_cells_with_diagnostics(hwpx, &specs)?;
+    let diagnosed = HwpxCellEditor::set_cells_with_diagnostics(hwpx, &specs)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     // Documented order: the input decode first, then the encode that produced
     // the output.
     let mut warnings: Vec<OpsWarning> =
@@ -544,6 +550,8 @@ pub struct StructuralMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Rejected`] with [`OpsCode::InsertTextRequired`] when `text`
 ///   is empty (the MCP server calls this `INSERT_TEXT_REQUIRED`; the CLI's
 ///   own `--text` clap guard already refuses an empty list ahead of this
@@ -576,7 +584,8 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
     let anchor = ParagraphLocator { section: opts.section, index: opts.anchor };
     let diagnosed = HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
         hwpx, anchor, position, &opts.text,
-    )?;
+    )
+    .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
@@ -591,6 +600,8 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
 /// an `INDEX_MARK_REMOVED` warning beside the edited bytes.
 ///
 /// # Errors
+///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
 ///
 /// - [`OpsError::Rejected`] with [`OpsCode::DeleteNoTarget`] when `indexes`
 ///   is empty (the frontends call this `DELETE_NO_TARGET`). The library
@@ -627,7 +638,8 @@ pub fn delete_para(hwpx: &[u8], opts: &DeleteParaOptions) -> Result<StructuralOu
     // succeeds. An undecodable input or an out-of-range target yields
     // nothing here and is refused by the editor on the next line.
     let advisories = scan_delete_warnings(hwpx, &targets);
-    let diagnosed = HwpxStructuralEditor::delete_paragraphs_with_diagnostics(hwpx, &targets)?;
+    let diagnosed = HwpxStructuralEditor::delete_paragraphs_with_diagnostics(hwpx, &targets)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     // Documented order: what the decode reported, then what the edit advises.
     // The scan above decodes the package a second time; its warnings are the
     // editor's own, already reported, so only its advisories are taken.

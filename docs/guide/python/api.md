@@ -83,3 +83,11 @@
 | ---------------------------------- | ------------------------------------------ |
 | `hwpforge.__version__`             | 설치된 패키지 버전                         |
 | `hwpforge._hwpforge.MAX_FILE_SIZE` | `Document.open`의 상한, 104857600 (100 MB) |
+
+### HWP5 입력 옵션
+
+`fill`·`set_cell`·`insert_para`·`delete_para`·`stamp`와 `save`에는
+키워드 `accept_conversion_loss: bool = False`가 있습니다.
+HWP5 자동 변환의 의미 손실만 허용하며 기존 편집 검증은 유지합니다.
+포함 읽기·편집 결과에는 선택적인 `conversion` 메타데이터가 추가됩니다.
+[입력·저장 정책](editing.md#hwp5-입력과-변환-손실)에 전체 범위가 있습니다.

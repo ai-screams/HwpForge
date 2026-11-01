@@ -45,6 +45,11 @@
 //! code too; only a direct [`OpsError::Core`] (document validation) is
 //! `VALIDATION_FAILED`.
 //!
+//! An input decode failure on a non-ZIP CFB container reports `HWP5_INPUT`
+//! with the original decoder message and a conversion hint. Argument checks
+//! keep their priority; valid ZIP packages, including prefixed HWPX, keep
+//! their existing behavior. This layer does not convert HWP5 automatically.
+//!
 //! # Features
 //!
 //! `ops-hwpx` gives the HWPX-only operations, `ops-md` adds the Markdown
@@ -57,6 +62,7 @@ pub mod edit;
 pub mod exchange;
 #[cfg(feature = "ops-hwpx")]
 pub mod fs;
+mod input;
 pub mod inspect;
 pub mod inspect_meta;
 #[cfg(feature = "ops-md")]
@@ -129,6 +135,17 @@ pub use style::{
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
+    /// HWP5 input passed to an operation requiring HWPX. Convert it first.
+    ///
+    /// Display deliberately includes the original cause for callers that only
+    /// print the message. `source()` also preserves it for structured walkers;
+    /// those walkers should not append it to the already complete message.
+    #[error("HWP5 (.hwp) input requires conversion to HWPX first; cause: {source}")]
+    Hwp5Input {
+        /// The original input decode failure, including its source chain.
+        #[source]
+        source: Box<OpsError>,
+    },
     /// Shared JSON exchange validation failure.
     #[error(transparent)]
     Exchange(HwpxError),
@@ -288,6 +305,7 @@ impl OpsError {
     #[must_use]
     pub fn code(&self) -> OpsCode {
         match self {
+            Self::Hwp5Input { .. } => OpsCode::Hwp5Input,
             Self::Decode(e) => hwpx_code(e, Stage::Decode),
             Self::Encode(e) => hwpx_code(e, Stage::Encode),
             // `md_code` documents why the two asset-contract variants keep
@@ -447,6 +465,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
     }
     Some(match code {
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
+        OpsCode::Hwp5Input => "Convert the HWP5 (.hwp) document with convert_hwp5 (CLI: convert-hwp5) before using this operation.",
         OpsCode::EmptyFieldValue => {
             "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요"
         }

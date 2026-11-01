@@ -295,6 +295,8 @@ pub struct ParaShapeSummary {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Decode`] (code `DECODE_FAILED`) when the bytes are not a
 /// decodable HWPX package.
 ///
@@ -309,7 +311,8 @@ pub struct ParaShapeSummary {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     let document = &decoded.document;
     let metadata = document.metadata();
 

@@ -18,29 +18,35 @@ use pyo3::types::PyBytes;
 
 use crate::args;
 use crate::errors::OrPy;
+use crate::input;
 use crate::results::bytes_and_meta;
 
 /// Fills click-here fields by name.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
+///     accept_conversion_loss: Allow semantic conversion loss (default false).
+///         Otherwise HWP5_CONVERSION_LOSS carries rejected warnings in details.
 ///     values: Field name to replacement text. An empty mapping is rejected
 ///         with `NO_VALUES`, and an empty string is not a valid value.
 ///
 /// Returns:
 ///     The filled HWPX package, the fields that were filled, and `warnings`.
 #[pyfunction]
-#[pyo3(signature = (data, /, *, values))]
+#[pyo3(signature = (data, /, *, values, accept_conversion_loss = false))]
 pub(crate) fn fill<'py>(
     py: Python<'py>,
     data: PyBackedBytes,
     values: BTreeMap<String, String>,
+    accept_conversion_loss: bool,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyAny>)> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let values: Vec<(String, String)> = values.into_iter().collect();
     let options = ops::FillOptions::default();
     let output = py.detach(|| ops::fill(bytes, &values, &options)).or_py(py)?;
-    bytes_and_meta(py, &output.bytes, &output.meta())
+    input::accept(py, &input, accept_conversion_loss)?;
+    bytes_and_meta(py, &output.bytes, &input::metadata(output.meta(), &input))
 }
 
 /// Replaces the text of one table cell, or of a batch of them.
@@ -50,7 +56,9 @@ pub(crate) fn fill<'py>(
 /// any mix with `INVALID_SET_CELL_ARGS`.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
+///     accept_conversion_loss: Allow semantic conversion loss (default false).
+///         Otherwise HWP5_CONVERSION_LOSS carries rejected warnings in details.
 ///     table: Ordinal of the table to edit.
 ///     at: Zero-based grid coordinate as `"row,col"`, for example `"1,0"`.
 ///     right_of: Label of the cell to the left of the target.
@@ -73,6 +81,7 @@ pub(crate) fn fill<'py>(
     below = None,
     text = None,
     specs = None,
+    accept_conversion_loss = false,
 ))]
 #[allow(clippy::too_many_arguments)] // One parameter per CLI flag: the FFI table is the contract.
 pub(crate) fn set_cell<'py>(
@@ -84,8 +93,10 @@ pub(crate) fn set_cell<'py>(
     below: Option<String>,
     text: Option<String>,
     specs: Option<&Bound<'py, PyAny>>,
+    accept_conversion_loss: bool,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyAny>)> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let mut options = ops::SetCellOptions::default();
     if let Some(table) = table {
         options = options.with_table(table);
@@ -106,13 +117,16 @@ pub(crate) fn set_cell<'py>(
         options = options.with_specs(args::json_argument::<Vec<CellSpec>>("specs", specs)?);
     }
     let output = py.detach(|| ops::set_cell(bytes, &options)).or_py(py)?;
-    bytes_and_meta(py, &output.bytes, &output.meta())
+    input::accept(py, &input, accept_conversion_loss)?;
+    bytes_and_meta(py, &output.bytes, &input::metadata(output.meta(), &input))
 }
 
 /// Inserts paragraphs next to an anchor paragraph.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
+///     accept_conversion_loss: Allow semantic conversion loss (default false).
+///         Otherwise HWP5_CONVERSION_LOSS carries rejected warnings in details.
 ///     section: Index of the section to edit.
 ///     anchor: Index of the paragraph the new ones go next to.
 ///     text: The paragraphs to insert — one string for a single paragraph, or
@@ -123,7 +137,8 @@ pub(crate) fn set_cell<'py>(
 /// Returns:
 ///     The edited HWPX package, the insert and delete counts, and `warnings`.
 #[pyfunction]
-#[pyo3(signature = (data, /, *, section, anchor, text, before = false))]
+#[pyo3(signature = (data, /, *, section, anchor, text, before = false, accept_conversion_loss = false))]
+#[allow(clippy::too_many_arguments)] // One parameter per editing option.
 pub(crate) fn insert_para<'py>(
     py: Python<'py>,
     data: PyBackedBytes,
@@ -131,21 +146,26 @@ pub(crate) fn insert_para<'py>(
     anchor: usize,
     text: &Bound<'py, PyAny>,
     before: bool,
+    accept_conversion_loss: bool,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyAny>)> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let options = ops::InsertParaOptions::default()
         .with_section(section)
         .with_anchor(anchor)
         .with_text(args::paragraph_texts("text", text)?)
         .with_before(before);
     let output = py.detach(|| ops::insert_para(bytes, &options)).or_py(py)?;
-    bytes_and_meta(py, &output.bytes, &output.meta())
+    input::accept(py, &input, accept_conversion_loss)?;
+    bytes_and_meta(py, &output.bytes, &input::metadata(output.meta(), &input))
 }
 
 /// Deletes paragraphs by index.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
+///     accept_conversion_loss: Allow semantic conversion loss (default false).
+///         Otherwise HWP5_CONVERSION_LOSS carries rejected warnings in details.
 ///     section: Index of the section to edit.
 ///     indexes: Indexes of the paragraphs to delete, in the input document's
 ///         numbering.
@@ -153,23 +173,28 @@ pub(crate) fn insert_para<'py>(
 /// Returns:
 ///     The edited HWPX package, the insert and delete counts, and `warnings`.
 #[pyfunction]
-#[pyo3(signature = (data, /, *, section, indexes))]
+#[pyo3(signature = (data, /, *, section, indexes, accept_conversion_loss = false))]
 pub(crate) fn delete_para<'py>(
     py: Python<'py>,
     data: PyBackedBytes,
     section: usize,
     indexes: Vec<usize>,
+    accept_conversion_loss: bool,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyAny>)> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let options = ops::DeleteParaOptions::default().with_section(section).with_indexes(indexes);
     let output = py.detach(|| ops::delete_para(bytes, &options)).or_py(py)?;
-    bytes_and_meta(py, &output.bytes, &output.meta())
+    input::accept(py, &input, accept_conversion_loss)?;
+    bytes_and_meta(py, &output.bytes, &input::metadata(output.meta(), &input))
 }
 
 /// Applies an approved stamp map, all or nothing.
 ///
 /// Args:
-///     data: The HWPX package.
+///     data: The HWPX package or HWP5 (.hwp) bytes.
+///     accept_conversion_loss: Allow semantic conversion loss (default false).
+///         Otherwise HWP5_CONVERSION_LOSS carries rejected warnings in details.
 ///     request: The approval map — a list of specs (v1), or the
 ///         `{schema_version, source_sha256, text, cells}` envelope (v2) that
 ///         `stamp_plan` feeds. Anything else raises
@@ -181,18 +206,21 @@ pub(crate) fn delete_para<'py>(
 /// Returns:
 ///     The stamped HWPX package, the manifest and `warnings`.
 #[pyfunction]
-#[pyo3(signature = (data, /, *, request, manifest = true))]
+#[pyo3(signature = (data, /, *, request, manifest = true, accept_conversion_loss = false))]
 pub(crate) fn stamp<'py>(
     py: Python<'py>,
     data: PyBackedBytes,
     request: &Bound<'py, PyAny>,
     manifest: bool,
+    accept_conversion_loss: bool,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyAny>)> {
-    let bytes: &[u8] = &data;
+    let input = input::open(py, &data)?;
+    let bytes: &[u8] = &input.bytes;
     let request = args::stamp_map(py, request)?;
     let options = ops::StampOptions::default().with_manifest(manifest);
     let output = py.detach(|| ops::stamp(bytes, &request, &options)).or_py(py)?;
-    bytes_and_meta(py, &output.bytes, &output.meta())
+    input::accept(py, &input, accept_conversion_loss)?;
+    bytes_and_meta(py, &output.bytes, &input::metadata(output.meta(), &input))
 }
 
 /// Rebinds a document's fonts onto a style preset.

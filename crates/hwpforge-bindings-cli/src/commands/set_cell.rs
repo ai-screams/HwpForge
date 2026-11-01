@@ -9,7 +9,7 @@
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hwpforge::ops::edit::{set_cell as ops_set_cell, SetCellOptions};
 use hwpforge::ops::OpsWarning;
@@ -17,7 +17,7 @@ use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{CellResolution, CellSpec};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, read_bounded_string, read_input, CliError};
+use crate::error::{check_file_size, read_bounded_string, CliError};
 
 /// Flag bundle for a single-target invocation.
 pub struct SingleTarget<'a> {
@@ -35,14 +35,15 @@ pub struct SingleTarget<'a> {
 
 /// Run the `set-cell` command.
 pub fn run(
-    file: &PathBuf,
+    file: &Path,
     output: &PathBuf,
     single: SingleTarget<'_>,
     map: Option<&PathBuf>,
     json_mode: bool,
+    accept_conversion_loss: bool,
 ) {
     check_file_size(file, json_mode, Command::SetCell);
-    let bytes = read_input(file, json_mode, Command::SetCell);
+    let bytes = crate::input::read_input_hwpx(file, json_mode, Command::SetCell);
 
     let opts = build_options(single, map, json_mode);
 
@@ -57,6 +58,7 @@ pub fn run(
     // `[set-cell]`-prefixed stderr line each in text mode.
     let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();
 
+    bytes.check_edit(file, output, None, accept_conversion_loss, json_mode, Command::SetCell);
     if let Err(e) = std::fs::write(output, &result.bytes) {
         CliError::new(
             CliCode::Ops(OpsCode::FileWriteFailed),
@@ -75,7 +77,7 @@ pub fn run(
         if !warnings.is_empty() {
             out["warnings"] = serde_json::to_value(&warnings).unwrap();
         }
-        println!("{}", serde_json::to_string(&out).unwrap());
+        println!("{}", bytes.json(&out).unwrap());
     } else {
         for w in &warnings {
             eprintln!("[set-cell] {}: {}", w.code, w.message);

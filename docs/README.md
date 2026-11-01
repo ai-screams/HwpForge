@@ -12,12 +12,12 @@
 
 ## HwpForge란?
 
-HwpForge는 [한컴 한글](https://www.hancom.com/)의 HWP/HWPX 문서를 Rust로 읽고, 쓰고, 변환할 수 있는 라이브러리입니다. public guide와 umbrella crate surface는 여전히 HWPX/Markdown 중심이지만, HWP5는 전용 crate와 CLI를 통해 decode, audit, re-emission 경로를 제공합니다.
+HwpForge는 [한컴 한글](https://www.hancom.com/)의 HWP/HWPX 문서를 Rust로 읽고, 쓰고, 변환할 수 있는 라이브러리입니다. CLI·Python의 지원 읽기·편집 연산은 HWP5 입력을 자동 변환하며 편집 결과는 HWPX입니다. `.hwp` 저장은 지원하지 않습니다. 변환 손실의 거부·허용과 대상 명령은 [CLI 입력 정책](reference/cli.md#hwp-입력과-hwpx-출력)을 참고합니다. Rust의 `hwpforge::ops`와 MCP에는 명시적으로 변환한 HWPX를 전달합니다.
 
 ### 주요 기능
 
 - **HWPX 풀 코덱** — HWPX 파일 디코딩/인코딩 + 무손실 라운드트립
-- **HWP5 읽기/점검 경로** — legacy `.hwp` decode, audit, HWPX re-emission
+- **HWP5 입력과 HWPX 출력** — CLI·Python의 지원 읽기·편집 자동 변환과 명시적 변환·점검 경로를 제공합니다
 - **Markdown 브릿지** — GFM Markdown ↔ HWPX 변환
 - **PDF 내보내기** — 문서에 들어 있는 조판 캐시(layout cache)를 재생해 PDF로 렌더 (`to-pdf`)
 - **편집 연산 (`ops`)** — 누름틀 채우기, 표 셀 편집, 문단 삽입·삭제, 템플릿 스탬핑, diff·검증을 CLI·MCP·Python이 같은 구현으로 공유

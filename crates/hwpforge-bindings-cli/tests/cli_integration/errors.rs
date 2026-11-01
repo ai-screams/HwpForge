@@ -324,3 +324,24 @@ fn editors_share_decode_and_admission_fixtures() {
         assert!(!error["hint"].as_str().unwrap_or_default().contains("Report this as a bug."));
     }
 }
+
+#[test]
+// 이것을 실패시키는 것: inspect 변환 경로 제거 또는 변환 오류 코드·원인 변경.
+fn hwp5_with_hwpx_extension_reports_conversion_hint() {
+    let tmp = test_tmp();
+    let input = tmp.join("renamed.hwpx");
+    let original =
+        include_bytes!("../../../hwpforge/tests/data/hwp5-dangling-table-border-fill.hwp");
+    std::fs::write(&input, original).unwrap();
+    let (_, stderr, code) = run(&["inspect", input.to_str().unwrap(), "--json"]);
+    let error: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(code, 2);
+    assert_eq!(error["code"], "HWP5_DECODE_FAILED");
+    assert_eq!(
+        error["message"],
+        hwpforge_convert::ops::convert_hwp5(original, &Default::default()).unwrap_err().to_string()
+    );
+    assert!(error.get("details").is_none());
+    assert_eq!(error["hint"], serde_json::Value::Null);
+    assert_eq!(std::fs::read(input).unwrap(), original);
+}

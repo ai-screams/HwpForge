@@ -184,6 +184,8 @@ pub struct RestyleMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::PresetNotFound`] — no built-in preset has that name.
 /// - [`OpsError::Decode`] (`DECODE_FAILED`) — the bytes are not a decodable
 ///   HWPX package.
@@ -222,7 +224,8 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
         .font
         .clone();
 
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     reject_input_content_loss(&decoded.warnings)?;
     let decode_warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
@@ -328,6 +331,8 @@ pub struct ValidateReport {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Decode`] (`DECODE_FAILED`) when the bytes are not a decodable
 /// HWPX package.
 ///
@@ -342,7 +347,8 @@ pub struct ValidateReport {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn validate(hwpx: &[u8]) -> Result<ValidateOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decoded = HwpxDecoder::decode(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
     let warnings: Vec<OpsWarning> = decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
 
     // Measured before `validate` takes the document, so a failed verdict

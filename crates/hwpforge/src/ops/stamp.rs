@@ -171,6 +171,8 @@ pub struct StampPlanMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// [`OpsError::Stamper`] (code `DECODE_FAILED`) when the bytes fail to
 /// decode.
 ///
@@ -185,7 +187,8 @@ pub struct StampPlanMeta {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn stamp_plan(hwpx: &[u8]) -> Result<StampPlanOutput, OpsError> {
-    let diagnosed = HwpxStamper::plan_bytes_v2_with_diagnostics(hwpx)?;
+    let diagnosed = HwpxStamper::plan_bytes_v2_with_diagnostics(hwpx)
+        .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
     Ok(StampPlanOutput {
         plan: diagnosed.value,
         warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
@@ -332,6 +335,8 @@ pub struct StampMeta {
 ///
 /// # Errors
 ///
+/// [`OpsError::Hwp5Input`] if an input requiring HWPX is a non-ZIP HWP5 container.
+///
 /// - [`OpsError::Stamper`] for every library rejection: the admission
 ///   refusals (`INPUT_NOT_ROUNDTRIP_SAFE`, `INPUT_ENTRIES_NOT_CARRIED`),
 ///   drift (`STAMP_SOURCE_HASH_MISMATCH`, `STAMP_LABEL_DRIFT`,
@@ -371,7 +376,8 @@ pub fn stamp(
         encode_warnings,
     ) = match request {
         StampMap::Legacy(specs) => {
-            let diagnosed = HwpxStamper::stamp_with_diagnostics(hwpx, specs)?;
+            let diagnosed = HwpxStamper::stamp_with_diagnostics(hwpx, specs)
+                .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
             let StampResult { bytes, manifest, outcome } = diagnosed.value;
             (
                 bytes,
@@ -385,7 +391,8 @@ pub fn stamp(
             )
         }
         StampMap::V2(envelope) => {
-            let diagnosed = HwpxStamper::stamp_v2_with_diagnostics(hwpx, envelope)?;
+            let diagnosed = HwpxStamper::stamp_v2_with_diagnostics(hwpx, envelope)
+                .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
             let StampResultV2 { bytes, manifest, outcome } = diagnosed.value;
             (
                 bytes,

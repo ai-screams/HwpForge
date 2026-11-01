@@ -35,7 +35,9 @@ class HwpForgeError(Exception):
             the semantic losses that caused the refusal and ``others`` the
             remaining warnings of the same encode. Each entry has the same
             ``{"code", "message"}`` shape as a report warning. ``None`` for
-            every other failure.
+            every other failure except ``HWP5_CONVERSION_LOSS``, whose details
+            contain only ``warnings`` with ``stage``, ``code``, ``message`` and
+            optional ``location``. MCP does not automatically convert HWP5 inputs.
     """
 
     code: str

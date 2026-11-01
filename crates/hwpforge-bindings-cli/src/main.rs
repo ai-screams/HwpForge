@@ -4,6 +4,7 @@ mod analysis;
 mod commands;
 mod compat;
 mod error;
+mod input;
 
 use std::path::PathBuf;
 
@@ -133,12 +134,12 @@ enum Commands {
         preset: String,
     },
 
-    /// Inspect HWPX document structure.
+    /// Inspect HWPX or HWP document structure.
     #[command(
-        long_about = "Inspect decoded HWPX document structure.\n\nThis command accepts HWPX files only. For HWP5 sources, use `convert-hwp5` to generate HWPX first, or `audit-hwp5` to compare a converted HWPX result against the original HWP5 source."
+        long_about = "Inspect decoded HWPX or HWP document structure.\n\nHWP input is converted to HWPX in memory. Conversion warnings are reported separately."
     )]
     Inspect {
-        /// HWPX file to inspect.
+        /// HWPX or HWP file to inspect.
         file: PathBuf,
 
         /// Include style details (char/para shapes).
@@ -146,9 +147,9 @@ enum Commands {
         styles: bool,
     },
 
-    /// Export HWPX to editable JSON.
+    /// Export HWPX or HWP to editable JSON.
     ToJson {
-        /// HWPX file to export.
+        /// HWPX or HWP file to export.
         file: PathBuf,
 
         /// Output JSON file path.
@@ -181,7 +182,7 @@ enum Commands {
 
     /// List named click-here fields (누름틀) and whether each is fillable.
     Fields {
-        /// HWPX file to inspect.
+        /// HWPX or HWP file to inspect.
         file: PathBuf,
     },
 
@@ -190,19 +191,19 @@ enum Commands {
         long_about = "Show the document navigation map — headings (shared outline classification), tables (ordinal + logical grid dims), named click-here fields, and bookmarks.\n\nName anchors (heading text, table ordinal, field/bookmark name) are the primary keys; {section, para} locators are secondary and go stale after structural edits. Fetch this once before targeted reads or edits."
     )]
     Outline {
-        /// HWPX file to inspect.
+        /// HWPX or HWP file to inspect.
         file: PathBuf,
     },
 
-    /// Diff two HWPX files: verify what an edit actually changed.
+    /// Diff two HWPX or HWP files: verify what an edit actually changed.
     #[command(
-        long_about = "Compare two HWPX files in two channels.\n\nsemantic = decoded Core structure, classified into field values, table-cell text {table, row, col}, paragraph text {section, para}, structure counts, and a capped unclassified remainder. package = ZIP entries compared by bytes (added/removed/changed).\n\nWire content inside a changed entry (e.g. the hp:linesegarray layout cache) is not itemized — the report says so explicitly. Run after fill/set-cell/stamp/patch to confirm only the intended delta landed."
+        long_about = "Compare two HWPX or HWP files in two channels. HWP inputs are converted to HWPX before comparison.\n\nsemantic = decoded Core structure, classified into field values, table-cell text {table, row, col}, paragraph text {section, para}, structure counts, and a capped unclassified remainder. package = ZIP entries compared by bytes (added/removed/changed).\n\nWire content inside a changed entry (e.g. the hp:linesegarray layout cache) is not itemized — the report says so explicitly. Run after fill/set-cell/stamp/patch to confirm only the intended delta landed."
     )]
     Diff {
-        /// Base HWPX file.
+        /// Base HWPX or HWP file.
         base: PathBuf,
 
-        /// Revised HWPX file to compare against the base.
+        /// Revised HWPX or HWP file to compare against the base.
         revised: PathBuf,
 
         /// Also write the full pretty-printed JSON report here.
@@ -215,7 +216,12 @@ enum Commands {
         long_about = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     DeletePara {
-        /// HWPX file to edit.
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Document output is .hwpx; .hwp output is unsupported. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
+        /// HWPX or HWP file to edit.
         file: PathBuf,
 
         /// Section index.
@@ -236,7 +242,12 @@ enum Commands {
         long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, preserving every other byte.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     InsertPara {
-        /// HWPX file to edit.
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Document output is .hwpx; .hwp output is unsupported. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
+        /// HWPX or HWP file to edit.
         file: PathBuf,
 
         /// Section index.
@@ -266,7 +277,7 @@ enum Commands {
         long_about = "Read a targeted text projection without exporting the whole document.\n\nExactly one target: --section N (optionally --paras A..B, inclusive) for paragraph text with outline/list kinds; --table N for the logical grid text matrix (merged regions appear once, at their anchor, with spans); --field NAME for a named click-here field.\n\nNon-text content is never silently dropped — embedded tables/images/controls surface as explicit markers. Read-only: to change what you read, use fill / set-cell / patch."
     )]
     Read {
-        /// HWPX file to read.
+        /// HWPX or HWP file to read.
         file: PathBuf,
 
         /// Section index to read paragraphs from.
@@ -291,7 +302,12 @@ enum Commands {
         long_about = "Fill named click-here fields (누름틀) by name, byte-preserving every untouched package entry.\n\nAll requested values are validated first (unknown/duplicate/unfillable names, empty values) and nothing is written unless every one passes. Use `fields` to discover names."
     )]
     Fill {
-        /// HWPX file to fill.
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Document output is .hwpx; .hwp output is unsupported. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
+        /// HWPX or HWP file to fill.
         file: PathBuf,
 
         /// name=value pair to fill (repeatable).
@@ -309,7 +325,12 @@ enum Commands {
         long_about = "Edit table cells by logical grid address, all-or-nothing behind the fail-closed admission gate.\n\nAddress a cell with --table N (to-json export order) plus one of --at \"r,c\" (covered positions resolve to their merge anchor), --right-of LABEL, or --below LABEL (normalized exact match). --text \"\" clears the cell. Batch edits go through --map (JSON array of CellSpec)."
     )]
     SetCell {
-        /// HWPX file to edit.
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Document output is .hwpx; .hwp output is unsupported. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
+        /// HWPX or HWP file to edit.
         file: PathBuf,
 
         /// Output HWPX file path.
@@ -347,7 +368,7 @@ enum Commands {
         long_about = "Discover class-A placeholder candidates (checkbox/paren-blank/date-blank/standalone-@/seal tokens) for template stamping.\n\nAuthor a spec map from the output: every unguarded candidate must get an action — {\"field\":{\"name\":\"…\"}} or \"ignore\" — then run `stamp --map`."
     )]
     StampPlan {
-        /// HWPX file to inspect.
+        /// HWPX or HWP file to inspect.
         file: PathBuf,
     },
 
@@ -356,7 +377,12 @@ enum Commands {
         long_about = "Apply a stamp spec map all-or-nothing behind a fail-closed admission gate (no-op round-trip + ZIP closed-world), then write the stamped HWPX and a manifest.\n\nThe map is a JSON array of StampSpec (from `stamp-plan --json` candidates plus an action per candidate). The stamped output is immediately usable with `fields`/`fill`."
     )]
     Stamp {
-        /// HWPX file to stamp.
+        /// Allow semantic loss from HWP5 conversion; editing admission still applies.
+        /// Document output is .hwpx; .hwp output is unsupported. Paths must remain stable during execution.
+        #[arg(long)]
+        accept_conversion_loss: bool,
+
+        /// HWPX or HWP file to stamp.
         file: PathBuf,
 
         /// JSON spec map (array of StampSpec with actions).
@@ -402,9 +428,9 @@ enum Commands {
         type_name: String,
     },
 
-    /// Convert an HWPX file to Markdown.
+    /// Convert an HWPX or HWP file to Markdown.
     ToMd {
-        /// Path to the input HWPX file.
+        /// Path to the input HWPX or HWP file.
         input: PathBuf,
 
         /// Output directory (defaults to same directory as input).
@@ -418,12 +444,12 @@ enum Commands {
         mode: MdMode,
     },
 
-    /// Check that an HWPX document satisfies Core's structural invariants.
+    /// Check that an HWPX or HWP document satisfies Core's structural invariants.
     #[command(
-        long_about = "Check that an HWPX document decodes and satisfies Core's structural invariants (Document::validate), without editing it.\n\nExit 0 when the document is valid; 1 on a file error (missing/unreadable/oversized input); 2 on a command-line argument error or when the bytes are not a decodable HWPX package at all; 3 when it decodes but fails validation (a verdict, not an error — see `errors` in --json output)."
+        long_about = "Check that an HWPX or HWP document decodes and satisfies Core's structural invariants (Document::validate), without editing it.\n\nExit 0 when the document is valid; 1 on a file error (missing/unreadable/oversized input); 2 on a command-line argument error or when decoding or HWP-to-HWPX conversion fails; 3 when it decodes but fails validation (a verdict, not an error — see `errors` in --json output)."
     )]
     Validate {
-        /// HWPX file to validate.
+        /// HWPX or HWP file to validate.
         file: PathBuf,
     },
 }
@@ -491,12 +517,34 @@ fn main() {
         Commands::Diff { base, revised, output } => {
             commands::diff::run(&base, &revised, output.as_ref(), cli.json);
         }
-        Commands::DeletePara { file, section, indices, output } => {
-            commands::structural::run_delete(&file, section, &indices, &output, cli.json);
+        Commands::DeletePara { file, section, indices, output, accept_conversion_loss } => {
+            commands::structural::run_delete(
+                &file,
+                section,
+                &indices,
+                &output,
+                cli.json,
+                accept_conversion_loss,
+            );
         }
-        Commands::InsertPara { file, section, anchor, before, texts, output } => {
+        Commands::InsertPara {
+            file,
+            section,
+            anchor,
+            before,
+            texts,
+            output,
+            accept_conversion_loss,
+        } => {
             commands::structural::run_insert(
-                &file, section, anchor, before, &texts, &output, cli.json,
+                &file,
+                section,
+                anchor,
+                before,
+                &texts,
+                &output,
+                cli.json,
+                accept_conversion_loss,
             );
         }
         Commands::Read { file, section, paras, table, field } => {
@@ -512,10 +560,20 @@ fn main() {
         Commands::Fields { file } => {
             commands::fields::run(&file, cli.json);
         }
-        Commands::Fill { file, sets, output } => {
-            commands::fill::run(&file, &sets, &output, cli.json);
+        Commands::Fill { file, sets, output, accept_conversion_loss } => {
+            commands::fill::run(&file, &sets, &output, cli.json, accept_conversion_loss);
         }
-        Commands::SetCell { file, output, table, at, right_of, below, text, map } => {
+        Commands::SetCell {
+            file,
+            output,
+            table,
+            at,
+            right_of,
+            below,
+            text,
+            map,
+            accept_conversion_loss,
+        } => {
             commands::set_cell::run(
                 &file,
                 &output,
@@ -528,13 +586,21 @@ fn main() {
                 },
                 map.as_ref(),
                 cli.json,
+                accept_conversion_loss,
             );
         }
         Commands::StampPlan { file } => {
             commands::stamp::run_plan(&file, cli.json);
         }
-        Commands::Stamp { file, map, output, manifest } => {
-            commands::stamp::run(&file, &map, &output, manifest.as_deref(), cli.json);
+        Commands::Stamp { file, map, output, manifest, accept_conversion_loss } => {
+            commands::stamp::run(
+                &file,
+                &map,
+                &output,
+                manifest.as_deref(),
+                cli.json,
+                accept_conversion_loss,
+            );
         }
         Commands::Patch { base, section, section_json, output } => {
             commands::patch::run(&base, section, &section_json, &output, cli.json);
