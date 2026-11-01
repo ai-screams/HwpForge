@@ -1452,7 +1452,10 @@ impl<'a> DecoderState<'a> {
         }
         // 이것을 실패시키는 것: 글 바이트만 세기(`empty_note_paragraphs_count_against_the_budget`).
         let cost = capture.paragraphs.iter().fold(0usize, |cost, p| {
-            cost.saturating_add(p.text_content().len())
+            p.runs
+                .iter()
+                .filter_map(|r| r.content.plain_text())
+                .fold(cost, |cost, text| cost.saturating_add(text.len()))
                 .saturating_add(NOTE_STRUCTURE_COST.saturating_mul(1 + p.runs.len()))
         });
         let canonical = UniCase::new(capture.label.clone());
@@ -4270,6 +4273,61 @@ text
     }
 
     #[test]
+    // 이것을 실패시키는 것: 인라인 텍스트 런의 바이트 또는 평문 없는 런의 구조 비용을 제외.
+    fn definition_cost_matches_paragraph_text_and_structure() {
+        use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
+
+        let template = default_template();
+        let (mapping, mut registry) = resolve_mapping(&template).unwrap();
+        let mut state = DecoderState::new(&mapping, &mut registry);
+        state.start_footnote_definition("1").unwrap();
+        let capture = state.definition_capture.as_mut().unwrap();
+        let style = capture.style;
+        capture.paragraphs = vec![
+            Paragraph::with_runs(
+                vec![Run::text("가", style.char_shape_id), Run::text("ab", style.char_shape_id)],
+                style.para_shape_id,
+            ),
+            Paragraph::with_runs(vec![], style.para_shape_id),
+            Paragraph::with_runs(
+                vec![
+                    Run::text("끝", style.char_shape_id),
+                    Run::control(
+                        Control::Footnote { inst_id: None, paragraphs: vec![] },
+                        style.char_shape_id,
+                    ),
+                    Run {
+                        content: RunContent::InlineText(InlineText::from_segments([
+                            InlineSegment::Tab(InlineTabAttr {
+                                width: HwpUnit::new(1000).unwrap(),
+                                leader: 1,
+                                tab_type: 0,
+                            }),
+                            InlineSegment::Plain("Z".to_string()),
+                        ])),
+                        char_shape_id: style.char_shape_id,
+                    },
+                ],
+                style.para_shape_id,
+            ),
+        ];
+        let text_bytes = capture.paragraphs.iter().map(|p| p.text_content().len()).sum::<usize>();
+        let structure_bytes = capture
+            .paragraphs
+            .iter()
+            .map(|p| NOTE_STRUCTURE_COST * (1 + p.runs.len()))
+            .sum::<usize>();
+
+        state.finish_footnote_definition().unwrap();
+
+        assert_eq!(
+            state.note_definitions[&UniCase::new("1".to_string())].cost,
+            text_bytes + structure_bytes
+        );
+    }
+
+    #[test]
+    // 이것을 실패시키는 것: 저장한 정의 비용을 0으로 고정.
     fn expansion_budget_rejects_pathological_duplication() {
         let template = default_template();
         // 큰 본문 1개를 다수 참조 — 전개 총량이 예산을 넘으면 typed 에러.
