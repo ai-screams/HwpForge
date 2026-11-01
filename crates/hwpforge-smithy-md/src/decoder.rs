@@ -431,6 +431,8 @@ struct NoteDefinition {
     label: String,
     /// 본문 문단들 (다문단 지원).
     paragraphs: Vec<Paragraph>,
+    /// 본문 문단 텍스트의 바이트 합.
+    cost: usize,
     /// resolve 에서 이 정의를 참조한 횟수. 0 이면 고아 (에러).
     reference_count: u32,
 }
@@ -613,11 +615,7 @@ impl<'a> DecoderState<'a> {
                                 });
                             };
                             def.reference_count += 1;
-                            let cost = def
-                                .paragraphs
-                                .iter()
-                                .map(|p| p.text_content().len())
-                                .sum::<usize>();
+                            let cost = def.cost;
                             #[cfg(feature = "resource-experiment")]
                             if let Some(cfg) = hwpforge_core::resource_experiment::configuration() {
                                 use hwpforge_core::resource_experiment::{self, Scope, Timing};
@@ -920,12 +918,20 @@ impl<'a> DecoderState<'a> {
         if !has_content {
             return Err(MdError::EmptyNoteDefinition { label: capture.label });
         }
+        let cost = capture
+            .paragraphs
+            .iter()
+            .map(|p| {
+                p.runs.iter().filter_map(|r| r.content.plain_text()).map(|t| t.len()).sum::<usize>()
+            })
+            .sum();
         let canonical = UniCase::new(capture.label.clone());
         self.note_definitions.insert(
             canonical,
             NoteDefinition {
                 label: capture.label,
                 paragraphs: capture.paragraphs,
+                cost,
                 reference_count: 0,
             },
         );
@@ -2442,7 +2448,45 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 비용 계산에서 인라인 텍스트 런 제외.
+    fn note_definition_cost_matches_text_content_bytes() {
+        use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
+
+        let template = default_template();
+        let (mapping, mut registry) = resolve_mapping(&template).unwrap();
+        let mut state = DecoderState::new(&mapping, &mut registry);
+        state.start_footnote_definition("1").unwrap();
+        let style = state.footnote_style;
+        let capture = state.definition_capture.as_mut().unwrap();
+        capture.paragraphs = vec![
+            Paragraph::with_runs(
+                vec![Run::text("한글", style.char_shape_id), Run::text("abc", style.char_shape_id)],
+                style.para_shape_id,
+            ),
+            Paragraph::new(style.para_shape_id),
+            Paragraph::with_runs(vec![Run::text("", style.char_shape_id)], style.para_shape_id),
+        ];
+        let mut current = ParagraphBuilder::new(style);
+        current.runs.push(Run {
+            content: RunContent::InlineText(InlineText::from_segments([
+                InlineSegment::Plain("각주".into()),
+                InlineSegment::Tab(InlineTabAttr { width: HwpUnit::ZERO, leader: 0, tab_type: 0 }),
+                InlineSegment::Plain("끝".into()),
+            ])),
+            char_shape_id: style.char_shape_id,
+        });
+        capture.current = Some(current);
+        state.finish_footnote_definition().unwrap();
+        let def = &state.note_definitions[&UniCase::new("1".to_string())];
+        assert_eq!(def.paragraphs.len(), 4);
+        let old_cost = def.paragraphs.iter().map(|p| p.text_content().len()).sum::<usize>();
+        assert_eq!(old_cost, "한글abc각주\t끝".len());
+        assert_eq!(def.cost, old_cost);
+    }
+
+    #[test]
     // 이것을 실패시키는 것: 설정 없는 공통 경로의 확장 상한 검사 삭제 (모든 feature 빌드 포함).
+    // 이것을 실패시키는 것: 정의에 저장하는 비용을 0으로 고정.
     fn expansion_budget_rejects_pathological_duplication() {
         let template = default_template();
         // 큰 본문 1개를 다수 참조 — 전개 총량이 예산을 넘으면 typed 에러.
