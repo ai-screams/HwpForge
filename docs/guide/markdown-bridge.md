@@ -314,7 +314,7 @@ HWPX 문서를 Markdown으로 변환하면 LLM이나 RAG(Retrieval-Augmented Gen
 
 ```toml
 [dependencies]
-hwpforge = { version = "0.16", features = ["md"] }
+hwpforge = { version = "0.19", features = ["md"] }
 ```
 
 ### Lossy vs Lossless 모드 선택

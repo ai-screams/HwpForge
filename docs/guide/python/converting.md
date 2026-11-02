@@ -60,13 +60,13 @@ print(exported.report["document"] == document)      # 같은 내용을 dict 로�
 
 rebuilt = hwpforge.from_json(exported.text, base=doc)
 print(rebuilt.report["paragraphs"], [w["code"] for w in rebuilt.report["warnings"]])
-# 3 ['LAYOUT_CACHE_DROPPED']
+# 3 []
 ```
 
 - `to_json`의 JSON은 문서 전체와 style store이며, 표 셀에 격자 주소가 붙어 있습니다. `styles=False`는 구조만 내보냅니다.
-- `from_json`은 그 JSON을 **다시 인코드**해 새 문서를 만듭니다. `base`를 주면 style store(스타일 없이 내보낸 JSON 일 때)와 이미지 바이너리를 그 문서에서 가져옵니다. `base` 없이 이미지가 있는 문서를 재구성하면 이미지가 빠집니다.
-- 생성은 fail-closed가 아닙니다: 의미가 손실돼도 거부하지 않고 `warnings`에 실어 돌려줍니다. 위의 `LAYOUT_CACHE_DROPPED`는 원본이 가진 줄 조판 캐시를 재인코드가 싣지 않는다는 뜻입니다(한컴에서 다시 저장하면 복원).
-- 한컴 저장 문서의 `Preview/*`·`container.rdf` 엔트리는 `base`를 줘도 승계되지 않습니다(경고 없음). 텍스트만 바꿀 거라면 `export_section` → `patch`가 문서를 온전히 보존합니다.
+- `from_json`은 그 JSON을 **다시 인코드**해 새 문서를 만듭니다. `base`를 주면 이미지 바이너리와, 바뀌지 않은 문단의 줄 조판 캐시를 그 문서에서 가져옵니다. `base` 없이 이미지가 있는 문서를 재구성하면 이미지가 빠집니다. 스타일은 `base`에서 오지 않습니다. 값이 있는 `style_ref`가 하나라도 있으면 JSON의 `styles`가 필요해서 `styles=False`로 내보낸 JSON은 `base`를 줘도 거부됩니다. 모든 `style_ref`가 `null`이면 기본 프리셋으로 재구성합니다.
+- 생성은 fail-closed가 아닙니다: 의미가 손실돼도 거부하지 않고 `warnings`에 실어 돌려줍니다. 위 예제는 내용을 바꾸지 않아 `base` 바이트가 그대로 돌아오므로 경고가 없습니다. 내용을 바꾸면 줄 조판 캐시를 잃은 문단마다 `LAYOUT_CACHE_DROPPED`가 나옵니다(한컴에서 다시 저장하면 복원). `base`가 없으면 캐시를 싣지 않습니다.
+- 내용이 바뀌면 한컴 저장 문서의 `Preview/*`·`container.rdf` 엔트리는 `base`를 줘도 승계되지 않습니다(경고 없음). 텍스트만 바꿀 거라면 `export_section` → `patch`가 문서를 온전히 보존합니다.
 - JSON이 문서가 아니면 `JSON_PARSE_FAILED`. 스키마는 `hwpforge.schema(kind="exported-document")`.
 - JSON 에 `"format_version": 3` 가 붙고 문단 여백과 탭 위치는 `{"unit": "hwpunit" | "char", "value": 정수}` 입니다. 이전 판이 내보낸 버전 없는 JSON 은 탭 위치가 있으면 `LEGACY_JSON_TABS` 로 거부되고, 없으면 여백을 풀어 읽으며 `LEGACY_PARAGRAPH_MEASURES` 경고를 냅니다. 원본에서 `to_json` 을 다시 실행하십시오. 자세한 규칙은 CLI 레퍼런스의 `to-json` 절에 있습니다.
 
@@ -87,16 +87,16 @@ converted.document.save("old.hwpx")
 
 ## `to_pdf` — PDF 렌더
 
-렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5`로 캐시를 옮긴 HWPX(기본값). Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
+렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5`로 캐시를 옮긴 HWPX(기본값). Markdown이나 `base` 없는 JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
 
 캐시가 있어도 아직 재생하지 못하는 내용이 있습니다. 한컴이 저장한 문서라도 아래 경우는 실패하고, **한컴에서 다시 저장해도 풀리지 않습니다.**
 
-| `cause["code"]`       | 언제                                                                                      | 예                                     |
-| --------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------- |
-| `INVALID_CACHE`       | 문단 안에 글자가 아닌 요소(누름틀·메모·각주·수식·하이퍼링크·상호참조·차트·도형 등)가 있음 | 누름틀·메모 등 필드가 든 문단          |
-| `UNSUPPORTED_CONTENT` | 아직 지원하지 않는 배치 — `cause["kind"]`가 무엇인지 말함                                 | `kind == "non-default table position"` |
+| `cause["code"]`       | 언제                                                                                                                                                         | 예                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `INVALID_CACHE`       | 문단 안에 재생하지 못하는 요소(각주·수식·상호참조 등 일부 필드·차트·도형 등)가 있음. 누름틀·하이퍼링크는 저장 방식에 따라 다르고, 메모만으로는 거부되지 않음 | 상호참조·각주·수식이 든 문단           |
+| `UNSUPPORTED_CONTENT` | 아직 지원하지 않는 배치 — `cause["kind"]`가 무엇인지 말함                                                                                                    | `kind == "non-default table position"` |
 
-누름틀 서식처럼 이 경우에 걸리는 문서는 한컴에서 PDF로 저장하세요.
+이 경우에 걸리는 문서는 한컴에서 PDF로 저장하세요.
 
 ```python
 with open("old.hwp", "rb") as handle:
