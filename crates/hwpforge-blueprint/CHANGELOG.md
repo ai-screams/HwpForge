@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.18.0...hwpforge-blueprint-v0.19.0) - 2026-11-02
+
+### Changed (BREAKING)
+
+- 스타일 항목이 자기 `StyleRef`를 들고 레지스트리가 그 순서를 관리한다. `StyleEntry::new`를 지우고 `StyleRegistry::register_style(name, char_shape_id, para_shape_id, font_id) -> BlueprintResult<StyleRef>`로 등록한다. 같은 이름을 다시 등록하면 참조는 유지하고 내용만 바꾼다. `StyleRegistry.style_entries` 필드는 비공개가 되고 `style_entries()` 접근자로 읽는다. `StyleEntry`의 직렬화 형식에도 필수 필드 `style_ref`가 더해져 이전 직렬화 데이터는 그대로 읽히지 않는다. 이행: `StyleEntry`를 직접 만들던 코드는 `register_style`로 바꾸고, 필드를 직접 읽던 코드는 접근자를 쓴다. 이전 직렬화 데이터는 원본 템플릿이나 등록 정보로 레지스트리를 다시 구성한다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- `TemplateProvider`에 `is_builtin_template(&self, name) -> bool`을 더한다. 기본 구현은 `false`라 기존 구현은 그대로 컴파일된다. 내장 템플릿에만 호환 이름 후보를 허용하는 데 쓴다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- 템플릿 상속에서 항목 순서가 루트부터 쌓이고, 값은 가장 가까운 부모가 이긴다. 전에는 "첫 항목을 본문으로 쓰는" 대체 선택이 이 순서에 기대었으므로, 다단 상속 템플릿에서 본문으로 고른 스타일이 달라질 수 있다. 이행: 이전 선택을 유지하려면 `markdown_mapping.body`를 명시한다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- `MarkdownMapping`에 `numbered_item`, `check_item`, `bullet_levels` 필드가 늘어난다. 구조체를 리터럴로 만들던 코드는 컴파일되지 않으므로 `..Default::default()`를 붙인다. 수제 템플릿에 이 역할이 없으면 Markdown 쪽에서 그 종류의 목록을 지원하지 않는 것으로 다룬다(`hwpforge-smithy-md` 항목을 본다). ([#303](https://github.com/ai-screams/HwpForge/pull/303))
+
+### Added
+
+- 본문·제목·코드·인용·목록 역할의 스타일 이름 선택과 제목·목록 문단 모양 파생을 맡는 `markdown` 모듈을 더한다. `resolve_markdown_style_names`가 이름을 고르고 `apply_markdown_heading_levels`가 제목에 개요 수준을 붙인다. 제목이 본문이나 명시 목록과 같은 항목을 쓰면 원래 항목은 바꾸지 않고 제목용 문단 모양을 따로 만든다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- 내장 템플릿 `default`와 `gov_proposal`에 `heading4`–`heading6`을 더한다. 모양은 `heading3`과 같고, 개요 4–6 수준이라 한컴 차례에 여섯 수준이 모두 들어간다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- 기본 템플릿에 번호·체크 항목 역할과 수준별 글머리표·번호 정의를 넣고, `apply_markdown_list_levels`·`restart_markdown_numbering`으로 수준별 문단 모양을 파생한다. `restart_markdown_numbering`은 번호 정의를 복제해 번호 목록마다 새로 1부터 세게 한다. 수준 1–8의 번호 모양은 한컴 기본 형식(`1.`, `가.`, `1)`, `가)`, `(1)`, `(가)` 등)이다. ([#303](https://github.com/ai-screams/HwpForge/pull/303))
+
+### Fixed
+
+- 번호·글머리표 목록에서 표지 뒤 글의 시작이 번호마다 달라(`1.`은 13.2pt, `10.`은 18.7pt, `가.`는 17.5pt) 이어지는 문단과 어긋나던 것을 고친다. 항목의 이어지는 문단은 항목 여백에 기호 폭 20pt를 더한 자리에서 시작한다. 글머리표의 글 시작은 15pt에서 20pt로 옮겨 간다. 한계: 기호 폭 20pt는 글자 크기 10pt인 기본 템플릿에 맞춘 고정값이라, 본문 글자 크기를 바꾼 템플릿에서는 기호 뒤 글과 이어지는 문단이 어긋날 수 있다. ([#313](https://github.com/ai-screams/HwpForge/pull/313))
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.17.1...hwpforge-blueprint-v0.18.0) - 2026-10-25
 
 ### Changed

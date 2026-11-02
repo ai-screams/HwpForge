@@ -17,8 +17,8 @@ rust-version = "1.92"
 description = "PDF renderer for HwpForge — Hancom layout-cache replay (조판 캐시 재생)"
 
 [dependencies]
-hwpforge-core = { path = "../hwpforge-core", version = "0.18.0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.18.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.19.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.19.0" }
 krilla = { workspace = true }
 rustybuzz = { workspace = true }
 thiserror = { workspace = true }
@@ -28,6 +28,6 @@ flate2 = { workspace = true }
 # publish = false 라 path-only(버전 미고정) — hwpforge-convert 는
 # release-plz 대상이 아니다 (convert 자체 Cargo.toml 관례와 동일).
 hwpforge-convert = { path = "../hwpforge-convert" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.18.0" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.19.0" }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

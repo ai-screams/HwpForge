@@ -15,9 +15,9 @@ description = "Markdown codec (decoder + lossy/lossless encoder) for HwpForge"
 
 [dependencies]
 base64 = { workspace = true }
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.18.0" }
-hwpforge-core = { path = "../hwpforge-core", version = "0.18.0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.18.0" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.19.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.19.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.19.0" }
 pulldown-cmark = { workspace = true }
 quick-xml = { workspace = true }
 serde = { workspace = true }
@@ -28,7 +28,7 @@ thiserror = { workspace = true }
 unicase = "2"
 
 [dev-dependencies]
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.18.0" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.19.0" }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 zip = { workspace = true }

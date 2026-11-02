@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.18.0...hwpforge-smithy-md-v0.19.0) - 2026-11-02
+
+### Changed (BREAKING)
+
+- Markdown 변환 결과의 문단이 한컴 기본 스타일 대신 템플릿 스타일(`body`, `heading1`–`heading6`, `list_item` 등)을 가리킨다. 형식 중립 `StyleRef`를 쓰도록 바뀐 Core 문단 참조에 맞춘 변경이다(`hwpforge-core` 항목을 본다). 제목·목록 충돌은 stderr 출력 대신 `MdWarning::HeadingListConflict`로 돌려준다. 이행: stderr의 충돌 메시지를 읽던 코드는 경고 값을 읽는다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- Markdown 목록을 `- ` 글자가 붙은 본문 문단으로 쓰던 것을 한컴의 글머리표·번호·체크 문단으로 쓴다. 한컴에서 기호와 번호가 문서 기능으로 보이고, 중첩 수준이 HWPX에 남고, 둘째 줄이 항목 글 시작에 맞으며, 항목 안의 문단·코드·표도 그 항목에 남는다. 번호 목록은 목록마다 1부터 다시 센다. 같은 Markdown의 HWPX 출력이 달라지며 이전 산출물과의 호환은 없다. 새 경고는 다음과 같다: 9보다 깊은 수준은 `LIST_LEVEL_CLAMPED`, 1이 아닌 시작 번호는 1부터 쓰고 `LIST_START_NORMALIZED`, 항목 안 제목·구분선은 `LIST_SEMANTICS_LOST`, 템플릿에 해당 역할이 없으면 `LIST_DEFINITION_MISSING`, 번호 정의 복제 한도(1024)를 넘으면 `NUMBERING_PRESENTATION_LOST`. 한컴이 항목의 코드 문단에 표·그림·컨트롤을 넣었다면 코드 블록 대신 일반 문단으로 써서 내용을 잃지 않는다. ([#303](https://github.com/ai-screams/HwpForge/pull/303))
+- `StyleLookup`의 목록 조회가 `para_list` 하나로 합쳐졌다(`hwpforge-core` 항목을 본다). 이에 맞춰 lossy 보기가 원본 스타일을 받는 `MdEncoder::encode_lossy_with_styles(document, styles)`를 더했고, lossy `to-md`의 목록·제목·체크 상태가 원본 문단 모양을 따른다. 목록 문단을 목록 항목으로 쓰지 못하면 문단마다 한 번 `MdWarning::ListSemanticsLost`(`LIST_SEMANTICS_LOST`)를 낸다. 사유는 `container_projection`, `body_carrier_projection`, `markup_fallback`이다. 표나 그림 하나만 있는 목록 문단은 그 블록을 품은 항목으로 쓰고, 코드 글꼴 문단에 표나 그림이 있으면 일반 문단으로 쓴다. ([#301](https://github.com/ai-screams/HwpForge/pull/301))
+
+### Added
+
+- `to-md`가 쓴 HTML을 `convert`가 다시 읽는다. styled 출력의 `<strong>`·`<em>`·`<u>`·`<sup>`·`<sub>`와 HTML 표, lossy 출력의 표 칸 `<br>`이 대상이다. 디코더는 인코더가 실제로 쓰는 HTML만 받아 같은 서식으로 읽고, 그 밖의 HTML은 전과 같이 거부한다. `<!-- chart -->`·`<!-- memo: … -->` 주석은 되살릴 데이터가 없으므로 건너뛰고 `CONTENT_LOST` 경고를 낸다. 전에는 이런 출력을 `convert`에 넣으면 `MD_DECODE_FAILED`로 실패했다. ([#298](https://github.com/ai-screams/HwpForge/pull/298))
+- `StyleLookup::style_char_shape` 질의를 쓰도록 styled 인코더를 바꾼다(`hwpforge-core` 항목을 본다). ([#304](https://github.com/ai-screams/HwpForge/pull/304))
+
+### Changed
+
+- lossless 출력은 `metadata.format: lossless` 표지를 메타데이터와 관계없이 늘 쓴다. 일반 디코드가 이 표지를 만나면 원인과 대안(`to-json`/`from-json`)을 알려 주며 `UnsupportedStructure`로 거부한다. 전에는 메시지가 `raw HTML`이라 원인을 알 수 없었다. `to-md --mode lossless`의 도움말과 문서는 "Round-trip-safe"가 아니라 보존 범위를 확인하는 기계용 보기라고 설명한다. 이 출력을 되읽는 코드는 Rust API `MdDecoder::decode_lossless` 하나뿐이며 CLI·MCP·Python의 `convert`는 부르지 않는다. 이행: 문서 구조와 스타일의 왕복 편집은 `to-json`/`from-json`을 쓴다. ([#299](https://github.com/ai-screams/HwpForge/pull/299))
+
+### Fixed
+
+- 중첩 목록을 수준마다 두 칸씩 들여 써서 번호 목록의 하위 항목이 형제가 되고 더 깊은 줄이 들여쓴 코드 블록으로 읽히던 것을 고친다. 각 항목을 부모 표지 뒤 내용이 시작하는 열에 맞춰 들여 쓰고(`- `는 2칸, `1. `은 3칸, `10. `은 4칸), 수준을 건너뛰어도 한 단계만 깊어진다. 목록 글 안에서 표지처럼 보이는 글자는 글자로 남고, 빈 목록 항목도 자식을 유지한다. ([#300](https://github.com/ai-screams/HwpForge/pull/300))
+- 기본 템플릿의 제목이 `# **장 제목 하나**`처럼 아무도 쓰지 않은 강조가 붙어 나오던 것을 고친다. 문단 스타일이 이미 주는 강조(굵게, 기울임, 취소선, 밑줄, 위 첨자, 아래 첨자)는 쓰지 않고 그 스타일을 넘는 강조만 쓴다. 스타일 기준을 모르거나 글자가 스타일의 속성을 끄는 경우는 전과 같이 절대 표기로 쓴다. 본문의 일반 강조는 그대로다. ([#304](https://github.com/ai-screams/HwpForge/pull/304))
+- Markdown으로 읽을 때 목록의 왼쪽 여백과 첫 줄 들여쓰기가 `PARAGRAPH_MEASURE_LOST` 손실로 잘못 보고되던 것을 고친다. 인코더가 실제로 쓴 목록 구조와 기본 템플릿 값을 대조해 다시 돌아오는 여백만 경고에서 뺀다. 내용이 사라지던 문제가 아니라 경고가 많아 진짜 손실이 묻히던 문제였다. ([#312](https://github.com/ai-screams/HwpForge/pull/312))
+- 코드 블록 마지막 줄 끝의 줄바꿈 하나가 `hp:lineBreak`가 되어 코드 아래에 빈 줄이 보이던 것을 고친다. 디코더는 마지막 줄 끝 줄바꿈 하나만 빼고, 공백·탭·중간의 빈 줄은 그대로 둔다. 빈 줄 하나뿐인 코드 블록은 빈 코드 블록과 같은 문단이 된다. ([#313](https://github.com/ai-screams/HwpForge/pull/313))
+- 번호·글머리표 목록의 표지에서 글까지를 20pt로 고정하고, 이어지는 문단도 같은 자리에서 시작하게 한다. 글머리표의 글 시작은 15pt에서 20pt로 옮겨 간다. Markdown 표의 아래 여백은 2.83pt에서 10pt로 늘어나므로 표가 많은 문서는 쪽 흐름이 달라질 수 있다. 한계: 목록 기호 폭은 20pt 고정이며 글자 크기 10pt인 기본 템플릿에만 맞춰 있다. ([#313](https://github.com/ai-screams/HwpForge/pull/313))
+
+### Performance
+
+- 각주 정의가 비었는지 판정할 때와 각주·미주 정의의 전개 비용을 계산할 때 정의 본문 전체를 임시 문자열로 복사하던 것을 run 단위 처리로 바꾼다. 수용·거부되는 입력과 비용 값, 상한(8 MiB) 동작은 그대로이고, 큰 각주 정의를 읽을 때 정의 크기만큼 생기던 순간 메모리 상승이 사라진다. ([#302](https://github.com/ai-screams/HwpForge/pull/302), [#309](https://github.com/ai-screams/HwpForge/pull/309))
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.1...hwpforge-smithy-md-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)

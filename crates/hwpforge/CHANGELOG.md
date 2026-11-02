@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/v0.18.0...v0.19.0) - 2026-11-02
+
+### Changed (BREAKING)
+
+- CLI 명령과 Python API가 `.hwp`(HWP5) 입력을 받는다. 입력은 확장자가 아니라 내용으로 판별하고, 메모리에서 HWPX로 변환해 기존 연산에 넘긴다. 읽기 명령은 변환 경고를 `conversion` 필드로 보고만 한다. 편집 5개 명령(`fill`, `set-cell`, `insert-para`, `delete-para`, `stamp`)은 변환에서 의미 손실이 생기면 쓰기 전에 `HWP5_CONVERSION_LOSS`로 거부하고, `--accept-conversion-loss`(Python은 `accept_conversion_loss=True`)로 허용한다. 이 옵션은 변환 손실만 허용하며 편집 자체의 admission과 `ENCODE_SEMANTIC_LOSS` 거부는 그대로 적용된다. 결과는 `.hwpx`로만 저장한다. 출력 경로가 `.hwp`이면 `INVALID_EXTENSION`으로, 이미 있는 출력이 입력과 같은 파일이면 쓰기 전에 `INVALID_OUTPUT_PATH`로 거부한다(파일 정체성으로 비교하므로 링크와 대소문자 별칭도 잡는다). 이행:
+  - CLI 편집 5개 명령과 Python `Document.save()`는 HWPX 입력에서도 `.hwp` 출력 경로를 대소문자 구분 없이 `INVALID_EXTENSION`으로 거부한다.
+  - Python `Document.save(path, accept_conversion_loss=False)`도 원본이 HWP5이면 변환하고 의미 손실은 기본 거부한다. 변환 경고는 파일을 저장한 뒤 `UserWarning`으로 알리므로, 경고를 예외로 다루는 호출은 파일이 써진 뒤 예외를 받는다. `to_bytes()`는 들고 있는 바이트를 변환 없이 돌려준다.
+  - HWPX만 받는 Rust ops 함수에 HWP5 입력이 들어오면 `DECODE_FAILED` 대신 `OpsError::Hwp5Input`(코드 `HWP5_INPUT`)를 반환한다. `hwpforge` 크레이트는 자동 변환을 하지 않으므로 먼저 `convert_hwp5`로 변환한다. 원래 디코드 오류는 source로 남는다.
+  - CLI에서 `.hwp` 입력의 변환 실패는 `HWP5_DECODE_FAILED`, `HWP5_CONVERT_FAILED`, `VALIDATION_FAILED`, `ENCODE_FAILED` 중 하나로 나오고, 변환 뒤에 검사하는 인자 오류보다 먼저 보고된다. 변환 전에 검사하는 인자(`fill`의 `--set`, `read`의 대상 조합, `to-json`의 출력 확장자 등)는 전과 같은 순서다.
+  - `from-json --base`, `patch`, Python `from_json(base=...)`·`patch`·`restyle`, MCP는 자동 변환하지 않고 `HWP5_INPUT`을 보고한다. ([#310](https://github.com/ai-screams/HwpForge/pull/310))
+- 문단 스타일 참조(`StyleIndex`, `Paragraph.style_id`)가 `StyleRef`와 `style_ref`로, 목록 조회가 `ParagraphListRef` 하나로 바뀐다. JSON 교환 형식은 v3이고 v2 입력은 v3로 이행해 읽는다. 스타일 없이 내보낸(`to-json --no-styles`) v3 문서는 `from-json`으로 되돌아가지 않는다. 자세한 이행은 `hwpforge-core`, `hwpforge-blueprint`, `hwpforge-smithy-hwpx` 항목을 본다. ([#295](https://github.com/ai-screams/HwpForge/pull/295), [#301](https://github.com/ai-screams/HwpForge/pull/301))
+- `convert`가 Markdown 목록을 한컴 글머리표·번호·체크 문단으로 쓰고, 변환 결과의 문단이 템플릿 스타일을 가리킨다. 같은 Markdown의 HWPX 출력이 달라진다. 자세한 내용은 `hwpforge-smithy-md` 항목을 본다. ([#303](https://github.com/ai-screams/HwpForge/pull/303), [#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+### Added
+
+- `to-md`가 쓴 HTML(styled의 `<strong>`·`<em>`·`<u>`와 HTML 표, lossy의 표 칸 `<br>`)을 `convert`가 다시 읽는다. ([#298](https://github.com/ai-screams/HwpForge/pull/298))
+- 목록 의미가 Markdown에 담기지 않는 곳을 알리는 ops 경고 코드 `LIST_SEMANTICS_LOST`, `LIST_DEFINITION_MISSING`, `LIST_LEVEL_CLAMPED`, `LIST_START_NORMALIZED`, `NUMBERING_PRESENTATION_LOST`를 더한다. lossy `to-md`(CLI·Python)가 디코드한 HWPX 스타일을 받아 목록·제목·체크 상태가 원본 문단 모양을 따른다. ([#301](https://github.com/ai-screams/HwpForge/pull/301), [#303](https://github.com/ai-screams/HwpForge/pull/303))
+
+### Fixed
+
+- `set-cell`로 표 칸을 고칠 때, 편집 뒤에도 한 줄임이 입증된 칸은 뒤 문단의 줄 조판 캐시를 유지한다. 한컴에서 편집하지 않은 문단의 줄바꿈이 원본과 같게 열린다. 한계: 한 줄짜리 칸에만 적용하고, 폭 판정이 글꼴을 보지 않으므로 칸 폭에 가까운 넓은 글꼴 값은 뒤 문단과 겹칠 수 있다. ([#314](https://github.com/ai-screams/HwpForge/pull/314))
+- `to-md`가 Markdown 목록의 왼쪽 여백·첫 줄 들여쓰기를 `PARAGRAPH_MEASURE_LOST` 손실로 잘못 보고하던 것을 고친다. 번호 목록의 둘째 문단과 코드 아래 빈 줄, 표 아래 간격 같은 외형도 바로잡는다. 목록 기호 폭은 20pt 고정이며 글자 크기 10pt인 기본 템플릿에만 맞춰 있다. ([#312](https://github.com/ai-screams/HwpForge/pull/312), [#313](https://github.com/ai-screams/HwpForge/pull/313))
+- `to-md --mode lossless` 출력을 `convert`에 넣으면 원인 없이 `raw HTML` 오류로 실패하던 것을, 원인과 대안(`to-json`/`from-json`)을 알려 주며 거부하도록 바꾼다. lossless는 보존 범위를 확인하는 기계용 보기이며 왕복 형식이 아니다. ([#299](https://github.com/ai-screams/HwpForge/pull/299))
+- HWPX 메타데이터의 값 하나가 크기 한도를 넘거나 풀 수 없는 XML 참조를 담았을 때 메타데이터 전체를 경고 없이 잃던 것을, 문제의 값 하나만 버리고 `CONTENT_LOST`로 알리도록 고친다. 이 경고가 있는 문서는 `stamp`·`restyle`이 거부한다. ([#287](https://github.com/ai-screams/HwpForge/pull/287))
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/v0.17.1...v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)

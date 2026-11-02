@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.18.0...hwpforge-core-v0.19.0) - 2026-11-02
+
+### Changed (BREAKING)
+
+- 문단의 스타일 참조를 형식과 무관한 `StyleRef`로 바꾼다. `Paragraph.style_id: Option<StyleIndex>`는 `style_ref: Option<StyleRef>`가 되고, `Paragraph::with_style`은 `StyleRef`를 받는다. `hwpforge_core::StyleRef`도 다시 공개한다. JSON의 문단 필드 이름도 `style_id`에서 `style_ref`로 바뀐다. 그동안 Core 문단이 HWPX 출력 번호를 직접 들고 있어서 Markdown 쪽이 한컴 기본 스타일 묶음의 크기를 알아야만 템플릿 스타일을 가리킬 수 있었다. 이제 참조를 HWPX 스타일 저장소 한 곳에서만 출력 번호로 바꾼다. 디코드한 문서의 0번 스타일은 "참조 없음"과 구별되는 실제 참조가 되어, 0번 스타일의 이름과 개요 수준 조회가 적용된다. 이행: `paragraph.style_id`를 `paragraph.style_ref`로, `StyleIndex::new(n)`을 `StyleRef::new(n)`으로 고친다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- `StyleLookup`의 목록 조회 세 개(`para_list_type`, `para_list_level`, `para_checked_state`)를 지우고 `para_list(id) -> Option<ParagraphListRef>` 하나로 합친다. 기본 구현은 `None`이다. 전에는 읽는 쪽마다 종류 문자열·수준·체크 여부로 목록 종류를 다시 판정해서, 모르는 종류 문자열이 조용히 글머리표가 되었다. `style_name`과 `style_heading_level`의 인자는 `StyleIndex`에서 `StyleRef`로 바뀐다. 이행: 세 메서드를 구현하던 곳은 `Outline`·`Number`·`Bullet`·`CheckBullet`과 수준을 담은 `ParagraphListRef`를 돌려주는 `para_list` 하나로 바꾼다. 체크 여부는 `CheckBullet`에서만 나온다. ([#301](https://github.com/ai-screams/HwpForge/pull/301))
+
+### Added
+
+- `StyleLookup::style_char_shape(StyleRef) -> Option<CharShapeIndex>`를 더한다. 문단 스타일이 기본으로 주는 글자 모양을 묻는 메서드이며 기본 구현은 `None`이라 기존 구현은 그대로 동작한다. ([#304](https://github.com/ai-screams/HwpForge/pull/304))
+- 0부터 센 개요 수준을 Markdown 제목 깊이(1–6)로 바꾸는 `outline::outline_heading_depth`를 공개한다. ([#301](https://github.com/ai-screams/HwpForge/pull/301))
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.17.1...hwpforge-core-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)

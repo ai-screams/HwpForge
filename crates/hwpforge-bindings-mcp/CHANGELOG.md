@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.18.0...hwpforge-bindings-mcp-v0.19.0) - 2026-11-02
+
+### Changed (BREAKING)
+
+- `hwpforge_to_json`의 전체 문서·구역 JSON이 교환 형식 v3로 바뀐다. 문단은 `style_ref`, 스타일 저장소는 `style_positions`를 쓴다. JSON 입력 경로는 v2를 v3로 이행해 읽는다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- 이 서버는 `.hwp`(HWP5)를 자동 변환하지 않는다. `hwpforge_inspect`, `hwpforge_to_json`, `hwpforge_outline`, `hwpforge_diff`, `hwpforge_read`, `hwpforge_fields`, `hwpforge_fill`, `hwpforge_set_cell`, `hwpforge_insert_para`, `hwpforge_delete_para`, `hwpforge_stamp_plan`, `hwpforge_stamp`, `hwpforge_patch`, `hwpforge_to_md`, `hwpforge_validate`, `hwpforge_restyle`에 `.hwp` 입력이 들어오면 `DECODE_FAILED` 대신 `HWP5_INPUT`을 반환하고, 힌트로 CLI `hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>`를 안내한다. 이행: `HWP5_INPUT`을 받은 호출부는 먼저 `.hwpx`로 변환한다. ([#310](https://github.com/ai-screams/HwpForge/pull/310))
+
+### Added
+
+- `hwpforge_convert`가 `to-md`가 쓴 HTML(styled의 `<strong>`·`<em>`·`<u>`와 HTML 표, lossy의 표 칸 `<br>`)을 다시 읽는다. 차트·메모 주석은 건너뛰고 `CONTENT_LOST` 경고를 낸다. ([#298](https://github.com/ai-screams/HwpForge/pull/298))
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.1...hwpforge-bindings-mcp-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)
