@@ -9,20 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.18.0...hwpforge-foundation-v0.19.0) - 2026-11-02
 
+### Changed (BREAKING)
+
+- `StyleIndex`를 `StyleRef`로 바꾼다. 문서 안에서만 뜻이 있는 스타일 참조이며 HWPX 출력 번호가 아니다. 출력 번호는 HWPX 스타일 저장소만 정한다. 이행: `StyleIndex`를 `StyleRef`로 고쳐 쓴다. 생성(`StyleRef::new(n)`)과 값 접근은 전과 같다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
 ### Added
 
-- *(cli)* **BREAKING** read and edit .hwp input through in-memory HWPX conversion ([#310](https://github.com/ai-screams/HwpForge/pull/310))
-
-
-### Changed
-
-- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
-
-
-### Documentation
-
-- correct install versions, from-json caches and PDF limits for 0.19 ([#315](https://github.com/ai-screams/HwpForge/pull/315))
-
+- 공통 `OpsCode`에 `Hwp5Input`(`HWP5_INPUT`)과 `Hwp5ConversionLoss`(`HWP5_CONVERSION_LOSS`)를 더한다. 앞의 것은 HWPX만 받는 연산에 HWP5(`.hwp`) 파일이 들어왔다는 뜻이고, 뒤의 것은 `.hwp`를 변환하는 중 문서 의미가 사라져 편집을 거부했다는 뜻이다. `OpsCode`는 `#[non_exhaustive]`이므로 `match`에 이미 기본 갈래가 있으면 컴파일은 그대로 된다. ([#310](https://github.com/ai-screams/HwpForge/pull/310))
 
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.17.1...hwpforge-foundation-v0.18.0) - 2026-10-25
 

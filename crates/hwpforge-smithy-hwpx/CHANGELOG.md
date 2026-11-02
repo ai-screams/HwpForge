@@ -9,41 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.18.0...hwpforge-smithy-hwpx-v0.19.0) - 2026-11-02
 
-### Added
+### Changed (BREAKING)
 
-- *(cli)* **BREAKING** read and edit .hwp input through in-memory HWPX conversion ([#310](https://github.com/ai-screams/HwpForge/pull/310))
-
-- *(blueprint)* **BREAKING** [#296] write Markdown lists as Hancom bullet and numbered paragraphs ([#303](https://github.com/ai-screams/HwpForge/pull/303))
-
+- 문단 스타일 참조(`StyleRef`)를 HWPX 스타일 저장소만 출력 번호로 바꾼다. 인코더가 한컴 기본 스타일 묶음(Classic 18개, Modern 22개, Latest 23개)을 먼저 깔고 레지스트리 항목이 놓인 위치를 기록하므로, 변환한 문서를 한컴에서 열면 문단이 `바탕글`·`개요 N` 대신 템플릿 스타일 이름(`body`, `heading1` 등)으로 보이고, 한컴에서 `heading1` 스타일을 고치면 H1 문단만 함께 바뀐다. 저장소에 `style_position`, `effective_style_position`, `style_ref_at`을 더한다. 디코드한 문서는 원래 header 순서(0번 스타일 포함)를 유지한다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- JSON 교환 형식이 v3(`FORMAT_VERSION` 3)이다. 문단은 `style_ref`, 스타일 저장소는 `style_positions`를 쓴다. 새 진입점 `read_exchange`가 버전을 가려 v2 입력을 v3로 한 방향 이행해 읽고, `read_exchange_v2`는 호환용으로 남아 `read_exchange`를 부른다. 스타일 없이 내보낸 v3 문서(`to-json --no-styles`)를 다시 읽을 때 null이 아닌 스타일 참조는 거절하므로, 그 출력은 `from-json`으로 되돌아가지 않는다. 이행: 출력은 v3로 받고, 스타일이 필요하면 `--no-styles` 없이 내보낸다. ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+- 문단의 목록 정보를 `ParagraphListRef` 하나로 읽는다. HWPX의 heading 종류·정의 번호·수준을 형식 중립 참조로 되돌리는 역방향 변환을 더했고, 쓰기 쪽과 수준 검사를 공유한다. 알 수 없는 종류, 정의를 가리키지 않는 번호, 범위 밖 수준은 글머리표나 H6 제목으로 읽지 않고 본문으로 읽으며 `CONTENT_LOST`(`list_semantics`) 경고를 낸다. 이 경고가 있는 문서는 내용 손실을 거부하는 편집(`fill`, `set-cell` 등)이 거절하고, 레이아웃 편집은 줄 배치 캐시를 다시 계산한다. 한계: 원본의 알 수 없는 heading 종류는 보존하지 않으며 다시 쓰면 `NONE`이다. ([#301](https://github.com/ai-screams/HwpForge/pull/301))
 
 ### Changed
 
-- *(core)* **BREAKING** [#296] read paragraph lists as one typed reference ([#301](https://github.com/ai-screams/HwpForge/pull/301))
-
-- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
-
-- *(smithy-hwpx)* [#280] define repeated HWPX wire values in one place ([#292](https://github.com/ai-screams/HwpForge/pull/292))
-
-- *(smithy-hwpx)* [#282] drop the unused MAX_STYLE_INDEX checks ([#290](https://github.com/ai-screams/HwpForge/pull/290))
-
-
-### Documentation
-
-- correct install versions, from-json caches and PDF limits for 0.19 ([#315](https://github.com/ai-screams/HwpForge/pull/315))
-
+- 반복되는 HWPX wire 값(`dropcapstyle`, 필드 종류별 `fieldid`, 차트 계열 이름 형식, 개요 문단 모양 번호, 자리 표시 run 키)을 빌더마다 적던 것을 한 곳에서 정의한다. 출력 바이트와 공개 API는 그대로다. ([#292](https://github.com/ai-screams/HwpForge/pull/292))
+- 실제 디코드 경로에서 한 번도 실행되지 않던 `MAX_STYLE_INDEX` 검사 네 곳을 지운다. 스타일 번호의 실제 상한은 헤더에 정의된 `charPr`·`paraPr` 개수이며, 이 개수 이상의 번호는 전과 같이 디코드가 실패한다. 동작은 바뀌지 않는다. ([#290](https://github.com/ai-screams/HwpForge/pull/290))
 
 ### Fixed
 
-- *(hwpx)* [#311] keep line caches after proven one-line cell edits ([#314](https://github.com/ai-screams/HwpForge/pull/314))
-
-- *(md)* [#306] [#307] line up list text and settle code and table spacing ([#313](https://github.com/ai-screams/HwpForge/pull/313))
-
-- *(smithy-md)* [#297] write only emphasis beyond the paragraph style ([#304](https://github.com/ai-screams/HwpForge/pull/304))
-
-- *(smithy-hwpx)* [#286] read XML references in chart values and CLI text records ([#289](https://github.com/ai-screams/HwpForge/pull/289))
-
-- *(smithy-hwpx)* [#282] drop only the metadata value that is lost and report it ([#287](https://github.com/ai-screams/HwpForge/pull/287))
-
+- `Contents/content.hpf` 메타데이터에서 값 하나가 65,536바이트를 넘거나 `<opf:meta>`의 `name`이 넘치면 제목·작성자를 포함한 메타데이터 전체가 경고 없이 기본값이 되던 것을 고친다. 이제 문제가 된 값 하나만 버리고 `CONTENT_LOST` 경고를 낸다. 값의 `&amp;`·`&#xAC00;` 같은 XML 참조는 원래 글자로 읽는다(전에는 `A &amp; B`가 `A  B`로 읽혔다). 이런 입력을 `stamp`·`restyle`이 손실로 보고 거부하므로, 전에 성공하던 입력이 거부될 수 있다. 깊이·요소 수·DTD·이름공간 거부는 전과 같이 파서 전체 오류다. ([#287](https://github.com/ai-screams/HwpForge/pull/287))
+- 차트 파트의 값에 XML 참조가 있으면 값이 경고 없이 바뀌던 것을 고친다. 계열 이름 `R &amp; D`는 `D`로, 숫자 `1&#50;3`은 한 점 `123` 대신 `1`·`3` 두 점으로 읽혔고, CLI 경로 분석기의 텍스트 기록도 `A &amp; B`를 두 조각으로 남겼다. 값 하나의 경계 안에서 글자와 참조를 모은 뒤 한 번에 값을 정한다. 값의 앞뒤는 XML 공백(space·tab·CR·LF)만 자르므로 전각 공백은 내용으로 남는다. 정의되지 않은 엔티티(`&foo;`)가 든 차트는 다른 디코드 경로처럼 디코드 오류가 된다. ([#289](https://github.com/ai-screams/HwpForge/pull/289))
+- Markdown에서 만든 번호·글머리표 항목의 이어지는 문단이 항목 글과 어긋나던 것을 고친다. 번호 정의 수준마다 표지 폭을 고정(`useInstWidth=0`에 `textOffset`을 형식에 맞춰 지정)해 표지에서 글까지가 글자 크기 10pt에서 20pt가 된다. 고정은 템플릿으로 만드는 스타일 저장소에만 적용하며 HWPX 디코드, HWP5 변환, 스타일 포함 JSON, 스탬프·편집 경로는 지나지 않는다. 한계: 20pt는 글자 크기 10pt인 기본 템플릿 기준이다. 그 수준의 번호 하나만 쓰고 표지가 2칸 안에 드는 형식만 고정하며, 나머지는 번호 값을 따르는 기존 머리로 둔다. ([#313](https://github.com/ai-screams/HwpForge/pull/313))
+- `set-cell`로 표 칸을 고치면 같은 흐름의 뒤 문단이 줄 조판 캐시를 잃어, 한컴에서 편집하지 않은 문단의 줄바꿈이 원본과 달라지던 것을 고친다. 편집 뒤에도 한 줄임이 보수적으로 입증된 칸은 뒤 문단의 캐시를 유지한다. 입증하지 못한 값은 전과 같이 동작한다. 한계 1: 캐시 유지는 한 줄짜리 칸에만 적용한다. 한계 2: 폭 판정이 글꼴을 보지 않으므로, 측정한 상한보다 넓은 글꼴이나 측정하지 못한 글꼴을 칸 폭 가까이에서 쓰면 실제 줄 수와 유지한 캐시가 어긋나 뒤 문단과 겹칠 수 있다. 입력 문서의 줄 폭 값이 낡았어도 판정이 틀릴 수 있다. `fill`, `patch`, `insert-para`, `delete-para`와 줄 수가 바뀔 수 있는 값은 이 변경에 들어 있지 않다. ([#314](https://github.com/ai-screams/HwpForge/pull/314))
 
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.17.1...hwpforge-smithy-hwpx-v0.18.0) - 2026-10-25
 
