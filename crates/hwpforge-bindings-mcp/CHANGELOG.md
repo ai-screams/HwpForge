@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.18.0...hwpforge-bindings-mcp-v0.19.0) - 2026-11-02
+
+### Added
+
+- *(cli)* **BREAKING** read and edit .hwp input through in-memory HWPX conversion ([#310](https://github.com/ai-screams/HwpForge/pull/310))
+
+- *(smithy-md)* [#281] read back the HTML that to-md writes ([#298](https://github.com/ai-screams/HwpForge/pull/298))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.17.1...hwpforge-bindings-mcp-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)

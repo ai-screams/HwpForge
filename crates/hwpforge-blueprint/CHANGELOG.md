@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.18.0...hwpforge-blueprint-v0.19.0) - 2026-11-02
+
+### Added
+
+- *(cli)* **BREAKING** read and edit .hwp input through in-memory HWPX conversion ([#310](https://github.com/ai-screams/HwpForge/pull/310))
+
+- *(blueprint)* **BREAKING** [#296] write Markdown lists as Hancom bullet and numbered paragraphs ([#303](https://github.com/ai-screams/HwpForge/pull/303))
+
+
+### Changed
+
+- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+
+### Documentation
+
+- correct install versions, from-json caches and PDF limits for 0.19 ([#315](https://github.com/ai-screams/HwpForge/pull/315))
+
+
+### Fixed
+
+- *(md)* [#306] [#307] line up list text and settle code and table spacing ([#313](https://github.com/ai-screams/HwpForge/pull/313))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.17.1...hwpforge-blueprint-v0.18.0) - 2026-10-25
 
 ### Changed

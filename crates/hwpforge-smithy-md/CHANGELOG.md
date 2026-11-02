@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.18.0...hwpforge-smithy-md-v0.19.0) - 2026-11-02
+
+### Added
+
+- *(cli)* **BREAKING** read and edit .hwp input through in-memory HWPX conversion ([#310](https://github.com/ai-screams/HwpForge/pull/310))
+
+- *(blueprint)* **BREAKING** [#296] write Markdown lists as Hancom bullet and numbered paragraphs ([#303](https://github.com/ai-screams/HwpForge/pull/303))
+
+- *(smithy-md)* [#281] read back the HTML that to-md writes ([#298](https://github.com/ai-screams/HwpForge/pull/298))
+
+
+### Changed
+
+- *(core)* **BREAKING** [#296] read paragraph lists as one typed reference ([#301](https://github.com/ai-screams/HwpForge/pull/301))
+
+- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+
+### Documentation
+
+- correct install versions, from-json caches and PDF limits for 0.19 ([#315](https://github.com/ai-screams/HwpForge/pull/315))
+
+
+### Fixed
+
+- *(md)* [#306] [#307] line up list text and settle code and table spacing ([#313](https://github.com/ai-screams/HwpForge/pull/313))
+
+- *(smithy-md)* [#308] report list margins Markdown does not give back ([#312](https://github.com/ai-screams/HwpForge/pull/312))
+
+- *(smithy-md)* [#297] write only emphasis beyond the paragraph style ([#304](https://github.com/ai-screams/HwpForge/pull/304))
+
+- *(smithy-md)* [#296] nest Markdown list items under their marker width ([#300](https://github.com/ai-screams/HwpForge/pull/300))
+
+- *(smithy-md)* [#281] describe lossless Markdown as a view and refuse it in convert ([#299](https://github.com/ai-screams/HwpForge/pull/299))
+
+
+### Performance
+
+- *(smithy-md)* [#305] measure the footnote definition cost without copying its body ([#309](https://github.com/ai-screams/HwpForge/pull/309))
+
+- *(smithy-md)* check footnote definitions for content without copying the body ([#302](https://github.com/ai-screams/HwpForge/pull/302))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.17.1...hwpforge-smithy-md-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)

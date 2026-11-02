@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.18.0...hwpforge-foundation-v0.19.0) - 2026-11-02
+
+### Added
+
+- *(cli)* **BREAKING** read and edit .hwp input through in-memory HWPX conversion ([#310](https://github.com/ai-screams/HwpForge/pull/310))
+
+
+### Changed
+
+- *(core)* **BREAKING** [#279] make paragraph style references format-neutral and link Markdown to template styles ([#295](https://github.com/ai-screams/HwpForge/pull/295))
+
+
+### Documentation
+
+- correct install versions, from-json caches and PDF limits for 0.19 ([#315](https://github.com/ai-screams/HwpForge/pull/315))
+
+
 ## [0.18.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.17.1...hwpforge-foundation-v0.18.0) - 2026-10-25
 
 ### Changed (BREAKING)
