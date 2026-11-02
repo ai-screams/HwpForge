@@ -140,7 +140,7 @@ hwpforge from-json full.json -o 제안서_제출본.hwpx --base template.hwpx --
 hwpforge diff template.hwpx 제안서_제출본.hwpx --json
 ```
 
-On a 한컴-saved template the rebuild drops `Preview/*` and `META-INF/container.rdf` (the diff lists them under `package.removed`) and every line-layout cache (`warnings: ["layout cache dropped …"]`), and elements HwpForge does not model — form controls, master pages, some advanced formatting — can disappear. Tell the user, and have them open the result in 한컴 before submitting. If the template was not saved by 한컴, `insert-para` adds paragraphs without a rebuild ([structural-edit.md](structural-edit.md)). Paragraph-insert code: [editing-workflow.md](editing-workflow.md).
+On a 한컴-saved template the rebuild drops `Preview/*` and `META-INF/container.rdf` (the diff lists them under `package.removed`) and the line-layout caches around each change (`warnings: ["layout cache dropped …"]`), and elements HwpForge does not model — form controls, master pages, some advanced formatting — can disappear. Tell the user, and have them open the result in 한컴 before submitting. If the template was not saved by 한컴, `insert-para` adds paragraphs without a rebuild ([structural-edit.md](structural-edit.md)). Paragraph-insert code: [editing-workflow.md](editing-workflow.md).
 
 ## Checklist before handing it over
 

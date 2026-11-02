@@ -108,8 +108,10 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
 
     Args:
         text: The exported JSON.
-        base: A document to take the style store and package parts from, for
-            JSON that was exported without styles.
+        base: A document to take images and trusted unchanged line caches
+            from. Styles never come from it: JSON with a non-null `style_ref`
+            needs its own `styles`, and JSON whose references are all null
+            uses the default preset.
 
     Returns:
         The document, and a report holding the paragraph count of the

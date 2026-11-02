@@ -24,7 +24,7 @@ PDF 렌더(`krilla`)에 의존하는 `hwpforge-smithy-pdf`, `hwpforge-convert`, 
 
 ```toml
 [dependencies]
-hwpforge = "0.16"
+hwpforge = "0.19"
 ```
 
 기본 설치에는 HWPX 인코더/디코더가 포함됩니다.
@@ -47,14 +47,14 @@ HwpForge는 필요한 기능만 선택적으로 활성화할 수 있습니다.
 
 ```toml
 [dependencies]
-hwpforge = "0.16"
+hwpforge = "0.19"
 ```
 
 ### Markdown 변환 포함
 
 ```toml
 [dependencies]
-hwpforge = { version = "0.16", features = ["md"] }
+hwpforge = { version = "0.19", features = ["md"] }
 ```
 
 ### 편집 연산 계층 포함
@@ -63,14 +63,14 @@ CLI·MCP·Python이 공유하는 연산(`hwpforge::ops`)을 라이브러리에�
 
 ```toml
 [dependencies]
-hwpforge = { version = "0.16", features = ["ops"] }
+hwpforge = { version = "0.19", features = ["ops"] }
 ```
 
 ### 모든 기능 활성화
 
 ```toml
 [dependencies]
-hwpforge = { version = "0.16", features = ["full"] }
+hwpforge = { version = "0.19", features = ["full"] }
 ```
 
 ## 빌드 확인
@@ -84,7 +84,7 @@ cargo build
 다음과 같이 컴파일이 성공하면 설치가 완료된 것입니다:
 
 ```
-Compiling hwpforge v0.16.9
+Compiling hwpforge v0.19.0
  Finished `dev` profile [unoptimized + debuginfo] target(s) in ...
 ```
 

@@ -111,7 +111,7 @@ hwpforge to-pdf [OPTIONS] <INPUT>
 | `--degraded`              | 렌더 실패를 오류 대신 경고로 낮춥니다. 없는 스타일·축 폰트는 regular로 그리고, 렌더할 수 없는 이미지는 건너뜁니다 |
 | `--partial-cache-reject`  | 조판 캐시가 없는 문단이 하나라도 있으면 문서를 거부합니다(기본값: 경고 후 그 문단을 건너뜀)                       |
 
-조판 캐시가 있는 문서만 렌더할 수 있습니다. `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 거부됩니다.
+조판 캐시가 있는 문서만 렌더할 수 있습니다. `convert`나 `--base` 없는 `from-json`이 새로 만든 문서에는 캐시가 없어 거부됩니다. `from-json --base`는 믿을 수 있는 바뀌지 않은 캐시만 이어받습니다.
 
 ### audit-hwp5
 
