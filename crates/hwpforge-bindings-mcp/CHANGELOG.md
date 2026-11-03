@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.19.0...hwpforge-bindings-mcp-v0.19.1) - 2026-11-03
+
+### Changed
+
+- 워크스페이스 버전을 맞춘다. MCP 자체의 구현 변경은 없지만, HWPX 디코더 수정에 따라 본문 날 CRLF의 읽기 결과와 이전 section JSON의 `patch` 호환이 바뀐다. 자세한 내용은 `hwpforge-smithy-hwpx`의 업그레이드 주의를 따른다.
+
 ## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.18.0...hwpforge-bindings-mcp-v0.19.0) - 2026-11-02
 
 ### Changed (BREAKING)

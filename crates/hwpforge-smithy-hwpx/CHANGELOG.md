@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.0...hwpforge-smithy-hwpx-v0.19.1) - 2026-11-03
+
+### Fixed
+
+- HWPX 본문 글자(`<hp:t>`) 안의 CR과 LF를 표기와 관계없이 각각 줄바꿈 하나로 읽는다. 날 바이트, 문자 참조(`&#13;`·`&#10;`), CDATA가 모두 같다. 줄 조판 캐시가 없는 문서에서 한컴(macOS 12.30)은 이런 CR과 LF를 각각 줄바꿈으로 보여 주고, 저장한 캐시에서도 각각 한 글자로 센다. 전에는 날 바이트 CRLF(`\r\n`)만 줄바꿈 하나로 접혀 한컴보다 줄이 하나 적었고, 연속 CR(`\r\r\n`)도 한 글자 적게 읽었다. 그 뒤의 캐시 좌표는 범위 안에서는 경고 없이 다른 글자를 가리켰고, 범위를 벗어나면 `LAYOUT_CACHE_DROPPED` 경고와 함께 버려졌다. 문단에 캐시가 있으면 한컴은 저장된 줄 나눔을 따르므로 표시가 다를 수 있다. 관찰한 한컴 저장본에서는 본문 CR이 지워져, 영향을 받는 것은 다른 도구가 만든 HWPX다. Core·`patch`·`fill` 값으로 준 CRLF를 한 조각 안에서 줄바꿈 하나로 쓰는 쓰기 규칙은 그대로다 ([#207](https://github.com/ai-screams/HwpForge/issues/207), [#316](https://github.com/ai-screams/HwpForge/pull/316))
+
+### 업그레이드 주의
+
+- 본문 날 CRLF는 디코드한 글과 `to-json` 결과에서 LF 둘이 된다. Markdown 출력(`to-md`, Python 포함)은 자리에 따라 빈 줄, 공백(styled 제목), `<br>` 둘(표 칸)로 나타난다. 그 글을 다시 인코드하면 `<hp:lineBreak/>` 둘로 쓰고, 보존 `patch`가 고치지 않은 슬롯은 원본 바이트를 유지한다.
+- 그런 문서를 0.19.0 이하로 내보낸 section JSON(`to-json --section`)은 보존 메타데이터가 달라 `patch`가 재-export를 요구하며 거부한다. 0.19.1로 다시 내보낸 뒤 고친다.
+
+
 ## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.18.0...hwpforge-smithy-hwpx-v0.19.0) - 2026-11-02
 
 ### Changed (BREAKING)
