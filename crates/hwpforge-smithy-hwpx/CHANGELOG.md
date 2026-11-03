@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.0...hwpforge-smithy-hwpx-v0.19.1) - 2026-11-03
+
+### Fixed
+
+- *(hwpx)* [#207] read each body CR and LF as its own line end ([#316](https://github.com/ai-screams/HwpForge/pull/316))
+
+
 ## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.18.0...hwpforge-smithy-hwpx-v0.19.0) - 2026-11-02
 
 ### Changed (BREAKING)
