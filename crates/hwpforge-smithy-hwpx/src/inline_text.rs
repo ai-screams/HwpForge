@@ -57,13 +57,11 @@ pub(crate) fn requires_inline_text_markup(text: &str) -> bool {
 
 /// Encodes plain-text content into the inner XML for an `<hp:t>` element.
 ///
-/// Body line breaks follow `wire_xml::body_text_line_breaks`; other
+/// Body line breaks follow the contract in [`crate::wire_xml`]; other
 /// supported inline characters keep their existing mapping:
 ///
-/// - `\n` → `<hp:lineBreak/>`
 /// - `\t` → `<hp:tab/>`
 /// - `U+00A0` → `<hp:nbSpace/>`
-/// - `\r` / `\r\n` → one `<hp:lineBreak/>` within this fragment
 /// - `U+001F` → `<hp:fwSpace/>` (mirrors the HWP5 wire control byte for the
 ///   "fixed-width space" so the round-trip through Core is lossless)
 pub(crate) fn encode_inline_text_xml(text: &str) -> String {

@@ -2177,7 +2177,7 @@ fn encode_control_to_ctrl(
 /// 인라인 치환 마커(`__HWPTXT_…__` 등)일 수 있어, 문자 하나만 붙여도 치환
 /// 키가 깨져 최종 XML 에 내부 마커가 유출된다. 한컴형 번호-본문 간격은
 /// 공백 하나를 담은 **별도 텍스트 run** 으로 방출한다 (공백 전용 run 은
-/// ws-only 보존 수정(`preserve_ws_only_text`)으로 왕복에서도 안전).
+/// ws-only 보존 수정(`prepare_body_text_for_serde`)으로 왕복에서도 안전).
 /// 주입 결과 — 공통 note builder가 경고로 표면화한다.
 pub(crate) enum NoteHeadInjection {
     /// 주입 완료. `cache_dropped` = 어긋나게 될 lineseg 캐시를 드롭했는지.

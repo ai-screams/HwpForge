@@ -5,6 +5,8 @@ mod document;
 use document::text_para;
 #[path = "support/package.rs"]
 mod package;
+#[path = "support/xml.rs"]
+mod xml;
 use hwpforge_core::control::Control;
 use hwpforge_core::document::Document;
 use hwpforge_core::image::ImageStore;
@@ -17,17 +19,23 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{
-    CellSpec, CellTarget, HwpxCellEditor, HwpxDecoder, HwpxEncoder, HwpxPatcher,
+    CellSpec, CellTarget, HwpxCellEditor, HwpxDecoder, HwpxEncoder, HwpxError, HwpxPatcher,
+    PatchError, SectionWorkflowError,
 };
 use package::{section_xml_utf8 as section_xml, splice};
+use xml::{Content, Element};
 
 fn run_para(run: Run) -> Paragraph {
     Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))
 }
 
 fn encode(paragraphs: Vec<Paragraph>) -> Vec<u8> {
+    encode_section(Section::with_paragraphs(paragraphs, PageSettings::default()))
+}
+
+fn encode_section(section: Section) -> Vec<u8> {
     let mut doc = Document::new();
-    doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::default()));
+    doc.add_section(section);
     let styles = hwpforge_smithy_hwpx::style_store_for_preset("default").expect("preset");
     HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::default())
         .expect("encode")
@@ -358,6 +366,385 @@ fn cached_base() -> Vec<u8> {
         EncodeOptions::default().with_emit_layout_cache(true),
     )
     .unwrap()
+}
+
+// 이것을 실패시키는 것: 본문 CRLF 보호 생략, 연속 CR의 앞 CR 미치환,
+// 또는 보존된 textpos를 LF 개수에 맞춰 축약하기.
+#[test]
+fn raw_cr_lf_decode_keeps_wire_positions() {
+    use sha2::{Digest, Sha256};
+    for (wire, expected, position, expected_char) in [
+        ("a\rbcd", "a\nbcd", 3, 'c'),
+        ("a\nbcd", "a\nbcd", 3, 'c'),
+        ("a\r\nbcd", "a\n\nbcd", 3, 'b'),
+        ("a&#13;&#10;bcd", "a\n\nbcd", 3, 'b'),
+        ("<![CDATA[a\r\nbcd]]>", "a\n\nbcd", 3, 'b'),
+        ("a\r\n\r\nb", "a\n\n\n\nb", 3, '\n'),
+        ("a\r\r\nbcd", "a\n\n\nbcd", 4, 'b'),
+        ("a\r\r\r\nbcd", "a\n\n\n\nbcd", 5, 'b'),
+        ("a\r\n\nbcd", "a\n\n\nbcd", 4, 'b'),
+        ("a\n\r\nbcd", "a\n\n\nbcd", 4, 'b'),
+        ("<![CDATA[a\r\r\nbcd]]>", "a\n\n\nbcd", 4, 'b'),
+        ("<![CDATA[a\r\r\r\nbcd]]>", "a\n\n\n\nbcd", 5, 'b'),
+        ("<![CDATA[a\r\n\nbcd]]>", "a\n\n\nbcd", 4, 'b'),
+        ("<![CDATA[a\n\r\nbcd]]>", "a\n\n\nbcd", 4, 'b'),
+    ] {
+        let base = splice(&cached_base(), "가나다라", wire);
+        let base = splice(&base, "textpos=\"3\"", &format!("textpos=\"{position}\""));
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        assert!(decoded.warnings.is_empty(), "{wire:?}: {:?}", decoded.warnings);
+        let para = &decoded.document.sections()[0].paragraphs[1];
+        assert_eq!(para.text_content(), expected, "{wire:?}");
+        let pos = para.layout_cache.as_ref().unwrap().lines[1].textpos;
+        assert_eq!(pos, position, "{wire:?}");
+        assert_eq!(
+            para.text_content().encode_utf16().nth(pos as usize),
+            Some(expected_char as u16),
+            "{wire:?}"
+        );
+        let exported = HwpxPatcher::export_section_for_edit(&base, 0, false).unwrap().exported;
+        let preserved = exported.preservation.as_ref().unwrap();
+        assert_eq!(preserved.text_slots[1].original_text, expected, "{wire:?}");
+        let hwpforge_smithy_hwpx::TextLocator::TextElement {
+            content_start: Some(start),
+            content_end: Some(end),
+            ..
+        } = preserved.text_slots[1].locator
+        else {
+            panic!("text element: {wire:?}")
+        };
+        let xml = section_xml(&base);
+        assert_eq!(&xml[start..end], wire, "{wire:?}");
+        let mut hash = String::new();
+        for byte in Sha256::digest(xml.as_bytes()) {
+            hash.push_str(&format!("{byte:02x}"));
+        }
+        assert_eq!(preserved.section_sha256, hash, "{wire:?}");
+        let noop = HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &exported)
+            .unwrap();
+        assert_eq!(noop.value.bytes, base, "{wire:?}");
+    }
+}
+
+// 이것을 실패시키는 것: CRLF를 한 줄 끝으로 접어 한국어 뒤 좌표를 당기기.
+#[test]
+fn raw_crlf_keeps_korean_wire_positions() {
+    // Ten UTF-16 units precede the raw pair; positions 11 and 12 start
+    // the empty line and the following text respectively.
+    let base = splice(&cached_base(), "가나다라", "01234567앞줄\r\n뒷줄");
+    let base = splice(&base, "textpos=\"3\"", "textpos=\"11\"");
+    let base =
+        splice(&base, "</hp:linesegarray>", "<hp:lineseg textpos=\"12\"/></hp:linesegarray>");
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+    let para = &decoded.document.sections()[0].paragraphs[1];
+    assert_eq!(para.text_content(), "01234567앞줄\n\n뒷줄");
+    assert_eq!(
+        para.layout_cache.as_ref().unwrap().lines.iter().map(|l| l.textpos).collect::<Vec<_>>(),
+        [0, 11, 12]
+    );
+    assert_eq!(para.text_content().chars().nth(11), Some('\n'));
+    assert_eq!(para.text_content().chars().nth(12), Some('뒷'));
+}
+
+// 이것을 실패시키는 것: 서로 다른 run의 CR과 LF를 한 쌍으로 접기.
+#[test]
+fn raw_line_ends_keep_run_boundaries() {
+    let base = encode(vec![Paragraph::with_runs(
+        vec![
+            Run::text("left", CharShapeIndex::new(0)),
+            Run::text("middle", CharShapeIndex::new(0)),
+            Run::text("right", CharShapeIndex::new(0)),
+        ],
+        ParaShapeIndex::new(0),
+    )]);
+    for (wire, expected) in [("\r", "\n"), ("\r\n", "\n\n")] {
+        let base = splice(&splice(&base, "middle", wire), "right", "\nright");
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        let runs = &decoded.document.sections()[0].paragraphs[0].runs;
+        assert_eq!(runs.len(), 3, "{wire:?}");
+        assert_eq!(runs[1].content.as_text(), Some(expected), "{wire:?}");
+        assert_eq!(texts(&base), [format!("left{expected}\nright")], "{wire:?}");
+    }
+}
+
+fn slot_bytes<'a>(xml: &'a str, slot: &hwpforge_smithy_hwpx::PreservedTextSlot) -> &'a [u8] {
+    let hwpforge_smithy_hwpx::TextLocator::TextElement { element_start, element_end, .. } =
+        slot.locator
+    else {
+        panic!("expected text element")
+    };
+    &xml.as_bytes()[element_start..element_end]
+}
+
+// 이것을 실패시키는 것: 문자/참조/CDATA 순서 누락, 또는 빈 요소와 닫힌 요소의 순서 누락.
+#[test]
+fn xml_tree_keeps_mixed_content_order() {
+    let tree = Element::parse(
+        "<t key='A&amp;B'>a&#13;<![CDATA[b]]><lineBreak/>c<lineBreak></lineBreak>d</t>",
+    );
+    assert_eq!(tree.attr("key"), Some("A&B"));
+    assert_eq!(tree.text, "a\rbcd");
+    assert_eq!(tree.child_names(), ["lineBreak", "lineBreak"]);
+    assert_eq!(
+        tree.content,
+        [
+            Content::Text("a\rb".into()),
+            Content::Child(0),
+            Content::Text("c".into()),
+            Content::Child(1),
+            Content::Text("d".into()),
+        ]
+    );
+}
+
+// 이것을 실패시키는 것: CRLF 보호 생략.
+#[test]
+fn raw_cr_single_line_cache_patch_contract() {
+    for (wire, expected, breaks) in [("a\rb", "a\nb", 1), ("a\r\nb", "a\n\nb", 2)] {
+        let base = splice(&cached_base(), "가나다라", wire);
+        let xml = section_xml(&base);
+        let start = xml.find("<hp:lineseg textpos=\"3\"").unwrap();
+        let end = start + xml[start..].find("/>").unwrap() + 2;
+        let mut single = xml.clone();
+        single.replace_range(start..end, "");
+        let base = package::with_section(&base, &single);
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        let para = &decoded.document.sections()[0].paragraphs[1];
+        assert_eq!(para.text_content(), expected);
+        assert_eq!(para.layout_cache.as_ref().unwrap().lines.len(), 1);
+        let exported = HwpxPatcher::export_section_for_edit(&base, 0, false).unwrap().exported;
+        let noop = HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &exported)
+            .unwrap();
+        assert_eq!(noop.value.bytes, base);
+        let patched = patch_para1(&base, &format!("{expected}X"));
+        // 이것을 실패시키는 것: 줄 끝을 글 앞뒤로 이동하거나 캐시를 남기기.
+        let tree = Element::parse(&section_xml(&patched));
+        let paragraphs: Vec<_> = tree.children.iter().filter(|p| p.name == "hp:p").collect();
+        assert_eq!(paragraphs.len(), 2, "{wire:?}");
+        let t = paragraphs[1].child("hp:run").child("hp:t");
+        let mut ordered = vec![Content::Text("a".into())];
+        ordered.extend((0..breaks).map(Content::Child));
+        ordered.push(Content::Text("bX".into()));
+        assert_eq!(t.content, ordered, "{wire:?}");
+        assert_eq!(t.child_names(), vec!["hp:lineBreak"; breaks], "{wire:?}");
+        for paragraph in paragraphs {
+            assert!(!paragraph.child_names().contains(&"hp:linesegarray"), "{wire:?}");
+        }
+        let mut edited = exported;
+        edited.section.paragraphs[0].runs[0].content = RunContent::Text("앞X".into());
+        let out =
+            HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &edited).unwrap();
+        // 이것을 실패시키는 것: 무변경 슬롯을 다시 인코드해 원문 CR을 잃기.
+        let after_xml = section_xml(&out.value.bytes);
+        let after =
+            HwpxPatcher::export_section_for_edit(&out.value.bytes, 0, false).unwrap().exported;
+        let before_slot = &edited.preservation.as_ref().unwrap().text_slots[1];
+        let after_slot = &after.preservation.as_ref().unwrap().text_slots[1];
+        assert_eq!(
+            slot_bytes(&single, before_slot),
+            slot_bytes(&after_xml, after_slot),
+            "{wire:?}"
+        );
+        let tree = Element::parse(&after_xml);
+        for paragraph in tree.children.iter().filter(|p| p.name == "hp:p") {
+            assert!(!paragraph.child_names().contains(&"hp:linesegarray"), "{wire:?}");
+        }
+    }
+}
+
+// 이것을 실패시키는 것: CRLF 보호 생략, preservation 전체 비교 제거, 또는 오류 변형 변경.
+#[test]
+fn raw_crlf_old_preservation_requires_reexport() {
+    let base = splice(&cached_base(), "가나다라", "a\r\nb");
+    let mut old = HwpxPatcher::export_section_for_edit(&base, 0, false).unwrap().exported;
+    old.preservation.as_mut().unwrap().text_slots[1].original_text = "a\nb".into();
+    old.section.paragraphs[1].runs[0].content = RunContent::Text("a\nb".into());
+    let error =
+        HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &old).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SectionWorkflowError::PreservingPatch(PatchError::Rejected(
+                HwpxError::InvalidStructure { .. }
+            ))
+        ),
+        "{error}"
+    );
+}
+
+// 이것을 실패시키는 것: 본문 CRLF 보호 생략.
+#[test]
+fn raw_crlf_reaches_nested_body_channels() {
+    use hwpforge_core::caption::{Caption, CaptionSide};
+    use hwpforge_core::section::HeaderFooter;
+    let cs = CharShapeIndex::new(0);
+    let size = HwpUnit::new(8000).unwrap();
+    let mut table =
+        Table::new(vec![TableRow::new(vec![TableCell::new(vec![text_para("PAYLOAD")], size)])]);
+    table.caption = Some(Caption::new(vec![text_para("PAYLOAD")], CaptionSide::Bottom));
+    type BodyTexts = fn(&Paragraph) -> Vec<String>;
+    let cases: [(&str, Paragraph, BodyTexts, &str); 8] = [
+        (
+            "table and caption",
+            run_para(Run::table(table, cs)),
+            |paragraph| {
+                let RunContent::Table(table) = &paragraph.runs[0].content else {
+                    panic!("expected table: {paragraph:?}");
+                };
+                vec![
+                    table.rows[0].cells[0].paragraphs[0].text_content(),
+                    table.caption.as_ref().unwrap().paragraphs[0].text_content(),
+                ]
+            },
+            "a\n\nb",
+        ),
+        (
+            "textbox",
+            run_para(Run::control(Control::text_box(vec![text_para("PAYLOAD")], size, size), cs)),
+            |paragraph| {
+                let RunContent::Control(control) = &paragraph.runs[0].content else {
+                    panic!("expected control: {paragraph:?}");
+                };
+                let Control::TextBox { paragraphs, .. } = control.as_ref() else {
+                    panic!("unexpected control: {control:?}");
+                };
+                vec![paragraphs[0].text_content()]
+            },
+            "a\n\nb",
+        ),
+        (
+            "footnote",
+            run_para(Run::control(Control::footnote(vec![text_para("PAYLOAD")]), cs)),
+            |paragraph| {
+                let RunContent::Control(control) = &paragraph.runs[0].content else {
+                    panic!("expected control: {paragraph:?}");
+                };
+                let Control::Footnote { paragraphs, .. } = control.as_ref() else {
+                    panic!("unexpected control: {control:?}");
+                };
+                vec![paragraphs[0].text_content()]
+            },
+            "a\n\nb",
+        ),
+        (
+            "endnote",
+            run_para(Run::control(Control::endnote(vec![text_para("PAYLOAD")]), cs)),
+            |paragraph| {
+                let RunContent::Control(control) = &paragraph.runs[0].content else {
+                    panic!("expected control: {paragraph:?}");
+                };
+                let Control::Endnote { paragraphs, .. } = control.as_ref() else {
+                    panic!("unexpected control: {control:?}");
+                };
+                vec![paragraphs[0].text_content()]
+            },
+            "a\n\nb",
+        ),
+        (
+            "field",
+            run_para(Run::control(
+                Control::Field {
+                    field_type: FieldType::ClickHere,
+                    hint_text: None,
+                    help_text: None,
+                    name: Some("field".into()),
+                    display_text: "PAYLOAD".into(),
+                },
+                cs,
+            )),
+            |paragraph| {
+                let RunContent::Control(control) = &paragraph.runs[0].content else {
+                    panic!("expected control: {paragraph:?}");
+                };
+                let Control::Field { display_text, .. } = control.as_ref() else {
+                    panic!("unexpected control: {control:?}");
+                };
+                vec![display_text.clone()]
+            },
+            "a\n\nb",
+        ),
+        (
+            "hyperlink",
+            run_para(Run::control(
+                Control::Hyperlink { text: "PAYLOAD".into(), url: "https://example.com".into() },
+                cs,
+            )),
+            |paragraph| {
+                let RunContent::Control(control) = &paragraph.runs[0].content else {
+                    panic!("expected control: {paragraph:?}");
+                };
+                let Control::Hyperlink { text, .. } = control.as_ref() else {
+                    panic!("unexpected control: {control:?}");
+                };
+                vec![text.clone()]
+            },
+            "a\n\nb",
+        ),
+        (
+            "memo body and anchor",
+            run_para(Run::control(
+                Control::memo_with_anchor(
+                    vec![text_para("PAYLOAD")],
+                    vec![Run::text("PAYLOAD", cs)],
+                ),
+                cs,
+            )),
+            |paragraph| {
+                let RunContent::Control(control) = &paragraph.runs[0].content else {
+                    panic!("expected control: {paragraph:?}");
+                };
+                let Control::Memo { content, anchor_runs, .. } = control.as_ref() else {
+                    panic!("unexpected control: {control:?}");
+                };
+                vec![
+                    content[0].text_content(),
+                    anchor_runs[0].content.as_text().unwrap().to_owned(),
+                ]
+            },
+            "a\n\nb",
+        ),
+        (
+            "inline tab",
+            run_para(Run {
+                content: RunContent::InlineText(InlineText::from_segments([
+                    InlineSegment::Plain("PAYLOAD".into()),
+                    InlineSegment::Tab(InlineTabAttr { width: size, leader: 1, tab_type: 1 }),
+                ])),
+                char_shape_id: cs,
+            }),
+            |paragraph| {
+                let RunContent::InlineText(text) = &paragraph.runs[0].content else {
+                    panic!("expected inline text: {paragraph:?}");
+                };
+                vec![text.plain_text()]
+            },
+            "a\n\nb\t",
+        ),
+    ];
+    for (name, paragraph, body_texts, expected) in cases {
+        for wire in ["a\r\nb", "<![CDATA[a\r\nb]]>"] {
+            let base = splice(&encode(vec![paragraph.clone()]), "PAYLOAD", wire);
+            let decoded = HwpxDecoder::decode(&base).unwrap();
+            // 이것을 실패시키는 것: 특정 채널의 본문을 다른 채널로 옮기거나 줄 끝을 잃기.
+            // 이것을 실패시키는 것: 접근 함수가 빈 목록이나 다른 채널(예: hyperlink URL)을 반환하기.
+            let actual = body_texts(&decoded.document.sections()[0].paragraphs[0]);
+            assert!(!actual.is_empty(), "{name}: {wire:?}");
+            for text in actual {
+                assert_eq!(text, expected, "{name}: {wire:?}");
+            }
+        }
+    }
+    let mut section = Section::with_paragraphs(vec![text_para("body")], PageSettings::default());
+    section.headers.push(HeaderFooter::all_pages(vec![text_para("PAYLOAD")]));
+    section.footers.push(HeaderFooter::all_pages(vec![text_para("PAYLOAD")]));
+    // 이것을 실패시키는 것: Section 인코드 도우미가 머리말/꼬리말을 누락하기.
+    let bytes = encode_section(section);
+    let base = splice(&bytes, "PAYLOAD", "a\r\nb");
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    let section = &decoded.document.sections()[0];
+    assert_eq!(section.headers[0].paragraphs[0].text_content(), "a\n\nb");
+    assert_eq!(section.footers[0].paragraphs[0].text_content(), "a\n\nb");
 }
 
 // 이것을 실패시키는 것: 디코더에서 CRLF를 접거나 wire map 길이를 정규화된 길이로 바꾸기.

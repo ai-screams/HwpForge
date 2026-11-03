@@ -8,11 +8,30 @@
 //! - text-art line breaks: [`textart_text_to_wire`] and
 //!   [`textart_text_from_wire`] convert between Core's `\r\n` and Hancom's
 //!   `␍␊` in `hp:textart@text`;
-//! - whitespace-only text nodes: [`preserve_ws_only_text`] marks them before
-//!   quick-xml's serde decode would drop them, and [`PreservedText::as_str`]
-//!   removes the mark again.
+//! - body text: [`prepare_body_text_for_serde`] preserves raw line ends and
+//!   marks blank entries before quick-xml's serde decode would drop them;
+//!   [`PreservedText::as_str`] removes the mark again. Streaming readers use
+//!   [`prepare_body_text_for_streaming`] for line ends without marks.
 //!
-//! The whitespace scanner also resolves namespace declarations on start tags.
+//! Body line ends are owned here; schema projection, coordinates and edit
+//! surfaces must use this contract rather than XML's CRLF folding:
+//!
+//! | Direction / channel | Rule | Result |
+//! | --- | --- | --- |
+//! | Wire body Text, character references, CDATA | Each CR and LF is one UTF-16 unit and ends a line, regardless of spelling | CRLF is two units / two breaks; Core carries LF for each |
+//! | Core, patch or fill value → wire body | Fold CRLF within one supplied fragment; never across runs or fragments | One `hp:lineBreak` for CRLF, lone CR or lone LF |
+//! | Attributes, equation scripts, TextArt, dutmal `mainText`/`subText`, field `stringParam`, structural whitespace, foreign `t` | Separate channel contracts | No body line-end preprocessing |
+//!
+//! | Rule owner | Boundary |
+//! | --- | --- |
+//! | Namespace-aware wire scanner | Replace every raw CR in body Text/CDATA with LF before XML EOL normalization; equal byte length, no pairing or markup changes |
+//! | Smithy `body_text_line_breaks(..., false)` | Project decoded character references (including CR) to Core LF; never fold pairs |
+//! | Smithy `body_text_line_breaks(..., true)` | Fold CRLF only when writing one Core/patch/fill fragment |
+//!
+//! The decoder preprocesses its serde copy *after* source recording; locators
+//! and hashes address the original XML. Streaming layout fingerprints apply
+//! the same raw-CR rule only to sections and master pages, without serde's
+//! whitespace marks. Core owns format-independent text, not wire normalization.
 
 use std::borrow::Cow;
 
@@ -58,10 +77,10 @@ pub(crate) fn textart_text_from_wire(text: &str) -> String {
     textart_text_to_wire(text).replace(TEXTART_LINE_BREAK, "\r\n")
 }
 
-/// Body `<hp:t>` line breaks, excluding attributes, scripts and TextArt.
-/// Encoding folds CRLF only within the supplied text fragment. Decoding
-/// replaces CR one-for-one: the original wire map still counts both units
-/// of a referenced CRLF. Never normalize the XML before building that map.
+/// Applies the body line-end contract in the [module documentation](self).
+/// With `fold_crlf = false`, each CR becomes one LF, without folding pairs.
+/// With `fold_crlf = true`, CRLF within this one fragment becomes one LF;
+/// a lone CR also becomes LF. Folding never crosses fragments or runs.
 /// Folding skips removable characters after CR but leaves them in the output.
 /// The `fold_crlf=true` result must pass through a sanitizer or `strip_xml_forbidden_chars`.
 pub(crate) fn body_text_line_breaks(text: &str, fold_crlf: bool) -> Cow<'_, str> {
@@ -440,8 +459,9 @@ fn push_tag<'a>(
 /// is escaped by prepending one more, so even repeated marks are reversible.
 const WS_SENTINEL: char = '\u{E000}';
 
-/// Marks whitespace-only character data directly inside paragraph-namespace
-/// `t` elements (or unqualified `t`), including gaps around children.
+/// Protects body line ends and marks whitespace-only character data inside
+/// paragraph-namespace `t` elements (or unqualified `t`), including gaps
+/// around children, according to the [module contract](self).
 ///
 /// The serde decoder skips blank mixed-content entries independently of the
 /// reader's text-trimming setting. A mark keeps each entry alive; both Core
@@ -459,8 +479,15 @@ const WS_SENTINEL: char = '\u{E000}';
 /// and CDATA. Serde accepts `t` by local name even in other namespaces, so
 /// escaping covers those entries too; only paragraph text gets blank marks.
 /// Namespace errors are returned before any partially rewritten XML is used.
-pub(crate) fn preserve_ws_only_text(xml: &str) -> Result<Cow<'_, str>, quick_xml::Error> {
-    preserve_ws_only_text_counted(xml, &mut NamespaceWork::default())
+pub(crate) fn prepare_body_text_for_serde(xml: &str) -> Result<Cow<'_, str>, quick_xml::Error> {
+    // 이것을 실패시키는 것: serde 진입점을 Streaming 모드로 연결하기.
+    prepare_body_text_counted(xml, BodyTextReader::Serde, &mut NamespaceWork::default())
+}
+
+/// Protects body line ends for streaming readers, which do not discard blank
+/// text and must not receive serde's sentinel. See the [body contract](self).
+pub(crate) fn prepare_body_text_for_streaming(xml: &str) -> Result<Cow<'_, str>, quick_xml::Error> {
+    prepare_body_text_counted(xml, BodyTextReader::Streaming, &mut NamespaceWork::default())
 }
 
 // Counts actual URI input traversed by the classifier, not elapsed time or an
@@ -495,8 +522,16 @@ impl NamespaceWork {
     }
 }
 
-fn preserve_ws_only_text_counted<'a>(
+/// Serde needs reversible blank-entry marks; streaming readers keep blanks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyTextReader {
+    Serde,
+    Streaming,
+}
+
+fn prepare_body_text_counted<'a>(
     xml: &'a str,
+    reader: BodyTextReader,
     work: &mut NamespaceWork,
 ) -> Result<Cow<'a, str>, quick_xml::Error> {
     use quick_xml::events::BytesStart;
@@ -516,22 +551,12 @@ fn preserve_ws_only_text_counted<'a>(
         (Some("xmlns".to_owned()), false),
         (Some("hp".to_owned()), true),
     ];
-    let mut out: Option<String> = None;
-    let mut copied = 0;
+    let mut rewrite = Rewrite::default();
     let mut at = 0;
     let mut parents = Vec::new();
     while at < xml.len() {
-        let (end, blank, first) = text_group(xml, at);
         let (is_text, preserve_blank, _) = parents.last().copied().unwrap_or((false, false, 0));
-        // 이것을 실패시키는 것: 원문 선두 표식 이스케이프 생략 또는 URI 제한으로
-        // 외부 네임스페이스의 serde `t` 텍스트를 이스케이프하지 않기.
-        if is_text && PreservedText::needs_mark(blank && preserve_blank, first) {
-            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len()));
-            buf.push_str(&xml[copied..at]);
-            buf.push(WS_SENTINEL);
-            copied = at;
-        }
-        at = end;
+        at = rewrite.text_group(xml, at, (is_text, preserve_blank), reader);
         if at == xml.len() {
             break;
         }
@@ -601,19 +626,81 @@ fn preserve_ws_only_text_counted<'a>(
         }
         at = end;
     }
-    match out {
-        Some(mut buf) => {
-            buf.push_str(&xml[copied..]);
-            Ok(Cow::Owned(buf))
+    Ok(rewrite.finish(xml))
+}
+
+/// Output state shared by mixed-content groups in one XML document.
+#[derive(Default)]
+struct Rewrite {
+    out: Option<String>,
+    copied: usize,
+    raw_cr: Vec<std::ops::Range<usize>>,
+}
+
+impl Rewrite {
+    /// Rewrites one mixed-content group, keeping marks ahead of its payloads.
+    fn text_group(
+        &mut self,
+        xml: &str,
+        at: usize,
+        (is_text, preserve_blank): (bool, bool),
+        reader: BodyTextReader,
+    ) -> usize {
+        let (end, blank, first) = text_group(xml, at, |start, payload| {
+            // 이것을 실패시키는 것: namespace/부모 제한 제거 또는 보호 생략.
+            if preserve_blank && payload.contains('\r') {
+                self.raw_cr.push(start..start + payload.len());
+            }
+        });
+        // 이것을 실패시키는 것: 원문 선두 표식 이스케이프 생략 또는 URI 제한으로
+        // 외부 네임스페이스의 serde `t` 텍스트를 이스케이프하지 않기.
+        // 이것을 실패시키는 것: 스트리밍 지문에도 serde 표식을 넣기.
+        if reader == BodyTextReader::Serde
+            && is_text
+            && PreservedText::needs_mark(blank && preserve_blank, first)
+        {
+            let buf = self.out.get_or_insert_with(|| String::with_capacity(xml.len()));
+            buf.push_str(&xml[self.copied..at]);
+            buf.push(WS_SENTINEL);
+            self.copied = at;
         }
-        None => Ok(Cow::Borrowed(xml)),
+        // Marks precede the group's characters. Only payload ranges collected
+        // by text_group are rewritten: comments and PI may be in the group.
+        // CR and LF each occupy one byte, so a payload keeps its length.
+        for payload in self.raw_cr.drain(..) {
+            let buf = self.out.get_or_insert_with(|| String::with_capacity(xml.len()));
+            buf.push_str(&xml[self.copied..payload.start]);
+            let source = &xml[payload.clone()];
+            // 이것을 실패시키는 것: CR을 공백/두 LF로 치환하거나 원문 payload를 다시 복사하기.
+            let normalized = source.replace('\r', "\n");
+            // Each raw CR byte becomes one LF byte, so copied remains an
+            // offset in the original XML, independent of Core projection.
+            debug_assert_eq!(normalized.len(), source.len());
+            buf.push_str(&normalized);
+            self.copied = payload.end;
+        }
+        end
+    }
+
+    fn finish(self, xml: &str) -> Cow<'_, str> {
+        match self.out {
+            Some(mut buf) => {
+                buf.push_str(&xml[self.copied..]);
+                Cow::Owned(buf)
+            }
+            None => Cow::Borrowed(xml),
+        }
     }
 }
 
 /// Finds one serde character-data entry, stopping at an element or declaration.
 /// Comments and processing instructions contribute no characters; CDATA is
 /// literal text (its `&#32;` is not a character reference).
-fn text_group(xml: &str, mut at: usize) -> (usize, bool, Option<char>) {
+fn text_group(
+    xml: &str,
+    mut at: usize,
+    mut payload: impl FnMut(usize, &str),
+) -> (usize, bool, Option<char>) {
     let mut first = None;
     let mut blank = true;
     let mut nonempty = false;
@@ -622,6 +709,7 @@ fn text_group(xml: &str, mut at: usize) -> (usize, bool, Option<char>) {
         if let Some(len) = markup_len(rest.as_bytes(), &NON_ELEMENT_MARKUP) {
             if let Some(cdata) = rest[..len].strip_prefix("<![CDATA[") {
                 let content = cdata.strip_suffix("]]>").unwrap_or(cdata);
+                payload(at + "<![CDATA[".len(), content);
                 // 이것을 실패시키는 것: CDATA 선두 표식을 읽지 않거나, 앞선
                 // 텍스트가 있는데 CDATA의 선두로 덮어쓰기.
                 if first.is_none() {
@@ -635,6 +723,7 @@ fn text_group(xml: &str, mut at: usize) -> (usize, bool, Option<char>) {
             break;
         } else {
             let len = rest.find('<').unwrap_or(rest.len());
+            payload(at, &rest[..len]);
             nonempty = true;
             // Only the first character matters for escaping. Unescape just a
             // leading reference, not the whole entry (later entities may be
@@ -761,6 +850,89 @@ impl PreservedText {
 }
 
 #[cfg(test)]
+mod body_line_end_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: 표식/CR 치환 뒤 copied 진행을 생략하거나 마지막 원문을 버리기.
+    #[test]
+    fn rewrite_keeps_gaps_between_groups_and_the_tail() {
+        let source = "<s><hp:t> </hp:t><hp:t>a\r<![CDATA[b\rc]]>d</hp:t><hp:t>tail</hp:t></s>";
+        let expected =
+            "<s><hp:t>\u{E000} </hp:t><hp:t>a\n<![CDATA[b\nc]]>d</hp:t><hp:t>tail</hp:t></s>";
+        assert_eq!(prepare_body_text_for_serde(source).unwrap(), expected);
+    }
+
+    // 이것을 실패시키는 것: CR 없는 payload도 재작성 목록에 넣어 치환 버퍼를 할당하기.
+    #[test]
+    fn rewrite_without_cr_keeps_payloads_unallocated() {
+        let source = "a\n<![CDATA[b\nc]]><!--\r--><?pi \r?>d";
+        for reader in [BodyTextReader::Serde, BodyTextReader::Streaming] {
+            let mut rewrite = Rewrite::default();
+            assert_eq!(rewrite.text_group(source, 0, (true, true), reader), source.len());
+            assert!(rewrite.out.is_none());
+            assert_eq!(rewrite.raw_cr.capacity(), 0);
+            assert!(matches!(rewrite.finish(source), Cow::Borrowed(s) if s == source));
+        }
+    }
+
+    // 이것을 실패시키는 것: Text/CDATA 보호 생략, 본문 namespace 제한 제거,
+    // 주석·PI 치환, sentinel 누락 또는 CR 뒤 LF 소비.
+    // 이것을 실패시키는 것: 연속 CR의 앞 CR 미치환 또는 단독 CR 미치환.
+    #[test]
+    fn raw_line_ends_payload_boundary_table() {
+        for (source, expected) in [
+            ("<hp:t>가\r\n나\r\n다</hp:t>", "<hp:t>가\n\n나\n\n다</hp:t>"),
+            ("<hp:t><![CDATA[가\r\n나]]></hp:t>", "<hp:t><![CDATA[가\n\n나]]></hp:t>"),
+            ("<hp:t>\r\n</hp:t>", "<hp:t>\u{E000}\n\n</hp:t>"),
+            ("<hp:t><![CDATA[\r\n]]></hp:t>", "<hp:t>\u{E000}<![CDATA[\n\n]]></hp:t>"),
+            ("<hp:t>\u{E000}\r\n</hp:t>", "<hp:t>\u{E000}\u{E000}\n\n</hp:t>"),
+            ("<hp:t>&#xE000;\r\n</hp:t>", "<hp:t>\u{E000}&#xE000;\n\n</hp:t>"),
+            ("<hp:t>a\r<![CDATA[\nb\r]]>\nc</hp:t>", "<hp:t>a\n<![CDATA[\nb\n]]>\nc</hp:t>"),
+            ("<hp:t>a&#13;&#10;b\r&#10;c&#13;\nd</hp:t>", "<hp:t>a&#13;&#10;b\n&#10;c&#13;\nd</hp:t>"),
+            ("<hp:t>a\r</hp:t><hp:t>\nb</hp:t>", "<hp:t>a\n</hp:t><hp:t>\nb</hp:t>"),
+            ("<hp:t a='\r\n'>a\r\n<!--\r\n--><?pi \r\n?>b</hp:t>", "<hp:t a='\r\n'>a\n\n<!--\r\n--><?pi \r\n?>b</hp:t>"),
+            ("<hp:t>a\r<!--\r\n--><?pi \r\n?>\nb</hp:t>", "<hp:t>a\n<!--\r\n--><?pi \r\n?>\nb</hp:t>"),
+            ("<!DOCTYPE t [<!ENTITY x 'a\r\nb'>]><hp:t>x\r\ny</hp:t>", "<!DOCTYPE t [<!ENTITY x 'a\r\nb'>]><hp:t>x\n\ny</hp:t>"),
+            ("<sec>\r\n<hp:script>a\r\nb</hp:script><hp:textart text='a\r\nb'/><fieldBegin name='a\r\nb'/></sec>", "<sec>\r\n<hp:script>a\r\nb</hp:script><hp:textart text='a\r\nb'/><fieldBegin name='a\r\nb'/></sec>"),
+            ("<t>a\r\nb</t>", "<t>a\n\nb</t>"),
+            ("<hp:t xmlns:hp='urn:other'>a\r\nb</hp:t>", "<hp:t xmlns:hp='urn:other'>a\r\nb</hp:t>"),
+            ("<t xmlns='urn:other'>a\r\nb</t>", "<t xmlns='urn:other'>a\r\nb</t>"),
+        ] {
+            assert_eq!(prepare_body_text_for_serde(source).unwrap(), expected, "{source:?}");
+        }
+        for (wire, expected) in [
+            ("a\r\r\nb", "a\n\n\nb"),
+            ("a\r\r\r\nb", "a\n\n\n\nb"),
+            ("a\r\n\nb", "a\n\n\nb"),
+            ("a\n\r\nb", "a\n\n\nb"),
+        ] {
+            for (source, expected) in [
+                (format!("<hp:t>{wire}</hp:t>"), format!("<hp:t>{expected}</hp:t>")),
+                (
+                    format!("<hp:t><![CDATA[{wire}]]></hp:t>"),
+                    format!("<hp:t><![CDATA[{expected}]]></hp:t>"),
+                ),
+            ] {
+                assert_eq!(prepare_body_text_for_serde(&source).unwrap(), expected, "{source:?}");
+                assert_eq!(
+                    prepare_body_text_for_streaming(&source).unwrap(),
+                    expected,
+                    "{source:?}"
+                );
+                assert_eq!(source.len(), expected.len());
+            }
+        }
+        // 이것을 실패시키는 것: 변경 없는 본문에도 출력 버퍼를 미리 할당하기.
+        let unchanged = "<hp:t>a\nb</hp:t>";
+        assert!(matches!(prepare_body_text_for_serde(unchanged).unwrap(), Cow::Borrowed(_)));
+        assert!(matches!(prepare_body_text_for_streaming(unchanged).unwrap(), Cow::Borrowed(_)));
+        let source = format!("<s xmlns:q='{PARAGRAPH_NS}'><q:t>a\r\nb</q:t><s xmlns:q='urn:other'><q:t>a\r\nb</q:t></s><q:t>c\r\nd</q:t><s xmlns='{PARAGRAPH_NS}'><t>e\r\nf</t></s></s>");
+        let expected = format!("<s xmlns:q='{PARAGRAPH_NS}'><q:t>a\n\nb</q:t><s xmlns:q='urn:other'><q:t>a\r\nb</q:t></s><q:t>c\n\nd</q:t><s xmlns='{PARAGRAPH_NS}'><t>e\n\nf</t></s></s>");
+        assert_eq!(prepare_body_text_for_serde(&source).unwrap(), expected);
+    }
+}
+
+#[cfg(test)]
 mod attr_control_whitespace_tests {
     use super::normalize_attr_control_whitespace as norm;
     use std::borrow::Cow;
@@ -874,8 +1046,8 @@ mod clean_font_name_tests {
 mod ws_scanner_tests {
     use super::*;
 
-    fn preserve_ws_only_text(xml: &str) -> Cow<'_, str> {
-        super::preserve_ws_only_text(xml).expect("namespace scan")
+    fn prepare_body_text_for_serde(xml: &str) -> Cow<'_, str> {
+        super::prepare_body_text_for_serde(xml).expect("namespace scan")
     }
 
     // 이것을 실패시키는 것: 선두 원문 표식 이스케이프 생략, CDATA/참조의 첫 문자
@@ -904,7 +1076,7 @@ mod ws_scanner_tests {
             for tag in ["t", "hp:t", "q:t xmlns:q='urn:foreign'", "z:t"] {
                 let end = tag.split_whitespace().next().unwrap();
                 let xml = format!("<{tag}>{wire}</{end}>");
-                let marked = preserve_ws_only_text(&xml);
+                let marked = prepare_body_text_for_serde(&xml);
                 let want = if decoded.starts_with(WS_SENTINEL) {
                     format!("<{tag}>{WS_SENTINEL}{wire}</{end}>")
                 } else {
@@ -917,7 +1089,7 @@ mod ws_scanner_tests {
             }
         }
         let script = "<hp:script>\u{E000} </hp:script>";
-        assert_eq!(preserve_ws_only_text(script), script);
+        assert_eq!(prepare_body_text_for_serde(script), script);
     }
 
     // 이것을 실패시키는 것: 접두사 철자 비교, URI 무시, local name 무시,
@@ -946,7 +1118,7 @@ mod ws_scanner_tests {
             ("<r xmlns='urn:foreign'><t xmlns=''> </t><t> </t></r>".into(), 1),
             (format!("<q:t xmlns:q='{}'> </q:t>", ns.replace("paragraph", "paragr&#x61;ph")), 1),
         ] {
-            let marked = preserve_ws_only_text(&xml);
+            let marked = prepare_body_text_for_serde(&xml);
             assert_eq!(marked.matches(WS_SENTINEL).count(), count, "{xml}");
             assert_eq!(marked.replace(WS_SENTINEL, ""), xml);
         }
@@ -957,7 +1129,7 @@ mod ws_scanner_tests {
     fn namespace_errors_do_not_return_partially_marked_xml() {
         for binding in ["xmlns:xml='urn:invalid'", "xmlns:q='urn:&unknown;'"] {
             let xml = format!("<r><t> </t><q:t {binding}> </q:t></r>");
-            assert!(super::preserve_ws_only_text(&xml).is_err());
+            assert!(super::prepare_body_text_for_serde(&xml).is_err());
         }
     }
 
@@ -970,7 +1142,10 @@ mod ws_scanner_tests {
             let uri = format!("urn:{}", "&#97;".repeat(k));
             let xml = format!("<r xmlns:q='{uri}'>{}</r>", "<q:x/>".repeat(k));
             let mut work = NamespaceWork::default();
-            assert_eq!(preserve_ws_only_text_counted(&xml, &mut work).unwrap(), xml);
+            assert_eq!(
+                prepare_body_text_counted(&xml, BodyTextReader::Serde, &mut work).unwrap(),
+                xml
+            );
             assert_eq!(work.classifications, 1);
             assert_eq!(work.uri_bytes, 4 + 5 * k);
             assert_eq!(work.binding_probes, k + 4);
@@ -993,7 +1168,7 @@ mod ws_scanner_tests {
              <xml:t> </xml:t><xmlns:t> </xmlns:t></r>"
         );
         let mut work = NamespaceWork::default();
-        let out = preserve_ws_only_text_counted(&xml, &mut work).unwrap();
+        let out = prepare_body_text_counted(&xml, BodyTextReader::Serde, &mut work).unwrap();
         assert_eq!(out.matches(WS_SENTINEL).count(), 6);
         assert_eq!(out.replace(WS_SENTINEL, ""), xml);
         assert_eq!(work.classifications, 7);
@@ -1008,7 +1183,7 @@ mod ws_scanner_tests {
             let start = "<r xmlns:xml='http://www.w3.org/XML/1998/namespace'>";
             let xml = format!("{}{}{}", start.repeat(k), "<t> </t>".repeat(k), "</r>".repeat(k));
             let mut work = NamespaceWork::default();
-            let out = preserve_ws_only_text_counted(&xml, &mut work).unwrap();
+            let out = prepare_body_text_counted(&xml, BodyTextReader::Serde, &mut work).unwrap();
             assert_eq!(out.matches(WS_SENTINEL).count(), k);
             assert_eq!(work.classifications, 0);
             assert_eq!(work.binding_probes, 6 * k);
@@ -1022,7 +1197,7 @@ mod ws_scanner_tests {
     #[test]
     fn an_unclosed_comment_hides_the_rest_from_both_scanners() {
         let marked = "<!-- <hp:t> </hp:t>";
-        assert_eq!(preserve_ws_only_text(marked), marked);
+        assert_eq!(prepare_body_text_for_serde(marked), marked);
         let attr = r#"<!-- <a x="A&#9;B"/>"#;
         assert_eq!(normalize_attr_control_whitespace(attr), attr);
     }
@@ -1030,10 +1205,10 @@ mod ws_scanner_tests {
     // 이것을 실패시키는 것: 공백 판정을 빼거나 느슨하게 하는 것 — `a`·`  b` run 에도 표시가
     // 붙는다. 또는 빈 run 을 공백 전용으로 치는 것.
     #[test]
-    fn preserve_ws_only_text_marks_only_pure_whitespace() {
+    fn prepare_body_text_for_serde_marks_only_pure_whitespace() {
         let xml =
             "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t></hp:t><hp:t/></hp:run>";
-        let out = preserve_ws_only_text(xml);
+        let out = prepare_body_text_for_serde(xml);
         assert_eq!(
             out,
             "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t></hp:t><hp:t/></hp:run>"
@@ -1045,11 +1220,14 @@ mod ws_scanner_tests {
     // 이것을 실패시키는 것: 요소 이름 뒤 글자 검사를 빼는 것 — `<hp:tbl>` 을 run 으로 읽어
     // 첫 `</hp:t>` 까지 건너뛰므로 그 안의 진짜 공백 run 이 표시되지 않는다.
     #[test]
-    fn preserve_ws_only_text_distinguishes_text_from_structural_spaces() {
+    fn prepare_body_text_for_serde_distinguishes_text_from_structural_spaces() {
         let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
-        assert_eq!(preserve_ws_only_text(xml), "<hp:t>\u{E000} <hp:tab/></hp:t><hp:tbl> </hp:tbl>");
         assert_eq!(
-            preserve_ws_only_text("<hp:tbl><hp:t> </hp:t></hp:tbl>"),
+            prepare_body_text_for_serde(xml),
+            "<hp:t>\u{E000} <hp:tab/></hp:t><hp:tbl> </hp:tbl>"
+        );
+        assert_eq!(
+            prepare_body_text_for_serde("<hp:tbl><hp:t> </hp:t></hp:tbl>"),
             "<hp:tbl><hp:t>\u{E000} </hp:t></hp:tbl>"
         );
     }
@@ -1060,7 +1238,7 @@ mod ws_scanner_tests {
         let xml =
             "<hp:t>  <hp:fwSpace/> &#32;<hp:tab/>끝<hp:lineBreak/>   </hp:t><t> <fwSpace/> </t>";
         assert_eq!(
-            preserve_ws_only_text(xml),
+            prepare_body_text_for_serde(xml),
             "<hp:t>\u{E000}  <hp:fwSpace/>\u{E000} &#32;<hp:tab/>끝<hp:lineBreak/>\u{E000}   </hp:t><t>\u{E000} <fwSpace/>\u{E000} </t>"
         );
     }
@@ -1079,7 +1257,7 @@ mod ws_scanner_tests {
             let xml = format!("<hp:t>{body}<hp:fwSpace/></hp:t>");
             let mark = if blank { "\u{E000}" } else { "" };
             assert_eq!(
-                preserve_ws_only_text(&xml),
+                prepare_body_text_for_serde(&xml),
                 format!("<hp:t>{mark}{body}<hp:fwSpace/></hp:t>")
             );
         }
@@ -1090,7 +1268,7 @@ mod ws_scanner_tests {
     fn indentation_and_child_payloads_are_not_text_entries() {
         let xml =
             "<sec>\n <p> <run> <hp:t attr='>'> <hp:tab> </hp:tab> </hp:t> </run> </p>\n</sec>";
-        assert_eq!(preserve_ws_only_text(xml), "<sec>\n <p> <run> <hp:t attr='>'>\u{E000} <hp:tab> </hp:tab>\u{E000} </hp:t> </run> </p>\n</sec>");
+        assert_eq!(prepare_body_text_for_serde(xml), "<sec>\n <p> <run> <hp:t attr='>'>\u{E000} <hp:tab> </hp:tab>\u{E000} </hp:t> </run> </p>\n</sec>");
     }
 
     // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로
@@ -1101,7 +1279,7 @@ mod ws_scanner_tests {
             ["&#65;", "&amp;#13;", "&#13;x", "&#1;", "&#13", "&#+13;", "&#x+d;", "&#;", "&#X20;"]
         {
             let xml = format!("<hp:t>{wire}</hp:t>");
-            assert_eq!(preserve_ws_only_text(&xml), xml, "{wire}");
+            assert_eq!(prepare_body_text_for_serde(&xml), xml, "{wire}");
         }
     }
 
@@ -1117,7 +1295,7 @@ mod ws_scanner_tests {
             "<!-- <hp:t> --><x/>",
             "<?pi <hp:t> </hp:t>?>",
         ] {
-            assert_eq!(preserve_ws_only_text(xml), xml, "{xml}");
+            assert_eq!(prepare_body_text_for_serde(xml), xml, "{xml}");
         }
     }
 
@@ -1126,7 +1304,7 @@ mod ws_scanner_tests {
     #[test]
     fn a_fake_tag_in_a_comment_does_not_hide_a_real_run() {
         let xml = "<!-- <hp:t> --><hp:t> </hp:t>";
-        assert_eq!(preserve_ws_only_text(xml), "<!-- <hp:t> --><hp:t>\u{E000} </hp:t>");
+        assert_eq!(prepare_body_text_for_serde(xml), "<!-- <hp:t> --><hp:t>\u{E000} </hp:t>");
     }
 
     // A document type declaration can hold `<hp:t>`-shaped text in an entity
@@ -1148,7 +1326,7 @@ mod ws_scanner_tests {
         ] {
             let xml = format!("{doctype}<hp:t> </hp:t>");
             let want = format!("{doctype}<hp:t>\u{E000} </hp:t>");
-            assert_eq!(preserve_ws_only_text(&xml), want, "{doctype}");
+            assert_eq!(prepare_body_text_for_serde(&xml), want, "{doctype}");
         }
     }
 
@@ -1158,7 +1336,7 @@ mod ws_scanner_tests {
     #[test]
     fn an_unclosed_doctype_runs_to_the_end() {
         let xml = "<!DOCTYPE sec [<hp:t> </hp:t>";
-        assert_eq!(preserve_ws_only_text(xml), xml);
+        assert_eq!(prepare_body_text_for_serde(xml), xml);
     }
 }
 
@@ -1285,7 +1463,7 @@ mod sentinel_invariant_tests {
     use proptest::prelude::*;
 
     fn decode_text(xml: &str) -> HxText {
-        crate::decoder::xml_from_str(&preserve_ws_only_text(xml).unwrap()).unwrap()
+        crate::decoder::xml_from_str(&prepare_body_text_for_serde(xml).unwrap()).unwrap()
     }
 
     fn assert_plain_round_trip(source: &str) {

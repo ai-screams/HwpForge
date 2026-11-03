@@ -956,7 +956,7 @@ impl HxText {
     }
 
     /// Returns the combined text content, with `\n` for line breaks.
-    /// Character-reference CR is replaced one-for-one, preserving wire coordinates.
+    /// Line ends follow the body contract in [`crate::wire_xml`].
     ///
     /// Inline markup elements that Core carries through `RunContent::Text`
     /// are projected onto sentinel code-points so the round-trip through

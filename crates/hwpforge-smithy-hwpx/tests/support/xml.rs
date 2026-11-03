@@ -6,6 +6,13 @@ pub(crate) fn attr<'a>(tag: &'a str, name: &str) -> &'a str {
     &tag[at..at + tag[at..].find('"').unwrap()]
 }
 
+/// Mixed content in source order; element indices address `Element::children`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Content {
+    Text(String),
+    Child(usize),
+}
+
 /// Small parsed tree for wire assertions: exact qualified names, decoded
 /// attribute values (absence stays None), ordered children, and text.
 #[derive(Debug, Default)]
@@ -14,6 +21,7 @@ pub(crate) struct Element {
     pub attributes: std::collections::BTreeMap<String, String>,
     pub children: Vec<Element>,
     pub text: String,
+    pub content: Vec<Content>,
 }
 
 impl Element {
@@ -43,23 +51,23 @@ impl Element {
                         ..Self::default()
                     };
                     if empty {
-                        stack.last_mut().unwrap().children.push(node);
+                        stack.last_mut().unwrap().push_child(node);
                     } else {
                         stack.push(node);
                     }
                 }
                 Event::End(_) => {
                     let node = stack.pop().unwrap();
-                    stack.last_mut().unwrap().children.push(node);
+                    stack.last_mut().unwrap().push_child(node);
                 }
-                Event::Text(e) => stack.last_mut().unwrap().text.push_str(&e.xml10_content()),
-                Event::CData(e) => stack.last_mut().unwrap().text.push_str(&e.xml10_content()),
+                Event::Text(e) => stack.last_mut().unwrap().push_text(&e.xml10_content()),
+                Event::CData(e) => stack.last_mut().unwrap().push_text(&e.xml10_content()),
                 // quick-xml reports `&amp;` and `&#xAC00;` apart from the text
                 // around them; dropping them would cut the value.
                 Event::GeneralRef(e) => {
                     let wire = format!("&{};", &*e);
                     let text = quick_xml::escape::unescape(&wire).expect("known reference");
-                    stack.last_mut().unwrap().text.push_str(&text);
+                    stack.last_mut().unwrap().push_text(&text);
                 }
                 Event::Eof => break,
                 _ => {}
@@ -69,6 +77,20 @@ impl Element {
         let mut document = stack.pop().unwrap();
         assert_eq!(document.children.len(), 1);
         document.children.pop().unwrap()
+    }
+
+    fn push_child(&mut self, node: Self) {
+        self.content.push(Content::Child(self.children.len()));
+        self.children.push(node);
+    }
+
+    fn push_text(&mut self, text: &str) {
+        self.text.push_str(text);
+        if let Some(Content::Text(previous)) = self.content.last_mut() {
+            previous.push_str(text);
+        } else {
+            self.content.push(Content::Text(text.to_owned()));
+        }
     }
 
     pub fn attr(&self, name: &str) -> Option<&str> {
