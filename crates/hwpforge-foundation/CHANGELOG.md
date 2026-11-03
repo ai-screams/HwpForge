@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.19.0...hwpforge-foundation-v0.19.1) - 2026-11-03
+
+### Changed
+
+- 워크스페이스 버전을 맞춘다. 이 크레이트 자체의 구현 변경은 없다.
+
 ## [0.19.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.18.0...hwpforge-foundation-v0.19.0) - 2026-11-02
 
 ### Changed (BREAKING)
