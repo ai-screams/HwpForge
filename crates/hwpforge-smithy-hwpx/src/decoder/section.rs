@@ -181,7 +181,7 @@ pub(crate) fn parse_section_with_references(
             HwpxError::XmlParse { detail, .. } => HwpxError::XmlParse { file: part.into(), detail },
             other => other,
         })?;
-    let xml = crate::wire_xml::preserve_ws_only_text(&annotated).map_err(|e| {
+    let xml = crate::wire_xml::prepare_body_text_for_serde(&annotated).map_err(|e| {
         HwpxError::XmlParse { file: part.into(), detail: xml_error_detail(&e.into()) }
     })?;
     let section: HxSection = xml_from_str(&xml)
@@ -2701,6 +2701,8 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
 }
 
 /// Decodes an `HxDutmal` into a Core `Run` with `Control::Dutmal`.
+/// `mainText`/`subText` use XML character-data rules, like field `stringParam`;
+/// they are not body `t` payloads (see the channel table in `wire_xml`).
 fn decode_dutmal(dutmal: &HxDutmal, char_shape_id: CharShapeIndex) -> Run {
     let position = match dutmal.pos_type.as_str() {
         "BOTTOM" => DutmalPosition::Bottom,
@@ -3427,9 +3429,8 @@ pub(crate) fn parse_master_page_with_references(
     use hwpforge_core::section::{MasterPage, MasterPageSpecial};
 
     let file = format!("Contents/masterpage{global}.xml");
-    let xml = crate::wire_xml::preserve_ws_only_text(xml).map_err(|e| HwpxError::XmlParse {
-        file: file.clone(),
-        detail: xml_error_detail(&e.into()),
+    let xml = crate::wire_xml::prepare_body_text_for_serde(xml).map_err(|e| {
+        HwpxError::XmlParse { file: file.clone(), detail: xml_error_detail(&e.into()) }
     })?;
     let hx: crate::schema::section::HxMasterPage = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file, detail: xml_error_detail(&e) })?;
@@ -7274,7 +7275,72 @@ mod tests {
 #[cfg(test)]
 mod ws_preserve_tests {
     use super::*;
-    use crate::wire_xml::preserve_ws_only_text;
+    use crate::wire_xml::prepare_body_text_for_serde;
+
+    // 이것을 실패시키는 것: 본문 CRLF 보호 생략.
+    #[test]
+    fn raw_crlf_master_page_keeps_two_line_ends() {
+        let xml = "<masterPage><subList><p><run><t>a\r\nb</t></run><linesegarray><lineseg textpos='0'/><lineseg textpos='2'/><lineseg textpos='3'/></linesegarray></p></subList></masterPage>";
+        let (master, warnings) = parse_master_page(xml, 0, 0, &HashMap::new()).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(master.paragraphs[0].text_content(), "a\n\nb");
+        assert_eq!(
+            master.paragraphs[0]
+                .layout_cache
+                .as_ref()
+                .unwrap()
+                .lines
+                .iter()
+                .map(|line| line.textpos)
+                .collect::<Vec<_>>(),
+            [0, 2, 3]
+        );
+    }
+
+    // 이것을 실패시키는 것: 본문 CRLF 보호 생략.
+    #[test]
+    fn raw_crlf_field_spans_keep_following_wire_position() {
+        // The hyperlink folds its display into a control; the incomplete memo
+        // keeps ordinary anchor runs and its annotation instead.
+        for (kind, annotation, position) in [
+            ("HYPERLINK", "", 2),
+            ("MEMO", "<subList><p><run><t>a\r\nb</t></run></p></subList>", 6),
+        ] {
+            // Wire offset 22 = 가(1) + fieldBegin(8) + a/CR/LF/b(4) + fieldEnd(8) + 나(1).
+            let xml = format!("<sec><p><run><t>가</t><ctrl><fieldBegin id='1' type='{kind}'>{annotation}</fieldBegin></ctrl><t>a\r\nb</t><ctrl><fieldEnd beginIDRef='1'/></ctrl><t>나다</t></run><linesegarray><lineseg textpos='0'/><lineseg textpos='22'/></linesegarray></p></sec>");
+            let result = parse_section(&xml, 0, &HashMap::new()).unwrap();
+            assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+            let para = &result.paragraphs[0];
+            assert_eq!(para.layout_cache.as_ref().unwrap().lines[1].textpos, position);
+            // 이것을 실패시키는 것: 표시 글/anchor/annotation 중 한 경로의 줄 끝만 잃기.
+            let controls: Vec<_> =
+                para.runs.iter().filter_map(|run| run.content.as_control()).collect();
+            if kind == "HYPERLINK" {
+                let text = controls
+                    .iter()
+                    .find_map(|control| match control {
+                        Control::Hyperlink { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .expect("hyperlink display text");
+                assert_eq!(text, "a\n\nb", "{kind}");
+            } else {
+                let anchor: Vec<_> =
+                    para.runs.iter().filter_map(|run| run.content.as_text()).collect();
+                assert_eq!(anchor, ["가", "a\n\nb", "나다"], "{kind}");
+                let annotation = controls
+                    .iter()
+                    .find_map(|control| match control {
+                        Control::FieldBoundary {
+                            boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                        } => start.annotation.as_ref(),
+                        _ => None,
+                    })
+                    .expect("memo annotation");
+                assert_eq!(annotation[0].text_content(), "a\n\nb", "{kind}");
+            }
+        }
+    }
 
     // 이것을 실패시키는 것: 원문 U+E000 삭제, q 접두사의 공백 보호 누락,
     // ledger에서 이스케이프 표식 집계, 또는 바탕쪽의 공백 전처리 생략.
@@ -7288,7 +7354,7 @@ mod ws_preserve_tests {
             );
             let ns = "xmlns:q='http://www.hancom.co.kr/hwpml/2011/paragraph'";
             let raw = format!("<q:p {ns}><q:run><q:t>{body}</q:t></q:run></q:p>");
-            let marked = preserve_ws_only_text(&raw).unwrap();
+            let marked = prepare_body_text_for_serde(&raw).unwrap();
             let hx: HxParagraph = crate::decoder::xml_from_str(&marked).unwrap();
             let (map, _) = build_paragraph_wire_map(&hx).unwrap();
             assert_eq!((map.wire_end(), map.core_end()), (4, 4));
@@ -7353,7 +7419,7 @@ mod ws_preserve_tests {
             (" <hp:markpenBegin/> <hp:markpenEnd/> ", "   ", 3),
         ] {
             let raw = format!("<hp:p><hp:run><hp:t>{body}</hp:t></hp:run></hp:p>");
-            let marked = preserve_ws_only_text(&raw).unwrap();
+            let marked = prepare_body_text_for_serde(&raw).unwrap();
             let hx: HxParagraph = crate::decoder::xml_from_str(&marked).expect("parse");
             let (map, _) = build_paragraph_wire_map(&hx).expect("map");
             assert_eq!(map.wire_end(), wire_len, "{body}");
@@ -7430,7 +7496,7 @@ mod ws_preserve_tests {
     #[test]
     fn the_wire_map_does_not_count_the_ws_sentinel() {
         for wire in [" ", "&#13;"] {
-            let xml = preserve_ws_only_text(&format!(
+            let xml = prepare_body_text_for_serde(&format!(
                 r#"<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>가</hp:t></hp:run><hp:run charPrIDRef="0"><hp:t>{wire}</hp:t></hp:run></hp:p>"#
             ))
             .unwrap()

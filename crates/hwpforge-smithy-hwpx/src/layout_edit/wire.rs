@@ -40,6 +40,15 @@ impl Node {
         Ok(root)
     }
 
+    // Only sections and master pages carry body payloads. Other parts retain
+    // NsReader's namespace handling and avoid an unnecessary full XML scan.
+    fn parse_body(xml: &str) -> HwpxResult<Self> {
+        let xml = crate::wire_xml::prepare_body_text_for_streaming(xml).map_err(|e| {
+            HwpxError::XmlParse { file: "layout fingerprint".into(), detail: e.to_string() }
+        })?;
+        Self::parse(&xml)
+    }
+
     fn parse_package_xml(xml: &str) -> HwpxResult<Self> {
         fn mark(n: &mut Node) {
             n.package_xml = true;
@@ -849,7 +858,7 @@ impl PackageAnalysis {
             starts: Vec::new(),
         };
         for s in 0..section_count {
-            let tree = Node::parse(&package.read_text_entry(&result.section_paths[s])?)?;
+            let tree = Node::parse_body(&package.read_text_entry(&result.section_paths[s])?)?;
             let (mut stamp, mut flags) = definitions.stamp(&tree, false);
             let mut refs = Vec::new();
             collect_named(&tree, &["masterPage"], &mut refs);
@@ -901,7 +910,7 @@ impl PackageAnalysis {
                 .and_then(|m| m.parse::<usize>().ok())
                 .map(|m| (m, p))
         }) {
-            let tree = Node::parse(&package.read_text_entry(part)?)?;
+            let tree = Node::parse_body(&package.read_text_entry(part)?)?;
             let (stamp, flags) = definitions.stamp(&tree, false);
             let Some(owners) = master_owners.get(&m) else {
                 for flags in &mut result.sections {
@@ -1204,14 +1213,95 @@ fn collect_named(n: &Node, names: &[&str], into: &mut Vec<Node>) {
 }
 
 #[cfg(test)]
+fn package_bytes(parts: &[(&str, &str)]) -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in
+        std::iter::once(("mimetype", "application/hwp+zip")).chain(parts.iter().copied())
+    {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(data.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn node(xml: &str) -> Node {
-        Node::parse(xml).unwrap()
+        Node::parse_body(xml).unwrap()
     }
     fn fingerprint(header: &str, body: &str) -> (Stamp, Signals) {
-        Definitions::new(&node(header)).stamp(&node(body), false)
+        Definitions::new(&Node::parse(header).unwrap()).stamp(&node(body), false)
+    }
+
+    // 이것을 실패시키는 것: 머리 정보·차트·설정 입력에 본문 스캐너 적용,
+    // 또는 구역/바탕쪽 입력에서 본문 스캐너 생략.
+    #[test]
+    fn body_preprocessing_is_scoped_to_section_and_master_page_inputs() {
+        let parts = [
+            ("Contents/header.xml", "<head/>"),
+            ("Contents/content.hpf", "<package/>"),
+            (
+                "Contents/section0.xml",
+                "<sec><masterPage idRef='masterpage0'/><p><t>a\n\n\nb</t></p></sec>",
+            ),
+            ("Contents/masterpage0.xml", "<masterPage><p><t>a\n\n\nb</t></p></masterPage>"),
+            ("Chart/chart1.xml", "<chart/>"),
+            ("settings.xml", "<settings/>"),
+        ];
+        let analyze = |parts: &[(&str, &str)]| PackageAnalysis::read(&package_bytes(parts));
+        let analyze_unchanged = || analyze(&parts);
+        let analyze_changed = |changed: &str, xml: &str| {
+            let parts: Vec<_> = parts
+                .iter()
+                .map(|&(name, data)| (name, if name == changed { xml } else { data }))
+                .collect();
+            analyze(&parts)
+        };
+        // NsReader accepts an unused namespace URI literally. The body scanner
+        // classifies namespace URIs and therefore rejects this unknown entity.
+        let namespace = "<root xmlns:q='urn:&unknown;'><t>a\r\nb</t></root>";
+        assert_eq!(Node::parse_xml(namespace).unwrap().children[0].children[0].text, ["a\nb"]);
+        assert!(crate::wire_xml::prepare_body_text_for_streaming(namespace).is_err());
+        for path in ["Contents/header.xml", "Chart/chart1.xml", "settings.xml"] {
+            assert!(analyze_changed(path, namespace).is_ok(), "{path}");
+        }
+        let baseline = analyze_unchanged().unwrap();
+        for (path, xml) in parts.into_iter().filter(|(path, _)| {
+            path.starts_with("Contents/section") || path.starts_with("Contents/masterpage")
+        }) {
+            // 이것을 실패시키는 것: 패키지 도우미가 지정된 파트 교체를 무시하기.
+            let changed = analyze_changed(path, &xml.replace("a\n\n\nb", "changed")).unwrap();
+            assert_ne!(changed.section_stamps[0].hash, baseline.section_stamps[0].hash, "{path}");
+            for wire in ["a\r\r\nb", "<![CDATA[a\r\r\nb]]>"] {
+                let actual = analyze_changed(path, &xml.replace("a\n\n\nb", wire)).unwrap();
+                assert_eq!(
+                    actual.section_stamps[0].hash, baseline.section_stamps[0].hash,
+                    "{path}: {wire:?}"
+                );
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: 공통 본문 CRLF 보호 생략,
+    // 또는 스트리밍 지문에 serde용 sentinel을 삽입하기.
+    #[test]
+    fn raw_crlf_fingerprint_keeps_two_units_without_serde_marks() {
+        for wire in ["a\r\nb", "<![CDATA[a\r\nb]]>"] {
+            let raw = fingerprint("<head/>", &format!("<t>{wire}</t>")).0.hash;
+            assert_eq!(raw, fingerprint("<head/>", "<t>a\n\nb</t>").0.hash);
+            assert_ne!(raw, fingerprint("<head/>", "<t>a\nb</t>").0.hash);
+        }
+        for text in ["\r\n", "\u{E000}\r\n"] {
+            assert_eq!(
+                node(&format!("<t>{text}</t>")).children[0].text,
+                [text.replace('\r', "\n")]
+            );
+        }
+        assert_eq!(node("<t xmlns='urn:other'>a\r\nb</t>").children[0].text, ["a\nb"]);
+        assert_eq!(node("<script>a\r\nb</script>").children[0].text, ["a\nb"]);
     }
 
     // 이것을 실패시키는 것: 참조 속성 대신 Core 이름 목록으로만 의존성을 구성하기.
@@ -1404,20 +1494,14 @@ mod canonical_tests {
     }
 
     fn package(payload: &str, chart: &str) -> RawPackage {
-        use std::io::{Cursor, Write};
-        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for (name, data) in [
-            ("mimetype", "application/hwp+zip"),
+        RawPackage::read(&package_bytes(&[
             ("Contents/header.xml", "<head/>"),
             ("Contents/section0.xml", "<sec/>"),
             ("Contents/content.hpf", "<package/>"),
             ("BinData/a.bin", payload),
             ("Chart/chart1.xml", chart),
-        ] {
-            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-            zip.write_all(data.as_bytes()).unwrap();
-        }
-        RawPackage::read(&zip.finish().unwrap().into_inner()).unwrap()
+        ]))
+        .unwrap()
     }
 
     // 이것을 실패시키는 것: binaryItemIDRef/chartIDRef를 건너뛰거나 대상 바이트를 누락하기.
