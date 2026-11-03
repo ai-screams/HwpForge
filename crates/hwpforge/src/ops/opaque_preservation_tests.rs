@@ -272,30 +272,19 @@ fn opaque_gate_changed_payload() {
     assert!(error.to_string().contains("payload changed"), "{error}");
 }
 
-// 이것을 실패시키는 것: 재개방 is_opaque 비교 생략. 실제 payload는 같지만
-// 입력은 빈 폴더의 비압축 크기를 1로 광고한다. 출력이 실제 크기 0으로 쓰면
-// metadata 판정만 정상으로 바뀐다. ZIP reader는 상한 초과는 막지만 짧은 payload는 허용한다.
+// 이것을 실패시키는 것: 재개방 is_opaque 비교 생략. payload가 같은 빈 디렉터리도
+// 충돌하는 파일이 사라지면 opaque 분류가 바뀌므로 그 디렉터리에서 거부해야 한다.
 #[test]
 fn opaque_gate_changed_classification() {
-    let output = rewrite(&base(), &[("Unused/", b"")], &[]);
-    let mut input = output.clone();
-    // This is the last appended entry; alter only its advertised size in both
-    // headers, retaining the compressed stream and its CRC. Never parse ZIP
-    // metadata this way in production: the gate uses core's classification.
-    let central = input.windows(4).rposition(|w| w == b"PK\x01\x02").unwrap();
-    let local = u32::from_le_bytes(input[central + 42..central + 46].try_into().unwrap()) as usize;
-    input[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
-    input[local + 22..local + 26].copy_from_slice(&1u32.to_le_bytes());
+    let input = rewrite(&base(), &[("Unused/", b""), ("Unused", b"")], &[]);
+    let output = rewrite(&input, &[], &["Unused"]);
     let mut before = open_package(&input, Default::default()).unwrap();
     let mut after = open_package(&output, Default::default()).unwrap();
-    assert_eq!(before.entries().len(), after.entries().len());
-    for i in 0..before.entries().len() {
-        assert_eq!(before.entries()[i].path, after.entries()[i].path);
-        assert_eq!(before.read(i).unwrap(), after.read(i).unwrap());
-    }
     let i = before.entries().iter().position(|e| e.path == "Unused/").unwrap();
+    let j = after.entries().iter().position(|e| e.path == "Unused/").unwrap();
+    assert_eq!(before.read(i).unwrap(), after.read(j).unwrap());
     assert!(before.is_opaque(i));
-    assert!(!after.is_opaque(i));
+    assert!(!after.is_opaque(j));
     let error = ensure_opaque_carried(&input, &output).unwrap_err();
     assert!(error.to_string().contains("opaque entry 'Unused/'"), "{error}");
 }

@@ -1,5 +1,5 @@
 #[path = "document.rs"]
-mod document;
+pub(crate) mod document;
 
 use hwpforge_core::control::{FieldBoundary, FieldStart, GroupChild};
 use hwpforge_core::section::{HeaderFooter, MasterPage};

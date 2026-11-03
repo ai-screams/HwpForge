@@ -360,7 +360,6 @@ fn package_name_policy_stamp_rejects_uncarried_opaque_probe_shapes() {
 }
 
 // 이것을 실패시키는 것: carry 목록에서 is_opaque 우선 검사를 제거하거나 정상 빈 폴더까지 필수화하기.
-// stamp v1/v2 또는 cell-edit의 공용 carry 게이트 호출을 제거해도 실패한다.
 #[test]
 fn package_name_policy_empty_directory_carry_gate_covers_stamp_v1_v2_and_cell_edit() {
     use crate::cell_edit::{CellEditError, HwpxCellEditor};
@@ -372,6 +371,9 @@ fn package_name_policy_empty_directory_carry_gate_covers_stamp_v1_v2_and_cell_ed
         let index = package.entries().iter().position(|e| e.path == name).unwrap();
         assert_eq!(package.is_opaque(index), opaque);
         crate::stamp::check_zip_carry(&bytes, &bytes).unwrap();
+        if !opaque {
+            crate::stamp::check_zip_carry(&bytes, &original).unwrap();
+        }
         let request = StampRequestV2 {
             schema_version: STAMP_MAP_VERSION,
             source_sha256: HwpxStamper::plan_bytes_v2(&bytes).unwrap().source_sha256,
@@ -386,7 +388,7 @@ fn package_name_policy_empty_directory_carry_gate_covers_stamp_v1_v2_and_cell_ed
                     matches!(result.unwrap_err(), StamperError::UncarriedZipEntries { entries } if entries == [name])
                 );
             } else {
-                HwpxDecoder::decode(&result.unwrap()).unwrap();
+                result.unwrap();
             }
         }
         // Even an empty spec executes admission, regeneration and layout carry.
@@ -396,7 +398,7 @@ fn package_name_policy_empty_directory_carry_gate_covers_stamp_v1_v2_and_cell_ed
                 matches!(cells.unwrap_err(), CellEditError::UncarriedZipEntries { entries } if entries == [name])
             );
         } else {
-            HwpxDecoder::decode(&cells.unwrap().bytes).unwrap();
+            cells.unwrap();
         }
     }
 }

@@ -96,7 +96,10 @@ pub fn normalize_part_name(name: &str) -> CoreResult<&str> {
 /// Case-only collisions are rejected; selecting the same entry as Hancom from
 /// such collisions is deferred. Lookups that do not follow
 /// manifest hrefs (images, master pages and settings) are a separate limitation.
-/// Decompression is lazy, with actual byte limits enforced by [`Package::read`].
+/// Decompression is lazy except for directory classification; all reads enforce
+/// actual byte limits through [`Package::read`]. Directory classification counts
+/// against the cumulative read budget; reading that entry again counts again.
+/// Directory payload/CRC and limit errors can therefore fail this open call.
 ///
 /// # Errors
 /// Rejects ambiguous/invalid ZIP directories, unsafe names and resource limits.
@@ -109,6 +112,7 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
     let archive = directory::open(bytes, limits.entries)?;
     let mut entries = Vec::with_capacity(archive.len());
     let mut keys = BTreeSet::new();
+    let mut directories = Vec::new();
     let metadata = archive.metadata();
     for (index, name) in archive.file_names().enumerate() {
         let path = name.map_err(|e| zip_error(e.to_string()))?.into_owned();
@@ -117,6 +121,10 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
             return Err(invalid_structure(format!("duplicate decoded ZIP entry name '{key}'")));
         }
         let entry = metadata.entry(index).map_err(|e| zip_error(e.to_string()))?;
+        let raw = names::raw_name(bytes, entry.central_header_start())?;
+        if raw.ends_with(b"/") || entry.name_raw().ends_with(b"/") {
+            directories.push(index);
+        }
         entries.push(PackageEntry {
             path,
             size: entry.size(),
@@ -124,8 +132,22 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
             compression: entry.compression(),
         });
     }
-    let opaque = names::classify(bytes, &archive, &entries)?;
-    Ok(Package { archive, entries, opaque, limits, total_read: 0 })
+    // 이것을 실패시키는 것: 디렉터리 이름 검사를 payload 읽기 뒤로 미루기.
+    // Reject name collisions before attempting even directory decompression.
+    let opaque = names::classify(bytes, &archive, &entries, vec![false; entries.len()])?;
+    let has_directories = !directories.is_empty();
+    let mut package = Package { archive, opaque, entries, limits, total_read: 0 };
+    // 이것을 실패시키는 것: 실제 해제 바이트 대신 헤더 크기로 디렉터리를 분류.
+    for index in directories {
+        package.opaque[index] |= !package.read(index)?.is_empty();
+    }
+    // 이것을 실패시키는 것: 내용 기반 opaque 추가 뒤 이름 증거 재검사 생략.
+    // Payload-based opacity must also satisfy the raw/effective name guards.
+    if has_directories {
+        package.opaque =
+            names::classify(bytes, &package.archive, &package.entries, package.opaque)?;
+    }
+    Ok(package)
 }
 
 impl Package<'_> {

@@ -4446,6 +4446,12 @@
           "function": "carry_line_segs",
           "stage": "Verification",
           "occurrence": 6
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/raw_package.rs",
+          "function": "RawPackage::verify_output_capped",
+          "stage": "Verification",
+          "occurrence": 1
         }
       ]
     },

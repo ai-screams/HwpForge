@@ -61,7 +61,8 @@ pub(super) fn build_masterpage_entries(
                 crate::decoder::PathSeg::MasterPage(idx),
             ],
         );
-        let saved_part = std::mem::replace(&mut sink.part, format!("Contents/masterpage{idx}.xml"));
+        let saved_part =
+            std::mem::replace(&mut sink.part, crate::encoder::package::masterpage_part_name(idx));
         sink.in_master_page = true;
         let saved_caches = std::mem::take(&mut sink.dropped_caches);
         let (apply_type, page_number) = match mp.special {

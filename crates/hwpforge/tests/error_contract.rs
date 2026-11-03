@@ -196,6 +196,7 @@ fn manifest_is_consistent() {
 #[test]
 fn manifest_sites_match_the_production_generation_sites() {
     // 이것을 실패시키는 것: layout carry의 최종 ZIP 작성 stage를 Verification으로 변경.
+    // 이것을 실패시키는 것: 공통 출력 보존 검사의 Verification 생성 지점 등록 삭제.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let scan = error_inventory::collect_sites(&manifest.audited_variants);
 

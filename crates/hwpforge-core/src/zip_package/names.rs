@@ -12,6 +12,14 @@ use crate::CoreResult;
 /// at most 259 bytes are accepted; 260 bytes or more are rejected.
 const OPAQUE_REFERENCE_NAME_BUFFER_SIZE: usize = 260;
 
+/// Original name from the central directory already framed by `directory::open`.
+/// Use the metadata's physical offset, not an assumed iterator/record order.
+pub(super) fn raw_name(bytes: &[u8], central_header_start: u64) -> CoreResult<&[u8]> {
+    let start = central_header_start as usize;
+    let len = directory::u16_at(bytes, start + 28)? as usize;
+    Ok(&bytes[start + 46..start + 46 + len])
+}
+
 // Bound each preview before escaping, including the two-name mismatch error.
 // UTF-8 previews end at a character boundary; invalid UTF-8 retains byte identity.
 fn display_name(name: &[u8]) -> String {
@@ -47,19 +55,14 @@ pub(super) fn classify(
     bytes: &[u8],
     archive: &ZipArchive<Cursor<&[u8]>>,
     entries: &[PackageEntry],
+    mut opaque: Vec<bool>,
 ) -> CoreResult<Vec<bool>> {
     let metadata = archive.metadata();
     let mut names = Vec::with_capacity(entries.len());
-    let mut opaque = vec![false; entries.len()];
     let mut stripped = BTreeMap::<&[u8], usize>::new();
     for (index, entry) in entries.iter().enumerate() {
         let meta = metadata.entry(index).map_err(|e| zip_error(e.to_string()))?;
-        // The selected CD was already framed and checked by directory::open.
-        // Join by the metadata's physical central-header offset, never by an
-        // assumed equality of the zip iterator and physical record order.
-        let start = meta.central_header_start() as usize;
-        let len = directory::u16_at(bytes, start + 28)? as usize;
-        let raw = &bytes[start + 46..start + 46 + len];
+        let raw = raw_name(bytes, meta.central_header_start())?;
         let effective = meta.name_raw();
         for name in [raw, effective] {
             if !invariant(name) {
@@ -68,7 +71,6 @@ pub(super) fn classify(
                     String::from_utf8_lossy(name)
                 )));
             }
-            opaque[index] |= name.ends_with(b"/") && entry.size != 0;
             let text = String::from_utf8_lossy(name);
             opaque[index] |= normalize_part_name(text.strip_suffix('/').unwrap_or(&text)).is_err();
         }

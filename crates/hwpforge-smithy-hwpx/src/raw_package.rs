@@ -26,11 +26,113 @@ struct RawPackageEntry {
 
 #[cfg(test)]
 thread_local! {
-    // Full-package reads and writes on this test thread, excluding metadata opens.
+    // Capture the declaration actually submitted by each editor on this thread.
+    static VERIFIED_CHANGES: std::cell::RefCell<Option<OutputChanges>> = const { std::cell::RefCell::new(None) };
+    // Full-package reads and writes, excluding metadata opens.
     static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
+/// Exact parts an editor replaces/rebuilds; never path prefixes.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct OutputChanges {
+    pub(crate) rewritten: Vec<String>,
+}
+
+impl OutputChanges {
+    /// Full-document editors rebuild these exact parts. Existing media, charts,
+    /// and OLE still owe payload preservation. Master pages are rebuilt from Core.
+    pub(crate) fn reencoded(sections: &[hwpforge_core::Section]) -> Self {
+        use crate::encoder::package::{masterpage_part_name, section_part_name};
+        let masterpage_count =
+            sections.iter().flat_map(|s| s.master_pages.iter().flatten()).count();
+        Self {
+            rewritten: crate::encoder::package::FIXED_PART_NAMES
+                .into_iter()
+                .map(str::to_owned)
+                .chain((0..sections.len()).map(section_part_name))
+                .chain((0..masterpage_count).map(masterpage_part_name))
+                .collect(),
+        }
+    }
+}
+
 impl RawPackage {
+    /// Verify the actual final bytes using fresh Core name and bounded-read evidence.
+    /// Changed/rebuilt parts share one exact allowlist. Compression methods and
+    /// normal empty directories are packaging details, not payload changes.
+    /// The output's `mimetype`, when present, must still be stored uncompressed.
+    pub(crate) fn verify_output(
+        base: &[u8],
+        output: &[u8],
+        changes: &OutputChanges,
+    ) -> Result<(), crate::error::CodecFailure> {
+        Self::verify_output_capped(base, output, changes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
+    }
+
+    fn verify_output_capped(
+        base: &[u8],
+        output: &[u8],
+        changes: &OutputChanges,
+        max_entry: u64,
+        max_total: u64,
+    ) -> Result<(), crate::error::CodecFailure> {
+        #[cfg(test)]
+        VERIFIED_CHANGES.with(|observed| *observed.borrow_mut() = Some(changes.clone()));
+        let verify = || -> HwpxResult<()> {
+            let original = Self::read_capped(base, max_entry, max_total)?;
+            let output = Self::read_capped(output, max_entry, max_total)?;
+            let violation = |path: &str, reason: &str| HwpxError::InvalidStructure {
+                detail: format!("output package preservation: '{path}': {reason}"),
+            };
+            // 이것을 실패시키는 것: 선언된 mimetype도 Stored 규칙을 우회하게 하기.
+            if let Some(&index) = output.index_by_path.get("mimetype") {
+                if output.entries[index].compression != CompressionMethod::Stored {
+                    return Err(violation("mimetype", "must be stored uncompressed"));
+                }
+            }
+            for entry in &original.entries {
+                let after = output.index_by_path.get(&entry.path).map(|&i| &output.entries[i]);
+                if Self::is_directory_placeholder(&entry.path, entry.opaque) {
+                    continue;
+                }
+                let after = after.ok_or_else(|| violation(&entry.path, "missing part"))?;
+                if changes.rewritten.contains(&entry.path) {
+                    continue;
+                }
+                if entry.bytes != after.bytes {
+                    return Err(violation(&entry.path, "payload changed"));
+                }
+                if entry.opaque != after.opaque {
+                    return Err(violation(&entry.path, "opaque classification changed"));
+                }
+            }
+            for entry in &output.entries {
+                if Self::is_directory_placeholder(&entry.path, entry.opaque) {
+                    continue;
+                }
+                let was_content = original.index_by_path.get(&entry.path).is_some_and(|&i| {
+                    let before = &original.entries[i];
+                    !Self::is_directory_placeholder(&before.path, before.opaque)
+                });
+                if !was_content && !changes.rewritten.contains(&entry.path) {
+                    return Err(violation(&entry.path, "undeclared new part"));
+                }
+            }
+            Ok(())
+        };
+        verify().map_err(|e| {
+            crate::error::CodecFailure::hwpx(crate::error::CodecStage::Verification, &e)
+        })
+    }
+
+    /// Only normal, actually empty directories are packaging detail.
+    /// Opaque entries always remain content, including empty aliases.
+    /// Core `open_package` classifies directories from actual decompressed bytes:
+    /// a non-opaque path ending in '/' is already proven empty.
+    pub(crate) fn is_directory_placeholder(path: &str, opaque: bool) -> bool {
+        !opaque && path.ends_with('/')
+    }
+
     /// Resolve a Core section index using the decoder's package reading order.
     /// 이것을 실패시키는 것: section index를 파일 번호로 사용하거나 범위 밖을 폴백하기.
     pub(crate) fn section_path(&self, section_idx: usize) -> HwpxResult<String> {
@@ -156,9 +258,14 @@ impl RawPackage {
         let mut zip = ZipWriter::new(cursor);
 
         for entry in &self.entries {
+            let compression = if entry.path == "mimetype" {
+                CompressionMethod::Stored
+            } else {
+                entry.compression
+            };
             // fixed entry time (the ZIP epoch), never the clock.
             let options = SimpleFileOptions::default()
-                .compression_method(entry.compression)
+                .compression_method(compression)
                 .last_modified_time(zip::DateTime::default());
             zip.start_file(&entry.path, options).map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(&entry.bytes).map_err(|e| HwpxError::Zip(e.to_string()))?;
@@ -199,7 +306,7 @@ mod tests {
     }
 
     /// Builds an in-memory ZIP whose entries are `(name, size)` runs of zeros.
-    fn zeros_zip(entries: &[(&str, usize)]) -> Vec<u8> {
+    pub(super) fn zeros_zip(entries: &[(&str, usize)]) -> Vec<u8> {
         let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         for (name, size) in entries {
@@ -221,7 +328,7 @@ mod tests {
 
     /// Rewrites the declared uncompressed size in every central-directory
     /// record, leaving the compressed data (and its CRC) untouched.
-    fn forge_declared_size(zip: &mut [u8], declared: u32) {
+    pub(super) fn forge_declared_size(zip: &mut [u8], declared: u32) {
         let mut at = 0;
         while at + 28 <= zip.len() {
             if zip[at..at + 4] == [0x50, 0x4b, 0x01, 0x02] {
@@ -413,3 +520,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod preservation_tests;

@@ -645,3 +645,78 @@ fn name_policy_opaque_requires_identical_raw_effective_names() {
         "{case}"
     );
 }
+
+// 이것을 실패시키는 것: 내용 있는 raw 디렉터리를 분류에서 빼거나 이름 증거 검사 뒤에 opaque로 표시.
+#[test]
+fn directory_payload_classification_precedes_name_evidence() {
+    for (raw, effective, reason) in [
+        ("Unused/", Some("Effective"), "different raw/effective names"),
+        ("Unused/가/", None, "non-ASCII=true"),
+    ] {
+        let bytes = zip(&[(raw, effective, b"x")]);
+        let error = open_package(&bytes, Default::default()).unwrap_err().to_string();
+        assert!(error.contains(reason), "{error}");
+    }
+}
+
+// 이것을 실패시키는 것: 디렉터리 opaque 판정을 광고 크기로 되돌리기.
+#[test]
+fn directory_classification_uses_decompressed_payload() {
+    for (name, payload, declared, opaque) in [
+        ("Unused/", b"".as_slice(), 100u32, false),
+        ("Unused/", b"x".as_slice(), 1, true),
+        ("Unused/", b"x".as_slice(), 0, true),
+        ("Unused/가/", b"".as_slice(), 100, false),
+    ] {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                name,
+                FullFileOptions::default().compression_method(CompressionMethod::Deflated),
+            )
+            .unwrap();
+        writer.write_all(payload).unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&declared.to_le_bytes());
+        if payload.len() > declared as usize {
+            let error = open_package(&bytes, Default::default()).unwrap_err();
+            assert!(
+                error.to_string().contains("larger than its declared uncompressed size"),
+                "{error}"
+            );
+            continue;
+        }
+        let mut package = open_package(&bytes, Default::default()).unwrap();
+        assert_eq!(package.entries()[0].size, u64::from(declared));
+        assert_eq!(package.is_opaque(0), opaque, "{name}: {declared}");
+        assert_eq!(package.read(0).unwrap(), payload);
+    }
+}
+
+// 이것을 실패시키는 것: open 중 디렉터리 읽기 또는 그 누적 예산 계상을 생략.
+#[test]
+fn directory_open_enforces_limits_and_counts_reads() {
+    let bytes = zip(&[("Unused/", None, b"ab")]);
+    let error = open_package(&bytes, PackageLimits { entry: 1, ..Default::default() }).unwrap_err();
+    assert!(error.to_string().contains("exceeds limit of 1"), "{error}");
+    let mut package =
+        open_package(&bytes, PackageLimits { total: 3, ..Default::default() }).unwrap();
+    assert!(package.is_opaque(0));
+    let error = package.read(0).unwrap_err();
+    assert!(
+        error.to_string().contains("total decompressed data (4 bytes) exceeds limit of 3"),
+        "{error}"
+    );
+}
+
+// 이것을 실패시키는 것: 디렉터리 CRC 검사를 첫 명시적 read까지 미루기.
+#[test]
+fn directory_open_rejects_corrupt_payload() {
+    let mut bytes = zip(&[("Unused/", None, b"ab")]);
+    let name_len = u16::from_le_bytes(bytes[26..28].try_into().unwrap()) as usize;
+    let extra_len = u16::from_le_bytes(bytes[28..30].try_into().unwrap()) as usize;
+    bytes[30 + name_len + extra_len] ^= 1;
+    let error = open_package(&bytes, Default::default()).unwrap_err();
+    assert!(error.to_string().contains("Invalid checksum"), "{error}");
+}
