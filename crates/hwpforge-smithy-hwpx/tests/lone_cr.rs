@@ -547,9 +547,10 @@ fn raw_cr_single_line_cache_patch_contract() {
             "{wire:?}"
         );
         let tree = Element::parse(&after_xml);
-        for paragraph in tree.children.iter().filter(|p| p.name == "hp:p") {
-            assert!(!paragraph.child_names().contains(&"hp:linesegarray"), "{wire:?}");
-        }
+        let paragraphs: Vec<_> = tree.children.iter().filter(|p| p.name == "hp:p").collect();
+        assert!(!paragraphs[0].child_names().contains(&"hp:linesegarray"), "{wire:?}");
+        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
+        assert!(paragraphs[1].child_names().contains(&"hp:linesegarray"), "{wire:?}");
     }
 }
 
@@ -927,9 +928,9 @@ fn split_memo_anchor_cr_lf_keeps_admissible_cache() {
     assert_eq!(xml.matches("<hp:lineBreak/>").count(), 2);
 }
 
-// 이것을 실패시키는 것: inline 허용 취소 또는 stale_caches 제거.
+// 이것을 실패시키는 것: inline 허용 취소, 편집 캐시 보존 또는 기존 꼬리 제거 호출.
 #[test]
-fn f2_repeated_inline_fill_drops_only_the_flow_tail_cache() {
+fn repeated_inline_fill_preserves_plain_body_tail() {
     use hwpforge_core::layout::{LayoutCache, LineSeg};
     use hwpforge_smithy_hwpx::{EncodeOptions, HwpxFiller};
     let field = Control::Field {
@@ -975,7 +976,7 @@ fn f2_repeated_inline_fill_drops_only_the_flow_tail_cache() {
         let ps = &decoded.document.sections()[0].paragraphs;
         assert!(ps[0].layout_cache.is_some());
         assert!(ps[1].layout_cache.is_none());
-        assert!(ps[2].layout_cache.is_none());
+        assert!(ps[2].layout_cache.is_some());
     }
 }
 

@@ -216,7 +216,7 @@ fn splice_section(
             baseline[base[i].start..base[i].end] != probe[comparison[i].start..comparison[i].end]
         })
         .collect();
-    // The rule `fill` and `patch` use (`cache_flow::stale_paragraphs`), one
+    // The conservative re-encoding rule (`cache_flow::stale_paragraphs`), one
     // pass over the paragraphs (walking to the end of
     // the list from every changed paragraph was quadratic in a batch edit).
     // 이것을 실패시키는 것: 바뀐 문단마다 끝까지 훑기(`carry_stays_linear`).
@@ -545,6 +545,22 @@ mod tests {
     #[test]
     fn scan_rejects_unbalanced_paragraphs() {
         assert!(scan_paragraphs("<hs:sec><hp:p id=\"0\"><hp:run/></hs:sec>").is_none());
+    }
+
+    /// 이것을 실패시키는 것: 공유 stale_paragraphs를 자기 문단만 제거하도록 완화.
+    #[test]
+    fn preserve_policy_does_not_change_carry_bytes() {
+        let baseline =
+            format!("<hs:sec>{}{}{}</hs:sec>", p("앞", false), p("원래 값", false), p("뒤", false));
+        let output = baseline.replace("원래 값", "새 값");
+        let source =
+            format!("<hs:sec>{}{}{}</hs:sec>", p("앞", true), p("새 값", true), p("뒤", true));
+        let expected =
+            format!("<hs:sec>{}{}{}</hs:sec>", p("앞", true), p("새 값", false), p("뒤", false));
+        assert_eq!(
+            splice_section(&baseline, &output, &output, &source),
+            Some((expected, Vec::new()))
+        );
     }
 
     #[test]

@@ -1877,9 +1877,11 @@ fn runless_paragraph_cases() -> Vec<String> {
 fn preserving_patch_keeps_runless_paragraphs() {
     use hwpforge_smithy_hwpx::{ExportedSection, HwpxPatcher};
     for empty in runless_paragraph_cases() {
-        for wrapped in containers(&empty) {
-            // Keep the preceding container intact; all three following body
-            // paragraphs share the edited flow, including the runless one.
+        for (kind, wrapped) in containers(&empty).into_iter().enumerate() {
+            // Keep the preceding container and untouched body tail intact,
+            // including the runless paragraph's original cache. The table and
+            // group cases have no `hp:pos` of their own, so they count as
+            // floating objects and the whole tail loses its caches.
             let body = wrapped.clone()
                 + &para(&run("<hp:t>가상 편집 대상</hp:t>"), &[0])
                 + &empty
@@ -1900,11 +1902,16 @@ fn preserving_patch_keeps_runless_paragraphs() {
                 }
             });
             let patched = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap().bytes;
+            // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출,
+            // pos 없는 표·묶음을 글자처럼 취급.
+            let floating = matches!(kind, 1 | 3);
             let uncached_empty = if empty == "<hp:p/>" { empty.clone() } else { para("", &[]) };
+            let (kept_empty, tail_cache): (&str, &[_]) =
+                if floating { (&uncached_empty, &[]) } else { (&empty, &[0]) };
             let expected_body = wrapped
                 + &para(&run("<hp:t>수정한 가상 문장</hp:t>"), &[])
-                + &uncached_empty
-                + &para(&run("<hp:t>뒤 보통 문단</hp:t>"), &[]);
+                + kept_empty
+                + &para(&run("<hp:t>뒤 보통 문단</hp:t>"), tail_cache);
             assert_eq!(section_xml(&patched), original_xml.replace(&body, &expected_body));
             let mut before = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
             let mut after = zip::ZipArchive::new(Cursor::new(&patched)).unwrap();
@@ -1928,7 +1935,7 @@ fn preserving_patch_keeps_runless_paragraphs() {
 /// The #260 contract in a later section: a runless empty paragraph in
 /// section 1 of a two-section package exports without a warning, an unedited
 /// patch returns the package byte for byte, and editing another paragraph
-/// drops the empty paragraph's line cache with the rest of its flow, while
+/// preserves the empty paragraph's line cache with the untouched tail, while
 /// section 0 stays as it was.
 /// 이것을 실패시키는 것: patch 의 슬롯 투영에 `source_maps[section_idx]` 대신
 /// `source_maps[0]` 을 넘기기(구역 0 에는 가상 run 이 없어 슬롯 수가 어긋난다).
@@ -1991,10 +1998,10 @@ fn preserving_patch_keeps_runless_paragraphs_in_a_later_section() {
             }
         });
         let patched = HwpxPatcher::patch_exported_section(&bytes, 1, &exported).unwrap().bytes;
-        let uncached_empty = if empty == "<hp:p/>" { empty.clone() } else { para("", &[]) };
+        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
         let expected = para(&run("<hp:t>고친 문장</hp:t>"), &[])
-            + &uncached_empty
-            + &para(&run("<hp:t>뒤 문단</hp:t>"), &[]);
+            + &empty
+            + &para(&run("<hp:t>뒤 문단</hp:t>"), &[0]);
         let section1 = read(&bytes, "Contents/section1.xml");
         assert_eq!(read(&patched, "Contents/section1.xml"), section1.replace(&body, &expected));
         assert_eq!(read(&patched, "Contents/section0.xml"), read(&bytes, "Contents/section0.xml"));

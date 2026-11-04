@@ -147,7 +147,8 @@ fn reversed_spine_fill_changes_only_section_zero() {
     assert_removed_part(&output.encode_warnings);
     only_first_part_changed(&base, &output.value.bytes);
     let pkg = RawPackage::read(&output.value.bytes).unwrap();
-    assert!(!pkg.read_text_entry(FIRST).unwrap().contains("linesegarray"));
+    // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
+    assert_eq!(pkg.read_text_entry(FIRST).unwrap().matches(CACHE).count(), 1);
     assert!(pkg.read_text_entry(SECOND).unwrap().contains("linesegarray"));
 }
 
