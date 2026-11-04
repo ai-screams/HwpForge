@@ -1,8 +1,15 @@
 use super::*;
+use crate::line_keep::width;
+use crate::style_store::HwpxCharShape;
 use crate::test_support::xml;
 use hwpforge_core::layout::{LineBoundary, LineSeg, WireTokenKind};
 use hwpforge_core::{ImageStore, PageSettings, Section, TableRow};
 use hwpforge_foundation::HwpUnit;
+
+fn section_allows(xml: &str) -> Option<()> {
+    crate::line_keep::source_allows(&crate::line_keep::SectionEvidence::read(xml)?, true)
+        .then_some(())
+}
 
 fn paragraph(text: &str) -> Paragraph {
     let mut para =
@@ -242,7 +249,14 @@ fn source_queries_and_probe_encodes_have_fixed_batch_cost() {
             let specs: Vec<_> =
                 (0..count).map(|table| CellSpec { table, ..specs()[0].clone() }).collect();
             COST.set((0, 0, 0, 0, 0));
-            HwpxCellEditor::set_cells(&bytes, &specs).unwrap();
+            let edited = HwpxCellEditor::set_cells(&bytes, &specs).unwrap();
+            let output = HwpxDecoder::decode(&edited.bytes).unwrap();
+            // 이것을 실패시키는 것: 승인한 후보의 자기 캐시 복원 생략.
+            assert!(tables_in_document(&output.document).iter().all(|entry| entry.table.rows[0]
+                .cells[0]
+                .paragraphs[0]
+                .layout_cache
+                .is_some()));
             let active = usize::from(count > 0);
             assert_eq!(
                 COST.get().4,
@@ -252,6 +266,38 @@ fn source_queries_and_probe_encodes_have_fixed_batch_cost() {
             assert_eq!(COST.get(), (active, active, 3 * count, active, active * definitions));
         }
     }
+}
+
+// 이것을 실패시키는 것: 구역 파싱 실패를 캐시에 넣기 전에 반환하거나 실패한 증거를 허용.
+#[test]
+fn failed_section_evidence_is_read_once_per_part() {
+    let mut decoded = HwpxDecoder::decode(&fixture()).unwrap();
+    let host = decoded.document.sections()[0].paragraphs[0].clone();
+    for _ in 1..8 {
+        decoded.document.sections_mut()[0].paragraphs.push(host.clone());
+    }
+    let bytes = HwpxEncoder::encode_with_options(
+        &decoded.document.validate().unwrap(),
+        &decoded.style_store,
+        &decoded.image_store,
+        crate::EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    let decoded = HwpxDecoder::decode(&bytes).unwrap();
+    let specs: Vec<_> = (0..8).map(|table| CellSpec { table, ..specs()[0].clone() }).collect();
+    let edits = resolve_edits(&decoded.document, &specs).unwrap();
+    let mut package = RawPackage::read(&bytes).unwrap();
+    assert_eq!(candidates(&decoded, &package, &edits).len(), 8);
+    // Keep the recorded cell ranges valid; only the section evidence parser fails.
+    let xml = package
+        .read_text_entry("Contents/section0.xml")
+        .unwrap()
+        .replace("</hs:sec>", r#"<hp:unused duplicate="1" duplicate="2"/></hs:sec>"#);
+    assert!(crate::line_keep::SectionEvidence::read(&xml).is_none());
+    package.replace_text_entry("Contents/section0.xml", xml);
+    COST.set((0, 0, 0, 0, 0));
+    assert!(candidates(&decoded, &package, &edits).is_empty());
+    assert_eq!(COST.get().1, 1, "failed section evidence is cached for all eight cells");
 }
 
 /// 이것을 실패시키는 것: 후보가 없어도 캐시를 다시 붙이거나 probe에서 텍스트를 되돌리기.
@@ -510,6 +556,7 @@ fn section_grid_evidence_must_be_unique_and_explicit() {
         "<sec><p><run><secPr/></run></p></sec>",
         "<sec><p><run><secPr><grid/></secPr></run></p></sec>",
         &format!("<sec><p><run>{grid}{grid}</run></p></sec>"),
+        &format!("<sec><p><run>{grid}<secPr/></run></p></sec>"),
         &format!("<sec><p><run><unknown>{grid}</unknown></run></p></sec>"),
     ] {
         assert!(section_allows(xml).is_none(), "{xml}");
@@ -535,4 +582,64 @@ fn bounded_source_tree_drop_on_depth_rejection() {
             assert!(Tag::read(&rejected).is_none());
         },
     );
+}
+
+// 이것을 실패시키는 것: 칸 어댑터의 공통 charPr 검사 생략, decoder가 생략된 언어 요소에도 손실 경고.
+#[test]
+fn cell_candidates_reject_unmeasured_character_properties() {
+    let bytes = fixture();
+    let decoded = HwpxDecoder::decode(&bytes).unwrap();
+    let edits = resolve_edits(&decoded.document, &specs()).unwrap();
+    for (from, to) in [
+        ("useFontSpace=\"0\"", "useFontSpace=\"1\""),
+        ("</hh:charPr>", "<hh:bold/></hh:charPr>"),
+        ("latin=\"100\"", "latin=\"99\""),
+    ] {
+        let mut package = RawPackage::read(&bytes).unwrap();
+        let header = package.read_text_entry("Contents/header.xml").unwrap();
+        assert!(header.contains(from));
+        package.replace_text_entry("Contents/header.xml", header.replace(from, to));
+        assert!(candidates(&decoded, &package, &edits).is_empty(), "{from}");
+    }
+    for name in ["ratio", "spacing", "relSz", "offset"] {
+        let mut package = RawPackage::read(&bytes).unwrap();
+        let mut header = package.read_text_entry("Contents/header.xml").unwrap();
+        let start = header.find(&format!("<hh:{name} ")).unwrap();
+        let end = start + header[start..].find("/>").unwrap() + 2;
+        header.replace_range(start..end, "");
+        package.replace_text_entry("Contents/header.xml", header);
+        let decoded = HwpxDecoder::decode(&package.write().unwrap()).unwrap();
+        assert!(!decoded.warnings.iter().any(|w| matches!(w, crate::decoder::DecodeWarning::ContentLost {kind,..} if kind=="char_shape_per_language")));
+        assert!(candidates(&decoded, &package, &edits).is_empty(), "missing {name}");
+    }
+}
+
+// 이것을 실패시키는 것: charPr 원본 authored id로 찾기, 정의 순서 대신 0 고정.
+#[test]
+fn character_evidence_uses_definition_positions_even_with_duplicate_ids() {
+    for duplicate in [false, true] {
+        let bytes = fixture();
+        let mut package = RawPackage::read(&bytes).unwrap();
+        let header = package.read_text_entry("Contents/header.xml").unwrap();
+        let start = header.find("<hh:charPr ").unwrap();
+        let end = start + header[start..].find("</hh:charPr>").unwrap() + "</hh:charPr>".len();
+        let first = &header[start..end];
+        let id = if duplicate { "0" } else { "7" };
+        let bold = first
+            .replace("id=\"0\"", &format!("id=\"{id}\""))
+            .replace("</hh:charPr>", "<hh:bold/></hh:charPr>");
+        package.replace_text_entry(
+            "Contents/header.xml",
+            header.replace(first, &format!("{bold}{}", first.replace("=\"100\"", "=\"150\""))),
+        );
+        let bytes = package.write().unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        let header = crate::line_keep::Header::read(&package, &decoded.style_store, || {}).unwrap();
+        let evidence = crate::line_keep::SectionEvidence::read(
+            &package.read_text_entry("Contents/section0.xml").unwrap(),
+        )
+        .unwrap();
+        assert!(!header.allows(&evidence, 0, 0));
+        assert!(header.allows(&evidence, 0, 1));
+    }
 }

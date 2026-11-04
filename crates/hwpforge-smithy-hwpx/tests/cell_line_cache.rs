@@ -641,3 +641,31 @@ fn section_grid_rejection_uses_the_candidates_own_section() {
         }
     }
 }
+
+// 이것을 실패시키는 것: 글자 효과/글꼴 공백의 공통 후보 판정 우회.
+#[test]
+fn effects_and_font_space_remove_cell_self_caches() {
+    let base = fixture(40000);
+    for (from, to) in
+        [("useFontSpace=\"0\"", "useFontSpace=\"1\""), ("</hh:charPr>", "<hh:bold/></hh:charPr>")]
+    {
+        let bytes = package::splice_part(&base, "Contents/header.xml", from, to);
+        assert_eq!(caches(&edit(&bytes, "힣")).len(), 2);
+    }
+}
+
+// 이것을 실패시키는 것: 언어별 수치 손실의 입력 admission 거부 생략.
+#[test]
+fn per_language_loss_still_rejects_public_cell_edits() {
+    let base = package::splice_part(
+        &fixture(40000),
+        "Contents/header.xml",
+        "latin=\"100\"",
+        "latin=\"99\"",
+    );
+    let result = HwpxCellEditor::set_cells(
+        &base,
+        &[CellSpec { table: 0, target: CellTarget::At(GridCoord::new(0, 0)), text: "힣".into() }],
+    );
+    assert!(result.unwrap_err().to_string().contains("char_shape_per_language"));
+}

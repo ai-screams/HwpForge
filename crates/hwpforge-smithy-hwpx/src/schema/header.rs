@@ -404,6 +404,11 @@ pub struct HxLangValues {
     pub user: i32,
 }
 
+/// Whether all seven language scalars have one value; presence is the caller's policy.
+pub(crate) fn uniform(values: [i32; 7]) -> bool {
+    values.iter().all(|value| *value == values[0])
+}
+
 /// Marker for presence-based boolean elements (`<hh:bold/>`, `<hh:italic/>`).
 ///
 /// The element's mere presence means `true`; absence means `false`.
