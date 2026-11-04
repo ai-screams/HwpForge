@@ -31,6 +31,20 @@ A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 ent
 | Text-only | `patch`            | change text in existing paragraphs **and table cells**; preserves the package and the layout caches of paragraphs the change does not reach | add/remove paragraphs (`PATCH_FAILED … structural change detected`)                                                                        |
 | Rebuild   | `from-json --base` | add/remove paragraphs, any structural change; `--base` inherits images                                                                      | keep 한컴 package entries, every layout cache, or elements HwpForge does not model (form controls, master pages, some advanced formatting) |
 
+## Layout caches after `fill` and `patch`
+
+A paragraph whose text changes loses its line-layout cache, and 한컴 breaks its lines again. After an edit in body text, a later paragraph that holds only text and 누름틀 keeps its cache byte for byte: its line breaks do not move, and 한컴 restacks only the vertical positions. Later caches are dropped too in these cases:
+
+- A later paragraph holds an object (table, picture, shape), any part of a field other than a 누름틀 (cross-reference, date, formula, hyperlink, ...; a field can run over several paragraphs, even one that starts in the edited paragraph) or a page number: from the first such paragraph to the end of its flow, because its width or shown text can change when pages move.
+- The section holds, anywhere (table cells, headers and footers included), an object not placed as a character that text wraps around (the "어울림" style and the like): every later paragraph of the edited flow (and of the flows that hold it); paragraphs inside later table cells and text boxes keep theirs, because the object stays put while the text under it moves.
+- The section uses vertical text or columns of different widths: every later paragraph of the edited flow (and of the flows that hold it); paragraphs inside later table cells and text boxes keep theirs.
+- A field anywhere in the section (headers and footers included) cannot be tied to its place in the document, because its start and end do not match (such as a field with no end) or its position is not known (such as a field on a master page kept in a separate file): as before, the later paragraphs of the edited flow and of the flows that hold it; other paragraphs of the section keep their caches.
+- The edit is inside a table cell, text box, footnote or endnote: the later paragraphs of that flow, and the paragraph holding the table, box or note with the ones after it.
+- The edit is inside a header or footer: only the later paragraphs of that header or footer; the body keeps its caches.
+- `patch` has to rewrite the style definitions and so rebuilds the file: the rules above do not apply. The rebuild's own rules decide, and they can drop more caches, up to the whole section or document (for example with page numbers or floating objects); see [4b. Write back with a rebuild](#4b-write-back-with-a-rebuild).
+
+Each dropped cache shows as a `raw` `$.layout_cache` entry in `diff`. Keeping a cache does not check it: a cache that was already stale in the input stays stale.
+
 ## Steps
 
 ### 1. Locate the target
