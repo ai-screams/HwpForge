@@ -1051,7 +1051,7 @@ impl HwpxDecoder {
         }
         for number in masterpage_xmls.keys().filter(|n| !named_masterpages.contains(*n)) {
             warnings.push(DecodeWarning::ContentLost {
-                part: format!("Contents/masterpage{number}.xml"),
+                part: crate::encoder::package::masterpage_part_name(*number),
                 path: ParagraphPath::default(),
                 kind: "master_page".into(),
                 reason: "no section references this master page".into(),

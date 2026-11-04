@@ -870,7 +870,10 @@ impl PackageAnalysis {
                     .and_then(|m| m.parse::<usize>().ok())
                 {
                     master_owners.entry(m).or_default().insert(s);
-                    if package.read_entry(&format!("Contents/masterpage{m}.xml")).is_err() {
+                    if package
+                        .read_entry(&crate::encoder::package::masterpage_part_name(m))
+                        .is_err()
+                    {
                         flags.unresolved = true;
                     }
                 } else {
@@ -953,7 +956,9 @@ impl PackageAnalysis {
                 .0
                 .iter()
                 .find_map(|s| match s {
-                    PathSeg::MasterPage(m) => Some(format!("Contents/masterpage{m}.xml")),
+                    PathSeg::MasterPage(m) => {
+                        Some(crate::encoder::package::masterpage_part_name(*m))
+                    }
                     _ => None,
                 })
                 .unwrap_or_else(|| match path.0[0] {

@@ -42,7 +42,7 @@ pub(crate) struct OutputChanges {
 impl OutputChanges {
     /// Full-document editors rebuild these exact parts. Existing media, charts,
     /// and OLE still owe payload preservation. Master pages are rebuilt from Core.
-    pub(crate) fn reencoded(sections: &[hwpforge_core::Section]) -> Self {
+    fn reencoded(sections: &[hwpforge_core::Section]) -> Self {
         use crate::encoder::package::{masterpage_part_name, section_part_name};
         let masterpage_count =
             sections.iter().flat_map(|s| s.master_pages.iter().flatten()).count();
@@ -73,9 +73,20 @@ impl RawPackage {
         Self::verify_output_capped(base, None, output, changes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
     }
 
+    /// [`Self::verify_output_with`] for a full-document re-encode of `sections`
+    /// ([`OutputChanges::reencoded`]). `self` must be `base` exactly as read.
+    pub(crate) fn verify_reencoded_output(
+        &self,
+        base: &[u8],
+        output: &[u8],
+        sections: &[hwpforge_core::Section],
+    ) -> Result<(), crate::error::CodecFailure> {
+        self.verify_output_with(base, output, &OutputChanges::reencoded(sections))
+    }
+
     /// [`Self::verify_output`] against `self`, which must be `base` exactly as
     /// read. Never pass a package the editor has changed; re-read `base` then.
-    pub(crate) fn verify_output_with(
+    fn verify_output_with(
         &self,
         base: &[u8],
         output: &[u8],

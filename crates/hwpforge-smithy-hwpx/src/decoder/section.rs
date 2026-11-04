@@ -149,7 +149,7 @@ pub fn parse_section(
 ) -> HwpxResult<SectionParseResult> {
     // Without a package there is no spine to resolve the part from; name the
     // conventional part for this index so diagnostics point at the right file.
-    let part = format!("Contents/section{section_index}.xml");
+    let part = crate::encoder::package::section_part_name(section_index);
     parse_section_with_images(xml, section_index, &part, chart_xmls, &HashMap::new())
 }
 
@@ -442,7 +442,7 @@ impl DecodeCtx {
             last_origins: Vec::new(),
             warnings: Vec::new(),
             path: vec![super::PathSeg::Section(section_index), super::PathSeg::MasterPage(global)],
-            part: format!("Contents/masterpage{global}.xml"),
+            part: crate::encoder::package::masterpage_part_name(global),
             group_child_depth: 0,
             group_child_path_lens: Vec::new(),
             image_pixels: HashMap::new(),
@@ -3428,7 +3428,7 @@ pub(crate) fn parse_master_page_with_references(
 ) -> HwpxResult<(hwpforge_core::section::MasterPage, Vec<super::DecodeWarning>, bool)> {
     use hwpforge_core::section::{MasterPage, MasterPageSpecial};
 
-    let file = format!("Contents/masterpage{global}.xml");
+    let file = crate::encoder::package::masterpage_part_name(global);
     let xml = crate::wire_xml::prepare_body_text_for_serde(xml).map_err(|e| {
         HwpxError::XmlParse { file: file.clone(), detail: xml_error_detail(&e.into()) }
     })?;

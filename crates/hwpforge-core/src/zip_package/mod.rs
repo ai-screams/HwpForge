@@ -170,6 +170,16 @@ impl Package<'_> {
         self.opaque.get(index).copied().unwrap_or(false)
     }
 
+    fn check_total_budget(&self) -> CoreResult<()> {
+        if self.total_read > self.limits.total {
+            return Err(invalid_structure(format!(
+                "total decompressed data ({} bytes) exceeds limit of {}",
+                self.total_read, self.limits.total,
+            )));
+        }
+        Ok(())
+    }
+
     /// Whether at least one byte decompresses, reading at most that byte.
     /// The byte counts against the cumulative budget like any other read.
     fn has_output(&mut self, index: usize) -> CoreResult<bool> {
@@ -179,12 +189,7 @@ impl Package<'_> {
         self.total_read = self.total_read.saturating_add(probe.len() as u64);
         let path = names::display_name(self.entries[index].path.as_bytes());
         result.map_err(|e| zip_error(format!("read {path}: {e}")))?;
-        if self.total_read > self.limits.total {
-            return Err(invalid_structure(format!(
-                "total decompressed data ({} bytes) exceeds limit of {}",
-                self.total_read, self.limits.total,
-            )));
-        }
+        self.check_total_budget()?;
         Ok(!probe.is_empty())
     }
 
@@ -193,12 +198,7 @@ impl Package<'_> {
     /// # Errors
     /// Returns existing Core errors for ZIP read failures or exceeded budgets.
     pub fn read(&mut self, index: usize) -> CoreResult<Vec<u8>> {
-        if self.total_read > self.limits.total {
-            return Err(invalid_structure(format!(
-                "total decompressed data ({} bytes) exceeds limit of {}",
-                self.total_read, self.limits.total,
-            )));
-        }
+        self.check_total_budget()?;
         let entry =
             self.entries.get(index).ok_or_else(|| zip_error("entry index out of bounds"))?;
         let path = &entry.path;
@@ -217,12 +217,7 @@ impl Package<'_> {
                 self.limits.entry,
             )));
         }
-        if self.total_read > self.limits.total {
-            return Err(invalid_structure(format!(
-                "total decompressed data ({} bytes) exceeds limit of {}",
-                self.total_read, self.limits.total,
-            )));
-        }
+        self.check_total_budget()?;
         Ok(data)
     }
 }

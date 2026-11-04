@@ -36,7 +36,8 @@ pub(crate) fn section_part_name(index: usize) -> String {
     format!("Contents/section{index}.xml")
 }
 
-/// Master page part name in the document-wide encoder sequence.
+/// Part name of master page `index` in the document-wide sequence (the
+/// encoder's numbering and the decoder's `Contents/masterpage{N}.xml`).
 pub(crate) fn masterpage_part_name(index: usize) -> String {
     format!("Contents/masterpage{index}.xml")
 }

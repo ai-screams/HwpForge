@@ -1437,7 +1437,7 @@ impl HwpxEncoder {
                     } = w
                     {
                         Some(EncodeWarning::UnclosedFieldBoundary {
-                            part: format!("Contents/section{section_index}.xml"),
+                            part: package::section_part_name(*section_index),
                             reason: w.to_string(),
                         })
                     } else {
@@ -1464,7 +1464,7 @@ impl HwpxEncoder {
                 &mut note_counters,
                 &mut context,
             )?;
-            origins::finish_part(&format!("Contents/section{i}.xml"), &mut result.xml)?;
+            origins::finish_part(&package::section_part_name(i), &mut result.xml)?;
             for (part, xml) in &mut result.master_pages {
                 origins::finish_part(part, xml)?;
             }
@@ -1601,7 +1601,7 @@ impl HwpxEncoder {
             section_xmls
                 .iter()
                 .enumerate()
-                .map(|(i, xml)| (format!("Contents/section{i}.xml"), xml.as_str())),
+                .map(|(i, xml)| (package::section_part_name(i), xml.as_str())),
         );
         parts.extend(master_pages.iter().map(|(path, xml)| (path.clone(), xml.as_str())));
         let parts: Vec<(&str, &str)> = parts.iter().map(|(n, x)| (n.as_str(), *x)).collect();

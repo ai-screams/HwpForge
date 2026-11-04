@@ -249,7 +249,7 @@ impl DocumentEncodeContext {
             warnings: Vec::new(),
             dropped_caches: Vec::new(),
             path: vec![crate::decoder::PathSeg::Section(section_index)],
-            part: format!("Contents/section{section_index}.xml"),
+            part: super::package::section_part_name(section_index),
             in_master_page: false,
         }
     }
@@ -295,7 +295,7 @@ impl DocumentEncodeContext {
 
     pub(crate) fn begin_section(&mut self, section_index: usize) {
         self.path = vec![crate::decoder::PathSeg::Section(section_index)];
-        self.part = format!("Contents/section{section_index}.xml");
+        self.part = super::package::section_part_name(section_index);
         self.in_master_page = false;
     }
 

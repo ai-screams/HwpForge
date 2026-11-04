@@ -453,23 +453,7 @@ impl HwpxStructuralEditor {
             package.replace_text_entry(&path, out);
         }
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
-        let bytes = package
-            .write()
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        // The edited package is not the original; verification re-reads `base`.
-        drop(package);
-
-        // ── reverse-delta self-verify: output ≡ declared delta ──
-        let expected_doc = HwpxDocument {
-            source_maps: Vec::new(),
-            source_basis: None,
-            warnings: Vec::new(),
-            document: expected,
-            style_store: d0.style_store.clone(),
-            image_store: d0.image_store.clone(),
-        };
-        self_verify(&bytes, &expected_doc)?;
-        RawPackage::verify_output(base, &bytes, &changes).map_err(StructuralEditError::Codec)?;
+        let bytes = finish_edit(base, package, &d0, expected, &changes)?;
 
         Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
     }
@@ -794,26 +778,38 @@ impl HwpxStructuralEditor {
         package.replace_text_entry(&path, out);
         let mut changes = crate::raw_package::OutputChanges { rewritten: vec![path] };
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
-        let bytes = package
-            .write()
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        // The edited package is not the original; verification re-reads `base`.
-        drop(package);
-
-        // ── reverse-delta self-verify ──
-        let expected_doc = HwpxDocument {
-            source_maps: Vec::new(),
-            source_basis: None,
-            warnings: Vec::new(),
-            document: expected,
-            style_store: d0.style_store.clone(),
-            image_store: d0.image_store.clone(),
-        };
-        self_verify(&bytes, &expected_doc)?;
-        RawPackage::verify_output(base, &bytes, &changes).map_err(StructuralEditError::Codec)?;
+        let bytes = finish_edit(base, package, &d0, expected, &changes)?;
 
         Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
+}
+
+/// Writes the edited package, then checks the bytes against the declared delta
+/// (reverse-delta self-verify) and the package preservation rule. The edited
+/// package is dropped first: it is not the original, so the preservation check
+/// re-reads `base`.
+fn finish_edit(
+    base: &[u8],
+    package: RawPackage,
+    d0: &HwpxDocument,
+    expected: Document,
+    changes: &crate::raw_package::OutputChanges,
+) -> Result<Vec<u8>, StructuralEditError> {
+    let bytes = package
+        .write()
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
+    drop(package);
+    let expected_doc = HwpxDocument {
+        source_maps: Vec::new(),
+        source_basis: None,
+        warnings: Vec::new(),
+        document: expected,
+        style_store: d0.style_store.clone(),
+        image_store: d0.image_store.clone(),
+    };
+    self_verify(&bytes, &expected_doc)?;
+    RawPackage::verify_output(base, &bytes, changes).map_err(StructuralEditError::Codec)?;
+    Ok(bytes)
 }
 
 // Admission has already validated the original definitions and proved the

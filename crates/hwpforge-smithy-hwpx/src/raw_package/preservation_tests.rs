@@ -401,13 +401,12 @@ fn stamp_declares_only_reencoded_document_parts() {
 // 이것을 실패시키는 것: stamp v2 출력 검사 제거 또는 매체까지 재작성 선언 확장.
 #[test]
 fn stamp_v2_declares_only_reencoded_document_parts() {
-    use sha2::{Digest, Sha256};
     let base = editable_package();
     crate::stamp::HwpxStamper::stamp_v2(
         &base,
         &crate::stamp::StampRequestV2 {
             schema_version: crate::stamp::STAMP_MAP_VERSION,
-            source_sha256: Sha256::digest(&base).iter().map(|byte| format!("{byte:02x}")).collect(),
+            source_sha256: crate::patch::sha256_hex(&base),
             text: vec![stamp_spec(&base)],
             cells: Vec::new(),
         },

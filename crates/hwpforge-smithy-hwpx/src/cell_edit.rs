@@ -764,11 +764,7 @@ impl HwpxCellEditor {
         .map_err(CellEditError::Codec)?;
         encode_warnings.extend(dropped);
         package
-            .verify_output_with(
-                base,
-                &bytes,
-                &crate::raw_package::OutputChanges::reencoded(validated.sections()),
-            )
+            .verify_reencoded_output(base, &bytes, validated.sections())
             .map_err(CellEditError::Codec)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },
