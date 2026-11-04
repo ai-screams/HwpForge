@@ -175,6 +175,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Free runner disk space
+        run: scripts/free_runner_disk.sh
       - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -205,6 +207,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
+      - name: Free runner disk space
+        run: scripts/free_runner_disk.sh
       - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -598,6 +602,10 @@ jobs:
         uses: docker://rhysd/actionlint:1.7.7
         with:
           args: -color
+      - name: ShellCheck the runner disk script
+        # actionlint checks inline `run:` blocks but not the script file that
+        # the test and coverage jobs call.
+        run: shellcheck scripts/free_runner_disk.sh
       - name: Verify core action major versions
         run: |
           set -euo pipefail
