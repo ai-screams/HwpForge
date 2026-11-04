@@ -90,7 +90,7 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
             });
             continue;
         }
-        if path == crate::decoder::package_order::CONTENT && !package.order.content_excludable {
+        if path == CONTENT_HPF_PART && !package.order.content_excludable {
             global.children.push(Node {
                 name: path.into(),
                 children: vec![content.clone()],
@@ -108,7 +108,7 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
         let mut info = Node { name: path.into(), ..Node::default() };
         if path.ends_with(".xml") || path.ends_with(".hpf") {
             let xml = crate::package_xml::text_entry(path, bytes)?;
-            let parsed = if path == crate::decoder::package_order::CONTAINER {
+            let parsed = if path == CONTAINER_PART {
                 Node::parse_package_xml(&xml)?
             } else {
                 Node::parse(&xml)?

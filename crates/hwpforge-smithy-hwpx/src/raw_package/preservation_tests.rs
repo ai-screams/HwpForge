@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::CodecStage;
+use crate::test_support::xml;
 
 #[path = "../../tests/support/package.rs"]
 mod package_support;
@@ -149,7 +150,26 @@ fn violation_names_are_escaped_and_bounded() {
     }
 }
 
-use crate::patch::field_path_contract::fixtures::document as document_support;
+/// Text of each top-level paragraph of section 0, in order (nested `hp:t` joined).
+fn paragraph_texts(bytes: &[u8]) -> Vec<String> {
+    fn text(node: &xml::Element, out: &mut String) {
+        if node.name == "hp:t" {
+            out.push_str(&node.text);
+        }
+        node.children.iter().for_each(|child| text(child, out));
+    }
+    let section = xml::Element::parse(&package_support::section_xml(bytes));
+    section
+        .children
+        .iter()
+        .filter(|node| node.name == "hp:p")
+        .map(|paragraph| {
+            let mut out = String::new();
+            text(paragraph, &mut out);
+            out
+        })
+        .collect()
+}
 
 fn editable_package() -> Vec<u8> {
     editable_package_with_media(false)
@@ -192,7 +212,8 @@ fn delete_normalizes_deflated_mimetype() {
     )
     .unwrap();
     assert_stored_mimetype(&base, &output);
-    assert!(!package_support::section_xml(&output).contains("remove"));
+    // 이것을 실패시키는 것: 다른 문단(표 문단)을 지우거나 순서를 바꾸기.
+    assert_eq!(paragraph_texts(&output), ["□", ""]);
 }
 
 // 이것을 실패시키는 것: 구조 삽입 writer에서 원본 mimetype 압축을 그대로 복사.
@@ -208,11 +229,19 @@ fn insert_normalizes_deflated_mimetype() {
     )
     .unwrap();
     assert_stored_mimetype(&base, &output);
-    assert!(package_support::section_xml(&output).contains("insert"));
+    // 이것을 실패시키는 것: 새 문단을 기준 문단 앞에 넣기.
+    assert_eq!(paragraph_texts(&output), ["□", "remove", "insert", ""]);
+}
+
+fn text_para(text: &str) -> hwpforge_core::Paragraph {
+    runs_para(vec![hwpforge_core::Run::text(text, hwpforge_foundation::CharShapeIndex::new(0))])
+}
+
+fn runs_para(runs: Vec<hwpforge_core::Run>) -> hwpforge_core::Paragraph {
+    hwpforge_core::Paragraph::with_runs(runs, hwpforge_foundation::ParaShapeIndex::new(0))
 }
 
 fn editable_package_with_media(media: bool) -> Vec<u8> {
-    use document_support::{runs_para, text_para};
     use hwpforge_core::{Document, PageSettings, Run, Section, Table, TableCell, TableRow};
     use hwpforge_foundation::{CharShapeIndex, HwpUnit};
     let table = Table::new(vec![TableRow::new(vec![TableCell::new(

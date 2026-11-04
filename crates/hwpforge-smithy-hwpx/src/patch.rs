@@ -1459,4 +1459,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "../tests/support/field_path_contract.rs"]
-pub(crate) mod field_path_contract;
+mod field_path_contract;

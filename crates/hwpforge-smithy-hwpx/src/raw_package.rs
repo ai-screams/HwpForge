@@ -59,12 +59,13 @@ impl OutputChanges {
 
 impl RawPackage {
     /// Verify the actual final bytes using fresh Core name and bounded-read evidence.
-    /// Changed/rebuilt parts share one exact allowlist: every part named in
-    /// `changes.rewritten` (fixed parts, sections and, for re-encoding editors,
-    /// master pages) is exempt from payload comparison but must still exist.
-    /// Compression methods and normal empty directories are packaging details,
-    /// not payload changes. The output's `mimetype`, when present, must still be
-    /// stored uncompressed; its position in the archive is not checked.
+    /// Parts named in `changes.rewritten` (fixed parts, sections and, for
+    /// re-encoding editors, master pages) may change payload or be added; every
+    /// other part keeps its payload and opaque classification. Existing parts
+    /// must remain, except for normal empty directory placeholders. Compression
+    /// methods are packaging details, not payload changes. The output's
+    /// `mimetype`, when present, must still be stored uncompressed; its position
+    /// in the archive is not checked.
     pub(crate) fn verify_output(
         base: &[u8],
         output: &[u8],

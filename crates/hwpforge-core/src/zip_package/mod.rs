@@ -187,8 +187,10 @@ impl Package<'_> {
         let mut probe = Vec::with_capacity(1);
         let result = file.take(1).read_to_end(&mut probe);
         self.total_read = self.total_read.saturating_add(probe.len() as u64);
-        let path = names::display_name(self.entries[index].path.as_bytes());
-        result.map_err(|e| zip_error(format!("read {path}: {e}")))?;
+        result.map_err(|e| {
+            let path = names::display_name(self.entries[index].path.as_bytes());
+            zip_error(format!("read {path}: {e}"))
+        })?;
         self.check_total_budget()?;
         Ok(!probe.is_empty())
     }

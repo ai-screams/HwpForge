@@ -26,6 +26,7 @@ use hwpforge_core::image::ImageStore;
 use hwpforge_core::section::{BeginNum, MasterPage, Section};
 use hwpforge_core::PageSettings;
 
+use crate::encoder::package::HEADER_PART;
 use crate::error::HwpxResult;
 use crate::style_store::HwpxStyleStore;
 
@@ -297,9 +298,6 @@ pub enum DecodeWarning {
         axes: Vec<&'static str>,
     },
 }
-
-// The header part every [`DecodeWarning::BeginNumRepaired`] points at.
-use crate::encoder::package::HEADER_PART;
 
 impl DecodeWarning {
     /// 이 경고의 안정 코드.

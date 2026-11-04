@@ -3,7 +3,7 @@ use super::*;
 use hwpforge_core::field_inventory::FieldInventory;
 use hwpforge_core::node_path::CorePath;
 #[path = "field_path_fixtures.rs"]
-pub(crate) mod fixtures;
+mod fixtures;
 
 fn snapshot() -> String {
     let mut lines = Vec::new();

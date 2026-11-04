@@ -136,4 +136,7 @@ pub use style_store::{
 mod reading_order_edits;
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod package_name_policy_tests;

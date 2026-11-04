@@ -1,14 +1,12 @@
 //! Resolve package reading order once, before Core paragraph paths are assigned.
 //! HWPX hrefs are archive-relative (including `Contents/`), not OPF-relative.
-use crate::encoder::package::{CONTAINER_RDF_PART, HEADER_PART};
+use crate::encoder::package::{CONTAINER_RDF_PART, CONTENT_HPF_PART, HEADER_PART};
 use std::collections::{BTreeMap, BTreeSet};
 
 use quick_xml::{events::Event, name::ResolveResult, NsReader};
 
 const OPF: &str = "http://www.idpf.org/2007/opf/";
 const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
-pub(crate) use crate::encoder::package::CONTAINER_PART as CONTAINER;
-pub(crate) use crate::encoder::package::CONTENT_HPF_PART as CONTENT;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackageOrder {
@@ -175,7 +173,7 @@ fn validate_container(xml: &str, paths: &[String]) -> Result<bool, String> {
                     return Err(format!("invalid/missing rootfile {target}"));
                 }
                 match (target, media) {
-                    (CONTENT, "application/hwpml-package+xml") => packages += 1,
+                    (CONTENT_HPF_PART, "application/hwpml-package+xml") => packages += 1,
                     ("Preview/PrvText.txt", "text/plain")
                     | (CONTAINER_RDF_PART, "application/rdf+xml") => {}
                     _ => return Err(format!("unsupported rootfile {target} ({media})")),
@@ -288,14 +286,15 @@ fn resolve_spine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encoder::package::CONTAINER_PART;
 
     const CONTAINER_XML: &str = "<c:container xmlns:c='urn:oasis:names:tc:opendocument:xmlns:container'><c:rootfiles><c:rootfile full-path='Contents/content.hpf' media-type='application/hwpml-package+xml'/></c:rootfiles></c:container>";
     const CONTENT_XML: &str = "<p:package xmlns:p='http://www.idpf.org/2007/opf/'><p:manifest><p:item id='head' href='Contents/header.xml' media-type='application/xml'/><p:item id='alpha' href='Contents/section0.xml' media-type='application/xml'/><p:item id='beta' href='Contents/section1.xml' media-type='application/xml'/></p:manifest><p:spine><p:itemref idref='head'/><p:itemref idref='beta'/><p:itemref idref='alpha'/></p:spine></p:package>";
 
     fn paths() -> Vec<String> {
         [
-            CONTENT,
-            CONTAINER,
+            CONTENT_HPF_PART,
+            CONTAINER_PART,
             "Contents/header.xml",
             "Contents/section0.xml",
             "Contents/section1.xml",
@@ -455,8 +454,8 @@ mod tests {
     #[test]
     fn container_requires_a_supported_existing_package_root() {
         for (from, to, reason) in [
-            (CONTENT, "other.hpf", "missing rootfile"),
-            (CONTENT, "settings.xml", "unsupported rootfile"),
+            (CONTENT_HPF_PART, "other.hpf", "missing rootfile"),
+            (CONTENT_HPF_PART, "settings.xml", "unsupported rootfile"),
             ("application/hwpml-package+xml", "application/xml", "unsupported rootfile"),
             ("media-type=", "other-type=", "unsupported rootfile"),
             ("<c:rootfile ", "<c:rootfile xml:base='x' ", "selection attributes"),
@@ -467,7 +466,7 @@ mod tests {
             let error = validate_container(&CONTAINER_XML.replace(from, to), &paths()).unwrap_err();
             assert!(error.contains(reason), "{to}: {error}");
         }
-        let missing_file: Vec<_> = paths().into_iter().filter(|p| p != CONTENT).collect();
+        let missing_file: Vec<_> = paths().into_iter().filter(|p| p != CONTENT_HPF_PART).collect();
         assert!(validate_container(CONTAINER_XML, &missing_file)
             .unwrap_err()
             .contains("missing rootfile"));

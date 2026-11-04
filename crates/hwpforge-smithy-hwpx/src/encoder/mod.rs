@@ -401,7 +401,7 @@ use crate::error::{HwpxError, HwpxResult};
 use crate::style_store::HwpxStyleStore;
 
 use self::header::encode_header;
-use self::package::PackageWriter;
+use self::package::{PackageWriter, CONTENT_HPF_PART, HEADER_PART};
 use self::section::encode_section_with_note_counters;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
@@ -540,9 +540,6 @@ pub enum EncodeWarning {
         kinds: Vec<String>,
     },
 }
-
-// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
-use self::package::{CONTENT_HPF_PART, HEADER_PART};
 
 impl EncodeWarning {
     /// 이 경고가 **의미 손상**인지 — 즉 산출 바이트가 입력의 의미를 잃었는지.

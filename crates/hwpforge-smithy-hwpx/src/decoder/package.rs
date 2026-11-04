@@ -17,11 +17,7 @@ use hwpforge_core::zip_package::{MAX_ENTRIES, MAX_ENTRY_SIZE};
 const ACCEPTED_MIMETYPES: &[&str] =
     &["application/hwp+zip", "application/haansofthwp+zip", "application/vnd.hancom.hwp+zip"];
 
-// Path to the mimetype file inside the ZIP.
-use crate::encoder::package::MIMETYPE_PART as MIMETYPE_PATH;
-
-// Path to the header XML inside the ZIP.
-use crate::encoder::package::HEADER_PART as HEADER_PATH;
+use crate::encoder::package::{CONTAINER_PART, CONTENT_HPF_PART, HEADER_PART, MIMETYPE_PART};
 
 // ── PackageReader ────────────────────────────────────────────────
 
@@ -76,8 +72,8 @@ impl<'a> PackageReader<'a> {
                 Ok(None)
             }
         };
-        let content = optional(super::package_order::CONTENT)?;
-        let container = optional(super::package_order::CONTAINER)?;
+        let content = optional(CONTENT_HPF_PART)?;
+        let container = optional(CONTAINER_PART)?;
         reader.order = super::package_order::PackageOrder::resolve(
             &reader.paths,
             content.as_deref(),
@@ -89,7 +85,7 @@ impl<'a> PackageReader<'a> {
 
     /// Validates the `mimetype` file in the archive.
     fn validate_mimetype(&mut self) -> HwpxResult<()> {
-        let bytes = self.read_binary_entry(MIMETYPE_PATH)?;
+        let bytes = self.read_binary_entry(MIMETYPE_PART)?;
         if bytes.starts_with(b"application/hwp+zip") {
             return Ok(());
         }
@@ -105,7 +101,7 @@ impl<'a> PackageReader<'a> {
 
     /// Returns the raw XML content of `Contents/header.xml`.
     pub fn read_header_xml(&mut self) -> HwpxResult<String> {
-        self.read_entry(HEADER_PATH)
+        self.read_entry(HEADER_PART)
     }
 
     /// Returns a section in manifest-resolved spine reading order.
@@ -867,7 +863,7 @@ mod tests {
             let bytes = writer.finish().expect("finish").into_inner();
             let err = PackageReader::new(&bytes).expect_err("missing mimetype or entry cap");
             if count == MAX_ENTRIES {
-                assert!(matches!(err, HwpxError::MissingFile { path } if path == MIMETYPE_PATH));
+                assert!(matches!(err, HwpxError::MissingFile { path } if path == MIMETYPE_PART));
             } else {
                 assert!(matches!(err, HwpxError::InvalidStructure { detail }
                     if detail == "archive has 10001 entries, exceeds limit of 10000"));
@@ -881,17 +877,17 @@ mod tests {
         let payload = "x".repeat(MAX_ENTRY_SIZE as usize + 1024);
         let bytes = make_hwpx_zip("application/hwp+zip", &payload, &[]);
         let mut archive = ZipArchive::new(Cursor::new(&bytes)).expect("archive");
-        let file = archive.by_name(HEADER_PATH).expect("header");
+        let file = archive.by_name(HEADER_PART).expect("header");
         assert!(file.size() / file.compressed_size() > 100);
         for binary in [false, true] {
             let mut reader = PackageReader::new(&bytes).expect("package");
             let err = if binary {
-                reader.read_binary_entry(HEADER_PATH).expect_err("cap")
+                reader.read_binary_entry(HEADER_PART).expect_err("cap")
             } else {
                 reader.read_header_xml().expect_err("cap")
             };
             assert!(matches!(err, HwpxError::InvalidStructure { detail }
-                if detail == format!("entry '{HEADER_PATH}' decompressed to {} bytes, exceeds limit of {MAX_ENTRY_SIZE}", MAX_ENTRY_SIZE + 1)));
+                if detail == format!("entry '{HEADER_PART}' decompressed to {} bytes, exceeds limit of {MAX_ENTRY_SIZE}", MAX_ENTRY_SIZE + 1)));
         }
     }
 
@@ -904,12 +900,12 @@ mod tests {
             reader.archive =
                 open_package(&bytes, PackageLimits { total: 2, ..Default::default() }).unwrap();
             if binary {
-                assert_eq!(reader.read_binary_entry(HEADER_PATH).expect("exact cap"), b"ab");
+                assert_eq!(reader.read_binary_entry(HEADER_PART).expect("exact cap"), b"ab");
             } else {
                 assert_eq!(reader.read_header_xml().expect("exact cap"), "ab");
             }
             let err = if binary {
-                reader.read_binary_entry(HEADER_PATH).expect_err("total")
+                reader.read_binary_entry(HEADER_PART).expect_err("total")
             } else {
                 reader.read_header_xml().expect_err("total")
             };

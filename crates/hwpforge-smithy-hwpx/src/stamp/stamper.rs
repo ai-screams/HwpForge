@@ -1330,12 +1330,10 @@ fn zip_entry_names(bytes: &[u8]) -> hwpforge_core::CoreResult<Vec<String>> {
     let archive = hwpforge_core::zip_package::open_package(bytes, Default::default())?;
     let mut names = Vec::new();
     for index in 0..archive.entries().len() {
-        let path = archive.entries()[index].path.clone();
-        if !crate::raw_package::RawPackage::is_directory_placeholder(
-            &path,
-            archive.is_opaque(index),
-        ) {
-            names.push(path);
+        let path = &archive.entries()[index].path;
+        if !crate::raw_package::RawPackage::is_directory_placeholder(path, archive.is_opaque(index))
+        {
+            names.push(path.clone());
         }
     }
     Ok(names)

@@ -13,7 +13,7 @@ use crate::{HwpxError, HwpxResult};
 pub(crate) fn text_entry<'a>(path: &str, bytes: impl Into<Cow<'a, [u8]>>) -> HwpxResult<String> {
     let bytes = bytes.into();
     let result = match path {
-        crate::decoder::package_order::CONTENT | crate::decoder::package_order::CONTAINER => {
+        crate::encoder::package::CONTENT_HPF_PART | crate::encoder::package::CONTAINER_PART => {
             decode(bytes, hwpforge_core::zip_package::MAX_ENTRY_SIZE as usize)
         }
         _ => utf8(bytes),
