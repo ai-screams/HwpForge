@@ -57,7 +57,7 @@ zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 # === HWP5 Binary ===
 byteorder = "1.5"
-cfb = "0.15"
+cfb = "0.16"
 encoding_rs = "0.8"
 flate2 = "1.0"
 
