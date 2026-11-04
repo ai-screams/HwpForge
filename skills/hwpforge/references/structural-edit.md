@@ -4,6 +4,8 @@ These surfaces edit cells and top-level paragraphs without a JSON round-trip and
 
 ## `set-cell` — table cells by grid address
 
+A cell containing one paragraph on one line can keep its line-layout cache after a short replacement. Character effects (such as bold, italic or shadow), kerning, emphasis marks and font-space settings exclude a cell from cache preservation. Character width, spacing, relative size and position settings must be present and match across all script groups; missing source evidence or unproven text width also drops the cache.
+
 ```bash
 hwpforge read form.hwpx --table 0                                          # grid: [r,c] text, merged cells once at their anchor
 hwpforge set-cell form.hwpx --table 0 --at "1,2" --text "홍길동" -o out.hwpx
