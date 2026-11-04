@@ -298,8 +298,8 @@ pub enum DecodeWarning {
     },
 }
 
-/// The header part every [`DecodeWarning::BeginNumRepaired`] points at.
-const HEADER_PART: &str = "Contents/header.xml";
+// The header part every [`DecodeWarning::BeginNumRepaired`] points at.
+use crate::encoder::package::HEADER_PART;
 
 impl DecodeWarning {
     /// 이 경고의 안정 코드.
@@ -830,7 +830,7 @@ impl HwpxDecoder {
         // default metadata without a warning; a block the parser cannot
         // read downgrades to default but is reported as content loss.
         let parsed_metadata = pkg
-            .read_text_entry("Contents/content.hpf")
+            .read_text_entry(crate::encoder::package::CONTENT_HPF_PART)
             .and_then(|xml| metadata::parse_content_hpf_metadata(&xml));
         // Any content.hpf problem the package-order pass reported (unreadable
         // XML, a missing part, or a spine/manifest error) already marks the
@@ -861,7 +861,7 @@ impl HwpxDecoder {
         // fixed order.
         let masterpage_xmls = pkg.read_masterpage_parts()?;
         let manifest = pkg
-            .read_text_entry("Contents/content.hpf")
+            .read_text_entry(crate::encoder::package::CONTENT_HPF_PART)
             .map(|xml| manifest_hrefs(&xml))
             .unwrap_or_default();
 
@@ -879,13 +879,13 @@ impl HwpxDecoder {
         let mut named_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(dropped_metadata.into_iter().map(|dropped| DecodeWarning::ContentLost {
-            part: "Contents/content.hpf".into(),
+            part: crate::encoder::package::CONTENT_HPF_PART.into(),
             path: ParagraphPath::default(),
             kind: dropped.field,
             reason: dropped.reason,
         }));
         warnings.extend(header_result.warnings);
-        warnings.extend(references.validate_auxiliary_xml(&header_xml, "Contents/header.xml")?);
+        warnings.extend(references.validate_auxiliary_xml(&header_xml, HEADER_PART)?);
         warnings.extend(pkg.order.problems.iter().map(|reason| DecodeWarning::ContentLost {
             part: "Contents/content.hpf / META-INF/container.xml".into(),
             path: ParagraphPath::default(),
@@ -1353,7 +1353,7 @@ pub fn master_page_part_paths(
 ) -> HwpxResult<Vec<Vec<String>>> {
     let parts = pkg.read_masterpage_parts()?;
     let manifest = pkg
-        .read_text_entry("Contents/content.hpf")
+        .read_text_entry(crate::encoder::package::CONTENT_HPF_PART)
         .map(|xml| manifest_hrefs(&xml))
         .unwrap_or_default();
     (0..pkg.section_count())

@@ -1,6 +1,7 @@
 //! Shared preserve-first HWPX package storage.
 
 use crate::decoder::package::PackageReader;
+use crate::encoder::package::MIMETYPE_PART;
 use crate::error::{HwpxError, HwpxResult};
 use crate::package_path::package_error;
 use hwpforge_core::zip_package::{open_package, PackageLimits, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE};
@@ -58,19 +59,41 @@ impl OutputChanges {
 
 impl RawPackage {
     /// Verify the actual final bytes using fresh Core name and bounded-read evidence.
-    /// Changed/rebuilt parts share one exact allowlist. Compression methods and
-    /// normal empty directories are packaging details, not payload changes.
-    /// The output's `mimetype`, when present, must still be stored uncompressed.
+    /// Changed/rebuilt parts share one exact allowlist: every part named in
+    /// `changes.rewritten` (fixed parts, sections and, for re-encoding editors,
+    /// master pages) is exempt from payload comparison but must still exist.
+    /// Compression methods and normal empty directories are packaging details,
+    /// not payload changes. The output's `mimetype`, when present, must still be
+    /// stored uncompressed; its position in the archive is not checked.
     pub(crate) fn verify_output(
         base: &[u8],
         output: &[u8],
         changes: &OutputChanges,
     ) -> Result<(), crate::error::CodecFailure> {
-        Self::verify_output_capped(base, output, changes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
+        Self::verify_output_capped(base, None, output, changes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
+    }
+
+    /// [`Self::verify_output`] against `self`, which must be `base` exactly as
+    /// read. Never pass a package the editor has changed; re-read `base` then.
+    pub(crate) fn verify_output_with(
+        &self,
+        base: &[u8],
+        output: &[u8],
+        changes: &OutputChanges,
+    ) -> Result<(), crate::error::CodecFailure> {
+        Self::verify_output_capped(
+            base,
+            Some(self),
+            output,
+            changes,
+            MAX_ENTRY_SIZE,
+            MAX_TOTAL_SIZE,
+        )
     }
 
     fn verify_output_capped(
         base: &[u8],
+        read_base: Option<&Self>,
         output: &[u8],
         changes: &OutputChanges,
         max_entry: u64,
@@ -79,43 +102,69 @@ impl RawPackage {
         #[cfg(test)]
         VERIFIED_CHANGES.with(|observed| *observed.borrow_mut() = Some(changes.clone()));
         let verify = || -> HwpxResult<()> {
-            let original = Self::read_capped(base, max_entry, max_total)?;
-            let output = Self::read_capped(output, max_entry, max_total)?;
-            let violation = |path: &str, reason: &str| HwpxError::InvalidStructure {
-                detail: format!("output package preservation: '{path}': {reason}"),
+            let fresh;
+            let original = match read_base {
+                Some(original) => original,
+                None => {
+                    fresh = Self::read_capped(base, max_entry, max_total)?;
+                    &fresh
+                }
             };
+            let violation = |path: &str, reason: &str| HwpxError::InvalidStructure {
+                detail: format!("output package preservation: '{}': {reason}", shown_name(path)),
+            };
+            let mut package = open_package(
+                output,
+                PackageLimits { entry: max_entry, total: max_total, ..Default::default() },
+            )
+            .map_err(package_error)?;
+            // Read every output entry once, keeping only (path, opaque, same payload).
+            let mut after = Vec::with_capacity(package.entries().len());
+            for index in 0..package.entries().len() {
+                let bytes = package.read(index).map_err(package_error)?;
+                let path = package.entries()[index].path.clone();
+                let same = original
+                    .index_by_path
+                    .get(&path)
+                    .is_some_and(|&i| original.entries[i].bytes == bytes);
+                after.push((path, package.is_opaque(index), same));
+            }
+            let index_by_path: BTreeMap<&str, usize> =
+                after.iter().enumerate().map(|(i, (path, ..))| (path.as_str(), i)).collect();
             // 이것을 실패시키는 것: 선언된 mimetype도 Stored 규칙을 우회하게 하기.
-            if let Some(&index) = output.index_by_path.get("mimetype") {
-                if output.entries[index].compression != CompressionMethod::Stored {
-                    return Err(violation("mimetype", "must be stored uncompressed"));
+            if let Some(&index) = index_by_path.get(MIMETYPE_PART) {
+                if package.entries()[index].compression != CompressionMethod::Stored {
+                    return Err(violation(MIMETYPE_PART, "must be stored uncompressed"));
                 }
             }
             for entry in &original.entries {
-                let after = output.index_by_path.get(&entry.path).map(|&i| &output.entries[i]);
                 if Self::is_directory_placeholder(&entry.path, entry.opaque) {
                     continue;
                 }
-                let after = after.ok_or_else(|| violation(&entry.path, "missing part"))?;
+                let &(_, opaque, same) = index_by_path
+                    .get(entry.path.as_str())
+                    .map(|&i| &after[i])
+                    .ok_or_else(|| violation(&entry.path, "missing part"))?;
                 if changes.rewritten.contains(&entry.path) {
                     continue;
                 }
-                if entry.bytes != after.bytes {
+                if !same {
                     return Err(violation(&entry.path, "payload changed"));
                 }
-                if entry.opaque != after.opaque {
+                if entry.opaque != opaque {
                     return Err(violation(&entry.path, "opaque classification changed"));
                 }
             }
-            for entry in &output.entries {
-                if Self::is_directory_placeholder(&entry.path, entry.opaque) {
+            for (path, opaque, _) in &after {
+                if Self::is_directory_placeholder(path, *opaque) {
                     continue;
                 }
-                let was_content = original.index_by_path.get(&entry.path).is_some_and(|&i| {
+                let was_content = original.index_by_path.get(path).is_some_and(|&i| {
                     let before = &original.entries[i];
                     !Self::is_directory_placeholder(&before.path, before.opaque)
                 });
-                if !was_content && !changes.rewritten.contains(&entry.path) {
-                    return Err(violation(&entry.path, "undeclared new part"));
+                if !was_content && !changes.rewritten.contains(path) {
+                    return Err(violation(path, "undeclared new part"));
                 }
             }
             Ok(())
@@ -258,7 +307,7 @@ impl RawPackage {
         let mut zip = ZipWriter::new(cursor);
 
         for entry in &self.entries {
-            let compression = if entry.path == "mimetype" {
+            let compression = if entry.path == MIMETYPE_PART {
                 CompressionMethod::Stored
             } else {
                 entry.compression
@@ -277,6 +326,18 @@ impl RawPackage {
         // generated parts). Do not reuse the input's opaque flags as approval.
         open_package(&bytes, PackageLimits::default()).map_err(package_error)?;
         Ok(bytes)
+    }
+}
+
+/// Entry names come from the input: escape control characters and show at
+/// most 64 characters, so a crafted name cannot flood or forge the message.
+fn shown_name(path: &str) -> String {
+    let end = path.char_indices().nth(64).map_or(path.len(), |(i, _)| i);
+    let shown = path[..end].escape_debug().to_string();
+    if end < path.len() {
+        format!("{shown}... ({} bytes total)", path.len())
+    } else {
+        shown
     }
 }
 

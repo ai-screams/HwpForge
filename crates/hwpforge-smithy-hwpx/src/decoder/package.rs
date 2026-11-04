@@ -17,11 +17,11 @@ use hwpforge_core::zip_package::{MAX_ENTRIES, MAX_ENTRY_SIZE};
 const ACCEPTED_MIMETYPES: &[&str] =
     &["application/hwp+zip", "application/haansofthwp+zip", "application/vnd.hancom.hwp+zip"];
 
-/// Path to the mimetype file inside the ZIP.
-const MIMETYPE_PATH: &str = "mimetype";
+// Path to the mimetype file inside the ZIP.
+use crate::encoder::package::MIMETYPE_PART as MIMETYPE_PATH;
 
-/// Path to the header XML inside the ZIP.
-const HEADER_PATH: &str = "Contents/header.xml";
+// Path to the header XML inside the ZIP.
+use crate::encoder::package::HEADER_PART as HEADER_PATH;
 
 // ── PackageReader ────────────────────────────────────────────────
 

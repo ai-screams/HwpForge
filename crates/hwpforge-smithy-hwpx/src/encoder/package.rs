@@ -3,15 +3,32 @@
 //! Creates the ZIP archive structure required by the HWPX format.
 //! Mirrors the [`crate::decoder::package`] module for symmetry.
 
+/// Package part holding the mimetype value.
+pub(crate) const MIMETYPE_PART: &str = "mimetype";
+/// Package part holding the format version.
+pub(crate) const VERSION_PART: &str = "version.xml";
+/// Package part listing the root files.
+pub(crate) const CONTAINER_PART: &str = "META-INF/container.xml";
+/// Package manifest part.
+pub(crate) const MANIFEST_PART: &str = "META-INF/manifest.xml";
+/// Package part listing the document parts and reading order.
+pub(crate) const CONTENT_HPF_PART: &str = "Contents/content.hpf";
+/// Package part holding the application settings.
+pub(crate) const SETTINGS_PART: &str = "settings.xml";
+/// Package part holding the document header (style definitions).
+pub(crate) const HEADER_PART: &str = "Contents/header.xml";
+/// Optional package metadata part; read and preserved, never written.
+pub(crate) const CONTAINER_RDF_PART: &str = "META-INF/container.rdf";
+
 /// Fixed parts emitted by every full-document encoding, in writer order.
 pub(crate) const FIXED_PART_NAMES: [&str; 7] = [
-    "mimetype",
-    "version.xml",
-    "META-INF/container.xml",
-    "META-INF/manifest.xml",
-    "Contents/content.hpf",
-    "settings.xml",
-    "Contents/header.xml",
+    MIMETYPE_PART,
+    VERSION_PART,
+    CONTAINER_PART,
+    MANIFEST_PART,
+    CONTENT_HPF_PART,
+    SETTINGS_PART,
+    HEADER_PART,
 ];
 
 /// Section part name used by the writer and edit declarations.
@@ -68,8 +85,11 @@ pub(crate) const XMLNS_DECLS: &str = concat!(
 /// The namespace URI matches the official 한글 output.
 const VERSION_XML: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR" major="5" minor="1" micro="1" buildNumber="0" os="10" xmlVersion="1.5" application="Hancom Office Hangul" appVersion="12.0.0.0"/>"##;
 
-/// META-INF/container.xml pointing to the content package file.
-const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#;
+/// META-INF/container.xml up to the content package path ([`CONTENT_HPF_PART`]).
+const CONTAINER_XML_HEAD: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path=""#;
+/// META-INF/container.xml after the content package path.
+const CONTAINER_XML_TAIL: &str =
+    r#"" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#;
 
 /// META-INF/manifest.xml (empty manifest).
 const MANIFEST_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><odf:manifest xmlns:odf="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>"#;
@@ -118,16 +138,12 @@ pub(crate) fn manifest_items(
     embedded_ole_ids: &[String],
 ) -> Vec<ManifestItem> {
     let mut items =
-        vec![ManifestItem::xml_part("header".to_string(), FIXED_PART_NAMES[6].to_string(), true)];
+        vec![ManifestItem::xml_part("header".to_string(), HEADER_PART.to_string(), true)];
     for i in 0..section_count {
         items.push(ManifestItem::xml_part(format!("section{i}"), section_part_name(i), true));
     }
     // settings in manifest (not in spine)
-    items.push(ManifestItem::xml_part(
-        "settings".to_string(),
-        FIXED_PART_NAMES[5].to_string(),
-        false,
-    ));
+    items.push(ManifestItem::xml_part("settings".to_string(), SETTINGS_PART.to_string(), false));
 
     // Image entries (not in spine). The `id` must match the
     // `binaryItemIDRef` in section XML (filename stem, no extension).
@@ -503,38 +519,34 @@ impl PackageWriter {
             .last_modified_time(fixed);
 
         // 1. mimetype — STORED, must be first entry (OPF convention)
-        zip.start_file(FIXED_PART_NAMES[0], stored_opts)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        zip.start_file(MIMETYPE_PART, stored_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
         zip.write_all(MIMETYPE).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 2. version.xml
-        zip.start_file(FIXED_PART_NAMES[1], deflate_opts)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        zip.start_file(VERSION_PART, deflate_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
         zip.write_all(VERSION_XML.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 3. META-INF/container.xml
-        zip.start_file(FIXED_PART_NAMES[2], deflate_opts)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
-        zip.write_all(CONTAINER_XML.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
+        zip.start_file(CONTAINER_PART, deflate_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
+        for piece in [CONTAINER_XML_HEAD, CONTENT_HPF_PART, CONTAINER_XML_TAIL] {
+            zip.write_all(piece.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
+        }
 
         // 4. META-INF/manifest.xml
-        zip.start_file(FIXED_PART_NAMES[3], deflate_opts)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        zip.start_file(MANIFEST_PART, deflate_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
         zip.write_all(MANIFEST_XML.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 5. Contents/content.hpf (dynamic manifest)
-        zip.start_file(FIXED_PART_NAMES[4], deflate_opts)
+        zip.start_file(CONTENT_HPF_PART, deflate_opts)
             .map_err(|e| HwpxError::Zip(e.to_string()))?;
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml
-        zip.start_file(FIXED_PART_NAMES[5], deflate_opts)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        zip.start_file(SETTINGS_PART, deflate_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
         zip.write_all(SETTINGS_XML.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 7. Contents/header.xml
-        zip.start_file(FIXED_PART_NAMES[6], deflate_opts)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        zip.start_file(HEADER_PART, deflate_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;
         zip.write_all(header_xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 8. Contents/section*.xml

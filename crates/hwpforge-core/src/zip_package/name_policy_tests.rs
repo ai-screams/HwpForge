@@ -694,29 +694,51 @@ fn directory_classification_uses_decompressed_payload() {
     }
 }
 
-// 이것을 실패시키는 것: open 중 디렉터리 읽기 또는 그 누적 예산 계상을 생략.
+// 이것을 실패시키는 것: open 중 디렉터리를 끝까지 해제하거나 탐침 1바이트의 누적 예산 계상을 생략.
 #[test]
-fn directory_open_enforces_limits_and_counts_reads() {
+fn directory_open_probes_one_byte_and_counts_it() {
     let bytes = zip(&[("Unused/", None, b"ab")]);
-    let error = open_package(&bytes, PackageLimits { entry: 1, ..Default::default() }).unwrap_err();
+    let mut package =
+        open_package(&bytes, PackageLimits { entry: 1, ..Default::default() }).unwrap();
+    assert!(package.is_opaque(0));
+    assert_eq!(package.total_read, 1);
+    let error = package.read(0).unwrap_err();
     assert!(error.to_string().contains("exceeds limit of 1"), "{error}");
     let mut package =
         open_package(&bytes, PackageLimits { total: 3, ..Default::default() }).unwrap();
-    assert!(package.is_opaque(0));
+    assert_eq!(package.read(0).unwrap(), b"ab");
+    let mut package =
+        open_package(&bytes, PackageLimits { total: 2, ..Default::default() }).unwrap();
     let error = package.read(0).unwrap_err();
     assert!(
-        error.to_string().contains("total decompressed data (4 bytes) exceeds limit of 3"),
+        error.to_string().contains("total decompressed data (3 bytes) exceeds limit of 2"),
         "{error}"
     );
 }
 
-// 이것을 실패시키는 것: 디렉터리 CRC 검사를 첫 명시적 read까지 미루기.
+// 이것을 실패시키는 것: open 중 디렉터리를 끝까지 해제해 CRC 오류를 open에서 내기.
 #[test]
-fn directory_open_rejects_corrupt_payload() {
+fn directory_crc_error_surfaces_on_full_read() {
     let mut bytes = zip(&[("Unused/", None, b"ab")]);
     let name_len = u16::from_le_bytes(bytes[26..28].try_into().unwrap()) as usize;
     let extra_len = u16::from_le_bytes(bytes[28..30].try_into().unwrap()) as usize;
     bytes[30 + name_len + extra_len] ^= 1;
-    let error = open_package(&bytes, Default::default()).unwrap_err();
+    let mut package = open_package(&bytes, Default::default()).unwrap();
+    assert!(package.is_opaque(0));
+    let error = package.read(0).unwrap_err();
     assert!(error.to_string().contains("Invalid checksum"), "{error}");
+}
+
+// 이것을 실패시키는 것: 탐침 읽기 오류에 입력 이름을 이스케이프 없이 넣기.
+#[test]
+fn directory_probe_error_escapes_the_name() {
+    let mut bytes = zip(&[("a\nb/", None, b"")]);
+    // An empty payload reaches EOF in the probe, so a wrong CRC fails at open.
+    let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    bytes[14..18].copy_from_slice(&1u32.to_le_bytes());
+    bytes[central + 16..central + 20].copy_from_slice(&1u32.to_le_bytes());
+    let error = open_package(&bytes, Default::default()).unwrap_err().to_string();
+    assert!(error.contains("Invalid checksum"), "{error}");
+    assert!(error.contains(r#"read "a\nb/""#), "{error}");
+    assert!(!error.contains('\n'), "{error}");
 }

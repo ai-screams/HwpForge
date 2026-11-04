@@ -456,6 +456,8 @@ impl HwpxStructuralEditor {
         let bytes = package
             .write()
             .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
+        // The edited package is not the original; verification re-reads `base`.
+        drop(package);
 
         // ── reverse-delta self-verify: output ≡ declared delta ──
         let expected_doc = HwpxDocument {
@@ -795,6 +797,8 @@ impl HwpxStructuralEditor {
         let bytes = package
             .write()
             .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
+        // The edited package is not the original; verification re-reads `base`.
+        drop(package);
 
         // ── reverse-delta self-verify ──
         let expected_doc = HwpxDocument {
@@ -827,8 +831,9 @@ fn normalize_header_for_edit(
             sections.first().and_then(|s| s.begin_num.as_ref()),
         )
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        package.replace_text_entry("Contents/header.xml", header);
-        changes.rewritten.push("Contents/header.xml".into());
+        use crate::encoder::package::HEADER_PART;
+        package.replace_text_entry(HEADER_PART, header);
+        changes.rewritten.push(HEADER_PART.into());
     }
     Ok(())
 }

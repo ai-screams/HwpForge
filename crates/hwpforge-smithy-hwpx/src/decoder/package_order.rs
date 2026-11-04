@@ -1,13 +1,14 @@
 //! Resolve package reading order once, before Core paragraph paths are assigned.
 //! HWPX hrefs are archive-relative (including `Contents/`), not OPF-relative.
+use crate::encoder::package::{CONTAINER_RDF_PART, HEADER_PART};
 use std::collections::{BTreeMap, BTreeSet};
 
 use quick_xml::{events::Event, name::ResolveResult, NsReader};
 
 const OPF: &str = "http://www.idpf.org/2007/opf/";
 const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
-pub(crate) const CONTENT: &str = "Contents/content.hpf";
-pub(crate) const CONTAINER: &str = "META-INF/container.xml";
+pub(crate) use crate::encoder::package::CONTAINER_PART as CONTAINER;
+pub(crate) use crate::encoder::package::CONTENT_HPF_PART as CONTENT;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackageOrder {
@@ -176,7 +177,7 @@ fn validate_container(xml: &str, paths: &[String]) -> Result<bool, String> {
                 match (target, media) {
                     (CONTENT, "application/hwpml-package+xml") => packages += 1,
                     ("Preview/PrvText.txt", "text/plain")
-                    | ("META-INF/container.rdf", "application/rdf+xml") => {}
+                    | (CONTAINER_RDF_PART, "application/rdf+xml") => {}
                     _ => return Err(format!("unsupported rootfile {target} ({media})")),
                 }
                 Ok(())
@@ -272,9 +273,7 @@ fn resolve_spine(
         }
         if numbered_part(target, "Contents/section").is_some() {
             sections.push(target.clone());
-        } else if target != "Contents/header.xml"
-            && numbered_part(target, "Contents/masterpage").is_none()
-        {
+        } else if target != HEADER_PART && numbered_part(target, "Contents/masterpage").is_none() {
             return Err(format!("non-section spine target {target}"));
         }
         // Header and masterpage are known structural entries in Hancom's spine;

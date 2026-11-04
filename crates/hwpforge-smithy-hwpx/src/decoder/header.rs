@@ -11,6 +11,7 @@ use hwpforge_foundation::{
 };
 
 use crate::decoder::{xml_error_detail, xml_from_str};
+use crate::encoder::package::HEADER_PART;
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
 use crate::paragraph_measure::{
@@ -110,7 +111,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
                     }
                 }
                 warnings.push(super::DecodeWarning::ContentLost {
-                    part: "Contents/header.xml".into(),
+                    part: HEADER_PART.into(),
                     path: super::ParagraphPath::default(),
                     kind: e.local_name().as_ref().to_string(),
                     reason: "unsupported header definition and its references are not carried"
@@ -161,7 +162,7 @@ fn list_semantics_losses(store: &HwpxStyleStore) -> Vec<super::DecodeWarning> {
         .filter_map(|(index, shape)| {
             let error = store.para_list_ref(shape).err()?;
             Some(super::DecodeWarning::ContentLost {
-                part: "Contents/header.xml".into(),
+                part: HEADER_PART.into(),
                 path: super::ParagraphPath::default(),
                 kind: "list_semantics".into(),
                 reason: format!(
@@ -228,7 +229,7 @@ fn normalize_definition_ids(
                 // A stale next-style reference falls back to the owning style.
                 // This recovery applies ONLY to nextStyleIDRef, with explicit loss.
                 warnings.push(super::DecodeWarning::ContentLost {
-                    part: "Contents/header.xml".into(),
+                    part: HEADER_PART.into(),
                     path: super::ParagraphPath::default(),
                     kind: kind.into(),
                     reason,
@@ -247,7 +248,7 @@ fn warn_definition_order(
     if !mismatches.is_empty() {
         // Definition labels are inactive metadata: positional selection is lossless.
         warnings.push(super::DecodeWarning::InactiveHeaderReference {
-            part: "Contents/header.xml".into(),
+            part: HEADER_PART.into(),
             kind: format!("definition_order:{kind}"),
             reason: format!("definition IDs ignored; {}", mismatches.join(", ")),
         });
@@ -368,7 +369,7 @@ fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
                 .filter(|&v| HwpUnit::new(v).is_err())
                 .collect();
             (!bad.is_empty()).then(|| super::DecodeWarning::ContentLost {
-                part: "Contents/header.xml".to_string(),
+                part: HEADER_PART.to_string(),
                 path: super::ParagraphPath::default(),
                 kind: "para_border_offset".to_string(),
                 reason: format!(
@@ -393,7 +394,7 @@ fn char_shadow_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
         .filter_map(|cp| {
             let problems = parse_char_shadow(cp.shadow.as_ref()?).1;
             (!problems.is_empty()).then(|| super::DecodeWarning::ContentLost {
-                part: "Contents/header.xml".to_string(),
+                part: HEADER_PART.to_string(),
                 path: super::ParagraphPath::default(),
                 kind: "char_shadow".to_string(),
                 reason: format!(
@@ -432,7 +433,7 @@ fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning>
             .map(|(name, _)| name)
             .collect();
             (!fields.is_empty()).then(|| super::DecodeWarning::ContentLost {
-                part: "Contents/header.xml".to_string(),
+                part: HEADER_PART.to_string(),
                 path: super::ParagraphPath::default(),
                 kind: "char_shape_per_language".to_string(),
                 reason: format!(
@@ -457,7 +458,7 @@ fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning>
 fn font_embedding_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
     let Some(fontfaces) = &ref_list.fontfaces else { return Vec::new() };
     let lost = |id: u32, lang: &str, what: &str| super::DecodeWarning::ContentLost {
-        part: "Contents/header.xml".to_string(),
+        part: HEADER_PART.to_string(),
         path: super::ParagraphPath::default(),
         kind: "font_embedding".to_string(),
         reason: format!("{lang} font {id}: the embedded {what} is written as not embedded"),
@@ -1090,7 +1091,7 @@ fn convert_para_pr(
         !heading.heading_type.is_empty() && heading.heading_type != heading_type.to_hwpx_str()
     }) {
         warnings.push(super::DecodeWarning::ContentLost {
-            part: "Contents/header.xml".into(),
+            part: HEADER_PART.into(),
             path: super::ParagraphPath::default(),
             kind: "list_semantics".into(),
             reason: format!(

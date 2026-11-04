@@ -434,12 +434,13 @@ impl HwpxStamper {
         let fields = HwpxFiller::list_fields(&bytes)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         let manifest = build_manifest(base, &bytes, &fields, &outcome)?;
-        crate::raw_package::RawPackage::verify_output(
-            base,
-            &bytes,
-            &crate::raw_package::OutputChanges::reencoded(validated.sections()),
-        )
-        .map_err(StamperError::Codec)?;
+        package
+            .verify_output_with(
+                base,
+                &bytes,
+                &crate::raw_package::OutputChanges::reencoded(validated.sections()),
+            )
+            .map_err(StamperError::Codec)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             StampResult { bytes, manifest, outcome },
             decode_warnings,
@@ -578,12 +579,13 @@ impl HwpxStamper {
         let fields = HwpxFiller::list_fields(&bytes)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         let manifest = build_manifest_v2(base, &bytes, &fields, &text_outcome, &cell_outcome)?;
-        crate::raw_package::RawPackage::verify_output(
-            base,
-            &bytes,
-            &crate::raw_package::OutputChanges::reencoded(validated.sections()),
-        )
-        .map_err(StamperError::Codec)?;
+        package
+            .verify_output_with(
+                base,
+                &bytes,
+                &crate::raw_package::OutputChanges::reencoded(validated.sections()),
+            )
+            .map_err(StamperError::Codec)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             StampResultV2 {
                 bytes,

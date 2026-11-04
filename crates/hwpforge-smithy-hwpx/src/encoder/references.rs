@@ -20,8 +20,8 @@ use quick_xml::{Reader, XmlVersion};
 use super::EncodeWarning;
 use crate::error::{HwpxError, HwpxResult};
 
-/// The CONTENT_HPF part name, for parse errors.
-const CONTENT_HPF: &str = "Contents/content.hpf";
+// The CONTENT_HPF part name, for parse errors.
+use super::package::CONTENT_HPF_PART as CONTENT_HPF;
 
 /// `(id, href)` of every `<opf:item>` in `content_hpf`, in document order,
 /// as an XML reader reads the attribute values.

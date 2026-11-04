@@ -137,7 +137,7 @@ impl Directory {
     }
 }
 
-fn invalid() -> CoreError {
+pub(super) fn invalid() -> CoreError {
     zip_error("invalid ZIP central directory framing")
 }
 

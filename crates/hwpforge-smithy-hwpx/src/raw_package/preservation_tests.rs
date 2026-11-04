@@ -109,10 +109,44 @@ fn output_rejects_invalid_names() {
 fn output_rejects_limits() {
     let base = zip(&[]);
     let oversized = zip(&[("large", 33)]);
-    let error = RawPackage::verify_output_capped(&base, &oversized, &changes(&["large"]), 32, 64)
-        .unwrap_err();
+    let error =
+        RawPackage::verify_output_capped(&base, None, &oversized, &changes(&["large"]), 32, 64)
+            .unwrap_err();
     assert_eq!(error.stage, CodecStage::Verification);
     assert!(error.detail.contains("exceeds limit of 32"), "{error:?}");
+}
+
+// 이것을 실패시키는 것: 넘겨받은 원본 대신 base를 다시 읽거나 출력 전체를 RawPackage로 만들기.
+#[test]
+fn verify_reads_whole_packages_only_for_an_unread_base() {
+    let base = zip(&[("asset", 8), ("Contents/section0.xml", 8)]);
+    let original = RawPackage::read_capped(&base, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE).unwrap();
+    let output = zip(&[("asset", 8), ("Contents/section0.xml", 9)]);
+    let declared = changes(&["Contents/section0.xml"]);
+    PACKAGE_IO.with(|count| count.set((0, 0)));
+    original.verify_output_with(&base, &output, &declared).unwrap();
+    let overwritten = package_support::splice_part(&output, "asset", "\0", "x");
+    let error = original.verify_output_with(&base, &overwritten, &declared).unwrap_err();
+    assert!(error.detail.contains("'asset': payload changed"), "{error:?}");
+    assert_eq!(PACKAGE_IO.with(|count| count.get()), (0, 0));
+    RawPackage::verify_output(&base, &output, &declared).unwrap();
+    assert_eq!(PACKAGE_IO.with(|count| count.get()), (1, 0));
+}
+
+// 이것을 실패시키는 것: 오류 문구에 항목 이름을 이스케이프·길이 제한 없이 넣기.
+#[test]
+fn violation_names_are_escaped_and_bounded() {
+    let base = zip(&[]);
+    let long = "가".repeat(300);
+    for (name, shown) in [
+        ("a\nb", "a\\nb".to_owned()),
+        (long.as_str(), format!("{}... (900 bytes total)", "가".repeat(64))),
+    ] {
+        let output = zip(&[(name, 1)]);
+        let error = RawPackage::verify_output(&base, &output, &changes(&[])).unwrap_err();
+        let expected = format!("output package preservation: '{shown}': undeclared new part");
+        assert!(error.detail.contains(&expected), "{error:?}");
+    }
 }
 
 use crate::patch::field_path_contract::fixtures::document as document_support;
@@ -498,4 +532,46 @@ fn media_survives_real_editors_and_rejects_overwrite() {
             rejects(&base, &corrupted.write().unwrap(), &declaration, "payload changed");
         }
     }
+}
+
+// Re-encoding names charts by reference order, so a base that references
+// chart2 before chart1 comes back with the two parts' payloads swapped. The
+// check compares part names, not meaning, and fails closed on that input.
+// 이것을 실패시키는 것: 차트 part를 payload 비교에서 빼거나 재작성 선언에 넣기.
+#[test]
+fn reencode_rejects_charts_referenced_out_of_name_order() {
+    use crate::cell_edit::{CellEditError, CellSpec, CellTarget, HwpxCellEditor};
+    let base = editable_package_with_media(true);
+    let mut package = RawPackage::read(&base).unwrap();
+    let [first, second] =
+        ["Chart/chart1.xml", "Chart/chart2.xml"].map(|p| package.index_by_path[p]);
+    let section = package.read_text_entry("Contents/section0.xml").unwrap();
+    assert!(section.contains("Chart/chart1.xml") && section.contains("Chart/chart2.xml"));
+    let swapped = section
+        .replace("Chart/chart1.xml", "\u{1}")
+        .replace("Chart/chart2.xml", "Chart/chart1.xml")
+        .replace('\u{1}', "Chart/chart2.xml");
+    package.replace_text_entry("Contents/section0.xml", swapped);
+    // The fixture's two charts share one payload; make them distinguishable.
+    let relabeled = package.read_text_entry("Chart/chart2.xml").unwrap();
+    assert!(relabeled.contains("<c:v>A</c:v>"));
+    package
+        .replace_text_entry("Chart/chart2.xml", relabeled.replace("<c:v>A</c:v>", "<c:v>C</c:v>"));
+    let chart = package.entries[second].bytes.clone();
+    package.entries[second].bytes = package.entries[first].bytes.clone();
+    package.entries[first].bytes = chart;
+    assert!(package.entries[first].bytes != package.entries[second].bytes);
+    let base = package.write().unwrap();
+    let error = HwpxCellEditor::set_cells(
+        &base,
+        &[CellSpec {
+            table: 0,
+            target: CellTarget::At(hwpforge_core::table::grid::GridCoord::new(0, 0)),
+            text: "value".into(),
+        }],
+    )
+    .unwrap_err();
+    let CellEditError::Codec(failure) = error else { panic!("{error:?}") };
+    assert_eq!(failure.stage, CodecStage::Verification);
+    assert!(failure.detail.contains("'Chart/chart1.xml': payload changed"), "{failure:?}");
 }

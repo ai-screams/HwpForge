@@ -541,8 +541,8 @@ pub enum EncodeWarning {
     },
 }
 
-/// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
-const CONTENT_HPF_PART: &str = "Contents/content.hpf";
+// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
+use self::package::{CONTENT_HPF_PART, HEADER_PART};
 
 impl EncodeWarning {
     /// 이 경고가 **의미 손상**인지 — 즉 산출 바이트가 입력의 의미를 잃었는지.
@@ -1556,7 +1556,7 @@ impl HwpxEncoder {
         // 이것을 실패시키는 것: extend로 되돌림(each_removal_is_reported_with_its_part_and_location).
         context.warnings.splice(
             section_warning_start..section_warning_start,
-            forbidden_char_warnings("Contents/header.xml", header_sites),
+            forbidden_char_warnings(HEADER_PART, header_sites),
         );
 
         let dropped_caches: Vec<Vec<EncodeWarning>> =
@@ -1593,10 +1593,10 @@ impl HwpxEncoder {
         // before it is read back, so the checks read the text that is written.
         let rendered = package::render_content_hpf(document.metadata(), &manifest);
         let (content_hpf, sites) = crate::wire_xml::strip_xml_forbidden_chars(&rendered);
-        context.warnings.extend(forbidden_char_warnings("Contents/content.hpf", sites));
+        context.warnings.extend(forbidden_char_warnings(CONTENT_HPF_PART, sites));
         let written = references::read_manifest(&content_hpf)?;
         context.warnings.extend(references::manifest_id_conflicts(&written));
-        let mut parts: Vec<(String, &str)> = vec![("Contents/header.xml".to_string(), &header_xml)];
+        let mut parts: Vec<(String, &str)> = vec![(HEADER_PART.to_string(), &header_xml)];
         parts.extend(
             section_xmls
                 .iter()

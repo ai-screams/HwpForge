@@ -96,10 +96,14 @@ pub fn normalize_part_name(name: &str) -> CoreResult<&str> {
 /// Case-only collisions are rejected; selecting the same entry as Hancom from
 /// such collisions is deferred. Lookups that do not follow
 /// manifest hrefs (images, master pages and settings) are a separate limitation.
-/// Decompression is lazy except for directory classification; all reads enforce
-/// actual byte limits through [`Package::read`]. Directory classification counts
-/// against the cumulative read budget; reading that entry again counts again.
-/// Directory payload/CRC and limit errors can therefore fail this open call.
+/// Decompression is lazy except for directory classification, which decompresses
+/// at most one byte per directory record to learn whether it has content. That
+/// byte counts against the cumulative read budget; all full reads enforce actual
+/// byte limits through [`Package::read`]. An error while producing that byte
+/// (including the CRC check of an empty directory, whose end the probe reaches)
+/// or an exhausted total budget fails this open call. A directory with content
+/// reports its remaining CRC, payload and per-entry limit errors on its first
+/// full read, so a consumer that never reads it does not check it for damage.
 ///
 /// # Errors
 /// Rejects ambiguous/invalid ZIP directories, unsafe names and resource limits.
@@ -139,7 +143,7 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
     let mut package = Package { archive, opaque, entries, limits, total_read: 0 };
     // 이것을 실패시키는 것: 실제 해제 바이트 대신 헤더 크기로 디렉터리를 분류.
     for index in directories {
-        package.opaque[index] |= !package.read(index)?.is_empty();
+        package.opaque[index] |= package.has_output(index)?;
     }
     // 이것을 실패시키는 것: 내용 기반 opaque 추가 뒤 이름 증거 재검사 생략.
     // Payload-based opacity must also satisfy the raw/effective name guards.
@@ -164,6 +168,24 @@ impl Package<'_> {
     /// path alone cannot reproduce it. Returns `false` for an out-of-range index.
     pub fn is_opaque(&self, index: usize) -> bool {
         self.opaque.get(index).copied().unwrap_or(false)
+    }
+
+    /// Whether at least one byte decompresses, reading at most that byte.
+    /// The byte counts against the cumulative budget like any other read.
+    fn has_output(&mut self, index: usize) -> CoreResult<bool> {
+        let file = self.archive.by_index(index).map_err(|e| zip_error(e.to_string()))?;
+        let mut probe = Vec::with_capacity(1);
+        let result = file.take(1).read_to_end(&mut probe);
+        self.total_read = self.total_read.saturating_add(probe.len() as u64);
+        let path = names::display_name(self.entries[index].path.as_bytes());
+        result.map_err(|e| zip_error(format!("read {path}: {e}")))?;
+        if self.total_read > self.limits.total {
+            return Err(invalid_structure(format!(
+                "total decompressed data ({} bytes) exceeds limit of {}",
+                self.total_read, self.limits.total,
+            )));
+        }
+        Ok(!probe.is_empty())
     }
 
     /// Read an entry, bounded by actual output rather than header sizes.
