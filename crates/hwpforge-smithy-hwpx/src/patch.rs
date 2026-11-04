@@ -512,15 +512,19 @@ impl HwpxPatcher {
             edits.push((&preserved_slot.locator, new_text.as_str()));
         }
 
-        // A changed text slot makes its paragraph's line
-        // cache stale, and the caches of the later paragraphs of its flow and
-        // of the host chain — the same set `fill` drops (`cache_flow`). Text
-        // replacements and cache removals are written in one pass, which
-        // refuses overlapping spans.
-        // 이것을 실패시키는 것: 이 제거 삭제(`patch_drops_the_changed_flow_tail_and_host_chain`,
-        // `a_shortened_patch_drops_the_stale_line_start`).
+        // Actual normalized edits own the invalidation decision. Untouched
+        // plain body tails retain their original line breaking caches; nested
+        // edits keep the conservative tail and host-chain invalidation.
+        // Text replacements and owned-cache removals share one checked splice.
         let mut replacements = Vec::with_capacity(edits.len());
         if !edits.is_empty() {
+            // The gates are built here, not at decode: the field ranges come
+            // from the inventory the protection check above already built.
+            decoded.source_maps[section_idx].prove_cache_text_tail(
+                &base_section_xml,
+                &before_fields,
+                section_idx,
+            );
             let flow = &decoded.source_maps[section_idx].cache_flow;
             let mut changed = Vec::with_capacity(edits.len());
             for (locator, text) in &edits {
@@ -542,8 +546,11 @@ impl HwpxPatcher {
                     .map_err(|error| PatchError::Invariant { detail: error.to_string() })?,
                 );
             }
-            replacements
-                .extend(flow.stale_caches(changed).into_iter().map(|range| (range, String::new())));
+            replacements.extend(
+                flow.caches_to_drop_for_text_edits(changed)
+                    .into_iter()
+                    .map(|range| (range, String::new())),
+            );
         }
         let patched_section_xml = crate::cache_flow::splice(&base_section_xml, replacements)
             .map_err(|error| PatchError::Invariant { detail: error.to_string() })?;

@@ -91,6 +91,27 @@ pub struct SourceMap {
     pub(crate) cache_flow: crate::cache_flow::ParagraphFlow,
 }
 impl SourceMap {
+    /// Builds the text-tail gates the preserving text editors' cache
+    /// question needs ([`crate::cache_flow::ParagraphFlow::prove_text_tail`]):
+    /// reads `xml`, this section's original text, once more, and places the
+    /// field ranges of `inventory` (built for section `section_index` of the
+    /// decoded document) on its source paragraphs through the recorded run
+    /// origins. Only the preserving patch calls this, so reads never pay for
+    /// it. An unreadable `xml` leaves the flow unproven.
+    pub(crate) fn prove_cache_text_tail(
+        &mut self,
+        xml: &str,
+        inventory: &FieldInventory<'_>,
+        section_index: usize,
+    ) {
+        let Ok((_, source)) = XmlSource::read(xml) else { return };
+        let Self { nodes, cache_flow, .. } = self;
+        cache_flow.prove_text_tail(&source, xml, inventory, |path| {
+            crate::work::tick();
+            let node = nodes.get(&CorePath::new(section_index, path))?;
+            node.ranges.first().map(|range| range.start)
+        });
+    }
     /// Locate an original node without reparsing its source.
     pub fn node(&self, path: &CorePath) -> Option<&SourceNode> {
         self.nodes.get(path)

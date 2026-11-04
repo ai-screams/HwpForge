@@ -610,9 +610,9 @@ mod tests {
         );
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
-        // 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
-        // 낡는다 — 전에는 남겼던 것이 틀렸다.
-        assert_eq!(caches(&xml), Vec::<usize>::new());
+        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
+        // 미편집 평문 꼬리는 한컴이 vertpos를 다시 쌓는다.
+        assert_eq!(caches(&xml), vec![1]);
         assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
 
@@ -1028,8 +1028,7 @@ mod tests {
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
         assert_eq!(listed.len(), 2, "premise: the unnamed field is listed");
         let xml = fill_xml(&bytes, &[("b", "값")]).expect("fill");
-        // 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
-        // 이빨은 위치 불일치 오류(`expect`)가 진다.
-        assert_eq!(caches(&xml), Vec::<usize>::new());
+        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
+        assert_eq!(caches(&xml), vec![1]);
     }
 }

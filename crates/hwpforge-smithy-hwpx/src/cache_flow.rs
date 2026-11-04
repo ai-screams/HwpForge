@@ -1,12 +1,10 @@
 //! Which paragraph line caches a text change makes stale,
 //! shared by the two preserve-first text editors: `fill` and `patch`.
 //!
-//! A paragraph's `<hp:linesegarray>` places its lines by character position
-//! and stacks them by vertical position. A changed paragraph's own cache is
-//! stale; so is every later paragraph of the same flow (their vertical
-//! positions follow it); so is the paragraph hosting that flow (a cell or
-//! text box that grows moves its host's lines) and, the same way, its own
-//! flow tail and host chain, up to the section body.
+//! The conservative rule drops the edited paragraph, its flow tail and host
+//! chain. Preserve-only text edits can retain an untouched body tail whose
+//! line breaking inputs stay fixed: Hancom restacks its vertical positions.
+//! Re-encoding callers keep the conservative rule below.
 
 use std::ops::Range;
 
@@ -85,10 +83,91 @@ pub(crate) struct ParagraphFlow {
     /// The paragraph each paragraph sits inside (`None` in the section
     /// body) — unlike `list_host`, also across a header or footer.
     parent: Vec<Option<usize>>,
+    /// Whether a paragraph directly owns an element outside the text-tail
+    /// allowlist ([`text_tail_element`]), or holds the begin, body or end of
+    /// a field other than ClickHere ([`Self::project_fields`]). Such a
+    /// paragraph may change width or line breaks when pages move.
+    has_disallowed_element: Vec<bool>,
+    /// Whether the section's gates or field ranges could not be placed on
+    /// its source paragraphs ([`Self::prove_text_tail`]), so no paragraph
+    /// can be proven plain.
+    unproven_fields: bool,
+    /// Whether the section holds an object that text wraps around and that
+    /// is not placed as a character. Such an object stays where it is while
+    /// a preserved tail moves under it, so its lines would be wrong.
+    has_wrapping_object: bool,
+    /// Whether some `secPr` of the section declares horizontal text.
+    has_horizontal_section: bool,
+    /// Whether some `secPr` or `colPr` of the section declares a setting
+    /// under which preserved line breaks are not known to stay valid
+    /// (another text direction, columns of different widths).
+    incompatible_section: bool,
 }
 
 impl ParagraphFlow {
+    /// Drop changed caches and all legacy nested-edit dependencies. In a body
+    /// tail, keep the plain prefix before the first disallowed owner. A
+    /// wrapping object anywhere in the section, or incompatible section
+    /// geometry, keeps the conservative rule for the whole section.
+    /// keepWithNext, keepLines and widowOrphan only move vertical positions;
+    /// they are not gates for untouched line breaking inputs.
+    pub(crate) fn caches_to_drop_for_text_edits(
+        &self,
+        paragraphs: impl IntoIterator<Item = usize>,
+    ) -> Vec<Range<usize>> {
+        let mut changed = vec![false; self.spans.len()];
+        let mut has_body_edit = false;
+        for p in paragraphs {
+            crate::work::tick();
+            changed[p] = true;
+            has_body_edit |= self.parent[p].is_none();
+        }
+        let edited = || {
+            changed.iter().enumerate().filter_map(|(p, &yes)| {
+                crate::work::tick();
+                yes.then_some(p)
+            })
+        };
+        if !has_body_edit
+            || !self.has_horizontal_section
+            || self.incompatible_section
+            || self.has_wrapping_object
+            || self.unproven_fields
+        {
+            return self.stale_caches(edited());
+        }
+        let stale = stale_paragraphs(&self.para_list, &self.list_host, edited(), &mut || {});
+        let nested = stale_paragraphs(
+            &self.para_list,
+            &self.list_host,
+            edited().filter(|&p| self.parent[p].is_some()),
+            &mut || {},
+        );
+        let mut block_from = vec![usize::MAX; self.list_host.len()];
+        for p in 0..self.spans.len() {
+            crate::work::tick();
+            if !stale[p] {
+                continue;
+            }
+            let list = self.para_list[p];
+            if !changed[p] && self.has_disallowed_element[p] {
+                block_from[list] = block_from[list].min(p);
+            }
+        }
+        let mut ranges = Vec::new();
+        for p in 0..self.spans.len() {
+            crate::work::tick();
+            if changed[p] || nested[p] || (stale[p] && p >= block_from[self.para_list[p]]) {
+                ranges.extend(self.caches[p].iter().cloned());
+            }
+        }
+        ranges
+    }
+
     /// Build from the decoder's original-element records, without reading XML.
+    /// The text-tail gates are not built here: until
+    /// [`Self::prove_text_tail`] runs no section is known to be horizontal,
+    /// so [`Self::caches_to_drop_for_text_edits`] keeps the conservative rule.
     pub(crate) fn from_source(source: &hwpforge_core::source_xml::XmlSource) -> Self {
         let mut flow = Self::default();
         let mut nearest = vec![None; source.elements().len()];
@@ -124,6 +203,161 @@ impl ParagraphFlow {
         flow
     }
 
+    /// Build the text-tail gates for the preserving editors: scan `source`
+    /// (a fresh read of `xml`, the section text the flow was built from),
+    /// then place the field ranges of `inventory` ([`Self::project_fields`]).
+    /// The flow is proven only when both succeed.
+    pub(crate) fn prove_text_tail(
+        &mut self,
+        source: &hwpforge_core::source_xml::XmlSource,
+        xml: &str,
+        inventory: &hwpforge_core::field_inventory::FieldInventory<'_>,
+        run_start: impl Fn(&str) -> Option<usize>,
+    ) {
+        self.unproven_fields = true;
+        if self.scan_text_tail(source, xml).is_some() {
+            self.project_fields(inventory, run_start);
+        }
+    }
+
+    /// The per-element part of the gates: the text-tail allowlist per owner
+    /// paragraph, section direction and columns, and objects text wraps
+    /// around. Each start tag is read at most once. `None` (fail closed) when
+    /// `source` does not match the flow's paragraphs or a start tag cannot be
+    /// read.
+    fn scan_text_tail(
+        &mut self,
+        source: &hwpforge_core::source_xml::XmlSource,
+        xml: &str,
+    ) -> Option<()> {
+        let elements = source.elements();
+        self.has_disallowed_element = vec![false; self.spans.len()];
+        self.has_wrapping_object = false;
+        self.has_horizontal_section = false;
+        self.incompatible_section = false;
+        let mut nearest = vec![None; elements.len()];
+        let mut paragraphs = 0;
+        for (id, element) in elements.iter().enumerate().skip(1) {
+            crate::work::tick();
+            let parent = element.parent();
+            nearest[id] = nearest[parent];
+            let name = element.name();
+            if name == "p" {
+                if self.spans.get(paragraphs) != Some(&element.outer()) {
+                    return None;
+                }
+                nearest[id] = Some(paragraphs);
+                paragraphs += 1;
+            }
+            // Section-level gates come first: they hold whichever paragraph,
+            // header or footer owns the element, or none.
+            match name {
+                "secPr" => {
+                    let start = source_start(xml, element)?;
+                    let horizontal =
+                        attribute(&start, "textDirection").as_deref() == Some("HORIZONTAL");
+                    self.has_horizontal_section |= horizontal;
+                    self.incompatible_section |= !horizontal;
+                }
+                "colPr" => {
+                    let start = source_start(xml, element)?;
+                    self.incompatible_section |= !(attribute(&start, "colCount").as_deref()
+                        == Some("1")
+                        || attribute(&start, "sameSz").as_deref() == Some("1"));
+                }
+                // A `pos` is judged with the object that owns it (below); one
+                // directly under the document has no owner to judge it by.
+                "pos" if parent == 0 => return None,
+                _ => {}
+            }
+            // An object, or any element that owns a `pos`, is placed by its
+            // `pos` children: their `treatAsChar` and its own `textWrap`
+            // (missing counts as wrapping and floating). An object without
+            // its own `pos` has no proof of being inline, so it counts as
+            // floating unless its wrap style leaves the lines alone. A
+            // group's children carry no `pos`: their container's judges them.
+            let mut placed = element.children().iter().filter(|&&c| elements[c].name() == "pos");
+            let first_pos = placed.next();
+            if first_pos.is_some() || object_element(name) {
+                let wrap = attribute(&source_start(xml, element)?, "textWrap");
+                match first_pos {
+                    Some(&first) => {
+                        let wraps =
+                            matches!(wrap.as_deref(), None | Some("SQUARE" | "TIGHT" | "THROUGH"));
+                        for &pos in std::iter::once(&first).chain(placed) {
+                            let pos = source_start(xml, &elements[pos])?;
+                            let inline = attribute(&pos, "treatAsChar").as_deref() == Some("1");
+                            self.has_wrapping_object |= wraps && !inline;
+                        }
+                    }
+                    None if elements[parent].name() != "container" => {
+                        self.has_wrapping_object |= !matches!(
+                            wrap.as_deref(),
+                            Some("TOP_AND_BOTTOM" | "BEHIND_TEXT" | "IN_FRONT_OF_TEXT")
+                        );
+                    }
+                    None => {}
+                }
+            }
+            // Only the innermost owner receives the flag. Containers already
+            // flag their host; descendant aggregation would mix independent flows.
+            let Some(owner) = nearest[id] else { continue };
+            let disallowed = !text_tail_element(name)
+                || (name == "fieldBegin"
+                    && attribute(&source_start(xml, element)?, "type").as_deref()
+                        != Some("CLICK_HERE"));
+            self.has_disallowed_element[owner] |= disallowed;
+        }
+        (paragraphs == self.spans.len()).then_some(())
+    }
+
+    /// Marks every paragraph that a field other than ClickHere covers (its
+    /// begin, body and end), taking the ranges from the section's
+    /// `inventory`. `run_start` gives a run path's first source byte. A
+    /// range the inventory does not prove (a diagnostic or a recovered
+    /// warning), a run without a source position, or a begin and end in
+    /// different source lists leaves the section unproven.
+    fn project_fields(
+        &mut self,
+        inventory: &hwpforge_core::field_inventory::FieldInventory<'_>,
+        run_start: impl Fn(&str) -> Option<usize>,
+    ) {
+        self.unproven_fields = true;
+        if !inventory.diagnostics().is_empty() || !inventory.warnings().is_empty() {
+            return;
+        }
+        let mut opens = vec![0usize; self.spans.len()];
+        let mut closes = opens.clone();
+        for field in inventory.fields() {
+            crate::work::tick();
+            // Bookmarks show nothing; ClickHere shows the text the user typed.
+            if matches!(field.kind(), "CLICK_HERE" | "BOOKMARK") {
+                continue;
+            }
+            let at = |path: &str| run_start(path).and_then(|offset| self.paragraph_at(offset));
+            let begin = at(field.start());
+            let end = field.end().as_deref().map_or(begin, at);
+            match (begin, end) {
+                (Some(b), Some(e)) if b <= e && self.para_list[b] == self.para_list[e] => {
+                    opens[b] += 1;
+                    closes[e] += 1;
+                }
+                _ => return,
+            }
+        }
+        // Paragraphs of one list rise in index order, so a running count per
+        // list covers every paragraph from a begin to its end.
+        let mut running = vec![0usize; self.list_host.len()];
+        for p in 0..self.spans.len() {
+            crate::work::tick();
+            let list = self.para_list[p];
+            running[list] += opens[p];
+            self.has_disallowed_element[p] |= running[list] > 0;
+            running[list] -= closes[p];
+        }
+        self.unproven_fields = false;
+    }
+
     /// The innermost paragraph whose span holds byte `offset`.
     ///
     /// The last paragraph to start at or before `offset` is either it or
@@ -133,6 +367,7 @@ impl ParagraphFlow {
         let last = self.spans.partition_point(|span| span.start <= offset).checked_sub(1)?;
         let mut at = Some(last);
         while let Some(p) = at {
+            crate::work::tick();
             if self.spans[p].contains(&offset) {
                 return Some(p);
             }
@@ -148,6 +383,89 @@ impl ParagraphFlow {
     ) -> Vec<Range<usize>> {
         stale_caches(&self.caches, &self.para_list, &self.list_host, paragraphs, &mut || {})
     }
+}
+
+/// The source ledger already records the end of the opening tag, including
+/// quoted `>` and either quote style. No tag scanner or XML reader is needed.
+/// `None` when the recorded range is not a start tag of `xml` (for example
+/// the empty range of the document's virtual root). Counts the bytes read.
+fn source_start<'a>(
+    xml: &'a str,
+    element: &hwpforge_core::source_xml::XmlElement,
+) -> Option<quick_xml::events::BytesStart<'a>> {
+    let outer = element.outer();
+    let end = element.inner().map_or(outer.end, |inner| inner.start);
+    let content = xml.get(outer.start.checked_add(1)?..end.checked_sub(1)?)?;
+    let content = content.trim_end_matches('/');
+    let name = element.qualified_name().len();
+    crate::work::tick_n(content.len());
+    (name <= content.len() && content.is_char_boundary(name))
+        .then(|| quick_xml::events::BytesStart::from_content(content, name))
+}
+
+/// The normalized value of attribute `key`, `None` when absent or unreadable.
+fn attribute(start: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
+    start.attributes().flatten().find(|a| a.key.as_ref() == key).and_then(|a| {
+        a.normalized_value(quick_xml::XmlVersion::Explicit1_0).ok().map(|v| v.into_owned())
+    })
+}
+
+/// Objects placed by an `hp:pos` child: shapes, tables, pictures, equations,
+/// OLE, charts, text art, video and form controls.
+fn object_element(name: &str) -> bool {
+    matches!(
+        name,
+        "tbl"
+            | "pic"
+            | "rect"
+            | "ellipse"
+            | "line"
+            | "arc"
+            | "polygon"
+            | "curve"
+            | "connectLine"
+            | "container"
+            | "equation"
+            | "ole"
+            | "chart"
+            | "textart"
+            | "video"
+            | "btn"
+            | "radioBtn"
+            | "checkBtn"
+            | "comboBox"
+            | "listBox"
+            | "edit"
+            | "scrollBar"
+    )
+}
+
+/// Elements a preserved tail paragraph may hold: text, line caches, breaks,
+/// marks and the parts of a field (`fieldBegin` is further limited to
+/// ClickHere in [`ParagraphFlow::scan_text_tail`]).
+fn text_tail_element(name: &str) -> bool {
+    matches!(
+        name,
+        "p" | "run"
+            | "t"
+            | "linesegarray"
+            | "lineseg"
+            | "ctrl"
+            | "fieldBegin"
+            | "fieldEnd"
+            | "parameters"
+            | "stringParam"
+            | "integerParam"
+            | "booleanParam"
+            | "tab"
+            | "lineBreak"
+            | "nbSpace"
+            | "fwSpace"
+            | "markpenBegin"
+            | "markpenEnd"
+            | "titleMark"
+            | "bookmark"
+    )
 }
 
 /// Writes `xml` with each `(range, replacement)` applied, in one pass.
@@ -183,6 +501,10 @@ pub(crate) fn splice(
     out.push_str(&xml[cursor..]);
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "cache_flow/text_edits_tests.rs"]
+mod text_edits_tests;
 
 #[cfg(test)]
 mod tests {
@@ -268,7 +590,7 @@ mod tests {
     /// Counterexample: a body paragraph "ABCDEFGHIJKLMNOPQRST"
     /// with a line at 10, patched to "A", kept `textpos="10"` and no warning;
     /// the re-decode then dropped the cache as out of range.
-    /// 이것을 실패시키는 것: patch 의 캐시 제거 삭제.
+    /// 이것을 실패시키는 것: patch 의 캐시 제거 삭제 또는 기존 꼬리 제거 호출.
     #[test]
     fn a_shortened_patch_drops_the_stale_line_start() {
         let bytes = encode(Section::with_paragraphs(
@@ -293,7 +615,7 @@ mod tests {
         let out = patch(&bytes, |s| set_text(&mut s.paragraphs[1], "A"));
         let out_xml = section_xml(&out);
         assert!(!out_xml.contains("textpos=\"10\""), "{out_xml}");
-        assert_eq!(caches(&out_xml), vec![0], "the flow tail goes too");
+        assert_eq!(caches(&out_xml), vec![0, 2], "plain body tail stays verbatim");
         let decoded = HwpxDecoder::decode(&out).expect("decode");
         assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
     }
