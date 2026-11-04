@@ -1,11 +1,10 @@
 //! Conservative one-line filter for text-only cell replacement.
 use super::*;
-use crate::encoder::package::HEADER_PART;
+use crate::line_keep::Tag;
 use crate::patch::RawPackage;
-use crate::style_store::{HwpxCharShape, HwpxStyleStore};
+use crate::style_store::HwpxStyleStore;
 use hwpforge_core::layout::LayoutCache;
 use hwpforge_core::node_path::CorePath;
-use quick_xml::{events::Event, Reader};
 
 pub(super) struct Candidate {
     table: usize,
@@ -13,112 +12,6 @@ pub(super) struct Candidate {
     cell: usize,
     text: String,
     cache: LayoutCache,
-}
-
-// Only attributes actually present on the source count as evidence.
-#[derive(Default)]
-struct Tag {
-    name: String,
-    attrs: HashMap<String, String>,
-    children: Vec<Tag>,
-}
-impl Tag {
-    fn read(xml: &str) -> Option<Self> {
-        let mut reader = Reader::from_str(xml);
-        let mut stack = vec![Self::default()];
-        loop {
-            let event = reader.read_event().ok()?;
-            let empty = matches!(event, Event::Empty(_));
-            match event {
-                Event::Start(e) | Event::Empty(e) => {
-                    let mut tag =
-                        Self { name: e.local_name().as_ref().to_string(), ..Self::default() };
-                    for attr in e.attributes() {
-                        let attr = attr.ok()?;
-                        let value = attr
-                            .normalized_value(quick_xml::XmlVersion::Explicit1_0)
-                            .ok()?
-                            .into_owned();
-                        tag.attrs.insert(attr.key.as_ref().to_string(), value);
-                    }
-                    if empty {
-                        stack.last_mut()?.children.push(tag);
-                    } else {
-                        if stack.len() > crate::decoder::XML_RECURSION_LIMIT {
-                            return None;
-                        }
-                        stack.push(tag);
-                    }
-                }
-                Event::End(_) => {
-                    let tag = stack.pop()?;
-                    stack.last_mut()?.children.push(tag);
-                }
-                Event::Eof => break,
-                _ => {}
-            }
-        }
-        if stack.len() != 1 {
-            return None;
-        }
-        let mut root = stack.pop()?;
-        if root.children.len() != 1 {
-            return None;
-        }
-        root.children.pop()
-    }
-    fn child(&self, name: &str) -> Option<&Self> {
-        let mut children = self.children.iter().filter(|c| c.name == name);
-        let child = children.next()?;
-        if children.next().is_some() {
-            return None;
-        }
-        Some(child)
-    }
-    fn into_child(self, name: &str) -> Option<Self> {
-        let mut children = self.children.into_iter().filter(|c| c.name == name);
-        let child = children.next()?;
-        if children.next().is_some() {
-            return None;
-        }
-        Some(child)
-    }
-    fn is(&self, key: &str, value: &str) -> bool {
-        self.attrs.get(key).map(String::as_str) == Some(value)
-    }
-}
-
-fn weight(text: &str) -> Option<u64> {
-    if text.is_empty() {
-        return None;
-    }
-    text.chars().try_fold(0u64, |sum, c| {
-        // Conservative measured advances for the supported character set.
-        let weight = match c {
-            '\u{ac00}'..='\u{d7a3}' => 105,
-            ' ' => 50,
-            '0'..='9' | '.' | ',' | '-' | '(' | ')' | '/' | ':' => 100,
-            _ => return None,
-        };
-        sum.checked_add(weight)
-    })
-}
-
-fn width(text: &str, shape: &HwpxCharShape) -> Option<u64> {
-    // Positive spacing at reduced relative size has no measured width bound.
-    if shape.rel_sz < 100 && shape.spacing > 0 {
-        return None;
-    }
-    let height = u64::try_from(shape.height.as_i32()).ok().filter(|v| *v > 0)?;
-    let rel = u64::try_from(shape.rel_sz).ok().filter(|v| *v > 0)?;
-    let ratio = u64::try_from(shape.ratio).ok().filter(|v| *v > 0)?;
-    let spacing = shape.spacing.max(0) as u64;
-    weight(text)?
-        .checked_mul(height)?
-        .checked_mul(rel)?
-        .checked_mul(ratio.checked_add(spacing)?)?
-        .checked_add(999_999)
-        .map(|n| n / 1_000_000)
 }
 
 fn eligible<'a>(
@@ -135,23 +28,7 @@ fn eligible<'a>(
     let RunContent::Text(old) = &run.content else {
         return None;
     };
-    if para.end_char_shape.is_some() {
-        return None;
-    }
-    let cache = para.layout_cache.as_ref()?;
-    let [line] = cache.lines.as_slice() else {
-        return None;
-    };
-    if line.textpos != 0 || line.boundary.is_some() {
-        return None;
-    }
-    weight(old)?;
-    let shape = styles.char_shape(run.char_shape_id).ok()?;
-    let available = u64::try_from(line.horzsize).ok()?;
-    if width(text, shape)? > available {
-        return None;
-    }
-    Some((old, cache))
+    Some((old, crate::line_keep::eligible(para, old, text, styles)?))
 }
 
 fn source_tag(
@@ -170,7 +47,9 @@ fn source_allows(
     parts: &HashMap<String, String>,
     map: &crate::decoder::source_map::SourceMap,
     path: &CorePath,
-    definitions: &[Tag],
+    header: &crate::line_keep::Header,
+    section: &crate::line_keep::SectionEvidence,
+    character: usize,
 ) -> Option<()> {
     let cell = source_tag(parts, map, path)?;
     let sub = cell.child("subList")?;
@@ -183,48 +62,7 @@ fn source_allows(
         &CorePath::new(path.section(), format!("{}.paragraphs[0]", path.relative())),
     )?;
     let index: usize = paragraph.attrs.get("paraPrIDRef")?.parse().ok()?;
-    // Header references use definition order, independent of authored id attributes.
-    let definition = definitions.get(index)?;
-    if !definition.is("fontLineHeight", "0") || !definition.is("condense", "0") {
-        return None;
-    }
-    let auto = definition.child("autoSpacing")?;
-    if !auto.is("eAsianEng", "0") || !auto.is("eAsianNum", "0") {
-        return None;
-    }
-    if !definition.child("breakSetting")?.is("lineWrap", "BREAK")
-        || !definition.child("heading")?.is("type", "NONE")
-    {
-        return None;
-    }
-    Some(())
-}
-
-// Grid widths are outside the measured bound; missing properties are not evidence.
-fn section_allows(xml: &str) -> Option<()> {
-    let section = Tag::read(xml)?;
-    let mut properties = section
-        .children
-        .iter()
-        .filter(|p| p.name == "p")
-        .flat_map(|p| &p.children)
-        .filter(|r| r.name == "run")
-        .flat_map(|r| &r.children)
-        .filter(|t| t.name == "secPr");
-    let property = properties.next()?;
-    if properties.next().is_some() {
-        return None;
-    }
-    let grid = property.child("grid")?;
-    if !grid.is("charGrid", "0") || !grid.is("wonggojiFormat", "0") {
-        return None;
-    }
-    Some(())
-}
-
-fn read_header(package: &RawPackage) -> Option<Tag> {
-    count(0);
-    package.read_text_entry(HEADER_PART).ok().and_then(|xml| Tag::read(&xml))
+    header.allows(section, index, character).then_some(())
 }
 
 /// Selects cells whose Core cache and original wire properties prove one line.
@@ -245,19 +83,8 @@ pub(super) fn candidates(
             let (text, cache) = eligible(cell, &edit.text, &decoded.style_store)?;
             let definitions = header
                 .get_or_init(|| {
-                    let properties = read_header(package)?
-                        .into_child("refList")?
-                        .into_child("paraProperties")?;
-                    Some(
-                        properties
-                            .children
-                            .into_iter()
-                            .filter(|tag| {
-                                count(4);
-                                tag.name == "paraPr"
-                            })
-                            .collect::<Vec<_>>(),
-                    )
+                    count(0);
+                    crate::line_keep::Header::read(package, &decoded.style_store, || count(4))
                 })
                 .as_ref()?;
             let table_path = crate::table_inventory::core_path(entry);
@@ -276,14 +103,18 @@ pub(super) fn candidates(
             if !parts.contains_key(part) {
                 count(1);
                 let xml = package.read_text_entry(part).ok()?;
-                let allowed = section_allows(&xml).is_some();
+                let allowed = crate::line_keep::SectionEvidence::read(&xml);
                 parts.insert(part.to_owned(), xml);
                 section_allowed.insert(part.to_owned(), allowed);
             }
-            if !section_allowed.get(part).copied()? {
-                return None;
-            }
-            source_allows(&parts, map, &path, definitions)?;
+            source_allows(
+                &parts,
+                map,
+                &path,
+                definitions,
+                section_allowed.get(part)?.as_ref()?,
+                cell.paragraphs[0].runs[0].char_shape_id.get(),
+            )?;
             Some(Candidate {
                 table: edit.table,
                 row: edit.row_idx,

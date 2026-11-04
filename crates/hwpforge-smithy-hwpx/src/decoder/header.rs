@@ -415,7 +415,9 @@ fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning>
     let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
     let uniform = |v: &Option<crate::schema::header::HxLangValues>| {
         v.as_ref().is_none_or(|v| {
-            [v.latin, v.hanja, v.japanese, v.other, v.symbol, v.user].iter().all(|x| *x == v.hangul)
+            crate::schema::header::uniform([
+                v.hangul, v.latin, v.hanja, v.japanese, v.other, v.symbol, v.user,
+            ])
         })
     };
     char_props

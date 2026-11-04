@@ -1,5 +1,7 @@
 #[path = "support/package.rs"]
 mod package;
+#[path = "support/xml.rs"]
+mod xml;
 use package::section_xml_unchecked as section_xml;
 use std::io::{Cursor, Read, Write};
 
@@ -1902,17 +1904,29 @@ fn preserving_patch_keeps_runless_paragraphs() {
                 }
             });
             let patched = HwpxPatcher::patch_exported_section(&bytes, 0, &exported).unwrap().bytes;
-            // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출,
+            // 이것을 실패시키는 것: 본문 편집 문단 캐시 보존 생략, 기존 꼬리 제거 호출,
             // pos 없는 표·묶음을 글자처럼 취급.
             let floating = matches!(kind, 1 | 3);
             let uncached_empty = if empty == "<hp:p/>" { empty.clone() } else { para("", &[]) };
             let (kept_empty, tail_cache): (&str, &[_]) =
                 if floating { (&uncached_empty, &[]) } else { (&empty, &[0]) };
             let expected_body = wrapped
-                + &para(&run("<hp:t>수정한 가상 문장</hp:t>"), &[])
+                + &para(&run("<hp:t>수정한 가상 문장</hp:t>"), tail_cache)
                 + kept_empty
                 + &para(&run("<hp:t>뒤 보통 문단</hp:t>"), tail_cache);
             assert_eq!(section_xml(&patched), original_xml.replace(&body, &expected_body));
+            let output_xml = section_xml(&patched);
+            let tree = xml::Element::parse(&output_xml);
+            let edited = tree
+                .children
+                .iter()
+                .find(|p| {
+                    p.children.iter().any(|r| {
+                        r.children.iter().any(|t| t.name == "hp:t" && t.text == "수정한 가상 문장")
+                    })
+                })
+                .unwrap();
+            assert_eq!(edited.children.iter().any(|c| c.name == "hp:linesegarray"), !floating);
             let mut before = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
             let mut after = zip::ZipArchive::new(Cursor::new(&patched)).unwrap();
             assert_eq!(before.len(), after.len());
@@ -1998,12 +2012,27 @@ fn preserving_patch_keeps_runless_paragraphs_in_a_later_section() {
             }
         });
         let patched = HwpxPatcher::patch_exported_section(&bytes, 1, &exported).unwrap().bytes;
-        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
-        let expected = para(&run("<hp:t>고친 문장</hp:t>"), &[])
+        // 이것을 실패시키는 것: 본문 편집 문단 캐시 보존 생략 또는 기존 꼬리 제거 호출.
+        let expected = para(&run("<hp:t>고친 문장</hp:t>"), &[0])
             + &empty
             + &para(&run("<hp:t>뒤 문단</hp:t>"), &[0]);
         let section1 = read(&bytes, "Contents/section1.xml");
         assert_eq!(read(&patched, "Contents/section1.xml"), section1.replace(&body, &expected));
+        let output_xml = read(&patched, "Contents/section1.xml");
+        let tree = xml::Element::parse(&output_xml);
+        let edited = tree
+            .children
+            .iter()
+            .find(|p| {
+                p.children
+                    .iter()
+                    .any(|r| r.children.iter().any(|t| t.name == "hp:t" && t.text == "고친 문장"))
+            })
+            .unwrap();
+        assert_eq!(
+            edited.child("hp:linesegarray").child("hp:lineseg").attr("horzsize"),
+            Some("40000")
+        );
         assert_eq!(read(&patched, "Contents/section0.xml"), read(&bytes, "Contents/section0.xml"));
     }
 }

@@ -32,7 +32,7 @@ hwpforge fill template.hwpx --set 과제명="AI 문서 자동화" --set 기관�
 hwpforge diff template.hwpx 제안서_제출본.hwpx --json
 ```
 
-All-or-nothing: an unknown, duplicate or empty value fails the whole call and writes nothing. In the diff, `field_values` shows one `value_changed` per name, and `raw` entries at `$.layout_cache` show the paragraphs whose caches were dropped: each filled paragraph and, in some layouts, later ones ([which ones](editing-workflow.md#layout-caches-after-fill-and-patch)) — expected.
+All-or-nothing: an unknown, duplicate or empty value fails the whole call and writes nothing. In the diff, `field_values` shows one `value_changed` per name, and `raw` entries at `$.layout_cache` show the paragraphs whose caches were dropped: filled paragraphs that fail the conservative one-line check or are invalidated by the layout, and in some layouts later ones ([which ones](editing-workflow.md#layout-caches-after-fill-and-patch)) — expected.
 
 ## Recipe B — replace placeholder text (body and table cells)
 
