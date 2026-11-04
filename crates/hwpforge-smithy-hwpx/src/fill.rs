@@ -412,6 +412,7 @@ mod tests {
 
     use super::*;
     use crate::patch::RawPackage;
+    use crate::test_support::xml;
     use hwpforge_core::caption::{Caption, CaptionSide};
     use hwpforge_core::document::Document;
     use hwpforge_core::image::{Image, ImageFormat, ImageStore};
@@ -504,7 +505,25 @@ mod tests {
 
     /// 남아 있는 캐시 표지 번호 (9000 기준 오프셋).
     fn caches(xml: &str) -> Vec<usize> {
-        (0..64).filter(|k| xml.contains(&format!("vertpos=\"{}\"", 9000 + k))).collect()
+        fn collect(node: &xml::Element, out: &mut Vec<usize>) {
+            if node.name == "hp:lineseg" {
+                if let Some(position) = node
+                    .attr("vertpos")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .and_then(|v| v.checked_sub(9000))
+                {
+                    out.push(position);
+                }
+            }
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+        let mut out = Vec::new();
+        collect(&xml::Element::parse(xml), &mut out);
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     fn fill_xml(bytes: &[u8], pairs: &[(&str, &str)]) -> Result<String, FillError> {
@@ -550,7 +569,12 @@ mod tests {
             assert_eq!(listed[0].name.as_deref(), Some(decoded), "fixture premise for {wire}");
             let xml = fill_xml(&bytes, &[(decoded, "채움")])
                 .unwrap_or_else(|e| panic!("{wire}: fill failed: {e}"));
-            assert!(!xml.contains("<hp:linesegarray"), "{wire}: filled paragraph cache must go");
+            // 이것을 실패시키는 것: 편집 문단 캐시 보존 생략.
+            assert_eq!(
+                xml::Element::parse(&xml).find("hp:lineseg").attr("vertpos"),
+                Some("0"),
+                "{wire}: proven body cache stays"
+            );
         }
     }
 
@@ -580,7 +604,7 @@ mod tests {
         });
         let xml = fill_xml(&bytes, &[("user_email", "x@y.z")]).expect("fill");
         assert!(xml.contains("vertpos=\"0\""), "hyperlink paragraph cache must stay");
-        assert!(!xml.contains("vertpos=\"777\""), "filled paragraph cache must go");
+        assert!(!xml.contains("vertpos=\"777\""), "unproven field paragraph cache must go");
     }
 
     #[test]
@@ -600,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn two_filled_fields_in_one_paragraph_remove_its_cache_once() {
+    fn two_filled_fields_in_one_paragraph_share_one_kept_cache() {
         // 9000 = 필드 둘이 든 문단, 9001 = 다음 문단.
         // 이것을 실패시키는 것: 같은 구간을 두 번 모으기(`stale_caches` 가 구간을
         // 겹쳐 내면 두 번째 제거가 다른 바이트를 깎는다).
@@ -610,9 +634,9 @@ mod tests {
         );
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
-        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
+        // 이것을 실패시키는 것: 편집 문단 캐시 보존 생략 또는 기존 꼬리 제거 호출.
         // 미편집 평문 꼬리는 한컴이 vertpos를 다시 쌓는다.
-        assert_eq!(caches(&xml), vec![1]);
+        assert_eq!(caches(&xml), vec![0, 1]);
         assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
 
@@ -856,7 +880,8 @@ mod tests {
         let filled = fill_xml(&assetless, &[("cap", "1")]).expect("fill assetless caption");
         assert_eq!(caches(&filled), Vec::<usize>::new());
         let filled = fill_xml(&assetless, &[("body", "1")]).expect("fill body field");
-        assert_eq!(caches(&filled), vec![0, 1]);
+        // 이것을 실패시키는 것: 본문 편집 문단 캐시 보존 생략.
+        assert_eq!(caches(&filled), vec![0, 1, 2]);
     }
 
     #[test]
@@ -880,7 +905,8 @@ mod tests {
         assert_eq!(listed.len(), 1, "premise: the arc's inner text is not in the inventory");
         let filled = fill_xml(&bytes, &[("body", "1")]).expect("fill");
         // 9000 = 호 내부 문단, 9001 = 호가 든 문단, 9002 = 본문 필드 문단.
-        assert_eq!(caches(&filled), vec![0, 1]);
+        // 이것을 실패시키는 것: 본문 편집 문단 캐시 보존 생략.
+        assert_eq!(caches(&filled), vec![0, 1, 2]);
     }
 
     #[test]
@@ -953,10 +979,15 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
             // 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
             // 전용 시험(`cell_fill_drops_the_flow_tail_and_the_host_chain`)이 맡고,
-            // 여기서는 짝지은 문단의 캐시가 가고 첫 본문 문단(9000, `body`)은
-            // 다른 필드일 때 남는지만 본다.
+            // 여기서는 내부 문단의 캐시가 가고 첫 본문 문단(9000, `body`)은
+            // 한 줄 증거가 있으면 편집 여부와 무관하게 남는지도 본다.
             let left = caches(&filled);
-            assert!(!left.contains(&own), "{name}: its own paragraph cache goes: {left:?}");
+            // 이것을 실패시키는 것: 본문 편집 문단 캐시 보존 생략.
+            assert_eq!(
+                left.contains(&own),
+                name == "body",
+                "{name}: only a proven body paragraph keeps its own cache: {left:?}"
+            );
             assert!(left.iter().all(|k| all.contains(k)), "{name}");
             if name != "body" {
                 assert!(left.contains(&0), "{name}: the body paragraph before it keeps its cache");
@@ -1028,7 +1059,7 @@ mod tests {
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
         assert_eq!(listed.len(), 2, "premise: the unnamed field is listed");
         let xml = fill_xml(&bytes, &[("b", "값")]).expect("fill");
-        // 이것을 실패시키는 것: 보존형 패처에서 기존 꼬리 제거 호출.
-        assert_eq!(caches(&xml), vec![1]);
+        // 이것을 실패시키는 것: 편집 문단 캐시 보존 생략 또는 기존 꼬리 제거 호출.
+        assert_eq!(caches(&xml), vec![0, 1]);
     }
 }

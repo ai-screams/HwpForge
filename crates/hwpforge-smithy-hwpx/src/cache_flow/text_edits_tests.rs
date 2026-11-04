@@ -16,7 +16,7 @@ fn p(content: &str) -> String {
 }
 
 fn dropped(flow: &ParagraphFlow, changed: &[usize]) -> Vec<usize> {
-    let ranges = flow.caches_to_drop_for_text_edits(changed.iter().copied());
+    let ranges = flow.caches_to_drop_for_text_edits(changed.iter().copied(), &[]);
     assert_eq!(ranges.len(), ranges.iter().collect::<std::collections::HashSet<_>>().len());
     flow.caches
         .iter()
@@ -519,7 +519,7 @@ fn field_ranges_from_the_inventory_mark_every_paragraph_they_cover() {
 /// inventory, parsing) is not measured here.
 /// 이것을 실패시키는 것: 필드마다 모든 문단을 다시 훑어 표시하기(이차 투영),
 /// run 노드 조회를 키 조회 대신 전체 순회로 바꾸기(이차 조회),
-/// 편집점마다 stale_paragraphs 를 다시 부르기(이차 재순회).
+/// 편집점마다 stale_paragraphs 를 다시 부르기(이차 재순회), 편집 문단 캐시 보존 무시.
 #[test]
 fn counted_text_edit_gate_work_stays_linear() {
     let work = |n: usize| {
@@ -534,15 +534,21 @@ fn counted_text_edit_gate_work_stays_linear() {
         crate::work::WORK.set(0);
         let f = mapped(&xml);
         assert!(!f.unproven_fields);
+        assert_eq!(f.has_disallowed_self_element.len(), n);
         let edits: Vec<usize> = (0..n).step_by(4).collect();
         // The first field blocks the rest of the body list.
         assert_eq!(dropped(&f, &edits).len(), n);
+        let mut keep = vec![false; n];
+        keep[0] = true;
+        assert_eq!(f.caches_to_drop_for_text_edits(edits, &keep).len(), n - 1);
         crate::work::WORK.get()
     };
     let small = work(128);
-    let large = work(256);
+    let medium = work(256);
+    let large = work(512);
     assert!(small > 0, "the counted passes count their work");
-    assert!(large <= 2 * small + 8, "{small} -> {large}");
+    // Compare growth, cancelling the fixed section prefix counted once per input.
+    assert!(large - medium <= 2 * (medium - small) + 8, "{small} -> {medium} -> {large}");
 }
 
 /// If the inventory's field and the source lists disagree (the begin and
@@ -626,6 +632,25 @@ fn pos_children_read_their_parent_start_tag_once() {
     assert!(large <= 2 * small + 8, "{small} -> {large}");
 }
 
+// 이것을 실패시키는 것: fieldBegin을 꼬리 판정과 자기 문단 판정에서 각각 읽기.
+#[test]
+fn field_begin_start_tag_is_read_once() {
+    let work = |n: usize| {
+        let xml = format!(
+            "<sec><p paraPrIDRef='0'><run charPrIDRef='0'><ctrl><fieldBegin type='CLICK_HERE' name='{}'/></ctrl><t>가</t></run></p></sec>",
+            "X".repeat(n)
+        );
+        let (_, source) = XmlSource::read(&xml).unwrap();
+        let mut f = ParagraphFlow::from_source(&source);
+        crate::work::WORK.set(0);
+        f.scan_text_tail(&source, &xml).unwrap();
+        assert!(!f.has_disallowed_element[0]);
+        assert!(!f.has_disallowed_self_element[0]);
+        crate::work::WORK.get()
+    };
+    assert_eq!(work(200) - work(100), 100);
+}
+
 /// The document's virtual root has an empty range: it is never a start tag.
 /// 이것을 실패시키는 것: 기록된 범위를 확인 없이 잘라 읽기.
 #[test]
@@ -659,5 +684,170 @@ fn a_scan_of_other_text_leaves_the_flow_unproven() {
         f.prove_text_tail(&scanned_source, scanned, &Default::default(), |_| None);
         assert!(f.unproven_fields, "{scanned}");
         assert_eq!(dropped(&f, &[0]), expected, "{scanned}");
+    }
+}
+
+// 이것을 실패시키는 것: 보존 후보를 편집 집합에서 먼저 빼기, 최종 제거 집합에서 보존 후보 차감, 본문 없음/구역 실패 분기 제거.
+#[test]
+fn self_keep_never_overrides_nested_blocked_or_section_invalidation() {
+    let cases = [
+        (flow(&format!("{}{}{}", p("가"), p("나"), p("다"))), vec![1], vec![]),
+        (
+            flow(&format!("{}{}{}{}", p("가"), p("<autoNum/>"), p("나"), p("다"))),
+            vec![0, 2],
+            vec![1, 2, 3],
+        ),
+        (
+            flow(&format!(
+                "{}{}",
+                p(&format!("<tbl><pos treatAsChar='1'/><subList>{}</subList></tbl>", p("칸"))),
+                p("뒤")
+            )),
+            vec![0, 1],
+            vec![0, 1, 2],
+        ),
+        (
+            flow(&format!(
+                "{}{}",
+                p(&format!("<tbl><pos treatAsChar='1'/><subList>{}</subList></tbl>", p("칸"))),
+                p("뒤")
+            )),
+            vec![1],
+            vec![0, 1, 2],
+        ),
+        (
+            flow(&format!("{}{}", p("<colPr colCount='2' sameSz='0'/>"), p("나"))),
+            vec![0],
+            vec![0, 1],
+        ),
+    ];
+    for (case, (flow, changed, expected)) in cases.into_iter().enumerate() {
+        crate::work::WORK.set(0);
+        let ranges = flow.caches_to_drop_for_text_edits(changed, &vec![true; flow.spans.len()]);
+        if case == 3 {
+            assert_eq!(crate::work::WORK.get(), 9, "nested-only uses one conservative query");
+        }
+        let actual: Vec<_> = flow
+            .caches
+            .iter()
+            .enumerate()
+            .filter_map(|(p, caches)| caches.iter().any(|c| ranges.contains(c)).then_some(p))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+// 이것을 실패시키는 것: SourceMap/flow 범위 동등성 또는 직접 캐시 배열 유일성 검사 삭제.
+#[test]
+fn self_evidence_requires_the_exact_body_span() {
+    let xml = "<sec><p paraPrIDRef='3'><run charPrIDRef='0'><secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='0'/></secPr><t>가</t></run><linesegarray><lineseg/></linesegarray></p></sec>";
+    let (_, source) = XmlSource::read(xml).unwrap();
+    let mut f = ParagraphFlow::from_source(&source);
+    f.prove_text_tail(&source, xml, &Default::default(), |_| None);
+    assert_eq!(f.self_candidate(0, &f.spans[0]), Some(3));
+    assert_eq!(f.self_candidate(0, &(f.spans[0].start + 1..f.spans[0].end)), None);
+    let duplicate = xml.replace("</p>", "<linesegarray><lineseg/></linesegarray></p>");
+    let (_, source) = XmlSource::read(&duplicate).unwrap();
+    let mut f = ParagraphFlow::from_source(&source);
+    f.prove_text_tail(&source, &duplicate, &Default::default(), |_| None);
+    assert_eq!(f.self_candidate(0, &f.spans[0]), None);
+}
+
+// 이것을 실패시키는 것: 자기 허용 목록에 tab/lineBreak/nbSpace/fwSpace/autoNum 또는 임의 ctrl 자식을 허용, 빈 run의 다른 글자 모양 무시.
+#[test]
+fn self_element_allowlist_is_distinct_from_the_untouched_tail() {
+    for (content, allowed) in [
+        ("<t>가</t>", true),
+        ("</run><run charPrIDRef='1'><t/>", false),
+        ("<t>가<tab/></t>", false),
+        ("<t>가<lineBreak/></t>", false),
+        ("<t>가<nbSpace/></t>", false),
+        ("<t>가<fwSpace/></t>", false),
+        ("<ctrl><autoNum/></ctrl>", false),
+        ("<ctrl><footNote/></ctrl>", false),
+        ("<ctrl><unknown/></ctrl>", false),
+        ("<ctrl><colPr colCount='1'/></ctrl>", true),
+        ("<secPr textDirection='HORIZONTAL'><grid/><unknown/></secPr>", true),
+    ] {
+        let xml = format!("<sec><p paraPrIDRef='0'><run charPrIDRef='0'>{content}</run><linesegarray><lineseg/></linesegarray></p></sec>");
+        let (_, source) = XmlSource::read(&xml).unwrap();
+        let mut f = ParagraphFlow::from_source(&source);
+        f.prove_text_tail(&source, &xml, &Default::default(), |_| None);
+        assert_eq!(f.self_candidate(0, &f.spans[0]).is_some(), allowed, "{content}");
+    }
+}
+
+// 이것을 실패시키는 것: 편집 불가 CLICK_HERE/BOOKMARK 자기 투영 생략, 필드 범위의 시작 문단만 표시.
+#[test]
+fn bookmark_and_other_field_ranges_block_self_including_middle_and_end() {
+    for kind in ["BOOKMARK", "CROSSREF", "CLICK_HERE"] {
+        let xml = body(&[
+            format!("{}{}", t("앞"), begin(r#" id="77""#, kind)),
+            t("본문"),
+            format!("{}{}", end("77"), t("뒤")),
+            t("꼬리"),
+        ]);
+        let f = mapped(&xml);
+        assert!(!f.unproven_fields);
+        assert_eq!(f.has_disallowed_self_element[..3], [true, true, true]);
+    }
+}
+
+// 이것을 실패시키는 것: 위치 없는 BOOKMARK/편집 불가 CLICK_HERE의 자기 차단과 꼬리 입증 실패를 다시 합치기.
+#[test]
+fn unlocated_bookmark_and_uneditable_clickhere_block_all_self_caches_only() {
+    for kind in ["BOOKMARK", "CLICK_HERE"] {
+        let xml = format!(
+            "<hs:sec>{}</hs:sec>",
+            body(&[
+                format!("{}{}", t("앞"), begin(r#" id="77""#, kind)),
+                t("본문"),
+                format!("{}{}", end("77"), t("뒤")),
+                t("꼬리"),
+            ])
+        );
+        let parsed =
+            crate::decoder::section::parse_section(&xml, 0, &Default::default()).expect("parse");
+        let section = hwpforge_core::Section::with_paragraphs(
+            parsed.paragraphs,
+            hwpforge_core::PageSettings::a4(),
+        );
+        let inventory = hwpforge_core::field_inventory::FieldInventory::from_sections(
+            std::slice::from_ref(&section),
+        );
+        assert_eq!(inventory.fields().len(), 1);
+        assert_eq!(inventory.fields()[0].kind(), kind);
+        assert_ne!(
+            inventory.fields()[0].editability(),
+            hwpforge_core::field_inventory::FieldEditability::Editable
+        );
+        let (_, source) = XmlSource::read(&xml).unwrap();
+        let mut f = ParagraphFlow::from_source(&source);
+        f.prove_text_tail(&source, &xml, &inventory, |_| None);
+        assert!(!f.unproven_fields, "{kind}");
+        assert_eq!(f.has_disallowed_self_element, [true, true, true, true], "{kind}");
+    }
+}
+
+// 이것을 실패시키는 것: 구역 증거를 한 진입점에서만 수집, 중복 grid 또는 secPr 허용.
+#[test]
+fn section_adapters_agree_on_explicit_grid_evidence() {
+    for (properties, expected) in [
+        ("<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='0' lineGrid='9'/></secPr>", true),
+        ("<secPr textDirection='HORIZONTAL'><grid charGrid='1' wonggojiFormat='0'/></secPr>", false),
+        ("<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='1'/></secPr>", false),
+        ("<secPr textDirection='HORIZONTAL'><grid charGrid='0'/></secPr>", false),
+        ("<secPr textDirection='HORIZONTAL'/>", false),
+        ("<secPr><grid charGrid='0' wonggojiFormat='0'/><grid charGrid='0' wonggojiFormat='0'/></secPr>", false),
+        ("<secPr><grid charGrid='0' wonggojiFormat='0'/></secPr><secPr><grid charGrid='0' wonggojiFormat='0'/></secPr>", false),
+    ] {
+        let xml = format!("<sec><p paraPrIDRef='0'><run charPrIDRef='0'>{properties}<t>가</t></run></p></sec>");
+        let (_, source) = XmlSource::read(&xml).unwrap();
+        let mut f = ParagraphFlow::from_source(&source);
+        f.prove_text_tail(&source, &xml, &Default::default(), |_| None);
+        let cell = crate::line_keep::SectionEvidence::read(&xml).unwrap();
+        assert_eq!(crate::line_keep::source_allows(&cell, true),expected);
+        assert_eq!(crate::line_keep::source_allows(&f.section_evidence, true),expected);
+        assert!(!crate::line_keep::source_allows(&cell, false));
     }
 }

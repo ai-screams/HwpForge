@@ -2,7 +2,8 @@
 //! shared by the two preserve-first text editors: `fill` and `patch`.
 //!
 //! The conservative rule drops the edited paragraph, its flow tail and host
-//! chain. Preserve-only text edits can retain an untouched body tail whose
+//! chain. Preserve-only text edits can also retain a proven single-line body
+//! paragraph itself and an untouched body tail whose
 //! line breaking inputs stay fixed: Hancom restacks its vertical positions.
 //! Re-encoding callers keep the conservative rule below.
 
@@ -88,6 +89,9 @@ pub(crate) struct ParagraphFlow {
     /// a field other than ClickHere ([`Self::project_fields`]). Such a
     /// paragraph may change width or line breaks when pages move.
     has_disallowed_element: Vec<bool>,
+    has_disallowed_self_element: Vec<bool>,
+    paragraph_definitions: Vec<Option<usize>>,
+    pub(crate) section_evidence: crate::line_keep::SectionEvidence,
     /// Whether the section's gates or field ranges could not be placed on
     /// its source paragraphs ([`Self::prove_text_tail`]), so no paragraph
     /// can be proven plain.
@@ -105,7 +109,8 @@ pub(crate) struct ParagraphFlow {
 }
 
 impl ParagraphFlow {
-    /// Drop changed caches and all legacy nested-edit dependencies. In a body
+    /// Drop changed caches unless their own one-line evidence succeeds, and
+    /// retain all legacy nested-edit dependencies. In a body
     /// tail, keep the plain prefix before the first disallowed owner. A
     /// wrapping object anywhere in the section, or incompatible section
     /// geometry, keeps the conservative rule for the whole section.
@@ -114,6 +119,7 @@ impl ParagraphFlow {
     pub(crate) fn caches_to_drop_for_text_edits(
         &self,
         paragraphs: impl IntoIterator<Item = usize>,
+        keep: &[bool],
     ) -> Vec<Range<usize>> {
         let mut changed = vec![false; self.spans.len()];
         let mut has_body_edit = false;
@@ -157,11 +163,30 @@ impl ParagraphFlow {
         let mut ranges = Vec::new();
         for p in 0..self.spans.len() {
             crate::work::tick();
-            if changed[p] || nested[p] || (stale[p] && p >= block_from[self.para_list[p]]) {
+            if (changed[p] && !keep.get(p).copied().unwrap_or(false))
+                || nested[p]
+                || (stale[p] && p >= block_from[self.para_list[p]])
+            {
                 ranges.extend(self.caches[p].iter().cloned());
             }
         }
         ranges
+    }
+
+    /// Exact body ownership and one direct cache array, using decoder source ranges.
+    pub(crate) fn self_candidate(&self, p: usize, span: &Range<usize>) -> Option<usize> {
+        if self.parent.get(p)?.is_some()
+            || self.spans.get(p)? != span
+            || *self.has_disallowed_self_element.get(p)?
+            || self.caches.get(p)?.len() != 1
+        {
+            return None;
+        }
+        *self.paragraph_definitions.get(p)?
+    }
+
+    pub(crate) fn paragraph_count(&self) -> usize {
+        self.spans.len()
     }
 
     /// Build from the decoder's original-element records, without reading XML.
@@ -232,6 +257,13 @@ impl ParagraphFlow {
     ) -> Option<()> {
         let elements = source.elements();
         self.has_disallowed_element = vec![false; self.spans.len()];
+        self.has_disallowed_self_element = vec![false; self.spans.len()];
+        self.paragraph_definitions = vec![None; self.spans.len()];
+        let mut character_definitions: Vec<Option<usize>> = vec![None; self.spans.len()];
+        self.section_evidence = crate::line_keep::SectionEvidence::default();
+        let mut in_section = vec![false; elements.len()];
+        let mut section_property = vec![false; elements.len()];
+        let mut click_metadata = vec![false; elements.len()];
         self.has_wrapping_object = false;
         self.has_horizontal_section = false;
         self.incompatible_section = false;
@@ -242,11 +274,16 @@ impl ParagraphFlow {
             let parent = element.parent();
             nearest[id] = nearest[parent];
             let name = element.name();
+            in_section[id] = in_section[parent] || name == "secPr";
+            click_metadata[id] = click_metadata[parent];
             if name == "p" {
                 if self.spans.get(paragraphs) != Some(&element.outer()) {
                     return None;
                 }
                 nearest[id] = Some(paragraphs);
+                self.paragraph_definitions[paragraphs] =
+                    attribute(&source_start(xml, element)?, "paraPrIDRef")
+                        .and_then(|s| s.parse().ok());
                 paragraphs += 1;
             }
             // Section-level gates come first: they hold whichever paragraph,
@@ -258,6 +295,21 @@ impl ParagraphFlow {
                         attribute(&start, "textDirection").as_deref() == Some("HORIZONTAL");
                     self.has_horizontal_section |= horizontal;
                     self.incompatible_section |= !horizontal;
+                    let run = &elements[parent];
+                    let paragraph = &elements[run.parent()];
+                    if run.name() == "run"
+                        && paragraph.name() == "p"
+                        && elements[paragraph.parent()].parent() == 0
+                    {
+                        section_property[id] = true;
+                        self.section_evidence.properties += 1;
+                    }
+                }
+                "grid" if section_property[parent] => {
+                    let start = source_start(xml, element)?;
+                    self.section_evidence.grids += 1;
+                    self.section_evidence.char_grid = attribute(&start, "charGrid");
+                    self.section_evidence.wonggoji = attribute(&start, "wonggojiFormat");
                 }
                 "colPr" => {
                     let start = source_start(xml, element)?;
@@ -302,21 +354,48 @@ impl ParagraphFlow {
             // Only the innermost owner receives the flag. Containers already
             // flag their host; descendant aggregation would mix independent flows.
             let Some(owner) = nearest[id] else { continue };
-            let disallowed = !text_tail_element(name)
-                || (name == "fieldBegin"
-                    && attribute(&source_start(xml, element)?, "type").as_deref()
-                        != Some("CLICK_HERE"));
+            if name == "fieldBegin" {
+                click_metadata[id] = attribute(&source_start(xml, element)?, "type").as_deref()
+                    == Some("CLICK_HERE");
+            }
+            let disallowed =
+                !text_tail_element(name) || (name == "fieldBegin" && !click_metadata[id]);
             self.has_disallowed_element[owner] |= disallowed;
+            let parent_name = elements[parent].name();
+            if name == "run" && parent_name == "p" {
+                let character = attribute(&source_start(xml, element)?, "charPrIDRef")
+                    .and_then(|s| s.parse().ok());
+                self.has_disallowed_self_element[owner] |= character.is_none()
+                    || character_definitions[owner].is_some_and(|old| Some(old) != character);
+                character_definitions[owner] = character;
+            }
+            let allowed = in_section[id]
+                || match name {
+                    "p" => true,
+                    "run" | "linesegarray" => parent_name == "p",
+                    "t" | "ctrl" => parent_name == "run",
+                    "lineseg" => parent_name == "linesegarray",
+                    "colPr" | "fieldEnd" => parent_name == "ctrl",
+                    "fieldBegin" => parent_name == "ctrl" && click_metadata[id],
+                    "parameters" => parent_name == "fieldBegin" && click_metadata[id],
+                    "stringParam" | "integerParam" | "booleanParam" => {
+                        parent_name == "parameters" && click_metadata[id]
+                    }
+                    _ => false,
+                };
+            self.has_disallowed_self_element[owner] |= !allowed;
         }
         (paragraphs == self.spans.len()).then_some(())
     }
 
-    /// Marks every paragraph that a field other than ClickHere covers (its
-    /// begin, body and end), taking the ranges from the section's
-    /// `inventory`. `run_start` gives a run path's first source byte. A
-    /// range the inventory does not prove (a diagnostic or a recovered
-    /// warning), a run without a source position, or a begin and end in
-    /// different source lists leaves the section unproven.
+    /// Marks every paragraph covered by non-ClickHere fields for tail removal,
+    /// and by any field without an editable value for self-cache removal.
+    /// Uses begin, body and end ranges from the section's
+    /// `inventory`. `run_start` gives a run path's first source byte.
+    /// A diagnostic or recovered warning leaves the section unproven.
+    /// An unlocated range does too, except for bookmarks and ClickHere:
+    /// their unknown coverage blocks only self-cache preservation throughout
+    /// the section, leaving the existing tail proof intact.
     fn project_fields(
         &mut self,
         inventory: &hwpforge_core::field_inventory::FieldInventory<'_>,
@@ -328,32 +407,48 @@ impl ParagraphFlow {
         }
         let mut opens = vec![0usize; self.spans.len()];
         let mut closes = opens.clone();
+        let mut self_opens = opens.clone();
+        let mut self_closes = opens.clone();
+        let mut unlocated_self_field = false;
         for field in inventory.fields() {
             crate::work::tick();
-            // Bookmarks show nothing; ClickHere shows the text the user typed.
-            if matches!(field.kind(), "CLICK_HERE" | "BOOKMARK") {
+            // Only editable ClickHere values have complete patchable text slots.
+            // Other ranges may hide visible text from the width calculation.
+            if field.kind() == "CLICK_HERE"
+                && field.editability() == hwpforge_core::field_inventory::FieldEditability::Editable
+            {
                 continue;
             }
             let at = |path: &str| run_start(path).and_then(|offset| self.paragraph_at(offset));
             let begin = at(field.start());
             let end = field.end().as_deref().map_or(begin, at);
+            let self_only = matches!(field.kind(), "BOOKMARK" | "CLICK_HERE");
             match (begin, end) {
                 (Some(b), Some(e)) if b <= e && self.para_list[b] == self.para_list[e] => {
-                    opens[b] += 1;
-                    closes[e] += 1;
+                    self_opens[b] += 1;
+                    self_closes[e] += 1;
+                    if !self_only {
+                        opens[b] += 1;
+                        closes[e] += 1;
+                    }
                 }
+                _ if self_only => unlocated_self_field = true,
                 _ => return,
             }
         }
         // Paragraphs of one list rise in index order, so a running count per
         // list covers every paragraph from a begin to its end.
         let mut running = vec![0usize; self.list_host.len()];
+        let mut self_running = running.clone();
         for p in 0..self.spans.len() {
             crate::work::tick();
             let list = self.para_list[p];
             running[list] += opens[p];
             self.has_disallowed_element[p] |= running[list] > 0;
             running[list] -= closes[p];
+            self_running[list] += self_opens[p];
+            self.has_disallowed_self_element[p] |= unlocated_self_field || self_running[list] > 0;
+            self_running[list] -= self_closes[p];
         }
         self.unproven_fields = false;
     }
