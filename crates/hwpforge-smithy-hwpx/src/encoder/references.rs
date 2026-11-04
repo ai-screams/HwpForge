@@ -17,11 +17,9 @@
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
 
+use super::package::CONTENT_HPF_PART;
 use super::EncodeWarning;
 use crate::error::{HwpxError, HwpxResult};
-
-/// The CONTENT_HPF part name, for parse errors.
-const CONTENT_HPF: &str = "Contents/content.hpf";
 
 /// `(id, href)` of every `<opf:item>` in `content_hpf`, in document order,
 /// as an XML reader reads the attribute values.
@@ -30,7 +28,8 @@ const CONTENT_HPF: &str = "Contents/content.hpf";
 ///
 /// [`HwpxError::XmlParse`] if the text is not well-formed.
 pub(crate) fn read_manifest(content_hpf: &str) -> HwpxResult<Vec<(String, String)>> {
-    let parse_error = |detail: String| HwpxError::XmlParse { file: CONTENT_HPF.into(), detail };
+    let parse_error =
+        |detail: String| HwpxError::XmlParse { file: CONTENT_HPF_PART.into(), detail };
     let mut items = Vec::new();
     let mut reader = Reader::from_str(content_hpf);
     loop {

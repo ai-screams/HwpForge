@@ -434,6 +434,9 @@ impl HwpxStamper {
         let fields = HwpxFiller::list_fields(&bytes)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         let manifest = build_manifest(base, &bytes, &fields, &outcome)?;
+        package
+            .verify_reencoded_output(base, &bytes, validated.sections())
+            .map_err(StamperError::Codec)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             StampResult { bytes, manifest, outcome },
             decode_warnings,
@@ -572,6 +575,9 @@ impl HwpxStamper {
         let fields = HwpxFiller::list_fields(&bytes)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?;
         let manifest = build_manifest_v2(base, &bytes, &fields, &text_outcome, &cell_outcome)?;
+        package
+            .verify_reencoded_output(base, &bytes, validated.sections())
+            .map_err(StamperError::Codec)?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             StampResultV2 {
                 bytes,
@@ -1322,18 +1328,15 @@ pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), Stamper
 
 fn zip_entry_names(bytes: &[u8]) -> hwpforge_core::CoreResult<Vec<String>> {
     let archive = hwpforge_core::zip_package::open_package(bytes, Default::default())?;
-    // Only normal empty directory placeholders are packaging detail. Opaque
-    // entries must be accounted for even when their payload is empty.
-    Ok(archive
-        .entries()
-        .iter()
-        .enumerate()
-        .filter(|(index, entry)| {
-            // Retain this crate-boundary guard even though core classifies nonempty directories as opaque.
-            archive.is_opaque(*index) || !entry.path.ends_with('/') || entry.size != 0
-        })
-        .map(|(_, entry)| entry.path.clone())
-        .collect())
+    let mut names = Vec::new();
+    for index in 0..archive.entries().len() {
+        let path = &archive.entries()[index].path;
+        if !crate::raw_package::RawPackage::is_directory_placeholder(path, archive.is_opaque(index))
+        {
+            names.push(path.clone());
+        }
+    }
+    Ok(names)
 }
 
 fn build_manifest(
@@ -1573,6 +1576,32 @@ mod tests {
                 }
             );
         }
+    }
+
+    // 이것을 실패시키는 것: 이름 열거에서 일반 payload를 다시 읽거나,
+    // Core의 opaque 분류 없이 slash만으로 내용 있는 디렉터리를 생략.
+    #[test]
+    fn zip_names_reuse_core_classification_without_reading_file_payloads() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in
+            [("asset", b"payload".as_slice()), ("Empty/", b""), ("Full/", b"x"), ("Alias/./", b"")]
+        {
+            zip.start_file(
+                name,
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(data).unwrap();
+        }
+        let mut bytes = zip.finish().unwrap().into_inner();
+        let at = bytes.windows(7).position(|w| w == b"payload").unwrap();
+        bytes[at] ^= 1;
+        let mut package =
+            hwpforge_core::zip_package::open_package(&bytes, Default::default()).unwrap();
+        assert!(package.read(0).is_err(), "the file payload has a bad CRC");
+        assert_eq!(super::zip_entry_names(&bytes).unwrap(), ["asset", "Full/", "Alias/./"]);
     }
 
     /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.

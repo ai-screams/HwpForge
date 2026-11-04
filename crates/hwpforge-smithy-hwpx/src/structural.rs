@@ -329,10 +329,11 @@ impl HwpxStructuralEditor {
     ///
     /// Deleting nothing decodes nothing, so the empty-target no-op returns an
     /// empty list rather than the warnings of a decode it never ran.
+    /// The original bytes are returned without package validation.
     ///
     /// # Errors
     ///
-    /// See [`StructuralEditError`]. Every package entry is read and counted,
+    /// See [`StructuralEditError`]. For nonempty edits every package entry is read and counted,
     /// including ones the decoder ignores: an entry past 50 MiB, or a package
     /// past 500 MiB decompressed, is refused with
     /// [`StructuralEditError::Codec`].
@@ -417,6 +418,7 @@ impl HwpxStructuralEditor {
         for t in targets {
             by_section.entry(t.section).or_default().push(t.index);
         }
+        let mut changes = crate::raw_package::OutputChanges::default();
         for (section_idx, mut indices) in by_section {
             let path = package
                 .section_path(section_idx)
@@ -447,23 +449,11 @@ impl HwpxStructuralEditor {
             }
             indices.sort_unstable();
             let out = splice_paragraphs(&xml, map, &indices, None)?;
+            changes.rewritten.push(path.clone());
             package.replace_text_entry(&path, out);
         }
-        normalize_header_for_edit(&mut package, &d0)?;
-        let bytes = package
-            .write()
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-
-        // ── reverse-delta self-verify: output ≡ declared delta ──
-        let expected_doc = HwpxDocument {
-            source_maps: Vec::new(),
-            source_basis: None,
-            warnings: Vec::new(),
-            document: expected,
-            style_store: d0.style_store.clone(),
-            image_store: d0.image_store.clone(),
-        };
-        self_verify(&bytes, &expected_doc)?;
+        normalize_header_for_edit(&mut package, &d0, &mut changes)?;
+        let bytes = finish_edit(base, package, &d0, expected, &changes)?;
 
         Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
     }
@@ -502,7 +492,7 @@ impl HwpxStructuralEditor {
     /// Paragraphs from the insertion point down have their now-stale caches
     /// stripped so the renderer recomputes them.
     ///
-    /// An empty `texts` is a byte-identical no-op.
+    /// An empty `texts` returns the original bytes without package validation.
     ///
     /// # Errors
     ///
@@ -571,7 +561,8 @@ impl HwpxStructuralEditor {
     /// # Errors
     ///
     /// See [`StructuralEditError`]; each text must be a single paragraph
-    /// (no newline), else [`StructuralEditError::MultiParagraphText`]. Every
+    /// (no newline), else [`StructuralEditError::MultiParagraphText`]. Empty
+    /// requests return the original bytes without validation. Otherwise every
     /// package entry is read and counted, including ones the decoder ignores:
     /// an entry past 50 MiB, or a package past 500 MiB decompressed, is
     /// refused with [`StructuralEditError::Codec`].
@@ -785,24 +776,40 @@ impl HwpxStructuralEditor {
         let out =
             splice_paragraphs(&xml, map, &[], Some((insert_index, texts.len(), &new_para_bytes)))?;
         package.replace_text_entry(&path, out);
-        normalize_header_for_edit(&mut package, &d0)?;
-        let bytes = package
-            .write()
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-
-        // ── reverse-delta self-verify ──
-        let expected_doc = HwpxDocument {
-            source_maps: Vec::new(),
-            source_basis: None,
-            warnings: Vec::new(),
-            document: expected,
-            style_store: d0.style_store.clone(),
-            image_store: d0.image_store.clone(),
-        };
-        self_verify(&bytes, &expected_doc)?;
+        let mut changes = crate::raw_package::OutputChanges { rewritten: vec![path] };
+        normalize_header_for_edit(&mut package, &d0, &mut changes)?;
+        let bytes = finish_edit(base, package, &d0, expected, &changes)?;
 
         Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
+}
+
+/// Writes the edited package, then checks the bytes against the declared delta
+/// (reverse-delta self-verify) and the package preservation rule. The edited
+/// package is dropped first: it is not the original, so the preservation check
+/// re-reads `base`.
+fn finish_edit(
+    base: &[u8],
+    package: RawPackage,
+    d0: &HwpxDocument,
+    expected: Document,
+    changes: &crate::raw_package::OutputChanges,
+) -> Result<Vec<u8>, StructuralEditError> {
+    let bytes = package
+        .write()
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
+    drop(package);
+    let expected_doc = HwpxDocument {
+        source_maps: Vec::new(),
+        source_basis: None,
+        warnings: Vec::new(),
+        document: expected,
+        style_store: d0.style_store.clone(),
+        image_store: d0.image_store.clone(),
+    };
+    self_verify(&bytes, &expected_doc)?;
+    RawPackage::verify_output(base, &bytes, changes).map_err(StructuralEditError::Codec)?;
+    Ok(bytes)
 }
 
 // Admission has already validated the original definitions and proved the
@@ -810,6 +817,7 @@ impl HwpxStructuralEditor {
 fn normalize_header_for_edit(
     package: &mut RawPackage,
     decoded: &HwpxDocument,
+    changes: &mut crate::raw_package::OutputChanges,
 ) -> Result<(), StructuralEditError> {
     if decoded.requires_header_normalization() {
         let sections = decoded.document.sections();
@@ -819,7 +827,9 @@ fn normalize_header_for_edit(
             sections.first().and_then(|s| s.begin_num.as_ref()),
         )
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        package.replace_text_entry("Contents/header.xml", header);
+        use crate::encoder::package::HEADER_PART;
+        package.replace_text_entry(HEADER_PART, header);
+        changes.rewritten.push(HEADER_PART.into());
     }
     Ok(())
 }

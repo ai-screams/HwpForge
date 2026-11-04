@@ -29,6 +29,10 @@
 //! These sources describe format roles; no Hancom rendering experiment is claimed.
 
 use super::{collect_named, Node, RawPackage};
+use crate::encoder::package::{
+    CONTAINER_PART, CONTAINER_RDF_PART, CONTENT_HPF_PART, HEADER_PART, MANIFEST_PART,
+    MIMETYPE_PART, SETTINGS_PART, VERSION_PART,
+};
 use crate::HwpxResult;
 use sha2::{Digest, Sha256};
 
@@ -60,7 +64,7 @@ fn settings_input(mut node: Node) -> Option<Node> {
 }
 
 fn represented_part(path: &str) -> bool {
-    matches!(path, "Contents/header.xml" | "Contents/content.hpf")
+    matches!(path, HEADER_PART | CONTENT_HPF_PART)
         || ["Contents/section", "Contents/masterpage"].iter().any(|prefix| {
             path.strip_prefix(prefix)
                 .and_then(|p| p.strip_suffix(".xml"))
@@ -86,7 +90,7 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
             });
             continue;
         }
-        if path == crate::decoder::package_order::CONTENT && !package.order.content_excludable {
+        if path == CONTENT_HPF_PART && !package.order.content_excludable {
             global.children.push(Node {
                 name: path.into(),
                 children: vec![content.clone()],
@@ -94,11 +98,8 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
             });
         }
         if represented_part(path)
-            || (path == "META-INF/container.xml" && package.order.container_excludable)
-            || matches!(
-                path,
-                "version.xml" | "META-INF/container.rdf" | "META-INF/manifest.xml" | "mimetype"
-            )
+            || (path == CONTAINER_PART && package.order.container_excludable)
+            || matches!(path, VERSION_PART | CONTAINER_RDF_PART | MANIFEST_PART | MIMETYPE_PART)
             || path.starts_with("Preview/")
         {
             continue;
@@ -107,12 +108,12 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
         let mut info = Node { name: path.into(), ..Node::default() };
         if path.ends_with(".xml") || path.ends_with(".hpf") {
             let xml = crate::package_xml::text_entry(path, bytes)?;
-            let parsed = if path == crate::decoder::package_order::CONTAINER {
+            let parsed = if path == CONTAINER_PART {
                 Node::parse_package_xml(&xml)?
             } else {
                 Node::parse(&xml)?
             };
-            if path == "settings.xml" {
+            if path == SETTINGS_PART {
                 let Some(settings) = settings_input(parsed) else { continue };
                 info.children.push(settings);
             } else {

@@ -12,9 +12,18 @@ use crate::CoreResult;
 /// at most 259 bytes are accepted; 260 bytes or more are rejected.
 const OPAQUE_REFERENCE_NAME_BUFFER_SIZE: usize = 260;
 
+/// Original name from the central directory already framed by `directory::open`.
+/// Use the metadata's physical offset, not an assumed iterator/record order.
+pub(super) fn raw_name(bytes: &[u8], central_header_start: u64) -> CoreResult<&[u8]> {
+    let start = usize::try_from(central_header_start).map_err(|_| directory::invalid())?;
+    let len = directory::u16_at(bytes, start.checked_add(28).ok_or_else(directory::invalid)?)?;
+    let name = start.checked_add(46).ok_or_else(directory::invalid)?;
+    bytes.get(name..name + usize::from(len)).ok_or_else(directory::invalid)
+}
+
 // Bound each preview before escaping, including the two-name mismatch error.
 // UTF-8 previews end at a character boundary; invalid UTF-8 retains byte identity.
-fn display_name(name: &[u8]) -> String {
+pub(super) fn display_name(name: &[u8]) -> String {
     let mut end = name.len().min(64);
     let mut display = match std::str::from_utf8(name) {
         Ok(text) => {
@@ -47,19 +56,14 @@ pub(super) fn classify(
     bytes: &[u8],
     archive: &ZipArchive<Cursor<&[u8]>>,
     entries: &[PackageEntry],
+    mut opaque: Vec<bool>,
 ) -> CoreResult<Vec<bool>> {
     let metadata = archive.metadata();
     let mut names = Vec::with_capacity(entries.len());
-    let mut opaque = vec![false; entries.len()];
     let mut stripped = BTreeMap::<&[u8], usize>::new();
     for (index, entry) in entries.iter().enumerate() {
         let meta = metadata.entry(index).map_err(|e| zip_error(e.to_string()))?;
-        // The selected CD was already framed and checked by directory::open.
-        // Join by the metadata's physical central-header offset, never by an
-        // assumed equality of the zip iterator and physical record order.
-        let start = meta.central_header_start() as usize;
-        let len = directory::u16_at(bytes, start + 28)? as usize;
-        let raw = &bytes[start + 46..start + 46 + len];
+        let raw = raw_name(bytes, meta.central_header_start())?;
         let effective = meta.name_raw();
         for name in [raw, effective] {
             if !invariant(name) {
@@ -68,7 +72,6 @@ pub(super) fn classify(
                     String::from_utf8_lossy(name)
                 )));
             }
-            opaque[index] |= name.ends_with(b"/") && entry.size != 0;
             let text = String::from_utf8_lossy(name);
             opaque[index] |= normalize_part_name(text.strip_suffix('/').unwrap_or(&text)).is_err();
         }
@@ -150,4 +153,22 @@ pub(super) fn classify(
 #[cfg(test)]
 thread_local! {
     pub(super) static WORK: std::cell::Cell<(usize,usize,usize)> = const { std::cell::Cell::new((0,0,0)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::raw_name;
+
+    // 이것을 실패시키는 것: 이름 길이나 레코드 위치를 검사하지 않고 잘라 내기.
+    #[test]
+    fn raw_name_rejects_out_of_range_records() {
+        let mut record = vec![0u8; 46];
+        record[28..30].copy_from_slice(&10u16.to_le_bytes());
+        for (bytes, start) in [(&record[..], 0), (&record[..], u64::MAX)] {
+            let error = raw_name(bytes, start).unwrap_err().to_string();
+            assert!(error.contains("invalid ZIP central directory framing"), "{error}");
+        }
+        record.extend(b"0123456789");
+        assert_eq!(raw_name(&record, 0).unwrap(), b"0123456789");
+    }
 }

@@ -4446,6 +4446,12 @@
           "function": "carry_line_segs",
           "stage": "Verification",
           "occurrence": 6
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/raw_package.rs",
+          "function": "RawPackage::verify_output_capped",
+          "stage": "Verification",
+          "occurrence": 1
         }
       ]
     },
@@ -4615,13 +4621,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
-          "stage": "Encode",
-          "occurrence": 1
-        },
-        {
-          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "function": "finish_edit",
           "stage": "Encode",
           "occurrence": 1
         },

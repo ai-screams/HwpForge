@@ -1,9 +1,8 @@
 use super::*;
+use crate::test_support::xml;
 use hwpforge_core::layout::{LineBoundary, LineSeg, WireTokenKind};
 use hwpforge_core::{ImageStore, PageSettings, Section, TableRow};
 use hwpforge_foundation::HwpUnit;
-#[path = "../../tests/support/xml.rs"]
-mod xml;
 
 fn paragraph(text: &str) -> Paragraph {
     let mut para =

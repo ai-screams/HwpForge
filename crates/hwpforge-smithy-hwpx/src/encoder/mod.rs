@@ -401,7 +401,7 @@ use crate::error::{HwpxError, HwpxResult};
 use crate::style_store::HwpxStyleStore;
 
 use self::header::encode_header;
-use self::package::PackageWriter;
+use self::package::{PackageWriter, CONTENT_HPF_PART, HEADER_PART};
 use self::section::encode_section_with_note_counters;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
@@ -540,9 +540,6 @@ pub enum EncodeWarning {
         kinds: Vec<String>,
     },
 }
-
-/// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
-const CONTENT_HPF_PART: &str = "Contents/content.hpf";
 
 impl EncodeWarning {
     /// 이 경고가 **의미 손상**인지 — 즉 산출 바이트가 입력의 의미를 잃었는지.
@@ -1437,7 +1434,7 @@ impl HwpxEncoder {
                     } = w
                     {
                         Some(EncodeWarning::UnclosedFieldBoundary {
-                            part: format!("Contents/section{section_index}.xml"),
+                            part: package::section_part_name(*section_index),
                             reason: w.to_string(),
                         })
                     } else {
@@ -1464,7 +1461,7 @@ impl HwpxEncoder {
                 &mut note_counters,
                 &mut context,
             )?;
-            origins::finish_part(&format!("Contents/section{i}.xml"), &mut result.xml)?;
+            origins::finish_part(&package::section_part_name(i), &mut result.xml)?;
             for (part, xml) in &mut result.master_pages {
                 origins::finish_part(part, xml)?;
             }
@@ -1556,7 +1553,7 @@ impl HwpxEncoder {
         // 이것을 실패시키는 것: extend로 되돌림(each_removal_is_reported_with_its_part_and_location).
         context.warnings.splice(
             section_warning_start..section_warning_start,
-            forbidden_char_warnings("Contents/header.xml", header_sites),
+            forbidden_char_warnings(HEADER_PART, header_sites),
         );
 
         let dropped_caches: Vec<Vec<EncodeWarning>> =
@@ -1593,15 +1590,15 @@ impl HwpxEncoder {
         // before it is read back, so the checks read the text that is written.
         let rendered = package::render_content_hpf(document.metadata(), &manifest);
         let (content_hpf, sites) = crate::wire_xml::strip_xml_forbidden_chars(&rendered);
-        context.warnings.extend(forbidden_char_warnings("Contents/content.hpf", sites));
+        context.warnings.extend(forbidden_char_warnings(CONTENT_HPF_PART, sites));
         let written = references::read_manifest(&content_hpf)?;
         context.warnings.extend(references::manifest_id_conflicts(&written));
-        let mut parts: Vec<(String, &str)> = vec![("Contents/header.xml".to_string(), &header_xml)];
+        let mut parts: Vec<(String, &str)> = vec![(HEADER_PART.to_string(), &header_xml)];
         parts.extend(
             section_xmls
                 .iter()
                 .enumerate()
-                .map(|(i, xml)| (format!("Contents/section{i}.xml"), xml.as_str())),
+                .map(|(i, xml)| (package::section_part_name(i), xml.as_str())),
         );
         parts.extend(master_pages.iter().map(|(path, xml)| (path.clone(), xml.as_str())));
         let parts: Vec<(&str, &str)> = parts.iter().map(|(n, x)| (n.as_str(), *x)).collect();

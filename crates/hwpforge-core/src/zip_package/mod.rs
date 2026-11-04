@@ -96,7 +96,14 @@ pub fn normalize_part_name(name: &str) -> CoreResult<&str> {
 /// Case-only collisions are rejected; selecting the same entry as Hancom from
 /// such collisions is deferred. Lookups that do not follow
 /// manifest hrefs (images, master pages and settings) are a separate limitation.
-/// Decompression is lazy, with actual byte limits enforced by [`Package::read`].
+/// Decompression is lazy except for directory classification, which decompresses
+/// at most one byte per directory record to learn whether it has content. That
+/// byte counts against the cumulative read budget; all full reads enforce actual
+/// byte limits through [`Package::read`]. An error while producing that byte
+/// (including the CRC check of an empty directory, whose end the probe reaches)
+/// or an exhausted total budget fails this open call. A directory with content
+/// reports its remaining CRC, payload and per-entry limit errors on its first
+/// full read, so a consumer that never reads it does not check it for damage.
 ///
 /// # Errors
 /// Rejects ambiguous/invalid ZIP directories, unsafe names and resource limits.
@@ -109,6 +116,7 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
     let archive = directory::open(bytes, limits.entries)?;
     let mut entries = Vec::with_capacity(archive.len());
     let mut keys = BTreeSet::new();
+    let mut directories = Vec::new();
     let metadata = archive.metadata();
     for (index, name) in archive.file_names().enumerate() {
         let path = name.map_err(|e| zip_error(e.to_string()))?.into_owned();
@@ -117,6 +125,10 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
             return Err(invalid_structure(format!("duplicate decoded ZIP entry name '{key}'")));
         }
         let entry = metadata.entry(index).map_err(|e| zip_error(e.to_string()))?;
+        let raw = names::raw_name(bytes, entry.central_header_start())?;
+        if raw.ends_with(b"/") || entry.name_raw().ends_with(b"/") {
+            directories.push(index);
+        }
         entries.push(PackageEntry {
             path,
             size: entry.size(),
@@ -124,8 +136,22 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
             compression: entry.compression(),
         });
     }
-    let opaque = names::classify(bytes, &archive, &entries)?;
-    Ok(Package { archive, entries, opaque, limits, total_read: 0 })
+    // 이것을 실패시키는 것: 디렉터리 이름 검사를 payload 읽기 뒤로 미루기.
+    // Reject name collisions before attempting even directory decompression.
+    let opaque = names::classify(bytes, &archive, &entries, vec![false; entries.len()])?;
+    let has_directories = !directories.is_empty();
+    let mut package = Package { archive, opaque, entries, limits, total_read: 0 };
+    // 이것을 실패시키는 것: 실제 해제 바이트 대신 헤더 크기로 디렉터리를 분류.
+    for index in directories {
+        package.opaque[index] |= package.has_output(index)?;
+    }
+    // 이것을 실패시키는 것: 내용 기반 opaque 추가 뒤 이름 증거 재검사 생략.
+    // Payload-based opacity must also satisfy the raw/effective name guards.
+    if has_directories {
+        package.opaque =
+            names::classify(bytes, &package.archive, &package.entries, package.opaque)?;
+    }
+    Ok(package)
 }
 
 impl Package<'_> {
@@ -144,17 +170,37 @@ impl Package<'_> {
         self.opaque.get(index).copied().unwrap_or(false)
     }
 
-    /// Read an entry, bounded by actual output rather than header sizes.
-    ///
-    /// # Errors
-    /// Returns existing Core errors for ZIP read failures or exceeded budgets.
-    pub fn read(&mut self, index: usize) -> CoreResult<Vec<u8>> {
+    fn check_total_budget(&self) -> CoreResult<()> {
         if self.total_read > self.limits.total {
             return Err(invalid_structure(format!(
                 "total decompressed data ({} bytes) exceeds limit of {}",
                 self.total_read, self.limits.total,
             )));
         }
+        Ok(())
+    }
+
+    /// Whether at least one byte decompresses, reading at most that byte.
+    /// The byte counts against the cumulative budget like any other read.
+    fn has_output(&mut self, index: usize) -> CoreResult<bool> {
+        let file = self.archive.by_index(index).map_err(|e| zip_error(e.to_string()))?;
+        let mut probe = Vec::with_capacity(1);
+        let result = file.take(1).read_to_end(&mut probe);
+        self.total_read = self.total_read.saturating_add(probe.len() as u64);
+        result.map_err(|e| {
+            let path = names::display_name(self.entries[index].path.as_bytes());
+            zip_error(format!("read {path}: {e}"))
+        })?;
+        self.check_total_budget()?;
+        Ok(!probe.is_empty())
+    }
+
+    /// Read an entry, bounded by actual output rather than header sizes.
+    ///
+    /// # Errors
+    /// Returns existing Core errors for ZIP read failures or exceeded budgets.
+    pub fn read(&mut self, index: usize) -> CoreResult<Vec<u8>> {
+        self.check_total_budget()?;
         let entry =
             self.entries.get(index).ok_or_else(|| zip_error("entry index out of bounds"))?;
         let path = &entry.path;
@@ -173,12 +219,7 @@ impl Package<'_> {
                 self.limits.entry,
             )));
         }
-        if self.total_read > self.limits.total {
-            return Err(invalid_structure(format!(
-                "total decompressed data ({} bytes) exceeds limit of {}",
-                self.total_read, self.limits.total,
-            )));
-        }
+        self.check_total_budget()?;
         Ok(data)
     }
 }

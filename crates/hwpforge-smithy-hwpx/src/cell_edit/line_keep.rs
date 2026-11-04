@@ -1,5 +1,6 @@
 //! Conservative one-line filter for text-only cell replacement.
 use super::*;
+use crate::encoder::package::HEADER_PART;
 use crate::patch::RawPackage;
 use crate::style_store::{HwpxCharShape, HwpxStyleStore};
 use hwpforge_core::layout::LayoutCache;
@@ -223,7 +224,7 @@ fn section_allows(xml: &str) -> Option<()> {
 
 fn read_header(package: &RawPackage) -> Option<Tag> {
     count(0);
-    package.read_text_entry("Contents/header.xml").ok().and_then(|xml| Tag::read(&xml))
+    package.read_text_entry(HEADER_PART).ok().and_then(|xml| Tag::read(&xml))
 }
 
 /// Selects cells whose Core cache and original wire properties prove one line.

@@ -1,6 +1,7 @@
 //! Shared preserve-first HWPX package storage.
 
 use crate::decoder::package::PackageReader;
+use crate::encoder::package::MIMETYPE_PART;
 use crate::error::{HwpxError, HwpxResult};
 use crate::package_path::package_error;
 use hwpforge_core::zip_package::{open_package, PackageLimits, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE};
@@ -26,11 +27,173 @@ struct RawPackageEntry {
 
 #[cfg(test)]
 thread_local! {
-    // Full-package reads and writes on this test thread, excluding metadata opens.
+    // Capture the declaration actually submitted by each editor on this thread.
+    static VERIFIED_CHANGES: std::cell::RefCell<Option<OutputChanges>> = const { std::cell::RefCell::new(None) };
+    // Full-package reads and writes, excluding metadata opens.
     static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
+/// Exact parts an editor replaces/rebuilds; never path prefixes.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct OutputChanges {
+    pub(crate) rewritten: Vec<String>,
+}
+
+impl OutputChanges {
+    /// Full-document editors rebuild these exact parts. Existing media, charts,
+    /// and OLE still owe payload preservation. Master pages are rebuilt from Core.
+    fn reencoded(sections: &[hwpforge_core::Section]) -> Self {
+        use crate::encoder::package::{masterpage_part_name, section_part_name};
+        let masterpage_count =
+            sections.iter().flat_map(|s| s.master_pages.iter().flatten()).count();
+        Self {
+            rewritten: crate::encoder::package::FIXED_PART_NAMES
+                .into_iter()
+                .map(str::to_owned)
+                .chain((0..sections.len()).map(section_part_name))
+                .chain((0..masterpage_count).map(masterpage_part_name))
+                .collect(),
+        }
+    }
+}
+
 impl RawPackage {
+    /// Verify the actual final bytes using fresh Core name and bounded-read evidence.
+    /// Parts named in `changes.rewritten` (fixed parts, sections and, for
+    /// re-encoding editors, master pages) may change payload or be added; every
+    /// other part keeps its payload and opaque classification. Existing parts
+    /// must remain, except for normal empty directory placeholders. Compression
+    /// methods are packaging details, not payload changes. The output's
+    /// `mimetype`, when present, must still be stored uncompressed; its position
+    /// in the archive is not checked.
+    pub(crate) fn verify_output(
+        base: &[u8],
+        output: &[u8],
+        changes: &OutputChanges,
+    ) -> Result<(), crate::error::CodecFailure> {
+        Self::verify_output_capped(base, None, output, changes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
+    }
+
+    /// [`Self::verify_output_with`] for a full-document re-encode of `sections`
+    /// ([`OutputChanges::reencoded`]). `self` must be `base` exactly as read.
+    pub(crate) fn verify_reencoded_output(
+        &self,
+        base: &[u8],
+        output: &[u8],
+        sections: &[hwpforge_core::Section],
+    ) -> Result<(), crate::error::CodecFailure> {
+        self.verify_output_with(base, output, &OutputChanges::reencoded(sections))
+    }
+
+    /// [`Self::verify_output`] against `self`, which must be `base` exactly as
+    /// read. Never pass a package the editor has changed; re-read `base` then.
+    fn verify_output_with(
+        &self,
+        base: &[u8],
+        output: &[u8],
+        changes: &OutputChanges,
+    ) -> Result<(), crate::error::CodecFailure> {
+        Self::verify_output_capped(
+            base,
+            Some(self),
+            output,
+            changes,
+            MAX_ENTRY_SIZE,
+            MAX_TOTAL_SIZE,
+        )
+    }
+
+    fn verify_output_capped(
+        base: &[u8],
+        read_base: Option<&Self>,
+        output: &[u8],
+        changes: &OutputChanges,
+        max_entry: u64,
+        max_total: u64,
+    ) -> Result<(), crate::error::CodecFailure> {
+        #[cfg(test)]
+        VERIFIED_CHANGES.with(|observed| *observed.borrow_mut() = Some(changes.clone()));
+        let verify = || -> HwpxResult<()> {
+            let fresh;
+            let original = match read_base {
+                Some(original) => original,
+                None => {
+                    fresh = Self::read_capped(base, max_entry, max_total)?;
+                    &fresh
+                }
+            };
+            let violation = |path: &str, reason: &str| HwpxError::InvalidStructure {
+                detail: format!("output package preservation: '{}': {reason}", shown_name(path)),
+            };
+            let mut package = open_package(
+                output,
+                PackageLimits { entry: max_entry, total: max_total, ..Default::default() },
+            )
+            .map_err(package_error)?;
+            // Read every output entry once, keeping only (path, opaque, same payload).
+            let mut after = Vec::with_capacity(package.entries().len());
+            for index in 0..package.entries().len() {
+                let bytes = package.read(index).map_err(package_error)?;
+                let path = package.entries()[index].path.clone();
+                let same = original
+                    .index_by_path
+                    .get(&path)
+                    .is_some_and(|&i| original.entries[i].bytes == bytes);
+                after.push((path, package.is_opaque(index), same));
+            }
+            let index_by_path: BTreeMap<&str, usize> =
+                after.iter().enumerate().map(|(i, (path, ..))| (path.as_str(), i)).collect();
+            // 이것을 실패시키는 것: 선언된 mimetype도 Stored 규칙을 우회하게 하기.
+            if let Some(&index) = index_by_path.get(MIMETYPE_PART) {
+                if package.entries()[index].compression != CompressionMethod::Stored {
+                    return Err(violation(MIMETYPE_PART, "must be stored uncompressed"));
+                }
+            }
+            for entry in &original.entries {
+                if Self::is_directory_placeholder(&entry.path, entry.opaque) {
+                    continue;
+                }
+                let &(_, opaque, same) = index_by_path
+                    .get(entry.path.as_str())
+                    .map(|&i| &after[i])
+                    .ok_or_else(|| violation(&entry.path, "missing part"))?;
+                if changes.rewritten.contains(&entry.path) {
+                    continue;
+                }
+                if !same {
+                    return Err(violation(&entry.path, "payload changed"));
+                }
+                if entry.opaque != opaque {
+                    return Err(violation(&entry.path, "opaque classification changed"));
+                }
+            }
+            for (path, opaque, _) in &after {
+                if Self::is_directory_placeholder(path, *opaque) {
+                    continue;
+                }
+                let was_content = original.index_by_path.get(path).is_some_and(|&i| {
+                    let before = &original.entries[i];
+                    !Self::is_directory_placeholder(&before.path, before.opaque)
+                });
+                if !was_content && !changes.rewritten.contains(path) {
+                    return Err(violation(path, "undeclared new part"));
+                }
+            }
+            Ok(())
+        };
+        verify().map_err(|e| {
+            crate::error::CodecFailure::hwpx(crate::error::CodecStage::Verification, &e)
+        })
+    }
+
+    /// Only normal, actually empty directories are packaging detail.
+    /// Opaque entries always remain content, including empty aliases.
+    /// Core `open_package` classifies directories from actual decompressed bytes:
+    /// a non-opaque path ending in '/' is already proven empty.
+    pub(crate) fn is_directory_placeholder(path: &str, opaque: bool) -> bool {
+        !opaque && path.ends_with('/')
+    }
+
     /// Resolve a Core section index using the decoder's package reading order.
     /// 이것을 실패시키는 것: section index를 파일 번호로 사용하거나 범위 밖을 폴백하기.
     pub(crate) fn section_path(&self, section_idx: usize) -> HwpxResult<String> {
@@ -156,9 +319,14 @@ impl RawPackage {
         let mut zip = ZipWriter::new(cursor);
 
         for entry in &self.entries {
+            let compression = if entry.path == MIMETYPE_PART {
+                CompressionMethod::Stored
+            } else {
+                entry.compression
+            };
             // fixed entry time (the ZIP epoch), never the clock.
             let options = SimpleFileOptions::default()
-                .compression_method(entry.compression)
+                .compression_method(compression)
                 .last_modified_time(zip::DateTime::default());
             zip.start_file(&entry.path, options).map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(&entry.bytes).map_err(|e| HwpxError::Zip(e.to_string()))?;
@@ -170,6 +338,18 @@ impl RawPackage {
         // generated parts). Do not reuse the input's opaque flags as approval.
         open_package(&bytes, PackageLimits::default()).map_err(package_error)?;
         Ok(bytes)
+    }
+}
+
+/// Entry names come from the input: escape control characters and show at
+/// most 64 characters, so a crafted name cannot flood or forge the message.
+fn shown_name(path: &str) -> String {
+    let end = path.char_indices().nth(64).map_or(path.len(), |(i, _)| i);
+    let shown = path[..end].escape_debug().to_string();
+    if end < path.len() {
+        format!("{shown}... ({} bytes total)", path.len())
+    } else {
+        shown
     }
 }
 
@@ -199,7 +379,7 @@ mod tests {
     }
 
     /// Builds an in-memory ZIP whose entries are `(name, size)` runs of zeros.
-    fn zeros_zip(entries: &[(&str, usize)]) -> Vec<u8> {
+    pub(super) fn zeros_zip(entries: &[(&str, usize)]) -> Vec<u8> {
         let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         for (name, size) in entries {
@@ -221,7 +401,7 @@ mod tests {
 
     /// Rewrites the declared uncompressed size in every central-directory
     /// record, leaving the compressed data (and its CRC) untouched.
-    fn forge_declared_size(zip: &mut [u8], declared: u32) {
+    pub(super) fn forge_declared_size(zip: &mut [u8], declared: u32) {
         let mut at = 0;
         while at + 28 <= zip.len() {
             if zip[at..at + 4] == [0x50, 0x4b, 0x01, 0x02] {
@@ -413,3 +593,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod preservation_tests;
