@@ -1,0 +1,104 @@
+# =============================================================================
+# Cache warm-up for main
+# =============================================================================
+#
+# GitHub lets a workflow run restore caches saved on its own ref or on the
+# default branch. CI does not run on pushes to main, so main had no Rust
+# caches: every pull request's first run and every merge queue run built
+# all dependencies from scratch. These jobs build what the CI jobs build and
+# save the cache on main for them.
+#
+# The cache key of Swatinem/rust-cache contains the job id and a hash of the
+# `CARGO*`/`RUST*` environment. Each job id here matches its CI job
+# (`lint-clippy`, `test`, `coverage` in ci.yml) and `env` matches ci.yml's, so
+# the keys match. Change both files together.
+#
+# When the exact key already exists the cache would not be saved again, so
+# each job stops after the cache step on a hit.
+# =============================================================================
+
+name: Cache Warm
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+# A run is not cancelled by the next push: the first run after the keys change
+# has to finish to save anything, and later runs stop early on a cache hit.
+concurrency:
+  group: cache-warm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lint-clippy:
+    name: "Warm › Clippy"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup show
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+      - name: cargo clippy
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo clippy --workspace --all-targets --all-features
+
+  test:
+    name: "Warm › Test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free runner disk space
+        run: scripts/free_runner_disk.sh
+      - name: Install Rust toolchain
+        run: rustup show
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2.88.1
+        with:
+          tool: cargo-nextest
+      - name: Build the test binaries
+        if: steps.cache.outputs.cache-hit != 'true'
+        # Same build as ci.yml `Verify › Test`, without running the tests.
+        run: >-
+          cargo nextest run --workspace --all-features --no-run
+          --exclude hwpforge-bindings-py
+
+  coverage:
+    name: "Warm › Coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free runner disk space
+        run: scripts/free_runner_disk.sh
+      - name: Install Rust toolchain
+        run: rustup show
+      - id: cache
+        uses: Swatinem/rust-cache@v2
+      - name: Install coverage tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2.88.1
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+      - name: Build and run the instrumented tests
+        if: steps.cache.outputs.cache-hit != 'true'
+        # Same build as ci.yml `Verify › Coverage`. cargo-llvm-cov has no
+        # build-only mode for nextest, so the tests run (about a minute) and
+        # no report or threshold is checked.
+        run: >-
+          cargo llvm-cov nextest --no-report
+          --workspace --all-features
+          --exclude hwpforge-bindings-py

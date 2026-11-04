@@ -163,7 +163,15 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup show
+      # Merge queue runs restore caches but do not save them: each queue run
+      # has its own `gh-readonly-queue/...` ref, and a run can restore only
+      # its own ref's caches or main's, so a queue cache is never read again
+      # and only pushes useful caches out of the 10 GB limit. Main's caches
+      # come from `cache-warm.yml`; `save-if` on every cache step below says
+      # the same.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
       - name: cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -180,6 +188,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
       - name: Install nextest
         uses: taiki-e/install-action@v2.88.1
         with:
@@ -212,6 +222,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
       - name: Install coverage tools
         uses: taiki-e/install-action@v2.88.1
         with:
@@ -249,6 +261,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2.88.1
         with:
@@ -297,6 +311,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'merge_group' }}
           # build_site.sh builds rustdoc in its own target dir; cache that one.
           workspaces: ". -> target/site-build"
       - name: Install mdBook toolchain
@@ -324,6 +339,7 @@ jobs:
         run: rustup toolchain install 1.89 --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'merge_group' }}
           key: msrv
       - name: cargo +1.89 check
         # 1.92 를 선언한 크레이트는 넷이고, 전부 publish=false 라 MSRV 소비자
@@ -399,6 +415,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.event_name != 'merge_group' }}
           key: python
       - name: uv sync (dev group)
         working-directory: crates/hwpforge-bindings-py
