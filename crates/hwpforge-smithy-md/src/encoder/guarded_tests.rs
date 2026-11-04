@@ -1164,6 +1164,7 @@ fn continuation_line_start_comment_moves_after_text() {
 /// the walk does not scan the rest of the line again for each one.
 /// 이것을 실패시키는 것: 꼬리를 줄 끝까지 다시 훑기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn line_start_comments_are_linear() {
     let mut runs: Vec<hwpforge_core::Run> = (0..100_000).map(|_| chart()).collect();
     runs.push(t("x"));
@@ -1507,6 +1508,7 @@ fn joined_cell_emphasis_stays_local() {
 /// over (each `!` before a link is escaped, moving the places after it).
 /// 이것을 실패시키는 것: 앞 공백 항목을 하나씩 지우기 · `!` 이스케이프마다 모든 자리 다시 훑기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn emphasis_writer_is_linear() {
     use hwpforge_core::control::Control;
     let mut paragraphs: Vec<hwpforge_core::Paragraph> =
@@ -1535,6 +1537,7 @@ fn emphasis_writer_is_linear() {
 /// count of `\\` before it instead of counting the whole tail again.
 /// 이것을 실패시키는 것: `join` 이 꼬리를 조각마다 다시 세기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn backslash_links_are_linear() {
     use hwpforge_core::control::Control;
     let runs: Vec<hwpforge_core::Run> =
@@ -1608,6 +1611,7 @@ fn one_warning_per_paragraph() {
 /// search a mutation adds stands out from the drawing.
 /// 이것을 실패시키는 것: 경고 목록을 처음부터 찾기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn many_fallbacks_are_linear() {
     let listed = || body(vec![t("1"), compose(". x")]);
     let doc = doc((0..N_FALLBACKS).map(|_| listed()).collect());
@@ -1620,8 +1624,11 @@ fn many_fallbacks_are_linear() {
 const N_FALLBACKS: usize = 250_000;
 
 /// The time bound of the linearity tests here, for a debug build on
-/// a CI runner: five times the slowest linear case and a third of the
-/// fastest quadratic one, both measured locally in a debug build
+/// a CI runner. The coverage build skips these tests (`cfg(coverage)`, set by
+/// cargo-llvm-cov): its instrumentation made linear runs take 4.5–6.9 s, and
+/// the uninstrumented test job still runs them. The bound lies between five
+/// times the slowest linear case and a third of the fastest quadratic one,
+/// both measured locally in a debug build
 /// (`cargo nextest run -p hwpforge-smithy-md --all-features`, three runs,
 /// tests in parallel; 2026-10-26). Slowest linear run / with the mutation
 /// in each test's comment:
@@ -1642,6 +1649,7 @@ const LINEAR_BOUND: std::time::Duration = std::time::Duration::from_secs(3);
 /// nothing: each is left out once, the text's tail is not scanned again.
 /// 이것을 실패시키는 것: 빈 조각마다 앞 출력을 다시 훑기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn empty_pieces_after_text_are_linear() {
     use hwpforge_core::control::Control;
     let mut runs = vec![t(&"\\".repeat(100_000))];
@@ -1777,6 +1785,7 @@ fn text_controls_with_nothing_or_math() {
 /// it, not every open span.
 /// 이것을 실패시키는 것: 열린 강조를 전부 훑기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn math_check_is_linear() {
     use hwpforge_core::control::Control;
     let n = 300_000;
@@ -2007,6 +2016,7 @@ fn fallback_link_labels_keep_their_spaces() {
 /// number does, drawn and in a fallback (each walked the keys before it).
 /// 이것을 실패시키는 것: 키를 매번 처음부터 걷기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn colliding_pictures_take_linear_time() {
     let n = 8192;
     let mut runs = vec![
@@ -2290,6 +2300,7 @@ fn lossy_definition_rows() {
 /// took billions of steps).
 /// 이것을 실패시키는 것: 후보마다 공백을 다시 훑기.
 #[test]
+#[cfg_attr(coverage, ignore = "fixed time bound; the coverage build is instrumented")]
 fn guarded_text_is_linear() {
     let raw = format!("{}x", "\n".repeat(100_000));
     let started = std::time::Instant::now();
