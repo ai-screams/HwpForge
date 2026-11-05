@@ -2,8 +2,8 @@
 //! shared by the two preserve-first text editors: `fill` and `patch`.
 //!
 //! The conservative rule drops the edited paragraph, its flow tail and host
-//! chain. Preserve-only text edits can also retain a proven single-line body
-//! paragraph itself and an untouched body tail whose
+//! chain. Proven single-line body and direct table-cell edits do not start
+//! invalidation. Other body edits can retain an untouched body tail whose
 //! line breaking inputs stay fixed: Hancom restacks its vertical positions.
 //! Re-encoding callers keep the conservative rule below.
 
@@ -22,8 +22,8 @@ use crate::error::{HwpxError, HwpxResult};
 /// examined) for the linearity tests.
 ///
 /// 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · host 사슬 생략 · 목록 처음부터
-/// (fill: `cell_fill_drops_the_flow_tail_and_the_host_chain`,
-/// `each_container_drops_its_flow_tail_and_host_chain`; patch:
+/// (fill: `cell_fill_preserves_proven_lines_and_drops_overflow_tail`,
+/// `direct_cells_keep_caches_and_other_containers_drop_tail_and_hosts`; patch:
 /// `patch_drops_the_changed_flow_tail_and_host_chain`).
 pub(crate) fn stale_caches(
     caches: &[Vec<Range<usize>>],
@@ -91,6 +91,8 @@ pub(crate) struct ParagraphFlow {
     has_disallowed_element: Vec<bool>,
     has_disallowed_self_element: Vec<bool>,
     paragraph_definitions: Vec<Option<usize>>,
+    /// Source ownership is proven only for body and direct top-level table cells.
+    supported_owner: Vec<bool>,
     pub(crate) section_evidence: crate::line_keep::SectionEvidence,
     /// Whether the section's gates or field ranges could not be placed on
     /// its source paragraphs ([`Self::prove_text_tail`]), so no paragraph
@@ -109,8 +111,8 @@ pub(crate) struct ParagraphFlow {
 }
 
 impl ParagraphFlow {
-    /// Drop changed caches unless their own one-line evidence succeeds, and
-    /// retain all legacy nested-edit dependencies. In a body
+    /// Proven body/direct-cell edits start no invalidation. Other edits
+    /// retain the legacy nested-edit dependencies. In a body
     /// tail, keep the plain prefix before the first disallowed owner. A
     /// wrapping object anywhere in the section, or incompatible section
     /// geometry, keeps the conservative rule for the whole section.
@@ -122,11 +124,9 @@ impl ParagraphFlow {
         keep: &[bool],
     ) -> Vec<Range<usize>> {
         let mut changed = vec![false; self.spans.len()];
-        let mut has_body_edit = false;
         for p in paragraphs {
             crate::work::tick();
             changed[p] = true;
-            has_body_edit |= self.parent[p].is_none();
         }
         let edited = || {
             changed.iter().enumerate().filter_map(|(p, &yes)| {
@@ -134,19 +134,31 @@ impl ParagraphFlow {
                 yes.then_some(p)
             })
         };
-        if !has_body_edit
-            || !self.has_horizontal_section
+        if !self.has_horizontal_section
             || self.incompatible_section
             || self.has_wrapping_object
             || self.unproven_fields
         {
             return self.stale_caches(edited());
         }
-        let stale = stale_paragraphs(&self.para_list, &self.list_host, edited(), &mut || {});
+        // 이것을 실패시키는 것: 호출자의 keep을 소유 관계/자기 조건 없이 신뢰,
+        // 성공한 한 줄 편집을 장벽 또는 내부 흐름 전파 시작점에 포함.
+        let seeds: Vec<bool> = changed
+            .iter()
+            .enumerate()
+            .map(|(p, &edited)| {
+                edited
+                    && !(keep.get(p).copied().unwrap_or(false)
+                        && self.supported_owner[p]
+                        && !self.has_disallowed_self_element[p])
+            })
+            .collect();
+        let starts = || seeds.iter().enumerate().filter_map(|(p, &yes)| yes.then_some(p));
+        let stale = stale_paragraphs(&self.para_list, &self.list_host, starts(), &mut || {});
         let nested = stale_paragraphs(
             &self.para_list,
             &self.list_host,
-            edited().filter(|&p| self.parent[p].is_some()),
+            starts().filter(|&p| self.parent[p].is_some()),
             &mut || {},
         );
         let mut block_from = vec![usize::MAX; self.list_host.len()];
@@ -163,19 +175,16 @@ impl ParagraphFlow {
         let mut ranges = Vec::new();
         for p in 0..self.spans.len() {
             crate::work::tick();
-            if (changed[p] && !keep.get(p).copied().unwrap_or(false))
-                || nested[p]
-                || (stale[p] && p >= block_from[self.para_list[p]])
-            {
+            if seeds[p] || nested[p] || (stale[p] && p >= block_from[self.para_list[p]]) {
                 ranges.extend(self.caches[p].iter().cloned());
             }
         }
         ranges
     }
 
-    /// Exact body ownership and one direct cache array, using decoder source ranges.
+    /// Supported source ownership and one direct cache array, using decoder ranges.
     pub(crate) fn self_candidate(&self, p: usize, span: &Range<usize>) -> Option<usize> {
-        if self.parent.get(p)?.is_some()
+        if !self.supported_owner.get(p).copied().unwrap_or(false)
             || self.spans.get(p)? != span
             || *self.has_disallowed_self_element.get(p)?
             || self.caches.get(p)?.len() != 1
@@ -259,6 +268,9 @@ impl ParagraphFlow {
         self.has_disallowed_element = vec![false; self.spans.len()];
         self.has_disallowed_self_element = vec![false; self.spans.len()];
         self.paragraph_definitions = vec![None; self.spans.len()];
+        self.supported_owner = vec![false; self.spans.len()];
+        let mut direct_cell_list = vec![false; elements.len()];
+        let mut cell_sublist_count = vec![0; elements.len()];
         let mut character_definitions: Vec<Option<usize>> = vec![None; self.spans.len()];
         self.section_evidence = crate::line_keep::SectionEvidence::default();
         let mut in_section = vec![false; elements.len()];
@@ -276,10 +288,40 @@ impl ParagraphFlow {
             let name = element.name();
             in_section[id] = in_section[parent] || name == "secPr";
             click_metadata[id] = click_metadata[parent];
+            if name == "tc" {
+                // 이것을 실패시키는 것: subList마다 같은 칸의 자식을 다시 세기.
+                cell_sublist_count[id] = element
+                    .children()
+                    .iter()
+                    .filter(|&&child| {
+                        crate::work::tick();
+                        elements[child].name() == "subList"
+                    })
+                    .count();
+            }
+            if name == "subList" {
+                // 이것을 실패시키는 것: tbl 조상만으로 승인, 중복/방향 누락 subList 승인.
+                let mut ancestor = parent;
+                let direct = ["tc", "tr", "tbl", "run", "p", "sec"].iter().all(|name| {
+                    let element = &elements[ancestor];
+                    ancestor = element.parent();
+                    element.name() == *name
+                }) && ancestor == 0;
+                if direct && cell_sublist_count[parent] == 1 {
+                    let tag = source_start(xml, element)?;
+                    direct_cell_list[id] = crate::line_keep::cell_flow_allows(
+                        attribute(&tag, "textDirection").as_deref(),
+                        attribute(&tag, "lineWrap").as_deref(),
+                    );
+                }
+            }
             if name == "p" {
                 if self.spans.get(paragraphs) != Some(&element.outer()) {
                     return None;
                 }
+                self.supported_owner[paragraphs] = (elements[parent].name() == "sec"
+                    && elements[parent].parent() == 0)
+                    || direct_cell_list[parent];
                 nearest[id] = Some(paragraphs);
                 self.paragraph_definitions[paragraphs] =
                     attribute(&source_start(xml, element)?, "paraPrIDRef")

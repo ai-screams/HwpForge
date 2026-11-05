@@ -53,7 +53,10 @@ fn source_allows(
 ) -> Option<()> {
     let cell = source_tag(parts, map, path)?;
     let sub = cell.child("subList")?;
-    if !sub.is("textDirection", "HORIZONTAL") || !sub.is("lineWrap", "BREAK") {
+    if !crate::line_keep::cell_flow_allows(
+        sub.attrs.get("textDirection").map(String::as_str),
+        sub.attrs.get("lineWrap").map(String::as_str),
+    ) {
         return None;
     }
     let paragraph = source_tag(

@@ -695,9 +695,9 @@ fn clickhere_across_paragraphs_drops_both_edited_endpoint_caches() {
     }
 }
 
-// 이것을 실패시키는 것: 자기 후보를 본문 경로 대신 중첩 문단에도 부여하거나 nested 영향 면제.
+// 이것을 실패시키는 것: 직접 칸 후보 제외, 성공한 편집도 전파 시작점에 포함.
 #[test]
-fn body_and_cell_edits_keep_nested_invalidation() {
+fn body_and_direct_cell_edits_preserve_without_propagation() {
     use hwpforge_core::{Table, TableCell, TableRow};
     use hwpforge_foundation::HwpUnit;
     let table = Table::new(vec![TableRow::new(vec![TableCell::new(
@@ -709,6 +709,20 @@ fn body_and_cell_edits_keep_nested_invalidation() {
         ParaShapeIndex::new(0),
     );
     let bytes = input(vec![para("앞"), host, para("뒤")]);
+    let mut source = package::section_xml(&bytes).replace("<hp:t>뒤</hp:t>", "<hp:t>뒤꼬리</hp:t>");
+    let tail = source.rfind("</hp:linesegarray>").unwrap();
+    let second_line = "<hp:lineseg textpos=\"1\" vertpos=\"9600\" vertsize=\"1000\" textheight=\"1000\" baseline=\"850\" spacing=\"600\" horzpos=\"0\" horzsize=\"42520\" flags=\"393216\"/>";
+    source.insert_str(tail, second_line);
+    let bytes = package::with_section(&bytes, &source);
+    assert_eq!(
+        HwpxDecoder::decode(&bytes).unwrap().document.sections()[0].paragraphs[2]
+            .layout_cache
+            .as_ref()
+            .unwrap()
+            .lines
+            .len(),
+        2
+    );
     for body_too in [false, true] {
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
         let mut section = decoded.document.sections()[0].clone();
@@ -724,11 +738,17 @@ fn body_and_cell_edits_keep_nested_invalidation() {
             HwpxPatcher::patch_section_preserving(&bytes, 0, &section, None, Some(&preservation))
                 .unwrap();
         let xml = package::section_xml(&out);
-        assert_eq!(vertpos(&xml), [Some("9000".into()), None, None]);
+        assert_eq!(vertpos(&xml), [Some("9000".into()), Some("9003".into()), Some("9004".into())]);
+        let mut expected_xml =
+            package::section_xml(&bytes).replace("<hp:t>칸 뒤</hp:t>", "<hp:t>나</hp:t>");
+        if body_too {
+            expected_xml = expected_xml.replace("<hp:t>앞</hp:t>", "<hp:t>가</hp:t>");
+        }
+        assert_eq!(xml, expected_xml);
         let tree = Element::parse(&xml);
         let cell = tree.find("hp:tc").find("hp:subList");
         let ps: Vec<_> = cell.children.iter().filter(|p| p.name == "hp:p").collect();
         assert!(ps[0].children.iter().any(|c| c.name == "hp:linesegarray"));
-        assert!(ps[1].children.iter().all(|c| c.name != "hp:linesegarray"));
+        assert!(ps[1].children.iter().any(|c| c.name == "hp:linesegarray"));
     }
 }

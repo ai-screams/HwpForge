@@ -640,16 +640,10 @@ mod tests {
         assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
 
-    /// (cache invalidation): filling a field in the middle of three
-    /// cell paragraphs drops that paragraph's cache, the cell paragraph after
-    /// it, the table's host paragraph and the body paragraph after the host;
-    /// the first cell paragraph and the body paragraph before keep theirs.
-    /// A value of the same length does the same (line counts are not judged
-    /// — that would need layout).
-    /// 이것을 실패시키는 것: 꼬리 대신 문단 하나만(9003 이 남는다) · host 사슬
-    /// 생략(9004·9005 가 남는다) · 목록 처음부터(9001 이 간다).
+    // 이것을 실패시키는 것: 직접 칸 후보 제외, 폭 초과 칸의 host 전파 생략.
+    // A proven cell edit starts no propagation; overflow retains the conservative rule.
     #[test]
-    fn cell_fill_drops_the_flow_tail_and_the_host_chain() {
+    fn cell_fill_preserves_proven_lines_and_drops_overflow_tail() {
         let cell = TableCell::new(
             vec![para(vec![text("c0")]), para(vec![field("mid", "칸")]), para(vec![text("c2")])],
             size(4000),
@@ -665,20 +659,20 @@ mod tests {
         );
         // close order: 앞 9000, c0 9001, mid 9002, c2 9003, host 9004, 뒤 9005.
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
-        for value in ["여러 줄로 길어진 값 여러 줄로 길어진 값 여러 줄로 길어진 값", "값"]
+        for (value, expected) in
+            [("값".to_owned(), vec![0, 1, 2, 3, 4, 5]), ("가".repeat(100), vec![0, 1])]
         {
-            let xml = fill_xml(&bytes, &[("mid", value)]).expect("fill");
-            assert_eq!(caches(&xml), vec![0, 1], "{value}");
+            let xml = fill_xml(&bytes, &[("mid", &value)]).expect("fill");
+            assert_eq!(caches(&xml), expected, "{value}");
         }
     }
 
-    /// Per container, filling the middle of three paragraphs
-    /// drops exactly that paragraph, the one after it, the host paragraph
-    /// and the body paragraph after the host — every other cache stays.
+    /// Direct cell edits with one-line proof preserve all caches. Other
+    /// containers retain the conservative flow-tail and host-chain rule.
     /// 이것을 실패시키는 것: host 사슬 생략 · 꼬리 대신 문단 하나만 · 목록
     /// 처음부터 — 컨테이너마다.
     #[test]
-    fn each_container_drops_its_flow_tail_and_host_chain() {
+    fn direct_cells_keep_caches_and_other_containers_drop_tail_and_hosts() {
         let inner =
             || vec![para(vec![text("x0")]), para(vec![field("mid", "칸")]), para(vec![text("x2")])];
         let containers: Vec<(&str, RunContent)> = vec![
@@ -708,20 +702,15 @@ mod tests {
                 &ImageStore::default(),
             );
             let xml = add_caches(&section_xml(&doc));
-            // Close order of a paragraph = `</hp:p>` count before it closes.
-            let leaf =
-                |needle: &str| xml[..xml.find(needle).expect(needle)].matches("</hp:p>").count();
-            let host = leaf("<hp:t>뒤</hp:t>") - 1;
-            let dropped =
-                [leaf("name=\"mid\""), leaf("<hp:t>x2</hp:t>"), host, leaf("<hp:t>뒤</hp:t>")];
-            let all = caches(&xml);
-            let expected: Vec<usize> =
-                all.iter().copied().filter(|k| !dropped.contains(k)).collect();
+            let expected = match name {
+                "cell" => vec![0, 1, 2, 3, 4, 5],
+                "table caption" => vec![0, 1, 4],
+                _ => vec![0, 1],
+            };
             let bytes = with_section_xml(&doc, xml.clone());
             let filled = fill_xml(&bytes, &[("mid", "여러 줄로 길어진 값")])
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(caches(&filled), expected, "{name}");
-            assert!(expected.contains(&leaf("<hp:t>x0</hp:t>")), "{name}: x0 keeps its cache");
         }
     }
 
@@ -977,16 +966,14 @@ mod tests {
             let own = xml[..at].matches("</hp:p>").count();
             let filled = fill_xml(&bytes, &[(name.as_str(), "값")])
                 .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
-            // 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
-            // 전용 시험(`cell_fill_drops_the_flow_tail_and_the_host_chain`)이 맡고,
-            // 여기서는 내부 문단의 캐시가 가고 첫 본문 문단(9000, `body`)은
-            // 한 줄 증거가 있으면 편집 여부와 무관하게 남는지도 본다.
+            // 본문과 직접 칸만 한 줄 증거로 자기 캐시를 유지한다.
+            // 다른 내부 문단은 기존 흐름 꼬리와 host 사슬 제거를 따른다.
             let left = caches(&filled);
-            // 이것을 실패시키는 것: 본문 편집 문단 캐시 보존 생략.
+            // 이것을 실패시키는 것: 본문/직접 칸 후보 제외.
             assert_eq!(
                 left.contains(&own),
-                name == "body",
-                "{name}: only a proven body paragraph keeps its own cache: {left:?}"
+                name == "body" || name == "cell",
+                "{name}: only a proven body or direct-cell paragraph keeps its own cache: {left:?}"
             );
             assert!(left.iter().all(|k| all.contains(k)), "{name}");
             if name != "body" {

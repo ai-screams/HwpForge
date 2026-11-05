@@ -79,6 +79,12 @@ impl Tag {
     }
 }
 
+/// A cell needs explicit horizontal text with ordinary line wrapping.
+// 이것을 실패시키는 것: 누락된 방향 또는 줄바꿈 값을 기본 승인.
+pub(crate) fn cell_flow_allows(direction: Option<&str>, wrap: Option<&str>) -> bool {
+    direction == Some("HORIZONTAL") && wrap == Some("BREAK")
+}
+
 fn weight(text: &str) -> Option<u64> {
     if text.is_empty() {
         return None;
