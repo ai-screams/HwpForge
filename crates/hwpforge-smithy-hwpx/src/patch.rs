@@ -133,14 +133,7 @@ impl HwpxPatcher {
             .source_maps
             .get(section_idx)
             .ok_or_else(|| PatchError::Invariant { detail: "missing decoder source map".into() })?;
-        preservation_from_map(
-            &section_xml,
-            &section_path,
-            section,
-            map,
-            section_idx,
-            &mut |_, _| {},
-        )
+        preservation_from_map(&section_xml, &section_path, section, map, section_idx, None)
     }
 
     /// Patches a single section while preserving untouched package entries.
@@ -426,7 +419,9 @@ impl HwpxPatcher {
                 detail: "missing decoder source map".into(),
             })?,
             section_idx,
-            &mut |paragraph, path| paragraph_slots.push((paragraph, path.to_owned())),
+            Some(&mut |paragraph, prefix, index| {
+                paragraph_slots.push((paragraph, paragraph_path(prefix, index)));
+            }),
         )?;
         if preservation != &rebuilt_preservation {
             return Err(PatchError::Rejected(HwpxError::InvalidStructure {
@@ -784,7 +779,7 @@ fn preservation_from_map<'a>(
     section: &'a Section,
     map: &crate::decoder::source_map::SourceMap,
     section_idx: usize,
-    visit: &mut impl FnMut(&'a Paragraph, &str),
+    visit: Option<&mut dyn FnMut(&'a Paragraph, &str, usize)>,
 ) -> Result<SectionPreservation, PatchError> {
     let recorded: BTreeMap<_, _> = map.text_slots().iter().map(|s| (s.path.as_str(), s)).collect();
     let mut slots = Vec::new();
@@ -820,14 +815,14 @@ fn collect_preserving_text_slots(
     section_idx: usize,
     map: &crate::decoder::source_map::SourceMap,
 ) -> Result<Vec<SemanticTextSlot>, PatchError> {
-    collect_preserving_text_slots_with(section, section_idx, map, &mut |_, _| {})
+    collect_preserving_text_slots_with(section, section_idx, map, None)
 }
 
 fn collect_preserving_text_slots_with<'a>(
     section: &'a Section,
     section_idx: usize,
     map: &crate::decoder::source_map::SourceMap,
-    visit: &mut impl FnMut(&'a Paragraph, &str),
+    visit: Option<&mut dyn FnMut(&'a Paragraph, &str, usize)>,
 ) -> Result<Vec<SemanticTextSlot>, PatchError> {
     let mut slots = Vec::new();
     for slot in collect_text_slots_with(section, section_idx, true, visit) {
@@ -866,7 +861,7 @@ fn build_section_preservation(
     decoded.headers = parsed.headers;
     decoded.footers = parsed.footers;
     let map = parsed.source.finish(&decoded, 0, part);
-    preservation_from_map(xml, part, section, &map, 0, &mut |_, _| {})
+    preservation_from_map(xml, part, section, &map, 0, None)
 }
 
 // pub(crate): stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
@@ -931,19 +926,25 @@ fn has_text_or_anchor(run: &Run) -> bool {
         || matches!(run.content.as_control(), Some(Control::Memo { .. }))
 }
 
+fn paragraph_path(prefix: &str, index: usize) -> String {
+    #[cfg(test)]
+    PARAGRAPH_PATHS.set(PARAGRAPH_PATHS.get() + 1);
+    format!("{prefix}[{index}]")
+}
+
 fn collect_text_slots(
     section: &Section,
     section_idx: usize,
     patchable_only: bool,
 ) -> Vec<SemanticTextSlot> {
-    collect_text_slots_with(section, section_idx, patchable_only, &mut |_, _| {})
+    collect_text_slots_with(section, section_idx, patchable_only, None)
 }
 
 fn collect_text_slots_with<'a>(
     section: &'a Section,
     section_idx: usize,
     patchable_only: bool,
-    visit: &mut impl FnMut(&'a Paragraph, &str),
+    mut visit: Option<&mut dyn FnMut(&'a Paragraph, &str, usize)>,
 ) -> Vec<SemanticTextSlot> {
     use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
     let sections = std::slice::from_ref(section);
@@ -955,23 +956,22 @@ fn collect_text_slots_with<'a>(
             return;
         }
         for (pi, paragraph) in paragraphs.iter().enumerate() {
-            // No full paragraph path for a container-only flow. Folded fields
-            // still need a paragraph candidate although their slots are added below.
-            // 이것을 실패시키는 것: 텍스트 run이 없는 접힌 누름틀 후보 누락.
             let has_text = paragraph.runs.iter().any(has_text_or_anchor);
-            if !has_text
-                && !paragraph
-                    .runs
-                    .iter()
-                    .any(|run| matches!(run.content.as_control(), Some(Control::Field { .. })))
-            {
-                continue;
+            if let Some(visit) = visit.as_mut() {
+                // 이것을 실패시키는 것: 텍스트 run이 없는 접힌 누름틀 후보 누락.
+                if has_text
+                    || paragraph
+                        .runs
+                        .iter()
+                        .any(|run| matches!(run.content.as_control(), Some(Control::Field { .. })))
+                {
+                    visit(paragraph, prefix, pi);
+                }
             }
-            let path = format!("{prefix}[{pi}]");
-            visit(paragraph, &path);
             // Folded field slots come from the inventory below; avoid allocating
             // a traversal stack when this paragraph has no text or Memo anchors.
             if has_text {
+                let path = paragraph_path(prefix, pi);
                 text_runs(
                     &paragraph.runs,
                     &path,
@@ -1229,6 +1229,7 @@ fn self_check_count(field: usize) {
 
 #[cfg(test)]
 thread_local! {
+    static PARAGRAPH_PATHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEXT_RUNS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SELF_CHECK_WORK: std::cell::Cell<(usize, usize, usize, usize)> = const {
         std::cell::Cell::new((0, 0, 0, 0))
@@ -1241,7 +1242,8 @@ mod tests {
         include!("../tests/support/small_stack.rs");
     }
 
-    // 이것을 실패시키는 것: text_runs 호출의 has_text 조건 삭제.
+    // 이것을 실패시키는 것: text_runs 호출의 has_text 조건 삭제,
+    // 후보 visitor 없는 접힌 필드 export에서도 문단 경로 생성.
     #[test]
     fn folded_field_slots_skip_text_run_traversal() {
         use hwpforge_core::{Document, ImageStore, PageSettings};
@@ -1272,8 +1274,10 @@ mod tests {
         )
         .unwrap();
         TEXT_RUNS_CALLS.set(0);
+        PARAGRAPH_PATHS.set(0);
         let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &section).unwrap();
         assert_eq!(TEXT_RUNS_CALLS.get(), 0);
+        assert_eq!(PARAGRAPH_PATHS.get(), 0);
         assert_eq!(
             preservation
                 .text_slots
@@ -1289,10 +1293,17 @@ mod tests {
         for patchable_only in [true, false] {
             let mut visited = Vec::new();
             TEXT_RUNS_CALLS.set(0);
-            let slots = collect_text_slots_with(&section, 0, patchable_only, &mut |_, path| {
-                visited.push(path.to_owned());
-            });
+            PARAGRAPH_PATHS.set(0);
+            let slots = collect_text_slots_with(
+                &section,
+                0,
+                patchable_only,
+                Some(&mut |_, prefix, index| {
+                    visited.push(paragraph_path(prefix, index));
+                }),
+            );
             assert_eq!(TEXT_RUNS_CALLS.get(), 0);
+            assert_eq!(PARAGRAPH_PATHS.get(), 1);
             assert_eq!(visited, ["paragraphs[0]"]);
             assert_eq!(
                 slots.iter().map(|s| (s.path.as_str(), s.text.as_str())).collect::<Vec<_>>(),
@@ -1309,8 +1320,10 @@ mod tests {
             CharShapeIndex::new(0),
         ));
         TEXT_RUNS_CALLS.set(0);
+        PARAGRAPH_PATHS.set(0);
         let slots = collect_stamp_text_slots(&section, 0);
         assert_eq!(TEXT_RUNS_CALLS.get(), 1);
+        assert_eq!(PARAGRAPH_PATHS.get(), 1);
         assert_eq!(
             slots.iter().map(|s| (s.path.as_str(), s.text.as_str())).collect::<Vec<_>>(),
             [
