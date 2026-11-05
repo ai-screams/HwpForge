@@ -555,137 +555,20 @@ impl HwpxPatcher {
                     .map_err(|error| PatchError::Invariant { detail: error.to_string() })?,
                 );
             }
-            // Sum patchable direct-run slots, including unchanged editable fields.
-            // The flow gate excludes ranges and elements whose visible text may be
-            // absent from these slots; nested flows never add to their host's width.
-            let map = &decoded.source_maps[section_idx];
-            let mut changed_mask = vec![false; flow.paragraph_count()];
-            for &p in &changed {
-                changed_mask[p] = true;
-            }
-            let mut owners = vec![None; flow.paragraph_count()];
-            let mut slot_owners = BTreeMap::new();
-            for (paragraph, path) in &paragraph_slots {
-                let Some((p, definition)) = paragraph_origin(
-                    map,
-                    &expected_section_path,
-                    &hwpforge_core::node_path::CorePath::new(section_idx, path.as_str()),
-                )
-                .filter(|(p, _)| changed_mask[*p]) else {
-                    continue;
-                };
-                owners[p] = Some((*paragraph, definition));
-                for ri in 0..paragraph.runs.len() {
-                    let run_path = format!("{path}.runs[{ri}]");
-                    if run_owner(map, &expected_section_path, section_idx, &run_path) == Some(p) {
-                        slot_owners.insert(format!("{run_path}.text"), p);
-                        slot_owners.insert(format!("{run_path}.control.field"), p);
-                    }
-                }
-            }
-            let mut keep = vec![false; flow.paragraph_count()];
-            if owners.iter().any(Option::is_some) {
-                #[cfg(test)]
-                SELF_CHECK_WORK.with(|work| {
-                    let (blocks, slots, indexes, headers) = work.get();
-                    work.set((blocks + 1, slots, indexes, headers));
-                });
-                let mut texts = vec![(String::new(), String::new(), true); flow.paragraph_count()];
-                for (slot, new) in rebuilt_preservation.text_slots.iter().zip(&new_texts) {
-                    let Some(&p) = slot_owners.get(&slot.path) else { continue };
-                    let (old, final_text, valid) = &mut texts[p];
-                    *valid &= flow.paragraph_at(text_locator_start(&slot.locator)) == Some(p);
-                    #[cfg(test)]
-                    SELF_CHECK_WORK.with(|work| {
-                        let (blocks, slots, indexes, headers) = work.get();
-                        work.set((blocks, slots + 1, indexes, headers));
-                    });
-                    old.push_str(&slot.original_text);
-                    final_text.push_str(new.as_deref().unwrap_or(&slot.original_text));
-                }
-                let final_slots = std::cell::OnceCell::new();
-                for (before, after) in before_fields.fields().iter().zip(after_fields.fields()) {
-                    // Noneditable ranges are already excluded by the flow gate; their
-                    // absent patch slots do not describe an empty editable value.
-                    if before.editability()
-                        != hwpforge_core::field_inventory::FieldEditability::Editable
-                    {
-                        continue;
-                    }
-                    let empty = before.current().is_empty()
-                        || after.current().is_empty()
-                        || before.body().iter().all(|body| {
-                            let slots = final_slots.get_or_init(|| {
-                                #[cfg(test)]
-                                SELF_CHECK_WORK.with(|work| {
-                                    let (blocks, slots, indexes, headers) = work.get();
-                                    work.set((blocks, slots, indexes + 1, headers));
-                                });
-                                rebuilt_preservation
-                                    .text_slots
-                                    .iter()
-                                    .zip(&new_texts)
-                                    .map(|(slot, new)| {
-                                        (
-                                            slot.path.as_str(),
-                                            new.as_deref().unwrap_or(&slot.original_text),
-                                        )
-                                    })
-                                    .collect::<BTreeMap<_, _>>()
-                            });
-                            slots.get(body.path()).is_none_or(|text| text.is_empty())
-                        });
-                    if empty {
-                        for path in
-                            std::iter::once(before.start().as_str()).chain(before.end().as_deref())
-                        {
-                            if let Some(p) =
-                                run_owner(map, &expected_section_path, section_idx, path)
-                            {
-                                if let Some(text) = texts.get_mut(p) {
-                                    text.2 = false;
-                                }
-                            }
-                        }
-                    }
-                }
-                let header = std::cell::OnceCell::new();
-                for (p, (old, text, valid)) in texts.iter().enumerate() {
-                    if !valid {
-                        continue;
-                    }
-                    let Some((paragraph, definition)) = owners[p] else { continue };
-                    if crate::line_keep::eligible(paragraph, old, text, &decoded.style_store)
-                        .is_none()
-                    {
-                        continue;
-                    }
-                    let Some(header) = header
-                        .get_or_init(|| {
-                            #[cfg(test)]
-                            SELF_CHECK_WORK.with(|work| {
-                                let (blocks, slots, indexes, headers) = work.get();
-                                work.set((blocks, slots, indexes, headers + 1));
-                            });
-                            crate::line_keep::Header::read(
-                                &raw_package,
-                                &decoded.style_store,
-                                || {},
-                            )
-                        })
-                        .as_ref()
-                    else {
-                        continue;
-                    };
-                    keep[p] = header.allows(
-                        &flow.section_evidence,
-                        definition,
-                        paragraph.runs[0].char_shape_id.get(),
-                    );
-                }
-            }
+            let proven = one_line_proofs(
+                &decoded.source_maps[section_idx],
+                section_idx,
+                &rebuilt_preservation,
+                &paragraph_slots,
+                &changed,
+                &new_texts,
+                &before_fields,
+                &after_fields,
+                &decoded.style_store,
+                &raw_package,
+            );
             replacements.extend(
-                flow.caches_to_drop_for_text_edits(changed, &keep)
+                flow.caches_to_drop_for_text_edits(changed, &proven)
                     .into_iter()
                     .map(|range| (range, String::new())),
             );
@@ -732,6 +615,123 @@ impl HwpxPatcher {
             encode_warnings,
         ))
     }
+}
+
+// Proof inputs already belong to the patch operation; keep them explicit instead
+// of introducing a second context that duplicates its state.
+#[allow(clippy::too_many_arguments)]
+fn one_line_proofs(
+    map: &crate::decoder::source_map::SourceMap,
+    section_idx: usize,
+    preservation: &SectionPreservation,
+    paragraph_slots: &[(&Paragraph, String)],
+    changed: &[usize],
+    new_texts: &[Option<String>],
+    before_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    after_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    styles: &HwpxStyleStore,
+    raw_package: &RawPackage,
+) -> Vec<bool> {
+    // Sum patchable direct-run slots, including unchanged editable fields.
+    // The flow gate excludes ranges and elements whose visible text may be
+    // absent from these slots; nested flows never add to their host's width.
+    let flow = &map.cache_flow;
+    let mut changed_mask = vec![false; flow.paragraph_count()];
+    for &p in changed {
+        changed_mask[p] = true;
+    }
+    let mut owners = vec![None; flow.paragraph_count()];
+    let mut slot_owners = BTreeMap::new();
+    for (paragraph, path) in paragraph_slots {
+        let Some((p, definition)) = paragraph_origin(
+            map,
+            &preservation.section_path,
+            &hwpforge_core::node_path::CorePath::new(section_idx, path.as_str()),
+        )
+        .filter(|(p, _)| changed_mask[*p]) else {
+            continue;
+        };
+        owners[p] = Some((*paragraph, definition));
+        for ri in 0..paragraph.runs.len() {
+            let run_path = format!("{path}.runs[{ri}]");
+            if run_owner(map, &preservation.section_path, section_idx, &run_path) == Some(p) {
+                slot_owners.insert(format!("{run_path}.text"), p);
+                slot_owners.insert(format!("{run_path}.control.field"), p);
+            }
+        }
+    }
+    let mut proven = vec![false; flow.paragraph_count()];
+    if owners.iter().any(Option::is_some) {
+        self_check_count(0);
+        let mut texts = vec![(String::new(), String::new(), true); flow.paragraph_count()];
+        for (slot, new) in preservation.text_slots.iter().zip(new_texts) {
+            let Some(&p) = slot_owners.get(&slot.path) else { continue };
+            let (old, final_text, valid) = &mut texts[p];
+            *valid &= flow.paragraph_at(text_locator_start(&slot.locator)) == Some(p);
+            self_check_count(1);
+            old.push_str(&slot.original_text);
+            final_text.push_str(new.as_deref().unwrap_or(&slot.original_text));
+        }
+        let final_slots = std::cell::OnceCell::new();
+        for (before, after) in before_fields.fields().iter().zip(after_fields.fields()) {
+            // Noneditable ranges are already excluded by the flow gate; their
+            // absent patch slots do not describe an empty editable value.
+            if before.editability() != hwpforge_core::field_inventory::FieldEditability::Editable {
+                continue;
+            }
+            let empty = before.current().is_empty()
+                || after.current().is_empty()
+                || before.body().iter().all(|body| {
+                    let slots = final_slots.get_or_init(|| {
+                        self_check_count(2);
+                        preservation
+                            .text_slots
+                            .iter()
+                            .zip(new_texts)
+                            .map(|(slot, new)| {
+                                (slot.path.as_str(), new.as_deref().unwrap_or(&slot.original_text))
+                            })
+                            .collect::<BTreeMap<_, _>>()
+                    });
+                    slots.get(body.path()).is_none_or(|text| text.is_empty())
+                });
+            if empty {
+                for path in std::iter::once(before.start().as_str()).chain(before.end().as_deref())
+                {
+                    if let Some(p) = run_owner(map, &preservation.section_path, section_idx, path) {
+                        if let Some(text) = texts.get_mut(p) {
+                            text.2 = false;
+                        }
+                    }
+                }
+            }
+        }
+        let header = std::cell::OnceCell::new();
+        for (p, (old, text, valid)) in texts.iter().enumerate() {
+            if !valid {
+                continue;
+            }
+            let Some((paragraph, definition)) = owners[p] else { continue };
+            if crate::line_keep::eligible(paragraph, old, text, styles).is_none() {
+                continue;
+            }
+            let Some(header) = header
+                .get_or_init(|| {
+                    self_check_count(3);
+                    crate::line_keep::Header::read(raw_package, styles, || {})
+                })
+                .as_ref()
+            else {
+                continue;
+            };
+            proven[p] = header.allows(
+                &flow.section_evidence,
+                definition,
+                paragraph.runs[0].char_shape_id.get(),
+            );
+        }
+    }
+    proven
 }
 
 // 이것을 실패시키는 것: part/span 대조 삭제, 첫 칸 문단의 속성을 모든 문단에 사용.
@@ -1213,6 +1213,18 @@ fn redact_control(control: &mut Control) {
         // 변경이 무음 드롭되는 대신 structural change 로 거부되게 한다.
         _ => {}
     }
+}
+
+#[inline]
+#[cfg_attr(not(test), allow(unused_variables))]
+fn self_check_count(field: usize) {
+    #[cfg(test)]
+    SELF_CHECK_WORK.with(|work| {
+        let (blocks, slots, indexes, headers) = work.get();
+        let mut fields = [blocks, slots, indexes, headers];
+        fields[field] += 1;
+        work.set((fields[0], fields[1], fields[2], fields[3]));
+    });
 }
 
 #[cfg(test)]

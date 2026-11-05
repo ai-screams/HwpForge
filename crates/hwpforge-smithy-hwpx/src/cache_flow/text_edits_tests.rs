@@ -540,10 +540,10 @@ fn counted_text_edit_gate_work_stays_linear() {
         let edits: Vec<usize> = (0..n).step_by(4).collect();
         // Without preservation, the first field blocks the rest of the body list.
         assert_eq!(dropped(&f, &edits).len(), n);
-        let mut keep = vec![false; n];
+        let mut proven = vec![false; n];
         // A proven edit starts no propagation: the first active edit is paragraph 4.
-        keep[0] = true;
-        assert_eq!(f.caches_to_drop_for_text_edits(edits, &keep).len(), n - 4);
+        proven[0] = true;
+        assert_eq!(f.caches_to_drop_for_text_edits(edits, &proven).len(), n - 4);
         crate::work::WORK.get()
     };
     let small = work(128);
@@ -711,9 +711,9 @@ fn a_scan_of_other_text_leaves_the_flow_unproven() {
     }
 }
 
-// 이것을 실패시키는 것: keep을 그대로 전파 면제로 신뢰, 성공한 편집에서 장벽 전파, 구역 실패 무시.
+// 이것을 실패시키는 것: proven을 그대로 전파 면제로 신뢰, 성공한 편집에서 장벽 전파, 구역 실패 무시.
 #[test]
-fn self_keep_never_overrides_nested_blocked_or_section_invalidation() {
+fn proven_self_never_overrides_nested_blocked_or_section_invalidation() {
     // 이것을 실패시키는 것: 최종 제거 집합에서 성공한 뒤 본문 문단을 강제로 제외.
     let blocked = flow(&format!("{}{}{}{}", p("가"), p("<autoNum/>"), p("나"), p("다")));
     let ranges = blocked.caches_to_drop_for_text_edits([0, 2], &[false, false, true, false]);

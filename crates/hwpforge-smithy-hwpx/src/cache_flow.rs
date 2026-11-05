@@ -121,7 +121,7 @@ impl ParagraphFlow {
     pub(crate) fn caches_to_drop_for_text_edits(
         &self,
         paragraphs: impl IntoIterator<Item = usize>,
-        keep: &[bool],
+        proven: &[bool],
     ) -> Vec<Range<usize>> {
         let mut changed = vec![false; self.spans.len()];
         for p in paragraphs {
@@ -141,16 +141,13 @@ impl ParagraphFlow {
         {
             return self.stale_caches(edited());
         }
-        // 이것을 실패시키는 것: 호출자의 keep을 소유 관계/자기 조건 없이 신뢰,
+        // 이것을 실패시키는 것: 호출자의 proven을 소유 관계/자기 조건 없이 신뢰,
         // 성공한 한 줄 편집을 장벽 또는 내부 흐름 전파 시작점에 포함.
         let seeds: Vec<bool> = changed
             .iter()
             .enumerate()
             .map(|(p, &edited)| {
-                edited
-                    && !(keep.get(p).copied().unwrap_or(false)
-                        && self.supported_owner[p]
-                        && !self.has_disallowed_self_element[p])
+                edited && !(proven.get(p).copied().unwrap_or(false) && self.self_owned(p))
             })
             .collect();
         let starts = || seeds.iter().enumerate().filter_map(|(p, &yes)| yes.then_some(p));
@@ -182,13 +179,14 @@ impl ParagraphFlow {
         ranges
     }
 
+    fn self_owned(&self, p: usize) -> bool {
+        self.supported_owner.get(p).copied().unwrap_or(false)
+            && self.has_disallowed_self_element.get(p) == Some(&false)
+    }
+
     /// Supported source ownership and one direct cache array, using decoder ranges.
     pub(crate) fn self_candidate(&self, p: usize, span: &Range<usize>) -> Option<usize> {
-        if !self.supported_owner.get(p).copied().unwrap_or(false)
-            || self.spans.get(p)? != span
-            || *self.has_disallowed_self_element.get(p)?
-            || self.caches.get(p)?.len() != 1
-        {
+        if !self.self_owned(p) || self.spans.get(p)? != span || self.caches.get(p)?.len() != 1 {
             return None;
         }
         *self.paragraph_definitions.get(p)?
@@ -299,22 +297,8 @@ impl ParagraphFlow {
                     })
                     .count();
             }
-            if name == "subList" {
-                // 이것을 실패시키는 것: tbl 조상만으로 승인, 중복/방향 누락 subList 승인.
-                let mut ancestor = parent;
-                let direct = ["tc", "tr", "tbl", "run", "p", "sec"].iter().all(|name| {
-                    let element = &elements[ancestor];
-                    ancestor = element.parent();
-                    element.name() == *name
-                }) && ancestor == 0;
-                if direct && cell_sublist_count[parent] == 1 {
-                    let tag = source_start(xml, element)?;
-                    direct_cell_list[id] = crate::line_keep::cell_flow_allows(
-                        attribute(&tag, "textDirection").as_deref(),
-                        attribute(&tag, "lineWrap").as_deref(),
-                    );
-                }
-            }
+            direct_cell_list[id] =
+                direct_cell_sublist(element, elements, xml, &cell_sublist_count)?;
             if name == "p" {
                 if self.spans.get(paragraphs) != Some(&element.outer()) {
                     return None;
@@ -520,6 +504,33 @@ impl ParagraphFlow {
     ) -> Vec<Range<usize>> {
         stale_caches(&self.caches, &self.para_list, &self.list_host, paragraphs, &mut || {})
     }
+}
+
+// 이것을 실패시키는 것: tbl 조상만으로 승인, 중복/방향 누락 subList 승인.
+fn direct_cell_sublist(
+    element: &hwpforge_core::source_xml::XmlElement,
+    elements: &[hwpforge_core::source_xml::XmlElement],
+    xml: &str,
+    cell_sublist_count: &[usize],
+) -> Option<bool> {
+    if element.name() != "subList" {
+        return Some(false);
+    }
+    let parent = element.parent();
+    let mut ancestor = parent;
+    let direct = ["tc", "tr", "tbl", "run", "p", "sec"].iter().all(|name| {
+        let element = &elements[ancestor];
+        ancestor = element.parent();
+        element.name() == *name
+    }) && ancestor == 0;
+    if direct && cell_sublist_count[parent] == 1 {
+        let tag = source_start(xml, element)?;
+        return Some(crate::line_keep::cell_flow_allows(
+            attribute(&tag, "textDirection").as_deref(),
+            attribute(&tag, "lineWrap").as_deref(),
+        ));
+    }
+    Some(false)
 }
 
 /// The source ledger already records the end of the opening tag, including
