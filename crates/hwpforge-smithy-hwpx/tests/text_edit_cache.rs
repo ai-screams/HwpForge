@@ -49,17 +49,24 @@ fn input_section(section: Section, styles: &hwpforge_smithy_hwpx::HwpxStyleStore
     doc.add_section(section);
     let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), styles, &ImageStore::new()).unwrap();
     let xml = package::section_xml(&bytes);
+    let cache_start = r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos=""#;
+    let cache_end = r#"" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="42520" flags="393216"/></hp:linesegarray></hp:p>"#;
     let mut k = 0;
-    let xml = xml.split_inclusive("</hp:p>").map(|part| {
-        let result = part.replace("</hp:p>", &format!("<hp:linesegarray><hp:lineseg textpos=\"0\" vertpos=\"{}\" vertsize=\"1000\" textheight=\"1000\" baseline=\"850\" spacing=\"600\" horzpos=\"0\" horzsize=\"42520\" flags=\"393216\"/></hp:linesegarray></hp:p>", 9000 + k));
-        k += 1;
-        result
-    }).collect::<String>();
+    let xml = xml
+        .split_inclusive("</hp:p>")
+        .map(|part| {
+            let cache = format!("{cache_start}{}{cache_end}", 9000 + k);
+            let result = part.replace("</hp:p>", &cache);
+            k += 1;
+            result
+        })
+        .collect::<String>();
     package::with_section(&bytes, &xml)
 }
 
 /// The `vertpos` of each body paragraph's first cached line, `None` without
 /// a `hp:linesegarray`.
+// 이것을 실패시키는 것: 다줄 캐시에서 첫 줄 대신 마지막 줄을 관찰.
 fn vertpos(xml: &str) -> Vec<Option<String>> {
     Element::parse(xml)
         .children
@@ -67,7 +74,8 @@ fn vertpos(xml: &str) -> Vec<Option<String>> {
         .filter(|p| p.name == "hp:p")
         .map(|p| {
             let cache = p.children.iter().find(|c| c.name == "hp:linesegarray")?;
-            Some(cache.child("hp:lineseg").attr("vertpos").unwrap().to_owned())
+            let first = cache.children.iter().find(|c| c.name == "hp:lineseg")?;
+            Some(first.attr("vertpos").unwrap().to_owned())
         })
         .collect()
 }
@@ -597,7 +605,8 @@ fn body_character_definitions_follow_reference_order() {
 #[test]
 fn field_boundaries_across_runs_preserve_one_line() {
     let base = with_width(&input(vec![para("앞"), field("edit"), para("뒤")]), 1050);
-    let bytes = package::splice(&base,"<hp:t>원래 값</hp:t>","</hp:run><hp:run charPrIDRef=\"0\"><hp:t>원래 값</hp:t></hp:run><hp:run charPrIDRef=\"0\">");
+    let boundary_runs = "</hp:run><hp:run charPrIDRef=\"0\"><hp:t>원래 값</hp:t></hp:run><hp:run charPrIDRef=\"0\">";
+    let bytes = package::splice(&base, "<hp:t>원래 값</hp:t>", boundary_runs);
     let decoded = HwpxDecoder::decode(&bytes).unwrap();
     assert!(decoded.document.sections()[0].paragraphs[1]
         .runs
@@ -655,9 +664,11 @@ fn clickhere_with_two_body_runs_drops_edited_paragraph_cache() {
 #[test]
 fn clickhere_across_paragraphs_drops_both_edited_endpoint_caches() {
     let base = with_width(&input(vec![para("앞"), para("가"), para("라"), para("뒤")]), 3150);
+    let field_start = r#"<hp:t>가</hp:t><hp:ctrl><hp:fieldBegin id="77" type="CLICK_HERE" name="range" editable="1" dirty="0" zorder="0" fieldid="1"/></hp:ctrl></hp:run><hp:run charPrIDRef="0"><hp:t>나나</hp:t>"#;
+    let field_end = r#"<hp:t>다다</hp:t></hp:run><hp:run charPrIDRef="0"><hp:ctrl><hp:fieldEnd beginIDRef="77" fieldid="1"/></hp:ctrl><hp:t>라</hp:t>"#;
     let xml = package::section_xml(&base)
-        .replace("<hp:t>가</hp:t>", r#"<hp:t>가</hp:t><hp:ctrl><hp:fieldBegin id="77" type="CLICK_HERE" name="range" editable="1" dirty="0" zorder="0" fieldid="1"/></hp:ctrl></hp:run><hp:run charPrIDRef="0"><hp:t>나나</hp:t>"#)
-        .replace("<hp:t>라</hp:t>", r#"<hp:t>다다</hp:t></hp:run><hp:run charPrIDRef="0"><hp:ctrl><hp:fieldEnd beginIDRef="77" fieldid="1"/></hp:ctrl><hp:t>라</hp:t>"#);
+        .replace("<hp:t>가</hp:t>", field_start)
+        .replace("<hp:t>라</hp:t>", field_end);
     let bytes = package::with_section(&base, &xml);
     let decoded = HwpxDecoder::decode(&bytes).unwrap();
     let inventory =
@@ -750,5 +761,278 @@ fn body_and_direct_cell_edits_preserve_without_propagation() {
         let ps: Vec<_> = cell.children.iter().filter(|p| p.name == "hp:p").collect();
         assert!(ps[0].children.iter().any(|c| c.name == "hp:linesegarray"));
         assert!(ps[1].children.iter().any(|c| c.name == "hp:linesegarray"));
+    }
+}
+
+fn table_host(cells: Vec<Vec<Paragraph>>) -> Paragraph {
+    use hwpforge_core::{Table, TableCell, TableRow};
+    use hwpforge_foundation::HwpUnit;
+    Paragraph::with_runs(
+        vec![Run::table(
+            Table::new(vec![TableRow::new(
+                cells
+                    .into_iter()
+                    .map(|ps| TableCell::new(ps, HwpUnit::new(8000).unwrap()))
+                    .collect(),
+            )]),
+            CharShapeIndex::new(0),
+        )],
+        ParaShapeIndex::new(0),
+    )
+}
+
+fn cell_paragraph(
+    section: &mut Section,
+    host: usize,
+    cell: usize,
+    paragraph: usize,
+) -> &mut Paragraph {
+    let RunContent::Table(table) = &mut section.paragraphs[host].runs[0].content else {
+        panic!("table")
+    };
+    &mut table.rows[0].cells[cell].paragraphs[paragraph]
+}
+
+fn patch_section(bytes: &[u8], edit: impl FnOnce(&mut Section)) -> Vec<u8> {
+    let decoded = HwpxDecoder::decode(bytes).unwrap();
+    let mut section = decoded.document.sections()[0].clone();
+    let preservation = HwpxPatcher::export_section_preservation(bytes, 0, &section).unwrap();
+    edit(&mut section);
+    HwpxPatcher::patch_section_preserving(bytes, 0, &section, None, Some(&preservation)).unwrap()
+}
+
+fn cache_marks(xml: &str) -> Vec<usize> {
+    fn visit(node: &Element, marks: &mut Vec<usize>) {
+        if node.name == "hp:linesegarray" {
+            marks.push(node.children[0].attr("vertpos").unwrap().parse::<usize>().unwrap() - 9000);
+        }
+        for child in &node.children {
+            visit(child, marks);
+        }
+    }
+    let mut marks = Vec::new();
+    visit(&Element::parse(xml), &mut marks);
+    marks.sort_unstable();
+    marks
+}
+
+// 이것을 실패시키는 것: 성공 칸도 내부 전파 시작점에 포함, 최종 제거에서 성공 문단 차감,
+// 첫 변경만 처리, 모든 칸을 한 목록으로 취급, 호출 전체를 일괄 실패로 처리.
+#[test]
+fn direct_cell_edits_have_independent_seeds_and_removal_precedence() {
+    let bytes = input(vec![
+        para("본문"),
+        table_host(vec![vec![para("첫째"), para("둘째"), para("셋째")], vec![para("옆칸")]]),
+        para("뒤"),
+        table_host(vec![vec![para("다른 표")]]),
+        para("끝"),
+    ]);
+    // Cache markers: body 0, first cell 1/2/3, sibling 4, host 5, tail 6,
+    // second table cell 7, second host 8, last body 9.
+    // 한 칸이 커져도 같은 행의 옆 CENTER·BOTTOM 칸은 저장된 lineseg가 변하지 않았다.
+    let cases: &[(Option<&str>, &[(usize, usize, usize, &str)], &[usize])] = &[
+        (None, &[(1, 0, 1, "가")], &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        (None, &[(1, 0, 0, "가"), (1, 0, 1, "나")], &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        (None, &[(1, 0, 0, "가\n나"), (1, 0, 1, "나")], &[0, 4, 7]),
+        (None, &[(1, 0, 0, "가"), (1, 0, 1, "나\n다")], &[0, 1, 4, 7]),
+        (None, &[(1, 0, 1, "가"), (1, 1, 0, "나\n다"), (3, 0, 0, "라")], &[0, 1, 2, 3, 7]),
+        (Some("가"), &[(1, 0, 1, "나")], &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        (Some("가\n나"), &[(1, 0, 1, "나")], &[1, 2, 3, 4, 7]),
+        (Some("가"), &[(1, 0, 1, "나\n다")], &[0, 1, 4, 7]),
+        (Some("가\n나"), &[(1, 0, 1, "나\n다")], &[1, 4, 7]),
+    ];
+    for &(body, edits, expected) in cases {
+        for reverse in [false, true] {
+            let out = patch_section(&bytes, |section| {
+                if let Some(text) = body {
+                    section.paragraphs[0].runs[0].content = RunContent::Text(text.into());
+                }
+                let mut ordered = edits.to_vec();
+                if reverse {
+                    ordered.reverse();
+                }
+                // Repeated assignments produce one final normalized change.
+                for (host, cell, p, text) in ordered.into_iter().chain(edits.iter().copied()) {
+                    cell_paragraph(section, host, cell, p).runs[0].content =
+                        RunContent::Text(text.into());
+                }
+            });
+            assert_eq!(cache_marks(&package::section_xml(&out)), expected, "{body:?} {edits:?}");
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 첫 문단의 캐시/스타일로 판정, 변경 슬롯만 합산, 폭 경계의 <=를 <로,
+// 정규화 전 글자로 판정, 캐시 없는 변경을 전파에서 제외.
+#[test]
+fn direct_cell_width_uses_its_own_paragraph_and_all_slots() {
+    let mut middle = para("가");
+    middle.runs.push(Run::text("나다", CharShapeIndex::new(0)));
+    let mut styles = style_store_for_preset("default").unwrap();
+    let mut character = styles.char_shape(CharShapeIndex::new(0)).unwrap().clone();
+    character.bold = true;
+    let first_character = styles.push_char_shape(character);
+    let mut definition = styles.para_shape(ParaShapeIndex::new(0)).unwrap().clone();
+    definition.condense = 1;
+    let first_definition = styles.push_para_shape(definition);
+    let mut first = para("첫째");
+    first.para_shape_id = first_definition;
+    first.runs[0].char_shape_id = first_character;
+    let bytes = input_styled(
+        vec![para("앞"), table_host(vec![vec![first, middle, para("뒤")]]), para("끝")],
+        &styles,
+    );
+    let xml = package::section_xml(&bytes);
+    // The first cell paragraph has disallowed definitions and a different width.
+    for (width, text, expected) in [
+        (3150, "라", vec![0, 1, 2, 3, 4, 5]),
+        (3149, "라", vec![0, 1]),
+        (3150, "라\u{0001}", vec![0, 1, 2, 3, 4, 5]),
+    ] {
+        let original_line = "vertpos=\"9002\" vertsize=\"1000\" textheight=\"1000\" baseline=\"850\" spacing=\"600\" horzpos=\"0\" horzsize=\"42520\"";
+        let narrow_line = format!("vertpos=\"9002\" vertsize=\"1000\" textheight=\"1000\" baseline=\"850\" spacing=\"600\" horzpos=\"0\" horzsize=\"{width}\"");
+        let narrow = xml.replace(original_line, &narrow_line);
+        let base = package::with_section(&bytes, &narrow);
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        assert!(cell_paragraph(&mut decoded.document.sections()[0].clone(), 1, 0, 1)
+            .layout_cache
+            .is_some());
+        let out = patch_section(&base, |s| {
+            cell_paragraph(s, 1, 0, 1).runs[0].content = RunContent::Text(text.into())
+        });
+        assert_eq!(
+            cache_marks(&package::section_xml(&out)),
+            expected,
+            "width {width}, text {text:?}"
+        );
+    }
+    let (_, source) = XmlSource::read(&xml).unwrap();
+    let cache = source
+        .elements()
+        .iter()
+        .find(|e| e.name() == "linesegarray" && xml[e.outer()].contains("vertpos=\"9002\""))
+        .unwrap();
+    let mut uncached = xml.clone();
+    uncached.replace_range(cache.outer(), "");
+    let base = package::with_section(&bytes, &uncached);
+    let out = patch_section(&base, |s| {
+        cell_paragraph(s, 1, 0, 1).runs[0].content = RunContent::Text("라".into())
+    });
+    assert_eq!(cache_marks(&package::section_xml(&out)), [0, 1]);
+}
+
+// 이것을 실패시키는 것: 빈 필드 끝점을 본문 경로로만 조회, 직접 슬롯 누락/표시값 이중 합산.
+#[test]
+fn direct_cell_fields_share_patch_and_fill_evidence() {
+    let mut middle = field("칸값");
+    middle.runs.insert(0, Run::text("앞", CharShapeIndex::new(0)));
+    middle.runs.push(Run::text("뒤", CharShapeIndex::new(0)));
+    let bytes = input(vec![
+        para("앞"),
+        table_host(vec![vec![para("첫째"), middle, para("셋째")]]),
+        para("끝"),
+    ]);
+    let bytes = with_width(&bytes, 3150);
+    let out = HwpxFiller::fill(
+        &bytes,
+        &std::collections::BTreeMap::from([("칸값".to_string(), "값".to_string())]),
+    )
+    .unwrap()
+    .bytes;
+    let patched = patch_section(&bytes, |s| {
+        let RunContent::Control(control) = &mut cell_paragraph(s, 1, 0, 1).runs[1].content else {
+            panic!("field")
+        };
+        let Control::Field { display_text, .. } = control.as_mut() else { panic!("field") };
+        *display_text = "값".into();
+    });
+    assert_eq!(out, patched);
+    assert_eq!(cache_marks(&package::section_xml(&out)), [0, 1, 2, 3, 4, 5]);
+    let boundary_runs = "</hp:run><hp:run charPrIDRef=\"0\"><hp:t>원래 값</hp:t></hp:run><hp:run charPrIDRef=\"0\">";
+    let boundary = package::splice(&bytes, "<hp:t>원래 값</hp:t>", boundary_runs);
+    let filled_boundary = HwpxFiller::fill(
+        &boundary,
+        &std::collections::BTreeMap::from([("칸값".into(), "값".into())]),
+    )
+    .unwrap()
+    .bytes;
+    let patched_boundary = patch_section(&boundary, |s| {
+        let p = cell_paragraph(s, 1, 0, 1);
+        p.runs.iter_mut().find(|r| r.content.as_text() == Some("원래 값")).unwrap().content =
+            RunContent::Text("값".into());
+    });
+    assert_eq!(filled_boundary, patched_boundary);
+    assert_eq!(cache_marks(&package::section_xml(&filled_boundary)), [0, 1, 2, 3, 4, 5]);
+    let empty = patch_section(&bytes, |s| {
+        let RunContent::Control(control) = &mut cell_paragraph(s, 1, 0, 1).runs[1].content else {
+            panic!("field")
+        };
+        let Control::Field { display_text, .. } = control.as_mut() else { panic!("field") };
+        *display_text = "\u{1}".into();
+    });
+    assert_eq!(cache_marks(&package::section_xml(&empty)), [0, 1]);
+}
+
+// 이것을 실패시키는 것: 병합 칸 제외, TOP 또는 CENTER 정렬만 허용, 글자처럼 배치한 표만 허용.
+#[test]
+fn direct_cell_merges_alignment_and_nonwrapping_placement_are_not_extra_gates() {
+    use hwpforge_core::{Table, TableCell, TableRow};
+    use hwpforge_foundation::HwpUnit;
+    for vertical in [false, true] {
+        let merged = TableCell::with_span(
+            vec![para("대상")],
+            HwpUnit::new(8000).unwrap(),
+            if vertical { 1 } else { 2 },
+            if vertical { 2 } else { 1 },
+        );
+        let side = || TableCell::new(vec![para("옆칸")], HwpUnit::new(8000).unwrap());
+        let rows = if vertical {
+            vec![TableRow::new(vec![merged, side()]), TableRow::new(vec![side()])]
+        } else {
+            vec![TableRow::new(vec![merged, side()])]
+        };
+        let host = Paragraph::with_runs(
+            vec![Run::table(Table::new(rows), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let base = input(vec![para("앞"), host, para("뒤")]);
+        let original = package::section_xml(&base);
+        let (_, source_map) = XmlSource::read(&original).unwrap();
+        let sublist = source_map.elements().iter().find(|e| e.name() == "subList").unwrap();
+        let start_tag = sublist.outer().start..sublist.inner().unwrap().start;
+        let original_tag = &original[start_tag.clone()];
+        assert!(original_tag.contains("vertAlign=\"CENTER\""));
+        for align in ["TOP", "CENTER", "BOTTOM"] {
+            for inline in [true, false] {
+                let replacement = format!("vertAlign=\"{align}\"");
+                let tag = original_tag.replace("vertAlign=\"CENTER\"", &replacement);
+                assert!(tag.contains(&replacement));
+                assert_eq!(tag == original_tag, align == "CENTER");
+                let mut source = original.clone();
+                source.replace_range(start_tag.clone(), &tag);
+                if !inline {
+                    source = source
+                        .replace("treatAsChar=\"1\"", "treatAsChar=\"0\"")
+                        .replace("textWrap=\"SQUARE\"", "textWrap=\"TOP_AND_BOTTOM\"");
+                }
+                assert_eq!(
+                    Element::parse(&source).find("hp:subList").attr("vertAlign"),
+                    Some(align)
+                );
+                let bytes = package::with_section(&base, &source);
+                let out = patch_section(&bytes, |s| {
+                    cell_paragraph(s, 1, 0, 0).runs[0].content = RunContent::Text("값".into())
+                });
+                assert_eq!(
+                    cache_marks(&package::section_xml(&out)),
+                    if vertical { vec![0, 1, 2, 3, 4, 5] } else { vec![0, 1, 2, 3, 4] },
+                    "{vertical} {align} {inline}"
+                );
+                assert_eq!(
+                    package::section_xml(&out),
+                    source.replace("<hp:t>대상</hp:t>", "<hp:t>값</hp:t>")
+                );
+            }
+        }
     }
 }
