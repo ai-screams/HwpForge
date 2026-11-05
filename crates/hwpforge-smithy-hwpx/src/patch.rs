@@ -133,7 +133,7 @@ impl HwpxPatcher {
             .source_maps
             .get(section_idx)
             .ok_or_else(|| PatchError::Invariant { detail: "missing decoder source map".into() })?;
-        preservation_from_map(&section_xml, &section_path, section, map, section_idx)
+        preservation_from_map(&section_xml, &section_path, section, map, section_idx, None)
     }
 
     /// Patches a single section while preserving untouched package entries.
@@ -410,6 +410,7 @@ impl HwpxPatcher {
             }));
         }
 
+        let mut paragraph_slots = Vec::new();
         let rebuilt_preservation = preservation_from_map(
             &base_section_xml,
             &expected_section_path,
@@ -418,6 +419,9 @@ impl HwpxPatcher {
                 detail: "missing decoder source map".into(),
             })?,
             section_idx,
+            Some(&mut |paragraph, prefix, index| {
+                paragraph_slots.push((paragraph, paragraph_path(prefix, index)));
+            }),
         )?;
         if preservation != &rebuilt_preservation {
             return Err(PatchError::Rejected(HwpxError::InvalidStructure {
@@ -513,7 +517,7 @@ impl HwpxPatcher {
         }
 
         // Actual normalized edits own the invalidation decision. Untouched
-        // plain body tails retain their original line breaking caches; nested
+        // proven body and direct-cell edits start no invalidation. Other nested
         // edits keep the conservative tail and host-chain invalidation.
         // Text replacements and owned-cache removals share one checked splice.
         let mut replacements = Vec::with_capacity(edits.len());
@@ -546,128 +550,20 @@ impl HwpxPatcher {
                     .map_err(|error| PatchError::Invariant { detail: error.to_string() })?,
                 );
             }
-            // Sum patchable direct-run slots, including unchanged editable fields.
-            // The flow gate excludes ranges and elements whose visible text may be
-            // absent from these slots; nested flows never add to their host's width.
-            let map = &decoded.source_maps[section_idx];
-            let mut changed_mask = vec![false; flow.paragraph_count()];
-            for &p in &changed {
-                changed_mask[p] = true;
-            }
-            let owners: Vec<_> = (0..base_section.paragraphs.len())
-                .map(|body| {
-                    body_origin(map, &expected_section_path, section_idx, body)
-                        .filter(|(p, _)| changed_mask[*p])
-                })
-                .collect();
-            let mut keep = vec![false; flow.paragraph_count()];
-            if owners.iter().any(Option::is_some) {
-                #[cfg(test)]
-                SELF_CHECK_WORK.with(|work| {
-                    let (blocks, slots, indexes) = work.get();
-                    work.set((blocks + 1, slots, indexes));
-                });
-                let mut texts =
-                    vec![(String::new(), String::new(), true); base_section.paragraphs.len()];
-                for (slot, new) in rebuilt_preservation.text_slots.iter().zip(&new_texts) {
-                    let Some((body, run, suffix)) = body_run(&slot.path) else { continue };
-                    if !matches!(suffix, ".text" | ".control.field") {
-                        continue;
-                    }
-                    if owners.get(body).is_none_or(Option::is_none) {
-                        continue;
-                    }
-                    let Some((old, final_text, valid)) = texts.get_mut(body) else { continue };
-                    let paragraph = &base_section.paragraphs[body];
-                    *valid &= paragraph.runs.get(run).is_some();
-                    *valid &= owners[body].is_some_and(|(p, _)| {
-                        flow.paragraph_at(text_locator_start(&slot.locator)) == Some(p)
-                    });
-                    #[cfg(test)]
-                    SELF_CHECK_WORK.with(|work| {
-                        let (blocks, slots, indexes) = work.get();
-                        work.set((blocks, slots + 1, indexes));
-                    });
-                    old.push_str(&slot.original_text);
-                    final_text.push_str(new.as_deref().unwrap_or(&slot.original_text));
-                }
-                let final_slots = std::cell::OnceCell::new();
-                for (before, after) in before_fields.fields().iter().zip(after_fields.fields()) {
-                    // Noneditable ranges are already excluded by the flow gate; their
-                    // absent patch slots do not describe an empty editable value.
-                    if before.editability()
-                        != hwpforge_core::field_inventory::FieldEditability::Editable
-                    {
-                        continue;
-                    }
-                    let empty = before.current().is_empty()
-                        || after.current().is_empty()
-                        || before.body().iter().all(|body| {
-                            let slots = final_slots.get_or_init(|| {
-                                #[cfg(test)]
-                                SELF_CHECK_WORK.with(|work| {
-                                    let (blocks, slots, indexes) = work.get();
-                                    work.set((blocks, slots, indexes + 1));
-                                });
-                                rebuilt_preservation
-                                    .text_slots
-                                    .iter()
-                                    .zip(&new_texts)
-                                    .map(|(slot, new)| {
-                                        (
-                                            slot.path.as_str(),
-                                            new.as_deref().unwrap_or(&slot.original_text),
-                                        )
-                                    })
-                                    .collect::<BTreeMap<_, _>>()
-                            });
-                            slots.get(body.path()).is_none_or(|text| text.is_empty())
-                        });
-                    if empty {
-                        for path in
-                            std::iter::once(before.start().as_str()).chain(before.end().as_deref())
-                        {
-                            if let Some((body, _, _)) = body_run(path) {
-                                if let Some(text) = texts.get_mut(body) {
-                                    text.2 = false;
-                                }
-                            }
-                        }
-                    }
-                }
-                let header = std::cell::OnceCell::new();
-                for (body, (old, text, valid)) in texts.iter().enumerate() {
-                    if !valid {
-                        continue;
-                    }
-                    let paragraph = &base_section.paragraphs[body];
-                    let Some((p, definition)) = owners[body] else { continue };
-                    if crate::line_keep::eligible(paragraph, old, text, &decoded.style_store)
-                        .is_none()
-                    {
-                        continue;
-                    }
-                    let Some(header) = header
-                        .get_or_init(|| {
-                            crate::line_keep::Header::read(
-                                &raw_package,
-                                &decoded.style_store,
-                                || {},
-                            )
-                        })
-                        .as_ref()
-                    else {
-                        continue;
-                    };
-                    keep[p] = header.allows(
-                        &flow.section_evidence,
-                        definition,
-                        paragraph.runs[0].char_shape_id.get(),
-                    );
-                }
-            }
+            let proven = one_line_proofs(
+                &decoded.source_maps[section_idx],
+                section_idx,
+                &rebuilt_preservation,
+                &paragraph_slots,
+                &changed,
+                &new_texts,
+                &before_fields,
+                &after_fields,
+                &decoded.style_store,
+                &raw_package,
+            );
             replacements.extend(
-                flow.caches_to_drop_for_text_edits(changed, &keep)
+                flow.caches_to_drop_for_text_edits(changed, &proven)
                     .into_iter()
                     .map(|range| (range, String::new())),
             );
@@ -716,27 +612,154 @@ impl HwpxPatcher {
     }
 }
 
-fn body_origin(
+// Proof inputs already belong to the patch operation; keep them explicit instead
+// of introducing a second context that duplicates its state.
+#[allow(clippy::too_many_arguments)]
+fn one_line_proofs(
+    map: &crate::decoder::source_map::SourceMap,
+    section_idx: usize,
+    preservation: &SectionPreservation,
+    paragraph_slots: &[(&Paragraph, String)],
+    changed: &[usize],
+    new_texts: &[Option<String>],
+    before_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    after_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    styles: &HwpxStyleStore,
+    raw_package: &RawPackage,
+) -> Vec<bool> {
+    // Sum patchable direct-run slots, including unchanged editable fields.
+    // The flow gate excludes ranges and elements whose visible text may be
+    // absent from these slots; nested flows never add to their host's width.
+    let flow = &map.cache_flow;
+    let mut changed_mask = vec![false; flow.paragraph_count()];
+    for &p in changed {
+        changed_mask[p] = true;
+    }
+    let mut owners = vec![None; flow.paragraph_count()];
+    let mut slot_owners = BTreeMap::new();
+    for (paragraph, path) in paragraph_slots {
+        let Some((p, definition)) = paragraph_origin(
+            map,
+            &preservation.section_path,
+            &hwpforge_core::node_path::CorePath::new(section_idx, path.as_str()),
+        )
+        .filter(|(p, _)| changed_mask[*p]) else {
+            continue;
+        };
+        owners[p] = Some((*paragraph, definition));
+        for ri in 0..paragraph.runs.len() {
+            let run_path = format!("{path}.runs[{ri}]");
+            if run_owner(map, &preservation.section_path, section_idx, &run_path) == Some(p) {
+                slot_owners.insert(format!("{run_path}.text"), p);
+                slot_owners.insert(format!("{run_path}.control.field"), p);
+            }
+        }
+    }
+    let mut proven = vec![false; flow.paragraph_count()];
+    if owners.iter().any(Option::is_some) {
+        self_check_count(0);
+        let mut texts = vec![(String::new(), String::new(), true); flow.paragraph_count()];
+        for (slot, new) in preservation.text_slots.iter().zip(new_texts) {
+            let Some(&p) = slot_owners.get(&slot.path) else { continue };
+            let (old, final_text, valid) = &mut texts[p];
+            *valid &= flow.paragraph_at(text_locator_start(&slot.locator)) == Some(p);
+            self_check_count(1);
+            old.push_str(&slot.original_text);
+            final_text.push_str(new.as_deref().unwrap_or(&slot.original_text));
+        }
+        let final_slots = std::cell::OnceCell::new();
+        for (before, after) in before_fields.fields().iter().zip(after_fields.fields()) {
+            // Noneditable ranges are already excluded by the flow gate; their
+            // absent patch slots do not describe an empty editable value.
+            if before.editability() != hwpforge_core::field_inventory::FieldEditability::Editable {
+                continue;
+            }
+            let empty = before.current().is_empty()
+                || after.current().is_empty()
+                || before.body().iter().all(|body| {
+                    let slots = final_slots.get_or_init(|| {
+                        self_check_count(2);
+                        preservation
+                            .text_slots
+                            .iter()
+                            .zip(new_texts)
+                            .map(|(slot, new)| {
+                                (slot.path.as_str(), new.as_deref().unwrap_or(&slot.original_text))
+                            })
+                            .collect::<BTreeMap<_, _>>()
+                    });
+                    slots.get(body.path()).is_none_or(|text| text.is_empty())
+                });
+            if empty {
+                for path in std::iter::once(before.start().as_str()).chain(before.end().as_deref())
+                {
+                    if let Some(p) = run_owner(map, &preservation.section_path, section_idx, path) {
+                        if let Some(text) = texts.get_mut(p) {
+                            text.2 = false;
+                        }
+                    }
+                }
+            }
+        }
+        let header = std::cell::OnceCell::new();
+        for (p, (old, text, valid)) in texts.iter().enumerate() {
+            if !valid {
+                continue;
+            }
+            let Some((paragraph, definition)) = owners[p] else { continue };
+            if crate::line_keep::eligible(paragraph, old, text, styles).is_none() {
+                continue;
+            }
+            let Some(header) = header
+                .get_or_init(|| {
+                    self_check_count(3);
+                    crate::line_keep::Header::read(raw_package, styles, || {})
+                })
+                .as_ref()
+            else {
+                continue;
+            };
+            proven[p] = header.allows(
+                &flow.section_evidence,
+                definition,
+                paragraph.runs[0].char_shape_id.get(),
+            );
+        }
+    }
+    proven
+}
+
+// 이것을 실패시키는 것: part/span 대조 삭제, 첫 칸 문단의 속성을 모든 문단에 사용.
+fn paragraph_origin(
     map: &crate::decoder::source_map::SourceMap,
     part: &str,
-    section: usize,
-    body: usize,
+    path: &hwpforge_core::node_path::CorePath,
 ) -> Option<(usize, usize)> {
-    let path = hwpforge_core::node_path::CorePath::new(section, format!("paragraphs[{body}]"));
-    let node = map.node(&path)?;
+    let node = map.node(path)?;
     if node.part() != part {
         return None;
     }
-    let span = node.ranges().first()?;
+    let [span] = node.ranges() else { return None };
     let p = map.cache_flow.paragraph_at(span.start)?;
     Some((p, map.cache_flow.self_candidate(p, span)?))
 }
 
-/// A direct body run address; suffixes belong to the caller's slot policy.
-fn body_run(path: &str) -> Option<(usize, usize, &str)> {
-    let (paragraph, rest) = path.strip_prefix("paragraphs[")?.split_once("].runs[")?;
-    let (run, suffix) = rest.split_once(']')?;
-    Some((paragraph.parse().ok()?, run.parse().ok()?, suffix))
+// Field endpoints and direct runs use the same decoder projection, including cells.
+fn run_owner(
+    map: &crate::decoder::source_map::SourceMap,
+    part: &str,
+    section: usize,
+    path: &str,
+) -> Option<usize> {
+    let node = map.node(&hwpforge_core::node_path::CorePath::new(section, path))?;
+    if node.part() != part {
+        return None;
+    }
+    let first = map.cache_flow.paragraph_at(node.ranges().first()?.start)?;
+    node.ranges()
+        .iter()
+        .all(|span| map.cache_flow.paragraph_at(span.start) == Some(first))
+        .then_some(first)
 }
 
 #[derive(Debug, Clone)]
@@ -750,16 +773,17 @@ pub(crate) struct SemanticTextSlot {
     pub(crate) inline: bool,
 }
 
-fn preservation_from_map(
+fn preservation_from_map<'a>(
     xml: &str,
     part: &str,
-    section: &Section,
+    section: &'a Section,
     map: &crate::decoder::source_map::SourceMap,
     section_idx: usize,
+    visit: Option<&mut dyn FnMut(&'a Paragraph, &str, usize)>,
 ) -> Result<SectionPreservation, PatchError> {
     let recorded: BTreeMap<_, _> = map.text_slots().iter().map(|s| (s.path.as_str(), s)).collect();
     let mut slots = Vec::new();
-    for slot in collect_preserving_text_slots(section, section_idx, map)? {
+    for slot in collect_preserving_text_slots_with(section, section_idx, map, visit)? {
         let original = recorded.get(slot.path.as_str()).ok_or_else(|| PatchError::Invariant {
             detail: format!(
                 "internal decoder source-map defect: no original slot for {}",
@@ -791,8 +815,17 @@ fn collect_preserving_text_slots(
     section_idx: usize,
     map: &crate::decoder::source_map::SourceMap,
 ) -> Result<Vec<SemanticTextSlot>, PatchError> {
+    collect_preserving_text_slots_with(section, section_idx, map, None)
+}
+
+fn collect_preserving_text_slots_with<'a>(
+    section: &'a Section,
+    section_idx: usize,
+    map: &crate::decoder::source_map::SourceMap,
+    visit: Option<&mut dyn FnMut(&'a Paragraph, &str, usize)>,
+) -> Result<Vec<SemanticTextSlot>, PatchError> {
     let mut slots = Vec::new();
-    for slot in collect_semantic_text_slots(section, section_idx) {
+    for slot in collect_text_slots_with(section, section_idx, true, visit) {
         if map.synthetic_empty_texts.contains(&slot.path) {
             if !slot.text.is_empty() {
                 return Err(PatchError::Rejected(HwpxError::InvalidStructure {
@@ -828,7 +861,7 @@ fn build_section_preservation(
     decoded.headers = parsed.headers;
     decoded.footers = parsed.footers;
     let map = parsed.source.finish(&decoded, 0, part);
-    preservation_from_map(xml, part, section, &map, 0)
+    preservation_from_map(xml, part, section, &map, 0, None)
 }
 
 // pub(crate): stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
@@ -857,6 +890,8 @@ fn text_runs(
     patchable_only: bool,
     slots: &mut Vec<SemanticTextSlot>,
 ) {
+    #[cfg(test)]
+    TEXT_RUNS_CALLS.set(TEXT_RUNS_CALLS.get() + 1);
     let mut path = prefix.to_owned();
     let mut stack: Vec<_> =
         runs.iter().enumerate().rev().map(|(ri, run)| (run, ri, path.len())).collect();
@@ -891,10 +926,25 @@ fn has_text_or_anchor(run: &Run) -> bool {
         || matches!(run.content.as_control(), Some(Control::Memo { .. }))
 }
 
+fn paragraph_path(prefix: &str, index: usize) -> String {
+    #[cfg(test)]
+    PARAGRAPH_PATHS.set(PARAGRAPH_PATHS.get() + 1);
+    format!("{prefix}[{index}]")
+}
+
 fn collect_text_slots(
     section: &Section,
     section_idx: usize,
     patchable_only: bool,
+) -> Vec<SemanticTextSlot> {
+    collect_text_slots_with(section, section_idx, patchable_only, None)
+}
+
+fn collect_text_slots_with<'a>(
+    section: &'a Section,
+    section_idx: usize,
+    patchable_only: bool,
+    mut visit: Option<&mut dyn FnMut(&'a Paragraph, &str, usize)>,
 ) -> Vec<SemanticTextSlot> {
     use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
     let sections = std::slice::from_ref(section);
@@ -906,18 +956,31 @@ fn collect_text_slots(
             return;
         }
         for (pi, paragraph) in paragraphs.iter().enumerate() {
-            // No full paragraph path for a container-only flow.
-            if !paragraph.runs.iter().any(has_text_or_anchor) {
-                continue;
+            let has_text = paragraph.runs.iter().any(has_text_or_anchor);
+            if let Some(visit) = visit.as_mut() {
+                // 이것을 실패시키는 것: 텍스트 run이 없는 접힌 누름틀 후보 누락.
+                if has_text
+                    || paragraph
+                        .runs
+                        .iter()
+                        .any(|run| matches!(run.content.as_control(), Some(Control::Field { .. })))
+                {
+                    visit(paragraph, prefix, pi);
+                }
             }
-            text_runs(
-                &paragraph.runs,
-                &format!("{prefix}[{pi}]"),
-                section_idx,
-                &inventory,
-                patchable_only,
-                &mut slots,
-            );
+            // Folded field slots come from the inventory below; avoid allocating
+            // a traversal stack when this paragraph has no text or Memo anchors.
+            if has_text {
+                let path = paragraph_path(prefix, pi);
+                text_runs(
+                    &paragraph.runs,
+                    &path,
+                    section_idx,
+                    &inventory,
+                    patchable_only,
+                    &mut slots,
+                );
+            }
         }
     });
     for field in inventory.fields().iter().filter(|f| {
@@ -1152,10 +1215,24 @@ fn redact_control(control: &mut Control) {
     }
 }
 
+#[inline]
+#[cfg_attr(not(test), allow(unused_variables))]
+fn self_check_count(field: usize) {
+    #[cfg(test)]
+    SELF_CHECK_WORK.with(|work| {
+        let (blocks, slots, indexes, headers) = work.get();
+        let mut fields = [blocks, slots, indexes, headers];
+        fields[field] += 1;
+        work.set((fields[0], fields[1], fields[2], fields[3]));
+    });
+}
+
 #[cfg(test)]
 thread_local! {
-    static SELF_CHECK_WORK: std::cell::Cell<(usize, usize, usize)> = const {
-        std::cell::Cell::new((0, 0, 0))
+    static PARAGRAPH_PATHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEXT_RUNS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SELF_CHECK_WORK: std::cell::Cell<(usize, usize, usize, usize)> = const {
+        std::cell::Cell::new((0, 0, 0, 0))
     };
 }
 
@@ -1165,10 +1242,103 @@ mod tests {
         include!("../tests/support/small_stack.rs");
     }
 
-    // 이것을 실패시키는 것: 후보 없는 자기 판정 실행, 후보 밖 슬롯 합산,
-    // 빈 값 조회가 필요하지 않은데도 필드 슬롯 색인 생성.
+    // 이것을 실패시키는 것: text_runs 호출의 has_text 조건 삭제,
+    // 후보 visitor 없는 접힌 필드 export에서도 문단 경로 생성.
     #[test]
-    fn self_check_work_is_limited_to_body_candidates() {
+    fn folded_field_slots_skip_text_run_traversal() {
+        use hwpforge_core::{Document, ImageStore, PageSettings};
+        use hwpforge_foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
+
+        let field = |text: &str| {
+            Run::control(
+                Control::Field {
+                    field_type: FieldType::ClickHere,
+                    hint_text: Some(text.into()),
+                    help_text: None,
+                    name: Some(text.into()),
+                    display_text: text.into(),
+                },
+                CharShapeIndex::new(0),
+            )
+        };
+        let mut section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![field("가"), field("나")], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        );
+        let mut doc = Document::new();
+        doc.add_section(section.clone());
+        let bytes = crate::HwpxEncoder::encode(
+            &doc.validate().unwrap(),
+            &crate::style_store_for_preset("default").unwrap(),
+            &ImageStore::new(),
+        )
+        .unwrap();
+        TEXT_RUNS_CALLS.set(0);
+        PARAGRAPH_PATHS.set(0);
+        let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &section).unwrap();
+        assert_eq!(TEXT_RUNS_CALLS.get(), 0);
+        assert_eq!(PARAGRAPH_PATHS.get(), 0);
+        assert_eq!(
+            preservation
+                .text_slots
+                .iter()
+                .map(|s| (s.path.as_str(), s.original_text.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("paragraphs[0].runs[0].control.field", "가"),
+                ("paragraphs[0].runs[1].control.field", "나")
+            ]
+        );
+
+        for patchable_only in [true, false] {
+            let mut visited = Vec::new();
+            TEXT_RUNS_CALLS.set(0);
+            PARAGRAPH_PATHS.set(0);
+            let slots = collect_text_slots_with(
+                &section,
+                0,
+                patchable_only,
+                Some(&mut |_, prefix, index| {
+                    visited.push(paragraph_path(prefix, index));
+                }),
+            );
+            assert_eq!(TEXT_RUNS_CALLS.get(), 0);
+            assert_eq!(PARAGRAPH_PATHS.get(), 1);
+            assert_eq!(visited, ["paragraphs[0]"]);
+            assert_eq!(
+                slots.iter().map(|s| (s.path.as_str(), s.text.as_str())).collect::<Vec<_>>(),
+                [
+                    ("paragraphs[0].runs[0].control.field", "가"),
+                    ("paragraphs[0].runs[1].control.field", "나")
+                ]
+            );
+        }
+
+        section.paragraphs[0].runs.push(Run::text("다", CharShapeIndex::new(0)));
+        section.paragraphs[0].runs.push(Run::control(
+            Control::memo_with_anchor(vec![], vec![Run::text("라", CharShapeIndex::new(0))]),
+            CharShapeIndex::new(0),
+        ));
+        TEXT_RUNS_CALLS.set(0);
+        PARAGRAPH_PATHS.set(0);
+        let slots = collect_stamp_text_slots(&section, 0);
+        assert_eq!(TEXT_RUNS_CALLS.get(), 1);
+        assert_eq!(PARAGRAPH_PATHS.get(), 1);
+        assert_eq!(
+            slots.iter().map(|s| (s.path.as_str(), s.text.as_str())).collect::<Vec<_>>(),
+            [
+                ("paragraphs[0].runs[0].control.field", "가"),
+                ("paragraphs[0].runs[1].control.field", "나"),
+                ("paragraphs[0].runs[2].text", "다"),
+                ("paragraphs[0].runs[3].control.memo.anchor[0].runs[0].text", "라")
+            ]
+        );
+    }
+
+    // 이것을 실패시키는 것: 후보 없는 자기 판정 실행, 후보 밖 슬롯 합산,
+    // 빈 값 조회가 필요하지 않은데도 필드 슬롯 색인 생성, 후보마다 header 재파싱.
+    #[test]
+    fn self_check_work_is_limited_to_supported_candidates() {
         use hwpforge_core::layout::{LayoutCache, LineSeg};
         use hwpforge_core::{Document, ImageStore, PageSettings};
         use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex};
@@ -1186,7 +1356,9 @@ mod tests {
             p.layout_cache = Some(LayoutCache::new(vec![line]));
             p
         };
-        for (body_edit, field) in [(false, false), (true, false), (true, true)] {
+        for (body_edit, field, both) in
+            [(false, false, false), (true, false, false), (true, true, false), (true, false, true)]
+        {
             let mut first = para("가나");
             if field {
                 first.runs[0].content = RunContent::Control(Box::new(Control::Field {
@@ -1230,14 +1402,15 @@ mod tests {
                     }
                     _ => panic!("text or field"),
                 }
-            } else {
+            }
+            if !body_edit || both {
                 let RunContent::Table(table) = &mut section.paragraphs[2].runs[1].content else {
                     panic!("table")
                 };
                 table.rows[0].cells[0].paragraphs[0].runs[0].content =
                     RunContent::Text("다".into());
             }
-            SELF_CHECK_WORK.set((0, 0, 0));
+            SELF_CHECK_WORK.set((0, 0, 0, 0));
             let output = HwpxPatcher::patch_section_preserving(
                 &bytes,
                 0,
@@ -1246,10 +1419,10 @@ mod tests {
                 Some(&preservation),
             )
             .unwrap();
-            let expected = match (body_edit, field) {
-                (false, _) => (0, 0, 0),
-                (true, false) => (1, 1, 0),
-                (true, true) => (1, 1, 1),
+            let expected = match (both, field) {
+                (true, _) => (1, 2, 0, 1),
+                (false, false) => (1, 1, 0, 1),
+                (false, true) => (1, 1, 1, 1),
             };
             assert_eq!(SELF_CHECK_WORK.get(), expected);
             let xml = RawPackage::read(&output)
@@ -1263,28 +1436,46 @@ mod tests {
                 .filter(|p| p.name == "hp:p")
                 .map(|p| p.children.iter().any(|c| c.name == "hp:linesegarray"))
                 .collect();
-            assert_eq!(kept, [true, true, false, false]);
+            assert_eq!(kept, [true, true, true, true]);
         }
     }
 
-    // 이것을 실패시키는 것: part 비교 삭제, 첫 문단 고정, 중첩 run을 본문 run으로 인정.
+    // 이것을 실패시키는 것: 문단/run의 part 비교 삭제 또는 run 범위 소유자 비교 반전.
     #[test]
-    fn body_origin_uses_exact_part_and_direct_run_paths() {
-        assert_eq!(body_run("paragraphs[2].runs[3].text"), Some((2, 3, ".text")));
-        assert!(body_run(
-            "paragraphs[2].runs[3].table.rows[0].cells[0].paragraphs[0].runs[0].text"
-        )
-        .is_some_and(|(_, _, suffix)| suffix != ".text" && suffix != ".control.field"));
-        assert_eq!(body_run("headers[0].paragraphs[2].runs[3].text"), None);
+    fn paragraph_origin_uses_exact_part_and_source_paths() {
         let xml = "<hs:sec xmlns:hs='http://www.hancom.co.kr/hwpml/2011/section' xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph'><hp:p paraPrIDRef='0'><hp:run charPrIDRef='0'><hp:secPr textDirection='HORIZONTAL'><hp:grid charGrid='0' wonggojiFormat='0'/></hp:secPr><hp:t>가</hp:t></hp:run><hp:linesegarray><hp:lineseg textpos='0' horzsize='1000'/></hp:linesegarray></hp:p></hs:sec>";
         let mut parsed = parse_section(xml, 0, &HashMap::new()).unwrap();
         let source = std::mem::take(&mut parsed.source);
         let section = section_from_parsed(parsed);
         let mut map = source.finish(&section, 0, "Contents/section0.xml");
         map.prove_cache_text_tail(xml, &Default::default(), 0);
-        assert_eq!(body_origin(&map, "Contents/section0.xml", 0, 0), Some((0, 0)));
-        assert_eq!(body_origin(&map, "Contents/section1.xml", 0, 0), None);
-        assert_eq!(body_origin(&map, "Contents/section0.xml", 0, 1), None);
+        assert_eq!(run_owner(&map, "Contents/section0.xml", 0, "paragraphs[0].runs[0]"), Some(0));
+        assert_eq!(run_owner(&map, "Contents/section1.xml", 0, "paragraphs[0].runs[0]"), None);
+        assert_eq!(run_owner(&map, "Contents/section0.xml", 0, "paragraphs[1].runs[0]"), None);
+        assert_eq!(
+            paragraph_origin(
+                &map,
+                "Contents/section0.xml",
+                &hwpforge_core::node_path::CorePath::new(0, "paragraphs[0]")
+            ),
+            Some((0, 0))
+        );
+        assert_eq!(
+            paragraph_origin(
+                &map,
+                "Contents/section1.xml",
+                &hwpforge_core::node_path::CorePath::new(0, "paragraphs[0]")
+            ),
+            None
+        );
+        assert_eq!(
+            paragraph_origin(
+                &map,
+                "Contents/section0.xml",
+                &hwpforge_core::node_path::CorePath::new(0, "paragraphs[1]")
+            ),
+            None
+        );
     }
     // 이것을 실패시키는 것: text_runs의 Memo anchor 재귀 복원 또는 leaf 누락.
     // Field policy is tested separately at depth 33; this test isolates slot traversal.

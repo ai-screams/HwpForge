@@ -12,7 +12,7 @@ fn flow(body: &str) -> ParagraphFlow {
 }
 
 fn p(content: &str) -> String {
-    format!("<p><run>{content}</run><linesegarray><lineseg/></linesegarray></p>")
+    format!("<p><run charPrIDRef='0'>{content}</run><linesegarray><lineseg/></linesegarray></p>")
 }
 
 fn dropped(flow: &ParagraphFlow, changed: &[usize]) -> Vec<usize> {
@@ -179,13 +179,15 @@ fn batch_order_and_duplicates_do_not_change_drop_set() {
 /// 이것을 실패시키는 것: secPr 방향 조건 삭제, colCount/sameSz 어느 한쪽 무시, 마지막 colPr만 검사.
 #[test]
 fn section_direction_and_every_column_setting_gate_preservation() {
+    let mixed_columns =
+        "<secPr textDirection='HORIZONTAL'/><colPr colCount='2' sameSz='0'/><colPr colCount='1'/>";
     for (settings, keep) in [
         ("<secPr textDirection='HORIZONTAL'/><colPr colCount='1' sameSz='0'/>", true),
         ("<secPr textDirection='HORIZONTAL'/><colPr colCount='2' sameSz='1'/>", true),
         ("<secPr textDirection='VERTICAL'/><colPr colCount='1'/>", false),
         ("<secPr/><colPr colCount='1'/>", false),
         ("<secPr textDirection='HORIZONTAL'/><colPr colCount='2' sameSz='0'/>", false),
-        ("<secPr textDirection='HORIZONTAL'/><colPr colCount='2' sameSz='0'/><colPr colCount='1'/>", false),
+        (mixed_columns, false),
     ] {
         let f = flow(&format!("{}{}{}", p(settings), p("편집"), p("뒤")));
         assert_eq!(dropped(&f, &[1]), if keep { vec![1] } else { vec![1, 2] }, "{settings}");
@@ -536,11 +538,12 @@ fn counted_text_edit_gate_work_stays_linear() {
         assert!(!f.unproven_fields);
         assert_eq!(f.has_disallowed_self_element.len(), n);
         let edits: Vec<usize> = (0..n).step_by(4).collect();
-        // The first field blocks the rest of the body list.
+        // Without preservation, the first field blocks the rest of the body list.
         assert_eq!(dropped(&f, &edits).len(), n);
-        let mut keep = vec![false; n];
-        keep[0] = true;
-        assert_eq!(f.caches_to_drop_for_text_edits(edits, &keep).len(), n - 1);
+        let mut proven = vec![false; n];
+        // A proven edit starts no propagation: the first active edit is paragraph 4.
+        proven[0] = true;
+        assert_eq!(f.caches_to_drop_for_text_edits(edits, &proven).len(), n - 4);
         crate::work::WORK.get()
     };
     let small = work(128);
@@ -548,6 +551,27 @@ fn counted_text_edit_gate_work_stays_linear() {
     let large = work(512);
     assert!(small > 0, "the counted passes count their work");
     // Compare growth, cancelling the fixed section prefix counted once per input.
+    assert!(large - medium <= 2 * (medium - small) + 8, "{small} -> {medium} -> {large}");
+}
+
+// 이것을 실패시키는 것: subList마다 부모 칸의 자식을 다시 세기, 중복 subList 승인.
+#[test]
+fn counted_cell_sublist_uniqueness_work_stays_linear() {
+    let work = |n: usize| {
+        let sublist = "<subList textDirection='HORIZONTAL' lineWrap='BREAK'>";
+        let lists = format!("{sublist}{}</subList>", p("칸")).repeat(n);
+        let cell = format!("<tbl><pos treatAsChar='1'/><tr><tc>{lists}</tc></tr></tbl>");
+        crate::work::WORK.set(0);
+        let f = flow(&p(&cell));
+        let work = crate::work::WORK.get();
+        assert_eq!(f.supported_owner[1..], vec![n == 1; n]);
+        work
+    };
+    work(1);
+    let small = work(128);
+    let medium = work(256);
+    let large = work(512);
+    assert!(small > 0, "the counted passes count their work");
     assert!(large - medium <= 2 * (medium - small) + 8, "{small} -> {medium} -> {large}");
 }
 
@@ -687,15 +711,25 @@ fn a_scan_of_other_text_leaves_the_flow_unproven() {
     }
 }
 
-// 이것을 실패시키는 것: 보존 후보를 편집 집합에서 먼저 빼기, 최종 제거 집합에서 보존 후보 차감, 본문 없음/구역 실패 분기 제거.
+// 이것을 실패시키는 것: proven을 그대로 전파 면제로 신뢰, 성공한 편집에서 장벽 전파, 구역 실패 무시.
 #[test]
-fn self_keep_never_overrides_nested_blocked_or_section_invalidation() {
+fn proven_self_never_overrides_nested_blocked_or_section_invalidation() {
+    // 이것을 실패시키는 것: 최종 제거 집합에서 성공한 뒤 본문 문단을 강제로 제외.
+    let blocked = flow(&format!("{}{}{}{}", p("가"), p("<autoNum/>"), p("나"), p("다")));
+    let ranges = blocked.caches_to_drop_for_text_edits([0, 2], &[false, false, true, false]);
+    let actual: Vec<_> = blocked
+        .caches
+        .iter()
+        .enumerate()
+        .filter_map(|(p, caches)| caches.iter().any(|c| ranges.contains(c)).then_some(p))
+        .collect();
+    assert_eq!(actual, [0, 1, 2, 3]);
     let cases = [
         (flow(&format!("{}{}{}", p("가"), p("나"), p("다"))), vec![1], vec![]),
         (
             flow(&format!("{}{}{}{}", p("가"), p("<autoNum/>"), p("나"), p("다"))),
             vec![0, 2],
-            vec![1, 2, 3],
+            vec![], // Proven body edits no longer reach the later barrier.
         ),
         (
             flow(&format!(
@@ -721,11 +755,14 @@ fn self_keep_never_overrides_nested_blocked_or_section_invalidation() {
             vec![0, 1],
         ),
     ];
-    for (case, (flow, changed, expected)) in cases.into_iter().enumerate() {
+    // 내부 단독 편집을 혼합 편집보다 먼저 검사해 소유 관계 실패를 직접 드러낸다.
+    for (case, (flow, changed, expected)) in cases.into_iter().enumerate().rev() {
         crate::work::WORK.set(0);
-        let ranges = flow.caches_to_drop_for_text_edits(changed, &vec![true; flow.spans.len()]);
+        let ranges = flow
+            .caches_to_drop_for_text_edits(changed.iter().copied(), &vec![true; flow.spans.len()]);
         if case == 3 {
-            assert_eq!(crate::work::WORK.get(), 9, "nested-only uses one conservative query");
+            // 이것을 실패시키는 것: 내부 단독 편집에서 제거 질의를 중복 실행.
+            assert_eq!(crate::work::WORK.get(), 17, "nested-only uses two propagation passes");
         }
         let actual: Vec<_> = flow
             .caches
@@ -733,7 +770,7 @@ fn self_keep_never_overrides_nested_blocked_or_section_invalidation() {
             .enumerate()
             .filter_map(|(p, caches)| caches.iter().any(|c| ranges.contains(c)).then_some(p))
             .collect();
-        assert_eq!(actual, expected);
+        assert_eq!(actual, expected, "changed paragraphs: {changed:?}");
     }
 }
 
@@ -832,22 +869,90 @@ fn unlocated_bookmark_and_uneditable_clickhere_block_all_self_caches_only() {
 // 이것을 실패시키는 것: 구역 증거를 한 진입점에서만 수집, 중복 grid 또는 secPr 허용.
 #[test]
 fn section_adapters_agree_on_explicit_grid_evidence() {
+    let duplicate_section = "<secPr><grid charGrid='0' wonggojiFormat='0'/></secPr><secPr><grid charGrid='0' wonggojiFormat='0'/></secPr>";
+    let duplicate_grid = "<secPr><grid charGrid='0' wonggojiFormat='0'/><grid charGrid='0' wonggojiFormat='0'/></secPr>";
+    let horizontal_grid = "<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='0' lineGrid='9'/></secPr>";
     for (properties, expected) in [
-        ("<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='0' lineGrid='9'/></secPr>", true),
-        ("<secPr textDirection='HORIZONTAL'><grid charGrid='1' wonggojiFormat='0'/></secPr>", false),
-        ("<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='1'/></secPr>", false),
+        (horizontal_grid, true),
+        (
+            "<secPr textDirection='HORIZONTAL'><grid charGrid='1' wonggojiFormat='0'/></secPr>",
+            false,
+        ),
+        (
+            "<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='1'/></secPr>",
+            false,
+        ),
         ("<secPr textDirection='HORIZONTAL'><grid charGrid='0'/></secPr>", false),
         ("<secPr textDirection='HORIZONTAL'/>", false),
-        ("<secPr><grid charGrid='0' wonggojiFormat='0'/><grid charGrid='0' wonggojiFormat='0'/></secPr>", false),
-        ("<secPr><grid charGrid='0' wonggojiFormat='0'/></secPr><secPr><grid charGrid='0' wonggojiFormat='0'/></secPr>", false),
+        (duplicate_grid, false),
+        (duplicate_section, false),
     ] {
-        let xml = format!("<sec><p paraPrIDRef='0'><run charPrIDRef='0'>{properties}<t>가</t></run></p></sec>");
+        let xml = format!(
+            "<sec><p paraPrIDRef='0'><run charPrIDRef='0'>{properties}<t>가</t></run></p></sec>"
+        );
         let (_, source) = XmlSource::read(&xml).unwrap();
         let mut f = ParagraphFlow::from_source(&source);
         f.prove_text_tail(&source, &xml, &Default::default(), |_| None);
         let cell = crate::line_keep::SectionEvidence::read(&xml).unwrap();
-        assert_eq!(crate::line_keep::source_allows(&cell, true),expected);
-        assert_eq!(crate::line_keep::source_allows(&f.section_evidence, true),expected);
+        assert_eq!(crate::line_keep::source_allows(&cell, true), expected);
+        assert_eq!(crate::line_keep::source_allows(&f.section_evidence, true), expected);
         assert!(!crate::line_keep::source_allows(&cell, false));
+    }
+}
+
+// 이것을 실패시키는 것: 직접 소유 계층 생략, subList 유일성 생략, 방향/줄바꿈 누락 승인,
+// 자기 비허용 검사 생략, 구역 검사 전에 성공한 편집을 제거.
+#[test]
+fn direct_cell_source_ownership_and_gates_are_required_even_with_keep() {
+    for (attrs, extra, content, section, expected) in [
+        ("textDirection='HORIZONTAL' lineWrap='BREAK'", "", "글", "", vec![]),
+        ("lineWrap='BREAK'", "", "글", "", vec![1, 2, 3]),
+        ("textDirection='HORIZONTAL'", "", "글", "", vec![1, 2, 3]),
+        ("textDirection='VERTICAL' lineWrap='BREAK'", "", "글", "", vec![1, 2, 3]),
+        ("textDirection='HORIZONTAL' lineWrap='SQUEEZE'", "", "글", "", vec![1, 2, 3]),
+        ("textDirection='HORIZONTAL' lineWrap='BREAK'", "<subList/>", "글", "", vec![1, 2, 3]),
+        ("textDirection='HORIZONTAL' lineWrap='BREAK'", "", "<autoNum/>", "", vec![1, 2, 3]),
+        (
+            "textDirection='HORIZONTAL' lineWrap='BREAK'",
+            "",
+            "글",
+            "<colPr colCount='2' sameSz='0'/>",
+            vec![1, 2, 3],
+        ),
+    ] {
+        let cell = format!(
+            "<tbl><pos treatAsChar='1'/><tr><tc><subList {attrs}>{}</subList>{extra}</tc></tr></tbl>",
+            p(content)
+        );
+        let f = flow(&format!("{}{}{}", p(section), p(&cell), p("뒤")));
+        let ranges = f.caches_to_drop_for_text_edits([2], &[true; 4]);
+        let actual: Vec<_> = f
+            .caches
+            .iter()
+            .enumerate()
+            .filter_map(|(p, c)| c.iter().any(|r| ranges.contains(r)).then_some(p))
+            .collect();
+        assert_eq!(actual, expected, "{attrs} {extra} {content} {section}");
+    }
+    // A table ancestor alone cannot establish direct body-cell ownership.
+    let table_open =
+        "<tbl><pos treatAsChar='1'/><tr><tc><subList textDirection='HORIZONTAL' lineWrap='BREAK'>";
+    for (open, close, expected) in [
+        ("<drawText><subList>", "</subList></drawText>", vec![0, 1, 2, 3]),
+        ("<footNote><subList>", "</subList></footNote>", vec![0, 1, 2, 3]),
+        ("<header><subList>", "</subList></header>", vec![1, 2]),
+        ("<footer><subList>", "</subList></footer>", vec![1, 2]),
+        (table_open, "</subList></tc></tr></tbl>", vec![0, 1, 2, 3]),
+    ] {
+        let inner = p(&format!("{table_open}{}</subList></tc></tr></tbl>", p("칸")));
+        let f = flow(&format!("{}{}", p(&format!("{open}{inner}{close}")), p("뒤")));
+        let ranges = f.caches_to_drop_for_text_edits([2], &[true; 4]);
+        let actual: Vec<_> = f
+            .caches
+            .iter()
+            .enumerate()
+            .filter_map(|(p, c)| c.iter().any(|r| ranges.contains(r)).then_some(p))
+            .collect();
+        assert_eq!(actual, expected, "{open}");
     }
 }
