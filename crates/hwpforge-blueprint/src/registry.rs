@@ -87,6 +87,9 @@ impl StyleEntry {
 /// - CharShape 0, CharShape 1, CharShape 2...
 /// - ParaShape 0, ParaShape 1, ParaShape 2...
 /// - Font 0, Font 1... (deduplicated)
+///
+/// Each style registers `font` first, then `font_latin`, then
+/// `font_east_asian`. Existing names retain their first allocated index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct StyleRegistry {
@@ -326,6 +329,12 @@ fn build_style_entry(
     validate_tab_reference(style_name, para_shape.tab_def_id, ctx.tabs)?;
 
     let font_id = intern_font(ctx.fonts, ctx.font_indices, &char_shape.font)?;
+    for font in [char_shape.font_latin.as_deref(), char_shape.font_east_asian.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        intern_font(ctx.fonts, ctx.font_indices, font)?;
+    }
     let char_shape_id = CharShapeIndex::new(ctx.char_shapes.len());
     ctx.char_shapes.push(char_shape);
 

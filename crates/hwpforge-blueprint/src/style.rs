@@ -102,13 +102,19 @@ pub struct LineSpacing {
 /// Character shape with all optional fields (for YAML parsing and inheritance).
 ///
 /// After inheritance resolution, this is converted to [`CharShape`] where
-/// all fields are guaranteed to be present.
+/// required fields are present; absent font overrides inherit the base font.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct PartialCharShape {
     /// Font name (e.g. "한컴바탕", "Arial").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// Latin font override. Falls back to `font` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_latin: Option<String>,
+    /// East Asian font override. Falls back to `font` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_east_asian: Option<String>,
     /// Font size.
     #[serde(
         default,
@@ -345,6 +351,12 @@ impl PartialCharShape {
         if other.font.is_some() {
             self.font.clone_from(&other.font);
         }
+        if other.font_latin.is_some() {
+            self.font_latin.clone_from(&other.font_latin);
+        }
+        if other.font_east_asian.is_some() {
+            self.font_east_asian.clone_from(&other.font_east_asian);
+        }
         if other.size.is_some() {
             self.size = other.size;
         }
@@ -425,6 +437,8 @@ impl PartialCharShape {
                 style_name: style_name.to_string(),
                 field: "font".to_string(),
             })?,
+            font_latin: self.font_latin.clone(),
+            font_east_asian: self.font_east_asian.clone(),
             size: self.size.ok_or_else(|| BlueprintError::StyleResolution {
                 style_name: style_name.to_string(),
                 field: "size".to_string(),
@@ -838,7 +852,7 @@ impl PartialStyle {
 // Resolved (full) types
 // ---------------------------------------------------------------------------
 
-/// A fully-resolved character shape (all fields present).
+/// A fully-resolved character shape with optional language-specific font overrides.
 ///
 /// Construct via [`PartialCharShape::resolve`] (the canonical path) rather than
 /// a struct literal — this type is `#[non_exhaustive]` so new fields can be
@@ -848,6 +862,12 @@ impl PartialStyle {
 pub struct CharShape {
     /// Font name.
     pub font: String,
+    /// Latin font override. Falls back to `font` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_latin: Option<String>,
+    /// East Asian font override. Falls back to `font` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_east_asian: Option<String>,
     /// Font size.
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub size: HwpUnit,
@@ -1341,6 +1361,8 @@ mod tests {
     #[test]
     fn char_shape_serde_roundtrip() {
         let original = CharShape {
+            font_latin: None,
+            font_east_asian: None,
             font: "한컴바탕".into(),
             size: HwpUnit::from_pt(16.0).unwrap(),
             bold: true,
@@ -1375,6 +1397,8 @@ mod tests {
     #[test]
     fn char_shape_yaml_contains_human_readable() {
         let cs = CharShape {
+            font_latin: None,
+            font_east_asian: None,
             font: "Arial".into(),
             size: HwpUnit::from_pt(12.0).unwrap(),
             bold: false,

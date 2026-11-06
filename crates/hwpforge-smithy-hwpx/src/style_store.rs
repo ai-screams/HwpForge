@@ -7,6 +7,8 @@
 //! All fields use Foundation types (`Color`, `HwpUnit`, `Alignment`)
 //! so downstream code never touches raw XML strings.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 #[path = "header_fidelity.rs"]
@@ -888,11 +890,11 @@ impl HwpxBorderFill {
 /// id=6: 함초롬돋움 11pt #000000  (차례 1-3)
 /// ```
 ///
-/// The caller resolves the Batang slot against the registered fonts. Dotum
-/// uses slot 0; the fixture's Batang slot is 1 when a second font exists.
-pub(crate) fn default_char_shapes_modern(batang: FontIndex) -> [HwpxCharShape; 7] {
-    let dotum = FontIndex::new(0); // 함초롬돋움
-
+/// The caller resolves both family slots against the original registered fonts.
+pub(crate) fn default_char_shapes_modern(
+    dotum: FontIndex,
+    batang: FontIndex,
+) -> [HwpxCharShape; 7] {
     let batang_ref = HwpxFontRef {
         hangul: batang,
         latin: batang,
@@ -1889,11 +1891,23 @@ fn build_store_from_registry_with(
         }
     }
 
-    // Preserve the existing 0/1 slots for multi-font templates and presets.
-    // A single-font template (or the empty registry's 함초롬바탕 fallback)
-    // uses its only registered font for both default families, in every language.
-    let batang = FontIndex::new(usize::from(registry.fonts.len() > 1));
-    for cs in default_char_shapes_modern(batang) {
+    // Exclude only slot-only names. Unused registered fonts and names also
+    // used as a base remain candidates, in the original font-table order.
+    let base_fonts: BTreeSet<&str> =
+        registry.char_shapes.iter().map(|cs| cs.font.as_str()).collect();
+    let slot_fonts: BTreeSet<&str> = registry
+        .char_shapes
+        .iter()
+        .flat_map(|cs| [cs.font_latin.as_deref(), cs.font_east_asian.as_deref()])
+        .flatten()
+        .collect();
+    let mut families = registry.fonts.iter().enumerate().filter_map(|(index, font)| {
+        (base_fonts.contains(font.as_str()) || !slot_fonts.contains(font.as_str()))
+            .then_some(FontIndex::new(index))
+    });
+    let dotum = families.next().unwrap_or(FontIndex::new(0));
+    let batang = families.next().unwrap_or(dotum);
+    for cs in default_char_shapes_modern(dotum, batang) {
         store.push_char_shape(cs);
     }
     for ps in default_para_shapes_modern() {
@@ -1902,17 +1916,22 @@ fn build_store_from_registry_with(
 
     let mut char_shape_map = Vec::with_capacity(registry.char_shapes.len());
     for cs in &registry.char_shapes {
-        let font_idx = registry
-            .fonts
-            .iter()
-            .position(|f| f.as_str() == cs.font)
-            .map(FontIndex::new)
-            .unwrap_or(FontIndex::new(0));
+        let font_index = |name: &str| {
+            registry
+                .fonts
+                .iter()
+                .position(|f| f.as_str() == name)
+                .map(FontIndex::new)
+                .unwrap_or(FontIndex::new(0))
+        };
+        let font_idx = font_index(&cs.font);
+        let latin = font_index(cs.font_latin.as_deref().unwrap_or(&cs.font));
+        let east_asian = font_index(cs.font_east_asian.as_deref().unwrap_or(&cs.font));
         let font_ref = HwpxFontRef {
-            hangul: font_idx,
-            latin: font_idx,
-            hanja: font_idx,
-            japanese: font_idx,
+            hangul: east_asian,
+            latin,
+            hanja: east_asian,
+            japanese: east_asian,
             other: font_idx,
             symbol: font_idx,
             user: font_idx,
