@@ -106,8 +106,13 @@ fn apply_preset_font(registry: &mut StyleRegistry, new_font: &str) -> Result<(),
         }
     }
     for char_shape in &mut registry.char_shapes {
-        if char_shape.font == original_base {
-            char_shape.font = new_font.to_owned();
+        for name in std::iter::once(&mut char_shape.font)
+            .chain(char_shape.font_latin.iter_mut())
+            .chain(char_shape.font_east_asian.iter_mut())
+        {
+            if *name == original_base {
+                *name = new_font.to_owned();
+            }
         }
     }
     Ok(())
@@ -437,6 +442,40 @@ mod tests {
             registry.char_shapes.iter().any(|cs| cs.font == "D2Coding"),
             "a specialty char shape must survive: {registry:?}"
         );
+    }
+
+    #[test]
+    fn preset_font_replaces_matching_slots_without_false_fallbacks() {
+        // 이것을 실패시키는 것: 세 칸 중 하나의 교체 생략, 다른 글꼴까지 교체, None을 채우기.
+        use hwpforge_smithy_hwpx::{HancomStyleSet, ListHeadPolicy};
+        let template = hwpforge_blueprint::template::Template::from_yaml(
+            "meta:\n  name: slots\nstyles:\n  body:\n    char_shape:\n      font: Base\n      size: 10pt\n",
+        ).unwrap();
+        let mut clean = StyleRegistry::from_template(&template).unwrap();
+        clean.fonts.push(FontId::new("Special").unwrap());
+        let mut shape = clean.char_shapes[0].clone();
+        shape.font_latin = Some("Base".into());
+        shape.font_east_asian = Some("Base".into());
+        clean.char_shapes = vec![shape.clone(), shape.clone(), shape];
+        clean.char_shapes[1].font = "Special".into();
+        clean.char_shapes[1].font_latin = Some("Special".into());
+        clean.char_shapes[1].font_east_asian = Some("Special".into());
+        clean.char_shapes[2].font_latin = None;
+        clean.char_shapes[2].font_east_asian = None;
+        apply_preset_font(&mut clean, "New").unwrap();
+        for (i, expected) in ["New", "Special", "New"].iter().enumerate() {
+            let cs = &clean.char_shapes[i];
+            assert_eq!(&cs.font, expected);
+            assert_eq!(cs.font_latin.as_deref(), if i == 2 { None } else { Some(*expected) });
+            assert_eq!(cs.font_east_asian.as_deref(), if i == 2 { None } else { Some(*expected) });
+        }
+        let bridge = HwpxRegistryBridge::from_registry_with_diagnostics(
+            &clean,
+            HancomStyleSet::Modern,
+            ListHeadPolicy::Template,
+        )
+        .unwrap();
+        assert!(bridge.warnings.is_empty());
     }
 
     #[test]
