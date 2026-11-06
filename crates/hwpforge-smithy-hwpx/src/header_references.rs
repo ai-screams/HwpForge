@@ -1,4 +1,5 @@
 //! Header references are zero/one-based list positions (Hancom probes).
+use crate::encoder::wire_rules::OUTLINE_NUMBERING_POSITION;
 use crate::paragraph_measure::invalid;
 use crate::{HwpxResult, HwpxStyleStore};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleRef};
@@ -170,11 +171,11 @@ impl HeaderReferences {
                             continue;
                         }
                         let found = one_based(id as usize, self.numberings, "section numbering");
-                        if id == 1 && found.is_ok() {
+                        if id == OUTLINE_NUMBERING_POSITION && found.is_ok() {
                             continue;
                         }
                         format!(
-                            "{}; Core does not carry section outline selection; output selects 1",
+                            "{}; Core does not carry section outline selection; output selects {OUTLINE_NUMBERING_POSITION}",
                             found.err().map_or_else(
                                 || format!("validated numbering {id}"),
                                 |e| e.to_string()

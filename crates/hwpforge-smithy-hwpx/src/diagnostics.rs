@@ -16,13 +16,23 @@
 //! thin wrapper that drops the warnings; that keeps existing consumers byte
 //! identical while giving the operations layer a lossless path.
 //!
-//! There are three carriers — one per codec pass a facade can run, plus
-//! [`WithCodecWarnings`] for the regenerating editors that run both. All are
+//! The carriers separate registry projection from decoding and encoding, with
+//! [`WithCodecWarnings`] for the regenerating editors that run both codec passes. All are
 //! `#[non_exhaustive]`, so a further diagnostic channel can be added later
 //! without breaking the callers added today.
 
 use crate::decoder::DecodeWarning;
 use crate::encoder::EncodeWarning;
+
+/// A registry bridge result and the substitutions encountered while building it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WithBridgeWarnings<T> {
+    /// The projected value.
+    pub value: T,
+    /// Aggregated warnings in first-occurrence order.
+    pub warnings: Vec<crate::RegistryBridgeWarning>,
+}
 
 /// A projection plus the decoder warnings produced while reading it.
 ///

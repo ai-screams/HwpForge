@@ -246,6 +246,7 @@ fn build_image_fill_brush_xml(fill: &HwpxImageFill) -> String {
 /// `charPrIDRef="4294967295"` (u32::MAX) means "no override / use default".
 fn build_numberings_xml(store: &HwpxStyleStore) -> String {
     let numberings: Vec<NumberingDef> = if store.numbering_count() == 0 {
+        // First in the table = `wire_rules::OUTLINE_NUMBERING_POSITION`.
         vec![NumberingDef::default_outline()]
     } else {
         store.iter_numberings().cloned().collect()

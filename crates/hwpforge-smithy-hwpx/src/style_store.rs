@@ -30,7 +30,9 @@ use hwpforge_foundation::{
 };
 
 use crate::default_styles::HancomStyleSet;
+use crate::encoder::wire_rules::OUTLINE_NUMBERING_POSITION;
 use crate::error::{HwpxError, HwpxResult};
+use crate::registry_bridge::{record_font_fallback, ListHeadPolicy, RegistryBridgeWarning};
 
 // ── Font ─────────────────────────────────────────────────────────
 
@@ -1247,6 +1249,7 @@ pub(crate) struct RegistryStoreBuild {
     pub(crate) store: HwpxStyleStore,
     pub(crate) char_shape_map: Vec<CharShapeIndex>,
     pub(crate) para_shape_map: Vec<ParaShapeIndex>,
+    pub(crate) warnings: Vec<RegistryBridgeWarning>,
 }
 
 impl HwpxStyleStore {
@@ -1397,14 +1400,15 @@ impl HwpxStyleStore {
         registry: &StyleRegistry,
         style_set: HancomStyleSet,
     ) -> HwpxResult<Self> {
-        Ok(Self::from_registry_with_mappings(registry, style_set)?.store)
+        Ok(Self::from_registry_with_mappings(registry, style_set, ListHeadPolicy::Template)?.store)
     }
 
     pub(crate) fn from_registry_with_mappings(
         registry: &StyleRegistry,
         style_set: HancomStyleSet,
+        list_policy: ListHeadPolicy,
     ) -> HwpxResult<RegistryStoreBuild> {
-        build_store_from_registry_with(registry, style_set)
+        build_store_from_registry_with(registry, style_set, list_policy)
     }
 
     // ── Fonts ────────────────────────────────────────────────────
@@ -1818,23 +1822,28 @@ fn apply_list_marker_widths(
 ) -> HwpxResult<()> {
     use crate::encoder::wire_rules::{list_text_offset, BULLET_TEXT_OFFSET};
 
-    for (position, numbering) in (1..).zip(&registry.numberings).skip(1) {
-        for head in &numbering.levels {
-            if let Some(offset) = list_text_offset(head) {
-                store.set_paragraph_head_metrics(
-                    HeadingType::Number,
-                    position,
-                    head.level,
-                    Alignment::Left,
-                    false,
-                    true,
-                    0,
-                    offset,
-                    false,
-                    u32::MAX,
-                )?;
-            }
-        }
+    let offsets: Vec<_> = (1..)
+        .zip(&store.numberings)
+        .filter(|(position, _)| *position != OUTLINE_NUMBERING_POSITION)
+        .flat_map(|(position, numbering)| {
+            numbering.levels.iter().filter_map(move |head| {
+                list_text_offset(head).map(|offset| (position, head.level, offset))
+            })
+        })
+        .collect();
+    for (position, level, offset) in offsets {
+        store.set_paragraph_head_metrics(
+            HeadingType::Number,
+            position,
+            level,
+            Alignment::Left,
+            false,
+            true,
+            0,
+            offset,
+            false,
+            u32::MAX,
+        )?;
     }
     for (position, bullet) in (1..).zip(&registry.bullets) {
         store.set_paragraph_head_metrics(
@@ -1856,6 +1865,7 @@ fn apply_list_marker_widths(
 fn build_store_from_registry_with(
     registry: &StyleRegistry,
     style_set: HancomStyleSet,
+    list_policy: ListHeadPolicy,
 ) -> HwpxResult<RegistryStoreBuild> {
     let mut store = HwpxStyleStore { style_set, ..HwpxStyleStore::default() };
 
@@ -1914,19 +1924,28 @@ fn build_store_from_registry_with(
         store.push_para_shape(ps);
     }
 
+    let mut warnings = Vec::new();
     let mut char_shape_map = Vec::with_capacity(registry.char_shapes.len());
-    for cs in &registry.char_shapes {
-        let font_index = |name: &str| {
-            registry
-                .fonts
-                .iter()
-                .position(|f| f.as_str() == name)
-                .map(FontIndex::new)
-                .unwrap_or(FontIndex::new(0))
+    for (char_shape, cs) in registry.char_shapes.iter().enumerate() {
+        let mut font_index = |name: &str, slot| -> HwpxResult<FontIndex> {
+            if let Some(index) = registry.fonts.iter().position(|f| f.as_str() == name) {
+                return Ok(FontIndex::new(index));
+            }
+            // An empty table synthesizes the default face, not a failed lookup.
+            if has_fonts {
+                record_font_fallback(&mut warnings, name, slot, char_shape)?;
+            }
+            Ok(FontIndex::new(0))
         };
-        let font_idx = font_index(&cs.font);
-        let latin = font_index(cs.font_latin.as_deref().unwrap_or(&cs.font));
-        let east_asian = font_index(cs.font_east_asian.as_deref().unwrap_or(&cs.font));
+        let font_idx = font_index(&cs.font, "font")?;
+        let latin = match cs.font_latin.as_deref() {
+            Some(name) => font_index(name, "latin")?,
+            None => font_idx,
+        };
+        let east_asian = match cs.font_east_asian.as_deref() {
+            Some(name) => font_index(name, "east_asian")?,
+            None => font_idx,
+        };
         let font_ref = HwpxFontRef {
             hangul: east_asian,
             latin,
@@ -1964,18 +1983,71 @@ fn build_store_from_registry_with(
         }));
     }
 
+    if list_policy == ListHeadPolicy::PreserveEffective {
+        let mut outline = NumberingDef::default_outline();
+        // Output renumbers labels by position; this keeps the store's own
+        // labels unique for callers that inspect the bridge store.
+        let labels: BTreeSet<_> = registry.numberings.iter().map(|n| n.id).collect();
+        while labels.contains(&outline.id) {
+            outline.id = outline.id.checked_add(1).ok_or_else(|| HwpxError::InvalidStructure {
+                detail: "no unused outline numbering label".into(),
+            })?;
+        }
+        // Empty text removes the number; zero offset removes the gap that
+        // otherwise remains after an empty marker. Keep all other defaults.
+        let levels: Vec<u32> = outline.levels.iter().map(|head| head.level).collect();
+        for head in &mut outline.levels {
+            head.text.clear();
+        }
+        // First in the still-empty table = `OUTLINE_NUMBERING_POSITION`.
+        store.push_numbering(outline);
+        for level in levels {
+            store.set_paragraph_head_metrics(
+                HeadingType::Outline,
+                OUTLINE_NUMBERING_POSITION,
+                level,
+                Alignment::Left,
+                true,
+                true,
+                0,
+                0,
+                false,
+                u32::MAX,
+            )?;
+        }
+    }
+    // Record each actual insertion position once; list conversion only consumes
+    // these store-local indices, never re-derives an import offset.
+    let mut numbering_map = Vec::with_capacity(registry.numberings.len());
     for numbering in &registry.numberings {
+        numbering_map.push(hwpforge_foundation::NumberingIndex::new(store.numbering_count()));
         store.push_numbering(numbering.clone());
     }
     for bullet in &registry.bullets {
         store.push_bullet(bullet.clone());
     }
-    apply_list_marker_widths(&mut store, registry)?;
+    if list_policy == ListHeadPolicy::Template {
+        apply_list_marker_widths(&mut store, registry)?;
+    }
 
     let tabs = TabDef::merged_with_defaults(registry.tabs.iter());
     let mut para_shape_map = Vec::with_capacity(registry.para_shapes.len());
     for ps in &registry.para_shapes {
-        let wire_parts = list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
+        let list = match ps.list {
+            Some(ParagraphListRef::Number { numbering_id, level }) => {
+                Some(ParagraphListRef::Number {
+                    numbering_id: registry_shape_map_entry(
+                        &numbering_map,
+                        numbering_id.get(),
+                        "numbering definition",
+                    )?,
+                    level,
+                })
+            }
+            other => other,
+        };
+        let wire_parts =
+            list_ref_to_wire_parts(list, &store.numberings, &store.bullets, list_policy)?;
         para_shape_map.push(store.push_para_shape(HwpxParaShape {
             alignment: ps.alignment,
             margin_left: ParagraphMeasure::from_hwp_unit(ps.indent_left),
@@ -2075,7 +2147,7 @@ fn build_store_from_registry_with(
     }
     store.style_positions = std::sync::Arc::new(positions);
     store.rebuild_style_references()?;
-    Ok(RegistryStoreBuild { store, char_shape_map, para_shape_map })
+    Ok(RegistryStoreBuild { store, char_shape_map, para_shape_map, warnings })
 }
 
 // ── Thread safety assertions ─────────────────────────────────────

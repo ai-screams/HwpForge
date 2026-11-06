@@ -2,6 +2,13 @@
 use hwpforge_core::ParaHead;
 use hwpforge_foundation::{DropCapStyle, NumberFormatType};
 
+/// One-based numbering-table position used by section outline references.
+/// Definition ID labels are independent of this position.
+pub(crate) const OUTLINE_NUMBERING_POSITION: u32 = 1;
+// The outline definition is placed by putting it first in an empty table, so
+// a different position would need an explicit placement rule.
+const _: () = assert!(OUTLINE_NUMBERING_POSITION == 1);
+
 pub(crate) const DEFAULT_DROP_CAP: DropCapStyle = DropCapStyle::None;
 
 /// `textOffset` (percent of the font size) of a bullet: one cell of marker.

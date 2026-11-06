@@ -122,6 +122,16 @@ pub const MANIFEST: &[ManifestEntry] = &[
     },
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
+        file: "crates/hwpforge-smithy-hwpx/src/registry_bridge.rs",
+        wrapped: &[],
+        not_wrapped: &[(
+            "RegistryBridgeWarning",
+            "registry diagnostics returned by the bridge; ops registry paths use the \
+             compatibility entry points, which discard bridge warnings",
+        )],
+    },
+    ManifestEntry {
+        krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/decoder/mod.rs",
         wrapped: &["DecodeWarning"],
         not_wrapped: &[],

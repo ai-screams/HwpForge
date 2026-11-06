@@ -8,7 +8,9 @@
 use hwpforge_core::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
 use hwpforge_foundation::{BulletIndex, HeadingType, NumberFormatType, NumberingIndex};
 
+use crate::encoder::wire_rules::OUTLINE_NUMBERING_POSITION;
 use crate::error::{HwpxError, HwpxResult};
+use crate::registry_bridge::ListHeadPolicy;
 use crate::schema::header::{HxBullet, HxBulletParaHead, HxHeading};
 
 /// Shared paragraph-list wire components stored on `hh:paraPr`.
@@ -26,7 +28,30 @@ pub(crate) fn list_ref_to_wire_parts(
     list_ref: Option<ParagraphListRef>,
     numberings: &[NumberingDef],
     bullets: &[BulletDef],
+    list_policy: ListHeadPolicy,
 ) -> HwpxResult<WireListParts> {
+    // Template may rely on the header's empty-store fallback. Effective
+    // projection must already have reserved an actual outline definition.
+    // The registry builder upholds both checks; they guard other callers.
+    if list_policy == ListHeadPolicy::PreserveEffective {
+        match list_ref {
+            Some(ParagraphListRef::Outline { .. })
+                if numberings.get((OUTLINE_NUMBERING_POSITION - 1) as usize).is_none() =>
+            {
+                return Err(HwpxError::InvalidStructure {
+                    detail: "missing outline numbering definition".into(),
+                });
+            }
+            Some(ParagraphListRef::Number { numbering_id, .. })
+                if numbering_id.get() == (OUTLINE_NUMBERING_POSITION - 1) as usize =>
+            {
+                return Err(HwpxError::InvalidStructure {
+                    detail: "ordinary list references outline numbering position".into(),
+                });
+            }
+            _ => {}
+        }
+    }
     match list_ref {
         // HWPX `paraPr/heading(level)` is zero-based for outline as well.
         // Only `<hh:numbering>/<hh:paraHead level="...">` uses one-based
@@ -287,6 +312,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn effective_lists_require_a_reserved_outline_definition() {
+        // 이것을 실패시키는 것: 개요 정의 존재 검사 또는 일반 목록의 개요 자리 충돌 검사 제거.
+        let missing = list_ref_to_wire_parts(
+            Some(ParagraphListRef::Outline { level: 0 }),
+            &[],
+            &[],
+            ListHeadPolicy::PreserveEffective,
+        )
+        .unwrap_err();
+        assert!(matches!(missing, HwpxError::InvalidStructure { .. }));
+        let collision = list_ref_to_wire_parts(
+            Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 0 }),
+            &[NumberingDef::default_outline()],
+            &[],
+            ListHeadPolicy::PreserveEffective,
+        )
+        .unwrap_err();
+        assert!(matches!(collision, HwpxError::InvalidStructure { .. }));
+    }
+
+    #[test]
     fn list_ref_to_wire_parts_uses_positions_not_definition_labels() {
         // Hancom: wire references select list positions, even for sparse labels.
         let numberings = vec![NumberingDef {
@@ -322,6 +368,7 @@ mod tests {
                 Some(ParagraphListRef::Outline { level: 0 }),
                 &numberings,
                 &bullets,
+                ListHeadPolicy::Template
             )
             .unwrap(),
             WireListParts {
@@ -336,6 +383,7 @@ mod tests {
                 Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 2 }),
                 &numberings,
                 &bullets,
+                ListHeadPolicy::Template
             )
             .unwrap(),
             WireListParts {
@@ -350,6 +398,7 @@ mod tests {
                 Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 }),
                 &numberings,
                 &bullets,
+                ListHeadPolicy::Template
             )
             .unwrap(),
             WireListParts {
@@ -368,6 +417,7 @@ mod tests {
                 }),
                 &numberings,
                 &bullets,
+                ListHeadPolicy::Template
             )
             .unwrap(),
             WireListParts { heading_type: HeadingType::Bullet, id_ref: 2, level: 1, checked: true },
@@ -380,6 +430,7 @@ mod tests {
             Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(99), level: 0 }),
             &[],
             &[],
+            ListHeadPolicy::Template,
         )
         .unwrap_err();
         assert!(matches!(err, HwpxError::IndexOutOfBounds { kind: "numbering definition", .. }));
@@ -388,6 +439,7 @@ mod tests {
             Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(99), level: 0 }),
             &[],
             &[],
+            ListHeadPolicy::Template,
         )
         .unwrap_err();
         assert!(matches!(err, HwpxError::IndexOutOfBounds { kind: "bullet definition", .. }));
@@ -407,6 +459,7 @@ mod tests {
             Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 }),
             &[],
             &bullets,
+            ListHeadPolicy::Template,
         )
         .unwrap_err();
         assert!(matches!(err, HwpxError::InvalidStructure { .. }));
@@ -459,7 +512,13 @@ mod tests {
                 },
             ];
             for list in refs {
-                let parts = list_ref_to_wire_parts(Some(list), &numberings, &bullets).unwrap();
+                let parts = list_ref_to_wire_parts(
+                    Some(list),
+                    &numberings,
+                    &bullets,
+                    ListHeadPolicy::Template,
+                )
+                .unwrap();
                 assert_eq!(
                     wire_parts_to_list_ref(parts, &numberings, &bullets).unwrap(),
                     Some(list),
@@ -490,7 +549,8 @@ mod tests {
         for (input, canonical) in cases {
             let list = wire_parts_to_list_ref(input, &numberings, &bullets).unwrap();
             assert_eq!(
-                list_ref_to_wire_parts(list, &numberings, &bullets).unwrap(),
+                list_ref_to_wire_parts(list, &numberings, &bullets, ListHeadPolicy::Template)
+                    .unwrap(),
                 canonical,
                 "{input:?}"
             );
@@ -545,8 +605,13 @@ mod tests {
     /// 이것을 실패시키는 것: 쓰기 쪽 `wire_level` 을 `u32::from` 으로.
     #[test]
     fn list_ref_to_wire_parts_rejects_a_level_past_nine() {
-        let err = list_ref_to_wire_parts(Some(ParagraphListRef::Outline { level: 10 }), &[], &[])
-            .unwrap_err();
+        let err = list_ref_to_wire_parts(
+            Some(ParagraphListRef::Outline { level: 10 }),
+            &[],
+            &[],
+            ListHeadPolicy::Template,
+        )
+        .unwrap_err();
         assert!(matches!(err, HwpxError::InvalidStructure { .. }), "{err}");
     }
 

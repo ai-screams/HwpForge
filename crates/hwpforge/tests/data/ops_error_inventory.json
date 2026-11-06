@@ -888,6 +888,23 @@
     },
     {
       "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/registry_bridge.rs",
+      "name": "RegistryBridgeWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": false,
+      "not_wrapped_reason": "registry diagnostics returned by the bridge; ops registry paths use the compatibility entry points, which discard bridge warnings",
+      "variants": [
+        {
+          "name": "FontFallback",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
       "file": "crates/hwpforge-smithy-hwpx/src/decoder/mod.rs",
       "name": "DecodeWarning",
       "visibility": "pub",

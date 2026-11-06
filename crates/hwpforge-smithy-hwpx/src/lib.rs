@@ -97,7 +97,9 @@ pub use decoder::{
     master_page_part_paths, DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg,
 };
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
-pub use diagnostics::{WithCodecWarnings, WithDecodeWarnings, WithEncodeWarnings};
+pub use diagnostics::{
+    WithBridgeWarnings, WithCodecWarnings, WithDecodeWarnings, WithEncodeWarnings,
+};
 pub use diff::{
     CellTextChange, DiffDiagnostics, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer,
     PackageDiff, ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,
@@ -119,7 +121,7 @@ pub use read::{
     OutlineHeadingSource, OutlineTable, ParaKindView, ParaLocator, ParagraphView, ParagraphsView,
     ReadError, SectionOutline, TableView,
 };
-pub use registry_bridge::HwpxRegistryBridge;
+pub use registry_bridge::{HwpxRegistryBridge, ListHeadPolicy, RegistryBridgeWarning};
 pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
 };

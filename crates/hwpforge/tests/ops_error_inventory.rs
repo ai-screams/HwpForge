@@ -1093,6 +1093,7 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
 
 #[test]
 fn inventory_matches_the_tracked_file() {
+    // 이것을 실패시키는 것: snapshot에서 RegistryBridgeWarning 항목을 빼기.
     let regenerated = error_inventory::collect();
     let rendered = serde_json::to_string_pretty(&regenerated).expect("serialise") + "\n";
 
@@ -1178,6 +1179,7 @@ fn every_wrapped_payload_type_has_a_manifest_record() {
 
 #[test]
 fn manifest_files_hold_no_unnamed_diagnostic_enum() {
+    // 이것을 실패시키는 것: RegistryBridgeWarning의 not_wrapped 분류를 manifest에서 빼기.
     let inventory = error_inventory::collect();
 
     assert!(

@@ -18,6 +18,73 @@ use crate::default_styles::HancomStyleSet;
 use crate::error::{HwpxError, HwpxResult};
 use crate::style_store::{HwpxStyleStore, RegistryStoreBuild};
 
+/// Controls whether list heads follow template spacing or retain effective values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ListHeadPolicy {
+    /// Keeps the existing outline definitions and template marker widths.
+    Template,
+    /// Reserves a numberless outline and leaves ordinary marker metrics intact.
+    ///
+    /// Every registry numbering is treated as an ordinary list, so a template
+    /// registry whose first numbering is an outline should use [`Self::Template`].
+    PreserveEffective,
+}
+
+/// A registry projection diagnostic, aggregated by variant and font slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RegistryBridgeWarning {
+    /// An explicitly requested font was absent from the nonempty font table.
+    FontFallback {
+        /// Requested name from the first occurrence in this slot.
+        requested_font: String,
+        /// `font`, `latin`, or `east_asian`; inherited empty slots are not counted.
+        slot: &'static str,
+        /// Zero-based registry character-shape index of the first occurrence.
+        char_shape: usize,
+        /// Total occurrences in this slot, including the first one.
+        count: u64,
+    },
+}
+
+impl RegistryBridgeWarning {
+    /// Stable diagnostic code, independent of the requested name and location.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::FontFallback { .. } => "FONT_FALLBACK",
+        }
+    }
+}
+
+pub(crate) fn record_font_fallback(
+    warnings: &mut Vec<RegistryBridgeWarning>,
+    requested_font: &str,
+    slot: &'static str,
+    char_shape: usize,
+) -> HwpxResult<()> {
+    for warning in warnings.iter_mut() {
+        match warning {
+            RegistryBridgeWarning::FontFallback { slot: existing, count, .. }
+                if *existing == slot =>
+            {
+                *count = count.checked_add(1).ok_or_else(|| HwpxError::InvalidStructure {
+                    detail: "font fallback count overflow".into(),
+                })?;
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    warnings.push(RegistryBridgeWarning::FontFallback {
+        requested_font: requested_font.into(),
+        slot,
+        char_shape,
+        count: 1,
+    });
+    Ok(())
+}
+
 /// Bridge that converts registry-local style indices into store-local HWPX ids.
 #[derive(Debug, Clone)]
 pub struct HwpxRegistryBridge {
@@ -37,9 +104,29 @@ impl HwpxRegistryBridge {
         registry: &StyleRegistry,
         style_set: HancomStyleSet,
     ) -> HwpxResult<Self> {
-        let RegistryStoreBuild { store, char_shape_map, para_shape_map } =
-            HwpxStyleStore::from_registry_with_mappings(registry, style_set)?;
-        Ok(Self { style_store: store, char_shape_map, para_shape_map })
+        Ok(Self::from_registry_with_diagnostics(registry, style_set, ListHeadPolicy::Template)?
+            .value)
+    }
+
+    /// Builds a bridge and reports actual font substitutions during projection.
+    ///
+    /// Warnings retain the first registry character-shape index and requested
+    /// name per font slot, with the total number of substitutions in that slot.
+    ///
+    /// # Errors
+    /// Returns an error for invalid registry references or an overflowing
+    /// warning count. Effective lists must not reference the reserved outline.
+    pub fn from_registry_with_diagnostics(
+        registry: &StyleRegistry,
+        style_set: HancomStyleSet,
+        list_policy: ListHeadPolicy,
+    ) -> HwpxResult<crate::WithBridgeWarnings<Self>> {
+        let RegistryStoreBuild { store, char_shape_map, para_shape_map, warnings } =
+            HwpxStyleStore::from_registry_with_mappings(registry, style_set, list_policy)?;
+        Ok(crate::WithBridgeWarnings {
+            value: Self { style_store: store, char_shape_map, para_shape_map },
+            warnings,
+        })
     }
 
     /// Returns the built HWPX style store.
@@ -194,6 +281,19 @@ mod tests {
     use hwpforge_core::PageSettings;
     use hwpforge_core::StyleLookup;
     use hwpforge_foundation::{ApplyPageType, HwpUnit, StyleRef};
+
+    #[test]
+    fn fallback_count_overflow_uses_the_existing_error_path() {
+        // 이것을 실패시키는 것: checked_add를 wrapping_add 또는 saturating_add로 바꾸기.
+        let mut warnings = vec![RegistryBridgeWarning::FontFallback {
+            requested_font: "First".into(),
+            slot: "font",
+            char_shape: 2,
+            count: u64::MAX,
+        }];
+        let error = record_font_fallback(&mut warnings, "Later", "font", 3).unwrap_err();
+        assert!(matches!(error, HwpxError::InvalidStructure { .. }));
+    }
 
     fn body_registry() -> (StyleRegistry, CharShapeIndex, ParaShapeIndex) {
         let template = builtin_default().unwrap();

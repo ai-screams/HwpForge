@@ -47,12 +47,13 @@ pub(super) fn build_sec_pr(ps: &PageSettings, text_direction: TextDirection) -> 
 /// `master_page_cnt` is set dynamically from the section's master pages.
 /// `textVerticalWidthHead` is `"1"` when text direction is not horizontal, `"0"` otherwise.
 pub(super) fn build_sec_pr_open_enriched(section: &Section) -> String {
+    let outline_position = crate::encoder::wire_rules::OUTLINE_NUMBERING_POSITION;
     let master_page_cnt = section.master_pages.as_ref().map_or(0, |v| v.len());
     let text_direction = section.text_direction.to_string();
     let vert_width_head =
         if section.text_direction == TextDirection::Horizontal { "0" } else { "1" };
     format!(
-        r#"<hp:secPr id="" textDirection="{text_direction}" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="{vert_width_head}" masterPageCnt="{master_page_cnt}">"#,
+        r#"<hp:secPr id="" textDirection="{text_direction}" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="{outline_position}" memoShapeIDRef="0" textVerticalWidthHead="{vert_width_head}" masterPageCnt="{master_page_cnt}">"#,
     )
 }
 
