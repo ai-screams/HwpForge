@@ -302,6 +302,8 @@ impl HwpxPatcher {
         }
 
         let mut decoded = HwpxDecoder::decode(base_bytes).map_err(codec(CodecStage::Decode))?;
+        // 이것을 실패시키는 것: 보존 patch의 무결성 검사 제거.
+        raw_package.ensure_editable().map_err(codec(CodecStage::Decode))?;
         crate::paragraph_measure::validate_measure_output(&decoded.style_store)
             .map_err(codec(CodecStage::Validation))?;
         let normalize_measures = decoded.requires_header_normalization();

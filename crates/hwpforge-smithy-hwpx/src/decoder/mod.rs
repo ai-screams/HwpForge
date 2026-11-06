@@ -150,9 +150,14 @@ impl HwpxEditBase {
     /// Decode and retain an independent original package.
     ///
     /// # Errors
-    /// Returns the same errors as [`HwpxDecoder::decode`].
+    /// Returns decode errors first, then [`HwpxError::InvalidStructure`] for
+    /// signature/encryption metadata that forbids editing. Every ZIP entry is
+    /// subject to the shared bounded reader, including encrypted entries.
     pub fn read(bytes: &[u8]) -> HwpxResult<Self> {
-        Ok(Self { decoded: HwpxDecoder::decode(bytes)? })
+        let decoded = HwpxDecoder::decode(bytes)?;
+        // 이것을 실패시키는 것: from-json의 base 무결성 검사 제거.
+        crate::raw_package::RawPackage::read(bytes)?.ensure_editable()?;
+        Ok(Self { decoded })
     }
 
     /// Read-only original model and source addresses.

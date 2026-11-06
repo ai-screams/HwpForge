@@ -1173,7 +1173,8 @@ impl HwpxEncoder {
     /// `options.emit_layout_cache` is overridden by this selective policy.
     /// Images come from `image_store`, as in [`Self::encode_with_diagnostics`].
     /// When the complete typed document (except caches), styles and images are
-    /// unchanged, returns the original package byte for byte. Original values
+    /// unchanged and the base is editable, returns the original package byte
+    /// for byte. Original values
     /// absent from Core are then retained along with the caches; cache validity
     /// is not re-certified. Regenerated output always uses the layout proof.
     ///
@@ -1186,6 +1187,8 @@ impl HwpxEncoder {
     ///
     /// Returns an error if the base cannot be decoded, the prepared Core
     /// document cannot be validated, or encoding/package I/O fails.
+    /// Signature or encryption markers in the base are rejected with
+    /// [`HwpxError::InvalidStructure`], even when the typed inputs are unchanged.
     ///
     /// # Examples
     ///

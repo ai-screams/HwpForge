@@ -259,16 +259,22 @@ fn map_admission(error: StamperError) -> StructuralEditError {
 
 /// Input admission gate shared by insert and delete: the base must round-trip
 /// (decode→encode→decode is a no-op) so a byte-splice edit can be verified.
-/// Returns the decoded base on success.
-fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
+/// Returns the decoded base and its checked package for reuse by the edit.
+fn admit(base: &[u8]) -> Result<(HwpxDocument, RawPackage), StructuralEditError> {
     let d0 = HwpxDecoder::decode(base)
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    let package = RawPackage::read(base)
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    // 이것을 실패시키는 것: admission 전 무결성 검사 제거.
+    package
+        .ensure_editable()
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
     let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission).map_err(map_admission)?;
     let d1 = HwpxDecoder::decode(&e0)
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
     admission_compare(&d0, &d1).map_err(map_admission)?;
     check_zip_carry(base, &e0).map_err(map_admission)?;
-    Ok(d0)
+    Ok((d0, package))
 }
 
 /// Reverse-delta self-verify shared by insert and delete: the re-decoded output
@@ -347,7 +353,7 @@ impl HwpxStructuralEditor {
             return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
         }
         // ── input admission: base must round-trip so we can verify ──
-        let d0 = admit(base)?;
+        let (d0, mut package) = admit(base)?;
         let decode_warnings = d0.warnings.clone();
         let sections = d0.document.sections();
 
@@ -411,8 +417,6 @@ impl HwpxStructuralEditor {
         })?;
 
         // ── byte-splice each affected section's XML ──
-        let mut package = RawPackage::read(base)
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let mut by_section: std::collections::BTreeMap<usize, Vec<usize>> =
             std::collections::BTreeMap::new();
         for t in targets {
@@ -607,7 +611,7 @@ impl HwpxStructuralEditor {
         }
 
         // ── input admission ──
-        let d0 = admit(base)?;
+        let (d0, mut package) = admit(base)?;
         let decode_warnings = d0.warnings.clone();
 
         let sections = d0.document.sections();
@@ -646,8 +650,6 @@ impl HwpxStructuralEditor {
         }
         // Each text is cleaned once here; the cleaned text is what is encoded,
         // spliced and expected by the self-verify below.
-        let mut package = RawPackage::read(base)
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let path = package
             .section_path(anchor.section)
             .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
@@ -1151,7 +1153,8 @@ mod tests {
             encoded_paragraph_spans("<other/>"),
             Err(StructuralEditError::Invariant { .. })
         ));
-        let doc = admit(&fixture("plain_paragraphs.hwpx")).unwrap();
+        // 이것을 실패시키는 것: self_verify의 decode 실패 stage를 Decode로 변경.
+        let (doc, _) = admit(&fixture("plain_paragraphs.hwpx")).unwrap();
         let error = self_verify(b"bad", &doc).unwrap_err();
         assert!(matches!(
             error,

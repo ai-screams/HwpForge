@@ -98,6 +98,27 @@ mod tests {
         assert_eq!(err.code, "FILE_NOT_FOUND");
     }
 
+    // 이것을 실패시키는 것: ops restyle 읽기를 HwpxDecoder::decode로 되돌리기.
+    #[test]
+    fn restyle_refuses_signature_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.hwpx");
+        let output = dir.path().join("restyled.hwpx");
+        crate::tools::convert::run_convert("본문", false, source.to_str().unwrap(), "default")
+            .unwrap();
+        let mut zip =
+            zip::ZipWriter::new_append(std::io::Cursor::new(std::fs::read(&source).unwrap()))
+                .unwrap();
+        zip.start_file("META-INF/signatures.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::fs::write(&source, zip.finish().unwrap().into_inner()).unwrap();
+        let err =
+            run_restyle(source.to_str().unwrap(), "modern", output.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "DECODE_FAILED");
+        assert!(err.message.contains("package integrity"), "{err:?}");
+        assert!(!output.exists());
+    }
+
     #[test]
     fn restyle_happy_path() {
         // 1. Create a valid HWPX via convert (default preset = 함초롬돋움)

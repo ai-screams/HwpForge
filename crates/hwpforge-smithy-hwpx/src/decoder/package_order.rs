@@ -63,7 +63,7 @@ impl PackageOrder {
 
 /// Bounded, namespace-aware pull traversal. No DTDs, unbound prefixes, multiple
 /// roots or truncated XML can establish a supported package structure.
-fn visit(
+pub(crate) fn visit(
     xml: &str,
     mut element: impl FnMut(&[String], &str, &BTreeMap<String, String>) -> Result<(), String>,
 ) -> Result<(), String> {

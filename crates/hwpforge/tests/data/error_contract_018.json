@@ -3670,7 +3670,7 @@
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
           "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
           "stage": "Decode",
-          "occurrence": 3,
+          "occurrence": 4,
           "anchor": "원본 구역 XML 읽기"
         },
         {
@@ -3679,6 +3679,13 @@
           "stage": "Decode",
           "occurrence": 1,
           "anchor": "구역 수를 확인한 뒤의 구역 경로 해석"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode 뒤 패키지 무결성 거부"
         }
       ],
       "inventory": [
@@ -4024,6 +4031,13 @@
           "stage": "Decode",
           "occurrence": 2,
           "anchor": "원본 패키지 읽기(RawPackage::read)"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode 뒤 패키지 무결성 거부"
         }
       ],
       "inventory": [
@@ -4298,6 +4312,13 @@
           "function": "HwpxCellEditor::set_cells_with_diagnostics",
           "stage": "Decode",
           "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode 뒤 패키지 무결성 거부"
         }
       ]
     },
@@ -4528,21 +4549,23 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
-          "stage": "Decode",
-          "occurrence": 2
-        },
-        {
-          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
           "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
           "stage": "Decode",
           "occurrence": 1
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics",
+          "function": "admit",
           "stage": "Decode",
-          "occurrence": 2
+          "occurrence": 2,
+          "anchor": "입구로 이동한 원본 패키지 읽기"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "admit",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode 뒤 패키지 무결성 거부"
         }
       ]
     },
@@ -4800,6 +4823,20 @@
           "function": "check_zip_carry",
           "stage": "Decode",
           "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode 뒤 패키지 무결성 거부"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+          "function": "HwpxStamper::stamp_v2_with_diagnostics",
+          "stage": "Decode",
+          "occurrence": 3,
+          "anchor": "원본 decode 뒤 패키지 무결성 거부"
         }
       ]
     },

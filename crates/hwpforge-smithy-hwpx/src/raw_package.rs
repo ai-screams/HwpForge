@@ -1,5 +1,7 @@
 //! Shared preserve-first HWPX package storage.
 
+mod integrity;
+
 use crate::decoder::package::PackageReader;
 use crate::encoder::package::MIMETYPE_PART;
 use crate::error::{HwpxError, HwpxResult};

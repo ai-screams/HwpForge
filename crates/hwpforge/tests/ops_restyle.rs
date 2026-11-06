@@ -1,5 +1,7 @@
 #![cfg(feature = "ops-hwpx")]
 
+#[path = "support/document.rs"]
+mod document;
 #[path = "support/fixtures.rs"]
 mod fixtures;
 use fixtures::{hwpx_fixture as fixture, warning_fixture};
@@ -518,4 +520,15 @@ fn metadata_overflow_refuses_restyle() {
     assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe);
     assert_eq!(HwpxDecoder::decode(&bytes).unwrap().warnings[0].code(), "CONTENT_LOST");
     assert!(err.to_string().contains("meta[name=description]"));
+}
+
+// 이것을 실패시키는 것: restyle 읽기를 HwpxDecoder::decode로 되돌리기.
+#[test]
+fn restyle_refuses_signature_markers() {
+    let mut zip = zip::ZipWriter::new_append(std::io::Cursor::new(document::editable())).unwrap();
+    zip.start_file("META-INF/signatures.xml", zip::write::SimpleFileOptions::default()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern")).unwrap_err();
+    assert_eq!(err.code(), OpsCode::DecodeFailed);
+    assert!(err.to_string().contains("package integrity"), "{err}");
 }
