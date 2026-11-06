@@ -228,10 +228,15 @@ fn source_queries_and_probe_encodes_have_fixed_batch_cost() {
         for _ in 1..definitions {
             decoded.style_store.push_para_shape(crate::style_store::HwpxParaShape::default());
         }
+        let mut matching_style = decoded.style_store.style(0).unwrap().clone();
+        matching_style.para_pr_id_ref = (definitions - 1) as u32;
+        decoded.style_store.push_style(matching_style);
+        let style_ref = decoded.style_store.style_ref_at(1).unwrap();
         // Reference the last definition, so lookup cost cannot hide an early exit.
         for_each_table_mut(&mut decoded.document, &mut |_, table| {
             table.rows[0].cells[0].paragraphs[0].para_shape_id =
                 ParaShapeIndex::new(definitions - 1);
+            table.rows[0].cells[0].paragraphs[0].style_ref = Some(style_ref);
         });
         // Distinct table hosts within one section share the same source part.
         let host = decoded.document.sections()[0].paragraphs[0].clone();
@@ -549,7 +554,7 @@ fn rejected_candidates_do_not_read_the_header() {
 /// 이것을 실패시키는 것: secPr 위치/유일성/존재 확인 삭제 또는 누락된 grid를 허용.
 #[test]
 fn section_grid_evidence_must_be_unique_and_explicit() {
-    let grid = r#"<secPr><grid charGrid="0" wonggojiFormat="0"/></secPr>"#;
+    let grid = r#"<secPr><grid charGrid="0" lineGrid="0" wonggojiFormat="0"/></secPr>"#;
     assert!(section_allows(&format!("<sec><p><run>{grid}</run></p></sec>")).is_some());
     for xml in [
         "<sec/>",
@@ -641,5 +646,162 @@ fn character_evidence_uses_definition_positions_even_with_duplicate_ids() {
         .unwrap();
         assert!(!header.allows(&evidence, 0, 0));
         assert!(header.allows(&evidence, 0, 1));
+    }
+}
+
+// 이것을 실패시키는 것: 한쪽 수집기에만 참조/grid 검사 추가, local name만 비교,
+// 재인코드 후보에서 공용 원문 검사 생략 또는 취소한 후보를 다시 복원.
+#[test]
+fn cell_and_splice_collect_the_same_source_evidence() {
+    for (from, to, keep) in [
+        ("lineGrid=\"0\"", "lineGrid=\"1\"", false),
+        ("lineGrid=\"0\"", "", false),
+        ("styleIDRef=\"0\"", "", false),
+        ("paraPrIDRef=\"0\"", "", false),
+        ("charPrIDRef=\"0\"", "", false),
+        (
+            "xmlns:hp=\"http://www.hancom.co.kr/hwpml/2011/paragraph\"",
+            "xmlns:hp=\"urn:foreign\"",
+            false,
+        ),
+        ("xmlns:hp=", "xmlns:alias=", true),
+        ("<hp:subList ", "<hh:subList ", false),
+    ] {
+        let mut package = RawPackage::read(&fixture()).unwrap();
+        let original = package.read_text_entry("Contents/section0.xml").unwrap();
+        let mut xml = original.replace(from, to);
+        if to == "xmlns:alias=" {
+            xml = xml.replace("hp:", "alias:");
+        }
+        package.replace_text_entry("Contents/section0.xml", xml.clone());
+        if to == "<hh:subList " {
+            xml = xml.replace("</hp:subList>", "</hh:subList>");
+            package.replace_text_entry("Contents/section0.xml", xml.clone());
+        }
+        let bytes = package.write().unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        let edits = resolve_edits(&decoded.document, &specs()).unwrap();
+        assert_eq!(candidates(&decoded, &package, &edits).len(), usize::from(keep), "{from}");
+        let mut map = decoded.source_map(0).unwrap().clone();
+        map.prove_cache_text_tail(
+            &xml,
+            &hwpforge_core::field_inventory::FieldInventory::from_sections(
+                decoded.document.sections(),
+            ),
+            0,
+        );
+        let section = crate::line_keep::SectionEvidence::read(&xml);
+        // 이것을 실패시키는 것: 외래 구역 운반자를 건너뛰어 빈 증거로 반환.
+        assert_eq!(section.is_some(), map.cache_flow.section_evidence(&xml).is_some());
+        let section = section.unwrap_or_default();
+        let original_map = decoded.source_map(0).unwrap();
+        for p in 0..map.cache_flow.paragraph_count() {
+            assert_eq!(
+                map.cache_flow.references(
+                    p,
+                    &xml,
+                    &map.cache_flow.section_evidence(&xml).unwrap_or_default().namespaces
+                ),
+                original_map.cache_flow.references(p, &xml, &section.namespaces)
+            );
+        }
+        let mut edited_section = decoded.document.sections()[0].clone();
+        let preservation =
+            crate::HwpxPatcher::export_section_preservation(&bytes, 0, &edited_section).unwrap();
+        let RunContent::Table(table) = &mut edited_section.paragraphs[0].runs[1].content else {
+            panic!("table")
+        };
+        table.rows[0].cells[0].paragraphs[0].runs[0].content = RunContent::Text("다".into());
+        let patched = crate::HwpxPatcher::patch_section_preserving(
+            &bytes,
+            0,
+            &edited_section,
+            None,
+            Some(&preservation),
+        )
+        .unwrap();
+        let patch_xml =
+            RawPackage::read(&patched).unwrap().read_text_entry("Contents/section0.xml").unwrap();
+        let patch_tree = xml::Element::parse(&patch_xml);
+        let (tc, p, t, cache) = if to == "xmlns:alias=" {
+            ("alias:tc", "alias:p", "alias:t", "alias:linesegarray")
+        } else {
+            ("hp:tc", "hp:p", "hp:t", "hp:linesegarray")
+        };
+        let patched_cell = patch_tree.find(tc).find(p);
+        assert_eq!(patched_cell.children.iter().any(|c| c.name == cache), keep, "patch {from}");
+        assert_eq!(patched_cell.find(t).text, "다");
+        // The existing carry fingerprint can still discard aliased source XML.
+        if to == "xmlns:alias=" {
+            continue;
+        }
+        let edited = HwpxCellEditor::set_cells(&bytes, &specs()).unwrap();
+        let output = RawPackage::read(&edited.bytes)
+            .unwrap()
+            .read_text_entry("Contents/section0.xml")
+            .unwrap();
+        let tree = xml::Element::parse(&output);
+        let cell = tree.find("hp:tc").find("hp:p");
+        assert_eq!(cell.children.iter().any(|c| c.name == "hp:linesegarray"), keep, "{from}");
+        assert_eq!(cell.find("hp:t").text, "다");
+    }
+}
+
+// 이것을 실패시키는 것: set-cell에서 fontRef 숫자만 비교하거나 raw 보존 경로에 글꼴 대조 적용.
+#[test]
+fn reencoded_cell_drops_cleaned_font_evidence_while_patch_keeps_it() {
+    let mut package = RawPackage::read(&fixture()).unwrap();
+    let header = package.read_text_entry("Contents/header.xml").unwrap();
+    package.replace_text_entry(
+        "Contents/header.xml",
+        header.replace("face=\"함초롬바탕\"", "face=\" 함초롬바탕 \""),
+    );
+    let bytes = package.write().unwrap();
+    let decoded = HwpxDecoder::decode(&bytes).unwrap();
+    let mut spec = specs();
+    spec[0].text = "1".into();
+    let edits = resolve_edits(&decoded.document, &spec).unwrap();
+    assert!(candidates(&decoded, &package, &edits).is_empty());
+    let edited = HwpxCellEditor::set_cells(&bytes, &spec).unwrap();
+    let mut section = decoded.document.sections()[0].clone();
+    let preservation =
+        crate::HwpxPatcher::export_section_preservation(&bytes, 0, &section).unwrap();
+    let RunContent::Table(table) = &mut section.paragraphs[0].runs[1].content else {
+        panic!("table")
+    };
+    table.rows[0].cells[0].paragraphs[0].runs[0].content = RunContent::Text("1".into());
+    let patched = crate::HwpxPatcher::patch_section_preserving(
+        &bytes,
+        0,
+        &section,
+        None,
+        Some(&preservation),
+    )
+    .unwrap();
+    for (out, keep) in [(edited.bytes, false), (patched, true)] {
+        let xml = RawPackage::read(&out).unwrap().read_text_entry("Contents/section0.xml").unwrap();
+        let tree = xml::Element::parse(&xml);
+        let p = tree.find("hp:tc").find("hp:p");
+        assert_eq!(p.children.iter().any(|c| c.name == "hp:linesegarray"), keep);
+        assert_eq!(p.find("hp:t").text, "1");
+    }
+}
+
+// 이것을 실패시키는 것: 루트 바인딩만 전달하면서 하위 재선언을 무시해 후보 승인.
+#[test]
+fn source_collectors_close_on_nested_namespace_rebinding() {
+    for element in ["subList", "tbl"] {
+        let mut package = RawPackage::read(&fixture()).unwrap();
+        let xml = package.read_text_entry("Contents/section0.xml").unwrap().replace(
+            &format!("<hp:{element} "),
+            &format!("<hp:{element} xmlns:hp=\"urn:foreign\" "),
+        );
+        package.replace_text_entry("Contents/section0.xml", xml.clone());
+        let decoded = HwpxDecoder::decode(&package.write().unwrap()).unwrap();
+        let edits = resolve_edits(&decoded.document, &specs()).unwrap();
+        assert!(candidates(&decoded, &package, &edits).is_empty());
+        let mut map = decoded.source_map(0).unwrap().clone();
+        map.prove_cache_text_tail(&xml, &Default::default(), 0);
+        assert!(map.cache_flow.section_evidence(&xml).is_none());
     }
 }

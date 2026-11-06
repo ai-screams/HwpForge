@@ -90,10 +90,16 @@ pub(crate) struct ParagraphFlow {
     /// paragraph may change width or line breaks when pages move.
     has_disallowed_element: Vec<bool>,
     has_disallowed_self_element: Vec<bool>,
-    paragraph_definitions: Vec<Option<usize>>,
+    // Re-encoded cell proofs run without prove_text_tail. Retain decoder-owned
+    // ranges here so both consumers can read all original runs without a new scan.
+    paragraph_starts: Vec<Range<usize>>,
+    run_starts: Vec<Vec<Range<usize>>>,
+    sublist_starts: Vec<Option<Range<usize>>>,
     /// Source ownership is proven only for body and direct top-level table cells.
     supported_owner: Vec<bool>,
-    pub(crate) section_evidence: crate::line_keep::SectionEvidence,
+    property_starts: Vec<[Range<usize>; 3]>,
+    grid_starts: Vec<Range<usize>>,
+    rebound_namespace: bool,
     /// Whether the section's gates or field ranges could not be placed on
     /// its source paragraphs ([`Self::prove_text_tail`]), so no paragraph
     /// can be proven plain.
@@ -185,11 +191,62 @@ impl ParagraphFlow {
     }
 
     /// Supported source ownership and one direct cache array, using decoder ranges.
-    pub(crate) fn self_candidate(&self, p: usize, span: &Range<usize>) -> Option<usize> {
+    pub(crate) fn self_candidate(&self, p: usize, span: &Range<usize>) -> Option<()> {
         if !self.self_owned(p) || self.spans.get(p)? != span || self.caches.get(p)?.len() != 1 {
             return None;
         }
-        *self.paragraph_definitions.get(p)?
+        Some(())
+    }
+
+    pub(crate) fn section_evidence(&self, xml: &str) -> Option<crate::line_keep::SectionEvidence> {
+        if self.rebound_namespace {
+            return None;
+        }
+        let (root, namespaces) =
+            crate::line_keep::Tag::opening_with_bindings(xml, &Default::default())?;
+        if root.name != "sec" {
+            return None;
+        }
+        let mut evidence = crate::line_keep::SectionEvidence { namespaces, ..Default::default() };
+        for starts in &self.property_starts {
+            for (range, name) in starts.iter().zip(["p", "run", "secPr"]) {
+                let tag =
+                    crate::line_keep::Tag::opening(xml.get(range.clone())?, &evidence.namespaces)?;
+                if tag.name != name {
+                    return None;
+                }
+            }
+            evidence.properties += 1;
+        }
+        for range in &self.grid_starts {
+            let tag =
+                crate::line_keep::Tag::opening(xml.get(range.clone())?, &evidence.namespaces)?;
+            evidence.record_grid(&tag);
+        }
+        Some(evidence)
+    }
+
+    pub(crate) fn references(
+        &self,
+        p: usize,
+        xml: &str,
+        namespaces: &crate::line_keep::NamespaceBindings,
+    ) -> Option<crate::line_keep::References> {
+        if let Some(range) = self.sublist_starts.get(p)? {
+            let sub = crate::line_keep::Tag::opening(xml.get(range.clone())?, namespaces)?;
+            if sub.name != "subList" {
+                return None;
+            }
+        }
+        crate::line_keep::references(
+            xml.get(self.paragraph_starts.get(p)?.clone())?,
+            self.run_starts
+                .get(p)?
+                .iter()
+                .map(|r| xml.get(r.clone()))
+                .collect::<Option<Vec<_>>>()?,
+            namespaces,
+        )
     }
 
     pub(crate) fn paragraph_count(&self) -> usize {
@@ -218,11 +275,22 @@ impl ParagraphFlow {
                     });
                     let paragraph = flow.spans.len();
                     flow.spans.push(element.outer());
+                    flow.paragraph_starts.push(start_range(element));
+                    flow.run_starts.push(Vec::new());
+                    flow.sublist_starts.push(
+                        (source.elements()[parent].name() == "subList")
+                            .then(|| start_range(&source.elements()[parent])),
+                    );
                     flow.caches.push(Vec::new());
                     flow.para_list.push(list);
                     flow.parent.push(nearest[parent]);
                     nearest[id] = Some(paragraph);
                     hosts[id] = Some(paragraph);
+                }
+                "run" if source.elements()[parent].name() == "p" => {
+                    if let Some(paragraph) = nearest[parent] {
+                        flow.run_starts[paragraph].push(start_range(element));
+                    }
                 }
                 "linesegarray" if source.elements()[parent].name() == "p" => {
                     if let Some(paragraph) = nearest[parent] {
@@ -265,12 +333,12 @@ impl ParagraphFlow {
         let elements = source.elements();
         self.has_disallowed_element = vec![false; self.spans.len()];
         self.has_disallowed_self_element = vec![false; self.spans.len()];
-        self.paragraph_definitions = vec![None; self.spans.len()];
         self.supported_owner = vec![false; self.spans.len()];
         let mut direct_cell_list = vec![false; elements.len()];
         let mut cell_sublist_count = vec![0; elements.len()];
-        let mut character_definitions: Vec<Option<usize>> = vec![None; self.spans.len()];
-        self.section_evidence = crate::line_keep::SectionEvidence::default();
+        self.property_starts.clear();
+        self.grid_starts.clear();
+        self.rebound_namespace = false;
         let mut in_section = vec![false; elements.len()];
         let mut section_property = vec![false; elements.len()];
         let mut click_metadata = vec![false; elements.len()];
@@ -284,6 +352,12 @@ impl ParagraphFlow {
             let parent = element.parent();
             nearest[id] = nearest[parent];
             let name = element.name();
+            // Deliberately conservative: this cheap prefilter also closes the proof
+            // when an attribute value contains "xmlns". Resolving every opening tag
+            // here would make non-candidates pay for namespace parsing.
+            if parent != 0 && xml.get(start_range(element))?.contains("xmlns") {
+                self.rebound_namespace = true;
+            }
             in_section[id] = in_section[parent] || name == "secPr";
             click_metadata[id] = click_metadata[parent];
             if name == "tc" {
@@ -307,9 +381,6 @@ impl ParagraphFlow {
                     && elements[parent].parent() == 0)
                     || direct_cell_list[parent];
                 nearest[id] = Some(paragraphs);
-                self.paragraph_definitions[paragraphs] =
-                    attribute(&source_start(xml, element)?, "paraPrIDRef")
-                        .and_then(|s| s.parse().ok());
                 paragraphs += 1;
             }
             // Section-level gates come first: they hold whichever paragraph,
@@ -328,14 +399,15 @@ impl ParagraphFlow {
                         && elements[paragraph.parent()].parent() == 0
                     {
                         section_property[id] = true;
-                        self.section_evidence.properties += 1;
+                        self.property_starts.push([
+                            start_range(paragraph),
+                            start_range(run),
+                            start_range(element),
+                        ]);
                     }
                 }
                 "grid" if section_property[parent] => {
-                    let start = source_start(xml, element)?;
-                    self.section_evidence.grids += 1;
-                    self.section_evidence.char_grid = attribute(&start, "charGrid");
-                    self.section_evidence.wonggoji = attribute(&start, "wonggojiFormat");
+                    self.grid_starts.push(start_range(element));
                 }
                 "colPr" => {
                     let start = source_start(xml, element)?;
@@ -388,13 +460,6 @@ impl ParagraphFlow {
                 !text_tail_element(name) || (name == "fieldBegin" && !click_metadata[id]);
             self.has_disallowed_element[owner] |= disallowed;
             let parent_name = elements[parent].name();
-            if name == "run" && parent_name == "p" {
-                let character = attribute(&source_start(xml, element)?, "charPrIDRef")
-                    .and_then(|s| s.parse().ok());
-                self.has_disallowed_self_element[owner] |= character.is_none()
-                    || character_definitions[owner].is_some_and(|old| Some(old) != character);
-                character_definitions[owner] = character;
-            }
             let allowed = in_section[id]
                 || match name {
                     "p" => true,
@@ -531,6 +596,11 @@ fn direct_cell_sublist(
         ));
     }
     Some(false)
+}
+
+fn start_range(element: &hwpforge_core::source_xml::XmlElement) -> Range<usize> {
+    let outer = element.outer();
+    outer.start..element.inner().map_or(outer.end, |inner| inner.start)
 }
 
 /// The source ledger already records the end of the opening tag, including

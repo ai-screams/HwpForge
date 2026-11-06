@@ -757,7 +757,7 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
 /// Emits all child elements expected by 한글: heading (NONE default),
 /// breakSetting, autoSpacing, margin/lineSpacing (inside hp:switch),
 /// and an optional border block when the shared model references one.
-fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
+pub(crate) fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
     let [offset_left, offset_right, offset_top, offset_bottom] =
         ps.border_offset.map(|v| v.as_i32());
     let border = ps.border_fill_id.map(|border_fill_id| HxBorder {

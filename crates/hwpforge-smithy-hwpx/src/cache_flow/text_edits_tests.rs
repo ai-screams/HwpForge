@@ -781,7 +781,7 @@ fn self_evidence_requires_the_exact_body_span() {
     let (_, source) = XmlSource::read(xml).unwrap();
     let mut f = ParagraphFlow::from_source(&source);
     f.prove_text_tail(&source, xml, &Default::default(), |_| None);
-    assert_eq!(f.self_candidate(0, &f.spans[0]), Some(3));
+    assert_eq!(f.self_candidate(0, &f.spans[0]), Some(()));
     assert_eq!(f.self_candidate(0, &(f.spans[0].start + 1..f.spans[0].end)), None);
     let duplicate = xml.replace("</p>", "<linesegarray><lineseg/></linesegarray></p>");
     let (_, source) = XmlSource::read(&duplicate).unwrap();
@@ -790,12 +790,12 @@ fn self_evidence_requires_the_exact_body_span() {
     assert_eq!(f.self_candidate(0, &f.spans[0]), None);
 }
 
-// 이것을 실패시키는 것: 자기 허용 목록에 tab/lineBreak/nbSpace/fwSpace/autoNum 또는 임의 ctrl 자식을 허용, 빈 run의 다른 글자 모양 무시.
+// 이것을 실패시키는 것: 자기 허용 목록에 tab/lineBreak/nbSpace/fwSpace/autoNum 또는 임의 ctrl 자식을 허용, 글자 모양 대조를 구조 소유 판정에 섞기.
 #[test]
 fn self_element_allowlist_is_distinct_from_the_untouched_tail() {
     for (content, allowed) in [
         ("<t>가</t>", true),
-        ("</run><run charPrIDRef='1'><t/>", false),
+        ("</run><run charPrIDRef='1'><t/>", true),
         ("<t>가<tab/></t>", false),
         ("<t>가<lineBreak/></t>", false),
         ("<t>가<nbSpace/></t>", false),
@@ -871,9 +871,11 @@ fn unlocated_bookmark_and_uneditable_clickhere_block_all_self_caches_only() {
 fn section_adapters_agree_on_explicit_grid_evidence() {
     let duplicate_section = "<secPr><grid charGrid='0' wonggojiFormat='0'/></secPr><secPr><grid charGrid='0' wonggojiFormat='0'/></secPr>";
     let duplicate_grid = "<secPr><grid charGrid='0' wonggojiFormat='0'/><grid charGrid='0' wonggojiFormat='0'/></secPr>";
-    let horizontal_grid = "<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='0' lineGrid='9'/></secPr>";
+    let horizontal_grid = "<secPr textDirection='HORIZONTAL'><grid charGrid='0' wonggojiFormat='0' lineGrid='0'/></secPr>";
     for (properties, expected) in [
         (horizontal_grid, true),
+        ("<secPr><grid charGrid='0' wonggojiFormat='0' lineGrid='9'/></secPr>", false),
+        ("<secPr><grid charGrid='0' wonggojiFormat='0'/></secPr>", false),
         (
             "<secPr textDirection='HORIZONTAL'><grid charGrid='1' wonggojiFormat='0'/></secPr>",
             false,
@@ -895,7 +897,10 @@ fn section_adapters_agree_on_explicit_grid_evidence() {
         f.prove_text_tail(&source, &xml, &Default::default(), |_| None);
         let cell = crate::line_keep::SectionEvidence::read(&xml).unwrap();
         assert_eq!(crate::line_keep::source_allows(&cell, true), expected);
-        assert_eq!(crate::line_keep::source_allows(&f.section_evidence, true), expected);
+        assert_eq!(
+            crate::line_keep::source_allows(&f.section_evidence(&xml).unwrap(), true),
+            expected
+        );
         assert!(!crate::line_keep::source_allows(&cell, false));
     }
 }
@@ -954,5 +959,26 @@ fn direct_cell_source_ownership_and_gates_are_required_even_with_keep() {
             .filter_map(|(p, c)| c.iter().any(|r| ranges.contains(r)).then_some(p))
             .collect();
         assert_eq!(actual, expected, "{open}");
+    }
+}
+
+// 이것을 실패시키는 것: secPr만 보고 상위 p/run의 외래 namespace를 무시하는 한쪽 수집기.
+#[test]
+fn section_carrier_namespaces_are_part_of_both_collectors_evidence() {
+    for (p, run, expected) in [("hp", "hp", true), ("hh", "hp", false), ("hp", "hh", false)] {
+        let xml = format!(
+            r#"<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><{p}:p><{run}:run><hp:secPr textDirection="HORIZONTAL"><hp:grid charGrid="0" lineGrid="0" wonggojiFormat="0"/></hp:secPr></{run}:run></{p}:p></hs:sec>"#
+        );
+        let (_, source) = XmlSource::read(&xml).unwrap();
+        let mut flow = ParagraphFlow::from_source(&source);
+        flow.prove_text_tail(&source, &xml, &Default::default(), |_| None);
+        let cell = crate::line_keep::SectionEvidence::read(&xml);
+        // 이것을 실패시키는 것: 외래 운반자를 건너뛰고 Some(빈 증거)를 반환.
+        assert_eq!(cell.is_some(), expected);
+        assert_eq!(cell.is_some_and(|e| crate::line_keep::source_allows(&e, true)), expected);
+        assert_eq!(
+            flow.section_evidence(&xml).is_some_and(|e| crate::line_keep::source_allows(&e, true)),
+            expected
+        );
     }
 }
