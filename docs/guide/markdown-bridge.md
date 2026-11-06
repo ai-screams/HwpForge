@@ -254,6 +254,8 @@ let lossless = MdEncoder::encode_lossless(&validated).unwrap();
 | `encode_lossy`    | 읽기 좋은 GFM                              | 사람이 읽는 문서 미리보기   |
 | `encode_lossless` | 아래 보존 범위 안에서 보존, 못 담으면 거부 | 보존 범위 확인(기계용 보기) |
 
+Markdown으로 HWPX를 재생성할 때 원본 패키지의 서명·암호화 상태는 승계되지 않습니다.
+
 Lossless 출력은 Markdown 변환의 입력이 아닙니다. 프론트매터에 늘 `metadata.format: lossless` 를 담고, 일반 Markdown 디코드(CLI·MCP 의 `convert`, Python `convert_md`, Rust `MdDecoder::decode`)는 이 표식을 보면 `MD_DECODE_FAILED`(Rust 는 `MdError::UnsupportedStructure`)로 거부합니다. 문서를 고쳐 다시 HWPX 로 만들려면 [JSON 왕복](../reference/cli.md#to-json)(`to-json` → 편집 → `from-json`)을 사용하세요. JSON 은 이미지를 담지 않으므로, `from-json --base` 로 기준 HWPX 의 이미지를 물려받습니다.
 
 ## 전체 파이프라인 예제 (MD string → HWPX file)

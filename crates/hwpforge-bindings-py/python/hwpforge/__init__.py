@@ -124,7 +124,8 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
             carries a grid address that no longer matches. Also
             ``HWP5_INPUT`` if `base` contains HWP5 (convert with ``convert_hwp5``
             first), or ``DECODE_FAILED`` if HWPX `base` cannot be decoded, including when it
-            exceeds the nesting or namespace limits.
+            exceeds the nesting or namespace limits, or when it carries a digital
+            signature or encryption marker that forbids editing.
     """
     data, report = _hwpforge.from_json(text, base=None if base is None else base.to_bytes())
     return DocumentResult(Document(data), report)
