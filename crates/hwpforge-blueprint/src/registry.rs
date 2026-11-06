@@ -92,6 +92,7 @@ impl StyleEntry {
 /// `font_east_asian`. Existing names retain their first allocated index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
+#[serde(try_from = "StyleRegistryWire")]
 pub struct StyleRegistry {
     /// All unique fonts referenced by character shapes.
     pub fonts: Vec<FontId>,
@@ -110,6 +111,56 @@ pub struct StyleRegistry {
     pub bullets: Vec<BulletDef>,
     /// Mapping from style name to its indices (insertion-order preserved).
     style_entries: IndexMap<String, StyleEntry>,
+    /// Original display names, keyed by style identity rather than display text.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    style_display_names: IndexMap<String, String>,
+}
+
+// Schemars follows serde's try_from for the deserialize contract. Keep the
+// field defaults here in step with `StyleRegistry`.
+#[derive(Deserialize, JsonSchema)]
+struct StyleRegistryWire {
+    /// All unique fonts referenced by character shapes.
+    fonts: Vec<FontId>,
+    /// All resolved character shapes.
+    char_shapes: Vec<CharShape>,
+    /// All resolved paragraph shapes.
+    para_shapes: Vec<ParaShape>,
+    /// Shared tab definitions referenced by paragraph shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tabs: Vec<TabDef>,
+    /// Shared numbering definitions referenced by paragraph shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    numberings: Vec<NumberingDef>,
+    /// Shared bullet definitions referenced by paragraph shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bullets: Vec<BulletDef>,
+    /// Mapping from style name to its indices (insertion-order preserved).
+    style_entries: IndexMap<String, StyleEntry>,
+    /// Original display names, keyed by style identity rather than display text.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    style_display_names: IndexMap<String, String>,
+}
+
+impl TryFrom<StyleRegistryWire> for StyleRegistry {
+    type Error = BlueprintError;
+
+    fn try_from(wire: StyleRegistryWire) -> BlueprintResult<Self> {
+        let registry = Self {
+            fonts: wire.fonts,
+            char_shapes: wire.char_shapes,
+            para_shapes: wire.para_shapes,
+            tabs: wire.tabs,
+            numberings: wire.numberings,
+            bullets: wire.bullets,
+            style_entries: wire.style_entries,
+            style_display_names: wire.style_display_names,
+        };
+        for key in registry.style_display_names.keys() {
+            registry.validate_display_name_key(key)?;
+        }
+        Ok(registry)
+    }
 }
 
 impl StyleRegistry {
@@ -136,6 +187,63 @@ impl StyleRegistry {
         Ok(style_ref)
     }
 
+    /// Sets the original display name of a registered style, replacing any previous name.
+    ///
+    /// Names are stored verbatim, including empty strings. They are metadata, not
+    /// identifiers: multiple styles may share a name without being merged.
+    /// Updating the same key with [`Self::register_style`] retains both its
+    /// [`StyleRef`] and its display name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlueprintError::InvalidStyleName`] for an unregistered reference,
+    /// leaving the registry unchanged.
+    ///
+    /// Each [`StyleRef`] is expected to belong to one entry. Deserialized registries
+    /// are not checked for duplicate references, and [`Self::register_style`]
+    /// numbers a new key by the entry count, so registering into a registry read
+    /// with non-sequential references can reuse an existing one. If two entries
+    /// share a reference, the name attaches to the first entry in insertion order.
+    pub fn set_style_display_name(
+        &mut self,
+        style: StyleRef,
+        name: impl Into<String>,
+    ) -> BlueprintResult<()> {
+        // The key comes from `style_entries`, so it cannot be an orphan.
+        let key = self.style_key(style).ok_or_else(|| BlueprintError::InvalidStyleName {
+            name: format!("StyleRef({})", style.get()),
+            reason: "no registered style has this StyleRef".into(),
+        })?;
+        self.style_display_names.insert(key.to_owned(), name.into());
+        Ok(())
+    }
+
+    /// Returns the original display name, or `None` for an unnamed or unknown style.
+    ///
+    /// Display names do not identify or merge styles; multiple styles may share
+    /// one. Updating the same key with [`Self::register_style`] preserves the
+    /// identity and display name. An explicitly stored empty name returns `Some("")`.
+    pub fn style_display_name(&self, style: StyleRef) -> Option<&str> {
+        self.style_display_names.get(self.style_key(style)?).map(String::as_str)
+    }
+
+    fn style_key(&self, style: StyleRef) -> Option<&str> {
+        self.style_entries
+            .iter()
+            .find(|(_, entry)| entry.style_ref == style)
+            .map(|(key, _)| key.as_str())
+    }
+
+    fn validate_display_name_key(&self, key: &str) -> BlueprintResult<()> {
+        if !self.style_entries.contains_key(key) {
+            return Err(BlueprintError::InvalidStyleName {
+                name: key.into(),
+                reason: "display name references unknown style".into(),
+            });
+        }
+        Ok(())
+    }
+
     /// Creates an empty StyleRegistry with only fonts.
     ///
     /// Useful when constructing a style store from preset fonts without a full
@@ -150,6 +258,7 @@ impl StyleRegistry {
             numberings: vec![],
             bullets: vec![],
             style_entries: IndexMap::new(),
+            style_display_names: IndexMap::new(),
         }
     }
 
@@ -225,6 +334,7 @@ impl StyleRegistry {
             numberings,
             bullets,
             style_entries,
+            style_display_names: IndexMap::new(),
         })
     }
 
