@@ -514,14 +514,14 @@ fn absent_multiline_and_unpromoted_body_caches_stay_unproven() {
     }
 }
 
-// 이것을 실패시키는 것: grid/paraPr 조건 우회, lineGrid/snapToGrid 를 새 거부 조건으로 추가.
+// 이것을 실패시키는 것: grid/paraPr 조건 우회, lineGrid 비영 승인, 명시 snapToGrid의 Core 일치 무시.
 #[test]
 fn body_properties_share_the_cell_admission_rules() {
     let base = input(vec![para("앞"), para("원래 값"), para("뒤")]);
     for (part, from, to, keep) in [
         ("Contents/section0.xml", "charGrid=\"0\"", "charGrid=\"1\"", false),
         ("Contents/section0.xml", "wonggojiFormat=\"0\"", "wonggojiFormat=\"1\"", false),
-        ("Contents/section0.xml", "lineGrid=\"0\"", "lineGrid=\"7\"", true),
+        ("Contents/section0.xml", "lineGrid=\"0\"", "lineGrid=\"7\"", false),
         ("Contents/header.xml", "snapToGrid=\"1\"", "snapToGrid=\"0\"", true),
         ("Contents/header.xml", "fontLineHeight=\"0\"", "fontLineHeight=\"1\"", false),
         ("Contents/header.xml", "condense=\"0\"", "condense=\"1\"", false),
@@ -587,6 +587,12 @@ fn body_character_definitions_follow_reference_order() {
         );
         let bytes =
             package::splice(&bytes, "charPrIDRef=\"0\"", &format!("charPrIDRef=\"{index}\""));
+        let bytes = package::splice_part(
+            &bytes,
+            "Contents/header.xml",
+            "charPrIDRef=\"0\"",
+            &format!("charPrIDRef=\"{index}\""),
+        );
         assert_self(&bytes, "가", keep);
     }
     for name in ["ratio", "spacing", "relSz", "offset"] {
@@ -1034,5 +1040,73 @@ fn direct_cell_merges_alignment_and_nonwrapping_placement_are_not_extra_gates() 
                 );
             }
         }
+    }
+}
+
+// 이것을 실패시키는 것: 공용 원문 검사 무조건 true, patch 또는 fill 한쪽에서만 증거 검사,
+// 원문 누락을 Core 기본값으로 승인, lineGrid 검사 생략, raw splice에 재인코드 글꼴 대조 적용.
+#[test]
+fn preserving_patch_and_fill_require_the_same_explicit_source_properties() {
+    for (part, from, to, keep) in [
+        ("Contents/section0.xml", "lineGrid=\"0\"", "lineGrid=\"1\"", false),
+        ("Contents/section0.xml", "lineGrid=\"0\"", "", false),
+        ("Contents/section0.xml", "styleIDRef=\"0\"", "", false),
+        ("Contents/section0.xml", "paraPrIDRef=\"0\"", "", false),
+        ("Contents/section0.xml", "charPrIDRef=\"0\"", "", false),
+        ("Contents/header.xml", "snapToGrid=\"1\"", "", false),
+        // Direct paragraph/run references supply the proof values; style type does not.
+        // 이것을 실패시키는 것: 스타일 PARA 타입 요구 복원.
+        ("Contents/header.xml", "type=\"PARA\"", "type=\"CHAR\"", true),
+        ("Contents/header.xml", "<hh:offset hangul=\"0\"", "<hh:offset hangul=\"1\"", false),
+        ("Contents/header.xml", "face=\"함초롬돋움\"", "face=\" 함초롬돋움 \"", true),
+    ] {
+        for is_field in [false, true] {
+            let body = if is_field { field("edit") } else { para("원래 값") };
+            let base = input(vec![para("앞"), body, para("뒤")]);
+            let bytes = package::splice_part(&base, part, from, to);
+            let out = if is_field {
+                HwpxFiller::fill(
+                    &bytes,
+                    &std::collections::BTreeMap::from([("edit".into(), "1".into())]),
+                )
+                .unwrap()
+                .bytes
+            } else {
+                patch(&bytes, "1")
+            };
+            let xml = package::section_xml(&out);
+            assert_eq!(
+                vertpos(&xml),
+                [Some("9000".into()), keep.then(|| "9001".into()), Some("9002".into())],
+                "{from} {to} field={is_field}"
+            );
+            let tree = Element::parse(&xml);
+            assert_eq!(tree.children[1].find("hp:t").text, "1");
+            assert_eq!(
+                package::part(&out, "Contents/header.xml"),
+                package::part(&bytes, "Contents/header.xml")
+            );
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 요소 local name만 비교, 루트 별칭을 후보 증거에 전달하지 않기.
+#[test]
+fn preserving_patch_resolves_element_aliases_from_the_section_root() {
+    let base = input(vec![para("앞"), para("가나"), para("뒤")]);
+    for (uri, keep) in
+        [("http://www.hancom.co.kr/hwpml/2011/paragraph", true), ("urn:foreign", false)]
+    {
+        let xml = package::section_xml(&base)
+            .replace("<hs:sec ", &format!("<hs:sec xmlns:alias=\"{uri}\" "))
+            .replace("<hp:p ", "<alias:p ")
+            .replace("</hp:p>", "</alias:p>")
+            .replace("<hp:run ", "<alias:run ")
+            .replace("</hp:run>", "</alias:run>");
+        let out = patch(&package::with_section(&base, &xml), "1");
+        let tree = Element::parse(&package::section_xml(&out));
+        let paragraph = &tree.children[1];
+        assert_eq!(paragraph.children.iter().any(|c| c.name == "hp:linesegarray"), keep);
+        assert_eq!(paragraph.find("hp:t").text, "1");
     }
 }

@@ -561,6 +561,7 @@ impl HwpxPatcher {
                 &after_fields,
                 &decoded.style_store,
                 &raw_package,
+                &base_section_xml,
             );
             replacements.extend(
                 flow.caches_to_drop_for_text_edits(changed, &proven)
@@ -626,6 +627,7 @@ fn one_line_proofs(
     after_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
     styles: &HwpxStyleStore,
     raw_package: &RawPackage,
+    source_xml: &str,
 ) -> Vec<bool> {
     // Sum patchable direct-run slots, including unchanged editable fields.
     // The flow gate excludes ranges and elements whose visible text may be
@@ -638,15 +640,15 @@ fn one_line_proofs(
     let mut owners = vec![None; flow.paragraph_count()];
     let mut slot_owners = BTreeMap::new();
     for (paragraph, path) in paragraph_slots {
-        let Some((p, definition)) = paragraph_origin(
+        let Some(p) = paragraph_origin(
             map,
             &preservation.section_path,
             &hwpforge_core::node_path::CorePath::new(section_idx, path.as_str()),
         )
-        .filter(|(p, _)| changed_mask[*p]) else {
+        .filter(|p| changed_mask[*p]) else {
             continue;
         };
-        owners[p] = Some((*paragraph, definition));
+        owners[p] = Some(*paragraph);
         for ri in 0..paragraph.runs.len() {
             let run_path = format!("{path}.runs[{ri}]");
             if run_owner(map, &preservation.section_path, section_idx, &run_path) == Some(p) {
@@ -702,11 +704,12 @@ fn one_line_proofs(
             }
         }
         let header = std::cell::OnceCell::new();
+        let section = std::cell::OnceCell::new();
         for (p, (old, text, valid)) in texts.iter().enumerate() {
             if !valid {
                 continue;
             }
-            let Some((paragraph, definition)) = owners[p] else { continue };
+            let Some(paragraph) = owners[p] else { continue };
             if crate::line_keep::eligible(paragraph, old, text, styles).is_none() {
                 continue;
             }
@@ -719,11 +722,13 @@ fn one_line_proofs(
             else {
                 continue;
             };
-            proven[p] = header.allows(
-                &flow.section_evidence,
-                definition,
-                paragraph.runs[0].char_shape_id.get(),
-            );
+            let Some(section) = section.get_or_init(|| flow.section_evidence(source_xml)).as_ref()
+            else {
+                continue;
+            };
+            proven[p] = flow
+                .references(p, source_xml, &section.namespaces)
+                .is_some_and(|source| header.proves(section, &source, paragraph, styles, false));
         }
     }
     proven
@@ -734,14 +739,15 @@ fn paragraph_origin(
     map: &crate::decoder::source_map::SourceMap,
     part: &str,
     path: &hwpforge_core::node_path::CorePath,
-) -> Option<(usize, usize)> {
+) -> Option<usize> {
     let node = map.node(path)?;
     if node.part() != part {
         return None;
     }
     let [span] = node.ranges() else { return None };
     let p = map.cache_flow.paragraph_at(span.start)?;
-    Some((p, map.cache_flow.self_candidate(p, span)?))
+    map.cache_flow.self_candidate(p, span)?;
+    Some(p)
 }
 
 // Field endpoints and direct runs use the same decoder projection, including cells.
@@ -1458,7 +1464,7 @@ mod tests {
                 "Contents/section0.xml",
                 &hwpforge_core::node_path::CorePath::new(0, "paragraphs[0]")
             ),
-            Some((0, 0))
+            Some(0)
         );
         assert_eq!(
             paragraph_origin(
@@ -1930,3 +1936,47 @@ mod tests {
 #[cfg(test)]
 #[path = "../tests/support/field_path_contract.rs"]
 mod field_path_contract;
+
+#[cfg(test)]
+mod source_evidence_tests {
+    use super::*;
+    use hwpforge_core::{
+        layout::{LayoutCache, LineSeg},
+        Document, ImageStore, PageSettings,
+    };
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+    // 이것을 실패시키는 것: 후보 검사 전에 루트/p/run 증거 파싱, 미변경 문단까지 증거 수집.
+    #[test]
+    fn source_evidence_is_lazy_and_limited_to_changed_candidates() {
+        let mut paragraph = Paragraph::with_runs(
+            vec![Run::text("가나", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let mut line = LineSeg::default();
+        line.horzsize = 40000;
+        paragraph.layout_cache = Some(LayoutCache::new(vec![line]));
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(vec![paragraph; 20], PageSettings::a4()));
+        let bytes = crate::HwpxEncoder::encode_with_options(
+            &document.validate().unwrap(),
+            &crate::style_store_for_preset("default").unwrap(),
+            &ImageStore::new(),
+            crate::EncodeOptions::default().with_emit_layout_cache(true),
+        )
+        .unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        let original = decoded.document.sections()[0].clone();
+        let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &original).unwrap();
+        for (text, count) in [("A", 0), ("1", 1), ("가나", 0)] {
+            let mut section = original.clone();
+            section.paragraphs[1].runs[0].content = RunContent::Text(text.into());
+            crate::line_keep::EVIDENCE_READS.set(0);
+            crate::line_keep::START_TAG_READS.set(0);
+            HwpxPatcher::patch_section_preserving(&bytes, 0, &section, None, Some(&preservation))
+                .unwrap();
+            assert_eq!(crate::line_keep::EVIDENCE_READS.get(), count);
+            assert_eq!(crate::line_keep::START_TAG_READS.get() == 0, count == 0);
+        }
+    }
+}

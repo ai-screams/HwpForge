@@ -35,12 +35,13 @@ fn source_tag(
     parts: &HashMap<String, String>,
     map: &crate::decoder::source_map::SourceMap,
     path: &CorePath,
+    section: &crate::line_keep::SectionEvidence,
 ) -> Option<Tag> {
     count(2);
     let node = map.node(path)?;
     let range = node.ranges().first()?;
     let xml = parts.get(node.part())?;
-    Tag::read(xml.get(range.clone())?)
+    Tag::read_in(xml.get(range.clone())?, &section.namespaces)
 }
 
 fn source_allows(
@@ -49,9 +50,10 @@ fn source_allows(
     path: &CorePath,
     header: &crate::line_keep::Header,
     section: &crate::line_keep::SectionEvidence,
-    character: usize,
+    paragraph: &Paragraph,
+    styles: &HwpxStyleStore,
 ) -> Option<()> {
-    let cell = source_tag(parts, map, path)?;
+    let cell = source_tag(parts, map, path, section)?;
     let sub = cell.child("subList")?;
     if !crate::line_keep::cell_flow_allows(
         sub.attrs.get("textDirection").map(String::as_str),
@@ -59,13 +61,17 @@ fn source_allows(
     ) {
         return None;
     }
-    let paragraph = source_tag(
-        parts,
-        map,
-        &CorePath::new(path.section(), format!("{}.paragraphs[0]", path.relative())),
-    )?;
-    let index: usize = paragraph.attrs.get("paraPrIDRef")?.parse().ok()?;
-    header.allows(section, index, character).then_some(())
+    let paragraph_path =
+        CorePath::new(path.section(), format!("{}.paragraphs[0]", path.relative()));
+    count(2);
+    let node = map.node(&paragraph_path)?;
+    let [range] = node.ranges() else {
+        return None;
+    };
+    let xml = parts.get(node.part())?;
+    let p = map.cache_flow.paragraph_at(range.start)?;
+    let source = map.cache_flow.references(p, xml, &section.namespaces)?;
+    header.proves(section, &source, paragraph, styles, true).then_some(())
 }
 
 /// Selects cells whose Core cache and original wire properties prove one line.
@@ -116,7 +122,8 @@ pub(super) fn candidates(
                 &path,
                 definitions,
                 section_allowed.get(part)?.as_ref()?,
-                cell.paragraphs[0].runs[0].char_shape_id.get(),
+                &cell.paragraphs[0],
+                &decoded.style_store,
             )?;
             Some(Candidate {
                 table: edit.table,
