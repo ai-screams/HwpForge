@@ -1,0 +1,22 @@
+[package]
+name = "hwpforge-smithy-docx"
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "DOCX package reader for HwpForge"
+
+[dependencies]
+hwpforge-core = { path = "../hwpforge-core", version = "0.19.1" }
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

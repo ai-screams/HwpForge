@@ -82,6 +82,7 @@ CHANGELOG 그룹 매핑 (`commit_parsers`):
 | `hwpforge-core`         | ✅        | `…-v{version}` |                                                               |
 | `hwpforge-blueprint`    | ✅        | `…-v{version}` |                                                               |
 | `hwpforge-smithy-hwpx`  | ✅        | `…-v{version}` |                                                               |
+| `hwpforge-smithy-docx`  | 예정      | `…-v{version}` | 첫 게시 전, 기본 workspace release-plz 정책 적용              |
 | `hwpforge-smithy-md`    | ✅        | `…-v{version}` |                                                               |
 | `hwpforge-bindings-mcp` | ✅        | `…-v{version}` | npm `@hwpforge/mcp` 바이너리는 npm-publish.yml가 별도 배포    |
 | `hwpforge-smithy-hwp5`  | ❌        | ❌             | `release=false, publish=false`                                |
@@ -89,6 +90,14 @@ CHANGELOG 그룹 매핑 (`commit_parsers`):
 | `hwpforge-bindings-py`  | ❌        | ❌             | `release=false, publish=false` — 배포는 PyPI (§9)             |
 | `hwpforge-smithy-pdf`   | ❌        | ❌             | Cargo.toml `publish = false`, `release-plz.toml` 에 항목 없음 |
 | `hwpforge-convert`      | ❌        | ❌             | Cargo.toml `publish = false`, `release-plz.toml` 에 항목 없음 |
+
+새 `hwpforge-smithy-docx`의 첫 게시 전에는 crates.io 이름/소유권과
+`CARGO_REGISTRY_TOKEN`의 최초 게시 권한을 확인한다. 기존 Smithy처럼
+`version.workspace`와 내부 의존성 버전 요구를 유지하고, package/publish dry-run,
+공개 의존 그래프와 release-plz의 실제 Release PR 대상·버전 diff를 확인한다.
+아직 게시되지 않은 의존성으로 dry-run이 제한되면 그 한계를 기록하고,
+게시 후 깨끗한 소비자 환경의 설치 검증으로 확인한다. 첫 게시 권한·버전·결과는
+이 표에서 확정하지 않으며 수동 publish/태그 절차를 추가하지 않는다.
 
 - **npm**: umbrella의 GitHub Release `published` → `npm-publish.yml` 가 `hwpforge-mcp` 5타깃
   바이너리 + 플랫폼 패키지 + base `@hwpforge/mcp`(optionalDependencies) 배포.

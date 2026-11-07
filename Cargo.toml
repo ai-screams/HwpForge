@@ -8,6 +8,7 @@ members = [
   "crates/hwpforge-convert",
   "crates/hwpforge-core",
   "crates/hwpforge-foundation",
+  "crates/hwpforge-smithy-docx",
   "crates/hwpforge-smithy-hwp5",
   "crates/hwpforge-smithy-hwpx",
   "crates/hwpforge-smithy-md",
