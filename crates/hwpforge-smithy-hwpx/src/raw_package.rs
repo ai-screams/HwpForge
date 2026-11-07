@@ -32,7 +32,7 @@ thread_local! {
     // Capture the declaration actually submitted by each editor on this thread.
     static VERIFIED_CHANGES: std::cell::RefCell<Option<OutputChanges>> = const { std::cell::RefCell::new(None) };
     // Full-package reads and writes, excluding metadata opens.
-    static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    pub(crate) static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// Exact parts an editor replaces/rebuilds; never path prefixes.

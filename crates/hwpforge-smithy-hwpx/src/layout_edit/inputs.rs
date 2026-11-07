@@ -41,9 +41,7 @@ const APP: &str = "{http://www.hancom.co.kr/hwpml/2011/app}";
 /// Remove only a schema-known caret, never unfamiliar extension data. Prune
 /// empty application wrappers so absent settings and caret-only settings agree.
 fn settings_input(mut node: Node) -> Option<Node> {
-    if node.namespace == APP
-        && node.name == "CaretPosition"
-        && node.attrs.keys().all(|k| matches!(k.as_str(), "listIDRef" | "paraIDRef" | "pos"))
+    if saved_caret(&node.namespace, &node.name, node.attrs.keys().map(String::as_str))
         && node.children.is_empty()
         && node.text.iter().all(|t| t.trim().is_empty())
     {
@@ -60,6 +58,97 @@ fn settings_input(mut node: Node) -> Option<Node> {
         None
     } else {
         Some(node)
+    }
+}
+
+fn saved_caret<'a>(namespace: &str, name: &str, mut keys: impl Iterator<Item = &'a str>) -> bool {
+    namespace == APP
+        && name == "CaretPosition"
+        && keys.all(|k| matches!(k, "listIDRef" | "paraIDRef" | "pos"))
+}
+
+/// Streaming version of the saved-caret exclusion: no recursive tree is built.
+pub(crate) fn settings_paragraph_refs_are_safe(xml: &str) -> HwpxResult<bool> {
+    use quick_xml::{events::Event, name::ResolveResult, NsReader};
+    let error = |detail: String| crate::HwpxError::XmlParse { file: "settings.xml".into(), detail };
+    let mut reader = NsReader::from_str(xml);
+    // Each frame only tracks whether a referenced caret must remain an empty leaf.
+    let mut stack = Vec::new();
+    loop {
+        let event = reader.read_event().map_err(|e| error(e.to_string()))?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                // Same conservative XML depth budget as package-order inspection.
+                // 이것을 실패시키는 것: settings 깊이 한도 제거 또는 off-by-one 축소.
+                if stack.len() >= 64 {
+                    return Err(error("invalid XML depth/root count".into()));
+                }
+                // 이것을 실패시키는 것: 자식이 있는 CaretPosition을 저장 커서로 제외.
+                if stack.last() == Some(&true) {
+                    return Ok(false);
+                }
+                let (ns, local) = reader.resolver().resolve_element(e.name());
+                let namespace = match ns {
+                    ResolveResult::Bound(ns) => format!("{{{}}}", ns.as_ref()),
+                    ResolveResult::Unbound => String::new(),
+                    ResolveResult::Unknown(_) => return Ok(false),
+                };
+                let mut keys = Vec::new();
+                for a in e.attributes() {
+                    let a = a.map_err(|e| error(e.to_string()))?;
+                    let key = a.key.as_ref();
+                    if key != "xmlns" && !key.starts_with("xmlns:") {
+                        // 이것을 실패시키는 것: 기존 settings 파서가 거부하던 미지 entity/접두사 승인.
+                        a.normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                            .map_err(|e| error(e.to_string()))?;
+                        if matches!(
+                            reader.resolver().resolve_attribute(a.key).0,
+                            ResolveResult::Unknown(_)
+                        ) {
+                            return Ok(false);
+                        }
+                        keys.push(key.to_owned());
+                    }
+                }
+                let reference = keys.iter().any(|k| k.rsplit(':').next() == Some("paraIDRef"));
+                // 이것을 실패시키는 것: 미지 namespace/속성/요소의 paraIDRef까지 제외.
+                if reference
+                    && !saved_caret(&namespace, local.as_ref(), keys.iter().map(String::as_str))
+                {
+                    return Ok(false);
+                }
+                if !empty {
+                    stack.push(reference);
+                }
+            }
+            Event::End(_) => {
+                stack.pop().ok_or_else(|| error("unbalanced XML".into()))?;
+            }
+            Event::Text(e) => {
+                if stack.last() == Some(&true) && !e.xml10_content().trim().is_empty() {
+                    return Ok(false);
+                }
+            }
+            Event::CData(e) => {
+                if stack.last() == Some(&true) && !e.xml10_content().trim().is_empty() {
+                    return Ok(false);
+                }
+            }
+            Event::GeneralRef(e) => {
+                let value =
+                    crate::wire_xml::resolve_general_ref(&e).map_err(|e| error(e.to_string()))?;
+                // 이것을 실패시키는 것: 커서의 비공백 텍스트/CDATA/문자 참조를 무시.
+                if stack.last() == Some(&true) && !value.trim().is_empty() {
+                    return Ok(false);
+                }
+            }
+            Event::DocType(_) => return Err(error("DTD is not a settings input".into())),
+            Event::Eof => {
+                return if stack.is_empty() { Ok(true) } else { Err(error("unclosed XML".into())) }
+            }
+            _ => {}
+        }
     }
 }
 

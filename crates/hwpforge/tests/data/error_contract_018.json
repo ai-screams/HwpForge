@@ -4696,6 +4696,12 @@
           "function": "encoded_paragraph_spans",
           "stage": "Verification",
           "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "verification_error",
+          "stage": "Verification",
+          "occurrence": 1
         }
       ]
     },
@@ -4759,9 +4765,15 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "splice_paragraphs",
+          "function": "paragraph_replacements",
           "variant": "StructuralEditError::Invariant",
           "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "paragraph_replacements",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 2
         }
       ]
     },
