@@ -33,9 +33,12 @@ def check(
     for path in sorted(paths):
         suffix = Path(path).suffix.lower()
         # 이것을 실패시키는 것: 텍스트 입력까지 검사하거나 예외를 거부하기.
-        if suffix not in {".hwp", ".hwpx", ".pdf"} or path in exceptions:
+        if (
+            suffix not in {".hwp", ".hwpx", ".pdf", ".docx", ".odt"}
+            or path in exceptions
+        ):
             continue
-        # 이것을 실패시키는 것: .hwp 또는 .pdf 허용.
+        # 이것을 실패시키는 것: .hwp, .pdf, .docx 또는 .odt 허용.
         if suffix != ".hwpx":
             violations.append(f"{path}: binary document format is not permitted")
             continue

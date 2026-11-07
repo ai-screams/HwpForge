@@ -33,6 +33,16 @@ class FixturePolicyTests(unittest.TestCase):
                 self.package(name=name)
                 self.assertEqual(len(policy.check(self.root, [name], {})), 1)
 
+    # 이것을 실패시키는 것: .docx 또는 .odt를 검사 확장자에서 제거.
+    def test_office_binary_formats_are_rejected(self):
+        for name in ("document.docx", "document.DOCX", "document.odt", "document.ODT"):
+            with self.subTest(name=name):
+                self.package(name=name)
+                self.assertEqual(
+                    policy.check(self.root, [name], {}),
+                    [f"{name}: binary document format is not permitted"],
+                )
+
     # 이것을 실패시키는 것: appVersion 검사를 무조건 참으로 바꾸기.
     def test_foreign_or_missing_version_is_rejected(self):
         for version in ('appVersion="12.30.0.0"', "", 'appVersion="112.0.0.0"'):
@@ -61,7 +71,9 @@ class FixturePolicyTests(unittest.TestCase):
         for error in (RuntimeError("encrypted"), NotImplementedError("compression")):
             with self.subTest(error=error):
                 with patch.object(policy.zipfile, "ZipFile", side_effect=error):
-                    self.assertEqual(len(policy.check(self.root, ["input.hwpx"], {})), 1)
+                    self.assertEqual(
+                        len(policy.check(self.root, ["input.hwpx"], {})), 1
+                    )
 
     # 이것을 실패시키는 것: 예외 건너뛰기를 제거하거나 stale 검사를 제거.
     def test_exception_must_be_tracked_and_present(self):
