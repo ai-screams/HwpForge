@@ -1,4 +1,5 @@
 mod convert;
+mod convert_docx;
 mod diff;
 mod errors;
 mod fields;

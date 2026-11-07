@@ -112,7 +112,7 @@ impl HwpxInput {
     }
 }
 
-fn same_existing_file(input: &Path, output: &Path) -> std::io::Result<bool> {
+pub(crate) fn same_existing_file(input: &Path, output: &Path) -> std::io::Result<bool> {
     // Only regular files can alias each other here. Inspect both paths before
     // opening either one: opening a FIFO can block after its writer has exited.
     // No reservation or creation: missing targets belong to the existing writer.

@@ -120,6 +120,15 @@ enum Commands {
         partial_cache_reject: bool,
     },
 
+    /// Convert a DOCX package to HWPX (identified by content).
+    ConvertDocx {
+        /// Input DOCX file.
+        input: PathBuf,
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
     /// Convert Markdown to HWPX.
     Convert {
         /// Input markdown file (use '-' for stdin).
@@ -498,6 +507,9 @@ fn main() {
                 partial_cache_reject,
                 cli.json,
             );
+        }
+        Commands::ConvertDocx { input, output } => {
+            commands::convert_docx::run(&input, &output, cli.json);
         }
         Commands::Convert { input, output, preset } => {
             commands::convert::run(&input, &output, &preset, cli.json);

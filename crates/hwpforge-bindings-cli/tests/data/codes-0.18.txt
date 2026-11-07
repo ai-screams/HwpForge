@@ -350,3 +350,13 @@ stamp	INVALID_OUTPUT_PATH	-	1	null
 diff	INVALID_OUTPUT_PATH	-	1	null
 to-json	INVALID_OUTPUT_PATH	-	1	null
 to-md	INVALID_OUTPUT_PATH	-	1	null
+convert-docx	DOCX_DECODE_FAILED	-	2	"@ops"
+convert-docx	STYLE_STORE_FAILED	-	2	null
+convert-docx	STYLE_REBIND_FAILED	-	2	null
+convert-docx	VALIDATION_FAILED	-	2	null
+convert-docx	ENCODE_FAILED	-	2	null
+convert-docx	INVALID_OUTPUT_PATH	-	1	null
+convert-docx	FILE_NOT_FOUND	-	2	null
+convert-docx	FILE_READ_FAILED	-	2	null
+convert-docx	FILE_WRITE_FAILED	-	2	null
+convert-docx	INPUT_TOO_LARGE	-	1	null

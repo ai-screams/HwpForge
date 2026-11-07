@@ -103,7 +103,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     let output_result = convert_md(&markdown, base_dir, &opts)
         .unwrap_or_else(|err| compat::exit_ops_error(Command::Convert, err, json_mode));
 
-    // 경고 순서는 ops 가 이미 보장: asset(embed) 경고 → encode 경고
+    // 경고 순서는 ops 가 이미 보장: asset(embed) 경고 → projection 경고 → encode 경고
     // (`hwpforge::ops::convert::convert_md`). 사람이 읽는 줄과 JSON 배열 둘
     // 다 이 순서를 그대로 쓴다.
     //
@@ -114,7 +114,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     // 레거시 줄을 재구성한다: `Encode` 는 `encode_warning_line`(레거시
     // 그대로), `Md` 는 레거시와 동일하게 `Display` 그대로(코드 접두 없음
     // — 임베드 제외 경고가 원래 코드 없이 나갔다). `OpsWarning` 은
-    // `#[non_exhaustive]` 이고 `convert_md` 는 오늘 이 둘만 내지만, 새
+    // `#[non_exhaustive]` 이고 새 Projection 경고와 그 밖의 새
     // variant(Decode/Structural/GridAddr/SectionWorkflow/Asset 등)가
     // 나오면 `"{code} {message}"` 로 폴백한다 — `convert_md` 가 실제로
     // 낸 적 없는 신규-전용 형태.

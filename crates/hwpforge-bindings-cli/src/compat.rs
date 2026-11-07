@@ -14,6 +14,7 @@ pub enum Command {
     AuditHwp5,
     CensusHwp5,
     ConvertHwp5,
+    ConvertDocx,
     ToPdf,
     Convert,
     Inspect,
@@ -207,6 +208,12 @@ const TABLE: &[Row] = &[
 
     row!(Convert, PresetNotFound, 1, UNKNOWN_PRESET_HINT),
     row!(Convert, MdDecodeFailed, 2),
+    row!(ConvertDocx, InvalidOutputPath, 1),
+    row!(ConvertDocx, DocxDecodeFailed, 2, ops),
+    row!(ConvertDocx, StyleStoreFailed, 2, ops),
+    row!(ConvertDocx, StyleRebindFailed, 2, ops),
+    row!(ConvertDocx, ValidationFailed, 2, ops),
+    row!(ConvertDocx, EncodeFailed, 2, ops),
     row!(Convert, StyleStoreFailed, 2),
     row!(Convert, StyleRebindFailed, 2),
     row!(Convert, ValidationFailed, 2),
@@ -557,11 +564,14 @@ fn registered_exit(cmd: Command, code: CliCode) -> Option<i32> {
     match code {
         CliCode::Ops(OpsCode::InputTooLarge) => Some(1),
         CliCode::Ops(OpsCode::FileNotFound | OpsCode::FileReadFailed) => Some(match cmd {
-            Command::ToMd | Command::ConvertHwp5 => 2,
+            Command::ToMd | Command::ConvertHwp5 | Command::ConvertDocx => 2,
             _ => 1,
         }),
         CliCode::Ops(OpsCode::FileWriteFailed) => Some(match cmd {
-            Command::DeletePara | Command::InsertPara | Command::ConvertHwp5 => 2,
+            Command::DeletePara
+            | Command::InsertPara
+            | Command::ConvertHwp5
+            | Command::ConvertDocx => 2,
             _ => 1,
         }),
         CliCode::Cli(CliOnly::InvalidSet | CliOnly::DuplicateSet) => Some(1),
@@ -873,6 +883,7 @@ mod tests {
                 "audit-hwp5" => Command::AuditHwp5,
                 "census-hwp5" => Command::CensusHwp5,
                 "convert-hwp5" => Command::ConvertHwp5,
+                "convert-docx" => Command::ConvertDocx,
                 "to-pdf" => Command::ToPdf,
                 "convert" => Command::Convert,
                 "inspect" => Command::Inspect,
