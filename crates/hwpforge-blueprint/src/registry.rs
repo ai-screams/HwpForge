@@ -111,6 +111,9 @@ pub struct StyleRegistry {
     pub bullets: Vec<BulletDef>,
     /// Mapping from style name to its indices (insertion-order preserved).
     style_entries: IndexMap<String, StyleEntry>,
+    /// First insertion position for each identity; entries are private and never removed.
+    #[serde(skip)]
+    style_positions: BTreeMap<StyleIdentity, usize>,
     /// Original display names, keyed by style identity rather than display text.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     style_display_names: IndexMap<String, String>,
@@ -153,6 +156,7 @@ impl TryFrom<StyleRegistryWire> for StyleRegistry {
             tabs: wire.tabs,
             numberings: wire.numberings,
             bullets: wire.bullets,
+            style_positions: style_positions(&wire.style_entries),
             style_entries: wire.style_entries,
             style_display_names: wire.style_display_names,
         };
@@ -161,6 +165,32 @@ impl TryFrom<StyleRegistryWire> for StyleRegistry {
         }
         Ok(registry)
     }
+}
+
+// This index covers only private identity metadata, never public shape Vecs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StyleIdentity(StyleRef);
+impl Ord for StyleIdentity {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        #[cfg(test)]
+        STYLE_COMPARISONS.with(|count| count.set(count.get() + 1));
+        self.0.cmp(&other.0)
+    }
+}
+impl PartialOrd for StyleIdentity {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+#[cfg(test)]
+thread_local! { static STYLE_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn style_positions(entries: &IndexMap<String, StyleEntry>) -> BTreeMap<StyleIdentity, usize> {
+    let mut positions = BTreeMap::new();
+    for (position, entry) in entries.values().enumerate() {
+        positions.entry(StyleIdentity(entry.style_ref)).or_insert(position);
+    }
+    positions
 }
 
 impl StyleRegistry {
@@ -182,6 +212,8 @@ impl StyleRegistry {
             .style_entries
             .get(&name)
             .map_or(StyleRef::new(self.style_entries.len()), |entry| entry.style_ref);
+        let position = self.style_entries.len();
+        self.style_positions.entry(StyleIdentity(style_ref)).or_insert(position);
         self.style_entries
             .insert(name, StyleEntry { style_ref, char_shape_id, para_shape_id, font_id });
         Ok(style_ref)
@@ -228,9 +260,9 @@ impl StyleRegistry {
     }
 
     fn style_key(&self, style: StyleRef) -> Option<&str> {
-        self.style_entries
-            .iter()
-            .find(|(_, entry)| entry.style_ref == style)
+        self.style_positions
+            .get(&StyleIdentity(style))
+            .and_then(|&position| self.style_entries.get_index(position))
             .map(|(key, _)| key.as_str())
     }
 
@@ -258,6 +290,7 @@ impl StyleRegistry {
             numberings: vec![],
             bullets: vec![],
             style_entries: IndexMap::new(),
+            style_positions: BTreeMap::new(),
             style_display_names: IndexMap::new(),
         }
     }
@@ -333,6 +366,7 @@ impl StyleRegistry {
             tabs,
             numberings,
             bullets,
+            style_positions: style_positions(&style_entries),
             style_entries,
             style_display_names: IndexMap::new(),
         })
@@ -1362,5 +1396,61 @@ mod tests {
             }
             other => panic!("Expected InvalidMappingReference, got: {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_index_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: 역색인 대신 전체 스타일 선형 검색 또는 등록 색인 갱신 누락.
+    #[test]
+    fn display_name_registration_uses_logarithmic_comparisons() {
+        STYLE_COMPARISONS.with(|count| count.set(0));
+        let mut r = StyleRegistry::with_fonts(vec![]);
+        for i in 0..16_384 {
+            let id = r
+                .register_style(
+                    format!("s{i}"),
+                    CharShapeIndex::new(0),
+                    ParaShapeIndex::new(0),
+                    FontIndex::new(0),
+                )
+                .unwrap();
+            r.set_style_display_name(id, "name").unwrap();
+            assert_eq!(r.style_display_name(id), Some("name"));
+        }
+        let comparisons = STYLE_COMPARISONS.with(|count| count.get());
+        eprintln!("display name comparisons: {comparisons}");
+        assert!((16_384..2_000_000).contains(&comparisons));
+        assert_eq!(r.style_positions.len(), 16_384);
+    }
+
+    // 이것을 실패시키는 것: 로드 색인 재구성 누락, 중복 identity의 마지막 항목 선택, wire에 색인 출력.
+    #[test]
+    fn loaded_index_keeps_first_identity_and_exact_wire() {
+        let json = r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{"a":{"style_ref":2,"char_shape_id":0,"para_shape_id":0,"font_id":0},"b":{"style_ref":2,"char_shape_id":0,"para_shape_id":0,"font_id":0}}}"#;
+        let mut r: StyleRegistry = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        r.fonts.clear();
+        r.char_shapes.clear();
+        r.para_shapes.clear();
+        r.set_style_display_name(StyleRef::new(2), "first").unwrap();
+        let id = r
+            .register_style(
+                "c".into(),
+                CharShapeIndex::new(9),
+                ParaShapeIndex::new(9),
+                FontIndex::new(9),
+            )
+            .unwrap();
+        assert_eq!(id, StyleRef::new(2));
+        r.set_style_display_name(id, "updated").unwrap();
+        assert_eq!(r.style_display_names.get("a").map(String::as_str), Some("updated"));
+        assert_eq!(r.style_display_names.get("c"), None);
+        assert_eq!(r.style_display_name(id), Some("updated"));
+        let r2: StyleRegistry = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r2, r);
+        assert_eq!(r2.clone().style_display_name(id), Some("updated"));
     }
 }
