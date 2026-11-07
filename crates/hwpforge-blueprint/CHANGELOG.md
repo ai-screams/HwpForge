@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.19.1...hwpforge-blueprint-v0.20.0) - 2026-11-07
+
+### Changed
+
+- 워크스페이스 버전을 맞춘다. 이 크레이트 자체의 구현 변경은 없다.
+
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.19.0...hwpforge-blueprint-v0.19.1) - 2026-11-03
 
 ### Changed

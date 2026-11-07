@@ -11,13 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
-
+- `XmlSource::read`가 UTF-8 BOM으로 시작하는 XML에서도 원문 bytes 기준 위치를 돌려준다. 편집 출력의 패키지 설명 파일을 원문 그대로 고칠 때 쓴다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#333](https://github.com/ai-screams/HwpForge/pull/333))
 
 ### Fixed
 
-- *(hwpx)* [#143] check that edits change only the package entries they declare ([#318](https://github.com/ai-screams/HwpForge/pull/318))
-
+- ZIP 열기가 디렉터리 항목을 헤더 크기 대신 실제 내용으로 판정한다. 편집이 선언한 패키지 항목만 바꿨는지 검사하는 데 쓴다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#318](https://github.com/ai-screams/HwpForge/pull/318))
 
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.19.0...hwpforge-core-v0.19.1) - 2026-11-03
 

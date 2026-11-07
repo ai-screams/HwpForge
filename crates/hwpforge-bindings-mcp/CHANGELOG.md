@@ -9,15 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.19.1...hwpforge-bindings-mcp-v0.20.0) - 2026-11-07
 
-### Added
+### Changed
 
-- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
-
-
-### Fixed
-
-- *(hwpx)* [#143] refuse to edit packages that carry a signature or encryption marker ([#330](https://github.com/ai-screams/HwpForge/pull/330))
-
+- 문서 전체를 다시 인코드하지 않고 내용을 바꾼 `hwpforge_patch`·`hwpforge_fill`이 미리보기가 있는 문서에서 `PREVIEW_REMOVED` 경고를 낸다. 거부 안내는 더 이상 원본 ZIP 항목을 모두 보존한다고 쓰지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#333](https://github.com/ai-screams/HwpForge/pull/333))
+- `hwpforge_restyle`을 포함한 편집 도구가 서명·암호화 표지가 있는 문서를 거부한다(`DECODE_FAILED`) ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#330](https://github.com/ai-screams/HwpForge/pull/330))
 
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.19.0...hwpforge-bindings-mcp-v0.19.1) - 2026-11-03
 

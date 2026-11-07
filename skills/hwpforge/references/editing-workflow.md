@@ -20,7 +20,7 @@ The refusal codes differ by interface — Python and MCP name them differently; 
 
 **The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, change any other text (including table cells) with `to-json --section N` → edit `content.Text` → `patch`. `from-json --base` is **never** a way around a refusal from `set-cell`, `insert-para`, `delete-para` or `stamp`. Use it only when the user explicitly asks for a structural change to that file **and** accepts that the result is a new file that loses the 한컴 package entries and the layout caches around each change, and that they must check it in 한컴.
 
-When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unchanged text returns the original file. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee.
+When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. If the input passes the edit checks and the text is unchanged, the original file is returned. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee.
 
 A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it — unless reading it loses content: text inside a field whose kind does not keep it (a bookmark span, a memo field) is dropped on reading (`CONTENT_LOST field_body`), and `set-cell`, `stamp` and `restyle` then refuse with `INPUT_NOT_ROUNDTRIP_SAFE`; `patch` still edits such a file. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
 
@@ -93,7 +93,7 @@ Only under SKILL.md rule 5: the user explicitly asked for this structural change
 hwpforge from-json full.json -o document.edited.hwpx --base document.hwpx --json
 ```
 
-`warnings` is always present in `from-json` output. Each cache a rebuild loses is listed as `"layout cache dropped at section[0].para[0] …"`. Without `--base` no cache is written. With `--base` the trusted unchanged caches are kept and the rest are dropped; JSON identical to the base returns its bytes unchanged with `[]`. A document missing caches may fail `to-pdf` until 한컴 re-saves it. If you changed a table's shape (rows, columns, merges), delete the `addr` fields of that table's cells first — a stale `addr` is refused with `GRID_ADDR_INVALID` (a missing `addr` is not checked).
+`warnings` is always present in `from-json` output. Each cache a rebuild loses is listed as `"layout cache dropped at section[0].para[0] …"`. Without `--base` no cache is written. With `--base`, trusted unchanged caches are kept and the rest are dropped. If the base passes the edit checks and the JSON is identical to it, the original bytes are returned. Existing decode warnings may still be reported. A document missing caches may fail `to-pdf` until 한컴 re-saves it. If you changed a table's shape (rows, columns, merges), delete the `addr` fields of that table's cells first — a stale `addr` is refused with `GRID_ADDR_INVALID` (a missing `addr` is not checked).
 
 ### 5. Verify
 

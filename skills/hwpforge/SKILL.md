@@ -71,7 +71,7 @@ PDF         → to-pdf (pdf.md)
 
 HWP5 edits (`fill`, `set-cell`, `insert-para`, `delete-para`, `stamp`) refuse semantic conversion loss with `HWP5_CONVERSION_LOSS`. Review the warnings before explicitly using `--accept-conversion-loss` (Python: `accept_conversion_loss=True`); editing checks remain enforced. `patch`, `from-json --base` and Python/MCP `restyle` need explicit conversion. Policy and output protection: [errors.md](references/errors.md#hwp5-input-conversion).
 
-**한컴-saved HWPX files** carry `Preview/*` and `META-INF/container.rdf`. Nearly every file a person saved in 한컴 does. When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unchanged text returns the original file. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee. `set-cell`, `insert-para`, `delete-para` and `stamp` refuse. Surface table: [editing-workflow.md](references/editing-workflow.md).
+**한컴-saved HWPX files** carry `Preview/*` and `META-INF/container.rdf`. Nearly every file a person saved in 한컴 does. When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. If the input passes the edit checks and the text is unchanged, the original file is returned. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee. `set-cell`, `insert-para`, `delete-para` and `stamp` refuse. Surface table: [editing-workflow.md](references/editing-workflow.md).
 
 ## Verify every edit
 

@@ -9,32 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.1...hwpforge-smithy-hwpx-v0.20.0) - 2026-11-07
 
+HWPX 편집 경로(`patch`, `fill`, `set-cell`, `stamp`, `insert-para`, `delete-para`, `restyle`)가 문서를 더 보수적으로 다루도록 고친 릴리스다. 출력·캐시·경고의 변화와 새로 거부되는 입력은 아래와 "업그레이드 주의"에 모았다.
+
 ### Added
 
-- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
+- 문서 전체를 다시 인코드하지 않는 보존 `patch`·`fill`이 내용을 실제로 바꾸면, 한컴 미리보기(`Preview/PrvText.txt`, `Preview/PrvImage.png`)와 `META-INF/container.xml`의 미리보기 줄을 지우고 의미 손실이 아닌 경고 `PREVIEW_REMOVED`를 문서당 한 번 낸다. 낡은 미리보기가 문서에 없는 내용을 보여 주는 일을 막는다. 이 처리는 내용 변경과 기존 미리보기가 함께 있을 때만 적용된다. 고쳐야 하는 설명 파일이 UTF-16이거나, 미리보기 구성·참조·설명 파일 값을 안전하게 해석하고 지울 수 없으면 결과 없이 거부한다. `header.xml` 정규화 등으로 `patch`가 문서 전체를 다시 인코드하는 경우는 이 처리를 거치지 않는다. ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#333](https://github.com/ai-screams/HwpForge/pull/333))
 
-
-### Documentation
-
-- *(hwpx)* [#143] give the editing-base error link a path rustdoc can resolve ([#332](https://github.com/ai-screams/HwpForge/pull/332))
-
+- 공개 API: `EncodeWarning::PreviewRemoved { parts }`(`EncodeWarning`은 `#[non_exhaustive]`), `HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics`(insert 에 있던 codec 진단 메서드의 delete 짝) ([#333](https://github.com/ai-screams/HwpForge/pull/333))
 
 ### Fixed
 
-- *(hwpx)* [#143] verify structural edit ranges and refuse edits that strand references ([#331](https://github.com/ai-screams/HwpForge/pull/331))
+- 서명(`META-INF/signatures*.xml`, XML 서명 선언)이나 암호화(`encryption.xml`, 암호화 선언, ZIP 암호화 플래그) 표지가 있는 패키지는 편집 진입점이 거부한다. 빈 구조 편집 요청은 전처럼 원본을 돌려준다. 전에는 서명이 원문과 맞지 않거나 암호화가 빠진 출력을 성공으로 돌려줬다. 오류는 기존 `InvalidStructure`이고 ops와 바인딩에서는 `DECODE_FAILED`로 보고된다. `restyle`, `HwpxEncoder::encode_with_base`, `from-json --base`도 같다. 읽기·검사·내보내기는 그대로다. 판정을 위해 `HwpxEditBase::read`와 이를 쓰는 편집은 디코더가 쓰지 않는 ZIP 항목까지 크기 제한 안에서 읽는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#330](https://github.com/ai-screams/HwpForge/pull/330))
+- `insert-para`·`delete-para`가 치환 범위의 겹침을 검사하고, 출력 section이 계획한 치환 밖에서 원본과 같은지 확인한다. 지운 문단 안의 표·필드·책갈피를 남은 참조(상호참조, 하이퍼링크 등)가 가리키거나 문단 id를 가리키는 참조(개요 상호참조, 개요 하이퍼링크 등)가 있으면 거부한다. 해석할 수 없는 참조·필드 표현도 거부하고, 참조 검사 대상 XML이 검사 조건이나 깊이 한도를 넘어도 거부한다. 지금 성공하는 생성 문서 편집의 출력은 바이트까지 같다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#331](https://github.com/ai-screams/HwpForge/pull/331))
+- 편집이 선언한 패키지 항목만 바꿨는지 출력 쪽에서 검사한다. 전에는 입력 항목의 이름이 출력에 있는지만 봐서 같은 이름의 이미지나 RDF 내용이 바뀌어도 통과했다. 편집 결과로 ZIP을 다시 쓸 때 `mimetype`을 형식에 맞게 압축 없이 저장한다. 내용이 같아 원본 bytes를 돌려주는 경우에는 원래 압축 상태가 남는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#318](https://github.com/ai-screams/HwpForge/pull/318))
+- `fill`·보존 `patch`가 줄 조판 캐시(`<hp:linesegarray>`)를 남기는 범위를 넓혔다. 한컴은 저장된 줄 나눔을 따르므로, 편집하지 않은 문단의 줄바꿈이 원본과 달라지는 일이 줄어든다. 모두 구역 검사를 통과하고 다른 제거 원인이 없을 때만 적용된다.
+  - 뒤 문단: 한 줄로 입증되지 않은 본문 편집 뒤에서도 글자와 누름틀만 있는 문단은 캐시를 남긴다. 개체, 누름틀이 아닌 필드, 쪽 번호가 있는 첫 문단부터는 전처럼 지운다 ([#311](https://github.com/ai-screams/HwpForge/issues/311), [#323](https://github.com/ai-screams/HwpForge/pull/323))
+  - 편집한 본문 문단: 편집 전후 모두 한 줄임을 입증할 수 있으면 자기 캐시를 남긴다 ([#311](https://github.com/ai-screams/HwpForge/issues/311), [#326](https://github.com/ai-screams/HwpForge/pull/326))
+  - 본문 문단이나 본문에 바로 놓인 표의 칸 문단을 편집한 경우, 편집 전후 모두 한 줄임이 입증되면 뒤 표·필드를 포함해 캐시 제거를 시작하지 않는다 ([#311](https://github.com/ai-screams/HwpForge/issues/311), [#328](https://github.com/ai-screams/HwpForge/pull/328))
+- 한 줄 입증이 원문의 문단·글자 참조, 글자 높이와 위치, 줄 격자, namespace 별칭을 함께 확인한다. 원문 증거가 디코드 결과와 어긋나는 입력은 캐시를 남기지 않는다. `set-cell`은 입증 조건이 강해져, 글자 효과·커닝·강조점·글꼴 공백 설정이 있거나 언어별 글꼴이 다른 칸에서는 전에 남기던 캐시를 지울 수 있다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#326](https://github.com/ai-screams/HwpForge/pull/326), [#329](https://github.com/ai-screams/HwpForge/pull/329))
 
-- *(hwpx)* [#143] refuse to edit packages that carry a signature or encryption marker ([#330](https://github.com/ai-screams/HwpForge/pull/330))
+### Documentation
 
-- *(hwpx)* [#143] check source formatting evidence before keeping single-line caches ([#329](https://github.com/ai-screams/HwpForge/pull/329))
+- 편집 기반 오류의 rustdoc 링크 경로를 고쳤다 ([#332](https://github.com/ai-screams/HwpForge/pull/332))
 
-- *(hwpx)* [#311] preserve caches for proven body and direct-cell edits ([#328](https://github.com/ai-screams/HwpForge/pull/328))
+### 업그레이드 주의
 
-- *(hwpx)* [#311] keep an edited body paragraph's own line cache when it stays on one line ([#326](https://github.com/ai-screams/HwpForge/pull/326))
-
-- *(hwpx)* [#143] check that edits change only the package entries they declare ([#318](https://github.com/ai-screams/HwpForge/pull/318))
-
-- *(hwpx)* [#311] keep later plain paragraphs' line caches after fill and patch ([#323](https://github.com/ai-screams/HwpForge/pull/323))
-
+- 서명·암호화 표지가 있는 HWPX의 편집, `restyle`, `from-json --base`는 이제 거부된다. 이전에 성공하던 호출이 `DECODE_FAILED`로 바뀐다.
+- 편집 입구가 쓰지 않는 ZIP 항목까지 읽으므로, 보호 표지가 없어도 그런 항목이 손상됐거나 크기 제한을 넘으면 거부될 수 있다.
+- 문단 id 참조, 지운 내용을 가리키는 참조, 해석할 수 없는 참조·필드 표현이 있거나 참조 검사 대상 XML이 깊이 한도를 넘는 문서의 `insert-para`·`delete-para`는 이제 거부된다.
+- 미리보기가 있는 문서에 내용을 바꾸는 보존 `patch`·`fill`을 하면 출력에서 미리보기 항목이 빠지고 `PREVIEW_REMOVED` 경고가 나온다. 한컴은 미리보기 없는 파일을 정상으로 열고 다시 저장하면 새로 만든다. 고쳐야 하는 설명 파일이 UTF-16이거나 미리보기를 안전하게 지울 수 없는 문서는 거부된다.
+- 두 차트를 이름 순서와 다르게 참조하는 문서의 재인코드 편집은 이제 거부된다.
+- 편집 결과로 ZIP을 다시 쓸 때는 압축된 `mimetype`을 압축 없이 저장한다. 내용이 같아 원본 bytes를 돌려주면 원래 압축 상태가 남는다.
+- `set-cell`은 위 조건의 칸에서 전에 남기던 줄 조판 캐시를 지울 수 있다.
 
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.0...hwpforge-smithy-hwpx-v0.19.1) - 2026-11-03
 
