@@ -106,6 +106,10 @@ check-features:
 	cargo check -p hwpforge --no-default-features
 	cargo check -p hwpforge --no-default-features --features hwpx
 	cargo check -p hwpforge --no-default-features --features md
+	cargo check -p hwpforge --no-default-features --features docx
+	cargo check -p hwpforge --no-default-features --features ops-docx
+	cargo check -p hwpforge --no-default-features --features ops-docx,schemars
+	cargo check -p hwpforge --no-default-features --features ops-docx,ops-md
 	cargo check -p hwpforge --no-default-features --features ops-hwpx
 	cargo check -p hwpforge --no-default-features --features ops-md
 	cargo check -p hwpforge --no-default-features --features ops
@@ -230,7 +234,7 @@ py-all: py-lint py-check py-rust-test py-test py-cov
 ci-fast: fixture-policy fmt clippy test deny lint-md
 	@echo "✅ Fast CI checks passed!"
 
-ci-full: ci-fast cov msrv msrv-pdf
+ci-full: ci-fast check-features cov msrv msrv-pdf
 	@echo "✅ Full CI checks passed!"
 
 ci: ci-fast

@@ -172,6 +172,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
+      - name: Check feature combinations
+        # A regression gate like MSRV: skipped on PR pushes to keep feedback fast,
+        # run in the merge queue and full mode. It stays in this job to reuse the
+        # Clippy cache that cache-warm.yml keeps warm on main.
+        if: needs.plan.outputs.mode != 'pr'
+        run: make check-features
       - name: cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
