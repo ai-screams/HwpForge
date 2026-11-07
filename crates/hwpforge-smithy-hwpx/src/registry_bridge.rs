@@ -55,6 +55,64 @@ impl RegistryBridgeWarning {
             Self::FontFallback { .. } => "FONT_FALLBACK",
         }
     }
+
+    /// Stable classification of the requested font slot that was lost.
+    pub fn loss(&self) -> &'static str {
+        match self {
+            Self::FontFallback { slot: "latin", .. } => "font_latin",
+            Self::FontFallback { slot: "east_asian", .. } => "font_east_asian",
+            Self::FontFallback { .. } => "font",
+        }
+    }
+
+    /// Stable classification of the actual replacement.
+    pub fn action(&self) -> &'static str {
+        match self {
+            Self::FontFallback { .. } => "use_first_font",
+        }
+    }
+
+    /// First registry location; no source package part is inferred.
+    pub fn location(&self) -> Option<String> {
+        match self {
+            Self::FontFallback { char_shape, slot, .. } => {
+                Some(format!("char_shapes[{char_shape}].{slot}"))
+            }
+        }
+    }
+
+    /// Total occurrences already aggregated by the bridge.
+    pub fn count(&self) -> u64 {
+        match self {
+            Self::FontFallback { count, .. } => *count,
+        }
+    }
+
+    /// First example and the number of omitted later locations.
+    pub fn message(&self) -> String {
+        let first = match self {
+            Self::FontFallback { requested_font, .. } => format!(
+                "Requested font '{}' is absent; using the first registered font",
+                quote_font(requested_font)
+            ),
+        };
+        if self.count() == 1 {
+            first
+        } else {
+            format!(
+                "{first} (total {} occurrences; first example only; subsequent locations omitted)",
+                self.count()
+            )
+        }
+    }
+}
+
+// Bound diagnostic names by Unicode characters before copying them.
+fn quote_font(value: &str) -> String {
+    match value.char_indices().nth(512) {
+        Some((end, _)) => format!("{}…", &value[..end]),
+        None => value.to_owned(),
+    }
 }
 
 pub(crate) fn record_font_fallback(
@@ -267,6 +325,52 @@ impl HwpxRegistryBridge {
 
 #[cfg(test)]
 mod tests {
+    // 이것을 실패시키는 것: 글꼴 인용 제한 제거, 512 경계 변경, 바이트 단위 절단, 생략 기호 제거.
+    #[test]
+    fn font_messages_bound_unicode_names_and_keep_aggregate_details() {
+        for (length, expected_name) in [
+            (511, concat!(
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+            )),
+            (512, concat!(
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+            )),
+            (513, concat!(
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+                "…",
+            )),
+        ] {
+            for (count, suffix) in [(1, ""), (2, " (total 2 occurrences; first example only; subsequent locations omitted)")] {
+                let warning = RegistryBridgeWarning::FontFallback {
+                    requested_font: "가".repeat(length), slot: "font", char_shape: 0, count,
+                };
+                assert_eq!(warning.message(), format!("Requested font '{expected_name}' is absent; using the first registered font{suffix}"));
+                assert_eq!(warning.count(), count);
+            }
+        }
+    }
+
     use super::*;
     use hwpforge_blueprint::builtins::builtin_default;
     use hwpforge_blueprint::registry::StyleRegistry;
