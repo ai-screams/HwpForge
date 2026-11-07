@@ -31,6 +31,8 @@ Branch on `code`, not on the exit code — which of 1 and 2 a failure uses is fi
 
 In 0.18, editor no-op validation, encoding, and re-decoding failures use `INPUT_NOT_ROUNDTRIP_SAFE` (exit 1). This changes paragraph-edit and stamp no-op admission failures from exit 2 to 1. Set-cell input decoding and original package reads use `DECODE_FAILED` (exit 2, previously 1). Paragraph-edit output decoding, artifact reads, and fragment parsing use `SELF_VERIFY_FAILED` (exit 1, previously 2). `validate` on a document the parser accepts but whose Core nesting exceeds 32 levels now fails with `DECODE_FAILED` (exit 2) instead of reporting `valid:false` (exit 3). The two I/O exit changes are listed below under Size limits.
 
+Documents with digital signature or encryption markers cannot be edited; the refusal is reported at the decode stage as `DECODE_FAILED`.
+
 ## Main codes and next steps (CLI)
 
 The codes an agent meets most often. Not exhaustive — any other code comes with a `message` and usually a `hint`; follow those.

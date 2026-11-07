@@ -389,6 +389,12 @@ impl HwpxStamper {
         // ── admission gate ──────────────────────────────────────────
         let d0 = HwpxDecoder::decode(base)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        // 이것을 실패시키는 것: decode 뒤 공통 무결성 검사 호출 제거.
+        package
+            .ensure_editable()
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let e0 = encode_hwpx(&d0, EncodePurpose::Admission)?;
         let d1 = HwpxDecoder::decode(&e0)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
@@ -412,8 +418,6 @@ impl HwpxStamper {
             warnings: decode_warnings,
         } = d0;
         let mut encode_warnings = Vec::new();
-        let package = crate::patch::RawPackage::read(base)
-            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let specs = clean_text_hints(&package, specs, &mut encode_warnings);
         let outcome = apply(&mut document, &specs)?;
         let validated = document
@@ -491,6 +495,12 @@ impl HwpxStamper {
         // ── admission gate (identical to v1) ────────────────────────
         let d0 = HwpxDecoder::decode(base)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        // 이것을 실패시키는 것: decode 뒤 공통 무결성 검사 호출 제거.
+        package
+            .ensure_editable()
+            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let e0 = encode_hwpx(&d0, EncodePurpose::Admission)?;
         let d1 = HwpxDecoder::decode(&e0)
             .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
@@ -518,8 +528,6 @@ impl HwpxStamper {
             warnings: decode_warnings,
         } = d0;
         let mut encode_warnings = Vec::new();
-        let package = crate::patch::RawPackage::read(base)
-            .map_err(|e| StamperError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let text_specs = clean_text_hints(&package, &request.text, &mut encode_warnings);
         let cell_specs =
             clean_cell_hints(&package, &document, &request.cells, &mut encode_warnings);

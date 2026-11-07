@@ -282,6 +282,12 @@ impl HwpxFiller {
 
         let mut decoded = HwpxDecoder::decode(base)
             .map_err(|error| FillError::Codec(CodecFailure::hwpx(CodecStage::Decode, &error)))?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|error| FillError::Codec(CodecFailure::hwpx(CodecStage::Decode, &error)))?;
+        // 이것을 실패시키는 것: decode 뒤 공통 무결성 검사 호출 제거.
+        package
+            .ensure_editable()
+            .map_err(|e| FillError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let decode_warnings = decoded.warnings.clone();
 
         let original_sections: Vec<Section> = decoded.document.sections().to_vec();
@@ -330,8 +336,6 @@ impl HwpxFiller {
             }
         }
         let mut encode_warnings = Vec::new();
-        let package = crate::patch::RawPackage::read(base)
-            .map_err(|error| FillError::Codec(CodecFailure::hwpx(CodecStage::Decode, &error)))?;
         let mut filled = Vec::new();
         let mut touched = std::collections::BTreeSet::new();
         let mut pending = Vec::new();

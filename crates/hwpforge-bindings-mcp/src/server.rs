@@ -346,7 +346,7 @@ fn to_json_next(data: &to_json::ToJsonData) -> Vec<String> {
              section parameter to patch instead of rebuild"
                 .to_string(),
             "Rebuilding from JSON alone drops image binaries; the section + hwpforge_patch route \
-             keeps them"
+             keeps them. Rebuilding does not inherit the original package's signature or encryption state"
                 .to_string(),
         ]
     };
@@ -381,7 +381,7 @@ impl HwpForgeServer {
     /// Supports GFM tables, images, headings, and Korean typography.
     #[tool(
         name = "hwpforge_convert",
-        description = "Convert Markdown to a Korean HWPX document (KS X 6101 standard). Supports GFM tables, images, headings, and Korean typography. Returns the output file path and document summary."
+        description = "Convert Markdown to a Korean HWPX document (KS X 6101 standard). Supports GFM tables, images, headings, and Korean typography. Returns the output file path and document summary. The original package's signature or encryption state is not inherited when rebuilding from Markdown."
     )]
     async fn hwpforge_convert(
         &self,
@@ -528,7 +528,7 @@ impl HwpForgeServer {
     /// Use when building documents programmatically without Markdown.
     #[tool(
         name = "hwpforge_from_json",
-        description = "Create an HWPX document directly from a JSON structure (ExportedDocument schema). Use when building documents programmatically without Markdown. Get the schema from hwpforge_to_json output. For large documents, prefer hwpforge_to_json + hwpforge_patch workflow with file paths instead of inline JSON."
+        description = "Create an HWPX document directly from a JSON structure (ExportedDocument schema). The original package's signature or encryption state is not inherited. Use when building documents programmatically without Markdown. Get the schema from hwpforge_to_json output. For large documents, prefer hwpforge_to_json + hwpforge_patch workflow with file paths instead of inline JSON."
     )]
     async fn hwpforge_from_json(
         &self,
@@ -555,7 +555,7 @@ impl HwpForgeServer {
                     vec![
                         "Use hwpforge_inspect to verify the output",
                         "Use hwpforge_to_json + hwpforge_patch to edit",
-                        "Note: images are NOT preserved in JSON round-trip; use hwpforge_patch with base_path to keep images",
+                        "Note: images are NOT preserved in JSON round-trip; use hwpforge_patch with base_path to keep images. Rebuilding does not inherit the original package's signature or encryption state",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))

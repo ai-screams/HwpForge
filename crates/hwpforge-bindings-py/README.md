@@ -93,6 +93,7 @@ above is not optional.
 A failure raises `HwpForgeError`, whose `code` is the stable string to branch on. The codes
 below are the ones each operation raises for its own characteristic failure; any operation
 that has to decode the document first can also raise `HWP5_DECODE_FAILED` (malformed HWP5) or `DECODE_FAILED` (malformed HWPX).
+An operation that edits an HWPX document also raises `DECODE_FAILED` when the package carries a digital signature or encryption marker, because such a document cannot be edited.
 
 ### `Document` methods
 

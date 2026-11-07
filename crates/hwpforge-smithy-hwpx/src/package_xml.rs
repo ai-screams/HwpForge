@@ -30,7 +30,7 @@ fn utf8(bytes: Cow<'_, [u8]>) -> Result<String, String> {
     }
 }
 
-fn decode(bytes: Cow<'_, [u8]>, limit: usize) -> Result<String, String> {
+pub(crate) fn decode(bytes: Cow<'_, [u8]>, limit: usize) -> Result<String, String> {
     use quick_xml::{
         events::{BytesDecl, BytesStart, Event},
         Reader,
