@@ -1,0 +1,18 @@
+{
+  "sections": 1,
+  "paragraphs": 1,
+  "warnings": [
+    {
+      "code": "DOCX_OPTIONAL_PART_OMITTED",
+      "message": "Relationship content is not interpreted",
+      "context": {
+        "format": "docx",
+        "stage": "decode",
+        "part": "opaque.xml",
+        "location": "relationship:opaque0",
+        "loss": "uninterpreted_part",
+        "action": "omit"
+      }
+    }
+  ]
+}

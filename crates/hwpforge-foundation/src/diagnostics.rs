@@ -115,6 +115,8 @@ ops_codes! {
     ValidationFailed => "VALIDATION_FAILED",
     /// Markdown input could not be decoded.
     MdDecodeFailed => "MD_DECODE_FAILED",
+    /// DOCX input could not be decoded.
+    DocxDecodeFailed => "DOCX_DECODE_FAILED",
     /// Style store could not be built from the preset.
     StyleStoreFailed => "STYLE_STORE_FAILED",
     /// The document has no fonts, so a restyle has nothing to rebind.

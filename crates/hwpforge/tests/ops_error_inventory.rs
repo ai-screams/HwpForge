@@ -43,6 +43,9 @@ use hwpforge::md::embed::ImageEmbedSkipReason;
 use hwpforge::md::{MdError, MdWarning};
 use hwpforge::ops::{OpsError, OpsWarning};
 
+#[cfg(feature = "ops-docx")]
+#[path = "support/docx_diagnostics.rs"]
+mod docx_diagnostics;
 #[path = "support/error_inventory.rs"]
 mod error_inventory;
 
@@ -53,6 +56,21 @@ const TRACKED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ops_error
 type Table = &'static [(&'static str, &'static [(&'static str, &'static str)])];
 
 const ERROR_MAPPING: Table = &[
+    (
+        "DocxError",
+        &[
+            ("MissingPart", "DOCX_DECODE_FAILED"),
+            ("AmbiguousPart", "DOCX_DECODE_FAILED"),
+            ("OpaquePart", "DOCX_DECODE_FAILED"),
+            ("MissingContentType", "DOCX_DECODE_FAILED"),
+            ("ContentTypeMismatch", "DOCX_DECODE_FAILED"),
+            ("UnsupportedEncoding", "DOCX_DECODE_FAILED"),
+            ("Invalid", "DOCX_DECODE_FAILED"),
+            ("Limit", "DOCX_DECODE_FAILED"),
+            ("Package", "DOCX_DECODE_FAILED"),
+            ("TrackedChange", "DOCX_DECODE_FAILED"),
+        ],
+    ),
     (
         "HwpxError",
         &[
@@ -298,6 +316,27 @@ fn foundation_errors() -> Vec<(&'static str, FoundationError)> {
 }
 
 const WARNING_MAPPING: Table = &[
+    ("RegistryBridgeWarning", &[("FontFallback", "FONT_FALLBACK")]),
+    (
+        "DocxWarning",
+        &[
+            ("DocumentSettingsOmitted", "DOCX_DOCUMENT_SETTINGS_OMITTED"),
+            ("StructuredWrapperFlattened", "DOCX_STRUCTURED_WRAPPER_FLATTENED"),
+            ("FormattingOmitted", "DOCX_FORMATTING_OMITTED"),
+            ("ContentOmitted", "DOCX_CONTENT_OMITTED"),
+            ("WhitespaceApproximated", "DOCX_WHITESPACE_APPROXIMATED"),
+            ("FieldInstructionOmitted", "DOCX_FIELD_INSTRUCTION_OMITTED"),
+            ("FieldResultMissing", "DOCX_FIELD_RESULT_MISSING"),
+            ("NestedFieldFlattened", "DOCX_NESTED_FIELD_FLATTENED"),
+            ("LinkTargetOmitted", "DOCX_LINK_TARGET_OMITTED"),
+            ("ContentControlFlattened", "DOCX_CONTENT_CONTROL_FLATTENED"),
+            ("AlternateContentSelected", "DOCX_ALTERNATE_CONTENT_SELECTED"),
+            ("OptionalPartOmitted", "DOCX_OPTIONAL_PART_OMITTED"),
+            ("BreakOmitted", "DOCX_BREAK_OMITTED"),
+            ("AttributeOmitted", "DOCX_ATTRIBUTE_OMITTED"),
+            ("ValueApproximated", "DOCX_VALUE_APPROXIMATED"),
+        ],
+    ),
     (
         "EncodeWarning",
         &[
@@ -742,6 +781,8 @@ fn md_errors() -> Vec<(&'static str, MdError)> {
 
 fn wrapped_errors() -> BTreeMap<&'static str, Vec<(&'static str, OpsError)>> {
     let mut all: BTreeMap<&'static str, Vec<(&'static str, OpsError)>> = BTreeMap::new();
+    #[cfg(feature = "ops-docx")]
+    all.insert("DocxError", docx_diagnostics::errors());
     all.insert(
         "HwpxError",
         hwpx_errors().into_iter().map(|(n, e)| (n, OpsError::decode(e))).collect(),
@@ -804,6 +845,20 @@ fn wrapped_errors() -> BTreeMap<&'static str, Vec<(&'static str, OpsError)>> {
 
 fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>> {
     let mut all: BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>> = BTreeMap::new();
+    #[cfg(feature = "ops-docx")]
+    all.insert("DocxWarning", docx_diagnostics::warnings());
+    all.insert(
+        "RegistryBridgeWarning",
+        vec![(
+            "FontFallback",
+            OpsWarning::Projection(hwpforge::hwpx::RegistryBridgeWarning::FontFallback {
+                requested_font: "Absent".into(),
+                slot: "font",
+                char_shape: 0,
+                count: 1,
+            }),
+        )],
+    );
     all.insert(
         "EncodeWarning",
         vec![
@@ -1179,7 +1234,7 @@ fn every_wrapped_payload_type_has_a_manifest_record() {
 
 #[test]
 fn manifest_files_hold_no_unnamed_diagnostic_enum() {
-    // 이것을 실패시키는 것: RegistryBridgeWarning의 not_wrapped 분류를 manifest에서 빼기.
+    // 이것을 실패시키는 것: RegistryBridgeWarning의 wrapped 분류를 manifest에서 빼기.
     let inventory = error_inventory::collect();
 
     assert!(
@@ -1225,6 +1280,10 @@ fn constructed_errors_produce_the_mapped_code() {
     let samples = wrapped_errors();
 
     for (enum_name, table) in ERROR_MAPPING {
+        #[cfg(not(feature = "ops-docx"))]
+        if *enum_name == "DocxError" {
+            continue;
+        }
         let built = samples
             .get(enum_name)
             .unwrap_or_else(|| panic!("{enum_name} has a table but no sample values"));
@@ -1248,17 +1307,27 @@ fn constructed_warnings_produce_the_mapped_code() {
     let samples = wrapped_warnings();
 
     for (enum_name, table) in WARNING_MAPPING {
-        let built = samples
-            .get(enum_name)
-            .unwrap_or_else(|| panic!("{enum_name} has a table but no sample values"));
-        let built_names: Vec<&str> = built.iter().map(|(name, _)| *name).collect();
-        let table_names: Vec<&str> = table.iter().map(|(name, _)| *name).collect();
+        #[cfg(not(feature = "ops-docx"))]
+        if *enum_name == "DocxWarning" {
+            continue;
+        }
+        let built = samples.get(enum_name).unwrap_or_else(|| panic!("{enum_name} has no samples"));
+        let mut built_names: Vec<_> = built.iter().map(|(name, _)| *name).collect();
+        let mut table_names: Vec<_> = table.iter().map(|(name, _)| *name).collect();
+        if *enum_name == "DocxWarning" {
+            // Real decoder samples arrive in occurrence order, not enum declaration order.
+            built_names.sort_unstable();
+            table_names.sort_unstable();
+        }
         assert_eq!(built_names, table_names, "{enum_name}: samples and table disagree");
-
-        for ((variant, expected), (_, warning)) in table.iter().zip(built) {
+        for (variant, warning) in built {
+            let expected = table.iter().find(|(name, _)| name == variant).unwrap().1;
             let info = warning.info();
-            assert_eq!(info.code, *expected, "{enum_name}::{variant}");
-            assert!(!info.message.is_empty(), "{enum_name}::{variant} has no message");
+            if !matches!(*enum_name, "DocxWarning" | "RegistryBridgeWarning") {
+                assert!(info.context.is_none());
+            }
+            assert_eq!(info.code, expected, "{enum_name}::{variant}");
+            assert!(!info.message.is_empty());
         }
     }
 }
@@ -1451,14 +1520,21 @@ fn semantic_loss_variants_become_the_uniform_envelope() {
 }
 
 #[test]
-fn one_code_never_offers_two_different_hints() {
-    // Today `hint()` is `hint_for(self.code())`, so this holds by
-    // construction. It is here as a guard for the refactor that would break
-    // it: if a hint ever became per-variant, two errors sharing a code could
-    // start printing different advice, and this test is what would catch it.
+fn codes_keep_their_hints_except_docx_recovery_cases() {
+    // 이것을 실패시키는 것: DOCX 변경 추적/한도 hint를 구조 오류 안내로 대체.
+    // Other codes retain their single recovery hint.
     let mut hints_per_code: BTreeMap<&str, BTreeSet<Option<&'static str>>> = BTreeMap::new();
     for (_, errors) in wrapped_errors() {
-        for (_, error) in errors {
+        for (variant, error) in errors {
+            if error.code() == OpsCode::DocxDecodeFailed {
+                let expected = match variant {
+                    "TrackedChange" => "Accept all changes in Word or LibreOffice and retry",
+                    "Limit" => "Reduce the document resource named in the error and retry",
+                    _ => "Check that the input is a valid DOCX document",
+                };
+                assert_eq!(error.hint(), Some(expected), "{variant}");
+                continue;
+            }
             hints_per_code.entry(error.code().as_str()).or_default().insert(error.hint());
         }
     }

@@ -24,7 +24,9 @@ ops-hwpx = ["hwpx", "dep:serde", "dep:serde_json", "dep:thiserror"]
 ## Adds the Markdown operations (`convert_md`, `to_md`) to `ops`. `serde_bytes`
 ## keeps the exported images as bytes instead of integer sequences.
 ops-md = ["ops-hwpx", "md", "dep:serde_bytes"]
-## Convenience alias for the whole operation layer.
+## DOCX import with the shared HWPX encoding backend.
+ops-docx = ["ops-hwpx", "docx"]
+## Compatibility alias for the HWPX and Markdown operations.
 ops = ["ops-md"]
 ## `JsonSchema` derives on the wire DTOs that `ops` owns, and on the exchange
 ## DTOs it hands through. `?` keeps this from switching the HWPX codec on.

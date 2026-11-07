@@ -1,6 +1,176 @@
 {
   "enums": [
     {
+      "krate": "hwpforge-smithy-docx",
+      "file": "crates/hwpforge-smithy-docx/src/error.rs",
+      "name": "DocxError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "MissingPart",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AmbiguousPart",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "OpaquePart",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MissingContentType",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ContentTypeMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnsupportedEncoding",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Invalid",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Limit",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Package",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TrackedChange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-docx",
+      "file": "crates/hwpforge-smithy-docx/src/warning.rs",
+      "name": "DocxWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "DocumentSettingsOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "StructuredWrapperFlattened",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FormattingOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ContentOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "WhitespaceApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FieldInstructionOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FieldResultMissing",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NestedFieldFlattened",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LinkTargetOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ContentControlFlattened",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AlternateContentSelected",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "OptionalPartOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "BreakOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AttributeOmitted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ValueApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
       "krate": "hwpforge-foundation",
       "file": "crates/hwpforge-foundation/src/error.rs",
       "name": "FoundationError",
@@ -892,8 +1062,7 @@
       "name": "RegistryBridgeWarning",
       "visibility": "pub",
       "non_exhaustive": true,
-      "wrapped": false,
-      "not_wrapped_reason": "registry diagnostics returned by the bridge; ops registry paths use the compatibility entry points, which discard bridge warnings",
+      "wrapped": true,
       "variants": [
         {
           "name": "FontFallback",

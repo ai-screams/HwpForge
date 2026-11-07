@@ -332,7 +332,7 @@ fn inventory_slots(inventory: &Inventory) -> BTreeSet<(String, String)> {
 
 #[test]
 // 이것을 실패시키는 것: 미등록 공개 &[u8] 함수·옵션 Vec<u8> 필드 추가, opts.base 등록 삭제,
-// 공개 함수·파일·바이트 타입·참조 타입·디렉터리·인자 순회 조건 제거 또는 중복 등록.
+// 공개 함수·파일·바이트 타입·참조 타입·디렉터리·인자 순회 조건 제거 또는 중복 등록, DOCX 등록 누락.
 fn public_byte_input_inventory_matches_behavior_registry() {
     // Start above ops so even today's tree exercises recursive traversal;
     // a future directory module cannot escape the public-input audit.
@@ -351,12 +351,17 @@ fn public_byte_input_inventory_matches_behavior_registry() {
         }
     }
     let actual = inventory_slots(&inventory);
-    let expected: BTreeSet<_> =
-        INPUTS.iter().map(|input| (input.function.to_owned(), input.slot.to_owned())).collect();
+    // DOCX is a distinct input format, not an HWPX slot. Its runtime rejection
+    // contract is exercised separately below when its feature is enabled.
+    let expected: BTreeSet<_> = INPUTS
+        .iter()
+        .map(|input| (input.function.to_owned(), input.slot.to_owned()))
+        .chain([("convert_docx".to_owned(), "bytes".to_owned())])
+        .collect();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 19);
-    assert_eq!(actual.iter().map(|(name, _)| name).collect::<BTreeSet<_>>().len(), 18);
-    assert_eq!(expected.len(), INPUTS.len(), "duplicate registry entry");
+    assert_eq!(actual.len(), 20);
+    assert_eq!(actual.iter().map(|(name, _)| name).collect::<BTreeSet<_>>().len(), 19);
+    assert_eq!(expected.len(), INPUTS.len() + 1, "duplicate registry entry");
 }
 
 #[test]
@@ -553,4 +558,15 @@ fn input_inventory_includes_trait_methods() {
         inventory_slots(&inventory),
         BTreeSet::from([("Reader::try_from".into(), "bytes".into())])
     );
+}
+
+// 이것을 실패시키는 것: DOCX 입력을 HWPX 입력으로 분류하여 HWP5_INPUT 안내를 반환.
+#[cfg(feature = "ops-docx")]
+#[test]
+fn docx_input_uses_its_own_decode_failure_contract() {
+    for bytes in [CFB, HWP5, Context::new().good.as_slice()] {
+        let error = convert_docx(bytes).unwrap_err();
+        assert_eq!(error.code().as_str(), "DOCX_DECODE_FAILED");
+        assert!(matches!(error, OpsError::DocxDecode(_)));
+    }
 }

@@ -53,15 +53,20 @@
 //! # Features
 //!
 //! `ops-hwpx` gives the HWPX-only operations, `ops-md` adds the Markdown
-//! ones, and `ops` is the alias for everything.
+//! ones, and `ops` remains an alias for `ops-md`. `ops-docx` independently
+//! adds DOCX import to the HWPX backend.
 
 #[cfg(feature = "ops-md")]
 pub mod convert;
 pub mod diff;
 pub mod edit;
+#[cfg(any(feature = "ops-md", feature = "ops-docx"))]
+pub(crate) mod encode_registry;
 pub mod exchange;
 #[cfg(feature = "ops-hwpx")]
 pub mod fs;
+#[cfg(feature = "ops-docx")]
+pub mod import;
 mod input;
 pub mod inspect;
 pub mod inspect_meta;
@@ -78,8 +83,11 @@ mod walk;
 use opaque::ensure_opaque_carried;
 
 use hwpforge_core::CoreError;
-use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
+use hwpforge_foundation::diagnostics::{OpsCode, WarningContext, WarningInfo, WarningStage};
 use hwpforge_foundation::FoundationError;
+#[cfg(feature = "ops-docx")]
+use hwpforge_smithy_docx::{DocxError, DocxWarning};
+use hwpforge_smithy_hwpx::RegistryBridgeWarning;
 use hwpforge_smithy_hwpx::{
     grid_addr::{GridAddrError, GridAddrWarning},
     partition_semantic_loss,
@@ -91,6 +99,9 @@ use hwpforge_smithy_hwpx::{
 
 #[cfg(feature = "ops-md")]
 use hwpforge_smithy_md::{assets::AssetOutcome, MdError, MdErrorCode, MdWarning};
+
+#[cfg(feature = "ops-docx")]
+pub use import::{convert_docx, ImportMeta, ImportOutput};
 
 pub use inspect::{inspect, InspectOptions, InspectOutput, InspectReport};
 pub use inspect_meta::InspectMeta;
@@ -158,6 +169,11 @@ pub enum OpsError {
     /// Build it with [`OpsError::encode`].
     #[error(transparent)]
     Encode(HwpxError),
+
+    /// DOCX input failure, preserving the original location and recovery guidance.
+    #[cfg(feature = "ops-docx")]
+    #[error(transparent)]
+    DocxDecode(DocxError),
 
     /// Markdown decode-stage failure (parsing Markdown, resolving assets).
     /// Build it with [`OpsError::md_decode`].
@@ -306,6 +322,8 @@ impl OpsError {
     pub fn code(&self) -> OpsCode {
         match self {
             Self::Hwp5Input { .. } => OpsCode::Hwp5Input,
+            #[cfg(feature = "ops-docx")]
+            Self::DocxDecode(_) => OpsCode::DocxDecodeFailed,
             Self::Decode(e) => hwpx_code(e, Stage::Decode),
             Self::Encode(e) => hwpx_code(e, Stage::Encode),
             // `md_code` documents why the two asset-contract variants keep
@@ -352,6 +370,16 @@ impl OpsError {
     /// File errors use canonical I/O codes with no generic recovery hint.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
+        #[cfg(feature = "ops-docx")]
+        match self {
+            Self::DocxDecode(DocxError::TrackedChange { .. }) => {
+                return Some("Accept all changes in Word or LibreOffice and retry");
+            }
+            Self::DocxDecode(DocxError::Limit { .. }) => {
+                return Some("Reduce the document resource named in the error and retry");
+            }
+            _ => {}
+        }
         hint_for(self.code())
     }
 
@@ -464,6 +492,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
         return Some("원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오.");
     }
     Some(match code {
+        OpsCode::DocxDecodeFailed => "Check that the input is a valid DOCX document",
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
         OpsCode::Hwp5Input => "Convert the HWP5 (.hwp) document with convert_hwp5 (CLI: convert-hwp5) before using this operation.",
         OpsCode::EmptyFieldValue => {
@@ -797,6 +826,11 @@ const UNCLASSIFIED: &str = "OTHER";
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsWarning {
+    /// Registry-to-HWPX projection diagnostic.
+    Projection(RegistryBridgeWarning),
+    /// Aggregated DOCX input diagnostic.
+    #[cfg(feature = "ops-docx")]
+    Docx(DocxWarning),
     /// Shared exchange version/migration diagnostic.
     LegacyParagraphMeasures {
         /// Migration limits and affected JSON paths.
@@ -860,6 +894,26 @@ impl OpsWarning {
     #[must_use]
     pub fn info(&self) -> WarningInfo {
         match self {
+            Self::Projection(w) => {
+                let mut context =
+                    WarningContext::new("hwpx", WarningStage::Project, w.loss(), w.action());
+                context.location = w.location();
+                context.count = w.count();
+                let mut info = WarningInfo::new(w.code(), w.message());
+                info.context = Some(context);
+                info
+            }
+            #[cfg(feature = "ops-docx")]
+            Self::Docx(w) => {
+                let mut context =
+                    WarningContext::new("docx", WarningStage::Decode, w.loss(), w.action());
+                context.part = w.part().map(str::to_owned);
+                context.location = w.location().map(str::to_owned);
+                context.count = w.count();
+                let mut info = WarningInfo::new(w.code(), w.message());
+                info.context = Some(context);
+                info
+            }
             Self::LegacyParagraphMeasures { message } => {
                 WarningInfo::new("LEGACY_PARAGRAPH_MEASURES", message)
             }

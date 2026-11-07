@@ -37,6 +37,18 @@ pub struct ManifestEntry {
 /// The audit scope. Extend it whenever `OpsError`/`OpsWarning` grows an arm.
 pub const MANIFEST: &[ManifestEntry] = &[
     ManifestEntry {
+        krate: "hwpforge-smithy-docx",
+        file: "crates/hwpforge-smithy-docx/src/error.rs",
+        wrapped: &["DocxError"],
+        not_wrapped: &[],
+    },
+    ManifestEntry {
+        krate: "hwpforge-smithy-docx",
+        file: "crates/hwpforge-smithy-docx/src/warning.rs",
+        wrapped: &["DocxWarning"],
+        not_wrapped: &[],
+    },
+    ManifestEntry {
         krate: "hwpforge-foundation",
         file: "crates/hwpforge-foundation/src/error.rs",
         wrapped: &["FoundationError"],
@@ -123,12 +135,8 @@ pub const MANIFEST: &[ManifestEntry] = &[
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/registry_bridge.rs",
-        wrapped: &[],
-        not_wrapped: &[(
-            "RegistryBridgeWarning",
-            "registry diagnostics returned by the bridge; ops registry paths use the \
-             compatibility entry points, which discard bridge warnings",
-        )],
+        wrapped: &["RegistryBridgeWarning"],
+        not_wrapped: &[],
     },
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
@@ -481,6 +489,40 @@ fn walk_items(items: &[Item], named: &[&str], entry: &ManifestEntry, out: &mut V
         match item {
             Item::Enum(item_enum) if named.contains(&item_enum.ident.to_string().as_str()) => {
                 out.push(record_enum(item_enum, entry));
+            }
+            Item::Macro(item)
+                if entry.krate == "hwpforge-smithy-docx" && item.mac.path.is_ident("warnings") =>
+            {
+                // The producer declares these variants through its finite warnings! table.
+                // Parse the table with syn, including both literal strings, instead of regex.
+                use syn::parse::Parser;
+                let parser = |input: syn::parse::ParseStream<'_>| {
+                    let mut variants = Vec::new();
+                    while !input.is_empty() {
+                        let name: syn::Ident = input.parse()?;
+                        input.parse::<syn::Token![=>]>()?;
+                        let content;
+                        syn::parenthesized!(content in input);
+                        content.parse::<syn::LitStr>()?;
+                        content.parse::<syn::Token![,]>()?;
+                        content.parse::<syn::LitStr>()?;
+                        if !content.is_empty() {
+                            return Err(content.error("unexpected warning declaration"));
+                        }
+                        variants.push(name);
+                        if !input.is_empty() {
+                            input.parse::<syn::Token![,]>()?;
+                        }
+                    }
+                    Ok(variants)
+                };
+                let variants =
+                    parser.parse2(item.mac.tokens.clone()).expect("DOCX warning declarations");
+                let definition: ItemEnum = syn::parse_quote! {
+                    #[non_exhaustive]
+                    pub enum DocxWarning { #( #variants {}, )* }
+                };
+                out.push(record_enum(&definition, entry));
             }
             // Inline `mod foo { … }` blocks are part of the same file.
             Item::Mod(item_mod) => {

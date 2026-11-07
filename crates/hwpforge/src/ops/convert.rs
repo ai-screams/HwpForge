@@ -30,7 +30,7 @@ use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::document::Document;
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_foundation::FontId;
-use hwpforge_smithy_hwpx::{builtin_presets, EncodeOptions, HwpxEncoder, HwpxRegistryBridge};
+use hwpforge_smithy_hwpx::{builtin_presets, ListHeadPolicy};
 use hwpforge_smithy_md::{
     collect_asset_plan, finish_assets, warnings_from, AssetOutcome, AssetPlanEntry, MdDecoder,
 };
@@ -345,27 +345,19 @@ pub fn convert_md(
             .map(OpsWarning::Md),
     );
 
-    let bridge =
-        HwpxRegistryBridge::from_registry(&style_registry).map_err(OpsError::style_store)?;
-    let rebound =
-        bridge.rebind_draft_document(finished.document).map_err(OpsError::style_rebind)?;
-    let validated = rebound.validate()?;
-    let sections = validated.sections().len();
-    let paragraphs: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();
-
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &validated,
-        bridge.style_store(),
+    let encoded = super::encode_registry::encode_registry(
+        finished.document,
+        &style_registry,
         &finished.image_store,
-        EncodeOptions::default(),
-    )
-    .map_err(OpsError::encode)?;
-    warnings.extend(outcome.warnings.into_iter().map(OpsWarning::Encode));
+        ListHeadPolicy::Template,
+    )?;
+    warnings.extend(encoded.bridge_warnings.into_iter().map(OpsWarning::Projection));
+    warnings.extend(encoded.encode_warnings.into_iter().map(OpsWarning::Encode));
 
     Ok(ConvertOutput {
-        bytes: outcome.bytes,
-        sections,
-        paragraphs,
+        bytes: encoded.bytes,
+        sections: encoded.sections,
+        paragraphs: encoded.paragraphs,
         assets: finished.outcomes,
         warnings,
     })
@@ -374,6 +366,7 @@ pub fn convert_md(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_smithy_hwpx::HwpxRegistryBridge;
 
     #[test]
     fn the_default_preset_is_the_one_the_decoder_resolves() {

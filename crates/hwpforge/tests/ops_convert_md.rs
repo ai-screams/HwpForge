@@ -726,3 +726,11 @@ fn pictures(paragraphs: &[hwpforge::core::Paragraph]) -> Vec<String> {
         })
         .collect()
 }
+
+// 이것을 실패시키는 것: Markdown 호출의 목록 정책을 PreserveEffective로 변경.
+#[test]
+fn markdown_retains_the_template_outline_head() {
+    let out = convert_md("# 제목\n\n본문입니다.\n", None, &ConvertMdOptions::default()).unwrap();
+    let decoded = hwpforge::hwpx::HwpxDecoder::decode(&out.bytes).unwrap();
+    assert_eq!(decoded.style_store.iter_numberings().next().unwrap().levels[0].text, "^1.");
+}
