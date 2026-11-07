@@ -56,3 +56,53 @@ where
 {
     Ok((text, meta(py, metadata)?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hwpforge_foundation::diagnostics::{WarningContext, WarningInfo, WarningStage};
+
+    // 이것을 실패시키는 것: context None 키 출력, Some 소실, 위치·횟수 소실,
+    // count=1 출력, 정수가 아닌 count 전달 또는 stage 철자 변경.
+    #[test]
+    fn warning_context_reaches_python_dict_without_reaggregation() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut warning = WarningInfo::new("TEST", "message");
+            let mut expected = serde_json::json!({"code": "TEST", "message": "message"});
+            assert!(meta(py, &warning).unwrap().eq(pythonize(py, &expected).unwrap()).unwrap());
+            for (stage, wire) in [
+                (WarningStage::Decode, "decode"),
+                (WarningStage::Project, "project"),
+                (WarningStage::Encode, "encode"),
+            ] {
+                for positioned in [false, true] {
+                    let mut context = WarningContext::new("docx", stage.clone(), "color", "omit");
+                    let mut expected_context = serde_json::json!({
+                        "format": "docx", "stage": wire, "loss": "color", "action": "omit"
+                    });
+                    if positioned {
+                        context.part = Some("word/document.xml".into());
+                        context.location = Some("paragraph[2]/run[3]".into());
+                        context.count = 20_000;
+                        expected_context["part"] = "word/document.xml".into();
+                        expected_context["location"] = "paragraph[2]/run[3]".into();
+                        expected_context["count"] = 20_000.into();
+                    }
+                    warning.context = Some(context);
+                    expected["context"] = expected_context;
+                    let actual = meta(py, &warning).unwrap();
+                    assert!(actual.eq(pythonize(py, &expected).unwrap()).unwrap());
+                    if positioned {
+                        assert!(actual
+                            .get_item("context")
+                            .unwrap()
+                            .get_item("count")
+                            .unwrap()
+                            .is_instance_of::<pyo3::types::PyInt>());
+                    }
+                }
+            }
+        });
+    }
+}

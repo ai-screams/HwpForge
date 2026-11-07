@@ -20,10 +20,20 @@ from typing_extensions import NotRequired, TypeAlias
 # A JSON document whose shape is the exchange schema, not a fixed key set.
 Json: TypeAlias = dict[str, Any]
 
+class WarningContext(TypedDict):
+    format: str
+    stage: Literal["decode", "project", "encode"]
+    part: NotRequired[str]
+    location: NotRequired[str]
+    loss: str
+    action: str
+    count: NotRequired[int]
+
 class WarningInfo(TypedDict):
     code: str
     message: str
     hint: NotRequired[str]
+    context: NotRequired[WarningContext]
 
 # The second, narrower classification a render failure carries, reached as
 # `HwpForgeError.cause`. Same keys as the command line prints under `cause`.

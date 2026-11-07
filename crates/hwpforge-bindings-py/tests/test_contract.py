@@ -5,6 +5,7 @@ The Rust extension and its Python wrappers share these observable contracts.
 
 from __future__ import annotations
 
+import ast
 import base64
 import io
 import json
@@ -276,6 +277,52 @@ def _keys_match_stub(value: Mapping[str, object], stub_name: str) -> None:
     assert required <= observed, f"{stub_name} is missing {sorted(required - observed)}"
     extra = sorted(observed - required - optional)
     assert not extra, f"{stub_name} has keys the stub does not declare: {extra}"
+
+
+# 이것을 실패시키는 것: context/중첩 필드 삭제·필수성 변경, stage Literal 또는 count 타입 변경,
+# 클래스 전체를 total=False 로 바꿔 필수 키를 선택으로 만드는 것.
+def test_warning_context_stub_matches_nested_payload() -> None:
+    # Runtime transport is exercised in the Rust results tests; these payloads
+    # pin the stub even before an operation starts producing contextual warnings.
+    minimal = {"format": "docx", "stage": "decode", "loss": "color", "action": "omit"}
+    positioned = {
+        **minimal,
+        "part": "word/document.xml",
+        "location": "paragraph[2]/run[3]",
+        "count": 20_000,
+    }
+    for context in [minimal, positioned]:
+        _keys_match_stub({"code": "TEST", "message": "message", "context": context}, "WarningInfo")
+        _keys_match_stub(context, "WarningContext")
+    assert _stub.typed_dict_keys("WarningInfo") == (
+        frozenset({"code", "message"}),
+        frozenset({"hint", "context"}),
+    )
+    assert _stub.typed_dict_keys("WarningContext") == (
+        frozenset({"format", "stage", "loss", "action"}),
+        frozenset({"part", "location", "count"}),
+    )
+
+    module = ast.parse(_stub.STUB_PATH.read_text(encoding="utf-8"))
+    annotations = {
+        node.name: {
+            field.target.id: ast.unparse(field.annotation)
+            for field in node.body
+            if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
+        }
+        for node in module.body
+        if isinstance(node, ast.ClassDef)
+    }
+    assert annotations["WarningInfo"]["context"] == "NotRequired[WarningContext]"
+    assert annotations["WarningContext"] == {
+        "format": "str",
+        "stage": "Literal['decode', 'project', 'encode']",
+        "part": "NotRequired[str]",
+        "location": "NotRequired[str]",
+        "loss": "str",
+        "action": "str",
+        "count": "NotRequired[int]",
+    }
 
 
 def test_a_body_paragraph_carries_no_variant_keys(table_bytes: bytes) -> None:
