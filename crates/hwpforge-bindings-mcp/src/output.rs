@@ -287,13 +287,9 @@ impl ToolErrorInfo {
 
 /// Structured non-fatal warning for MCP tool responses.
 ///
-/// this is a structural (field-by-field) twin of
-/// `hwpforge_foundation::diagnostics::WarningInfo` — same `{code, message,
-/// hint}` shape, `hint` omitted the same way when absent. Kept as its own
-/// type rather than replaced outright because every tool file's `warnings`
-/// field is typed on it already (`fields.rs`, `fill.rs`, `stamp.rs`, …), well
-/// outside this lane's scope; the `From<WarningInfo>` impl below is the one
-/// bridge [`crate::compat::warning`] needs.
+/// Its serialized shape matches `hwpforge_foundation::diagnostics::WarningInfo`,
+/// including omission of absent hints and context. Tool response fields retain
+/// this type; [`crate::compat::warning`] uses the field-by-field conversion below.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ToolWarningInfo {
     /// Machine-readable warning code.
@@ -303,12 +299,15 @@ pub struct ToolWarningInfo {
     /// Optional actionable hint for the caller.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Optional source context and occurrence count, copied without aggregation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<hwpforge_foundation::diagnostics::WarningContext>,
 }
 
 impl ToolWarningInfo {
     /// Create a new structured warning.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into(), hint: None }
+        Self { code: code.into(), message: message.into(), hint: None, context: None }
     }
 
     /// Add an optional hint to the warning.
@@ -319,13 +318,9 @@ impl ToolWarningInfo {
 }
 
 impl From<hwpforge_foundation::diagnostics::WarningInfo> for ToolWarningInfo {
-    /// A field-by-field copy through this type's own constructor — the two
-    /// types serialise identically, so this is the whole conversion.
+    /// Moves all fields without interpreting or aggregating the context.
     fn from(info: hwpforge_foundation::diagnostics::WarningInfo) -> Self {
-        match info.hint {
-            Some(hint) => Self::new(info.code, info.message).with_hint(hint),
-            None => Self::new(info.code, info.message),
-        }
+        Self { hint: info.hint, context: info.context, ..Self::new(info.code, info.message) }
     }
 }
 
@@ -421,8 +416,9 @@ mod tests {
         assert_eq!(content, "한글 텍스트");
     }
 
-    // 이것을 실패시키는 것: `From<WarningInfo>` 의 Some 갈래에서 hint 를 버리는 것,
+    // 이것을 실패시키는 것: `From<WarningInfo>` 에서 hint 를 버리는 것,
     // `hint` 를 늘 직렬화에서 생략하는 것(`skip_serializing`), None 일 때 키를 남기는 것.
+    // context에 대해서 이것을 실패시키는 것: None 키 출력 또는 생성자에서 Some 설정.
     #[test]
     fn warning_info_conversion_keeps_hint_only_when_present() {
         use hwpforge_foundation::diagnostics::WarningInfo;
@@ -435,6 +431,11 @@ mod tests {
             ),
         ];
         for (info, expected) in rows {
+            let direct = match &info.hint {
+                Some(hint) => ToolWarningInfo::new(&info.code, &info.message).with_hint(hint),
+                None => ToolWarningInfo::new(&info.code, &info.message),
+            };
+            assert_eq!(serde_json::to_string(&direct).unwrap(), expected);
             let warning = ToolWarningInfo::from(info);
             assert_eq!(serde_json::to_string(&warning).unwrap(), expected);
         }

@@ -910,6 +910,27 @@ mod tests {
         assert!(info.hint.is_none());
     }
 
+    // 이것을 실패시키는 것: DTO 변환에서 context 소실, count 재설정, 첫 위치 변경.
+    #[test]
+    fn warning_context_copies_the_first_position_and_total_verbatim() {
+        use hwpforge_foundation::diagnostics::{WarningContext, WarningInfo, WarningStage};
+
+        for positioned in [false, true] {
+            let mut context = WarningContext::new("docx", WarningStage::Decode, "color", "omit");
+            if positioned {
+                context.part = Some("word/document.xml".into());
+                context.location = Some("paragraph[2]/run[3]".into());
+            }
+            context.count = 20_000;
+            let mut source = WarningInfo::new("TEST", "message").with_hint("hint");
+            source.context = Some(context.clone());
+            let expected = serde_json::to_string(&source).unwrap();
+            let copied = ToolWarningInfo::from(source);
+            assert_eq!(copied.context, Some(context));
+            assert_eq!(serde_json::to_string(&copied).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn all_policy_rows_match_baseline() {
         // 이것을 실패시키는 것: TABLE 행의 코드·힌트·종료 값 변경, 행 추가 또는 기준선에서 TABLE 행 삭제.
