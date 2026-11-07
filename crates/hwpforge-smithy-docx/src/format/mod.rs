@@ -20,7 +20,12 @@ use properties::read_property;
 pub(crate) use properties::PropertyState;
 pub(crate) use resolve::Resolver;
 use std::rc::Rc;
-pub(crate) use units::structural;
+pub(crate) fn structural_length(
+    value: &str,
+    minimum: i32,
+) -> std::result::Result<i32, &'static str> {
+    units::length(value, 5, minimum)
+}
 
 const MAX_DEFINITIONS: usize = 16_384;
 const MAX_SHAPES: usize = 262_144;

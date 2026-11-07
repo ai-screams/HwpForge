@@ -19,7 +19,7 @@ fn imported_text_and_metadata_survive_encoding() {
     assert_eq!(text, ["첫째 & 본문", "둘째"]);
     let first = serde_json::to_value(output.meta()).unwrap();
     // Two paragraphs with one run each leave six categories unresolved twice.
-    let warnings: Vec<_> = [
+    let mut warnings: Vec<_> = [
         ("line_spacing", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
         ("paragraph_spacing", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
         ("indentation", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
@@ -30,6 +30,7 @@ fn imported_text_and_metadata_survive_encoding() {
         "code":"DOCX_FORMAT_DEFAULTED", "message":message,
         "context":{"format":"docx","stage":"decode","part":"body.xml","location":location,"loss":loss,"action":"use_fallback","count":2}
     })).collect();
+    warnings.extend(page_default_warnings());
     assert_eq!(first, json!({"sections":1,"paragraphs":2,"warnings":warnings}));
     assert_eq!(serde_json::to_value(output.meta()).unwrap(), first);
     let restored: ImportMeta = serde_json::from_value(first.clone()).unwrap();
@@ -57,7 +58,8 @@ fn decoder_counts_and_first_location_are_copied_once() {
         if count > 1 {
             context["count"] = json!(20_000);
         }
-        assert_eq!(meta["warnings"].as_array().unwrap().len(), 1);
+        assert_eq!(meta["warnings"].as_array().unwrap().len(), 3);
+        assert_eq!(&meta["warnings"].as_array().unwrap()[1..], &page_default_warnings());
         assert_eq!(meta["warnings"][0]["code"], "DOCX_OPTIONAL_PART_OMITTED");
         assert_eq!(meta["warnings"][0]["context"], context);
         assert_eq!(serde_json::to_value(output.meta()).unwrap(), meta);
@@ -164,12 +166,18 @@ fn unknown_source_positions_and_stage_order_survive_metadata() {
         meta["warnings"].as_array().unwrap().iter().map(|w| w["code"].as_str().unwrap()).collect();
     assert_eq!(
         codes,
-        ["DOCX_OPTIONAL_PART_OMITTED", "FONT_FALLBACK", "XML_FORBIDDEN_CHARS_REMOVED"]
+        [
+            "DOCX_OPTIONAL_PART_OMITTED",
+            "DOCX_PAGE_LAYOUT_APPROXIMATED",
+            "DOCX_PAGE_LAYOUT_APPROXIMATED",
+            "FONT_FALLBACK",
+            "XML_FORBIDDEN_CHARS_REMOVED"
+        ]
     );
-    assert_eq!(meta["warnings"][1]["context"]["stage"], "project");
-    assert_eq!(meta["warnings"][1]["context"]["count"], 2);
+    assert_eq!(meta["warnings"][3]["context"]["stage"], "project");
+    assert_eq!(meta["warnings"][3]["context"]["count"], 2);
     assert_eq!(
-        meta["warnings"][2],
+        meta["warnings"][4],
         json!({"code":"XML_FORBIDDEN_CHARS_REMOVED","message":"removed 1 XML-forbidden character(s) from hp:t in Contents/section0.xml"})
     );
     assert_eq!(serde_json::to_value(output.meta()).unwrap(), meta);
@@ -239,6 +247,81 @@ fn distinct_decoder_losses_keep_first_occurrence_order() {
                 Some("fldSimple#7"),
                 1
             ),
+            (
+                "DOCX_PAGE_LAYOUT_APPROXIMATED",
+                "page_size",
+                "use_defaults",
+                Some("body.xml"),
+                Some("body#0"),
+                1
+            ),
+            (
+                "DOCX_PAGE_LAYOUT_APPROXIMATED",
+                "page_margins",
+                "use_defaults",
+                Some("body.xml"),
+                Some("body#0"),
+                1
+            ),
         ]
     );
+}
+
+// 이것을 실패시키는 것: 공유 후반에서 구역·빈 조각·쪽 나누기 삭제 또는 경고 위치/count 재작성.
+#[test]
+fn sections_fragments_and_geometry_survive_shared_encoding() {
+    let output = convert_docx(&docx::package_with_defaults(
+        "<w:p><w:pPr><w:sectPr><w:pgSz w:w='15840' w:h='12240' w:orient='landscape'/></w:sectPr></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/><w:t>B</w:t><w:br w:type='column'/></w:r></w:p><w:sectPr><w:pgSz w:w='12240' w:h='15840' w:orient='portrait'/></w:sectPr>", "",
+    )).unwrap();
+    let meta = output.meta();
+    assert_eq!((meta.sections, meta.paragraphs), (2, 4));
+    let warnings: Vec<_> = meta
+        .warnings
+        .iter()
+        .map(|w| {
+            let c = w.context.as_ref().unwrap();
+            (w.code.as_str(), c.location.as_deref(), c.loss.as_str(), c.action.as_str(), c.count)
+        })
+        .collect();
+    assert_eq!(
+        warnings,
+        [
+            ("DOCX_PARAGRAPH_SPLIT_APPROXIMATED", Some("br#9"), "paragraph_split", "split", 1),
+            ("DOCX_COLUMN_BREAK_APPROXIMATED", Some("br#11"), "column_break", "page_break", 1),
+            ("DOCX_PAGE_LAYOUT_APPROXIMATED", Some("sectPr#5"), "page_margins", "use_defaults", 2),
+        ]
+    );
+    let decoded = hwpforge::hwpx::HwpxDecoder::decode(&output.bytes).unwrap();
+    let sections = decoded.document.sections();
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| s.paragraphs.iter().map(|p| p.text_content()).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        [vec!["A", "B", ""], vec![""]]
+    );
+    assert_eq!(
+        sections[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(),
+        [false, true, true]
+    );
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| (
+                s.page_settings.width.as_i32(),
+                s.page_settings.height.as_i32(),
+                s.page_settings.landscape
+            ))
+            .collect::<Vec<_>>(),
+        [(61200, 79200, true), (61200, 79200, false)]
+    );
+}
+
+// 이것을 실패시키는 것: 기본 쪽 경고의 loss/action/첫 위치/count를 바꾸거나 삭제.
+fn page_default_warnings() -> [serde_json::Value; 2] {
+    ["page_size", "page_margins"].map(|loss| json!({
+        "code":"DOCX_PAGE_LAYOUT_APPROXIMATED",
+        "message":"Missing section page setting uses Core defaults",
+        "context":{"format":"docx","stage":"decode","part":"body.xml","location":"body#0","loss":loss,"action":"use_defaults"}
+    }))
 }

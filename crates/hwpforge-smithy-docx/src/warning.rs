@@ -98,7 +98,9 @@ warnings! {
     ContentControlFlattened => ("DOCX_CONTENT_CONTROL_FLATTENED", "Content control body remains without control behavior."),
     AlternateContentSelected => ("DOCX_ALTERNATE_CONTENT_SELECTED", "A fallback branch was selected without feature negotiation."),
     OptionalPartOmitted => ("DOCX_OPTIONAL_PART_OMITTED", "An optional part could not be selected or is not interpreted."),
-    BreakOmitted => ("DOCX_BREAK_OMITTED", "A page or column break was discarded without splitting paragraphs."),
+    ParagraphSplitApproximated => ("DOCX_PARAGRAPH_SPLIT_APPROXIMATED", "A source paragraph was split and paragraph-level effects were approximated."),
+    ColumnBreakApproximated => ("DOCX_COLUMN_BREAK_APPROXIMATED", "A column break uses a page break in single-column output."),
+    PageLayoutApproximated => ("DOCX_PAGE_LAYOUT_APPROXIMATED", "Unsupported page layout semantics use the reported approximation."),
     AttributeOmitted => ("DOCX_ATTRIBUTE_OMITTED", "An unsupported attribute was ignored."),
     ValueApproximated => ("DOCX_VALUE_APPROXIMATED", "An unsupported value used the reported replacement."),
 }

@@ -774,7 +774,7 @@ def test_io_repr_preserves_subclass_and_os_fields():
             assert f"{name}={getattr(source, name)!r}" in rendered
 
 
-# 이것을 실패시키는 것: 공유 ImportMeta fixture의 미해석 관계 분류/위치 변경.
+# 이것을 실패시키는 것: 공유 ImportMeta fixture의 미해석 관계·기본 쪽 경고 분류/위치 변경.
 def test_import_report_matches_rust_serialization() -> None:
     import json
     from pathlib import Path
@@ -786,16 +786,29 @@ def test_import_report_matches_rust_serialization() -> None:
     _keys_match_stub(payload, "ImportReport")
     assert payload["sections"] == 1
     assert payload["paragraphs"] == 1
-    assert len(payload["warnings"]) == 1
-    for warning in payload["warnings"]:
+    assert len(payload["warnings"]) == 3
+    expected = [
+        (
+            "DOCX_OPTIONAL_PART_OMITTED",
+            "opaque.xml",
+            "relationship:opaque0",
+            "uninterpreted_part",
+            "omit",
+        ),
+        ("DOCX_PAGE_LAYOUT_APPROXIMATED", "body.xml", "body#0", "page_size", "use_defaults"),
+        ("DOCX_PAGE_LAYOUT_APPROXIMATED", "body.xml", "body#0", "page_margins", "use_defaults"),
+    ]
+    for warning, (code, part, location, loss, action) in zip(
+        payload["warnings"], expected, strict=True
+    ):
         _keys_match_stub(warning, "WarningInfo")
         _keys_match_stub(warning["context"], "WarningContext")
-        assert warning["code"] == "DOCX_OPTIONAL_PART_OMITTED"
+        assert warning["code"] == code
         assert warning["context"] == {
             "format": "docx",
             "stage": "decode",
-            "part": "opaque.xml",
-            "location": "relationship:opaque0",
-            "loss": "uninterpreted_part",
-            "action": "omit",
+            "part": part,
+            "location": location,
+            "loss": loss,
+            "action": action,
         }

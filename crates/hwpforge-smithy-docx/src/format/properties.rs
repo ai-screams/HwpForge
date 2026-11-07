@@ -396,10 +396,10 @@ pub(super) fn read_property(
                     r.warnings,
                     part,
                     at,
-                    Kind::FormattingOmitted,
-                    "section_layout",
-                    "use_defaults",
-                    "Section and page settings use Core defaults",
+                    Kind::PageLayoutApproximated,
+                    "nested_section",
+                    "omit",
+                    "Section settings in formatting definitions are not applied",
                 )?;
                 Ok(PropertyState::Excluded)
             }

@@ -90,7 +90,7 @@ pub fn errors() -> Vec<(&'static str, OpsError)> {
 }
 
 pub fn warnings() -> Vec<(&'static str, OpsWarning)> {
-    let body = "<w:p><w:pPr><w:pStyle w:val='missing'/><w:sectPr/></w:pPr><w:r><w:rPr><w:caps/><w:sz w:val='bad'/><w:szCs w:val='24'/><w:vanish/></w:rPr><w:t>X</w:t></w:r><w:smartTag><w:r><w:t> A </w:t><w:unknown/><w:br w:type='page'/><w:br w:type='odd'/><w:t w:other='x'>B</w:t></w:r></w:smartTag><w:fldSimple w:instr='PAGE'/><w:fldSimple w:instr='OUTER'><w:fldSimple w:instr='INNER'><w:r><w:t>7</w:t></w:r></w:fldSimple></w:fldSimple><w:hyperlink><w:r><w:t>L</w:t></w:r></w:hyperlink><w:sdt><w:sdtContent><w:r><w:t>S</w:t></w:r></w:sdtContent></w:sdt><mc:AlternateContent xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006'><mc:Fallback><w:r><w:t>F</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>";
+    let body = "<w:p><w:pPr><w:pStyle w:val='missing'/><w:numPr/><w:sectPr><w:type w:val='continuous'/></w:sectPr></w:pPr><w:r><w:rPr><w:caps/><w:sz w:val='bad'/><w:szCs w:val='24'/><w:vanish/></w:rPr><w:t>X</w:t></w:r><w:smartTag><w:r><w:t> A </w:t><w:unknown/><w:br w:type='page'/><w:br w:type='column'/><w:br w:type='odd'/><w:t w:other='x'>B</w:t></w:r></w:smartTag><w:fldSimple w:instr='PAGE'/><w:fldSimple w:instr='OUTER'><w:fldSimple w:instr='INNER'><w:r><w:t>7</w:t></w:r></w:fldSimple></w:fldSimple><w:hyperlink><w:r><w:t>L</w:t></w:r></w:hyperlink><w:sdt><w:sdtContent><w:r><w:t>S</w:t></w:r></w:sdtContent></w:sdt><mc:AlternateContent xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006'><mc:Fallback><w:r><w:t>F</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>";
     let bytes = rewrite(&docx::package(body), |e| {
         e[0].1 = e[0].1.replace("</Types>", "<Override PartName='/settings.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml'/></Types>");
         e.push(("_rels/body.xml.rels".into(), "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='s' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings' Target='settings.xml'/><Relationship Id='h' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/header' Target='missing.xml'/></Relationships>".into()));
@@ -121,7 +121,9 @@ pub fn warnings() -> Vec<(&'static str, OpsWarning)> {
                 DocxWarning::ContentControlFlattened { .. } => "ContentControlFlattened",
                 DocxWarning::AlternateContentSelected { .. } => "AlternateContentSelected",
                 DocxWarning::OptionalPartOmitted { .. } => "OptionalPartOmitted",
-                DocxWarning::BreakOmitted { .. } => "BreakOmitted",
+                DocxWarning::ParagraphSplitApproximated { .. } => "ParagraphSplitApproximated",
+                DocxWarning::ColumnBreakApproximated { .. } => "ColumnBreakApproximated",
+                DocxWarning::PageLayoutApproximated { .. } => "PageLayoutApproximated",
                 DocxWarning::AttributeOmitted { .. } => "AttributeOmitted",
                 DocxWarning::ValueApproximated { .. } => "ValueApproximated",
                 _ => panic!("unregistered DOCX warning: {w:?}"),

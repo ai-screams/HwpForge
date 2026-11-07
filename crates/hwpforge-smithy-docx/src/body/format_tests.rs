@@ -4,7 +4,10 @@ use hwpforge_foundation::{Color, LineSpacingType};
 
 fn read(styles: &str, body: &str) -> DocxDecoded {
     let styles = format!("<w:styles xmlns:w='{W}'>{styles}</w:styles>");
-    decode_docx(&package(body, &[("styles", "styles.xml", &styles)])).unwrap()
+    let mut d = decode_docx(&package(body, &[("styles", "styles.xml", &styles)])).unwrap();
+    // Page defaults have dedicated raw-decode assertions in the layout tests.
+    d.warnings.retain(|w| !matches!(w.loss(), "page_size" | "page_margins"));
+    d
 }
 fn shape(d: &DocxDecoded, run: usize) -> &hwpforge_blueprint::style::CharShape {
     let p = &d.document.sections()[0].paragraphs[0];
@@ -378,11 +381,13 @@ fn malformed_structure_is_fatal_while_formatting_is_local() {
         "",
         "<w:p/><w:sectPr><w:pgSz w:w='11906' w:h='16838'/><w:pgMar w:left='0'/></w:sectPr>",
     );
+    let page = d.document.sections()[0].page_settings;
     assert_eq!(
-        d.document.sections()[0].page_settings,
-        hwpforge_core::page::PageSettings::default()
+        (page.width.as_i32(), page.height.as_i32(), page.margin_left.as_i32()),
+        (59530, 84190, 0)
     );
-    assert_eq!(d.warnings.iter().find(|w| w.loss() == "section_layout").unwrap().count(), 1);
+    // 이것을 실패시키는 것: orient 생략 세로에 방향 추론 경고 추가.
+    assert!(!d.warnings.iter().any(|w| w.loss() == "page_orientation"));
 }
 
 // 이것을 실패시키는 것: 기본 highlight 색표·정렬·baseline/none 대응을 다른 값으로 바꿈.
@@ -828,10 +833,14 @@ fn structural_fractional_lengths_reject_negative_nonzero_sources() {
         assert!(decode_docx(&package(&format!("<w:p/><w:sectPr>{dimensions}</w:sectPr>"), &[]))
             .is_err());
     }
-    let d = read("", "<w:p/><w:sectPr><w:pgMar w:left='-0pt'/><w:pgSz w:w='0.01pt'/></w:sectPr>");
+    let d = read(
+        "",
+        "<w:p/><w:sectPr><w:pgMar w:left='-0pt' w:right='0'/><w:pgSz w:w='0.01pt'/></w:sectPr>",
+    );
+    let page = d.document.sections()[0].page_settings;
     assert_eq!(
-        d.document.sections()[0].page_settings,
-        hwpforge_core::page::PageSettings::default()
+        (page.width.as_i32(), page.margin_left.as_i32(), page.margin_right.as_i32()),
+        (1, 0, 0)
     );
 }
 

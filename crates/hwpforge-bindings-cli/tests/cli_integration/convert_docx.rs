@@ -31,6 +31,7 @@ fn converts_package_content_with_an_unrelated_extension() {
 }
 
 // 이것을 실패시키는 것: 필드 명령 경고의 count를 1로 초기화하거나 첫 위치/후속 생략 표시 누락.
+// 이것을 실패시키는 것: 쪽 기본값 경고 삭제 또는 위치 변경.
 #[test]
 fn text_output_reports_first_location_and_total_occurrences() {
     let tmp = test_tmp();
@@ -48,7 +49,7 @@ fn text_output_reports_first_location_and_total_occurrences() {
         run(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(stdout, format!("Generated {} (1 sections, 1 paragraphs)\n", output.display()));
-    assert_eq!(stderr, "[convert-docx] DOCX_FIELD_INSTRUCTION_OMITTED: total 2; first body.xml:fldSimple#4; subsequent locations omitted: yes; Field instruction discarded; saved result retained (total 2 occurrences; first example only; subsequent locations omitted)\n");
+    assert_eq!(stderr, "[convert-docx] DOCX_FIELD_INSTRUCTION_OMITTED: total 2; first body.xml:fldSimple#4; subsequent locations omitted: yes; Field instruction discarded; saved result retained (total 2 occurrences; first example only; subsequent locations omitted)\n[convert-docx] DOCX_PAGE_LAYOUT_APPROXIMATED: total 1; first body.xml:body#0; subsequent locations omitted: no; Missing section page setting uses Core defaults\n[convert-docx] DOCX_PAGE_LAYOUT_APPROXIMATED: total 1; first body.xml:body#0; subsequent locations omitted: no; Missing section page setting uses Core defaults\n");
 }
 
 // 이것을 실패시키는 것: 실패 후 출력 파일 생성, 종료 코드/오류 문구 변경, 확장자만으로 수용.
@@ -85,6 +86,7 @@ fn tracked_changes_and_non_docx_content_fail_without_output() {
 }
 
 // 이것을 실패시키는 것: 단일 경고에도 이후 위치가 생략되었다고 출력하거나 무경고 입력에 진단 추가(count > 1을 count >= 1로 변경).
+// 이것을 실패시키는 것: 일곱 여백 속성이 모두 있어도 page_margins 기본값 경고 추가.
 #[test]
 fn single_and_no_warning_text_output_keep_their_counts() {
     let tmp = test_tmp();
@@ -94,7 +96,7 @@ fn single_and_no_warning_text_output_keep_their_counts() {
         ("<w:p><w:r><w:t>본문</w:t></w:r></w:p>", ""),
         ("<w:p><w:fldSimple w:instr='DATE'><w:r><w:t>본문</w:t></w:r></w:fldSimple></w:p>", "[convert-docx] DOCX_FIELD_INSTRUCTION_OMITTED: total 1; first body.xml:fldSimple#4; subsequent locations omitted: no; Field instruction discarded; saved result retained\n"),
     ] {
-        std::fs::write(&input, docx::package_with_defaults(body, "")).unwrap();
+        std::fs::write(&input, docx::package_with_defaults(&format!("{body}<w:sectPr><w:pgSz w:w='11906' w:h='16838'/><w:pgMar w:top='0' w:right='0' w:bottom='0' w:left='0' w:header='0' w:footer='0' w:gutter='0'/></w:sectPr>"), "")).unwrap();
         let (stdout, stderr, code) = run(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
         assert_eq!(code, 0);
         assert_eq!(stderr, expected);

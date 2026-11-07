@@ -8,14 +8,27 @@ use crate::{
     DocxDecoded, DocxError, DocxWarning,
 };
 use hwpforge_core::{
-    document::Document, image::ImageStore, page::PageSettings, paragraph::Paragraph, run::Run,
+    document::Document,
+    image::ImageStore,
+    paragraph::Paragraph,
+    run::{Run, RunContent},
     section::Section,
 };
 use hwpforge_foundation::ParaShapeIndex;
-use std::{collections::HashSet, fmt, rc::Rc};
+mod layout;
+use layout::{Break, DecodedSection, Layout, Origin, Relations};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    rc::Rc,
+};
 
 const MAX_PARAGRAPHS: usize = 1_000_000;
 const MAX_RUNS: usize = 4_000_000;
+
+fn empty_text_runs(runs: &[Run]) -> bool {
+    runs.iter().all(|run| matches!(&run.content, RunContent::Text(text) if text.is_empty()))
+}
 
 fn admit_count(
     part: &str,
@@ -60,6 +73,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut seen = HashSet::from([package.main.id]);
     let main = package.main.name.clone();
     let mut definitions = Definitions::default();
+    let mut relations = Relations::default();
+    let mut valid_roots = HashMap::new();
     // Moving the relationships avoids cloning all input strings or borrowing the
     // package through a read. Shared ZIP targets are scanned only once.
     let mut relationships = std::mem::take(&mut package.relationships);
@@ -90,6 +105,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             Ok(Some(_)) => {
                 let Target::Internal(internal) = &relation.target else { unreachable!() };
                 if !seen.insert(internal.id) {
+                    if valid_roots.get(&internal.id) == Some(&root) {
+                        relations.admit(&relation, &main)?;
+                    }
                     continue;
                 }
             }
@@ -144,6 +162,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
                 )
             })?;
         } else {
+            if let Target::Internal(internal) = &relation.target {
+                valid_roots.insert(internal.id, root);
+            }
+            relations.admit(&relation, &main)?;
             let loss = match relation.kind {
                 RelationshipKind::Numbering => {
                     Some((Kind::FormattingOmitted, "list_definitions", "omit"))
@@ -173,11 +195,21 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     }
     let mut resolver = Resolver::new(definitions, &mut warnings)?;
     let bytes = package.read_main()?;
-    let paragraphs =
-        scan_formatted(&bytes, &main, &mut package.text_budget, &mut warnings, &mut resolver)?;
+    let sections = scan_formatted(
+        &bytes,
+        &main,
+        &mut package.text_budget,
+        &mut warnings,
+        &mut resolver,
+        &relations,
+    )?;
     let registry = resolver.registry;
     let mut document = Document::new();
-    document.add_section(Section::with_paragraphs(paragraphs, PageSettings::default()));
+    for section in sections {
+        debug_assert_eq!(section.origins.len(), section.core.paragraphs.len());
+        debug_assert!(section.content_width.as_i32() > 0 && section.content_height.as_i32() > 0);
+        document.add_section(section.core);
+    }
     Ok(DocxDecoded { document, registry, image_store: ImageStore::new(), warnings })
 }
 
@@ -234,6 +266,9 @@ enum Node {
     RunProperties,
     MarkProperties,
     NumberProperties,
+    SectionProperties,
+    Columns,
+    SectionProperty(PropertyState),
     Property(PropertyState),
     Text {
         preserve: bool,
@@ -276,11 +311,25 @@ struct Body<'a> {
     root: &'a str,
     root_matches: bool,
     body_seen: bool,
+    final_section_seen: bool,
     stack: Vec<Frame>,
     fields: Vec<Field>,
     paragraphs: Vec<Paragraph>,
+    sections: Vec<DecodedSection>,
+    origins: Vec<Origin>,
+    breaks: Vec<(usize, Break)>,
+    boundary_input: Option<(hwpforge_foundation::CharShapeIndex, bool)>,
+    source_paragraphs: usize,
+    paragraph_top_level: bool,
+    output_paragraphs: usize,
+    layout: Option<(Layout, Location)>,
+    paragraph_layout: Option<(Layout, Location)>,
+    relations: Option<&'a Relations>,
     paragraph: Option<Paragraph>,
     run: Option<(String, bool)>,
+    run_diagnosed: bool,
+    run_split: bool,
+    diagnose_runs: Vec<bool>,
     resolver: Option<&'a mut Resolver>,
     direct_para: Delta,
     direct_run: Delta,
@@ -300,7 +349,7 @@ fn scan(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<(Vec<Paragraph>, bool)> {
+) -> Result<(Vec<DecodedSection>, bool)> {
     scan_inner(bytes, part, root, main, budget, warnings, None)
 }
 fn scan_formatted(
@@ -309,8 +358,9 @@ fn scan_formatted(
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
     resolver: &mut Resolver,
-) -> Result<Vec<Paragraph>> {
-    Ok(scan_inner(bytes, part, "document", true, budget, warnings, Some(resolver))?.0)
+    relations: &Relations,
+) -> Result<Vec<DecodedSection>> {
+    Ok(scan_inner(bytes, part, "document", true, budget, warnings, Some((resolver, relations)))?.0)
 }
 fn scan_inner(
     bytes: &[u8],
@@ -319,19 +369,34 @@ fn scan_inner(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-    resolver: Option<&mut Resolver>,
-) -> Result<(Vec<Paragraph>, bool)> {
+    resources: Option<(&mut Resolver, &Relations)>,
+) -> Result<(Vec<DecodedSection>, bool)> {
+    let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
     let mut body = Body {
         part,
         main,
         root,
         root_matches: false,
         body_seen: false,
+        final_section_seen: false,
         stack: Vec::new(),
         fields: Vec::new(),
         paragraphs: Vec::new(),
+        sections: Vec::new(),
+        origins: Vec::new(),
+        breaks: Vec::new(),
+        boundary_input: None,
+        source_paragraphs: 0,
+        paragraph_top_level: false,
+        output_paragraphs: 0,
+        layout: None,
+        paragraph_layout: None,
+        relations,
         paragraph: None,
         run: None,
+        run_diagnosed: false,
+        run_split: false,
+        diagnose_runs: Vec::new(),
         resolver,
         direct_para: Delta::default(),
         direct_run: Delta::default(),
@@ -354,14 +419,10 @@ fn scan_inner(
     if main && !body.body_seen {
         return Err(DocxError::invalid(part, "document", "missing body"));
     }
-    // Core requires a paragraph even when all source objects were excluded.
-    if main && body.paragraphs.is_empty() {
-        admit_count(part, "#body", "paragraphs", 0, MAX_PARAGRAPHS)?;
-        body.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
-        body.push_run(String::new(), "#body")?;
-        body.finish_paragraph()?;
+    if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
+        body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
     }
-    Ok((body.paragraphs, body.root_matches))
+    Ok((body.sections, body.root_matches))
 }
 
 impl Body<'_> {
@@ -415,13 +476,27 @@ impl Body<'_> {
                 && self.stack.len() == 1
                 && !(w && element.name == "trackRevisions")
             {
-                self.warn(
-                    Kind::DocumentSettingsOmitted,
-                    &location,
-                    || "Document setting is not applied",
-                    "document_settings",
-                    "ignore",
-                )?;
+                if w && matches!(
+                    element.name.as_str(),
+                    "mirrorMargins" | "gutterAtTop" | "rtlGutter"
+                ) {
+                    layout::warn(
+                        self.warnings,
+                        self.part,
+                        &location,
+                        "binding_layout",
+                        "omit",
+                        "Document-wide mirrored or relocated binding margins are not applied",
+                    )?;
+                } else {
+                    self.warn(
+                        Kind::DocumentSettingsOmitted,
+                        &location,
+                        || "Document setting is not applied",
+                        "document_settings",
+                        "ignore",
+                    )?;
+                }
             }
             self.stack.push(frame);
             return Ok(());
@@ -483,7 +558,8 @@ impl Body<'_> {
         Ok(())
     }
     fn semantic(&mut self, element: &Element, frame: &mut Frame) -> Result<()> {
-        let location = &frame.location;
+        let location_value = frame.location.clone();
+        let location = &location_value;
         let w = element.namespace_id == W_NS.0;
         if element.namespace_id == MC_NS.0 {
             match element.name.as_str() {
@@ -523,13 +599,20 @@ impl Body<'_> {
                             "nested body paragraph",
                         ));
                     }
-                    admit_count(
+                    self.output_paragraphs = admit_count(
                         self.part,
                         location,
                         "paragraphs",
-                        self.paragraphs.len(),
+                        self.output_paragraphs,
                         MAX_PARAGRAPHS,
                     )?;
+                    self.source_paragraphs += 1;
+                    self.paragraph_top_level =
+                        self.stack.last().is_some_and(|f| matches!(f.node, Node::Body));
+                    self.breaks.clear();
+                    self.diagnose_runs.clear();
+                    self.run_diagnosed = false;
+                    self.boundary_input = None;
                     self.direct_para = Delta::default();
                     self.direct_run = Delta::default();
                     self.run_style = None;
@@ -550,6 +633,8 @@ impl Body<'_> {
                     self.direct_run = Delta::default();
                     self.run_style = None;
                     self.run = Some((String::new(), self.visible()));
+                    self.run_diagnosed = false;
+                    self.run_split = false;
                     frame.node = Node::Run;
                 }
                 "t" => {
@@ -563,18 +648,7 @@ impl Body<'_> {
                 "tab" => self.append("\t", location)?,
                 "cr" | "br" => match attribute(element, W_NS.0, "type") {
                     Some("page" | "column") if element.name == "br" => {
-                        let loss = if attribute(element, W_NS.0, "type") == Some("page") {
-                            "page_break"
-                        } else {
-                            "column_break"
-                        };
-                        self.warn(
-                            Kind::BreakOmitted,
-                            location,
-                            || "Break discarded; paragraph is not split",
-                            loss,
-                            "omit",
-                        )?;
+                        self.split(attribute(element, W_NS.0, "type") == Some("column"), location)?;
                     }
                     None | Some("textWrapping") => self.append("\n", location)?,
                     Some(_) => self.warn(
@@ -587,26 +661,19 @@ impl Body<'_> {
                 },
                 "noBreakHyphen" => self.append("\u{2011}", location)?,
                 "softHyphen" => self.append("\u{00ad}", location)?,
-                "rPr" | "pPr" | "sectPr" => {
-                    if element.name != "sectPr" {
-                        crate::format::container_attributes(
-                            element,
-                            self.part,
-                            &location.to_string(),
-                            self.warnings,
-                        )?;
-                    }
-                    match element.name.as_str() {
-                        "rPr" => frame.node = Node::RunProperties,
-                        "pPr" => frame.node = Node::ParaProperties,
-                        _ => self.warn(
-                            Kind::FormattingOmitted,
-                            location,
-                            || "Section and page settings use Core defaults",
-                            "section_layout",
-                            "use_defaults",
-                        )?,
-                    }
+                "sectPr" => self.begin_layout(element, frame)?,
+                "rPr" | "pPr" => {
+                    crate::format::container_attributes(
+                        element,
+                        self.part,
+                        &location.to_string(),
+                        self.warnings,
+                    )?;
+                    frame.node = if element.name == "rPr" {
+                        Node::RunProperties
+                    } else {
+                        Node::ParaProperties
+                    };
                     frame.blocked = true;
                     frame.properties = true;
                 }
@@ -736,11 +803,14 @@ impl Body<'_> {
         }
         Ok(())
     }
+    fn mark_field_result(&mut self) {
+        for field in self.fields.iter_mut().rev().take_while(|f| f.result) {
+            field.has_result = true;
+        }
+    }
     fn append(&mut self, text: &str, location: &Location) -> Result<()> {
         if !text.is_empty() {
-            for field in self.fields.iter_mut().rev().take_while(|f| f.result) {
-                field.has_result = true;
-            }
+            self.mark_field_result();
         }
         if !self.visible() {
             return Ok(());
@@ -872,6 +942,8 @@ impl Body<'_> {
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?
             .add_run(Run::text(text, id));
+        self.diagnose_runs.push(!self.run_diagnosed);
+        self.run_diagnosed = true;
         Ok(())
     }
     fn finish_paragraph(&mut self) -> Result<()> {
@@ -879,18 +951,197 @@ impl Body<'_> {
             .paragraph
             .take()
             .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?;
-        self.resolver
+        let base = self
+            .resolver
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing resolver"))?
             .finish(
-                &mut paragraph,
+                (&mut paragraph, &self.diagnose_runs),
                 self.paragraph_style,
                 &self.direct_para,
                 self.mark.as_ref().map(|d| (d, self.mark_style)),
                 self.part,
                 self.warnings,
             )?;
-        self.paragraphs.push(paragraph);
+        let total = self.breaks.len() + 1;
+        let mut start = 0;
+        let run_count = paragraph.runs.len();
+        let mut runs = std::mem::take(&mut paragraph.runs).into_iter();
+        for fragment in 0..total {
+            let end = self.breaks.get(fragment).map_or(run_count, |b| b.0);
+            let mut p = paragraph.clone();
+            p.runs = runs.by_ref().take(end - start).collect();
+            // Empty source runs still participate in source diagnostics, but an
+            // empty output fragment has exactly one run at its final effective shape.
+            if empty_text_runs(&p.runs) {
+                if let Some(last) = p.runs.pop() {
+                    p.runs.clear();
+                    p.runs.push(last);
+                }
+            }
+            start = end;
+            let cause = fragment.checked_sub(1).map(|i| self.breaks[i].1);
+            if total > 1 {
+                p.para_shape_id = self.resolver.as_mut().unwrap().fragment_shape(
+                    &base,
+                    fragment == 0,
+                    fragment + 1 == total,
+                )?;
+                p.page_break = if fragment == 0 { paragraph.page_break } else { cause.is_some() };
+                if fragment + 1 != total {
+                    p.end_char_shape = None;
+                }
+                if fragment != 0 {
+                    p.heading_level = None;
+                }
+            }
+            self.origins.push(Origin {
+                paragraph: self.source_paragraphs,
+                list_item: self.source_paragraphs,
+                fragment,
+                cause,
+            });
+            self.paragraphs.push(p);
+        }
+        Ok(())
+    }
+    fn begin_layout(&mut self, e: &Element, frame: &mut Frame) -> Result<()> {
+        frame.blocked = true;
+        frame.properties = true;
+        frame.node = Node::SectionProperty(PropertyState::Excluded);
+        let valid_parent =
+            self.stack.last().is_some_and(|f| matches!(f.node, Node::ParaProperties | Node::Body));
+        if !valid_parent || (self.paragraph.is_some() && !self.paragraph_top_level) {
+            layout::warn(
+                self.warnings,
+                self.part,
+                &frame.location,
+                "nested_section",
+                "keep_content",
+                "Nested section settings excluded; body content retained",
+            )?;
+            return Ok(());
+        }
+        if self.layout.is_some() || self.paragraph_layout.is_some() {
+            return Err(DocxError::invalid(
+                self.part,
+                &frame.location,
+                "duplicate section settings",
+            ));
+        }
+        for (ns, key, _) in &e.attributes {
+            if !(*ns == W_NS.0
+                && matches!(key.as_str(), "rsidR" | "rsidRPr" | "rsidSect" | "rsidDel"))
+            {
+                layout::warn(
+                    self.warnings,
+                    self.part,
+                    &frame.location,
+                    "page_attribute",
+                    "omit",
+                    "Unsupported section attribute excluded",
+                )?;
+            }
+        }
+        self.layout = Some((Layout::default(), frame.location.clone()));
+        frame.node = Node::SectionProperties;
+        Ok(())
+    }
+    fn split(&mut self, column: bool, at: &Location) -> Result<()> {
+        if self.run.is_none() {
+            return Err(DocxError::invalid(self.part, at, "break requires a run"));
+        }
+        self.mark_field_result();
+        if !self.visible() {
+            return Ok(());
+        }
+        self.run_split = true;
+        self.output_paragraphs =
+            admit_count(self.part, at, "paragraphs", self.output_paragraphs, MAX_PARAGRAPHS)?;
+        let text = std::mem::take(&mut self.run.as_mut().unwrap().0);
+        if !text.is_empty() {
+            self.push_run(text, at)?;
+        }
+        self.boundary_input = Some((
+            self.resolver.as_mut().unwrap().run_input(self.direct_run.clone(), self.run_style)?,
+            !self.run_diagnosed,
+        ));
+        let start = self.breaks.last().map_or(0, |b| b.0);
+        let runs = &self.paragraph.as_ref().unwrap().runs[start..];
+        if !runs.is_empty() && empty_text_runs(runs) {
+            // A preceding empty source run does not own this break's character shape.
+            self.push_run(String::new(), at)?;
+        }
+        self.ensure_fragment_run(at)?;
+        if self.run_diagnosed {
+            if let Some((id, _)) = self.boundary_input {
+                self.boundary_input = Some((id, false));
+            }
+        }
+        if self.breaks.is_empty() {
+            self.warn(Kind::ParagraphSplitApproximated, at, || "Paragraph split; list grouping, indentation, keep and paragraph-end effects are approximated", "paragraph_split", "split")?;
+        }
+        if column {
+            self.warn(
+                Kind::ColumnBreakApproximated,
+                at,
+                || "Column break uses a page break in single-column output",
+                "column_break",
+                "page_break",
+            )?;
+        }
+        self.breaks.push((
+            self.paragraph.as_ref().unwrap().runs.len(),
+            if column { Break::Column } else { Break::Page },
+        ));
+        Ok(())
+    }
+    fn ensure_fragment_run(&mut self, at: &(impl fmt::Display + ?Sized)) -> Result<()> {
+        let start = self.breaks.last().map_or(0, |b| b.0);
+        if self.paragraph.as_ref().unwrap().runs.len() == start {
+            if let Some((id, diagnose)) = self.boundary_input {
+                self.runs = admit_count(self.part, at, "runs", self.runs, MAX_RUNS)?;
+                self.paragraph.as_mut().unwrap().add_run(Run::text("", id));
+                self.diagnose_runs.push(diagnose);
+                self.run_diagnosed = true;
+                self.boundary_input = Some((id, false));
+            } else {
+                self.push_run(String::new(), at)?;
+            }
+        }
+        Ok(())
+    }
+    fn close_section(&mut self, layout: Layout, at: Location) -> Result<()> {
+        let (page, mut references, content_width, content_height) =
+            layout.finish(self.part, &at, self.warnings)?;
+        if let Some(previous) = self.sections.last() {
+            references.inherit_defaults(previous.references);
+        }
+        if self.paragraphs.is_empty() {
+            self.output_paragraphs =
+                admit_count(self.part, &at, "paragraphs", self.output_paragraphs, MAX_PARAGRAPHS)?;
+            self.source_paragraphs += 1;
+            self.direct_para = Delta::default();
+            self.direct_run = Delta::default();
+            self.paragraph_style = None;
+            self.run_style = None;
+            self.mark = None;
+            self.mark_style = None;
+            self.breaks.clear();
+            self.diagnose_runs.clear();
+            self.run_diagnosed = false;
+            self.boundary_input = None;
+            self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
+            self.ensure_fragment_run(&at)?;
+            self.finish_paragraph()?;
+        }
+        self.sections.push(DecodedSection {
+            core: Section::with_paragraphs(std::mem::take(&mut self.paragraphs), page),
+            origins: std::mem::take(&mut self.origins),
+            references,
+            content_width,
+            content_height,
+        });
         Ok(())
     }
     fn property(&mut self, e: &Element, frame: &mut Frame) -> Result<()> {
@@ -900,16 +1151,39 @@ impl Body<'_> {
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing parent frame"))?
             .node;
         let w = e.namespace_id == W_NS.0;
-        if w && self
-            .stack
-            .last()
-            .ok_or_else(|| DocxError::invalid(self.part, "body", "missing parent frame"))?
-            .location
-            .name
-            .as_ref()
-            == "sectPr"
-        {
-            crate::format::structural(e, self.part)?;
+        if matches!(parent, Node::SectionProperties | Node::Columns | Node::SectionProperty(_)) {
+            let state = match parent {
+                Node::SectionProperties => {
+                    let layout = &mut self.layout.as_mut().unwrap().0;
+                    let state = layout.read(
+                        e,
+                        self.part,
+                        &frame.location,
+                        self.relations,
+                        self.warnings,
+                    )?;
+                    if w && e.name == "cols" {
+                        frame.node = Node::Columns;
+                        return Ok(());
+                    }
+                    state
+                }
+                Node::Columns if w && e.name == "col" => {
+                    self.layout.as_mut().unwrap().0.approximate_columns(
+                        self.part,
+                        &frame.location,
+                        self.warnings,
+                    )?;
+                    PropertyState::Excluded
+                }
+                Node::SectionProperty(PropertyState::Excluded) => PropertyState::Excluded,
+                _ => layout::exclude(self.part, &frame.location, self.warnings)?,
+            };
+            frame.node = Node::SectionProperty(state);
+            return Ok(());
+        }
+        if w && e.name == "sectPr" && matches!(parent, Node::ParaProperties) {
+            return self.begin_layout(e, frame);
         }
         if let Node::Property(state) = parent {
             frame.node = Node::Property(state.child(
@@ -998,21 +1272,26 @@ impl Body<'_> {
                     .run
                     .take()
                     .ok_or_else(|| DocxError::invalid(self.part, "r", "missing run"))?;
-                if keep {
+                if keep && (!text.is_empty() || !self.run_split) {
                     self.push_run(text, &frame.location)?;
                 }
             }
             Node::Paragraph => {
-                if self
-                    .paragraph
-                    .as_ref()
-                    .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?
-                    .runs
-                    .is_empty()
-                {
-                    self.push_run(String::new(), &frame.location)?;
-                }
+                self.ensure_fragment_run(&frame.location)?;
                 self.finish_paragraph()?;
+                if let Some((layout, at)) = self.paragraph_layout.take() {
+                    self.close_section(layout, at)?;
+                }
+            }
+            Node::SectionProperties => {
+                if let Some((layout, at)) = self.layout.take() {
+                    if self.paragraph.is_some() {
+                        self.paragraph_layout = Some((layout, at));
+                    } else {
+                        self.final_section_seen = true;
+                        self.close_section(layout, at)?;
+                    }
+                }
             }
             Node::SimpleField => self.finish_field(true, &frame.location)?,
             Node::Alternate { fallback: false } if !frame.blocked => self.warn(
@@ -1033,3 +1312,6 @@ mod tests;
 
 #[cfg(test)]
 mod format_tests;
+
+#[cfg(test)]
+mod layout_tests;

@@ -13,6 +13,30 @@
         "loss": "uninterpreted_part",
         "action": "omit"
       }
+    },
+    {
+      "code": "DOCX_PAGE_LAYOUT_APPROXIMATED",
+      "message": "Missing section page setting uses Core defaults",
+      "context": {
+        "format": "docx",
+        "stage": "decode",
+        "part": "body.xml",
+        "location": "body#0",
+        "loss": "page_size",
+        "action": "use_defaults"
+      }
+    },
+    {
+      "code": "DOCX_PAGE_LAYOUT_APPROXIMATED",
+      "message": "Missing section page setting uses Core defaults",
+      "context": {
+        "format": "docx",
+        "stage": "decode",
+        "part": "body.xml",
+        "location": "body#0",
+        "loss": "page_margins",
+        "action": "use_defaults"
+      }
     }
   ]
 }

@@ -1,7 +1,7 @@
 #![cfg(feature = "docx")]
 use std::io::{Cursor, Write};
 
-// 이것을 실패시키는 것: facade의 DOCX 진입점 변경 또는 미해결 서식 경고 누락.
+// 이것을 실패시키는 것: facade의 DOCX 진입점 변경 또는 미해결 서식·쪽 기본값 경고 누락.
 #[test]
 fn facade_decodes_text_without_other_codec_features() {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -29,6 +29,8 @@ fn facade_decodes_text_without_other_codec_features() {
             ("DOCX_FORMAT_DEFAULTED", "font_size", "use_fallback", 1),
             ("DOCX_FORMAT_DEFAULTED", "font_family", "use_fallback", 1),
             ("DOCX_FORMAT_DEFAULTED", "text_color", "use_fallback", 1),
+            ("DOCX_PAGE_LAYOUT_APPROXIMATED", "page_size", "use_defaults", 1),
+            ("DOCX_PAGE_LAYOUT_APPROXIMATED", "page_margins", "use_defaults", 1),
         ]
     );
 }

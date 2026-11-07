@@ -28,7 +28,7 @@ pub use warning::DocxWarning;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct DocxDecoded {
-    /// Body paragraphs in a single section with Core's default page settings.
+    /// Body fragments grouped by source sections with normalized page geometry.
     pub document: Document<Draft>,
     /// Interned effective character/paragraph shapes and original named paragraph styles.
     pub registry: StyleRegistry,

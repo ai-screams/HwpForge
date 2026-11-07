@@ -155,7 +155,7 @@ fn combination_cache_counts_and_font_storage_are_bounded() {
     for _ in 0..100 {
         p.add_run(hwpforge_core::Run::text("A", id));
     }
-    r.finish(&mut p, None, &Delta::default(), None, "body", &mut vec![]).unwrap();
+    r.finish((&mut p, &[]), None, &Delta::default(), None, "body", &mut vec![]).unwrap();
     assert_eq!(r.combinations_built, 1);
     r.owned_font_bytes = 64 * 1024 * 1024;
     let font = r.definitions.fonts.intern("another font", "test", "font").unwrap();
@@ -274,8 +274,15 @@ fn shared_identifiers_do_not_scale_with_references() {
             let input = r.run_input(delta.clone(), None).unwrap();
             let mut p = Paragraph::new(ParaShapeIndex::new(0));
             p.add_run(hwpforge_core::Run::text("A", input));
-            r.finish(&mut p, None, &Delta::default(), Some((&delta, None)), "body", &mut vec![])
-                .unwrap();
+            r.finish(
+                (&mut p, &[]),
+                None,
+                &Delta::default(),
+                Some((&delta, None)),
+                "body",
+                &mut vec![],
+            )
+            .unwrap();
             assert_eq!(p.end_char_shape, Some(CharShapeIndex::new(0)));
         }
         assert_eq!(
@@ -303,7 +310,8 @@ fn shared_identifiers_do_not_scale_with_references() {
             p.add_run(hwpforge_core::Run::text("A", input));
             let mut direct = Delta::default();
             direct.para.left = Some(i);
-            r.finish(&mut p, None, &direct, Some((&delta, None)), "body", &mut vec![]).unwrap();
+            r.finish((&mut p, &[]), None, &direct, Some((&delta, None)), "body", &mut vec![])
+                .unwrap();
         }
         assert_eq!(r.copied_font_bytes - initial.4, 0);
         assert_eq!(r.registry.char_shape_count(), 1);
@@ -350,7 +358,7 @@ fn context_and_combination_limits_precede_allocation() {
         r.contexts.insert((d, CharDelta::default()), i as usize);
     }
     assert!(matches!(
-        r.finish(&mut make(), None, &Delta::default(), None, "body", &mut vec![]),
+        r.finish((&mut make(), &[]), None, &Delta::default(), None, "body", &mut vec![]),
         Err(DocxError::Limit { resource: "format contexts", observed: 262145, limit: 262144, .. })
     ));
     r.contexts.clear();
@@ -359,7 +367,7 @@ fn context_and_combination_limits_precede_allocation() {
         r.combinations.insert((i + 1, 0), c);
     }
     assert!(matches!(
-        r.finish(&mut make(), None, &Delta::default(), None, "body", &mut vec![]),
+        r.finish((&mut make(), &[]), None, &Delta::default(), None, "body", &mut vec![]),
         Err(DocxError::Limit {
             resource: "format combinations",
             observed: 262145,
@@ -373,7 +381,7 @@ fn context_and_combination_limits_precede_allocation() {
     }
     assert!(matches!(
         r.finish(
-            &mut make(),
+            (&mut make(), &[]),
             None,
             &Delta::default(),
             Some((&Delta::default(), None)),
@@ -390,7 +398,7 @@ fn context_and_combination_limits_precede_allocation() {
     r.marks.insert((0, 0), c);
     assert!(r
         .finish(
-            &mut make(),
+            (&mut make(), &[]),
             None,
             &Delta::default(),
             Some((&Delta::default(), None)),
@@ -463,7 +471,8 @@ fn styled_marks_cache_character_resolution_and_keep_direct_precedence() {
     for _ in 0..3 {
         let mut p = Paragraph::new(ParaShapeIndex::new(0));
         p.add_run(hwpforge_core::Run::text("A", input));
-        r.finish(&mut p, None, &direct, Some((&mark, Some(style))), "body", &mut vec![]).unwrap();
+        r.finish((&mut p, &[]), None, &direct, Some((&mark, Some(style))), "body", &mut vec![])
+            .unwrap();
         for id in [p.runs[0].char_shape_id, p.end_char_shape.unwrap()] {
             let c = &r.registry.char_shapes[id.get()];
             assert_eq!((c.size.as_i32(), c.bold), (1500, false));
@@ -490,7 +499,8 @@ fn character_cache_context_keeps_direct_delta_for_runs_and_marks() {
     for (delta, expected) in [(&empty, true), (&direct, false), (&empty, true), (&direct, false)] {
         let mut p = Paragraph::new(ParaShapeIndex::new(0));
         p.add_run(hwpforge_core::Run::text("A", input));
-        r.finish(&mut p, None, delta, Some((&empty, Some(style))), "body", &mut vec![]).unwrap();
+        r.finish((&mut p, &[]), None, delta, Some((&empty, Some(style))), "body", &mut vec![])
+            .unwrap();
         assert_eq!(r.registry.char_shapes[p.runs[0].char_shape_id.get()].bold, expected);
         assert_eq!(r.registry.char_shapes[p.end_char_shape.unwrap().get()].bold, expected);
     }

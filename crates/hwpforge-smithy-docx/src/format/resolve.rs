@@ -302,13 +302,14 @@ impl Resolver {
     }
     pub(crate) fn finish(
         &mut self,
-        p: &mut Paragraph,
+        paragraph: (&mut Paragraph, &[bool]),
         style: Option<StyleKey>,
         direct: &Delta,
         mark: Option<(&Delta, Option<StyleKey>)>,
         part: &str,
         w: &mut Vec<DocxWarning>,
-    ) -> Result<()> {
+    ) -> Result<Delta> {
+        let (p, diagnose) = paragraph;
         let style = style.or(self.default_paragraph);
         let base = self.context(None, style, direct, part, w)?;
         p.style_ref = style.as_ref().and_then(|s| self.named.get(s)).copied();
@@ -325,11 +326,14 @@ impl Resolver {
             self.contexts.insert(context_key, next);
             next
         };
-        for run in &mut p.runs {
+        for (index, run) in p.runs.iter_mut().enumerate() {
+            let diagnose = diagnose.get(index).copied().unwrap_or(true);
             let input_id = run.char_shape_id.get();
             let key = (context, input_id);
             let result = if let Some(c) = self.combinations.get(&key) {
-                reference_warning(*c, part, w)?;
+                if diagnose {
+                    reference_warning(*c, part, w)?;
+                }
                 *c
             } else {
                 limit(part, "rPr", "format combinations", self.combinations.len() + 1, MAX_SHAPES)?;
@@ -343,7 +347,9 @@ impl Resolver {
                 result
             };
             run.char_shape_id = result.id;
-            format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
+            if diagnose {
+                format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
+            }
         }
         if let Some((mark, style)) = mark {
             let delta = self.run_input(mark.clone(), style)?.get();
@@ -367,7 +373,29 @@ impl Resolver {
             p.end_char_shape = Some(result.id);
             format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
         }
-        Ok(())
+        Ok(base)
+    }
+    pub(crate) fn fragment_shape(
+        &mut self,
+        base: &Delta,
+        first: bool,
+        last: bool,
+    ) -> Result<ParaShapeIndex> {
+        let mut derived = base.clone();
+        if !first {
+            derived.para.before = Some(0);
+            derived.para.first = Some(0);
+            derived.para.num_id = Some(0);
+            derived.para.num_present = Some(false);
+            derived.para.outline = Some(9);
+        }
+        if !last {
+            derived.para.after = Some(0);
+            derived.para.keep_next = Some(false);
+        }
+        derived.para.keep_lines = Some(false);
+        derived.para.widow = Some(false);
+        self.para_shape(&derived)
     }
     // Runs and paragraph marks share character style toggles and direct overrides.
     fn character(
@@ -499,6 +527,7 @@ impl Resolver {
     fn para_shape(&mut self, d: &Delta) -> Result<ParaShapeIndex> {
         let p = &d.para;
         let mut shape = ParaShape::default();
+        shape.list = None;
         shape.alignment = match p.alignment {
             Some(1) => Alignment::Center,
             Some(2) => Alignment::Right,

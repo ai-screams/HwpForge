@@ -1,9 +1,11 @@
 use crate::{DocxDecoded, DocxError};
 
-// Structural tests isolate their losses; formatting fallback counts are asserted separately.
+// Structural tests isolate their losses; format and page defaults are asserted separately.
 fn decode_structure(bytes: &[u8]) -> crate::DocxResult<DocxDecoded> {
     let mut d = crate::decode_docx(bytes)?;
-    d.warnings.retain(|w| w.code() != "DOCX_FORMAT_DEFAULTED");
+    d.warnings.retain(|w| {
+        w.code() != "DOCX_FORMAT_DEFAULTED" && !matches!(w.loss(), "page_size" | "page_margins")
+    });
     Ok(d)
 }
 use std::io::{Cursor, Write};
@@ -329,19 +331,19 @@ fn links_controls_and_fallback_keep_only_selected_text() {
     assert_eq!(d.warnings[0].loss(), "unknown_element");
 }
 
-// 이것을 실패시키는 것: 서식 무음 수용, 속성별로 무한 집계, page/column 나누기 출력.
+// 이것을 실패시키는 것: 서식 무음 수용, 속성별로 무한 집계, page/column 나누기 누락.
 #[test]
 fn formatting_breaks_attributes_and_values_have_explicit_losses() {
     let d = decoded("<w:p w:rsidR='1'><w:pPr><w:numPr/><w:rPr><w:b/></w:rPr><w:sectPr/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>A</w:t><w:br w:type='page'/><w:br w:type='column'/><w:br w:type='odd'/><w:t xml:space='odd' w:other='v'>B</w:t></w:r></w:p><w:sectPr/>");
-    assert_eq!(texts(&d), ["AB"]);
+    assert_eq!(texts(&d), ["A", "", "B"]);
+    assert_eq!(d.document.sections().len(), 2);
     let actual: Vec<_> =
         d.warnings.iter().map(|w| (w.code(), w.loss(), w.action(), w.count())).collect();
     assert_eq!(
         actual,
         [
-            ("DOCX_FORMATTING_OMITTED", "section_layout", "use_defaults", 2),
-            ("DOCX_BREAK_OMITTED", "page_break", "omit", 1),
-            ("DOCX_BREAK_OMITTED", "column_break", "omit", 1),
+            ("DOCX_PARAGRAPH_SPLIT_APPROXIMATED", "paragraph_split", "split", 1),
+            ("DOCX_COLUMN_BREAK_APPROXIMATED", "column_break", "page_break", 1),
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "omit", 1),
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "preserve_source", 1),
             ("DOCX_ATTRIBUTE_OMITTED", "unsupported_attribute", "ignore", 1),
@@ -646,9 +648,11 @@ fn field_results_respect_all_enclosing_boundaries() {
 // 이것을 실패시키는 것: 내용 제외 후 빈 구역 방치, 최소 빈 문단/run 생성 생략.
 #[test]
 fn empty_body_and_excluded_only_body_have_valid_minimal_structure() {
-    for body in
-        ["", "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"]
-    {
+    for body in [
+        "",
+        "<w:drawing><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:drawing>",
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+    ] {
         let d = decoded(body);
         assert_eq!(texts(&d), [""]);
         assert_eq!(counts(&d), [1]);
@@ -838,7 +842,9 @@ fn repeated_body_diagnostics_only_build_first_example() {
     assert_eq!(first.warnings.len(), 3);
     assert_eq!(repeated.warnings.len(), 3);
     assert_eq!(repeated.warnings.iter().map(|w| w.count()).collect::<Vec<_>>(), [64, 64, 64]);
-    assert_eq!((first_bytes, repeated_bytes), (3702, 3702));
+    // 이것을 실패시키는 것: 쪽 기본값 진단 두 건 누락 또는 반복 횟수만큼 사유 생성.
+    // Two page defaults add 2 * (13-byte part + 6-byte location + 47-byte reason).
+    assert_eq!((first_bytes, repeated_bytes), (3834, 3834));
     eprintln!("body diagnostic bytes: {first_bytes} / {repeated_bytes}");
 }
 

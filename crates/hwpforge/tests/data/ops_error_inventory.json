@@ -187,7 +187,19 @@
           "discriminant": null
         },
         {
-          "name": "BreakOmitted",
+          "name": "ParagraphSplitApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ColumnBreakApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "PageLayoutApproximated",
           "shape": "struct",
           "cfg": [],
           "discriminant": null
