@@ -79,6 +79,42 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "UnsupportedAttribute",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnsupportedValue",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "StyleReferenceLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FormatDefaulted",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ScriptFormatCollapsed",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "HiddenTextExposed",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "DocumentSettingsOmitted",
           "shape": "struct",
           "cfg": [],

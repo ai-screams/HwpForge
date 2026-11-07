@@ -6,7 +6,7 @@ use serde_json::json;
 #[path = "support/docx.rs"]
 mod docx;
 
-// 이것을 실패시키는 것: DOCX 대신 HWPX 디코더 호출, 본문/개수 변경, meta 재집계.
+// 이것을 실패시키는 것: DOCX 대신 HWPX 디코더 호출, 본문/개수 변경, 미해결 서식 경고 제거 또는 meta count를 1로 초기화.
 #[test]
 fn imported_text_and_metadata_survive_encoding() {
     let output = convert_docx(&docx::package(
@@ -18,7 +18,19 @@ fn imported_text_and_metadata_survive_encoding() {
         decoded.document.sections()[0].paragraphs.iter().map(|p| p.text_content()).collect();
     assert_eq!(text, ["첫째 & 본문", "둘째"]);
     let first = serde_json::to_value(output.meta()).unwrap();
-    assert_eq!(first, json!({"sections":1,"paragraphs":2,"warnings":[]}));
+    // Two paragraphs with one run each leave six categories unresolved twice.
+    let warnings: Vec<_> = [
+        ("line_spacing", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("paragraph_spacing", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("indentation", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("font_size", "rPr", "Unresolved character formatting uses 10pt, 함초롬바탕 or black (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("font_family", "rPr", "Unresolved character formatting uses 10pt, 함초롬바탕 or black (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("text_color", "rPr", "Unresolved character formatting uses 10pt, 함초롬바탕 or black (total 2 occurrences; first example only; subsequent locations omitted)"),
+    ].into_iter().map(|(loss, location, message)| json!({
+        "code":"DOCX_FORMAT_DEFAULTED", "message":message,
+        "context":{"format":"docx","stage":"decode","part":"body.xml","location":location,"loss":loss,"action":"use_fallback","count":2}
+    })).collect();
+    assert_eq!(first, json!({"sections":1,"paragraphs":2,"warnings":warnings}));
     assert_eq!(serde_json::to_value(output.meta()).unwrap(), first);
     let restored: ImportMeta = serde_json::from_value(first.clone()).unwrap();
     assert_eq!(serde_json::to_value(restored).unwrap(), first);
@@ -35,7 +47,7 @@ fn decoder_counts_and_first_location_are_copied_once() {
                 )
             })
             .collect();
-        let output = convert_docx(&docx::package_with_relationships(
+        let output = convert_docx(&docx::package_with_defaults(
             "<w:p><w:r><w:t>가</w:t></w:r></w:p>",
             &relationships,
         ))
@@ -119,13 +131,15 @@ fn unknown_source_positions_and_stage_order_survive_metadata() {
     use hwpforge::docx::DocxWarning;
     use hwpforge::hwpx::{EncodeWarning, RegistryBridgeWarning};
     use hwpforge::ops::OpsWarning;
-    let mut output =
-        convert_docx(&docx::package("<w:p><w:r><w:br w:type='page'/><w:t>가</w:t></w:r></w:p>"))
-            .unwrap();
-    let OpsWarning::Docx(DocxWarning::BreakOmitted { part, location, count, .. }) =
+    let mut output = convert_docx(&docx::package_with_defaults(
+        "<w:p><w:r><w:t>가</w:t></w:r></w:p>",
+        "<Relationship Id='opaque0' Type='urn:test:opaque' Target='opaque.xml'/>",
+    ))
+    .unwrap();
+    let OpsWarning::Docx(DocxWarning::OptionalPartOmitted { part, location, count, .. }) =
         &mut output.warnings[0]
     else {
-        panic!("break warning");
+        panic!("uninterpreted relationship warning");
     };
     *part = None;
     *location = None;
@@ -144,11 +158,14 @@ fn unknown_source_positions_and_stage_order_survive_metadata() {
     let meta = serde_json::to_value(output.meta()).unwrap();
     assert_eq!(
         meta["warnings"][0]["context"],
-        json!({"format":"docx","stage":"decode","loss":"page_break","action":"omit","count":20_000})
+        json!({"format":"docx","stage":"decode","loss":"uninterpreted_part","action":"omit","count":20_000})
     );
     let codes: Vec<_> =
         meta["warnings"].as_array().unwrap().iter().map(|w| w["code"].as_str().unwrap()).collect();
-    assert_eq!(codes, ["DOCX_BREAK_OMITTED", "FONT_FALLBACK", "XML_FORBIDDEN_CHARS_REMOVED"]);
+    assert_eq!(
+        codes,
+        ["DOCX_OPTIONAL_PART_OMITTED", "FONT_FALLBACK", "XML_FORBIDDEN_CHARS_REMOVED"]
+    );
     assert_eq!(meta["warnings"][1]["context"]["stage"], "project");
     assert_eq!(meta["warnings"][1]["context"]["count"], 2);
     assert_eq!(
@@ -168,23 +185,60 @@ fn import_uses_an_empty_outline_head() {
 // 이것을 실패시키는 것: decoder 경고를 역순으로 연결하거나 같은 코드의 다른 loss를 합산.
 #[test]
 fn distinct_decoder_losses_keep_first_occurrence_order() {
-    let output = convert_docx(&docx::package(
-        "<w:p><w:r><w:br w:type='page'/><w:br w:type='column'/><w:t>가</w:t></w:r></w:p>",
-    ))
-    .unwrap();
+    let output = convert_docx(&docx::package_with_defaults(
+        "<w:p><w:hyperlink w:anchor='local'><w:r><w:t>가</w:t></w:r></w:hyperlink><w:fldSimple w:instr='DATE'><w:r><w:t>나</w:t></w:r></w:fldSimple></w:p>",
+        "<Relationship Id='opaque0' Type='urn:test:opaque' Target='opaque.xml'/><Relationship Id='missing' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/header' Target='missing.xml'/><Relationship Id='opaque1' Type='urn:test:opaque' Target='other.xml'/>",
+    )).unwrap();
     let warnings = output.meta().warnings;
     let actual: Vec<_> = warnings
         .iter()
         .map(|w| {
             let c = w.context.as_ref().unwrap();
-            (w.code.as_str(), c.loss.as_str(), c.location.as_deref(), c.count)
+            (
+                w.code.as_str(),
+                c.loss.as_str(),
+                c.action.as_str(),
+                c.part.as_deref(),
+                c.location.as_deref(),
+                c.count,
+            )
         })
         .collect();
     assert_eq!(
         actual,
         [
-            ("DOCX_BREAK_OMITTED", "page_break", Some("br#5"), 1),
-            ("DOCX_BREAK_OMITTED", "column_break", Some("br#6"), 1),
+            (
+                "DOCX_OPTIONAL_PART_OMITTED",
+                "uninterpreted_part",
+                "omit",
+                Some("opaque.xml"),
+                Some("relationship:opaque0"),
+                2
+            ),
+            (
+                "DOCX_OPTIONAL_PART_OMITTED",
+                "optional_part",
+                "omit",
+                Some("missing.xml"),
+                Some("relationship:missing"),
+                1
+            ),
+            (
+                "DOCX_LINK_TARGET_OMITTED",
+                "hyperlink_target",
+                "keep_text",
+                Some("body.xml"),
+                Some("hyperlink#4"),
+                1
+            ),
+            (
+                "DOCX_FIELD_INSTRUCTION_OMITTED",
+                "field_function",
+                "use_saved_result",
+                Some("body.xml"),
+                Some("fldSimple#7"),
+                1
+            ),
         ]
     );
 }

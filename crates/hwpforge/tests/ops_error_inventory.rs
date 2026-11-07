@@ -320,6 +320,12 @@ const WARNING_MAPPING: Table = &[
     (
         "DocxWarning",
         &[
+            ("UnsupportedAttribute", "DOCX_UNSUPPORTED_ATTRIBUTE"),
+            ("UnsupportedValue", "DOCX_UNSUPPORTED_VALUE"),
+            ("StyleReferenceLost", "DOCX_STYLE_REFERENCE_LOST"),
+            ("FormatDefaulted", "DOCX_FORMAT_DEFAULTED"),
+            ("ScriptFormatCollapsed", "DOCX_SCRIPT_FORMAT_COLLAPSED"),
+            ("HiddenTextExposed", "DOCX_HIDDEN_TEXT_EXPOSED"),
             ("DocumentSettingsOmitted", "DOCX_DOCUMENT_SETTINGS_OMITTED"),
             ("StructuredWrapperFlattened", "DOCX_STRUCTURED_WRAPPER_FLATTENED"),
             ("FormattingOmitted", "DOCX_FORMATTING_OMITTED"),
@@ -1148,7 +1154,7 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
 
 #[test]
 fn inventory_matches_the_tracked_file() {
-    // 이것을 실패시키는 것: snapshot에서 RegistryBridgeWarning 항목을 빼기.
+    // 이것을 실패시키는 것: snapshot에서 DocxWarning::FormatDefaulted 항목을 빼기.
     let regenerated = error_inventory::collect();
     let rendered = serde_json::to_string_pretty(&regenerated).expect("serialise") + "\n";
 
@@ -1247,6 +1253,7 @@ fn manifest_files_hold_no_unnamed_diagnostic_enum() {
 
 #[test]
 fn every_wrapped_variant_has_a_mapping() {
+    // 이것을 실패시키는 것: DocxWarning::FormatDefaulted 매핑 행 제거.
     let inventory = error_inventory::collect();
     let tables: Vec<&(&str, &[(&str, &str)])> =
         ERROR_MAPPING.iter().chain(WARNING_MAPPING.iter()).collect();
@@ -1304,6 +1311,20 @@ fn constructed_errors_produce_the_mapped_code() {
 
 #[test]
 fn constructed_warnings_produce_the_mapped_code() {
+    // 이것을 실패시키는 것: FormatDefaulted를 기존 FORMAT 계열의 다른 코드로 오매핑.
+    // DOCX diagnostic codes must neither alias each other nor an existing ops code.
+    let docx_codes = WARNING_MAPPING.iter().find(|(name, _)| *name == "DocxWarning").unwrap().1;
+    let mut unique = BTreeSet::new();
+    for (_, code) in docx_codes {
+        assert!(unique.insert(*code), "duplicate DOCX warning code: {code}");
+        assert!(OpsCode::lookup(code).is_none(), "DOCX warning aliases an ops code: {code}");
+        for (_, other) in WARNING_MAPPING.iter().filter(|(name, _)| *name != "DocxWarning") {
+            assert!(
+                !other.iter().any(|(_, existing)| existing == code),
+                "DOCX warning aliases another warning: {code}"
+            );
+        }
+    }
     let samples = wrapped_warnings();
 
     for (enum_name, table) in WARNING_MAPPING {
