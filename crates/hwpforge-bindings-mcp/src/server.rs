@@ -327,7 +327,7 @@ fn tool_error_response(err: ToolErrorInfo) -> CallToolResult {
 ///
 /// The two exports have different follow-ups: `hwpforge_patch` consumes one
 /// section's `ExportedSection` and replaces that section in the base package
-/// (so it keeps the base's images and every other ZIP entry), while a
+/// (so it keeps the base's images; changed text removes Preview and warns), while a
 /// whole-document export is an `ExportedDocument` that only
 /// `hwpforge_from_json` accepts — and that rebuild starts from JSON alone,
 /// so image binaries do not survive it. Pointing a full export at
@@ -679,7 +679,7 @@ impl HwpForgeServer {
     /// Delete top-level paragraphs (structural edit).
     #[tool(
         name = "hwpforge_delete_para",
-        description = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify the result with hwpforge_diff."
+        description = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify the result with hwpforge_diff."
     )]
     async fn hwpforge_delete_para(
         &self,
@@ -711,7 +711,7 @@ impl HwpForgeServer {
     /// Insert a new paragraph relative to an anchor (structural edit).
     #[tool(
         name = "hwpforge_insert_para",
-        description = "Insert new top-level paragraphs before or after an anchor paragraph, preserving every other byte: text for one paragraph, or texts for a contiguous block inserted in order in one verified edit. Each new paragraph inherits the anchor's paragraph and character shape (no style is invented); every entry is a single line of plain text. Insert-before the section's first paragraph is refused. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify with hwpforge_diff."
+        description = "Insert new top-level paragraphs before or after an anchor paragraph, keeping unrelated content and updating affected layout caches: text for one paragraph, or texts for a contiguous block inserted in order in one verified edit. Each new paragraph inherits the anchor's paragraph and character shape (no style is invented); every entry is a single line of plain text. Insert-before the section's first paragraph is refused. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify with hwpforge_diff."
     )]
     async fn hwpforge_insert_para(
         &self,
@@ -822,10 +822,10 @@ impl HwpForgeServer {
     }
 
     /// Fill named click-here fields (누름틀) with values — delta edit that
-    /// byte-preserves every untouched package entry.
+    /// Fill named click-here fields. See the shared preview guidance in the tool description.
     #[tool(
         name = "hwpforge_fill",
-        description = "Fill named click-here fields (누름틀) by name→value map, byte-preserving everything else. All values are validated first (all-or-nothing). Much cheaper than to_json+patch for template filling. Use hwpforge_fields to discover names."
+        description = format!("Fill named click-here fields by name→value map. {} All values are validated before writing. Use hwpforge_fields to discover names.", crate::PREVIEW_EDIT_NOTICE)
     )]
     async fn hwpforge_fill(
         &self,

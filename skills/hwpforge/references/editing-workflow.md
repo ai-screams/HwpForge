@@ -4,32 +4,32 @@ Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it
 
 ## Which surface a 한컴-saved document accepts
 
-A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. The surfaces that re-encode the whole package refuse such a document **fail-closed** instead of dropping them.
+A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. `set-cell`, `insert-para`, `delete-para` and `stamp` refuse such inputs at their admission checks; `from-json --base` and `restyle` rebuild them with the losses described below.
 
-| Surface                      | 한컴-saved document | CLI result                                                                                            |
-| ---------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------- |
-| `fill`                       | works               | writes the named 누름틀, keeps every other entry byte for byte                                        |
-| `patch`                      | works               | text inside existing paragraphs and cells; package preserved                                          |
-| `set-cell`                   | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                   |
-| `insert-para`, `delete-para` | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                   |
-| `stamp`                      | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                   |
-| `from-json --base`           | lossy               | succeeds; inherits images and trusted unchanged caches, drops the entries above once anything changed |
-| `restyle` (MCP, Python)      | lossy               | succeeds; re-encodes like `from-json` — see [templates.md](templates.md)                              |
+| Surface                      | 한컴-saved document | CLI result                                                                                                           |
+| ---------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `fill`                       | works               | writes named 누름틀; removes an existing Preview on text changes (except document re-encoding)                       |
+| `patch`                      | works               | text inside existing paragraphs and cells; removes an existing Preview on text changes (except document re-encoding) |
+| `set-cell`                   | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `insert-para`, `delete-para` | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `stamp`                      | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `from-json --base`           | lossy               | succeeds; inherits images and trusted unchanged caches, drops the entries above once anything changed                |
+| `restyle` (MCP, Python)      | lossy               | succeeds; re-encodes like `from-json` — see [templates.md](templates.md)                                             |
 
 The refusal codes differ by interface — Python and MCP name them differently; see [errors.md](errors.md).
 
 **The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, change any other text (including table cells) with `to-json --section N` → edit `content.Text` → `patch`. `from-json --base` is **never** a way around a refusal from `set-cell`, `insert-para`, `delete-para` or `stamp`. Use it only when the user explicitly asks for a structural change to that file **and** accepts that the result is a new file that loses the 한컴 package entries and the layout caches around each change, and that they must check it in 한컴.
 
-Because `fill` and `patch` keep every other entry byte for byte, `Preview/PrvText.txt` (the preview text file managers and 한컴 show before opening) still holds the old text after the edit (measured: fill and patch both). 한컴 refreshes it on the next save; mention it if the user relies on previews.
+When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unchanged text returns the original file. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee.
 
 A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it — unless reading it loses content: text inside a field whose kind does not keep it (a bookmark span, a memo field) is dropped on reading (`CONTENT_LOST field_body`), and `set-cell`, `stamp` and `restyle` then refuse with `INPUT_NOT_ROUNDTRIP_SAFE`; `patch` still edits such a file. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
 
 ## Two write-back modes
 
-| Mode      | Command            | Can do                                                                                                                                      | Cannot do                                                                                                                                  |
-| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Text-only | `patch`            | change text in existing paragraphs **and table cells**; preserves the package and the layout caches of paragraphs the change does not reach | add/remove paragraphs (`PATCH_FAILED … structural change detected`)                                                                        |
-| Rebuild   | `from-json --base` | add/remove paragraphs, any structural change; `--base` inherits images                                                                      | keep 한컴 package entries, every layout cache, or elements HwpForge does not model (form controls, master pages, some advanced formatting) |
+| Mode      | Command            | Can do                                                                                                                                                 | Cannot do                                                                                                                                  |
+| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Text-only | `patch`            | change text in existing paragraphs **and table cells**; preserves other parts except Preview and its connections, and caches the change does not reach | add/remove paragraphs (`PATCH_FAILED … structural change detected`)                                                                        |
+| Rebuild   | `from-json --base` | add/remove paragraphs, any structural change; `--base` inherits images                                                                                 | keep 한컴 package entries, every layout cache, or elements HwpForge does not model (form controls, master pages, some advanced formatting) |
 
 ## Layout caches after `fill` and `patch`
 
@@ -83,7 +83,7 @@ Re-export with the same hwpforge version you patch with. `style_ref` and `headin
 hwpforge patch document.hwpx --section 0 section0.json -o document.edited.hwpx --json
 ```
 
-The first positional argument is the base whose package is preserved.
+The first positional argument supplies the original content. With an existing Preview and no document re-encoding, changed text removes `Preview/PrvText.txt`, `Preview/PrvImage.png`, and an empty `Preview/` directory if present (`package.removed`). Preview rootfile lines in `META-INF/container.xml` and matching manifest/spine connections in `Contents/content.hpf` are removed (`package.changed`); affected section XML and layout caches may also change. These are normal deltas for `fill` and `patch`; stop on other entry removals or unrelated descriptor changes. Header normalization and other document re-encoding require separate inspection.
 
 ### 4b. Write back with a rebuild
 

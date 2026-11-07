@@ -1,8 +1,8 @@
 //! `hwpforge_fill` — 이름 붙은 누름틀(ClickHere) 채우기 (delta edit).
 //!
 //! 섹션 JSON 왕복 없이 `이름 → 값` 맵만으로 문서를 채운다. 전량 preflight
-//! 후 전량 적용(all-or-nothing)이며, 채워진 섹션 XML 외의 패키지 엔트리는
-//! 바이트 그대로 보존된다.
+//! 후 전량 적용(all-or-nothing)이다. 내용을 바꾸면 한컴 미리보기를 제거하고
+//! PREVIEW_REMOVED를 보고한다. 한컴에서 다시 저장하면 미리보기가 다시 만들어진다.
 
 use std::collections::BTreeMap;
 

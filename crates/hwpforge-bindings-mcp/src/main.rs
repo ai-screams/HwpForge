@@ -4,6 +4,9 @@
 
 #![deny(missing_docs)]
 
+const PREVIEW_EDIT_NOTICE: &str = "When hwpforge_patch or hwpforge_fill changes content in a document with existing Hancom previews (Preview), it removes them and reports PREVIEW_REMOVED. Saving again in Hancom recreates them. Document re-encoding, such as header normalization, is outside this guarantee.";
+const PREVIEW_EDIT_NOTICE_KO: &str = "기존 한컴 미리보기가 있던 문서에서 hwpforge_patch·hwpforge_fill로 내용을 실제로 바꾸면 미리보기(Preview)가 지워지고 PREVIEW_REMOVED 경고가 나옵니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.";
+
 mod compat;
 mod output;
 mod prompts;
@@ -115,3 +118,6 @@ mod tests {
         assert_eq!(response_ids(4096, 100).await, vec![1, 2, 3]);
     }
 }
+
+#[cfg(test)]
+mod preview_tests;

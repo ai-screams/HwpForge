@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 // A refusal-only key: never used for package lookup, decoding or output names.
 // 이것을 실패시키는 것: dot/빈 성분/부모 성분 또는 역슬래시 정규화 제거.
-fn comparison_path(path: &str) -> String {
+pub(crate) fn comparison_path(path: &str) -> String {
     let slashes = path.replace('\\', "/");
     let mut parts = Vec::new();
     for part in slashes.split('/') {
@@ -23,7 +23,7 @@ fn comparison_path(path: &str) -> String {
 // The shared read visitor exposes raw namespace URIs. Apply XML attribute
 // normalization exactly once here, without changing its read-only contract.
 // 이것을 실패시키는 것: namespace 정규화 제거/실패 허용/이중 정규화.
-fn normalized_namespace(ns: &str) -> Result<Cow<'_, str>, String> {
+pub(crate) fn normalized_namespace(ns: &str) -> Result<Cow<'_, str>, String> {
     quick_xml::events::attributes::Attribute {
         key: quick_xml::name::QName("xmlns"),
         value: Cow::Borrowed(ns),

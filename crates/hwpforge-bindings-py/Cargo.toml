@@ -45,3 +45,6 @@ pyo3 = { workspace = true }
 pythonize = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

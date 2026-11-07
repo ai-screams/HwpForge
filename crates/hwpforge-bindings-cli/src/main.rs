@@ -1,5 +1,7 @@
 //! HwpForge CLI — AI-first document generation and editing.
 
+const PREVIEW_EDIT_NOTICE: &str = "기존 한컴 미리보기가 있던 문서에서 patch·fill로 내용을 실제로 바꾸면 미리보기(Preview)를 지우고 PREVIEW_REMOVED 경고를 냅니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.";
+
 mod analysis;
 mod commands;
 mod compat;
@@ -213,7 +215,7 @@ enum Commands {
 
     /// Delete top-level paragraphs (structural edit).
     #[command(
-        long_about = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+        long_about = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     DeletePara {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.
@@ -239,7 +241,7 @@ enum Commands {
 
     /// Insert a new paragraph relative to an anchor (structural edit).
     #[command(
-        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, preserving every other byte.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, keeping unrelated content and updating affected layout caches.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     InsertPara {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.
@@ -297,9 +299,9 @@ enum Commands {
         field: Option<String>,
     },
 
-    /// Fill named click-here fields (누름틀) with values, preserving everything else.
+    /// Fill named click-here fields (누름틀); changed text removes the Hancom preview.
     #[command(
-        long_about = "Fill named click-here fields (누름틀) by name, byte-preserving every untouched package entry.\n\nAll requested values are validated first (unknown/duplicate/unfillable names, empty values) and nothing is written unless every one passes. Use `fields` to discover names."
+        long_about = format!("Fill named click-here fields (누름틀). {}\n\nAll values are validated before writing. Use `fields` to discover names.", crate::PREVIEW_EDIT_NOTICE)
     )]
     Fill {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.

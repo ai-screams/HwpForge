@@ -86,8 +86,8 @@ pub(crate) fn from_json<'py>(
 
 /// Replaces one section of a document with an edited JSON tree.
 ///
-/// This is the preserving path: everything the section does not describe is
-/// carried over from the input package byte for byte.
+/// Unrelated content is retained. Changed text removes Preview and its connections
+/// and reports PREVIEW_REMOVED; affected layout caches may also change.
 ///
 /// Args:
 ///     data: The HWPX package.

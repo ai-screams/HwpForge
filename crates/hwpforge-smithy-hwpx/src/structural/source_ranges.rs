@@ -95,28 +95,9 @@ fn mismatch() -> StructuralEditError {
 fn verify_section(
     original: &str,
     output: &str,
-    mut allowed: Vec<(Range<usize>, String)>,
+    allowed: Vec<(Range<usize>, String)>,
 ) -> Result<(), StructuralEditError> {
-    allowed.sort_unstable_by_key(|(range, _)| (range.start, range.end));
-    let (mut source_at, mut output_at) = (0, 0);
-    for (range, replacement) in allowed {
-        let gap = original.get(source_at..range.start).ok_or_else(mismatch)?;
-        for expected in [gap, replacement.as_str()] {
-            // 이것을 실패시키는 것: 허용 구간 밖 같은 길이 변조 또는 추가 치환 허용.
-            if output.as_bytes().get(output_at..output_at + expected.len())
-                != Some(expected.as_bytes())
-            {
-                return Err(mismatch());
-            }
-            output_at += expected.len();
-        }
-        source_at = range.end;
-    }
-    // 이것을 실패시키는 것: 마지막 허용 구간 뒤의 변조/추가 바이트 무시.
-    if original.get(source_at..) != output.get(output_at..) {
-        return Err(mismatch());
-    }
-    Ok(())
+    crate::cache_flow::verify_replacements(original, output, allowed).map_err(|_| mismatch())
 }
 
 #[cfg(test)]

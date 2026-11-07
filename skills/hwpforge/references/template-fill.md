@@ -1,6 +1,6 @@
 # Filling a Korean Template (e.g. 국가과제 제안서)
 
-A template is an existing `.hwpx` (or `.hwp`) with fixed sections, headings, tables and placeholders (`(작성)`, `(여기에 … 작성하시오)`, `○○○`, 누름틀). The goal is to put the user's content in **without changing anything else** — government submissions are checked for format. Every recipe writes to a new file and ends with the verify loop in SKILL.md.
+A template is an existing `.hwpx` (or `.hwp`) with fixed sections, headings, tables and placeholders (`(작성)`, `(여기에 … 작성하시오)`, `○○○`, 누름틀). The goal is to put the user's content in **while preserving unrelated content** — government submissions are checked for format. Every recipe writes to a new file and ends with the verify loop in SKILL.md.
 
 ## Pick the route
 
@@ -32,7 +32,7 @@ hwpforge fill template.hwpx --set 과제명="AI 문서 자동화" --set 기관�
 hwpforge diff template.hwpx 제안서_제출본.hwpx --json
 ```
 
-All-or-nothing: an unknown, duplicate or empty value fails the whole call and writes nothing. In the diff, `field_values` shows one `value_changed` per name, and `raw` entries at `$.layout_cache` show the paragraphs whose caches were dropped: filled paragraphs that fail the conservative one-line check or are invalidated by the layout, and in some layouts later ones ([which ones](editing-workflow.md#layout-caches-after-fill-and-patch)) — expected.
+All-or-nothing: an unknown, duplicate or empty value fails the whole call and writes nothing. In the diff, `field_values` shows one `value_changed` per name, and `raw` entries at `$.layout_cache` show the paragraphs whose caches were dropped: filled paragraphs that fail the conservative one-line check or are invalidated by the layout, and in some layouts later ones ([which ones](editing-workflow.md#layout-caches-after-fill-and-patch)) — expected. If the template had a Preview, `package.removed` also lists `Preview/PrvText.txt`, `Preview/PrvImage.png`, and an empty `Preview/` directory if present. `package.changed` includes `META-INF/container.xml` when Preview rootfile lines are removed and `Contents/content.hpf` when Preview manifest/spine connections are removed. These are normal for both Recipes A and B; stop on unrelated removals or descriptor changes. Document re-encoding, such as header normalization, requires separate inspection.
 
 ## Recipe B — replace placeholder text (body and table cells)
 
@@ -41,7 +41,7 @@ hwpforge to-json template.hwpx --section 0 -o sec.json
 #   edit Text values in sec.json (script below); keep every paragraph, keep `preservation`
 hwpforge patch template.hwpx --section 0 sec.json -o 제안서_제출본.hwpx --json
 hwpforge validate 제안서_제출본.hwpx --json
-hwpforge diff template.hwpx 제안서_제출본.hwpx --json      # only the paragraphs/cells you filled
+hwpforge diff template.hwpx 제안서_제출본.hwpx --json      # intended text/cache changes and the Preview delta above
 ```
 
 Body placeholders are usually unique, so a text → value map works. **Table placeholders repeat** (`(작성)` in every budget cell), so fill tables by **logical grid address**: find the row whose label sits in logical column 0, then set logical columns 1, 2, … from each cell's `addr` (array position differs from the grid when cells are merged). The script is all-or-nothing: every requested value must land exactly once, otherwise it writes nothing and lists why.
@@ -126,7 +126,7 @@ Measured on 0.16.6 (tables converted from Markdown, then `to-json --section 0`):
 
 On a merged table (label `비고` spanning rows 1–2), row 2 of the export holds a single cell whose `addr` is (2,1) at array index 0 — selecting by `addr` put the value in (1,1) as intended. An empty cell exports as one `Text` run with `""`, so it passes the check.
 
-`patch` replaces the whole section, so only `Text` values change here — adding or removing a paragraph fails with `structural change detected`.
+`patch` accepts a section replacement with text-only changes, so change only `Text` values here — adding or removing a paragraph fails with `structural change detected`.
 
 ## Recipe C — add paragraphs under a heading (rebuild, only on explicit request)
 

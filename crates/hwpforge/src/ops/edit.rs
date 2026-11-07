@@ -1,11 +1,14 @@
 //! `fill` · `set_cell` · `insert_para` · `delete_para` — the four edits that
-//! change a document without rewriting the package.
+//! edit document content with operation-specific preservation checks.
 //!
 //! # Preservation and fail-closed behaviour
 //!
 //! `fill`, `insert_para` and `delete_para` are **preserving** edits: they
-//! splice the affected section XML and leave every other ZIP entry byte for
-//! byte, so there is no re-encode that could lose meaning. `set_cell` is a
+//! splice section XML. When content changes in a document with existing
+//! Hancom previews, they remove Preview and report PREVIEW_REMOVED.
+//! Unchanged content keeps the original. Document re-encoding, such as header
+//! normalization or style rewriting, and older whole-document JSON are outside
+//! this guarantee. `set_cell` is a
 //! **regenerating** edit — it rebuilds the package — and therefore runs
 //! behind an admission gate and refuses to emit bytes when the encode
 //! reports semantic loss (code `ENCODE_SEMANTIC_LOSS`). That refusal is
@@ -21,9 +24,9 @@
 //!
 //! | operation | decoder warnings | then |
 //! | -- | -- | -- |
-//! | [`fill`] | the name-resolution decode | values cleaned of forbidden characters |
-//! | [`insert_para`] | the admission decode | texts cleaned of forbidden characters |
-//! | [`delete_para`] | the admission decode | the advisory scan (`INDEX_MARK_REMOVED`) |
+//! | [`fill`] | the name-resolution decode | encode warnings, including cleaned values and `PREVIEW_REMOVED` |
+//! | [`insert_para`] | the admission decode | encode warnings, including cleaned texts and `PREVIEW_REMOVED` |
+//! | [`delete_para`] | the admission decode | encode warnings (including `PREVIEW_REMOVED`), then advisory scan (`INDEX_MARK_REMOVED`) |
 //! | [`set_cell`] | the admission decode | texts cleaned of forbidden characters, then the successful encode's non-semantic warnings |
 //!
 //! "Cleaned of forbidden characters" means the edit removed, from a value
@@ -43,12 +46,9 @@
 //! receives, so merging them would report one document's losses several
 //! times over. The count therefore does not grow with the size of the edit.
 //!
-//! [`set_cell`] is the one **regenerating** edit here, so it has a channel
-//! the other three do not: the other half of its fail-closed contract
-//! ([`HwpxCellEditor::set_cells_with_diagnostics`]). An encode that loses
-//! meaning produces no bytes, and an encode that succeeds hands back
-//! whatever **non-semantic** warnings it raised, after the clean-up warnings
-//! for its own texts.
+//! All edits retain the successful encode's warnings, including
+//! `PREVIEW_REMOVED` for preview removal. `set_cell` additionally refuses an
+//! encode that loses meaning; successful non-semantic warnings follow text cleanup.
 
 use std::collections::BTreeMap;
 
@@ -103,13 +103,13 @@ pub struct FillOptions {}
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FillOutput {
-    /// The filled HWPX package. Untouched entries are byte-identical.
+    /// The filled package; derived Preview and affected caches may be removed.
     pub bytes: Vec<u8>,
     /// The fields that were filled, in document order.
     pub filled: Vec<FilledField>,
     /// What decoding the package to resolve the names reported, in decoder
-    /// order, then one `XML_FORBIDDEN_CHARS_REMOVED` per value that had
-    /// characters removed — see the module docs.
+    /// order, then encode warnings including `XML_FORBIDDEN_CHARS_REMOVED`
+    /// and `PREVIEW_REMOVED` — see the module docs.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -503,16 +503,14 @@ impl DeleteParaOptions {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct StructuralOutput {
-    /// The edited HWPX package. Untouched entries are byte-identical.
+    /// The edited package; derived Preview and affected caches may be removed.
     pub bytes: Vec<u8>,
     /// Paragraphs inserted; zero for [`delete_para`].
     pub inserted: usize,
     /// Paragraphs deleted; zero for [`insert_para`].
     pub deleted: usize,
-    /// What the admission decode reported, then — for [`delete_para`] — the
-    /// advisories about what the edit took with it, or — for
-    /// [`insert_para`] — one `XML_FORBIDDEN_CHARS_REMOVED` per text that had
-    /// characters removed.
+    /// Admission decode warnings, then encode warnings (including cleaned texts
+    /// and `PREVIEW_REMOVED`), then deletion advisories such as `INDEX_MARK_REMOVED`.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -638,13 +636,14 @@ pub fn delete_para(hwpx: &[u8], opts: &DeleteParaOptions) -> Result<StructuralOu
     // succeeds. An undecodable input or an out-of-range target yields
     // nothing here and is refused by the editor on the next line.
     let advisories = scan_delete_warnings(hwpx, &targets);
-    let diagnosed = HwpxStructuralEditor::delete_paragraphs_with_diagnostics(hwpx, &targets)
+    let diagnosed = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(hwpx, &targets)
         .map_err(|e| super::input::classify_decode_failure(hwpx, e.into()))?;
-    // Documented order: what the decode reported, then what the edit advises.
+    // Documented order: decode, encode diagnostics, then edit advisories.
     // The scan above decodes the package a second time; its warnings are the
     // editor's own, already reported, so only its advisories are taken.
     let mut warnings: Vec<OpsWarning> =
-        diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect();
+        diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
     warnings.extend(advisories.into_iter().map(OpsWarning::Structural));
     super::ensure_opaque_carried(hwpx, &diagnosed.value)?;
     Ok(StructuralOutput {

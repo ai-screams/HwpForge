@@ -307,7 +307,7 @@ hwpforge validate [OPTIONS] <FILE>
 
 ### fill
 
-이름 있는 누름틀을 값으로 채웁니다. 건드리지 않는 패키지 엔트리는 바이트 그대로 보존합니다.
+이름 있는 누름틀을 값으로 채웁니다. 기존 한컴 미리보기가 있던 문서에서 내용을 실제로 바꾸면 미리보기(Preview)를 지우고 PREVIEW_REMOVED 경고를 냅니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 내용이 같으면 원본 파일을 돌려줍니다. 머리글 정규화·스타일 정의 변경 등 문서 재인코드가 필요하거나 이전 형식의 문서 전체 JSON을 쓰는 경우는 이 보장 밖입니다.
 
 ```console
 hwpforge fill [OPTIONS] --output <OUTPUT> <FILE>
@@ -350,7 +350,7 @@ hwpforge patch [OPTIONS] --section <SECTION> --output <OUTPUT> <BASE> <SECTION_J
 
 ### insert-para
 
-기준 문단 앞이나 뒤에 새 최상위 문단을 삽입합니다. 다른 바이트는 그대로 둡니다.
+기준 문단 앞이나 뒤에 새 최상위 문단을 삽입합니다. 관련 없는 내용을 유지하며, 영향을 받는 조판 캐시를 고칩니다. 한컴 저장 문서는 아래 사전 검사에서 거부됩니다.
 
 ```console
 hwpforge insert-para [OPTIONS] --section <SECTION> --anchor <ANCHOR> --text <TEXTS> --output <OUTPUT> <FILE>

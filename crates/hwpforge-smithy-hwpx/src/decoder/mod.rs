@@ -541,6 +541,7 @@ pub mod warning_samples {
     pub fn encode() -> Vec<EncodeWarning> {
         let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
         let samples = vec![
+            EncodeWarning::PreviewRemoved { parts: vec!["Preview/PrvText.txt".into()] },
             EncodeWarning::UnclosedFieldBoundary {
                 part: "Contents/section0.xml".into(),
                 reason: "sample".into(),
@@ -587,6 +588,7 @@ pub mod warning_samples {
                 | EncodeWarning::ContentLost { .. }
                 | EncodeWarning::PackageIdConflict { .. }
                 | EncodeWarning::ImageReferenceUnresolved { .. }
+                | EncodeWarning::PreviewRemoved { .. }
                 | EncodeWarning::ObjectIdConflict { .. } => {}
             }
         }

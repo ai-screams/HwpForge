@@ -23,7 +23,7 @@ use serde_json::Value;
 mod paragraph_refs;
 mod references;
 mod source_ranges;
-mod xml_values;
+pub(crate) mod xml_values;
 use source_ranges::SectionChange;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
@@ -305,8 +305,8 @@ fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEd
 pub struct HwpxStructuralEditor;
 
 impl HwpxStructuralEditor {
-    /// Deletes top-level paragraphs, all-or-nothing, preserving every other
-    /// byte of the package exactly.
+    /// Deletes top-level paragraphs, all-or-nothing, retaining unrelated content.
+    /// Affected caches and derived Preview may be removed.
     ///
     /// Pipeline: input admission gate → per-target rejection scan
     /// (reference / hard-break) → declared-delta build + `validate()` →
@@ -353,13 +353,33 @@ impl HwpxStructuralEditor {
         base: &[u8],
         targets: &[ParagraphLocator],
     ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
+        Self::delete_paragraphs_with_codec_diagnostics(base, targets).map(|result| {
+            crate::diagnostics::WithDecodeWarnings::new(result.value, result.decode_warnings)
+        })
+    }
+
+    /// Deletes paragraphs while retaining decode and encode diagnostics.
+    /// Empty requests return the original bytes. Existing admission remains unchanged.
+    ///
+    /// # Errors
+    /// See [`StructuralEditError`].
+    pub fn delete_paragraphs_with_codec_diagnostics(
+        base: &[u8],
+        targets: &[ParagraphLocator],
+    ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
         // Deleting nothing is a byte-identical no-op (the CLI/MCP surfaces nudge
         // the caller with an explicit "no target" error instead).
         if targets.is_empty() {
-            return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
+            return Ok(crate::diagnostics::WithCodecWarnings::new(
+                base.to_vec(),
+                Vec::new(),
+                Vec::new(),
+            ));
         }
         // ── input admission: base must round-trip so we can verify ──
         let (d0, mut package) = admit(base)?;
+        let preview = crate::raw_package::preview::PreviewRemoval::plan(&package)
+            .map_err(verification_error)?;
         let decode_warnings = d0.warnings.clone();
         let sections = d0.document.sections();
 
@@ -473,12 +493,19 @@ impl HwpxStructuralEditor {
             });
         }
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
+        preview.apply(&mut package, &mut changes).map_err(verification_error)?;
         let bytes = finish_edit(base, package, &d0, expected, &changes, &section_changes)?;
+        let preview_warning = preview.verify_final(&bytes).map_err(verification_error)?;
 
-        Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
+        Ok(crate::diagnostics::WithCodecWarnings::new(
+            bytes,
+            decode_warnings,
+            preview_warning.into_iter().collect(),
+        ))
     }
 
-    /// Inserts one new paragraph, preserving every other byte of the package.
+    /// Inserts a paragraph, invalidating affected caches and removing derived Preview
+    /// and its connections when present; unrelated content is retained.
     ///
     /// Delegates to [`Self::insert_paragraphs`] with a single-text batch —
     /// one implementation, two surfaces.
@@ -498,8 +525,8 @@ impl HwpxStructuralEditor {
         )
     }
 
-    /// Inserts a contiguous block of new paragraphs at one anchor, preserving
-    /// every other byte of the package (batch form of
+    /// Inserts a contiguous block at one anchor, retaining unrelated content
+    /// while invalidating affected caches and removing Preview (batch form of
     /// [`Self::insert_paragraph`]).
     ///
     /// Every inserted paragraph **uniformly** inherits the anchor's paragraph
@@ -566,7 +593,7 @@ impl HwpxStructuralEditor {
     /// admission gate's read of `base`, as in
     /// [`Self::insert_paragraphs_with_diagnostics`].
     ///
-    /// `encode_warnings` covers the texts alone. This path encodes the
+    /// `encode_warnings` covers text cleanup and removal of derived Preview parts. This path encodes the
     /// declared delta only to source the new paragraphs' bytes and throws
     /// that package away, so its diagnostics are not reported. What is
     /// reported is the entry clean-up: each text has the characters XML 1.0
@@ -628,6 +655,8 @@ impl HwpxStructuralEditor {
 
         // ── input admission ──
         let (d0, mut package) = admit(base)?;
+        let preview = crate::raw_package::preview::PreviewRemoval::plan(&package)
+            .map_err(verification_error)?;
         let decode_warnings = d0.warnings.clone();
 
         let sections = d0.document.sections();
@@ -803,10 +832,14 @@ impl HwpxStructuralEditor {
             deleted: Vec::new(),
             inserted: Some((insert_index, texts.len(), new_para_bytes)),
         }];
-        let mut changes = crate::raw_package::OutputChanges { rewritten: vec![path] };
+        let mut changes =
+            crate::raw_package::OutputChanges { rewritten: vec![path], ..Default::default() };
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
+        preview.apply(&mut package, &mut changes).map_err(verification_error)?;
         let bytes = finish_edit(base, package, &d0, expected, &changes, &section_changes)?;
+        let preview_warning = preview.verify_final(&bytes).map_err(verification_error)?;
 
+        encode_warnings.extend(preview_warning);
         Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
 }
