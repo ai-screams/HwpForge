@@ -107,6 +107,18 @@ impl Element {
         nodes[0]
     }
 
+    /// Matching elements in depth-first source order, including this element.
+    pub fn descendants(&self, name: &str) -> Vec<&Self> {
+        let mut nodes = Vec::new();
+        if self.name == name {
+            nodes.push(self);
+        }
+        for child in &self.children {
+            nodes.extend(child.descendants(name));
+        }
+        nodes
+    }
+
     pub fn find(&self, name: &str) -> &Self {
         if self.name == name {
             return self;
