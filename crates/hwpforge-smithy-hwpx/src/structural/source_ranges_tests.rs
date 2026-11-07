@@ -110,7 +110,7 @@ fn final_zip_rejects_semantically_invisible_extra_edit() {
         package,
         &decoded,
         expected,
-        &crate::raw_package::OutputChanges { rewritten: vec![path.into()] },
+        &crate::raw_package::OutputChanges { rewritten: vec![path.into()], ..Default::default() },
         &[SectionChange {
             section: 0,
             path: path.into(),

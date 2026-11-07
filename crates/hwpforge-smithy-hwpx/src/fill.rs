@@ -2,8 +2,10 @@
 //!
 //! 에이전트가 섹션 JSON 전체를 왕복하지 않고 `이름 → 값` 델타만으로
 //! 문서를 채우는 상위 API. 내부적으로 preserve-first 패처
-//! ([`crate::HwpxPatcher`])를 사용하므로 채워진 섹션 XML 외의 모든 ZIP
-//! 엔트리는 바이트 그대로 보존된다.
+//! ([`crate::HwpxPatcher`])를 사용한다. 기존 한컴 미리보기가 있던 문서에서 내용을
+//! 실제로 바꾸면 미리보기와 연결 정보를 지우고 PREVIEW_REMOVED를 보고한다.
+//! 한컴에서 다시 저장하면 미리보기가 다시 만들어진다. 같은 내용은 원본을 유지한다.
+//! 머리글 정규화 등 문서 재인코드나 이전 형식의 문서 전체 JSON은 이 보장 밖이다.
 //!
 //! # 정책
 //!
@@ -60,7 +62,7 @@ pub struct FilledField {
 /// [`HwpxFiller::fill`] 의 성공 결과.
 #[derive(Debug, Clone)]
 pub struct FillOutcome {
-    /// 채워진 HWPX 패키지 바이트. 건드리지 않은 엔트리는 원본과 동일하다.
+    /// 채워진 HWPX 패키지 바이트. 내용 변경에서는 Preview도 제거한다.
     pub bytes: Vec<u8>,
     /// 채워진 필드 목록 (요청 순서가 아니라 문서 순서).
     pub filled: Vec<FilledField>,
@@ -236,8 +238,8 @@ impl HwpxFiller {
     /// `decode_warnings` 는 [`HwpxFiller::fill_with_diagnostics`] 와 같은 입력
     /// 디코드 한 번의 경고다.
     ///
-    /// 채우기는 preserve-first 라 패키지를 재인코드하지 않는다.
-    /// `encode_warnings` 는 값 자체에 대한 것뿐이다: XML 1.0 이 담을 수 없는
+    /// raw 경로는 XML을 splice하며, fallback은 패키지를 재인코드할 수 있다.
+    /// `encode_warnings` 는 내용 변경의 Preview 제거와 값 정리를 보고한다: XML 1.0 이 담을 수 없는
     /// 문자(TAB·LF·CR 을 뺀 C0 제어 문자 — 단 `<hp:fwSpace/>` 로 쓰는
     /// U+001F 는 남긴다 — 와 U+FFFE·U+FFFF)는 값에서 지우고, 지운 값마다
     /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
@@ -376,34 +378,88 @@ impl HwpxFiller {
             });
         }
         let mut bytes = base.to_vec();
+        let mut changes = crate::raw_package::OutputChanges::default();
+        let mut preview = None;
         for section_idx in touched {
             // preservation 은 원본 섹션 상태로 export 해야 sha/슬롯이 맞는다.
-            // 앞선 patch 는 다른 섹션 파일만 바꾸므로 현재 bytes 의 이 섹션
-            // XML 은 base 와 동일하다 — 체이닝이 안전한 근거.
+            // raw 편집은 다른 구역 XML을 유지한다. 앞선 fallback은 모든 구역을
+            // 재인코드할 수 있으므로 현재 bytes에서 보존 위치와 hash를 다시 만든다.
             let preservation = HwpxPatcher::export_section_preservation(
                 &bytes,
                 section_idx,
                 &original_sections[section_idx],
             )
             .map_err(FillError::Patch)?;
-            bytes = HwpxPatcher::patch_section_preserving(
+            let result = HwpxPatcher::patch_section_preserving_with_changes(
                 &bytes,
                 section_idx,
                 &decoded.document.sections()[section_idx],
                 None,
                 Some(&preservation),
+                Some(&mut changes),
             )
             .map_err(FillError::Patch)?;
+            if result
+                .encode_warnings
+                .iter()
+                .any(|w| matches!(w, crate::EncodeWarning::PreviewRemoved { .. }))
+            {
+                preview =
+                    Some(crate::raw_package::preview::PreviewRemoval::plan(&package).map_err(
+                        |e| FillError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)),
+                    )?);
+            }
+            encode_warnings.extend(
+                result
+                    .encode_warnings
+                    .into_iter()
+                    .filter(|w| !matches!(w, crate::EncodeWarning::PreviewRemoved { .. })),
+            );
+            bytes = result.value;
         }
-
-        // The patcher invalidates caches from the actual changed text locators.
-        // 이것을 실패시키는 것: 별도 wire 필드 개수로 캐시를 다시 해석하기.
-        Ok(crate::diagnostics::WithCodecWarnings::new(
-            FillOutcome { bytes, filled },
-            decode_warnings,
-            encode_warnings,
-        ))
+        // The only return of edited bytes passes the accumulated output check.
+        finish_fill(
+            &package,
+            base,
+            &mut changes,
+            preview.as_ref(),
+            crate::diagnostics::WithCodecWarnings::new(
+                FillOutcome { bytes, filled },
+                decode_warnings,
+                encode_warnings,
+            ),
+        )
     }
+}
+
+// All accumulated edits share the original deletion plan, including later re-encodes.
+// Raw edits leave the header unchanged, so raw cannot turn into fallback later
+// in the same fill. Fallback can normalize the header and let later sections use
+// raw editing; their output declarations accumulate together here. If a raw edit
+// removed Preview, this final check uses the original deletion plan. Fallback
+// that already dropped Preview does not itself produce that removal warning.
+pub(crate) fn finish_fill(
+    package: &crate::raw_package::RawPackage,
+    base: &[u8],
+    changes: &mut crate::raw_package::OutputChanges,
+    preview: Option<&crate::raw_package::preview::PreviewRemoval>,
+    mut outcome: crate::diagnostics::WithCodecWarnings<FillOutcome>,
+) -> Result<crate::diagnostics::WithCodecWarnings<FillOutcome>, FillError> {
+    if let Some(preview) = preview {
+        changes.rewritten.sort();
+        changes.rewritten.dedup();
+        changes.deleted.sort();
+        changes.deleted.dedup();
+        package
+            .verify_output_with(base, &outcome.value.bytes, changes)
+            .map_err(FillError::Codec)?;
+        outcome.encode_warnings.extend(
+            preview
+                .verify_final(&outcome.value.bytes)
+                .map_err(|e| FillError::Codec(CodecFailure::hwpx(CodecStage::Verification, &e)))?,
+        );
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]

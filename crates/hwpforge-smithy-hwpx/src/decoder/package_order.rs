@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use quick_xml::{events::Event, name::ResolveResult, NsReader};
 
-const OPF: &str = "http://www.idpf.org/2007/opf/";
-const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
+pub(crate) const OPF: &str = "http://www.idpf.org/2007/opf/";
+pub(crate) const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackageOrder {
@@ -24,7 +24,7 @@ pub(crate) struct PackageOrder {
     pub content_problem_reported: bool,
 }
 
-fn numbered_part(path: &str, prefix: &str) -> Option<usize> {
+pub(crate) fn numbered_part(path: &str, prefix: &str) -> Option<usize> {
     path.strip_prefix(prefix)?.strip_suffix(".xml")?.parse().ok()
 }
 

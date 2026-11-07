@@ -735,6 +735,37 @@ pub(crate) fn splice(
 #[path = "cache_flow/text_edits_tests.rs"]
 mod text_edits_tests;
 
+/// Compare final bytes with the exact declared replacements and untouched gaps.
+pub(crate) fn verify_replacements(
+    original: &str,
+    output: &str,
+    mut allowed: Vec<(Range<usize>, String)>,
+) -> HwpxResult<()> {
+    let mismatch = || HwpxError::InvalidStructure {
+        detail: "bytes differ outside declared replacements".into(),
+    };
+    allowed.sort_unstable_by_key(|(range, _)| (range.start, range.end));
+    let (mut source_at, mut output_at) = (0, 0);
+    for (range, replacement) in allowed {
+        let gap = original.get(source_at..range.start).ok_or_else(mismatch)?;
+        for expected in [gap, replacement.as_str()] {
+            // 이것을 실패시키는 것: 허용 구간 밖 같은 길이 변조 또는 추가 치환 허용.
+            if output.as_bytes().get(output_at..output_at + expected.len())
+                != Some(expected.as_bytes())
+            {
+                return Err(mismatch());
+            }
+            output_at += expected.len();
+        }
+        source_at = range.end;
+    }
+    // 이것을 실패시키는 것: 마지막 허용 구간 뒤의 변조/추가 바이트 무시.
+    if original.get(source_at..) != output.get(output_at..) {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! Cache marker: [`add_caches`] puts a cache with `vertpos` = 9000 + (the

@@ -128,7 +128,7 @@ fn finish_delete(base: &[u8]) -> Result<Vec<u8>, StructuralEditError> {
         package,
         &decoded,
         expected,
-        &crate::raw_package::OutputChanges { rewritten: vec![path.into()] },
+        &crate::raw_package::OutputChanges { rewritten: vec![path.into()], ..Default::default() },
         &[crate::structural::SectionChange {
             section: 0,
             path: path.into(),

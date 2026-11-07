@@ -10,7 +10,10 @@ fn zip(entries: &[(&str, usize)]) -> Vec<u8> {
 }
 
 fn changes(rewritten: &[&str]) -> OutputChanges {
-    OutputChanges { rewritten: rewritten.iter().map(|s| (*s).into()).collect() }
+    OutputChanges {
+        rewritten: rewritten.iter().map(|s| (*s).into()).collect(),
+        ..Default::default()
+    }
 }
 
 fn rejects(base: &[u8], output: &[u8], changes: &OutputChanges, reason: &str) {
