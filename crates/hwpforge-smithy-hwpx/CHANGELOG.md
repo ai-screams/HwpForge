@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.1...hwpforge-smithy-hwpx-v0.20.0) - 2026-11-07
+
+### Added
+
+- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
+
+
+### Documentation
+
+- *(hwpx)* [#143] give the editing-base error link a path rustdoc can resolve ([#332](https://github.com/ai-screams/HwpForge/pull/332))
+
+
+### Fixed
+
+- *(hwpx)* [#143] verify structural edit ranges and refuse edits that strand references ([#331](https://github.com/ai-screams/HwpForge/pull/331))
+
+- *(hwpx)* [#143] refuse to edit packages that carry a signature or encryption marker ([#330](https://github.com/ai-screams/HwpForge/pull/330))
+
+- *(hwpx)* [#143] check source formatting evidence before keeping single-line caches ([#329](https://github.com/ai-screams/HwpForge/pull/329))
+
+- *(hwpx)* [#311] preserve caches for proven body and direct-cell edits ([#328](https://github.com/ai-screams/HwpForge/pull/328))
+
+- *(hwpx)* [#311] keep an edited body paragraph's own line cache when it stays on one line ([#326](https://github.com/ai-screams/HwpForge/pull/326))
+
+- *(hwpx)* [#143] check that edits change only the package entries they declare ([#318](https://github.com/ai-screams/HwpForge/pull/318))
+
+- *(hwpx)* [#311] keep later plain paragraphs' line caches after fill and patch ([#323](https://github.com/ai-screams/HwpForge/pull/323))
+
+
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.0...hwpforge-smithy-hwpx-v0.19.1) - 2026-11-03
 
 ### Fixed

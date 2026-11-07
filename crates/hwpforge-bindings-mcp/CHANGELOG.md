@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.19.1...hwpforge-bindings-mcp-v0.20.0) - 2026-11-07
+
+### Added
+
+- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
+
+
+### Fixed
+
+- *(hwpx)* [#143] refuse to edit packages that carry a signature or encryption marker ([#330](https://github.com/ai-screams/HwpForge/pull/330))
+
+
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.19.0...hwpforge-bindings-mcp-v0.19.1) - 2026-11-03
 
 ### Changed

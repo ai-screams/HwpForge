@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.19.1...hwpforge-core-v0.20.0) - 2026-11-07
+
+### Added
+
+- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
+
+
+### Fixed
+
+- *(hwpx)* [#143] check that edits change only the package entries they declare ([#318](https://github.com/ai-screams/HwpForge/pull/318))
+
+
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.19.0...hwpforge-core-v0.19.1) - 2026-11-03
 
 ### Changed

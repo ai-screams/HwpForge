@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/ai-screams/HwpForge/compare/v0.19.1...v0.20.0) - 2026-11-07
+
+### Added
+
+- *(hwpx)* [#143] remove stale Hancom previews when an edit changes the document ([#333](https://github.com/ai-screams/HwpForge/pull/333))
+
+
+### Fixed
+
+- *(hwpx)* [#143] verify structural edit ranges and refuse edits that strand references ([#331](https://github.com/ai-screams/HwpForge/pull/331))
+
+- *(hwpx)* [#143] refuse to edit packages that carry a signature or encryption marker ([#330](https://github.com/ai-screams/HwpForge/pull/330))
+
+- *(hwpx)* [#143] check that edits change only the package entries they declare ([#318](https://github.com/ai-screams/HwpForge/pull/318))
+
+
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/v0.19.0...v0.19.1) - 2026-11-03
 
 HWPX 본문의 CR·LF를 캐시 없는 문서의 한컴 표시와 같게 읽도록 고친 패치 릴리스다. 공개 Rust API는 바뀌지 않는다. 출력이 바뀌는 경우는 아래 "업그레이드 주의"에 모았다.
