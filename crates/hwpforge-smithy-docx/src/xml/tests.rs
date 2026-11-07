@@ -241,7 +241,7 @@ fn encoding_policy_is_explicit() {
             matches!(walk(input, "test.xml", &mut TextBudget::default(), |_| Ok(())).unwrap_err(), DocxError::UnsupportedEncoding { ref part, ref encoding } if part == "test.xml" && encoding == "UTF-16")
         );
     }
-    for encoding in ["UTF-16", "utf-16", "UTF-16LE", "UTF-16BE", "ISO-8859-1", "windows-1252", ""] {
+    for encoding in ["UTF-16", "utf-16", "UTF-16LE", "UTF-16BE", "ISO-8859-1", "windows-1252"] {
         let input = format!("<?xml version='1.0' encoding='{encoding}'?><a/>");
         assert!(
             matches!(values(&input).unwrap_err(), DocxError::UnsupportedEncoding { encoding: observed, .. } if observed == encoding)
@@ -404,7 +404,7 @@ fn long_namespace_is_shared_with_linear_comparisons() {
         if let XmlEvent::Start(element) = event {
             for (namespace, _, _) in element.attributes {
                 if namespace != NamespaceId::NONE {
-                    assert_eq!(namespace, NamespaceId(5));
+                    assert_eq!(namespace, NamespaceId(9));
                     count += 1;
                 }
             }
@@ -468,11 +468,11 @@ fn namespace_hash_collisions_verify_content() {
     let mut budget = TextBudget::default();
     let hash = namespaces.hasher.hash_one("urn:shared-a");
     for (uri, expected) in [
-        ("urn:shared-a", NamespaceId(5)),
-        ("urn:shared-b", NamespaceId(6)),
-        ("urn:shared-a", NamespaceId(5)),
-        ("short", NamespaceId(7)),
-        ("urn:shared-b", NamespaceId(6)),
+        ("urn:shared-a", NamespaceId(9)),
+        ("urn:shared-b", NamespaceId(10)),
+        ("urn:shared-a", NamespaceId(9)),
+        ("short", NamespaceId(11)),
+        ("urn:shared-b", NamespaceId(10)),
     ] {
         assert_eq!(
             namespaces.register_hashed("test.xml", "a", uri.into(), hash, &mut budget).unwrap(),
@@ -480,7 +480,7 @@ fn namespace_hash_collisions_verify_content() {
         );
     }
     assert_eq!(budget.namespace_comparison_bytes, 48);
-    assert_eq!(namespaces.uris.len(), 8);
+    assert_eq!(namespaces.uris.len(), 12);
 }
 
 // 이것을 실패시키는 것: prefix 조회를 활성 binding 선형 검색으로 되돌림, End에서 전체 binding 제거,
@@ -497,7 +497,7 @@ fn prefix_lookup_is_independent_of_active_bindings() {
         for _ in 0..1_000 {
             assert_eq!(
                 namespaces.resolve("test.xml", "a", QName("outer:a"), false, &mut budget).unwrap(),
-                NamespaceId(5)
+                NamespaceId(9)
             );
         }
         assert_eq!(budget.prefix_lookups, 1_000);
@@ -524,7 +524,7 @@ fn prefix_lookup_is_independent_of_active_bindings() {
         namespaces.pop();
     }
     assert_eq!(namespaces.bindings.len(), 1);
-    assert_eq!(namespaces.lookup("outer", &mut budget), Some(NamespaceId(5)));
+    assert_eq!(namespaces.lookup("outer", &mut budget), Some(NamespaceId(9)));
     namespaces.pop();
     assert_eq!(namespaces.bindings.len(), 0);
     assert_eq!(namespaces.levels.len(), 0);
@@ -582,7 +582,7 @@ fn empty_named_namespace_is_rejected_at_declaration() {
         },
     )
     .unwrap();
-    assert_eq!(ids, [NamespaceId(5), NamespaceId(0), NamespaceId(5)]);
+    assert_eq!(ids, [NamespaceId(9), NamespaceId(0), NamespaceId(9)]);
 }
 
 // 이것을 실패시키는 것: namespace 스코프 pop/기본 namespace/빈 재선언/예약 prefix 규칙 변경.
@@ -784,5 +784,40 @@ fn namespace_uris_share_storage_across_elements() {
     assert_eq!(retained[0].len(), 4_096);
     for uri in &retained {
         assert!(Rc::ptr_eq(&retained[0], uri));
+    }
+}
+
+// 이것을 실패시키는 것: 예약 PI 허용, 선언 version/순서/값/중복/구문 검사 생략.
+#[test]
+fn declarations_and_reserved_processing_instructions() {
+    for declaration in [
+        "<?XML?>",
+        "<?Xml data?>",
+        "<?xml?>",
+        "<?xml encoding='UTF-8'?>",
+        "<?xml version='2.0'?>",
+        "<?xml version='1.0' extra='x'?>",
+        "<?xml version='1.0' standalone='maybe'?>",
+        "<?xml version='1.0' standalone='yes' encoding='UTF-8'?>",
+        "<?xml version='1.0' version='1.0'?>",
+        "<?xml version=1.0?>",
+        "<?xml version='1.0' encoding=''?>",
+        "<?xml version='1.0'encoding='UTF-8'?>",
+        "<?xml version='1.0' encoding='1bad'?>",
+        "<?xml version='1.0' encoding='UTF*8'?>",
+    ] {
+        assert!(
+            matches!(values(&format!("{declaration}<a/> ")), Err(DocxError::Invalid { .. })),
+            "{declaration}"
+        );
+    }
+    for declaration in [
+        "",
+        "\u{feff}",
+        "<?한글 처리?>",
+        "<?xml version = '1.0'?>",
+        "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='no'?>",
+    ] {
+        assert_eq!(values(&format!("{declaration}<a>A</a>")).unwrap(), ["A"]);
     }
 }

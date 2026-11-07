@@ -1,3 +1,16 @@
+// Selection test helper constructs the owning relationship explicitly.
+impl DocxPackage<'_> {
+    fn read_test_target(&mut self, target: &Target, kind: &RelationshipKind) -> Result<Vec<u8>> {
+        if *kind == RelationshipKind::OfficeDocument {
+            return self.read_main();
+        }
+        self.read_relationship(&Relationship {
+            id: "test".into(),
+            target: target.clone(),
+            kind: kind.clone(),
+        })
+    }
+}
 use super::*;
 fn invalid(error: DocxError, element: &str, reason: &str) {
     match error {
@@ -88,17 +101,17 @@ fn custom_main_defaults_external_and_single_read() {
     );
     let external = package.relationships[0].target.clone();
     assert!(package
-        .read_target(&external, &RelationshipKind::Other("hyperlink".into()))
+        .read_test_target(&external, &RelationshipKind::Other("hyperlink".into()))
         .unwrap_err()
         .to_string()
         .contains("external"));
     let main = Target::Internal(package.main.clone());
     assert!(package
-        .read_target(&main, &RelationshipKind::OfficeDocument)
+        .read_test_target(&main, &RelationshipKind::OfficeDocument)
         .unwrap()
         .starts_with(b"<w:document"));
     assert!(package
-        .read_target(&main, &RelationshipKind::OfficeDocument)
+        .read_test_target(&main, &RelationshipKind::OfficeDocument)
         .unwrap_err()
         .to_string()
         .contains("already read"));
@@ -262,7 +275,7 @@ fn related_kind_validation_matrix() {
         );
         let mut package = package;
         let target = package.relationships[0].target.clone();
-        assert_eq!(package.read_target(&target, &kind).unwrap(), b"not read yet");
+        assert_eq!(package.read_test_target(&target, &kind).unwrap(), b"not read yet");
         for (target, extras, expected) in [
             ("../assets/absent.bin", vec![], "missing"),
             (
@@ -274,7 +287,7 @@ fn related_kind_validation_matrix() {
             let bytes = document(&root(), &ct, Some(&rels(&rel("one", name, target, ""))), &extras);
             let mut package = DocxPackage::open(&bytes).unwrap();
             let target = package.relationships[0].target.clone();
-            let error = package.read_target(&target, &kind).unwrap_err();
+            let error = package.read_test_target(&target, &kind).unwrap_err();
             match expected {
                 "missing" => assert!(
                     matches!(error, DocxError::MissingPart { ref part } if part == "assets/absent.bin")
@@ -302,7 +315,7 @@ fn related_kind_validation_matrix() {
         let mut package = DocxPackage::open(&bytes).unwrap();
         let target = package.relationships[0].target.clone();
         let expected = if name == "image" { "image/*" } else { mime };
-        match package.read_target(&target, &kind).unwrap_err() {
+        match package.read_test_target(&target, &kind).unwrap_err() {
             DocxError::ContentTypeMismatch { part, actual, expected: observed } => {
                 assert_eq!(part, "assets/part.bin");
                 assert_eq!(actual, "text/plain");
@@ -323,7 +336,7 @@ fn related_kind_validation_matrix() {
         let target = package.relationships[0].target.clone();
         assert!(matches!(&target, Target::Internal(part) if part.content_type.is_none()));
         assert!(
-            matches!(package.read_target(&target, &kind).unwrap_err(), DocxError::MissingContentType { ref part } if part == "assets/part.bin")
+            matches!(package.read_test_target(&target, &kind).unwrap_err(), DocxError::MissingContentType { ref part } if part == "assets/part.bin")
         );
         assert_eq!(package.consumed.len(), 3);
         let bytes = document(
@@ -350,7 +363,7 @@ fn related_kind_validation_matrix() {
         let mut package = DocxPackage::open(&bytes).unwrap();
         let target = package.relationships[0].target.clone();
         invalid(
-            package.read_target(&target, &kind).unwrap_err(),
+            package.read_test_target(&target, &kind).unwrap_err(),
             "Relationship",
             "external target cannot be read as a package part",
         );
@@ -486,7 +499,8 @@ fn metadata_validation_matrix() {
     }
 }
 
-// 이것을 실패시키는 것: 필수 part의 opaque/누락 variant를 서로 교환.
+// 이것을 실패시키는 것: 필수 part의 opaque/누락 variant를 서로 교환,
+// 메타데이터 index 재사용 경로에서 opaque 검사를 제거.
 #[test]
 fn selected_parts_must_exist_and_be_transparent() {
     for path in
@@ -527,7 +541,7 @@ fn root_level_main_and_unknown_internal_targets() {
     assert_eq!(package.relationships.len(), 2);
     assert_eq!(
         package
-            .read_target(
+            .read_test_target(
                 &package.relationships[0].target.clone(),
                 &package.relationships[0].kind.clone()
             )
@@ -536,7 +550,7 @@ fn root_level_main_and_unknown_internal_targets() {
     );
     assert_eq!(
         package
-            .read_target(
+            .read_test_target(
                 &package.relationships[1].target.clone(),
                 &package.relationships[1].kind.clone()
             )
@@ -571,11 +585,11 @@ fn failed_reads_are_consumed_and_selection_precedes_read() {
     let mut package = DocxPackage::open(&bytes).unwrap();
     let main = Target::Internal(package.main.clone());
     assert!(matches!(
-        package.read_target(&main, &RelationshipKind::OfficeDocument).unwrap_err(),
+        package.read_test_target(&main, &RelationshipKind::OfficeDocument).unwrap_err(),
         DocxError::Package { .. }
     ));
     assert!(package
-        .read_target(&main, &RelationshipKind::OfficeDocument)
+        .read_test_target(&main, &RelationshipKind::OfficeDocument)
         .unwrap_err()
         .to_string()
         .contains("already read"));
@@ -705,7 +719,7 @@ fn independent_metadata_rejections() {
     let mut package = DocxPackage::open(&bytes).unwrap();
     let relation = &package.relationships[0];
     assert_eq!(
-        package.read_target(&relation.target.clone(), &relation.kind.clone()).unwrap(),
+        package.read_test_target(&relation.target.clone(), &relation.kind.clone()).unwrap(),
         b"x"
     );
 }
@@ -771,14 +785,17 @@ fn entry_lookup_ignores_case_and_preserves_single_read() {
     assert!(
         matches!(&target, Target::Internal(part) if part.name.as_ref() == "media/image1.PNG" && part.content_type.as_deref() == Some("image/png"))
     );
-    assert_eq!(package.read_target(&target, &RelationshipKind::Image).unwrap(), b"image");
+    assert_eq!(package.read_test_target(&target, &RelationshipKind::Image).unwrap(), b"image");
     invalid(
         package.read_part("MEDIA/IMAGE1.PNG").unwrap_err(),
         "#part",
         "part already read (attempts observed 2, limit 1)",
     );
     let main = Target::Internal(package.main.clone());
-    assert_eq!(package.read_target(&main, &RelationshipKind::OfficeDocument).unwrap(), b"body");
+    assert_eq!(
+        package.read_test_target(&main, &RelationshipKind::OfficeDocument).unwrap(),
+        b"body"
+    );
 }
 
 // 이것을 실패시키는 것: Override/Default 등록의 소문자 변환 제거.
@@ -828,7 +845,7 @@ fn ambiguous_case_aliases_cannot_be_selected() {
     let mut package = DocxPackage::open(&bytes).unwrap();
     let relation = &package.relationships[0];
     assert!(
-        matches!(package.read_target(&relation.target.clone(), &relation.kind.clone()).unwrap_err(), DocxError::AmbiguousPart { ref part } if part == "mimetype")
+        matches!(package.read_test_target(&relation.target.clone(), &relation.kind.clone()).unwrap_err(), DocxError::AmbiguousPart { ref part } if part == "mimetype")
     );
     assert_eq!(package.consumed.len(), 3);
 }
@@ -890,7 +907,7 @@ fn unknown_targets_remain_lazy() {
             matches!(&relationship.target, Target::Internal(part) if part.name.as_ref() == "custom/unknown.bin" && part.content_type.is_none())
         );
         let error = package
-            .read_target(&relationship.target.clone(), &relationship.kind.clone())
+            .read_test_target(&relationship.target.clone(), &relationship.kind.clone())
             .unwrap_err();
         match extras.len() {
             0 => assert!(
@@ -920,7 +937,7 @@ fn mime_case_and_parameters() {
     );
     let mut package = DocxPackage::open(&bytes).unwrap();
     let target = package.relationships[0].target.clone();
-    assert_eq!(package.read_target(&target, &RelationshipKind::Image).unwrap(), b"pixels");
+    assert_eq!(package.read_test_target(&target, &RelationshipKind::Image).unwrap(), b"pixels");
     for mime in [
         "Application/vnd.ms-word.document.MACROENABLED.main+xml",
         "application/vnd.ms-word.document.macroenabled.main+xml",
@@ -1090,7 +1107,7 @@ fn diagnostic_fields_use_bounded_quotes() {
     }
     let macro_type = format!("application/macroEnabled{long}");
     let error = validate_content_type(
-        &Part { name: long.clone().into(), content_type: Some(macro_type.clone().into()) },
+        &Part::new(0, long.clone().into(), Some(macro_type.clone().into())),
         &RelationshipKind::OfficeDocument,
     )
     .unwrap_err();
@@ -1152,43 +1169,48 @@ fn content_type_definitions_are_shared_by_relationships() {
 }
 
 // 이것을 실패시키는 것: 관계별 경로 복제, raw 캐시 우회, canonical 별칭 공유 제거,
-// source를 캐시 key에서 제거, 해시 충돌을 동일 경로로 취급, 경로 예산을 관계별로 초기화.
+// source별 캐시 혼합, 해시 충돌을 동일 경로로 취급, 경로 예산을 관계별로 초기화.
+// 긴 source를 hit마다 해시하거나 content type 조회에서 전체 경로를 다시 소문자 복사.
 #[test]
 fn resolved_paths_share_repetitions_and_canonical_aliases() {
     let directory = "a".repeat(4_096);
     let source = format!("{directory}/main.xml");
     let mut paths = ResolvedPaths::default();
-    let first = paths.resolve(&source, "test.rels", "a.bin").unwrap();
-    // Saturate the allowance: repeats and aliases must not allocate another path.
-    paths.bytes = 67_108_864;
+    let types = ContentTypes::default();
+    let mut targets = HashMap::new();
+    let first = paths.resolve(&source, "test.rels", "a.bin", &mut targets, &types).unwrap();
     for _ in 0..128 {
         for target in ["a.bin", "A.BIN", "./a.bin", "sub/../a.bin"] {
-            assert!(Rc::ptr_eq(&first, &paths.resolve(&source, "test.rels", target).unwrap()));
+            let part = paths.resolve(&source, "test.rels", target, &mut targets, &types).unwrap();
+            assert!(Rc::ptr_eq(&first.name, &part.name));
         }
     }
-    assert_eq!(paths.bytes, 67_108_864);
     assert_eq!(paths.resolutions, 4);
     assert_eq!(paths.allocated_bytes, 4_102);
-    assert_eq!(paths.raw.len(), 1);
-    assert_eq!(paths.raw[&source].len(), 4);
+    assert_eq!(targets.len(), 4);
+    assert_eq!(types.lowercase_bytes.get(), 4_105);
+    assert_eq!(paths.hash_bytes, 20_129);
+    assert_eq!(paths.bytes, 65_796);
     assert_eq!(paths.canonical.values().map(Vec::len).sum::<usize>(), 1);
-    assert_eq!(first.len(), 4_102);
-    // Force an unrelated candidate into the hash bucket before its real match.
-    paths.canonical.values_mut().next().unwrap().insert(0, Rc::from("wrong/part"));
-    paths
-        .canonical
-        .values_mut()
-        .next()
-        .unwrap()
-        .insert(0, Rc::from(format!("{directory}/a.bin/extra")));
-    paths.canonical.values_mut().next().unwrap().insert(0, Rc::from(directory.as_str()));
+    // A hash collision must still compare every component and the component count.
+    for name in ["wrong/part".to_string(), format!("{directory}/a.bin/extra"), directory.clone()] {
+        paths
+            .canonical
+            .values_mut()
+            .next()
+            .unwrap()
+            .insert(0, Part::new(usize::MAX, name.into(), None));
+    }
     let absolute = format!("/{directory}/A.bin");
-    assert!(Rc::ptr_eq(&first, &paths.resolve("other/main.xml", "test.rels", &absolute).unwrap()));
-    paths.bytes = 4_102;
-    let other = paths.resolve("other/main.xml", "test.rels", "a.bin").unwrap();
-    assert_eq!(other.as_ref(), "other/a.bin");
-    assert!(!Rc::ptr_eq(&first, &other));
-    assert_eq!(paths.bytes, 4_113);
+    let mut other_targets = HashMap::new();
+    let same = paths
+        .resolve("other/main.xml", "test.rels", &absolute, &mut other_targets, &types)
+        .unwrap();
+    assert!(Rc::ptr_eq(&first.name, &same.name));
+    let other =
+        paths.resolve("other/main.xml", "test.rels", "a.bin", &mut other_targets, &types).unwrap();
+    assert_eq!(other.name.as_ref(), "other/a.bin");
+    assert!(!Rc::ptr_eq(&first.name, &other.name));
     assert_eq!(paths.resolutions, 6);
 
     let related = rels(
@@ -1224,38 +1246,48 @@ fn resolved_paths_share_repetitions_and_canonical_aliases() {
 #[test]
 fn distinct_short_targets_have_a_preallocation_path_budget() {
     for (length, count, expected) in
-        [(1_024, 64, 66_048), (2_048, 64, 131_584), (1_024, 128, 132_096)]
+        [(1_024, 64, 266_240), (2_048, 64, 528_384), (1_024, 128, 532_480)]
     {
         let source = format!("{}/main.xml", "a".repeat(length));
         let mut paths = ResolvedPaths::default();
-        let mut retained = Vec::new();
+        let mut targets = HashMap::new();
         for i in 0..count {
-            retained.push(paths.resolve(&source, "body.rels", &format!("{i:03}.bin")).unwrap());
+            paths
+                .resolve(
+                    &source,
+                    "body.rels",
+                    &format!("{i:03}.bin"),
+                    &mut targets,
+                    &ContentTypes::default(),
+                )
+                .unwrap();
         }
         assert_eq!(paths.bytes, expected);
-        assert_eq!(paths.allocated_bytes, expected);
-        assert_eq!(retained.iter().map(|name| name.len()).sum::<usize>(), expected);
+        assert_eq!(paths.allocated_bytes, (length + 8) * count);
     }
-    // Seed only the scalar to exercise the real 64 MiB bound without a large allocation.
-    let mut paths = ResolvedPaths { bytes: 67_108_854, ..ResolvedPaths::default() };
-    let last = paths.resolve("dir/main.xml", "body.rels", "aa.bin").unwrap();
-    assert_eq!(last.as_ref(), "dir/aa.bin");
+    let mut paths = ResolvedPaths { bytes: 67_108_792, ..ResolvedPaths::default() };
+    let mut targets = HashMap::new();
+    let types = ContentTypes::default();
+    let last = paths.resolve("dir/main.xml", "body.rels", "aa.bin", &mut targets, &types).unwrap();
+    assert_eq!(last.name.as_ref(), "dir/aa.bin");
     assert_eq!(paths.bytes, 67_108_864);
-    let before = paths.canonical.values().map(Vec::len).sum::<usize>();
-    match paths.resolve("dir/main.xml", "body.rels", "bb.bin").unwrap_err() {
-        DocxError::Limit { part, element, resource, observed, limit } => {
-            assert_eq!(part, "body.rels");
-            assert_eq!(element, "Relationship");
-            assert_eq!(resource, "resolved path UTF-8 bytes");
-            assert_eq!(observed, 67_108_874);
-            assert_eq!(limit, 67_108_864);
+    // Cache hits still work with an exhausted processing budget.
+    paths.resolve("dir/main.xml", "body.rels", "aa.bin", &mut targets, &types).unwrap();
+    for target in ["bb.bin", "AA.bin"] {
+        match paths.resolve("dir/main.xml", "body.rels", target, &mut targets, &types).unwrap_err()
+        {
+            DocxError::Limit { part, element, resource, observed, limit } => {
+                assert_eq!(part, "body.rels");
+                assert_eq!(element, "Relationship");
+                assert_eq!(resource, "resolved path processing bytes");
+                assert_eq!(observed, 67_108_936);
+                assert_eq!(limit, 67_108_864);
+            }
+            other => panic!("{other:?}"),
         }
-        other => panic!("{other:?}"),
     }
     assert_eq!(paths.bytes, 67_108_864);
-    assert_eq!(before, 1);
-    assert_eq!(paths.canonical.values().map(Vec::len).sum::<usize>(), 1);
-    assert_eq!(paths.raw["dir/main.xml"].len(), 1);
+    assert_eq!(targets.len(), 1);
     assert_eq!(paths.allocated_bytes, 10);
 }
 
@@ -1272,4 +1304,163 @@ fn empty_namespace_prefix_cannot_select_the_main_part() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+// 이것을 실패시키는 것: 실패 결과 미보관, 관계 종류별 MIME 캐시 혼합,
+// raw/canonical alias마다 index 셀 새 생성, 매 read에서 선택 재검사.
+#[test]
+fn canonical_selection_caches_success_and_every_failure() {
+    for (extra, mime, expected) in [
+        (
+            vec![("custom/a.xml", "<a/>")],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            Ok(Some(4)),
+        ),
+        (vec![], "application/x", Err(SelectionFailure::Missing)),
+        (
+            vec![("custom/a.xml", "<a/>"), ("custom/a.xml/", "")],
+            "application/x",
+            Err(SelectionFailure::Opaque),
+        ),
+        (vec![("custom/a.xml", "<a/>")], "", Err(SelectionFailure::MissingType)),
+        (
+            vec![("custom/a.xml", "<a/>")],
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            Err(SelectionFailure::Mismatch(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            )),
+        ),
+    ] {
+        let ct = types(&format!(
+            "<c:Override PartName='/custom/main.xml' ContentType='{MAIN_TYPE}'/>{}",
+            if mime.is_empty() {
+                String::new()
+            } else {
+                format!("<c:Override PartName='/custom/a.xml' ContentType='{mime}'/>")
+            }
+        ));
+        let related = rels(&format!(
+            "{}{}",
+            rel("one", "header", "a.xml", ""),
+            rel("two", "header", "./A.xml", "")
+        ));
+        let bytes = document(&root(), &ct, Some(&related), &extra);
+        let package = DocxPackage::open(&bytes).unwrap();
+        let Target::Internal(first) = &package.relationships[0].target else { panic!() };
+        let Target::Internal(alias) = &package.relationships[1].target else { panic!() };
+        assert_eq!(first.id, alias.id);
+        assert!(Rc::ptr_eq(&first.cache, &alias.cache));
+        take_selection_work();
+        assert_eq!(package.relationship_index(&package.relationships[0]), expected);
+        let initial = take_selection_work();
+        assert_eq!(initial.lookups, 1);
+        for _ in 0..64 {
+            assert_eq!(package.relationship_index(&package.relationships[1]), expected);
+        }
+        assert_eq!(
+            take_selection_work(),
+            SelectionWork {
+                entry_bytes: 0,
+                hash_bytes: 0,
+                lookups: 0,
+                path_bytes: 0,
+                lookup_bytes: 0,
+                type_checks: 0,
+                mime_calls: 0,
+                mime_bytes: 0
+            }
+        );
+        if expected.is_ok() {
+            let other = Relationship {
+                id: "footer".into(),
+                kind: RelationshipKind::Footer,
+                target: package.relationships[0].target.clone(),
+            };
+            assert_eq!(
+                package.relationship_index(&other),
+                Err(SelectionFailure::Mismatch(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"
+                ))
+            );
+            let work = take_selection_work();
+            assert_eq!(work.lookups, 0);
+            assert_eq!(work.mime_calls, 1);
+            assert_eq!(
+                package.relationship_index(&other),
+                Err(SelectionFailure::Mismatch(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"
+                ))
+            );
+            assert_eq!(
+                take_selection_work(),
+                SelectionWork {
+                    entry_bytes: 0,
+                    hash_bytes: 0,
+                    lookups: 0,
+                    path_bytes: 0,
+                    lookup_bytes: 0,
+                    type_checks: 0,
+                    mime_calls: 0,
+                    mime_bytes: 0
+                }
+            );
+        }
+    }
+    let bytes = document(
+        &root(),
+        &main_types(),
+        Some(&rels(&rel("one", "header", "../mimetype", ""))),
+        &[("mimetype", "one"), ("MIMETYPE", "two")],
+    );
+    let package = DocxPackage::open(&bytes).unwrap();
+    take_selection_work();
+    assert_eq!(
+        package.relationship_index(&package.relationships[0]),
+        Err(SelectionFailure::Ambiguous)
+    );
+    assert_eq!(take_selection_work().lookups, 1);
+    for _ in 0..64 {
+        assert_eq!(
+            package.relationship_index(&package.relationships[0]),
+            Err(SelectionFailure::Ambiguous)
+        );
+    }
+    assert_eq!(
+        take_selection_work(),
+        SelectionWork {
+            entry_bytes: 0,
+            hash_bytes: 0,
+            lookups: 0,
+            path_bytes: 0,
+            lookup_bytes: 0,
+            type_checks: 0,
+            mime_calls: 0,
+            mime_bytes: 0
+        }
+    );
+}
+
+// 이것을 실패시키는 것: ZIP 이름/질의 소문자화 제거, 충돌에서 첫/마지막 index 선택,
+// 해시 충돌의 문자열 확인 생략, 서로 다른 이름을 모호한 이름으로 합침.
+#[test]
+fn name_index_preserves_case_ambiguity_and_verifies_hash_collisions() {
+    for extra in [
+        vec![("mimetype", "a"), ("MIMETYPE", "b"), ("MimeType", "c")],
+        vec![("MimeType", "c"), ("MIMETYPE", "b"), ("mimetype", "a")],
+    ] {
+        let bytes = document(&root(), &main_types(), None, &extra);
+        let package = DocxPackage::open(&bytes).unwrap();
+        assert_eq!(package.names.get("MiMeTyPe"), Err(SelectionFailure::Ambiguous));
+        assert_eq!(package.names.get("CUSTOM/MAIN.XML"), Ok(Some(2)));
+    }
+    let bytes = document(&root(), &main_types(), None, &[("UPPER.XML", "x")]);
+    let mut package = DocxPackage::open(&bytes).unwrap();
+    assert_eq!(package.names.get("upper.xml"), Ok(Some(3)));
+    // Force two different names into a full-hash bucket; no probabilistic input.
+    let hash = package.names.hash("upper.xml");
+    package.names.buckets.get_mut(&hash).unwrap().insert(0, ("other.xml".into(), None));
+    assert_eq!(package.names.get("UPPER.XML"), Ok(Some(3)));
+    let hash = package.names.hash("absent.xml");
+    package.names.buckets.insert(hash, vec![("another.xml".into(), Some(3))]);
+    assert_eq!(package.names.get("absent.xml"), Ok(None));
 }

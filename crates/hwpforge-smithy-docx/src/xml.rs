@@ -98,8 +98,8 @@ pub(crate) enum XmlEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct NamespaceId(usize);
 impl NamespaceId {
-    const NONE: Self = Self(0);
-    const XML: Self = Self(1);
+    pub(crate) const NONE: Self = Self(0);
+    pub(crate) const XML: Self = Self(1);
     const XMLNS: Self = Self(2);
 }
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
@@ -108,6 +108,15 @@ pub(crate) const REL_NS: (NamespaceId, &str) =
     (NamespaceId(3), "http://schemas.openxmlformats.org/package/2006/relationships");
 pub(crate) const TYPE_NS: (NamespaceId, &str) =
     (NamespaceId(4), "http://schemas.openxmlformats.org/package/2006/content-types");
+
+pub(crate) const W_NS: (NamespaceId, &str) =
+    (NamespaceId(5), "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+pub(crate) const R_NS: (NamespaceId, &str) =
+    (NamespaceId(6), "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
+pub(crate) const MC_NS: (NamespaceId, &str) =
+    (NamespaceId(7), "http://schemas.openxmlformats.org/markup-compatibility/2006");
+pub(crate) const M_NS: (NamespaceId, &str) =
+    (NamespaceId(8), "http://schemas.openxmlformats.org/officeDocument/2006/math");
 
 // Hash only on registration, then verify exact content within that hash bucket.
 // Keeping the hash as the map key also avoids rehashing long URIs as the map grows.
@@ -122,7 +131,10 @@ impl Default for Namespaces {
     fn default() -> Self {
         let hasher = RandomState::new();
         let uris: Vec<Rc<str>> =
-            ["", XML_NS, XMLNS_NS, REL_NS.1, TYPE_NS.1].into_iter().map(Rc::from).collect();
+            ["", XML_NS, XMLNS_NS, REL_NS.1, TYPE_NS.1, W_NS.1, R_NS.1, MC_NS.1, M_NS.1]
+                .into_iter()
+                .map(Rc::from)
+                .collect();
         let mut by_hash: HashMap<u64, Vec<NamespaceId>> = HashMap::new();
         for (index, uri) in uris.iter().enumerate() {
             by_hash.entry(hasher.hash_one(uri.as_ref())).or_default().push(NamespaceId(index));
@@ -405,6 +417,59 @@ fn append(
     })
 }
 
+// XML declarations have a closed grammar, unlike arbitrary element attributes.
+fn declaration_syntax(raw: &str, part: &str, location: &str) -> Result<()> {
+    let invalid = || {
+        DocxError::invalid(part, location, "invalid XML declaration; expected version='1.0', optional encoding and standalone in order")
+    };
+    let mut rest = raw.strip_prefix("xml").ok_or_else(invalid)?;
+    let mut order = 0;
+    while !rest.is_empty() {
+        let trimmed = rest.trim_start_matches([' ', '\t', '\r', '\n']);
+        if trimmed.len() == rest.len() {
+            return Err(invalid());
+        }
+        rest = trimmed;
+        if rest.is_empty() {
+            break;
+        }
+        let end = rest.find(['=', ' ', '\t', '\r', '\n']).ok_or_else(invalid)?;
+        let key = &rest[..end];
+        rest = rest[end..].trim_start_matches([' ', '\t', '\r', '\n']);
+        rest =
+            rest.strip_prefix('=').ok_or_else(invalid)?.trim_start_matches([' ', '\t', '\r', '\n']);
+        let delimiter =
+            rest.chars().next().filter(|ch| matches!(ch, '\'' | '"')).ok_or_else(invalid)?;
+        rest = &rest[1..];
+        let end = rest.find(delimiter).ok_or_else(invalid)?;
+        let value = &rest[..end];
+        rest = &rest[end + 1..];
+        order = match (order, key) {
+            (0, "version") if value == "1.0" => 1,
+            (1, "encoding") => {
+                if !value.bytes().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+                    || !value.bytes().all(|ch| ch.is_ascii_alphanumeric() || b"._-".contains(&ch))
+                {
+                    return Err(invalid());
+                }
+                if !value.eq_ignore_ascii_case("UTF-8") {
+                    return Err(DocxError::UnsupportedEncoding {
+                        part: quote(part),
+                        encoding: quote(value),
+                    });
+                }
+                2
+            }
+            (1 | 2, "standalone") if matches!(value, "yes" | "no") => 3,
+            _ => return Err(invalid()),
+        };
+    }
+    if order == 0 {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 #[derive(PartialEq)]
 enum DocumentState {
     Prolog,
@@ -470,19 +535,10 @@ pub(crate) fn walk(
         first_event = false;
         match &event {
             Event::Decl(declaration) => {
-                if let Some(encoding) = declaration.encoding() {
-                    let encoding =
-                        encoding.map_err(|e| DocxError::invalid(part, location, quote(e)))?;
-                    if !encoding.eq_ignore_ascii_case("UTF-8") {
-                        return Err(DocxError::UnsupportedEncoding {
-                            part: quote(part),
-                            encoding: quote(encoding),
-                        });
-                    }
-                }
+                declaration_syntax(declaration.as_ref(), part, location)?;
             }
             Event::PI(pi) => {
-                if !ncname(pi.target()) {
+                if !ncname(pi.target()) || pi.target().eq_ignore_ascii_case("xml") {
                     return Err(DocxError::invalid(
                         part,
                         location,

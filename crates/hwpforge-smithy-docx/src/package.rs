@@ -6,6 +6,7 @@ use crate::{
 };
 use hwpforge_core::zip_package::{normalize_part_name, open_package, Package, PackageLimits};
 use std::{
+    cell::{OnceCell, RefCell},
     collections::{hash_map::RandomState, BTreeMap, BTreeSet, HashMap},
     hash::{BuildHasher, Hasher},
     rc::Rc,
@@ -98,26 +99,131 @@ impl RelationshipKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Part {
+    pub(crate) id: usize,
+    cache: Rc<PartCache>,
     pub(crate) name: Rc<str>,
     /// Declared type, even when the target entry is missing or opaque.
     pub(crate) content_type: Option<Rc<str>>,
 }
+// Clones from both raw Target and canonical aliases share these cells. No
+// canonical name is hashed or scanned on a repeated relationship selection.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PartCache {
+    index: OnceCell<std::result::Result<usize, SelectionFailure>>,
+    types: RefCell<BTreeMap<Option<MimeRule>, Option<SelectionFailure>>>,
+}
+impl Part {
+    fn new(id: usize, name: Rc<str>, content_type: Option<Rc<str>>) -> Self {
+        Self { id, name, content_type, cache: Rc::default() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionFailure {
+    Missing,
+    Ambiguous,
+    Opaque,
+    MissingType,
+    Mismatch(&'static str),
+    Macro,
+}
+impl SelectionFailure {
+    pub(crate) fn error(self, part: &Part) -> DocxError {
+        let name = quote(&part.name);
+        match self {
+            Self::Missing => DocxError::MissingPart { part: name },
+            Self::Ambiguous => DocxError::AmbiguousPart { part: name },
+            Self::Opaque => DocxError::OpaquePart { part: name },
+            Self::MissingType => DocxError::MissingContentType { part: name },
+            Self::Mismatch(expected) => DocxError::ContentTypeMismatch {
+                part: name,
+                actual: quote(part.content_type.as_deref().unwrap()),
+                expected,
+            },
+            Self::Macro => DocxError::invalid(
+                &name,
+                "#content-type",
+                format!(
+                    "macroEnabled content type '{}' is forbidden",
+                    quote(part.content_type.as_deref().unwrap())
+                ),
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Target {
     Internal(Part),
     External(String),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Relationship {
     pub(crate) id: String,
     pub(crate) kind: RelationshipKind,
     pub(crate) target: Target,
 }
 
+// Hash the lowercase spelling once. Integer buckets avoid rehashing long names
+// when the table grows; exact spelling checks still resolve full hash collisions.
+#[derive(Debug)]
+struct NameIndex {
+    buckets: HashMap<u64, Vec<(String, Option<usize>)>>,
+    hasher: RandomState,
+}
+impl NameIndex {
+    fn new(package: &Package<'_>) -> Self {
+        let mut result = Self { buckets: HashMap::new(), hasher: RandomState::new() };
+        for (index, entry) in package.entries().iter().enumerate() {
+            #[cfg(test)]
+            selection_work(|c| c.entry_bytes += entry.path.len());
+            let key = entry.path.to_ascii_lowercase();
+            let hash = result.hash(&key);
+            let bucket = result.buckets.entry(hash).or_default();
+            if let Some((_, value)) = bucket.iter_mut().find(|(name, _)| name_eq(name, &key)) {
+                // Core rejects ordinary case collisions, but accepts mimetype
+                // variants for Hancom. DOCX must not choose one arbitrarily.
+                *value = None;
+            } else {
+                bucket.push((key, Some(index)));
+            }
+        }
+        result
+    }
+    fn hash(&self, key: &str) -> u64 {
+        #[cfg(test)]
+        selection_work(|c| c.hash_bytes += key.len());
+        self.hasher.hash_one(key)
+    }
+    fn get(&self, name: &str) -> std::result::Result<Option<usize>, SelectionFailure> {
+        #[cfg(test)]
+        selection_work(|c| {
+            c.lookups += 1;
+            c.lookup_bytes += name.len();
+        });
+        let key = name.to_ascii_lowercase();
+        let found = self
+            .buckets
+            .get(&self.hash(&key))
+            .and_then(|bucket| bucket.iter().find(|(name, _)| name_eq(name, &key)));
+        match found {
+            None => Ok(None),
+            Some((_, Some(index))) => Ok(Some(*index)),
+            Some((_, None)) => Err(SelectionFailure::Ambiguous),
+        }
+    }
+}
+fn name_eq(left: &str, right: &str) -> bool {
+    #[cfg(test)]
+    selection_work(|c| c.path_bytes += compared_bytes(left.as_bytes(), right.as_bytes(), false));
+    left == right
+}
+
 #[derive(Debug)]
 pub(crate) struct DocxPackage<'a> {
     package: Package<'a>,
     consumed: BTreeSet<usize>,
+    names: NameIndex,
     pub(crate) main: Part,
     /// Main-part relationships in XML order, including unknown kinds and externals.
     pub(crate) relationships: Vec<Relationship>,
@@ -136,10 +242,12 @@ impl<'a> DocxPackage<'a> {
         }
         let package = open_package(bytes, PackageLimits::default())
             .map_err(|source| DocxError::Package { part: "#package".into(), source })?;
+        let names = NameIndex::new(&package);
         let mut result = Self {
             package,
             consumed: BTreeSet::new(),
-            main: Part { name: Rc::from(""), content_type: None },
+            names,
+            main: Part::new(usize::MAX, Rc::from(""), None),
             relationships: Vec::new(),
             text_budget: TextBudget::default(),
         };
@@ -148,9 +256,9 @@ impl<'a> DocxPackage<'a> {
             ContentTypes::parse(&bytes, &mut result.text_budget)?
         };
         let root = {
-            result.index(ROOT_RELS)?;
+            let index = result.index(ROOT_RELS)?;
             check_content_type(ROOT_RELS, types.get(ROOT_RELS), Some(MimeRule::Exact(RELS_TYPE)))?;
-            let bytes = result.read_part(ROOT_RELS)?;
+            let bytes = result.read_index(ROOT_RELS, index)?;
             parse_relationships(&bytes, ROOT_RELS, &mut result.text_budget)?
         };
         let candidates: Vec<_> =
@@ -166,7 +274,8 @@ impl<'a> DocxPackage<'a> {
             ));
         }
         let mut paths = ResolvedPaths::default();
-        let relationship = Self::resolve("", ROOT_RELS, &candidates[0], &types, &mut paths)?;
+        let relationship =
+            Self::resolve("", ROOT_RELS, &candidates[0], &types, &mut paths, &mut HashMap::new())?;
         result.main = match relationship.target {
             Target::Internal(part) => part,
             Target::External(target) => {
@@ -180,19 +289,23 @@ impl<'a> DocxPackage<'a> {
                 ))
             }
         };
-        result.index(&result.main.name)?;
-        validate_content_type(&result.main, &RelationshipKind::OfficeDocument)?;
+        result
+            .select(&result.main, &RelationshipKind::OfficeDocument)
+            .map_err(|e| e.error(&result.main))?;
         let rels_name = relationship_part_name(&result.main.name);
-        if result.find_index(&rels_name)?.is_some() {
-            result.index(&rels_name)?;
+        if let Some(index) = result.find_index(&rels_name)? {
+            if result.package.is_opaque(index) {
+                return Err(DocxError::OpaquePart { part: quote(&rels_name) });
+            }
             check_content_type(
                 &rels_name,
                 types.get(&rels_name),
                 Some(MimeRule::Exact(RELS_TYPE)),
             )?;
-            let bytes = result.read_part(&rels_name)?;
+            let bytes = result.read_index(&rels_name, index)?;
             let relationships = parse_relationships(&bytes, &rels_name, &mut result.text_budget)?;
             let mut singletons = BTreeSet::new();
+            let mut targets = HashMap::new();
             for relationship in relationships {
                 if relationship.kind.singleton() && !singletons.insert(relationship.kind.clone()) {
                     return Err(DocxError::invalid(
@@ -207,6 +320,7 @@ impl<'a> DocxPackage<'a> {
                     &relationship,
                     &types,
                     &mut paths,
+                    &mut targets,
                 )?);
             }
         }
@@ -214,18 +328,25 @@ impl<'a> DocxPackage<'a> {
     }
 
     fn find_index(&self, name: &str) -> Result<Option<usize>> {
-        let mut matches = self
-            .package
-            .entries()
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.path.eq_ignore_ascii_case(name));
-        let first = matches.next().map(|(index, _)| index);
-        // Core permits case variants of mimetype for other container formats.
-        if matches.next().is_some() {
-            return Err(DocxError::AmbiguousPart { part: quote(name) });
-        }
-        Ok(first)
+        self.names.get(name).map_err(|_| DocxError::AmbiguousPart { part: quote(name) })
+    }
+
+    fn part_index(&self, part: &Part) -> std::result::Result<usize, SelectionFailure> {
+        *part.cache.index.get_or_init(|| match self.find_index(&part.name) {
+            Err(_) => Err(SelectionFailure::Ambiguous),
+            Ok(None) => Err(SelectionFailure::Missing),
+            Ok(Some(index)) if self.package.is_opaque(index) => Err(SelectionFailure::Opaque),
+            Ok(Some(index)) => Ok(index),
+        })
+    }
+
+    fn select(
+        &self,
+        part: &Part,
+        kind: &RelationshipKind,
+    ) -> std::result::Result<usize, SelectionFailure> {
+        let index = self.part_index(part)?;
+        content_type_failure(part, kind).map_or(Ok(index), Err)
     }
 
     fn index(&self, name: &str) -> Result<usize> {
@@ -239,6 +360,10 @@ impl<'a> DocxPackage<'a> {
 
     fn read_part(&mut self, name: &str) -> Result<Vec<u8>> {
         let index = self.index(name)?;
+        self.read_index(name, index)
+    }
+
+    fn read_index(&mut self, name: &str, index: usize) -> Result<Vec<u8>> {
         // Mark before decompression: a failed read must never be retried either.
         if !self.consumed.insert(index) {
             return Err(DocxError::invalid(
@@ -250,27 +375,37 @@ impl<'a> DocxPackage<'a> {
         self.package.read(index).map_err(|source| DocxError::Package { part: quote(name), source })
     }
 
-    /// Move returned bytes to the XML walk or image consumer, then release them.
-    /// Shared targets must reuse the interpreted result, never reread the ZIP.
-    /// Pass the owning relationship kind (OfficeDocument for `main`). Missing,
-    /// opaque, missing-type and type-mismatch errors remain distinct so callers
-    /// can choose fatal errors or local exclusion according to content role.
-    pub(crate) fn read_target(
-        &mut self,
-        target: &Target,
-        kind: &RelationshipKind,
-    ) -> Result<Vec<u8>> {
-        match target {
-            Target::Internal(part) => {
-                self.index(&part.name)?;
-                validate_content_type(part, kind)?;
-                self.read_part(&part.name)
-            }
+    /// The mandatory main part is always fatal on selection or read failure.
+    pub(crate) fn read_main(&mut self) -> Result<Vec<u8>> {
+        let main = self.main.clone();
+        self.read_internal(&main, &RelationshipKind::OfficeDocument)
+    }
+
+    /// The relationship owns its type. Core read errors are always fatal.
+    pub(crate) fn read_relationship(&mut self, relationship: &Relationship) -> Result<Vec<u8>> {
+        match &relationship.target {
+            Target::Internal(part) => self.read_internal(part, &relationship.kind),
             Target::External(target) => Err(DocxError::invalid(
                 target,
                 "Relationship",
                 "external target cannot be read as a package part",
             )),
+        }
+    }
+
+    fn read_internal(&mut self, part: &Part, kind: &RelationshipKind) -> Result<Vec<u8>> {
+        let index = self.select(part, kind).map_err(|e| e.error(part))?;
+        self.read_index(&part.name, index)
+    }
+
+    /// Check type even for shared targets; successful reads are indexed by ZIP entry.
+    pub(crate) fn relationship_index(
+        &self,
+        relationship: &Relationship,
+    ) -> std::result::Result<Option<usize>, SelectionFailure> {
+        match &relationship.target {
+            Target::Internal(part) => self.select(part, &relationship.kind).map(Some),
+            Target::External(_) => Ok(None),
         }
     }
 
@@ -280,18 +415,18 @@ impl<'a> DocxPackage<'a> {
         raw: &RawRelationship,
         types: &ContentTypes,
         paths: &mut ResolvedPaths,
+        targets: &mut HashMap<String, Part>,
     ) -> Result<Relationship> {
         let target = if raw.external {
             Target::External(raw.target.clone())
         } else {
-            let name = paths.resolve(source, location, &raw.target)?;
-            Target::Internal(Part { content_type: types.shared(&name).cloned(), name })
+            Target::Internal(paths.resolve(source, location, &raw.target, targets, types)?)
         };
         Ok(Relationship { id: raw.id.clone(), kind: raw.kind.clone(), target })
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MimeRule {
     Exact(&'static str),
     Image,
@@ -310,20 +445,49 @@ impl MimeRule {
 /// MIME type/subtype are ASCII-insensitive; parameter spelling stays exact.
 /// Main content types with parameters are unsupported: no parameter semantics are implemented.
 fn mime_matches(actual: &str, rule: MimeRule) -> bool {
+    #[cfg(test)]
+    selection_work(|c| c.mime_calls += 1);
     let (media, parameters) = actual.split_once(';').unwrap_or((actual, ""));
+    #[cfg(test)]
+    selection_work(|c| c.mime_bytes += media.len() + usize::from(media.len() < actual.len()));
     match rule {
         MimeRule::Exact(expected) => {
             let (expected_media, expected_parameters) =
                 expected.split_once(';').unwrap_or((expected, ""));
-            media.eq_ignore_ascii_case(expected_media) && parameters == expected_parameters
+            mime_eq(media.as_bytes(), expected_media.as_bytes()) && {
+                #[cfg(test)]
+                selection_work(|c| {
+                    c.mime_bytes +=
+                        compared_bytes(parameters.as_bytes(), expected_parameters.as_bytes(), false)
+                });
+                parameters == expected_parameters
+            }
         }
         MimeRule::Image => {
-            media.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+            media.get(..6).is_some_and(|prefix| mime_eq(prefix.as_bytes(), b"image/"))
         }
-        MimeRule::Macro => {
-            media.as_bytes().windows(12).any(|word| word.eq_ignore_ascii_case(b"macroEnabled"))
-        }
+        MimeRule::Macro => media.as_bytes().windows(12).any(|word| mime_eq(word, b"macroEnabled")),
     }
+}
+
+fn mime_eq(actual: &[u8], expected: &[u8]) -> bool {
+    #[cfg(test)]
+    selection_work(|c| c.mime_bytes += compared_bytes(actual, expected, true));
+    actual.eq_ignore_ascii_case(expected)
+}
+
+// Logical byte visits at the production comparison sites, not SIMD instructions
+// or allocator/probe overhead. Unequal lengths require no payload comparison.
+#[cfg(test)]
+fn compared_bytes(actual: &[u8], expected: &[u8], ascii_case: bool) -> usize {
+    if actual.len() != expected.len() {
+        return 0;
+    }
+    actual
+        .iter()
+        .zip(expected)
+        .position(|(a, b)| if ascii_case { !a.eq_ignore_ascii_case(b) } else { a != b })
+        .map_or(actual.len(), |index| index + 1)
 }
 
 fn check_content_type(name: &str, actual: Option<&str>, expected: Option<MimeRule>) -> Result<()> {
@@ -340,25 +504,29 @@ fn check_content_type(name: &str, actual: Option<&str>, expected: Option<MimeRul
     Ok(())
 }
 
-fn validate_content_type(part: &Part, kind: &RelationshipKind) -> Result<()> {
-    if *kind == RelationshipKind::OfficeDocument
-        && part.content_type.as_deref().is_some_and(|mime| mime_matches(mime, MimeRule::Macro))
-    {
-        return Err(DocxError::invalid(
-            &part.name,
-            "#content-type",
-            format!(
-                "macroEnabled content type '{}' is forbidden",
-                quote(part.content_type.as_deref().unwrap())
-            ),
-        ));
-    }
-    let expected = if *kind == RelationshipKind::Image {
+fn content_type_failure(part: &Part, kind: &RelationshipKind) -> Option<SelectionFailure> {
+    let rule = if *kind == RelationshipKind::Image {
         Some(MimeRule::Image)
     } else {
         kind.expected_type().map(MimeRule::Exact)
     };
-    check_content_type(&part.name, part.content_type.as_deref(), expected)
+    *part.cache.types.borrow_mut().entry(rule).or_insert_with(|| {
+        #[cfg(test)]
+        selection_work(|c| c.type_checks += 1);
+        let Some(actual) = part.content_type.as_deref() else {
+            return Some(SelectionFailure::MissingType);
+        };
+        if *kind == RelationshipKind::OfficeDocument && mime_matches(actual, MimeRule::Macro) {
+            return Some(SelectionFailure::Macro);
+        }
+        rule.filter(|rule| !mime_matches(actual, *rule))
+            .map(|rule| SelectionFailure::Mismatch(rule.label()))
+    })
+}
+
+#[cfg(test)]
+fn validate_content_type(part: &Part, kind: &RelationshipKind) -> Result<()> {
+    content_type_failure(part, kind).map_or(Ok(()), |e| Err(e.error(part)))
 }
 
 fn relationship_part_name(source: &str) -> String {
@@ -368,27 +536,58 @@ fn relationship_part_name(source: &str) -> String {
     }
 }
 
-// Like expanded XML text, derived path payload gets a package-wide 64 MiB ceiling.
-// It is independent of ZIP bytes: short Targets can expand a long source directory.
+// Derived path work has a package-wide 64 MiB ceiling, including first-time
+// aliases. Four times source+Target is an admission weight for canonical path
+// derivation, not a count of every byte visit or ZIP candidate comparison. A first
+// selection lowercases/hashes its canonical name once (length <= source+Target);
+// it is covered by this weight. ZIP name indexing separately visits entry names
+// once; metadata performs a fixed number of name lookups. Hash collision checks
+// remain subject to the randomized hash table's expected-cost guarantee.
 const MAX_RESOLVED_PATH_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Default)]
 struct ResolvedPaths {
-    // Source keys occur once, Target keys are bounded by admitted XML attribute bytes.
-    raw: HashMap<String, HashMap<String, Rc<str>>>,
-    canonical: HashMap<u64, Vec<Rc<str>>>,
+    next_id: usize,
+    canonical: HashMap<u64, Vec<Part>>,
     hasher: RandomState,
     bytes: usize,
     #[cfg(test)]
     resolutions: usize,
     #[cfg(test)]
     allocated_bytes: usize,
+    #[cfg(test)]
+    hash_bytes: usize,
 }
 impl ResolvedPaths {
-    fn resolve(&mut self, source: &str, location: &str, target: &str) -> Result<Rc<str>> {
-        if let Some(name) = self.raw.get(source).and_then(|targets| targets.get(target)) {
-            return Ok(Rc::clone(name));
+    fn resolve(
+        &mut self,
+        source: &str,
+        location: &str,
+        target: &str,
+        targets: &mut HashMap<String, Part>,
+        types: &ContentTypes,
+    ) -> Result<Part> {
+        #[cfg(test)]
+        {
+            self.hash_bytes += target.len();
         }
+        if let Some(part) = targets.get(target) {
+            return Ok(part.clone());
+        }
+        // Charge before even splitting the source. A new alias also pays for its
+        // canonical work; repeated raw Targets only hash their own spelling.
+        let cost = source.len().saturating_add(target.len()).saturating_mul(4);
+        let observed = self.bytes.saturating_add(cost);
+        if observed > MAX_RESOLVED_PATH_BYTES {
+            return Err(DocxError::Limit {
+                part: quote(location),
+                element: "Relationship".into(),
+                resource: "resolved path processing bytes",
+                observed,
+                limit: MAX_RESOLVED_PATH_BYTES,
+            });
+        }
+        self.bytes = observed;
         #[cfg(test)]
         {
             self.resolutions += 1;
@@ -398,6 +597,10 @@ impl ResolvedPaths {
         // dot-segment aliases (including missing entries) share the first spelling.
         let mut hasher = self.hasher.build_hasher();
         for component in &components {
+            #[cfg(test)]
+            {
+                self.hash_bytes += component.len() + 1;
+            }
             for byte in component.bytes() {
                 hasher.write_u8(byte.to_ascii_lowercase());
             }
@@ -405,27 +608,18 @@ impl ResolvedPaths {
         }
         let bucket = self.canonical.entry(hasher.finish()).or_default();
         let existing = bucket.iter().find(|name| {
-            let mut stored = name.split('/');
+            let mut stored = name.name.split('/');
             components
                 .iter()
                 .all(|part| stored.next().is_some_and(|old| old.eq_ignore_ascii_case(part)))
                 && stored.next().is_none()
         });
         let name = if let Some(name) = existing {
-            Rc::clone(name)
+            name.clone()
         } else {
+            #[cfg(test)]
             let length = components.iter().map(|part| part.len()).sum::<usize>()
                 + components.len().saturating_sub(1);
-            let observed = self.bytes.saturating_add(length);
-            if observed > MAX_RESOLVED_PATH_BYTES {
-                return Err(DocxError::Limit {
-                    part: quote(location),
-                    element: "Relationship".into(),
-                    resource: "resolved path UTF-8 bytes",
-                    observed,
-                    limit: MAX_RESOLVED_PATH_BYTES,
-                });
-            }
             #[cfg(test)]
             {
                 self.allocated_bytes += length;
@@ -434,21 +628,21 @@ impl ResolvedPaths {
             normalize_part_name(&name)
                 .map_err(|source| DocxError::Package { part: quote(location), source })?;
             let name: Rc<str> = Rc::from(name);
-            self.bytes = observed;
-            bucket.push(Rc::clone(&name));
-            name
+            let part = Part::new(self.next_id, name.clone(), types.shared(&name).cloned());
+            self.next_id += 1;
+            bucket.push(part.clone());
+            part
         };
-        if !self.raw.contains_key(source) {
-            self.raw.insert(source.to_owned(), HashMap::new());
-        }
-        self.raw.get_mut(source).unwrap().insert(target.to_owned(), Rc::clone(&name));
+        targets.insert(target.to_owned(), name.clone());
         Ok(name)
     }
 }
 
 #[cfg(test)]
 fn resolve_target(source: &str, location: &str, target: &str) -> Result<Rc<str>> {
-    ResolvedPaths::default().resolve(source, location, target)
+    ResolvedPaths::default()
+        .resolve(source, location, target, &mut HashMap::new(), &ContentTypes::default())
+        .map(|part| part.name)
 }
 
 /// Resolve a part URI without percent decoding or changing its spelling.
@@ -602,6 +796,8 @@ fn parse_relationships(
 }
 #[derive(Default)]
 struct ContentTypes {
+    #[cfg(test)]
+    lowercase_bytes: std::cell::Cell<usize>,
     overrides: BTreeMap<String, Rc<str>>,
     defaults: BTreeMap<String, Rc<str>>,
 }
@@ -652,15 +848,49 @@ impl ContentTypes {
     fn get(&self, name: &str) -> Option<&str> {
         self.shared(name).map(AsRef::as_ref)
     }
+    fn lookup_key(&self, value: &str) -> String {
+        #[cfg(test)]
+        self.lowercase_bytes.set(self.lowercase_bytes.get() + value.len());
+        value.to_ascii_lowercase()
+    }
     fn shared(&self, name: &str) -> Option<&Rc<str>> {
-        self.overrides.get(&name.to_ascii_lowercase()).or_else(|| {
+        self.overrides.get(&self.lookup_key(name)).or_else(|| {
             name.rsplit('/')
                 .next()
                 .and_then(|last| last.rsplit_once('.'))
-                .and_then(|(_, extension)| self.defaults.get(&extension.to_ascii_lowercase()))
+                .and_then(|(_, extension)| self.defaults.get(&self.lookup_key(extension)))
         })
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SelectionWork {
+    pub(crate) lookups: usize,
+    pub(crate) entry_bytes: usize,
+    pub(crate) hash_bytes: usize,
+    pub(crate) path_bytes: usize,
+    pub(crate) lookup_bytes: usize,
+    pub(crate) type_checks: usize,
+    pub(crate) mime_calls: usize,
+    pub(crate) mime_bytes: usize,
+}
+#[cfg(test)]
+thread_local! {
+    static SELECTION_WORK: std::cell::Cell<SelectionWork> = const { std::cell::Cell::new(SelectionWork { entry_bytes: 0, hash_bytes: 0, lookups: 0, path_bytes: 0, lookup_bytes: 0, type_checks: 0, mime_calls: 0, mime_bytes: 0 }) };
+}
+#[cfg(test)]
+fn selection_work(update: impl FnOnce(&mut SelectionWork)) {
+    SELECTION_WORK.with(|cell| {
+        let mut work = cell.get();
+        update(&mut work);
+        cell.set(work);
+    });
+}
+#[cfg(test)]
+pub(crate) fn take_selection_work() -> SelectionWork {
+    SELECTION_WORK.with(|cell| cell.replace(SelectionWork::default()))
+}
