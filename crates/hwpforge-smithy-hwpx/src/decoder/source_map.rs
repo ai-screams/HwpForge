@@ -74,7 +74,6 @@ pub(crate) struct ParagraphSource {
     pub(crate) outer: Range<usize>,
     pub(crate) id_value: Option<Range<usize>>,
     pub(crate) prefix: String,
-    pub(crate) line_segments: Vec<Range<usize>>,
     pub(crate) has_properties: bool,
 }
 /// Immutable provenance emitted by the decoder.
@@ -241,11 +240,6 @@ impl SourceRecorder {
                                 .split_once(':')
                                 .map_or("", |(prefix, _)| prefix)
                                 .into(),
-                            line_segments: children
-                                .iter()
-                                .filter(|e| e.name() == "linesegarray")
-                                .map(|e| e.outer())
-                                .collect(),
                             has_properties,
                         });
                     }

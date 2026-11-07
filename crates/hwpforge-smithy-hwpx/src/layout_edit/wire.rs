@@ -10,6 +10,7 @@ use crate::{decoder::PathSeg, patch::RawPackage, HwpxError, HwpxResult};
 
 #[path = "inputs.rs"]
 mod inputs;
+pub(crate) use inputs::settings_paragraph_refs_are_safe;
 
 /// Wire definition kind and identifier (font kinds include their language).
 pub type DependencyKey = (String, String);

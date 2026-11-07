@@ -562,6 +562,13 @@ impl ParagraphFlow {
         None
     }
 
+    /// Direct caches of the original paragraph. Structural edits keep their
+    /// established body-only policy while sharing the complete flow ledger.
+    pub(crate) fn paragraph_caches(&self, offset: usize) -> Option<&[Range<usize>]> {
+        let p = self.paragraph_at(offset)?;
+        (self.spans[p].start == offset).then_some(self.caches[p].as_slice())
+    }
+
     /// The caches the changed `paragraphs` make stale ([`stale_caches`]).
     pub(crate) fn stale_caches(
         &self,
@@ -607,7 +614,7 @@ fn start_range(element: &hwpforge_core::source_xml::XmlElement) -> Range<usize> 
 /// quoted `>` and either quote style. No tag scanner or XML reader is needed.
 /// `None` when the recorded range is not a start tag of `xml` (for example
 /// the empty range of the document's virtual root). Counts the bytes read.
-fn source_start<'a>(
+pub(crate) fn source_start<'a>(
     xml: &'a str,
     element: &hwpforge_core::source_xml::XmlElement,
 ) -> Option<quick_xml::events::BytesStart<'a>> {
@@ -701,9 +708,12 @@ pub(crate) fn splice(
     crate::work::tick_n(xml.len() / 1024);
     let mut out = String::with_capacity(xml.len());
     let mut cursor = 0;
+    let mut previous = None;
     for (range, text) in replacements {
         crate::work::tick();
-        if range.start < cursor
+        // 이것을 실패시키는 것: 같은 위치의 빈 삽입 범위 중복 허용.
+        if previous.as_ref() == Some(&range)
+            || range.start < cursor
             || range.end < range.start
             || !xml.is_char_boundary(range.start)
             || !xml.is_char_boundary(range.end)
@@ -715,6 +725,7 @@ pub(crate) fn splice(
         out.push_str(&xml[cursor..range.start]);
         out.push_str(&text);
         cursor = range.end;
+        previous = Some(range);
     }
     out.push_str(&xml[cursor..]);
     Ok(out)
