@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/ai-screams/HwpForge/compare/v0.19.1...v0.20.0) - 2026-11-07
+
+HWPX 편집이 서명·암호화 문서를 거부하고, 내용을 바꾼 편집이 낡은 한컴 미리보기를 지우도록 바뀐 릴리스다. 자세한 내용과 업그레이드 주의는 `hwpforge-smithy-hwpx`를 따른다.
+
+### Added
+
+- 문서 전체를 다시 인코드하지 않는 `patch`·`fill`이 미리보기가 있는 문서의 내용을 바꾸면 미리보기를 지우고 `PREVIEW_REMOVED` 경고를 낸다. ops delete는 decode, encode, 구조 편집 경고를 이 순서로 합친다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#333](https://github.com/ai-screams/HwpForge/pull/333))
+
+### Fixed
+
+- 서명·암호화 표지가 있는 패키지는 편집 진입점과 `restyle`, `from-json --base`가 거부한다(빈 구조 편집 요청은 원본 반환) ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#330](https://github.com/ai-screams/HwpForge/pull/330))
+- 구조 편집이 끊기는 참조와 문단 id 참조를 거부한다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#331](https://github.com/ai-screams/HwpForge/pull/331))
+- 편집이 선언한 패키지 항목만 바꿨는지 검사한다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#318](https://github.com/ai-screams/HwpForge/pull/318))
+
 ## [0.19.1](https://github.com/ai-screams/HwpForge/compare/v0.19.0...v0.19.1) - 2026-11-03
 
 HWPX 본문의 CR·LF를 캐시 없는 문서의 한컴 표시와 같게 읽도록 고친 패치 릴리스다. 공개 Rust API는 바뀌지 않는다. 출력이 바뀌는 경우는 아래 "업그레이드 주의"에 모았다.
