@@ -90,3 +90,7 @@ pub use hwpforge_smithy_md as md;
 // make rustdoc resolve the module's intra-doc links in this scope instead.
 #[cfg(feature = "ops-hwpx")]
 pub mod ops;
+
+/// DOCX text decoding with explicit loss diagnostics.
+#[cfg(feature = "docx")]
+pub use hwpforge_smithy_docx as docx;

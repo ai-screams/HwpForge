@@ -14,6 +14,7 @@ rust-version.workspace = true
 description = "Programmatic control of Korean HWP/HWPX documents — read, write, and convert Hancom 한글 files"
 
 [features]
+docx = ["dep:hwpforge-smithy-docx"]
 default = ["hwpx"]
 hwpx = ["dep:hwpforge-smithy-hwpx"]
 md = ["dep:hwpforge-smithy-md"]
@@ -34,6 +35,7 @@ full = ["hwpx", "md", "ops"]
 hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.19.1" }
 hwpforge-core = { path = "../hwpforge-core", version = "0.19.1" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.19.1" }
+hwpforge-smithy-docx = { path = "../hwpforge-smithy-docx", version = "0.19.1", optional = true }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.19.1", optional = true }
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.19.1", optional = true }
 schemars = { workspace = true, optional = true }
