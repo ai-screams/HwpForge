@@ -35,6 +35,11 @@ class WarningInfo(TypedDict):
     hint: NotRequired[str]
     context: NotRequired[WarningContext]
 
+class ImportReport(TypedDict):
+    sections: int
+    paragraphs: int
+    warnings: list[WarningInfo]
+
 # The second, narrower classification a render failure carries, reached as
 # `HwpForgeError.cause`. Same keys as the command line prints under `cause`.
 # `stage` is `"render"` today; `code` is the renderer's own SCREAMING_SNAKE

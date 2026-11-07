@@ -772,3 +772,30 @@ def test_io_repr_preserves_subclass_and_os_fields():
         assert rendered.startswith(f"{cls.__name__}(")
         for name in ("errno", "strerror", "filename", "filename2", "winerror"):
             assert f"{name}={getattr(source, name)!r}" in rendered
+
+
+# 이것을 실패시키는 것: 공유 ImportMeta fixture의 미해석 관계 분류/위치 변경.
+def test_import_report_matches_rust_serialization() -> None:
+    import json
+    from pathlib import Path
+
+    # ops_import compares this fixture to actual convert_docx().meta() serialization.
+    payload = json.loads(
+        (Path(__file__).parent / "data" / "import-report.json").read_text(encoding="utf-8")
+    )
+    _keys_match_stub(payload, "ImportReport")
+    assert payload["sections"] == 1
+    assert payload["paragraphs"] == 1
+    assert len(payload["warnings"]) == 1
+    for warning in payload["warnings"]:
+        _keys_match_stub(warning, "WarningInfo")
+        _keys_match_stub(warning["context"], "WarningContext")
+        assert warning["code"] == "DOCX_OPTIONAL_PART_OMITTED"
+        assert warning["context"] == {
+            "format": "docx",
+            "stage": "decode",
+            "part": "opaque.xml",
+            "location": "relationship:opaque0",
+            "loss": "uninterpreted_part",
+            "action": "omit",
+        }

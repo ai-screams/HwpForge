@@ -118,3 +118,22 @@ def test_the_package_is_marked_as_typed() -> None:
 
     assert (package / "py.typed").is_file()
     assert (package / "_hwpforge.pyi").is_file()
+
+
+# 이것을 실패시키는 것: ImportReport의 키/필수성/주석 타입 변경.
+def test_import_report_declares_the_import_wire_shape() -> None:
+    assert _stub.typed_dict_keys("ImportReport") == (
+        frozenset({"sections", "paragraphs", "warnings"}),
+        frozenset(),
+    )
+    node = next(
+        node
+        for node in _stub._module().body
+        if isinstance(node, ast.ClassDef) and node.name == "ImportReport"
+    )
+    fields = {
+        field.target.id: ast.unparse(field.annotation)
+        for field in node.body
+        if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
+    }
+    assert fields == {"sections": "int", "paragraphs": "int", "warnings": "list[WarningInfo]"}
