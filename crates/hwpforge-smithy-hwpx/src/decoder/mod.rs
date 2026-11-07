@@ -150,7 +150,7 @@ impl HwpxEditBase {
     /// Decode and retain an independent original package.
     ///
     /// # Errors
-    /// Returns decode errors first, then [`HwpxError::InvalidStructure`] for
+    /// Returns decode errors first, then [`HwpxError::InvalidStructure`](crate::HwpxError::InvalidStructure) for
     /// signature/encryption metadata that forbids editing. Every ZIP entry is
     /// subject to the shared bounded reader, including encrypted entries.
     pub fn read(bytes: &[u8]) -> HwpxResult<Self> {
