@@ -80,6 +80,12 @@ macro_rules! warnings {
     };
 }
 warnings! {
+    UnsupportedAttribute => ("DOCX_UNSUPPORTED_ATTRIBUTE", "A formatting property or attribute is not represented."),
+    UnsupportedValue => ("DOCX_UNSUPPORTED_VALUE", "An invalid or unsupported formatting value uses its inherited value or fallback."),
+    StyleReferenceLost => ("DOCX_STYLE_REFERENCE_LOST", "A missing, incompatible or cyclic style connection was ignored."),
+    FormatDefaulted => ("DOCX_FORMAT_DEFAULTED", "An unresolved formatting category uses the documented import fallback."),
+    ScriptFormatCollapsed => ("DOCX_SCRIPT_FORMAT_COLLAPSED", "Distinct script formatting values were collapsed into the available slots."),
+    HiddenTextExposed => ("DOCX_HIDDEN_TEXT_EXPOSED", "Hidden text is retained without its hiding effect."),
     DocumentSettingsOmitted => ("DOCX_DOCUMENT_SETTINGS_OMITTED", "Document settings are not applied."),
     StructuredWrapperFlattened => ("DOCX_STRUCTURED_WRAPPER_FLATTENED", "Wrapper meaning is discarded while child content is retained."),
     FormattingOmitted => ("DOCX_FORMATTING_OMITTED", "Character, paragraph, list, or section formatting uses defaults."),

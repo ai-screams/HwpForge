@@ -1,0 +1,672 @@
+use super::*;
+use hwpforge_blueprint::{
+    registry::StyleRegistry,
+    style::{ParaShape, PartialCharShape},
+};
+use hwpforge_core::paragraph::Paragraph;
+use hwpforge_foundation::{
+    Alignment, CharShapeIndex, Color, FontId, FontIndex, HwpUnit, LineSpacingType, ParaShapeIndex,
+    StrikeoutShape, StyleRef, UnderlineType, VerticalPosition,
+};
+use std::{
+    collections::{hash_map::RandomState, HashMap},
+    hash::BuildHasher,
+};
+
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+struct RunInput {
+    delta: Delta,
+    style: Option<StyleKey>,
+}
+#[derive(Clone, Copy)]
+struct CharResult {
+    id: CharShapeIndex,
+    font: FontIndex,
+    missing: u8,
+    collapsed: bool,
+    reference_missing: bool,
+}
+
+pub(crate) struct Resolver {
+    pub(crate) definitions: Definitions,
+    pub(crate) registry: StyleRegistry,
+    inherited: HashMap<StyleKey, (Delta, usize)>,
+    named: HashMap<StyleKey, StyleRef>,
+    default_paragraph: Option<StyleKey>,
+    deltas: HashMap<RunInput, usize>,
+    inputs: Vec<RunInput>,
+    contexts: HashMap<(Delta, CharDelta), usize>,
+    combinations: HashMap<(usize, usize), CharResult>,
+    chars: HashMap<u64, Vec<(CharKey, CharShapeIndex)>>,
+    marks: HashMap<(usize, usize), CharResult>,
+    fallback_font: FontKey,
+    paras: HashMap<u64, Vec<ParaShapeIndex>>,
+    fonts: HashMap<FontKey, FontIndex>,
+    hasher: RandomState,
+    owned_font_bytes: usize,
+    #[cfg(test)]
+    combinations_built: usize,
+    #[cfg(test)]
+    char_shape_calls: usize,
+    #[cfg(test)]
+    copied_font_bytes: usize,
+}
+type CharKey = ([FontKey; 3], i32, [bool; 3], u32, bool, Option<u32>, u8);
+
+impl Resolver {
+    pub(crate) fn new(
+        mut definitions: Definitions,
+        warnings: &mut Vec<DocxWarning>,
+    ) -> Result<Self> {
+        let fallback_font = definitions.fonts.fallback()?;
+        let mut r = Self {
+            definitions,
+            registry: StyleRegistry::with_fonts(vec![]),
+            inherited: HashMap::new(),
+            named: HashMap::new(),
+            default_paragraph: None,
+            deltas: HashMap::new(),
+            inputs: vec![],
+            contexts: HashMap::new(),
+            combinations: HashMap::new(),
+            chars: HashMap::new(),
+            marks: HashMap::new(),
+            fallback_font,
+            paras: HashMap::new(),
+            fonts: HashMap::new(),
+            hasher: RandomState::new(),
+            owned_font_bytes: 0,
+            #[cfg(test)]
+            combinations_built: 0,
+            #[cfg(test)]
+            char_shape_calls: 0,
+            #[cfg(test)]
+            copied_font_bytes: 0,
+        };
+        let ids = r.definitions.ordered_styles();
+        for id in &ids {
+            r.inherit(*id, &mut Vec::new(), warnings)?;
+        }
+        for id in ids {
+            let Some(s) = r.definitions.style(id) else { continue };
+            if s.kind != StyleKind::Paragraph {
+                continue;
+            }
+            if s.default {
+                if r.default_paragraph.is_some() {
+                    return Err(DocxError::invalid(
+                        &s.part,
+                        &s.at,
+                        "multiple default paragraph styles",
+                    ));
+                }
+                r.default_paragraph = Some(id);
+            }
+            let (part, at, name) = (s.part.clone(), s.at.clone(), s.name.clone());
+            let effective = r.context(None, Some(id), &Delta::default(), &part, warnings)?;
+            let c =
+                r.character(&effective, &Delta::default(), &RunInput::default(), &part, warnings)?;
+            let p = r.para_shape(&effective)?;
+            format_warnings(
+                c.missing | para_missing(&effective.para),
+                c.collapsed,
+                &part,
+                &at,
+                warnings,
+            )?;
+            let font = c.font;
+            let key = format!("import_p_{:06}", r.named.len());
+            let reference = r
+                .registry
+                .register_style(key, c.id, p, font)
+                .map_err(|e| DocxError::invalid(&part, &at, quote(e)))?;
+            if let Some(name) = name {
+                r.registry
+                    .set_style_display_name(reference, name)
+                    .map_err(|e| DocxError::invalid(&part, &at, quote(e)))?;
+            }
+            r.named.insert(id, reference);
+        }
+        Ok(r)
+    }
+    fn inherit(
+        &mut self,
+        id: StyleKey,
+        path: &mut Vec<StyleKey>,
+        warnings: &mut Vec<DocxWarning>,
+    ) -> Result<(Delta, usize)> {
+        let s = self
+            .definitions
+            .style(id)
+            .ok_or_else(|| DocxError::invalid("#format", "style", "missing admitted style"))?;
+        if let Some((d, height)) = self.inherited.get(&id) {
+            limit(&s.part, &s.at, "style inheritance depth", path.len() + height, MAX_INHERITANCE)?;
+            return Ok((d.clone(), *height));
+        }
+        limit(&s.part, &s.at, "style inheritance depth", path.len() + 1, MAX_INHERITANCE)?;
+        let s = s.clone();
+        path.push(id);
+        let mut result = Delta::default();
+        let mut height = 1;
+        if let Some(parent) = s.parent {
+            let valid = self.definitions.style(parent).is_some_and(|p| p.kind == s.kind);
+            if valid && !path.contains(&parent) {
+                let (base, h) = self.inherit(parent, path, warnings)?;
+                result = base;
+                height = h + 1;
+            } else {
+                warn(
+                    warnings,
+                    &s.part,
+                    &s.at,
+                    Kind::StyleReferenceLost,
+                    "style_parent",
+                    "ignore_link",
+                    "Missing, incompatible or cyclic basedOn connection ignored",
+                )?;
+            }
+        }
+        apply(&mut result, &s.delta, false, &s.part, &s.at, warnings)?;
+        path.pop();
+        self.inherited.insert(id, (result.clone(), height));
+        Ok((result, height))
+    }
+    pub(crate) fn property(
+        &mut self,
+        d: &mut Delta,
+        e: &Element,
+        character: bool,
+        part: &str,
+        at: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<PropertyState> {
+        read_property(
+            d,
+            e,
+            character,
+            &self.definitions.theme,
+            &mut self.definitions.fonts,
+            part,
+            at,
+            w,
+        )
+    }
+    pub(crate) fn run_input(
+        &mut self,
+        delta: Delta,
+        style: Option<StyleKey>,
+    ) -> Result<CharShapeIndex> {
+        let input = RunInput { delta, style };
+        if let Some(id) = self.deltas.get(&input) {
+            return Ok(CharShapeIndex::new(*id));
+        }
+        limit("#format", "direct", "direct formatting deltas", self.inputs.len() + 1, MAX_SHAPES)?;
+        let id = self.inputs.len();
+        self.inputs.push(input.clone());
+        self.deltas.insert(input, id);
+        Ok(CharShapeIndex::new(id))
+    }
+    fn style(
+        &self,
+        id: Option<StyleKey>,
+        kind: StyleKind,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<Option<Delta>> {
+        let Some(id) = id else { return Ok(None) };
+        if self.definitions.style(id).is_some_and(|s| s.kind == kind) {
+            Ok(Some(self.inherited[&id].0.clone()))
+        } else {
+            warn(
+                w,
+                part,
+                "style",
+                Kind::StyleReferenceLost,
+                "style_reference",
+                "ignore_link",
+                "Missing or incompatible style",
+            )?;
+            Ok(None)
+        }
+    }
+    // The table argument is retained for whole-table contexts, even while table output is omitted.
+    fn context(
+        &self,
+        table: Option<StyleKey>,
+        style: Option<StyleKey>,
+        direct: &Delta,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<Delta> {
+        let mut result = self.definitions.defaults.clone();
+        if let Some(d) = self.style(table, StyleKind::Table, part, w)? {
+            apply(&mut result, &d, true, part, "style", w)?;
+        }
+        let paragraph = self.style(style, StyleKind::Paragraph, part, w)?;
+        let mut selection = result.clone();
+        if let Some(d) = &paragraph {
+            selection.overlay(d, false);
+        }
+        selection.overlay(direct, false);
+        if let Some(num) = selection.para.num_id.filter(|id| *id != 0) {
+            let level = selection.para.level.unwrap_or(0);
+            let number = self.definitions.numbers.get(&num);
+            let base = number
+                .and_then(|n| n.abstract_id)
+                .and_then(|id| self.definitions.abstracts.get(&id))
+                .and_then(|levels| levels.get(&level));
+            let over = number.and_then(|n| n.levels.get(&level));
+            if let Some(d) = base {
+                apply(&mut result, d, true, part, "numPr", w)?;
+            }
+            if let Some(d) = over {
+                apply(&mut result, d, true, part, "numPr", w)?;
+            }
+            if base.is_none() && over.is_none() {
+                warn(
+                    w,
+                    part,
+                    "numPr",
+                    Kind::StyleReferenceLost,
+                    "numbering_reference",
+                    "ignore_link",
+                    "Numbering level is not defined",
+                )?;
+            }
+            warn(
+                w,
+                part,
+                "numPr",
+                Kind::FormattingOmitted,
+                "list_markers",
+                "omit",
+                "List markers are not applied",
+            )?;
+        }
+        if selection.para.num_present == Some(true) && selection.para.num_id.is_none() {
+            warn(
+                w,
+                part,
+                "numPr",
+                Kind::FormattingOmitted,
+                "list_markers",
+                "omit",
+                "Unresolved list markers are not applied",
+            )?;
+        }
+        if let Some(d) = paragraph {
+            apply(&mut result, &d, true, part, "style", w)?;
+        }
+        apply(&mut result, direct, false, part, "pPr", w)?;
+        Ok(result)
+    }
+    pub(crate) fn finish(
+        &mut self,
+        p: &mut Paragraph,
+        style: Option<StyleKey>,
+        direct: &Delta,
+        mark: Option<(&Delta, Option<StyleKey>)>,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<()> {
+        let style = style.or(self.default_paragraph);
+        let base = self.context(None, style, direct, part, w)?;
+        p.style_ref = style.as_ref().and_then(|s| self.named.get(s)).copied();
+        p.para_shape_id = self.para_shape(&base)?;
+        p.page_break = base.para.page_break.unwrap_or(false);
+        format_warnings(para_missing(&base.para), false, part, "pPr", w)?;
+        // character() reapplies direct character values after the style toggle.
+        let context_key = (base.clone(), direct.char.clone());
+        let next = self.contexts.len();
+        let context = if let Some(&id) = self.contexts.get(&context_key) {
+            id
+        } else {
+            limit(part, "pPr", "format contexts", next + 1, MAX_SHAPES)?;
+            self.contexts.insert(context_key, next);
+            next
+        };
+        for run in &mut p.runs {
+            let input_id = run.char_shape_id.get();
+            let key = (context, input_id);
+            let result = if let Some(c) = self.combinations.get(&key) {
+                reference_warning(*c, part, w)?;
+                *c
+            } else {
+                limit(part, "rPr", "format combinations", self.combinations.len() + 1, MAX_SHAPES)?;
+                #[cfg(test)]
+                {
+                    self.combinations_built += 1;
+                }
+                let input = self.inputs[input_id].clone();
+                let result = self.character(&base, direct, &input, part, w)?;
+                self.combinations.insert(key, result);
+                result
+            };
+            run.char_shape_id = result.id;
+            format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
+        }
+        if let Some((mark, style)) = mark {
+            let delta = self.run_input(mark.clone(), style)?.get();
+            let key = (context, delta);
+            let result = if let Some(&result) = self.marks.get(&key) {
+                reference_warning(result, part, w)?;
+                result
+            } else {
+                limit(
+                    part,
+                    "rPr",
+                    "paragraph mark combinations",
+                    self.marks.len() + 1,
+                    MAX_SHAPES,
+                )?;
+                let input = self.inputs[delta].clone();
+                let result = self.character(&base, direct, &input, part, w)?;
+                self.marks.insert(key, result);
+                result
+            };
+            p.end_char_shape = Some(result.id);
+            format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
+        }
+        Ok(())
+    }
+    // Runs and paragraph marks share character style toggles and direct overrides.
+    fn character(
+        &mut self,
+        base: &Delta,
+        direct: &Delta,
+        input: &RunInput,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<CharResult> {
+        let mut effective = base.clone();
+        if let Some(d) = self.style(input.style, StyleKind::Character, part, w)? {
+            effective.overlay(&d, true);
+        }
+        effective.overlay(direct, false);
+        effective.overlay(&input.delta, false);
+        let mut result = self.char_shape(&effective)?;
+        result.reference_missing = input.style.is_some_and(|id| {
+            !self.definitions.style(id).is_some_and(|s| s.kind == StyleKind::Character)
+        });
+        Ok(result)
+    }
+    fn font(&mut self, key: FontKey) -> Result<FontIndex> {
+        if let Some(id) = self.fonts.get(&key) {
+            return Ok(*id);
+        }
+        // Output storage has the same bounded-entry budget as generated shapes;
+        // only Fonts::admit_source counts original font definitions.
+        limit("#format", "font", "output fonts", self.fonts.len() + 1, MAX_SHAPES)?;
+        self.admit_font_bytes(self.definitions.fonts.name(key).len())?;
+        let id = FontIndex::new(self.registry.fonts.len());
+        let name = self.definitions.fonts.name(key);
+        #[cfg(test)]
+        {
+            self.copied_font_bytes += name.len();
+        }
+        self.registry
+            .fonts
+            .push(FontId::new(name).map_err(|e| DocxError::invalid("#format", "font", quote(e)))?);
+        self.fonts.insert(key, id);
+        Ok(id)
+    }
+    fn char_shape(&mut self, d: &Delta) -> Result<CharResult> {
+        #[cfg(test)]
+        {
+            self.char_shape_calls += 1;
+        }
+        let c = &d.char;
+        let latin = c.fonts[1].or(c.fonts[0]);
+        let east = c.fonts[2];
+        let family = east.or(latin).unwrap_or(self.fallback_font);
+        let missing = u8::from(c.size.is_none())
+            | (u8::from(east.is_none() && latin.is_none()) << 1)
+            | (u8::from(c.color.is_none()) << 2)
+            | (u8::from(east.is_none() && latin.is_some()) << 3);
+        let size = c.size.unwrap_or(1000);
+        let bold = c.toggles[0].unwrap_or(false);
+        let italic = c.toggles[1].unwrap_or(false);
+        let strike = c.toggles[2].unwrap_or(false);
+        let collapsed = c.fonts[0].zip(c.fonts[1]).is_some_and(|(a, b)| a != b)
+            || c.fonts[3].is_some_and(|v| v != family)
+            || c.size_cs.is_some_and(|v| v != size)
+            || c.toggles[3].is_some_and(|v| v != bold)
+            || c.toggles[4].is_some_and(|v| v != italic);
+        let key = (
+            [family, latin.unwrap_or(family), east.unwrap_or(family)],
+            size,
+            [bold, italic, strike],
+            c.color.unwrap_or(0),
+            c.underline.unwrap_or(false),
+            c.highlight.flatten(),
+            c.vertical.unwrap_or(0),
+        );
+        let hash = self.hasher.hash_one(key);
+        // Exact canonical equality verifies every variable field before allocating strings.
+        if let Some((_, id)) = self
+            .chars
+            .get(&hash)
+            .and_then(|bucket| bucket.iter().find(|(candidate, _)| *candidate == key))
+        {
+            return Ok(CharResult {
+                id: *id,
+                font: self.fonts[&family],
+                missing,
+                collapsed,
+                reference_missing: false,
+            });
+        }
+        self.admit_shape()?;
+        self.admit_font_bytes(key.0.iter().map(|&k| self.definitions.fonts.name(k).len()).sum())?;
+        for k in key.0 {
+            self.font(k)?;
+        }
+        #[cfg(test)]
+        {
+            self.copied_font_bytes += self.definitions.fonts.name(family).len()
+                + key.0.iter().map(|&k| self.definitions.fonts.name(k).len()).sum::<usize>();
+        }
+        let mut partial = PartialCharShape::default();
+        partial.font = Some(self.definitions.fonts.name(family).to_owned());
+        partial.size = Some(unit(size)?);
+        let mut shape = partial
+            .resolve("import")
+            .map_err(|e| DocxError::invalid("#format", "char", quote(e)))?;
+        shape.font_latin = Some(self.definitions.fonts.name(key.0[1]).to_owned());
+        shape.font_east_asian = Some(self.definitions.fonts.name(key.0[2]).to_owned());
+        shape.bold = bold;
+        shape.italic = italic;
+        shape.color = color(key.3);
+        shape.underline_type = if key.4 { UnderlineType::Bottom } else { UnderlineType::None };
+        shape.strikeout_shape = if strike { StrikeoutShape::Solid } else { StrikeoutShape::None };
+        shape.shade_color = key.5.map(color);
+        shape.vertical_position = match key.6 {
+            1 => VerticalPosition::Superscript,
+            2 => VerticalPosition::Subscript,
+            _ => VerticalPosition::Normal,
+        };
+        let id = CharShapeIndex::new(self.registry.char_shapes.len());
+        self.registry.char_shapes.push(shape);
+        self.chars.entry(hash).or_default().push((key, id));
+        Ok(CharResult {
+            id,
+            font: self.fonts[&family],
+            missing,
+            collapsed,
+            reference_missing: false,
+        })
+    }
+    fn para_shape(&mut self, d: &Delta) -> Result<ParaShapeIndex> {
+        let p = &d.para;
+        let mut shape = ParaShape::default();
+        shape.alignment = match p.alignment {
+            Some(1) => Alignment::Center,
+            Some(2) => Alignment::Right,
+            Some(3) => Alignment::Justify,
+            _ => Alignment::Left,
+        };
+        let rule = if p.line.is_none() { 0 } else { p.line_rule.unwrap_or(0) };
+        shape.line_spacing_type = match rule {
+            1 => LineSpacingType::Fixed,
+            2 => LineSpacingType::AtLeast,
+            _ => LineSpacingType::Percentage,
+        };
+        shape.line_spacing_value =
+            units::canonical_float(if rule == 0 {
+                f64::from(p.line.unwrap_or(240)) * 100.0 / 240.0
+            } else {
+                f64::from(
+                    unit(p.line.unwrap_or(240).checked_mul(5).ok_or_else(|| {
+                        DocxError::invalid("#format", "line", "numeric overflow")
+                    })?)?
+                    .as_i32(),
+                )
+            })?;
+        shape.space_before = unit(p.before.unwrap_or(0))?;
+        shape.space_after = unit(p.after.unwrap_or(0))?;
+        shape.indent_left = unit(p.left.unwrap_or(0))?;
+        shape.indent_right = unit(p.right.unwrap_or(0))?;
+        shape.indent_first_line = unit(p.first.unwrap_or(0))?;
+        shape.keep_with_next = p.keep_next.unwrap_or(false);
+        shape.keep_lines_together = p.keep_lines.unwrap_or(false);
+        shape.widow_orphan = p.widow.unwrap_or(false);
+        let hash = self.hasher.hash_one((
+            shape.alignment,
+            shape.line_spacing_type,
+            shape.line_spacing_value.to_bits(),
+            shape.space_before,
+            shape.space_after,
+            shape.indent_left,
+            shape.indent_right,
+            shape.indent_first_line,
+            shape.keep_with_next,
+            shape.keep_lines_together,
+            shape.widow_orphan,
+        ));
+        if let Some(id) = self.paras.get(&hash).and_then(|bucket| {
+            bucket.iter().find(|id| self.registry.para_shapes[id.get()] == shape)
+        }) {
+            return Ok(*id);
+        }
+        self.admit_shape()?;
+        let id = ParaShapeIndex::new(self.registry.para_shapes.len());
+        self.registry.para_shapes.push(shape);
+        self.paras.entry(hash).or_default().push(id);
+        Ok(id)
+    }
+    fn admit_font_bytes(&mut self, additional: usize) -> Result<()> {
+        let observed = self.owned_font_bytes.saturating_add(additional);
+        limit("#format", "font", "materialized font bytes", observed, 64 * 1024 * 1024)?;
+        self.owned_font_bytes = observed;
+        Ok(())
+    }
+    fn admit_shape(&self) -> Result<()> {
+        limit(
+            "#format",
+            "shape",
+            "generated shapes",
+            self.registry.char_shapes.len() + self.registry.para_shapes.len() + 1,
+            MAX_SHAPES,
+        )
+    }
+}
+// The same diagnostic projection serves exported definitions, runs and paragraph marks.
+// Bits 0..3 describe character fallbacks; bits 4..6 describe paragraph fallbacks.
+fn para_missing(p: &ParaDelta) -> u8 {
+    (u8::from(p.line.is_none()) << 4)
+        | (u8::from(p.before.is_none() || p.after.is_none()) << 5)
+        | (u8::from(p.left.is_none() || p.right.is_none() || p.first.is_none()) << 6)
+}
+fn format_warnings(
+    missing: u8,
+    collapsed: bool,
+    part: &str,
+    at: &str,
+    w: &mut Vec<DocxWarning>,
+) -> Result<()> {
+    for (mask, loss, action, reason) in [
+        (
+            1,
+            "font_size",
+            "use_fallback",
+            "Unresolved character formatting uses 10pt, 함초롬바탕 or black",
+        ),
+        (
+            2,
+            "font_family",
+            "use_fallback",
+            "Unresolved character formatting uses 10pt, 함초롬바탕 or black",
+        ),
+        (
+            4,
+            "text_color",
+            "use_fallback",
+            "Unresolved character formatting uses 10pt, 함초롬바탕 or black",
+        ),
+        (
+            8,
+            "east_asian_font",
+            "use_general_font",
+            "Unresolved East Asian font uses the general font",
+        ),
+        (
+            16,
+            "line_spacing",
+            "use_fallback",
+            "Unresolved paragraph formatting uses 100% line spacing or zero length",
+        ),
+        (
+            32,
+            "paragraph_spacing",
+            "use_fallback",
+            "Unresolved paragraph formatting uses 100% line spacing or zero length",
+        ),
+        (
+            64,
+            "indentation",
+            "use_fallback",
+            "Unresolved paragraph formatting uses 100% line spacing or zero length",
+        ),
+    ] {
+        if missing & mask != 0 {
+            warn(w, part, at, Kind::FormatDefaulted, loss, action, reason)?;
+        }
+    }
+    if collapsed {
+        warn(
+            w,
+            part,
+            at,
+            Kind::ScriptFormatCollapsed,
+            "script_format",
+            "select_supported_slots",
+            "Different script fonts, sizes or effects were collapsed",
+        )?;
+    }
+    Ok(())
+}
+fn unit(n: i32) -> Result<HwpUnit> {
+    HwpUnit::new(n).map_err(|e| DocxError::invalid("#format", "length", quote(e)))
+}
+fn color(rgb: u32) -> Color {
+    Color::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
+}
+
+#[cfg(test)]
+#[path = "resolve_tests.rs"]
+mod tests;
+
+fn reference_warning(result: CharResult, part: &str, w: &mut Vec<DocxWarning>) -> Result<()> {
+    if result.reference_missing {
+        warn(
+            w,
+            part,
+            "style",
+            Kind::StyleReferenceLost,
+            "style_reference",
+            "ignore_link",
+            "Missing or incompatible character style",
+        )?;
+    }
+    Ok(())
+}

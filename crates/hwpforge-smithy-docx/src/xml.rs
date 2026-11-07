@@ -118,6 +118,9 @@ pub(crate) const MC_NS: (NamespaceId, &str) =
 pub(crate) const M_NS: (NamespaceId, &str) =
     (NamespaceId(8), "http://schemas.openxmlformats.org/officeDocument/2006/math");
 
+pub(crate) const A_NS: (NamespaceId, &str) =
+    (NamespaceId(9), "http://schemas.openxmlformats.org/drawingml/2006/main");
+
 // Hash only on registration, then verify exact content within that hash bucket.
 // Keeping the hash as the map key also avoids rehashing long URIs as the map grows.
 struct Namespaces {
@@ -131,7 +134,7 @@ impl Default for Namespaces {
     fn default() -> Self {
         let hasher = RandomState::new();
         let uris: Vec<Rc<str>> =
-            ["", XML_NS, XMLNS_NS, REL_NS.1, TYPE_NS.1, W_NS.1, R_NS.1, MC_NS.1, M_NS.1]
+            ["", XML_NS, XMLNS_NS, REL_NS.1, TYPE_NS.1, W_NS.1, R_NS.1, MC_NS.1, M_NS.1, A_NS.1]
                 .into_iter()
                 .map(Rc::from)
                 .collect();
@@ -290,6 +293,9 @@ fn ncname(name: &str) -> bool {
         })
 }
 fn check_qname(part: &str, element: &str, name: &str) -> Result<()> {
+    for identifier in name.split(':') {
+        crate::identifier::check(identifier, part, element)?;
+    }
     let valid = match name.split_once(':') {
         Some((prefix, local)) => ncname(prefix) && ncname(local),
         None => ncname(name),

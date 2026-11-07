@@ -763,6 +763,7 @@ fn parse_relationships(
             return Err(DocxError::invalid(part, &element.name, "expected Relationship"));
         }
         let id = required(part, &element, "Id")?;
+        crate::identifier::check(id, part, &element.name)?;
         if !ids.insert(id.to_owned()) {
             return Err(DocxError::invalid(
                 part,
@@ -822,10 +823,11 @@ impl ContentTypes {
                     })?;
                     result.overrides.insert(name.to_ascii_lowercase(), mime.into())
                 }
-                "Default" => result.defaults.insert(
-                    required(CONTENT_TYPES, &element, "Extension")?.to_ascii_lowercase(),
-                    mime.into(),
-                ),
+                "Default" => {
+                    let extension = required(CONTENT_TYPES, &element, "Extension")?;
+                    crate::identifier::check(extension, CONTENT_TYPES, "Default")?;
+                    result.defaults.insert(extension.to_ascii_lowercase(), mime.into())
+                }
                 _ => {
                     return Err(DocxError::invalid(
                         CONTENT_TYPES,

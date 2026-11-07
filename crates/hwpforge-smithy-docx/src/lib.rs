@@ -1,7 +1,7 @@
-//! Bounded Transitional DOCX text decoding into Core.
+//! Bounded Transitional DOCX decoding into Core and effective Blueprint styles.
 //!
-//! Saved field results and body paragraphs are retained. Formatting, objects,
-//! and ancillary content are reported as losses. Tracked changes are rejected
+//! Saved field results, body paragraphs and supported effective formatting are retained.
+//! Unsupported effects, objects and ancillary content are reported as losses. Tracked changes are rejected
 //! throughout every selected WordprocessingML part, including excluded subtrees.
 //! This is a structural import, with no promise of matching displayed pages.
 #![deny(missing_docs)]
@@ -9,6 +9,8 @@
 
 mod body;
 mod error;
+mod format;
+mod identifier;
 mod package;
 mod warning;
 mod xml;
@@ -28,7 +30,7 @@ pub use warning::DocxWarning;
 pub struct DocxDecoded {
     /// Body paragraphs in a single section with Core's default page settings.
     pub document: Document<Draft>,
-    /// One character/paragraph shape pair from Blueprint's built-in body style.
+    /// Interned effective character/paragraph shapes and original named paragraph styles.
     pub registry: StyleRegistry,
     /// Empty until image import is supported.
     pub image_store: ImageStore,
@@ -39,7 +41,7 @@ pub struct DocxDecoded {
 /// Decodes a Transitional DOCX package into a neutral Core bundle.
 ///
 /// Reads each selected WordprocessingML part once, sharing XML text limits.
-/// Does not fetch external relationships or interpret style definitions.
+/// Resolves theme fonts and styles before body text; never fetches external relationships.
 ///
 /// # Errors
 ///

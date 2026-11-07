@@ -1,7 +1,7 @@
 #![cfg(feature = "docx")]
 use std::io::{Cursor, Write};
 
-// 이것을 실패시키는 것: facade의 DOCX 진입점을 실패/다른 결과를 내는 함수로 연결.
+// 이것을 실패시키는 것: facade의 DOCX 진입점 변경 또는 미해결 서식 경고 누락.
 #[test]
 fn facade_decodes_text_without_other_codec_features() {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -16,7 +16,21 @@ fn facade_decodes_text_without_other_codec_features() {
     let bytes = zip.finish().unwrap().into_inner();
     let decoded: hwpforge::docx::DocxDecoded = hwpforge::docx::decode_docx(&bytes).unwrap();
     assert_eq!(decoded.document.sections()[0].paragraphs[0].text_content(), "A");
-    assert!(decoded.warnings.is_empty());
+    assert_eq!(
+        decoded
+            .warnings
+            .iter()
+            .map(|w| (w.code(), w.loss(), w.action(), w.count()))
+            .collect::<Vec<_>>(),
+        [
+            ("DOCX_FORMAT_DEFAULTED", "line_spacing", "use_fallback", 1),
+            ("DOCX_FORMAT_DEFAULTED", "paragraph_spacing", "use_fallback", 1),
+            ("DOCX_FORMAT_DEFAULTED", "indentation", "use_fallback", 1),
+            ("DOCX_FORMAT_DEFAULTED", "font_size", "use_fallback", 1),
+            ("DOCX_FORMAT_DEFAULTED", "font_family", "use_fallback", 1),
+            ("DOCX_FORMAT_DEFAULTED", "text_color", "use_fallback", 1),
+        ]
+    );
 }
 
 // 이것을 실패시키는 것: facade 오류 재노출 변경, variant 필드 매칭에서 `..` 제거.

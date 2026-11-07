@@ -1464,3 +1464,34 @@ fn name_index_preserves_case_ambiguity_and_verifies_hash_collisions() {
     package.names.buckets.insert(hash, vec![("another.xml".into(), Some(3))]);
     assert_eq!(package.names.get("absent.xml"), Ok(None));
 }
+
+// 이것을 실패시키는 것: 관계 ID/확장자 키의 길이 검사 누락 또는 경계 4096 거부.
+#[test]
+fn metadata_identifier_boundaries_are_checked_before_keys() {
+    for length in [4095, 4096, 4097] {
+        let key = "a".repeat(length);
+        let rels = format!("<Relationships xmlns='{}'><Relationship Id='{key}' Type='urn:other' Target='unused'/></Relationships>", REL_NS.1);
+        let types = format!(
+            "<Types xmlns='{}'><Default Extension='{key}' ContentType='application/xml'/></Types>",
+            TYPE_NS.1
+        );
+        for result in [
+            parse_relationships(rels.as_bytes(), "rels", &mut TextBudget::default()).map(|_| ()),
+            ContentTypes::parse(types.as_bytes(), &mut TextBudget::default()).map(|_| ()),
+        ] {
+            if length <= 4096 {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DocxError::Limit {
+                        resource: "identifier bytes",
+                        observed: 4097,
+                        limit: 4096,
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+}

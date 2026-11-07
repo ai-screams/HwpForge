@@ -1,0 +1,664 @@
+use super::*;
+use crate::{
+    body::tracked,
+    xml::{self, TextBudget, XmlEvent, A_NS},
+};
+use std::{
+    collections::{hash_map::RandomState, BTreeMap, HashMap},
+    hash::BuildHasher,
+};
+
+#[derive(Default)]
+pub(super) struct Number {
+    pub(super) abstract_id: Option<u32>,
+    pub(super) levels: BTreeMap<u32, Delta>,
+}
+#[derive(Default)]
+pub(crate) struct Definitions {
+    pub(super) styles: Vec<Option<Style>>,
+    style_ids: HashMap<u64, Vec<StyleKey>>,
+    style_names: Vec<Rc<str>>,
+    style_hasher: RandomState,
+    pub(crate) defaults: Delta,
+    pub(super) theme: Theme,
+    pub(super) fonts: Fonts,
+    pub(super) abstracts: HashMap<u32, BTreeMap<u32, Delta>>,
+    pub(super) numbers: HashMap<u32, Number>,
+    counts: [usize; 4],
+    level_count: usize,
+    #[cfg(test)]
+    pub(super) part_copied_bytes: usize,
+    #[cfg(test)]
+    pub(super) style_lookup_bytes: std::cell::Cell<usize>,
+    #[cfg(test)]
+    pub(super) style_comparison_bytes: std::cell::Cell<usize>,
+    #[cfg(test)]
+    pub(super) style_copied_bytes: usize,
+}
+// Only an admitted frame grants ownership to its immediate children. Unknown
+// frames carry no owner, and popping them cannot clear an outer definition.
+#[derive(Clone, Copy)]
+enum Owner {
+    Defaults,
+    Style(StyleKey),
+    Abstract(u32, u32),
+    Number(u32, u32),
+}
+#[derive(Clone, Copy, Default)]
+enum Frame {
+    #[default]
+    Ignored,
+    Root,
+    Defaults,
+    LatentStyles,
+    Leaf,
+    Property(PropertyState),
+    Metadata,
+    DefaultRun,
+    DefaultPara,
+    Style(StyleKey),
+    Table(StyleKey),
+    Properties(Owner, bool),
+    NumPr(Owner),
+    Abstract(u32),
+    Number(u32),
+    Override {
+        num: u32,
+        level: u32,
+        has_level: bool,
+    },
+    Level(Owner),
+    ThemeElements,
+    FontScheme,
+    Family(usize),
+    Section,
+}
+impl Definitions {
+    fn lookup_style(&self, id: &str, hash: u64) -> Option<StyleKey> {
+        self.style_ids.get(&hash)?.iter().copied().find(|key| {
+            let name = self.style_names[key.0].as_ref();
+            #[cfg(test)]
+            {
+                self.style_comparison_bytes
+                    .set(self.style_comparison_bytes.get() + name.len().min(id.len()));
+            }
+            name == id
+        })
+    }
+    fn intern_style(&mut self, id: &str, part: &str, at: &str) -> Result<StyleKey> {
+        crate::identifier::check(id, part, at)?;
+        #[cfg(test)]
+        {
+            self.style_lookup_bytes.set(self.style_lookup_bytes.get() + id.len());
+        }
+        let hash = self.style_hasher.hash_one(id);
+        if let Some(key) = self.lookup_style(id, hash) {
+            return Ok(key);
+        }
+        limit(part, at, "style identifiers", self.styles.len() + 1, MAX_DEFINITIONS * 8)?;
+        let key = StyleKey(self.styles.len());
+        self.styles.push(None);
+        #[cfg(test)]
+        {
+            self.style_copied_bytes += id.len();
+        }
+        self.style_names.push(Rc::from(id));
+        self.style_ids.entry(hash).or_default().push(key);
+        Ok(key)
+    }
+    pub(crate) fn style_key(&self, id: &str, part: &str, at: &str) -> Result<StyleKey> {
+        crate::identifier::check(id, part, at)?;
+        #[cfg(test)]
+        {
+            self.style_lookup_bytes.set(self.style_lookup_bytes.get() + id.len());
+        }
+        let hash = self.style_hasher.hash_one(id);
+        // Missing is distinct from an absent reference, without retaining arbitrary IDs.
+        Ok(self.lookup_style(id, hash).unwrap_or(StyleKey(usize::MAX)))
+    }
+    pub(super) fn style(&self, key: StyleKey) -> Option<&Style> {
+        self.styles.get(key.0).and_then(Option::as_ref)
+    }
+    pub(super) fn ordered_styles(&self) -> Vec<StyleKey> {
+        let mut ids: Vec<_> =
+            (0..self.styles.len()).map(StyleKey).filter(|&key| self.style(key).is_some()).collect();
+        ids.sort_unstable_by(|a, b| self.style_names[a.0].cmp(&self.style_names[b.0]));
+        ids
+    }
+    fn target(&mut self, owner: Owner) -> Option<&mut Delta> {
+        match owner {
+            Owner::Defaults => Some(&mut self.defaults),
+            Owner::Style(k) => self.styles.get_mut(k.0)?.as_mut().map(|s| &mut s.delta),
+            Owner::Abstract(id, level) => self.abstracts.get_mut(&id)?.get_mut(&level),
+            Owner::Number(id, level) => self.numbers.get_mut(&id)?.levels.get_mut(&level),
+        }
+    }
+    pub(crate) fn read(
+        &mut self,
+        bytes: &[u8],
+        part: &str,
+        root: &str,
+        budget: &mut TextBudget,
+        warnings: &mut Vec<DocxWarning>,
+    ) -> Result<bool> {
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut matches = false;
+        let mut ordinal = 0;
+        let shared_part: Rc<str> = Rc::from(part);
+        #[cfg(test)]
+        {
+            self.part_copied_bytes += part.len();
+        }
+        xml::walk(bytes, part, budget, |event| {
+            match event {
+                XmlEvent::Start(e) => {
+                    ordinal += 1;
+                    let w = e.namespace_id == W_NS.0;
+                    if w && tracked(&e.name) {
+                        return Err(DocxError::TrackedChange {
+                            part: quote(part),
+                            location: format!("{}#{ordinal}", quote(&e.name)),
+                            element: quote(&e.name),
+                        });
+                    }
+                    let parent = stack.last().copied().unwrap_or_default();
+                    let mut frame = Frame::Ignored;
+                    let mut diagnosed = false;
+                    if stack.is_empty() {
+                        matches = e.name == root
+                            && e.namespace_id == if root == "theme" { A_NS.0 } else { W_NS.0 };
+                        if matches {
+                            frame = Frame::Root;
+                        }
+                    } else if matches {
+                        if w && matches!(parent, Frame::Section) {
+                            units::structural(&e, part)?;
+                        }
+                        if root == "theme" && e.namespace_id == A_NS.0 {
+                            frame = match (parent, e.name.as_str()) {
+                                (Frame::Root, "themeElements") => Frame::ThemeElements,
+                                (Frame::ThemeElements, "fontScheme") => Frame::FontScheme,
+                                (Frame::FontScheme, "majorFont") => Frame::Family(0),
+                                (Frame::FontScheme, "minorFont") => Frame::Family(1),
+                                (Frame::Family(f), "latin" | "ea" | "cs") => {
+                                    let slot = match e.name.as_str() {
+                                        "latin" => 0,
+                                        "ea" => 1,
+                                        _ => 2,
+                                    };
+                                    self.theme.fonts[f][slot] = e
+                                        .attribute("typeface")
+                                        .filter(|v| !v.is_empty())
+                                        .map(|v| self.fonts.intern(v, part, &e.name))
+                                        .transpose()?;
+                                    Frame::Leaf
+                                }
+                                (Frame::Family(_), "font") => {
+                                    diagnosed = true;
+                                    warn(
+                                        warnings,
+                                        part,
+                                        &e.name,
+                                        Kind::UnsupportedAttribute,
+                                        "theme_script_font",
+                                        "ignore",
+                                        "Theme script-specific fonts are not selected",
+                                    )?;
+                                    Frame::Ignored
+                                }
+                                _ => Frame::Ignored,
+                            };
+                        } else if w && root == "styles" {
+                            frame = match (parent, e.name.as_str()) {
+                                (Frame::Root, "docDefaults") => Frame::Defaults,
+                                (Frame::Root, "latentStyles") => Frame::LatentStyles,
+                                (Frame::LatentStyles, "lsdException") => Frame::Metadata,
+                                (Frame::Defaults, "rPrDefault") => Frame::DefaultRun,
+                                (Frame::Defaults, "pPrDefault") => Frame::DefaultPara,
+                                (Frame::Root, "style") => {
+                                    let id = attr(&e, "styleId").ok_or_else(|| {
+                                        DocxError::invalid(part, "style", "missing styleId")
+                                    })?;
+                                    let key = self.intern_style(id, part, "style")?;
+                                    if self.style(key).is_some() {
+                                        return Err(DocxError::invalid(
+                                            part,
+                                            "style",
+                                            "duplicate styleId",
+                                        ));
+                                    }
+                                    let kind = match attr(&e, "type") {
+                                        Some("paragraph") => StyleKind::Paragraph,
+                                        Some("character") => StyleKind::Character,
+                                        Some("table") => StyleKind::Table,
+                                        Some("numbering") => StyleKind::Numbering,
+                                        _ => {
+                                            return Err(DocxError::invalid(
+                                                part,
+                                                "style",
+                                                "unknown or missing style type",
+                                            ))
+                                        }
+                                    };
+                                    limit(
+                                        part,
+                                        "style",
+                                        "style definitions",
+                                        self.counts[kind.index()] + 1,
+                                        MAX_DEFINITIONS,
+                                    )?;
+                                    self.counts[kind.index()] += 1;
+                                    self.styles[key.0] = Some(Style {
+                                        kind,
+                                        parent: None,
+                                        name: None,
+                                        delta: Delta::default(),
+                                        part: shared_part.clone(),
+                                        at: format!("style:{}", quote(id)),
+                                        default: properties::boolean(
+                                            &e,
+                                            "default",
+                                            None,
+                                            part,
+                                            &format!("style:{}", quote(id)),
+                                            warnings,
+                                        )?
+                                        .unwrap_or(false),
+                                    });
+                                    Frame::Style(key)
+                                }
+                                (Frame::Style(key), "basedOn") => {
+                                    if self
+                                        .style(key)
+                                        .is_some_and(|s| s.kind != StyleKind::Numbering)
+                                    {
+                                        let parent = attr(&e, "val")
+                                            .map(|v| self.intern_style(v, part, "basedOn"))
+                                            .transpose()?;
+                                        let style =
+                                            self.styles[key.0].as_mut().ok_or_else(|| {
+                                                DocxError::invalid(
+                                                    part,
+                                                    "style",
+                                                    "missing admitted style",
+                                                )
+                                            })?;
+                                        style.parent = parent;
+                                        if parent.is_none() {
+                                            warn(
+                                                warnings,
+                                                part,
+                                                &style.at,
+                                                Kind::StyleReferenceLost,
+                                                "style_parent",
+                                                "ignore_link",
+                                                "basedOn is missing its parent ID",
+                                            )?;
+                                        }
+                                    } else {
+                                        definition_warning(
+                                            &e,
+                                            part,
+                                            root,
+                                            "numbering basedOn link",
+                                            warnings,
+                                        )?;
+                                    }
+                                    Frame::Leaf
+                                }
+                                (Frame::Style(key), "name") => {
+                                    if let Some(s) = self.styles[key.0].as_mut() {
+                                        s.name = attr(&e, "val").map(str::to_owned);
+                                    }
+                                    Frame::Leaf
+                                }
+                                (Frame::Style(key), "tblStylePr") => {
+                                    if attr(&e, "type") == Some("wholeTable") {
+                                        Frame::Table(key)
+                                    } else {
+                                        diagnosed = true;
+                                        warn(
+                                            warnings,
+                                            part,
+                                            "tblStylePr",
+                                            Kind::UnsupportedAttribute,
+                                            "conditional_table_style",
+                                            "ignore",
+                                            "Conditional table formatting is not applied",
+                                        )?;
+                                        Frame::Ignored
+                                    }
+                                }
+                                (Frame::Style(key) | Frame::Table(key), "rPr" | "pPr") => {
+                                    Frame::Properties(Owner::Style(key), e.name == "rPr")
+                                }
+                                (Frame::DefaultRun, "rPr") => {
+                                    Frame::Properties(Owner::Defaults, true)
+                                }
+                                (Frame::DefaultPara, "pPr") => {
+                                    Frame::Properties(Owner::Defaults, false)
+                                }
+                                // Editor/UI metadata does not change the saved effective formatting.
+                                (
+                                    Frame::Style(_),
+                                    "next" | "link" | "aliases" | "uiPriority" | "qFormat"
+                                    | "semiHidden" | "unhideWhenUsed" | "locked" | "personal"
+                                    | "personalCompose" | "personalReply" | "rsid" | "autoRedefine",
+                                ) => Frame::Metadata,
+                                _ => Frame::Ignored,
+                            };
+                        } else if w && root == "numbering" {
+                            frame = match (parent, e.name.as_str()) {
+                                (Frame::Root, "abstractNum" | "num") => {
+                                    let abstract_definition = e.name == "abstractNum";
+                                    let id = integer(
+                                        &e,
+                                        if abstract_definition { "abstractNumId" } else { "numId" },
+                                        part,
+                                    )?;
+                                    if abstract_definition {
+                                        limit(
+                                            part,
+                                            &e.name,
+                                            "abstract numbering definitions",
+                                            self.abstracts.len() + 1,
+                                            MAX_DEFINITIONS,
+                                        )?;
+                                        if self.abstracts.insert(id, BTreeMap::new()).is_some() {
+                                            return Err(DocxError::invalid(
+                                                part,
+                                                &e.name,
+                                                "duplicate abstractNumId",
+                                            ));
+                                        }
+                                        Frame::Abstract(id)
+                                    } else {
+                                        limit(
+                                            part,
+                                            &e.name,
+                                            "numbering definitions",
+                                            self.numbers.len() + 1,
+                                            MAX_DEFINITIONS,
+                                        )?;
+                                        if self.numbers.insert(id, Number::default()).is_some() {
+                                            return Err(DocxError::invalid(
+                                                part,
+                                                &e.name,
+                                                "duplicate numId",
+                                            ));
+                                        }
+                                        Frame::Number(id)
+                                    }
+                                }
+                                (Frame::Number(id), "abstractNumId") => {
+                                    let value = integer(&e, "val", part)?;
+                                    if let Some(n) = self.numbers.get_mut(&id) {
+                                        n.abstract_id = Some(value);
+                                    }
+                                    Frame::Leaf
+                                }
+                                (Frame::Number(num), "lvlOverride") => {
+                                    let level = integer(&e, "ilvl", part)?;
+                                    limit(
+                                        part,
+                                        "lvlOverride",
+                                        "numbering levels",
+                                        self.level_count + 1,
+                                        MAX_DEFINITIONS,
+                                    )?;
+                                    let n = self.numbers.get_mut(&num).ok_or_else(|| {
+                                        DocxError::invalid(part, "num", "missing admitted number")
+                                    })?;
+                                    if n.levels.insert(level, Delta::default()).is_some() {
+                                        return Err(DocxError::invalid(
+                                            part,
+                                            "lvlOverride",
+                                            "duplicate level override",
+                                        ));
+                                    }
+                                    self.level_count += 1;
+                                    Frame::Override { num, level, has_level: false }
+                                }
+                                (Frame::Abstract(id), "lvl") => {
+                                    let level = integer(&e, "ilvl", part)?;
+                                    limit(
+                                        part,
+                                        "lvl",
+                                        "numbering levels",
+                                        self.level_count + 1,
+                                        MAX_DEFINITIONS,
+                                    )?;
+                                    let levels = self.abstracts.get_mut(&id).ok_or_else(|| {
+                                        DocxError::invalid(
+                                            part,
+                                            "abstractNum",
+                                            "missing admitted abstract",
+                                        )
+                                    })?;
+                                    if levels.insert(level, Delta::default()).is_some() {
+                                        return Err(DocxError::invalid(
+                                            part,
+                                            "lvl",
+                                            "duplicate numbering level",
+                                        ));
+                                    }
+                                    self.level_count += 1;
+                                    Frame::Level(Owner::Abstract(id, level))
+                                }
+                                (Frame::Override { num, level, has_level }, "lvl") => {
+                                    if has_level || integer(&e, "ilvl", part)? != level {
+                                        return Err(DocxError::invalid(
+                                            part,
+                                            "lvl",
+                                            "duplicate or mismatched override level",
+                                        ));
+                                    }
+                                    if let Some(f) = stack.last_mut() {
+                                        *f = Frame::Override { num, level, has_level: true };
+                                    }
+                                    Frame::Level(Owner::Number(num, level))
+                                }
+                                (Frame::Level(owner), "pPr") => Frame::Properties(owner, false),
+                                // Numbering identity/edit-history metadata, not level formatting.
+                                (Frame::Abstract(_), "nsid" | "tmpl" | "name")
+                                | (Frame::Root, "numIdMacAtCleanup") => Frame::Metadata,
+                                (
+                                    Frame::Abstract(_) | Frame::Number(_),
+                                    "numStyleLink" | "styleLink",
+                                ) => {
+                                    diagnosed = true;
+                                    warn(
+                                        warnings,
+                                        part,
+                                        &e.name,
+                                        Kind::UnsupportedAttribute,
+                                        "numbering_style_link",
+                                        "ignore",
+                                        "Numbering style link is not followed",
+                                    )?;
+                                    Frame::Ignored
+                                }
+                                _ => Frame::Ignored,
+                            };
+                        }
+                        if let Frame::Properties(owner, _) | Frame::NumPr(owner) = parent {
+                            let character = matches!(parent, Frame::Properties(_, true));
+                            let mut delta = Delta::default();
+                            let state = read_property(
+                                &mut delta,
+                                &e,
+                                character,
+                                &self.theme,
+                                &mut self.fonts,
+                                part,
+                                &e.name,
+                                warnings,
+                            )?;
+                            frame = Frame::Property(state);
+                            if let Some(target) = self.target(owner) {
+                                target.overlay(&delta, false);
+                            }
+                            if w && e.name == "numPr"
+                                && matches!(parent, Frame::Properties(_, false))
+                            {
+                                frame = Frame::NumPr(owner);
+                            }
+                            if w && e.name == "sectPr" {
+                                frame = Frame::Section;
+                            }
+                        }
+                        if let Frame::Property(state) = parent {
+                            frame = Frame::Property(state.child(&e, part, &e.name, warnings)?);
+                        }
+                        if matches!(frame, Frame::Properties(_, _)) {
+                            super::container_attributes(&e, part, &e.name, warnings)?;
+                        }
+                    }
+                    if matches {
+                        if matches!(frame, Frame::Ignored) {
+                            if !diagnosed
+                                && !matches!(
+                                    parent,
+                                    Frame::Ignored
+                                        | Frame::Properties(_, _)
+                                        | Frame::NumPr(_)
+                                        | Frame::Section
+                                )
+                            {
+                                definition_warning(&e, part, root, "child subtree", warnings)?;
+                            }
+                        } else {
+                            definition_attributes(frame, &e, part, root, warnings)?;
+                        }
+                    }
+                    stack.push(frame);
+                }
+                XmlEvent::End => {
+                    stack.pop();
+                }
+                XmlEvent::Text(_) => {}
+            }
+            Ok(())
+        })?;
+        Ok(matches)
+    }
+}
+// Explicit attributes for admitted definition frames only. Unsupported subtrees are
+// diagnosed once at their boundary and never acquire an owner from descendant names.
+fn definition_attributes(
+    frame: Frame,
+    e: &Element,
+    part: &str,
+    root: &str,
+    warnings: &mut Vec<DocxWarning>,
+) -> Result<()> {
+    let (consumed, ignored): (&[&str], &[&str]) = match frame {
+        Frame::Root if root == "theme" => (&[], &["name"]), // Display label only.
+        Frame::Root
+        | Frame::Defaults
+        | Frame::DefaultRun
+        | Frame::DefaultPara
+        | Frame::ThemeElements
+        | Frame::Family(_) => (&[], &[]),
+        Frame::Style(_) => (&["type", "styleId", "default"], &["customStyle"]), // Authoring provenance only.
+        Frame::Table(_) => (&["type"], &[]),
+        Frame::Abstract(_) => (&["abstractNumId"], &[]),
+        Frame::Number(_) => (&["numId"], &[]),
+        Frame::Override { .. } => (&["ilvl"], &[]),
+        Frame::Level(_) => (&["ilvl"], &["tplc", "tentative"]), // Gallery/template provenance only.
+        Frame::FontScheme => (&[], &["name"]),                  // Display label only.
+        Frame::LatentStyles => (
+            &[],
+            &[
+                "count",
+                "defLockedState",
+                "defUIPriority",
+                "defSemiHidden",
+                "defUnhideWhenUsed",
+                "defQFormat",
+            ],
+        ), // UI defaults for styles not present in the document.
+        Frame::Metadata if e.name == "lsdException" => {
+            (&[], &["name", "locked", "uiPriority", "semiHidden", "unhideWhenUsed", "qFormat"])
+        } // UI visibility/priority, not effective formatting.
+        Frame::Metadata => (&[], &["val"]), // Style editor links/labels or numbering edit-history IDs.
+        Frame::Leaf if root == "theme" => (&["typeface"], &[]),
+        Frame::Leaf => (&["val"], &[]),
+        Frame::Ignored
+        | Frame::Property(_)
+        | Frame::Properties(_, _)
+        | Frame::NumPr(_)
+        | Frame::Section => return Ok(()), // Property reader or subtree loss already accounts for these.
+    };
+    let namespace = if root == "theme" { xml::NamespaceId::NONE } else { W_NS.0 };
+    for (ns, key, _) in &e.attributes {
+        if *ns != namespace
+            || !(consumed.contains(&key.as_str()) || ignored.contains(&key.as_str()))
+        {
+            definition_warning(e, part, root, format_args!("attribute '{}'", key), warnings)?;
+        }
+    }
+    let flags: &[&str] = match frame {
+        Frame::Style(_) => &["customStyle"], // default is consumed while constructing the Style.
+        Frame::Level(_) => &["tentative"],
+        Frame::LatentStyles => {
+            &["defLockedState", "defSemiHidden", "defUnhideWhenUsed", "defQFormat"]
+        }
+        Frame::Metadata if e.name == "lsdException" => {
+            &["locked", "semiHidden", "unhideWhenUsed", "qFormat"]
+        }
+        Frame::Metadata
+            if matches!(
+                e.name.as_str(),
+                "qFormat"
+                    | "semiHidden"
+                    | "unhideWhenUsed"
+                    | "locked"
+                    | "personal"
+                    | "personalCompose"
+                    | "personalReply"
+                    | "autoRedefine"
+            ) =>
+        {
+            &["val"]
+        }
+        _ => &[],
+    };
+    for key in flags {
+        properties::boolean(e, key, None, part, &e.name, warnings)?;
+    }
+    Ok(())
+}
+fn definition_warning(
+    e: &Element,
+    part: &str,
+    root: &str,
+    detail: impl std::fmt::Display,
+    warnings: &mut Vec<DocxWarning>,
+) -> Result<()> {
+    let loss = match root {
+        "styles" => "style_definition",
+        "numbering" => "numbering_definition",
+        _ => "theme_definition",
+    };
+    record(warnings, Kind::UnsupportedAttribute, loss, "ignore", || {
+        (
+            Some(part),
+            Some(e.name.as_str()),
+            format!("Unsupported definition {} on '{}'", quote(detail), quote(&e.name)),
+        )
+    })
+}
+
+fn integer(e: &Element, key: &str, part: &str) -> Result<u32> {
+    let value = attr(e, key)
+        .ok_or_else(|| DocxError::invalid(part, &e.name, format!("invalid or missing {key}")))?;
+    crate::identifier::check(value, part, &e.name)?;
+    value
+        .parse()
+        .map_err(|_| DocxError::invalid(part, &e.name, format!("invalid or missing {key}")))
+}
+
+#[cfg(test)]
+#[path = "definitions_tests.rs"]
+mod tests;

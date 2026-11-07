@@ -1,8 +1,15 @@
-use crate::{decode_docx, DocxDecoded, DocxError};
+use crate::{DocxDecoded, DocxError};
+
+// Structural tests isolate their losses; formatting fallback counts are asserted separately.
+fn decode_structure(bytes: &[u8]) -> crate::DocxResult<DocxDecoded> {
+    let mut d = crate::decode_docx(bytes)?;
+    d.warnings.retain(|w| w.code() != "DOCX_FORMAT_DEFAULTED");
+    Ok(d)
+}
 use std::io::{Cursor, Write};
 use zip::{write::SimpleFileOptions, ZipWriter};
 
-const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+pub(super) const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 fn zip(entries: &[(&str, &str)]) -> Vec<u8> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -17,7 +24,7 @@ fn zip(entries: &[(&str, &str)]) -> Vec<u8> {
     }
     writer.finish().unwrap().into_inner()
 }
-fn package(body: &str, extras: &[(&str, &str, &str)]) -> Vec<u8> {
+pub(super) fn package(body: &str, extras: &[(&str, &str, &str)]) -> Vec<u8> {
     let main = format!("<w:document xmlns:w='{W}' xmlns:mc='{MC}' xmlns:m='http://schemas.openxmlformats.org/officeDocument/2006/math'><w:body>{body}</w:body></w:document>");
     let root = "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='main' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='text/body.xml'/></Relationships>";
     let mut types = String::from("<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Override PartName='/text/body.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/>");
@@ -25,7 +32,12 @@ fn package(body: &str, extras: &[(&str, &str, &str)]) -> Vec<u8> {
         "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>",
     );
     for (i, (kind, name, _)) in extras.iter().enumerate() {
-        types.push_str(&format!("<Override PartName='/text/{name}' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml'/>"));
+        let mime = if *kind == "theme" {
+            "application/vnd.openxmlformats-officedocument.theme+xml".to_owned()
+        } else {
+            format!("application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml")
+        };
+        types.push_str(&format!("<Override PartName='/text/{name}' ContentType='{mime}'/>"));
         rels.push_str(&format!("<Relationship Id='r{i}' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}' Target='{name}'/>"));
     }
     types.push_str("</Types>");
@@ -43,7 +55,7 @@ fn package(body: &str, extras: &[(&str, &str, &str)]) -> Vec<u8> {
     zip(&entries)
 }
 fn decoded(body: &str) -> DocxDecoded {
-    decode_docx(&package(body, &[])).unwrap()
+    decode_structure(&package(body, &[])).unwrap()
 }
 fn texts(d: &DocxDecoded) -> Vec<String> {
     d.document.sections()[0].paragraphs.iter().map(|p| p.text_content()).collect()
@@ -72,7 +84,7 @@ fn text_runs_empty_paragraphs_and_controls() {
     assert!(d.warnings.is_empty());
     assert_eq!(d.registry.char_shape_count(), 1);
     assert_eq!(d.registry.para_shape_count(), 1);
-    assert_eq!(d.registry.char_shapes[0].font, "한컴바탕");
+    assert_eq!(d.registry.char_shapes[0].font, "함초롬바탕");
     assert_eq!(
         d.document.sections()[0].page_settings,
         hwpforge_core::page::PageSettings::default()
@@ -134,7 +146,7 @@ fn ambiguous_field_boundaries_are_errors() {
     for content in ["<w:fldChar w:fldCharType='begin'/>", "<w:fldChar w:fldCharType='end'/>",
         "<w:fldChar w:fldCharType='separate'/>", "<w:fldChar w:fldCharType='begin'/><w:fldChar w:fldCharType='separate'/><w:fldChar w:fldCharType='separate'/><w:fldChar w:fldCharType='end'/>",
         "<w:fldChar/>"] {
-        assert!(matches!(decode_docx(&package(&format!("<w:p><w:r>{content}</w:r></w:p>"), &[])), Err(DocxError::Invalid { detail, .. }) if detail.contains("field")));
+        assert!(matches!(decode_structure(&package(&format!("<w:p><w:r>{content}</w:r></w:p>"), &[])), Err(DocxError::Invalid { detail, .. }) if detail.contains("field")));
     }
 }
 
@@ -225,7 +237,7 @@ fn revisions_are_rejected_in_every_selected_location() {
     }
 }
 fn revision_error(bytes: &[u8], expected: &str, expected_part: &str) {
-    let error = decode_docx(bytes).unwrap_err();
+    let error = decode_structure(bytes).unwrap_err();
     let message = error.to_string();
     assert!(message.contains("accept all changes in Word or LibreOffice and retry"));
     match error {
@@ -243,7 +255,7 @@ fn revision_error(bytes: &[u8], expected: &str, expected_part: &str) {
 #[test]
 fn recording_setting_without_changes_is_accepted() {
     let settings = format!("<w:settings xmlns:w='{W}'><w:trackRevisions/></w:settings>");
-    let d = decode_docx(&package(
+    let d = decode_structure(&package(
         "<w:p><w:r><w:t>A</w:t></w:r></w:p>",
         &[("settings", "settings.xml", &settings)],
     ))
@@ -327,15 +339,13 @@ fn formatting_breaks_attributes_and_values_have_explicit_losses() {
     assert_eq!(
         actual,
         [
-            ("DOCX_FORMATTING_OMITTED", "paragraph_format", "use_defaults", 1),
-            ("DOCX_FORMATTING_OMITTED", "list_markers", "omit", 1),
-            ("DOCX_FORMATTING_OMITTED", "character_format", "use_defaults", 2),
             ("DOCX_FORMATTING_OMITTED", "section_layout", "use_defaults", 2),
             ("DOCX_BREAK_OMITTED", "page_break", "omit", 1),
             ("DOCX_BREAK_OMITTED", "column_break", "omit", 1),
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "omit", 1),
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "preserve_source", 1),
             ("DOCX_ATTRIBUTE_OMITTED", "unsupported_attribute", "ignore", 1),
+            ("DOCX_FORMATTING_OMITTED", "list_markers", "omit", 1),
         ]
     );
     let p = &d.document.sections()[0].paragraphs[0];
@@ -345,20 +355,19 @@ fn formatting_breaks_attributes_and_values_have_explicit_losses() {
 // 이것을 실패시키는 것: 본문 서식 경고 미집계/첫 위치 갱신/위치를 키에 포함.
 #[test]
 fn repeated_run_loss_is_one_group_with_first_location() {
-    let runs = "<w:r><w:rPr><w:b/></w:rPr><w:t>A</w:t></w:r>".repeat(20_000);
+    let runs = "<w:r><w:rPr><w:caps/></w:rPr><w:t>A</w:t></w:r>".repeat(20_000);
     let d = decoded(&format!("<w:p>{runs}</w:p>"));
     assert_eq!(counts(&d), [20_000]);
     assert_eq!(d.warnings.len(), 1);
     assert_eq!(d.warnings[0].count(), 20_000);
-    assert_eq!(d.warnings[0].location(), Some("rPr#5"));
+    assert_eq!(d.warnings[0].location(), Some("caps#6"));
     assert_eq!(d.warnings[0].part(), Some("text/body.xml"));
 }
 
-// 이것을 실패시키는 것: 부속 part 미순회, 잘못된 root 무경고, 공유 ZIP part 재읽기.
+// 이것을 실패시키는 것: 부속 part 미순회, 번호 정의의 미지원 자식 무경고, 잘못된 root 무경고, 공유 ZIP part 재읽기.
 #[test]
 fn ancillary_parts_are_scanned_once_without_collecting_text() {
     for (kind, root, loss) in [
-        ("styles", "styles", "style_definitions"),
         ("numbering", "numbering", "list_definitions"),
         ("header", "hdr", "header"),
         ("footer", "ftr", "footer"),
@@ -368,13 +377,26 @@ fn ancillary_parts_are_scanned_once_without_collecting_text() {
     ] {
         let xml =
             format!("<w:{root} xmlns:w='{W}'><w:p><w:r><w:t>HIDDEN</w:t></w:r></w:p></w:{root}>");
-        let d = decode_docx(&package("<w:p/>", &[(kind, "extra.xml", &xml)])).unwrap();
+        let d = decode_structure(&package("<w:p/>", &[(kind, "extra.xml", &xml)])).unwrap();
         assert_eq!(texts(&d), [""]);
-        assert_eq!(d.warnings.len(), 1);
-        assert_eq!(d.warnings[0].loss(), loss);
+        if kind == "numbering" {
+            assert_eq!(
+                d.warnings
+                    .iter()
+                    .map(|w| (w.code(), w.loss(), w.action(), w.count()))
+                    .collect::<Vec<_>>(),
+                [
+                    ("DOCX_UNSUPPORTED_ATTRIBUTE", "numbering_definition", "ignore", 1),
+                    ("DOCX_FORMATTING_OMITTED", "list_definitions", "omit", 1),
+                ]
+            );
+        } else {
+            assert_eq!(d.warnings.len(), 1);
+        }
+        assert_eq!(d.warnings.last().unwrap().loss(), loss);
         assert_eq!(d.warnings[0].part(), Some("text/extra.xml"));
         let xml = format!("<w:wrong xmlns:w='{W}'/>");
-        let d = decode_docx(&package("<w:p/>", &[(kind, "extra.xml", &xml)])).unwrap();
+        let d = decode_structure(&package("<w:p/>", &[(kind, "extra.xml", &xml)])).unwrap();
         assert_eq!(d.warnings[0].code(), "DOCX_OPTIONAL_PART_OMITTED");
     }
     let bytes = package(
@@ -388,7 +410,7 @@ fn ancillary_parts_are_scanned_once_without_collecting_text() {
     let bytes = rewrite(&bytes, "text/_rels/body.xml.rels", |s| {
         s.replace("</Relationships>", "<Relationship Id='alias' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/header' Target='./EXTRA.xml'/></Relationships>")
     });
-    let d = decode_docx(&bytes).unwrap();
+    let d = decode_structure(&bytes).unwrap();
     assert_eq!(d.warnings.len(), 1);
     assert_eq!(d.warnings[0].count(), 1);
 }
@@ -429,7 +451,7 @@ fn only_missing_optional_parts_are_recoverable() {
             }
         });
         if target == "external.xml" {
-            match decode_docx(&changed).unwrap_err() {
+            match decode_structure(&changed).unwrap_err() {
                 DocxError::Invalid { part, element, detail } => {
                     assert_eq!(part, "text/body.xml");
                     assert_eq!(element, "relationship:r0");
@@ -444,7 +466,7 @@ fn only_missing_optional_parts_are_recoverable() {
                 let unselected = rewrite(&changed, "text/_rels/body.xml.rels", |s| {
                     s.replace("relationships/header", &format!("relationships/{kind}"))
                 });
-                let d = decode_docx(&unselected).unwrap();
+                let d = decode_structure(&unselected).unwrap();
                 assert_eq!(texts(&d), [""]);
                 assert_eq!(d.warnings.len(), 1);
                 assert_eq!(
@@ -453,7 +475,7 @@ fn only_missing_optional_parts_are_recoverable() {
                 );
             }
         } else {
-            let d = decode_docx(&changed).unwrap();
+            let d = decode_structure(&changed).unwrap();
             assert_eq!(d.warnings[0].code(), "DOCX_OPTIONAL_PART_OMITTED");
             assert_eq!(d.warnings[0].loss(), "optional_part");
         }
@@ -469,7 +491,7 @@ fn only_missing_optional_parts_are_recoverable() {
     }
     entries.push(("text/extra.xml/".into(), "".into()));
     let opaque = zip(&entries.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect::<Vec<_>>());
-    assert!(matches!(decode_docx(&opaque), Err(DocxError::OpaquePart { .. })));
+    assert!(matches!(decode_structure(&opaque), Err(DocxError::OpaquePart { .. })));
     for content_type in ["application/unknown", ""] {
         let changed = rewrite(&bytes, "[Content_Types].xml", |s| {
             if content_type.is_empty() {
@@ -482,9 +504,15 @@ fn only_missing_optional_parts_are_recoverable() {
             }
         });
         if content_type.is_empty() {
-            assert!(matches!(decode_docx(&changed), Err(DocxError::MissingContentType { .. })));
+            assert!(matches!(
+                decode_structure(&changed),
+                Err(DocxError::MissingContentType { .. })
+            ));
         } else {
-            assert!(matches!(decode_docx(&changed), Err(DocxError::ContentTypeMismatch { .. })));
+            assert!(matches!(
+                decode_structure(&changed),
+                Err(DocxError::ContentTypeMismatch { .. })
+            ));
         }
     }
     for xml in [
@@ -493,13 +521,13 @@ fn only_missing_optional_parts_are_recoverable() {
         "<hdr>",
     ] {
         let changed = rewrite(&bytes, "text/extra.xml", |_| xml.into());
-        assert!(matches!(decode_docx(&changed), Err(DocxError::Invalid { .. })));
+        assert!(matches!(decode_structure(&changed), Err(DocxError::Invalid { .. })));
     }
     let mut corrupt = bytes.clone();
     let needle = b"<w:hdr xmlns:w=";
     let offset = corrupt.windows(needle.len()).position(|v| v == needle).unwrap();
     corrupt[offset] = b'!';
-    assert!(matches!(decode_docx(&corrupt), Err(DocxError::Package { .. })));
+    assert!(matches!(decode_structure(&corrupt), Err(DocxError::Package { .. })));
 }
 
 // 이것을 실패시키는 것: body/root/문단/run 문맥 검사를 제거하거나 잘못된 구조 수용.
@@ -507,7 +535,7 @@ fn only_missing_optional_parts_are_recoverable() {
 fn body_structure_and_unknown_semantics_are_explicit() {
     let bytes = package("<w:p/>", &[]);
     for xml in ["<root xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body><w:p/></w:body></root>", "<document/>", "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'/>", "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body/><w:body/></w:document>"] {
-        assert!(matches!(decode_docx(&rewrite(&bytes, "text/body.xml", |_| xml.into())), Err(DocxError::Invalid { .. })));
+        assert!(matches!(decode_structure(&rewrite(&bytes, "text/body.xml", |_| xml.into())), Err(DocxError::Invalid { .. })));
     }
     for body in [
         "<w:p><w:p/></w:p>",
@@ -516,7 +544,7 @@ fn body_structure_and_unknown_semantics_are_explicit() {
         "<w:p><w:t>A</w:t></w:p>",
         "<w:p><w:tab/></w:p>",
     ] {
-        assert!(matches!(decode_docx(&package(body, &[])), Err(DocxError::Invalid { .. })));
+        assert!(matches!(decode_structure(&package(body, &[])), Err(DocxError::Invalid { .. })));
     }
     let d = decoded("<w:p>discard<w:r><w:instrText>COMMAND</w:instrText><w:t>A</w:t></w:r></w:p>");
     assert_eq!(texts(&d), ["A"]);
@@ -527,7 +555,7 @@ fn body_structure_and_unknown_semantics_are_explicit() {
     assert_eq!(d.warnings.iter().map(|w| w.count()).collect::<Vec<_>>(), [1, 1]);
     let bytes =
         rewrite(&bytes, "text/body.xml", |s| s.replace("<w:body>", "<w:background/><w:body>"));
-    assert_eq!(decode_docx(&bytes).unwrap().warnings[0].loss(), "outside_body");
+    assert_eq!(decode_structure(&bytes).unwrap().warnings[0].loss(), "outside_body");
 }
 
 // 이것을 실패시키는 것: prefix 종속, mc:Ignorable 무음 수용, 미해석 관계를 무경고 제외.
@@ -537,19 +565,19 @@ fn namespaces_and_uninterpreted_relationships_are_diagnosed() {
     let bytes = rewrite(&bytes, "text/body.xml", |s| {
         s.replace("w:", "한:").replace("xmlns:w=", "xmlns:한=")
     });
-    assert_eq!(texts(&decode_docx(&bytes).unwrap()), ["A"]);
+    assert_eq!(texts(&decode_structure(&bytes).unwrap()), ["A"]);
     let bytes = rewrite(&bytes, "text/body.xml", |s| {
         s.replace("<한:document ", "<한:document mc:Ignorable='w14' ")
     });
-    assert_eq!(decode_docx(&bytes).unwrap().warnings[0].code(), "DOCX_ATTRIBUTE_OMITTED");
+    assert_eq!(decode_structure(&bytes).unwrap().warnings[0].code(), "DOCX_ATTRIBUTE_OMITTED");
     let d = decoded(
         "<w:p><w:r><w:t>A</w:t><w:br xmlns:x='urn:other' x:type='page'/><w:t>B</w:t></w:r></w:p>",
     );
     assert_eq!(texts(&d), ["A\nB"]);
     assert_eq!(d.warnings[0].code(), "DOCX_ATTRIBUTE_OMITTED");
-    for kind in ["theme", "image", "custom"] {
+    for kind in ["image", "custom"] {
         let bytes = package("<w:p/>", &[(kind, "data.xml", "not XML")]);
-        let d = decode_docx(&bytes).unwrap();
+        let d = decode_structure(&bytes).unwrap();
         assert_eq!(d.warnings[0].loss(), "uninterpreted_part");
     }
 }
@@ -606,11 +634,11 @@ fn field_results_respect_all_enclosing_boundaries() {
     assert_eq!(texts(&d), ["7"]);
     assert!(!d.warnings.iter().any(|w| w.code() == "DOCX_FIELD_RESULT_MISSING"));
     for body in ["<w:p><w:fldSimple w:instr='X'><w:r><w:fldChar w:fldCharType='end'/></w:r></w:fldSimple></w:p>", "<w:p><w:fldSimple w:instr='X'><w:r><w:fldChar w:fldCharType='begin'/></w:r></w:fldSimple></w:p>"] {
-        assert!(matches!(decode_docx(&package(body, &[])), Err(DocxError::Invalid { detail, .. }) if detail == "unmatched field end"));
+        assert!(matches!(decode_structure(&package(body, &[])), Err(DocxError::Invalid { detail, .. }) if detail == "unmatched field end"));
     }
     let begin = "<w:fldChar w:fldCharType='begin'/>".repeat(129);
     assert!(matches!(
-        decode_docx(&package(&format!("<w:p><w:r>{begin}</w:r></w:p>"), &[])),
+        decode_structure(&package(&format!("<w:p><w:r>{begin}</w:r></w:p>"), &[])),
         Err(DocxError::Limit { resource: "field nesting", observed: 129, limit: 128, .. })
     ));
 }
@@ -640,7 +668,7 @@ fn document_settings_have_explicit_losses() {
         ("<w:compat><w:compatSetting w:name='x'/></w:compat><x:trackRevisions xmlns:x='urn:other'/>", 2),
     ] {
         let settings = format!("<w:settings xmlns:w='{W}'>{children}</w:settings>");
-        let d = decode_docx(&package("<w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>", &[("settings", "settings.xml", &settings)])).unwrap();
+        let d = decode_structure(&package("<w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>", &[("settings", "settings.xml", &settings)])).unwrap();
         assert_eq!(texts(&d), ["A\tB"]);
         if expected == 0 {
             assert!(d.warnings.is_empty());
@@ -652,11 +680,11 @@ fn document_settings_have_explicit_losses() {
         }
     }
     let header = format!("<w:hdr xmlns:w='{W}'><w:defaultTabStop/></w:hdr>");
-    let d = decode_docx(&package("<w:p/>", &[("header", "header.xml", &header)])).unwrap();
+    let d = decode_structure(&package("<w:p/>", &[("header", "header.xml", &header)])).unwrap();
     assert_eq!(d.warnings.len(), 1);
     assert_eq!((d.warnings[0].code(), d.warnings[0].loss()), ("DOCX_CONTENT_OMITTED", "header"));
     let wrong = format!("<w:wrong xmlns:w='{W}'><w:defaultTabStop/></w:wrong>");
-    let d = decode_docx(&package("<w:p/>", &[("settings", "settings.xml", &wrong)])).unwrap();
+    let d = decode_structure(&package("<w:p/>", &[("settings", "settings.xml", &wrong)])).unwrap();
     assert_eq!(d.warnings.len(), 1);
     assert_eq!(d.warnings[0].code(), "DOCX_OPTIONAL_PART_OMITTED");
 }
@@ -749,7 +777,7 @@ fn decode_selection_work_is_independent_of_repeated_relationships() {
                 let bytes = repeated_selection_package(relations, entries, length, missing, mime);
                 take_selection_work();
                 crate::warning::take_diagnostic_bytes();
-                let d = decode_docx(&bytes).unwrap();
+                let d = decode_structure(&bytes).unwrap();
                 diagnostic_bytes.push(crate::warning::take_diagnostic_bytes());
                 let work = take_selection_work();
                 assert_eq!(texts(&d), ["A"]);
@@ -786,7 +814,7 @@ fn decode_selection_work_is_independent_of_repeated_relationships() {
         for relations in [1, 64] {
             let bytes = repeated_selection_package(relations, 4, 32, false, &wrong);
             take_selection_work();
-            assert!(matches!(decode_docx(&bytes), Err(DocxError::ContentTypeMismatch { .. })));
+            assert!(matches!(decode_structure(&bytes), Err(DocxError::ContentTypeMismatch { .. })));
             let work = take_selection_work();
             eprintln!("mismatch length={length} relations={relations}: {work:?}");
             assert_eq!(
@@ -810,7 +838,7 @@ fn repeated_body_diagnostics_only_build_first_example() {
     assert_eq!(first.warnings.len(), 3);
     assert_eq!(repeated.warnings.len(), 3);
     assert_eq!(repeated.warnings.iter().map(|w| w.count()).collect::<Vec<_>>(), [64, 64, 64]);
-    assert_eq!((first_bytes, repeated_bytes), (3198, 3198));
+    assert_eq!((first_bytes, repeated_bytes), (3702, 3702));
     eprintln!("body diagnostic bytes: {first_bytes} / {repeated_bytes}");
 }
 
@@ -861,7 +889,7 @@ fn unique_targets_only_hash_their_names_and_index_entries_once() {
         ] {
             let bytes = unique_selection_package(targets, entries, length, missing);
             crate::package::take_selection_work();
-            let d = decode_docx(&bytes).unwrap();
+            let d = decode_structure(&bytes).unwrap();
             let work = crate::package::take_selection_work();
             eprintln!("unique missing={missing} targets={targets} entries={entries} length={length}: {work:?}");
             assert_eq!(work.lookups, if targets == 2 { 6 } else { 8 });
