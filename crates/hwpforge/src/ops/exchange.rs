@@ -20,9 +20,9 @@
 //! [`from_json`] **generates** a package from JSON: there is no original to
 //! preserve, so encode warnings are reported rather than fatal. [`patch`]
 //! **preserves**: it rewrites one section's text inside the existing package
-//! and leaves every other byte alone, so it has no encode stage. Its only
-//! encode warnings are about the edited text itself: characters XML 1.0
-//! cannot represent are removed from it and reported.
+//! and removes derived Preview parts and their connections on effective text
+//! changes. Encode warnings report that removal and XML text cleanup.
+//! Unchanged text keeps the original; rewriting styles or older whole-document JSON has no such warning guarantee.
 
 use hwpforge_core::caption::Caption;
 use hwpforge_core::control::{Control, GroupChild};
@@ -875,8 +875,8 @@ pub struct PatchOutput {
     /// `XML_FORBIDDEN_CHARS_REMOVED` per edited text slot that had
     /// characters removed.
     ///
-    /// A preserving patch splices one section's XML and leaves every other
-    /// ZIP entry alone, so no encoder runs. The base is still decoded, to
+    /// Changed text removes Preview and its connections and
+    /// reports PREVIEW_REMOVED. Affected caches may change; unrelated content is retained. The base is still decoded, to
     /// check the replacement against it, and that decode reports. A slot
     /// whose new text holds characters XML 1.0 cannot represent (the C0
     /// controls other than TAB, LF, CR and U+001F, plus U+FFFE/U+FFFF) is

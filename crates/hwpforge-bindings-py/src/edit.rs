@@ -2,8 +2,10 @@
 //! removing paragraphs, stamping an approved map, and restyling.
 //!
 //! Two families live here. The **preserving** edits (`fill`, `insert_para`,
-//! `delete_para`) apply a delta to the input package and carry everything else
-//! over untouched. The **regenerating** edits (`set_cell`, `stamp`, `restyle`)
+//! `delete_para`) apply a delta and retain unrelated content. When content
+//! changes in a document with existing Hancom previews, they remove Preview
+//! and report PREVIEW_REMOVED; saving again in Hancom rebuilds it. Document
+//! re-encoding, such as header normalization, is outside this guarantee. The **regenerating** edits (`set_cell`, `stamp`, `restyle`)
 //! encode the document again, and refuse to return bytes when that encode
 //! reported a semantic loss — `HwpForgeError(ENCODE_SEMANTIC_LOSS)` rather
 //! than a document that quietly means something else.

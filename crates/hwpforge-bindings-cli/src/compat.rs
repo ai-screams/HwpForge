@@ -54,7 +54,7 @@ struct Row {
     exit: i32,
 }
 
-const UNCARRIED_ENTRIES_HINT: &str = "한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)";
+const UNCARRIED_ENTRIES_HINT: &str = "한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요.";
 
 const UNKNOWN_PRESET_HINT: &str = "Available presets: default, modern, classic, latest";
 
@@ -462,6 +462,10 @@ pub fn cli_error(cmd: Command, err: OpsError) -> CliError {
         None => err.hint(),
     };
     match hint {
+        Some(hint) if code == OpsCode::InputEntriesNotCarried => {
+            CliError::new(CliCode::Ops(code), message)
+                .with_hint(format!("{hint} {}", crate::PREVIEW_EDIT_NOTICE))
+        }
         Some(hint) => CliError::new(CliCode::Ops(code), message).with_hint(hint),
         None => CliError::new(CliCode::Ops(code), message),
     }
@@ -844,6 +848,8 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 거부 이유·대안·언어 변경 또는 fidelity-gap에 Preview 안내 추가.
+    // 이것을 실패시키는 것: Preview 존재 조건·문서 재인코드 예외 누락 또는 안내 언어 변경.
     fn all_policy_rows_match_baseline() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../hwpforge/tests/data/error_contract_018.json"))

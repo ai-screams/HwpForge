@@ -55,6 +55,8 @@
 //! `ops-hwpx` gives the HWPX-only operations, `ops-md` adds the Markdown
 //! ones, and `ops` is the alias for everything.
 
+const UNCARRIED_ENTRIES_HINT: &str = "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요. 기존 한컴 미리보기가 있던 문서에서 patch·fill로 내용을 실제로 바꾸면 미리보기(Preview)를 지우고 PREVIEW_REMOVED 경고를 냅니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.";
+
 #[cfg(feature = "ops-md")]
 pub mod convert;
 pub mod diff;
@@ -493,7 +495,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed) — 텍스트는 to-json(section) → patch, 누름틀은 fill을 사용하세요"
         }
         OpsCode::InputEntriesNotCarried => {
-            "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 엔트리를 보존합니다)"
+            UNCARRIED_ENTRIES_HINT
         }
         OpsCode::StampSourceHashMismatch | OpsCode::StampLabelDrift | OpsCode::StampSpecStale => {
             "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"
@@ -1085,6 +1087,22 @@ mod tests {
         }
         assert!(hint_for(OpsCode::UpstreamUnmapped).is_some(), "unknown errors need a hint");
         assert!(hint_for(OpsCode::JsonParseFailed).is_none(), "no CLI hint to reproduce");
+    }
+
+    // 이것을 실패시키는 것: 거부 이유·대안을 지우거나 fidelity-gap 거부에 Preview 안내 추가.
+    #[test]
+    fn edit_refusal_hints_keep_reason_and_alternative() {
+        let entries = hint_for(OpsCode::InputEntriesNotCarried).unwrap();
+        assert!(entries.contains("재인코드 시 유실될 ZIP 엔트리"));
+        assert!(entries.contains("`patch`") && entries.contains("`fill`"));
+        assert!(entries.contains("PREVIEW_REMOVED"));
+        // 이것을 실패시키는 것: Preview 존재 조건 또는 머리글 재인코드 예외 누락.
+        assert!(entries.contains("기존 한컴 미리보기가 있던 문서에서"));
+        assert!(entries.contains("머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖"));
+        let fidelity = hint_for(OpsCode::InputNotRoundtripSafe).unwrap();
+        assert!(fidelity.contains("무손실 재인코드가 증명되지 않아"));
+        assert!(fidelity.contains("patch") && fidelity.contains("fill"));
+        assert!(!fidelity.contains("PREVIEW_REMOVED"));
     }
 
     #[cfg(feature = "ops-hwpx")]

@@ -3654,21 +3654,21 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Decode",
           "occurrence": 1,
           "anchor": "원본 패키지 읽기(RawPackage::read)"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Decode",
           "occurrence": 2,
           "anchor": "입구 metadata 검사 뒤 원본 decode"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Decode",
           "occurrence": 4,
           "anchor": "원본 구역 XML 읽기"
@@ -3682,7 +3682,7 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Decode",
           "occurrence": 3,
           "anchor": "원본 decode 뒤 패키지 무결성 거부"
@@ -3761,28 +3761,28 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Validation",
           "occurrence": 1,
           "anchor": "replacement 깊이 검사"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Validation",
           "occurrence": 2,
           "anchor": "출력 가능한 measure 검증"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Validation",
           "occurrence": 3,
           "anchor": "source 의미 검사(verify_document_source)"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Validation",
           "occurrence": 4,
           "anchor": "편집 문서 validate"
@@ -3812,21 +3812,21 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Encode",
           "occurrence": 1,
           "anchor": "출력용 header reference 구성"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Encode",
           "occurrence": 2,
           "anchor": "정규화가 필요한 header 의 재인코드"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "stage": "Encode",
           "occurrence": 3,
           "anchor": "출력 ZIP 작성"
@@ -3883,14 +3883,34 @@
           "mode": "injected",
           "operation": "patch.codec.verification"
         }
-      }
+      },
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
+          "stage": "Verification",
+          "occurrence": 3
+        }
+      ]
     },
     {
       "id": "patch.protected_field",
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::ProtectedFieldRange",
           "occurrence": 1,
           "anchor": "보호 필드 값·범위 변경"
@@ -3926,42 +3946,42 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::Invariant",
           "occurrence": 1,
           "anchor": "decoder source map 부재"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::Invariant",
           "occurrence": 2,
           "anchor": "검증된 slot 의 text element 부재"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::Invariant",
           "occurrence": 3,
           "anchor": "검증된 slot 의 inline 내용 부재"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::Invariant",
           "occurrence": 4,
           "anchor": "text slot 이 어느 문단에도 없음"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::Invariant",
           "occurrence": 5,
           "anchor": "검증된 locator 교체 실패"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/patch.rs",
-          "function": "HwpxPatcher::patch_section_preserving_with_codec_diagnostics",
+          "function": "HwpxPatcher::patch_section_preserving_with_changes",
           "variant": "PatchError::Invariant",
           "occurrence": 6,
           "anchor": "splice 범위 겹침"
@@ -4170,7 +4190,21 @@
           "mode": "injected",
           "operation": "fill.codec.verification"
         }
-      }
+      },
+      "sites": [
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "HwpxFiller::fill_with_codec_diagnostics",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+          "function": "finish_fill",
+          "stage": "Verification",
+          "occurrence": 1
+        }
+      ]
     },
     {
       "id": "fill.workflow",
@@ -4543,7 +4577,7 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
           "stage": "Decode",
           "occurrence": 1
         },
@@ -4613,7 +4647,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
           "stage": "Validation",
           "occurrence": 1
         },
@@ -4735,7 +4769,7 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
           "variant": "StructuralEditError::Invariant",
           "occurrence": 1
         },
@@ -5096,7 +5130,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_diagnostics",
+          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
           "variant": "StructuralEditError::ProtectedFieldRange",
           "occurrence": 1
         },

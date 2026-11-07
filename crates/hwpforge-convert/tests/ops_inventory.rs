@@ -99,6 +99,7 @@ const AUDITED: &[Audited] = &[
         file: "crates/hwpforge-smithy-hwpx/src/encoder/mod.rs",
         enum_name: "EncodeWarning",
         table: &[
+            ("PreviewRemoved", "PREVIEW_REMOVED"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             // OTHER by design: these three carry no CLI wording, so `ops`
@@ -252,6 +253,7 @@ fn variants_of(file: &str, enum_name: &'static str) -> Vec<String> {
 
 #[test]
 fn every_upstream_variant_is_named_in_the_mapping_tables() {
+    // 이것을 실패시키는 것: PreviewRemoved의 안정 코드 표 등록 삭제.
     for audited in AUDITED {
         let declared: BTreeSet<String> =
             variants_of(audited.file, audited.enum_name).into_iter().collect();

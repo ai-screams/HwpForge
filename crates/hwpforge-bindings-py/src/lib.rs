@@ -97,3 +97,6 @@ mod _hwpforge {
     #[pymodule_export]
     use crate::style::{schema, templates};
 }
+
+#[cfg(test)]
+mod preview_tests;
