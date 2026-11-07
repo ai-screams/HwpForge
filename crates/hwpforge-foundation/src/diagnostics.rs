@@ -297,6 +297,91 @@ impl<'de> Deserialize<'de> for OpsCode {
     }
 }
 
+/// The processing stage that detected a warning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[non_exhaustive]
+#[serde(rename_all = "lowercase")]
+pub enum WarningStage {
+    /// Reading the source format.
+    Decode,
+    /// Mapping document semantics between representations.
+    Project,
+    /// Writing the destination format.
+    Encode,
+}
+
+/// Source context and total occurrences of one kind of semantic loss.
+///
+/// Format, loss, action, and position strings belong to the producer; this
+/// shared DTO does not classify format-specific semantics. Positions describe
+/// the first occurrence, including when its position is unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[non_exhaustive]
+pub struct WarningContext {
+    /// Stable name of the format where the loss was detected.
+    pub format: String,
+    /// Stage that detected the loss.
+    pub stage: WarningStage,
+    /// Package part of the first occurrence, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
+    /// Position of the first occurrence within the part, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// Stable producer-defined classification of the lost semantics.
+    pub loss: String,
+    /// Stable producer-defined recovery action.
+    pub action: String,
+    /// Total occurrences, including those whose positions are omitted.
+    ///
+    /// Must be positive. A missing count reads as one; zero is rejected on read.
+    #[serde(
+        default = "single_occurrence",
+        skip_serializing_if = "is_single_occurrence",
+        deserialize_with = "deserialize_warning_count"
+    )]
+    #[schemars(range(min = 1))]
+    pub count: u64,
+}
+
+impl WarningContext {
+    /// Creates context for one occurrence with unknown part and location.
+    ///
+    /// Set the public position and count fields when the producer has them.
+    pub fn new(
+        format: impl Into<String>,
+        stage: WarningStage,
+        loss: impl Into<String>,
+        action: impl Into<String>,
+    ) -> Self {
+        Self {
+            format: format.into(),
+            stage,
+            part: None,
+            location: None,
+            loss: loss.into(),
+            action: action.into(),
+            count: single_occurrence(),
+        }
+    }
+}
+
+fn single_occurrence() -> u64 {
+    1
+}
+
+fn is_single_occurrence(count: &u64) -> bool {
+    *count == 1
+}
+
+fn deserialize_warning_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let count = u64::deserialize(deserializer)?;
+    if count == 0 {
+        return Err(serde::de::Error::custom("warning count must be positive"));
+    }
+    Ok(count)
+}
+
 /// One non-fatal warning as every frontend reports it.
 ///
 /// `code` is a stable SCREAMING_SNAKE string (an [`OpsCode`] wire string or a
@@ -313,12 +398,15 @@ pub struct WarningInfo {
     /// Optional recovery hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Optional source context and occurrence count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<WarningContext>,
 }
 
 impl WarningInfo {
-    /// Creates a warning with `code` and `message` and no hint.
+    /// Creates a warning with `code` and `message` and no hint or context.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into(), hint: None }
+        Self { code: code.into(), message: message.into(), hint: None, context: None }
     }
 
     /// Creates a warning whose code is an [`OpsCode`].
@@ -338,6 +426,108 @@ impl WarningInfo {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    // 이것을 실패시키는 것: context None 키 출력, 구 JSON에 context 필수화,
+    // 또는 기존 생성자가 context를 채우는 것.
+    #[test]
+    fn warning_context_absent_preserves_legacy_bytes_and_reads() {
+        for (warning, json) in [
+            (WarningInfo::new("TEST", "message"), r#"{"code":"TEST","message":"message"}"#),
+            (
+                WarningInfo::coded(OpsCode::EncodeSemanticLoss, "message").with_hint("hint"),
+                r#"{"code":"ENCODE_SEMANTIC_LOSS","message":"message","hint":"hint"}"#,
+            ),
+        ] {
+            assert!(warning.context.is_none());
+            assert_eq!(serde_json::to_string(&warning).unwrap(), json);
+            assert_eq!(serde_json::from_str::<WarningInfo>(json).unwrap(), warning);
+        }
+    }
+
+    // 이것을 실패시키는 것: count=0 허용, 0 이 아닌 값까지 거부하는 검사.
+    #[test]
+    fn warning_context_rejects_zero_count() {
+        let with_count = |count: &str| {
+            format!(
+                r#"{{"code":"TEST","message":"message","context":{{"format":"custom","stage":"decode","loss":"color","action":"omit","count":{count}}}}}"#
+            )
+        };
+        let error = serde_json::from_str::<WarningInfo>(&with_count("0")).unwrap_err();
+        assert!(error.to_string().contains("warning count must be positive"), "{error}");
+        let accepted = serde_json::from_str::<WarningInfo>(&with_count("2")).unwrap();
+        assert_eq!(accepted.context.unwrap().count, 2);
+    }
+
+    // 이것을 실패시키는 것: stage 철자 변경, context 소실, part/location None 출력·Some 소실,
+    // count=1 출력, 누락 count 기본값 변경, 읽은 count를 1로 고정, 생성자 필드 변경.
+    #[test]
+    fn warning_context_round_trips_optional_positions_and_counts() {
+        for (stage, wire) in [
+            (WarningStage::Decode, "decode"),
+            (WarningStage::Project, "project"),
+            (WarningStage::Encode, "encode"),
+        ] {
+            let mut context = WarningContext::new("custom", stage, "color", "omit");
+            for (part, location, count) in [
+                (None, None, 1),
+                (Some("word/document.xml"), None, 20_000),
+                (None, Some("paragraph[2]/run[3]"), 1),
+                (Some("word/document.xml"), Some("paragraph[2]/run[3]"), 20_000),
+            ] {
+                context.part = part.map(str::to_owned);
+                context.location = location.map(str::to_owned);
+                context.count = count;
+                let mut warning = WarningInfo::new("TEST", "message");
+                warning.context = Some(context.clone());
+                let mut expected = serde_json::json!({
+                    "format": "custom", "stage": wire, "loss": "color", "action": "omit"
+                });
+                if let Some(part) = part {
+                    expected["part"] = part.into();
+                }
+                if let Some(location) = location {
+                    expected["location"] = location.into();
+                }
+                if count != 1 {
+                    expected["count"] = count.into();
+                }
+                let expected =
+                    serde_json::json!({"code": "TEST", "message": "message", "context": expected});
+                assert_eq!(serde_json::to_value(&warning).unwrap(), expected);
+                let back = serde_json::from_value::<WarningInfo>(expected).unwrap();
+                assert_eq!(back, warning);
+            }
+            let value =
+                serde_json::to_value(WarningContext::new("custom", context.stage, "color", "omit"))
+                    .unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({"format": "custom", "stage": wire, "loss": "color", "action": "omit"})
+            );
+        }
+    }
+
+    // 이것을 실패시키는 것: schema에서 context 삭제·필수화, stage 철자 변경,
+    // count 필수화 또는 최솟값 0 허용.
+    #[test]
+    fn warning_context_schema_matches_optional_wire_contract() {
+        let schema = serde_json::to_value(schemars::schema_for!(WarningInfo)).unwrap();
+        assert!(schema["properties"]["context"].is_object());
+        assert!(!schema["required"].as_array().unwrap().contains(&"context".into()));
+        let context = &schema["$defs"]["WarningContext"];
+        assert!(!context["required"].as_array().unwrap().contains(&"count".into()));
+        assert_eq!(context["properties"]["count"]["minimum"], 1);
+        let stages: Vec<_> = schema["$defs"]["WarningStage"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| variant["const"].clone())
+            .collect();
+        assert_eq!(
+            stages,
+            serde_json::json!(["decode", "project", "encode"]).as_array().unwrap().clone()
+        );
+    }
 
     #[test]
     fn every_code_round_trips_through_its_wire_string() {
