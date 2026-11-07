@@ -122,7 +122,7 @@ pub struct HxWinBrush {
 ///
 /// Per KS X 6101, fillBrush is an `xs:choice` — exactly ONE of `winBrush`,
 /// `gradation`, or `imgBrush`. Use [`HxFillBrush::default_white`] for a
-/// standard solid white fill, or [`HxFillBrush::gradient`] for gradient fills.
+/// standard solid white fill, or [`HxFillBrush::from_gradation`] for gradient fills.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFillBrush {
     /// Solid/hatch fill brush (absent when gradient or image fill is used).
@@ -152,16 +152,24 @@ pub struct HxFillBrush {
 impl HxFillBrush {
     /// Creates a standard white fill brush (matches 한글 default for shapes).
     pub fn default_white() -> Self {
-        Self {
-            win_brush: Some(HxWinBrush {
-                face_color: "#FFFFFF".to_string(),
-                hatch_color: "#000000".to_string(),
-                hatch_style: None,
-                alpha: 0,
-            }),
-            gradation: None,
-            img_brush: None,
-        }
+        Self::from_win_brush(HxWinBrush {
+            face_color: "#FFFFFF".to_string(),
+            hatch_color: "#000000".to_string(),
+            hatch_style: None,
+            alpha: 0,
+        })
+    }
+
+    pub(crate) fn from_win_brush(brush: HxWinBrush) -> Self {
+        Self { win_brush: Some(brush), gradation: None, img_brush: None }
+    }
+
+    pub(crate) fn from_gradation(gradation: HxGradation) -> Self {
+        Self { win_brush: None, gradation: Some(gradation), img_brush: None }
+    }
+
+    pub(crate) fn from_img_brush(brush: super::header::HxImgBrush) -> Self {
+        Self { win_brush: None, gradation: None, img_brush: Some(brush) }
     }
 }
 

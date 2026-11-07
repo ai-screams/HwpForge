@@ -2041,6 +2041,19 @@ fn build_runs(
     Ok(result)
 }
 
+fn note_payload(
+    inst_id: Option<hwpforge_core::ObjectId>,
+    number: u32,
+    sub_list: HxSubList,
+) -> HxFootNote {
+    HxFootNote {
+        number: Some(number),
+        suffix_char: Some("41".to_string()),
+        inst_id: inst_id.map(hwpforge_core::ObjectId::value),
+        sub_list,
+    }
+}
+
 /// Converts a Core Control (Footnote/Endnote) to `HxCtrl`.
 ///
 /// Returns `None` for non-ctrl controls (TextBox, Unknown).
@@ -2071,12 +2084,7 @@ fn encode_control_to_ctrl(
                     sink,
                 );
                 HxCtrl {
-                    foot_note: Some(HxFootNote {
-                        number: Some(num),
-                        suffix_char: Some("41".to_string()),
-                        inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                        sub_list,
-                    }),
+                    foot_note: Some(note_payload(*inst_id, num, sub_list)),
                     ..Default::default()
                 }
             });
@@ -2103,12 +2111,7 @@ fn encode_control_to_ctrl(
                     sink,
                 );
                 HxCtrl {
-                    end_note: Some(HxFootNote {
-                        number: Some(num),
-                        suffix_char: Some("41".to_string()),
-                        inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                        sub_list,
-                    }),
+                    end_note: Some(note_payload(*inst_id, num, sub_list)),
                     ..Default::default()
                 }
             });
