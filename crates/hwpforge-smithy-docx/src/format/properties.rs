@@ -346,6 +346,10 @@ pub(super) fn read_property(
                 }
                 Ok(())
             }),
+            "contextualSpacing" => r.leaf(&["val"], |r| {
+                d.para.contextual = r.boolean()?;
+                Ok(())
+            }),
             "keepNext" => r.leaf(&["val"], |r| {
                 d.para.keep_next = r.boolean()?;
                 Ok(())

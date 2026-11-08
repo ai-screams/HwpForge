@@ -1,6 +1,7 @@
 //! DOCX-local property deltas, definition resolution and canonical shape caches.
 mod definitions;
 mod keys;
+mod line_height;
 use keys::{FontKey, Fonts};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct StyleKey(usize);
@@ -79,11 +80,14 @@ pub(crate) struct CharDelta {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ParaDelta {
+    pub(crate) contextual: Option<bool>,
+    // Projection cache only; raw line stays unchanged for inherited contexts.
+    projected_line: Option<u64>,
     alignment: Option<u8>,
     left: Option<i32>,
     right: Option<i32>,
     first: Option<i32>,
-    before: Option<i32>,
+    pub(crate) before: Option<i32>,
     after: Option<i32>,
     // raw line and rule are inherited independently; line stays rational until projection.
     line: Option<i32>,
@@ -127,6 +131,7 @@ impl Delta {
         overwrite!(
             self.para,
             other.para,
+            contextual,
             alignment,
             left,
             right,

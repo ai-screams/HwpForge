@@ -53,8 +53,8 @@ fn fonts_sizes_and_rgb_are_effective_values() {
 fn paragraph_spacing_keeps_precision_and_types() {
     for (rule, value, kind) in [
         ("auto", 100.41666666666667, LineSpacingType::Percentage),
-        ("exact", 1205.0, LineSpacingType::Fixed),
-        ("atLeast", 1205.0, LineSpacingType::AtLeast),
+        ("exact", 2410.0, LineSpacingType::Fixed),
+        ("atLeast", 2410.0, LineSpacingType::AtLeast),
     ] {
         let d=read("",&format!("<w:p><w:pPr><w:spacing w:line='241' w:lineRule='{rule}'/><w:ind w:left='360' w:firstLine='120' w:hanging='240'/></w:pPr></w:p>"));
         let p = &d.document.sections()[0].paragraphs[0];
@@ -557,12 +557,12 @@ fn definition_container_attributes_have_finite_losses() {
 #[test]
 fn inherited_line_rules_and_contextual_range_errors_are_local() {
     for (parent, child, kind, value, warning) in [
-        ("w:line='240' w:lineRule='exact'", "w:line='480'", LineSpacingType::Fixed, 2400.0, false),
+        ("w:line='240' w:lineRule='exact'", "w:line='480'", LineSpacingType::Fixed, 4800.0, false),
         (
             "w:line='240' w:lineRule='exact'",
             "w:line='100000000'",
             LineSpacingType::Fixed,
-            1200.0,
+            2400.0,
             true,
         ),
         (
@@ -613,7 +613,8 @@ fn missing_line_overrides_length_rule_with_percentage() {
                 "DOCX_FORMAT_DEFAULTED",
                 "use_fallback",
                 1,
-                "Unresolved paragraph formatting uses 100% line spacing or zero length".to_owned()
+                "Unresolved paragraph formatting uses single-line spacing or zero length"
+                    .to_owned()
             )
         );
     }
@@ -771,9 +772,14 @@ fn exported_named_defaults_are_diagnosed_before_direct_body_formatting() {
         let defaults = format!("<w:docDefaults><w:rPrDefault><w:rPr>{character}</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>{paragraph}</w:pPr></w:pPrDefault></w:docDefaults>").replace(remove, "");
         let d = read(&format!("{defaults}<w:style w:type='paragraph' w:styleId='unused'/>") , &format!("<w:p><w:pPr>{paragraph}</w:pPr><w:r><w:rPr>{character}</w:rPr><w:t>A</w:t></w:r></w:p>"));
         assert_eq!(d.registry.style_count(), 1);
+        assert_eq!(
+            d.warnings.iter().find(|w| w.loss() == "unknown_font_line_height").unwrap().count(),
+            1
+        );
         let warnings: Vec<_> = d
             .warnings
             .iter()
+            .filter(|w| w.loss() != "unknown_font_line_height")
             .map(|w| (w.code(), w.loss(), w.count(), w.part(), w.location()))
             .collect();
         assert_eq!(
@@ -1097,7 +1103,10 @@ fn optional_outline_values_recover_in_body_and_unused_definitions() {
                     .iter()
                     .map(|w| (w.code(), w.loss(), w.action(), w.count()))
                     .collect::<Vec<_>>(),
-                [("DOCX_UNSUPPORTED_VALUE", "format_value", "inherit_or_default", 1)]
+                [
+                    ("DOCX_UNSUPPORTED_VALUE", "format_value", "inherit_or_default", 1),
+                    ("DOCX_VALUE_APPROXIMATED", "unknown_font_line_height", "retain_spacing", 1)
+                ]
             );
         }
     }
@@ -1109,7 +1118,10 @@ fn optional_outline_values_recover_in_body_and_unused_definitions() {
                 .iter()
                 .map(|w| (w.code(), w.loss(), w.action(), w.count()))
                 .collect::<Vec<_>>(),
-            [("DOCX_UNSUPPORTED_ATTRIBUTE", "outline_level", "ignore", 1)]
+            [
+                ("DOCX_UNSUPPORTED_ATTRIBUTE", "outline_level", "ignore", 1),
+                ("DOCX_VALUE_APPROXIMATED", "unknown_font_line_height", "retain_spacing", 1)
+            ]
         );
     }
 }
@@ -1165,7 +1177,11 @@ fn distribute_alignment_and_other_jc_contracts() {
         let d = read("<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii='A' w:eastAsia='A'/><w:sz w:val='20'/><w:color w:val='000000'/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line='240' w:before='0' w:after='0'/><w:ind w:left='0' w:right='0' w:firstLine='0'/></w:pPr></w:pPrDefault></w:docDefaults>", &format!("<w:p><w:pPr><w:jc w:val='{value}'/></w:pPr><w:r><w:t>가 나</w:t></w:r></w:p>"));
         let p = &d.document.sections()[0].paragraphs[0];
         assert_eq!(d.registry.para_shapes[p.para_shape_id.get()].alignment, alignment);
-        assert_eq!(d.warnings.len(), warnings, "{value}: {:?}", d.warnings);
+        assert_eq!(d.warnings.len(), warnings + 1, "{value}: {:?}", d.warnings);
+        assert_eq!(
+            d.warnings.iter().find(|w| w.loss() == "unknown_font_line_height").unwrap().count(),
+            1
+        );
     }
 }
 
@@ -1190,4 +1206,22 @@ fn script_font_warning_describes_actual_hang_selection() {
             }
         }
     }
+}
+
+// 이것을 실패시키는 것: 기본/본문/문단 끝/문자 스타일/미사용 문단 스타일의
+// Blueprint use_font_space 중 하나를 false로 두고 HWPX 출력에서만 보정.
+#[test]
+fn font_space_is_enabled_for_every_docx_blueprint_shape() {
+    let d = read(
+        "<w:style w:type='paragraph' w:styleId='unused'><w:rPr><w:sz w:val='30'/></w:rPr></w:style><w:style w:type='character' w:styleId='character'><w:rPr><w:sz w:val='28'/></w:rPr></w:style>",
+        "<w:p/><w:p><w:pPr><w:rPr><w:sz w:val='26'/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val='24'/></w:rPr><w:t>A B</w:t></w:r><w:r><w:rPr><w:rStyle w:val='character'/></w:rPr><w:t>가 나</w:t></w:r></w:p>",
+    );
+    let mut actual: Vec<_> = d
+        .registry
+        .char_shapes
+        .iter()
+        .map(|shape| (shape.size.as_i32(), shape.use_font_space))
+        .collect();
+    actual.sort_unstable();
+    assert_eq!(actual, [(1000, true), (1200, true), (1300, true), (1400, true), (1500, true)]);
 }

@@ -844,7 +844,8 @@ fn repeated_body_diagnostics_only_build_first_example() {
     assert_eq!(repeated.warnings.iter().map(|w| w.count()).collect::<Vec<_>>(), [64, 64, 64]);
     // 이것을 실패시키는 것: 쪽 기본값 진단 두 건 누락 또는 반복 횟수만큼 사유 생성.
     // Two page defaults add 2 * (13-byte part + 6-byte location + 47-byte reason).
-    assert_eq!((first_bytes, repeated_bytes), (3834, 3834));
+    // Three fallback reasons replace "100% line" (9 bytes) with "single-line" (11).
+    assert_eq!((first_bytes, repeated_bytes), (3840, 3840));
     eprintln!("body diagnostic bytes: {first_bytes} / {repeated_bytes}");
 }
 

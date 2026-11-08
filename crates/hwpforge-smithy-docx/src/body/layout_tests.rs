@@ -184,6 +184,7 @@ fn indexed(body: &str) -> (Vec<super::DecodedSection>, super::Relations) {
         &mut warnings,
         &mut resolver,
         &relations,
+        false,
     )
     .unwrap();
     (sections, relations)
@@ -334,6 +335,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         main: true,
         root: "document",
         root_matches: true,
+        suppress_before_page_break: false,
         body_seen: true,
         final_section_seen: false,
         stack: vec![],
@@ -343,6 +345,8 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         origins: vec![],
         breaks: vec![],
         trailing_break: None,
+        pending_shapes: Vec::new(),
+        spacing_neighbor: None,
         split_at: None,
         boundary_input: None,
         source_paragraphs: 1,
@@ -840,7 +844,7 @@ fn visible_tail_and_section_end_keep_their_fragments() {
     );
 }
 
-// 이것을 실패시키는 것: 뒤 간격·keepNext·끝 모양을 삭제된 조각에 남김, 첫 조각 속성 삭제·마지막 조각에 복제, 여러 원본의 pending 덮어쓰기.
+// 이것을 실패시키는 것: 뒤 간격·keepNext·끝 모양을 삭제된 조각에 남김, 첫 조각 속성 삭제·마지막 조각에 복제, 여러 원본의 pending 덮어쓰기, 이동된 강제 경계에서 다음 원본의 before 억제.
 #[test]
 fn moved_tail_restores_last_fragment_properties_and_origins() {
     for prefix in ["", "<w:t>A</w:t><w:br w:type='page'/>"] {
@@ -853,11 +857,15 @@ fn moved_tail_restores_last_fragment_properties_and_origins() {
         for start in [0, n] {
             let first = &d.registry.para_shapes[p[start].para_shape_id.get()];
             let last = &d.registry.para_shapes[p[start + n - 1].para_shape_id.get()];
-            assert_eq!((first.space_before.as_i32(), first.indent_first_line.as_i32()), (100, 50));
+            let before = 100;
+            assert_eq!(
+                (first.space_before.as_i32(), first.indent_first_line.as_i32()),
+                (before, 50)
+            );
             assert_eq!((last.space_after.as_i32(), last.keep_with_next), (200, true));
             assert_eq!(
                 (last.space_before.as_i32(), last.indent_first_line.as_i32()),
-                if n == 1 { (100, 50) } else { (0, 0) }
+                if n == 1 { (before, 50) } else { (0, 0) }
             );
             let mark = p[start + n - 1].end_char_shape.unwrap();
             assert_eq!(
@@ -896,7 +904,7 @@ fn moved_single_fragment_preserves_original_shape_without_split_warning() {
 fn section_end_does_not_intern_unused_tail_restoration() {
     for (body, expected_texts, shape_count) in [
         ("<w:p><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p>", vec!["A", ""], 1),
-        ("<w:p><w:pPr><w:keepLines/><w:spacing w:before='20' w:after='40'/></w:pPr><w:r><w:t>base</w:t></w:r></w:p><w:p><w:pPr><w:keepLines/><w:spacing w:before='20' w:after='40'/></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p>", vec!["base", "A", ""], 3),
+        ("<w:p><w:pPr><w:keepLines/><w:spacing w:before='20' w:after='40'/></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p>", vec!["A", ""], 2),
     ] {
         let d = read(body);
         let paragraphs = &d.document.sections()[0].paragraphs;

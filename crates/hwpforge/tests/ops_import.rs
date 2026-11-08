@@ -7,6 +7,7 @@ use serde_json::json;
 mod docx;
 
 // 이것을 실패시키는 것: DOCX 대신 HWPX 디코더 호출, 본문/개수 변경, 미해결 서식 경고 제거 또는 meta count를 1로 초기화.
+// 알려진 글꼴의 한 줄 환산을 무시하고 경고를 무조건 100%라고 표기하는 경우도 실패한다.
 #[test]
 fn imported_text_and_metadata_survive_encoding() {
     let output = convert_docx(&docx::package(
@@ -20,9 +21,9 @@ fn imported_text_and_metadata_survive_encoding() {
     let first = serde_json::to_value(output.meta()).unwrap();
     // Two paragraphs with one run each leave six categories unresolved twice.
     let mut warnings: Vec<_> = [
-        ("line_spacing", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
-        ("paragraph_spacing", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
-        ("indentation", "pPr", "Unresolved paragraph formatting uses 100% line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("line_spacing", "pPr", "Unresolved paragraph formatting uses single-line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("paragraph_spacing", "pPr", "Unresolved paragraph formatting uses single-line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
+        ("indentation", "pPr", "Unresolved paragraph formatting uses single-line spacing or zero length (total 2 occurrences; first example only; subsequent locations omitted)"),
         ("font_size", "rPr", "Unresolved character formatting uses 10pt, 함초롬바탕 or black (total 2 occurrences; first example only; subsequent locations omitted)"),
         ("font_family", "rPr", "Unresolved character formatting uses 10pt, 함초롬바탕 or black (total 2 occurrences; first example only; subsequent locations omitted)"),
         ("text_color", "rPr", "Unresolved character formatting uses 10pt, 함초롬바탕 or black (total 2 occurrences; first example only; subsequent locations omitted)"),
@@ -324,4 +325,16 @@ fn page_default_warnings() -> [serde_json::Value; 2] {
         "message":"Missing section page setting uses Core defaults",
         "context":{"format":"docx","stage":"decode","part":"body.xml","location":"body#0","loss":loss,"action":"use_defaults"}
     }))
+}
+
+// 이것을 실패시키는 것: DOCX 물리 줄 높이를 HwpUnit으로 전달해 HWPX case에서 다시 반감.
+#[test]
+fn physical_line_spacing_survives_hwpx_encoding() {
+    for (rule, line, expected) in [("exact", 400, 4000), ("atLeast", 360, 3804)] {
+        let output = convert_docx(&docx::package(&format!("<w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='{rule}'/></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t></w:r></w:p>"))).unwrap();
+        let decoded = hwpforge::hwpx::HwpxDecoder::decode(&output.bytes).unwrap();
+        let p = &decoded.document.sections()[0].paragraphs[0];
+        let shape = decoded.style_store.para_shape(p.para_shape_id).unwrap();
+        assert_eq!(shape.line_spacing, expected);
+    }
 }

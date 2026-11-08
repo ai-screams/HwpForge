@@ -9,7 +9,7 @@ use hwpforge_foundation::{
     StrikeoutShape, StyleRef, UnderlineType, VerticalPosition,
 };
 use std::{
-    collections::{hash_map::RandomState, HashMap},
+    collections::{hash_map::RandomState, HashMap, HashSet},
     hash::BuildHasher,
 };
 
@@ -25,6 +25,8 @@ struct CharResult {
     missing: u8,
     collapsed: bool,
     reference_missing: bool,
+    line_fonts: [Option<FontKey>; 2],
+    size: i32,
 }
 
 pub(crate) struct Resolver {
@@ -40,6 +42,7 @@ pub(crate) struct Resolver {
     chars: HashMap<u64, Vec<(CharKey, CharShapeIndex)>>,
     marks: HashMap<(usize, usize), CharResult>,
     fallback_font: FontKey,
+    unknown_metrics: HashSet<FontKey>,
     paras: HashMap<u64, Vec<ParaShapeIndex>>,
     fonts: HashMap<FontKey, FontIndex>,
     hasher: RandomState,
@@ -72,6 +75,7 @@ impl Resolver {
             chars: HashMap::new(),
             marks: HashMap::new(),
             fallback_font,
+            unknown_metrics: HashSet::new(),
             paras: HashMap::new(),
             fonts: HashMap::new(),
             hasher: RandomState::new(),
@@ -103,9 +107,17 @@ impl Resolver {
                 r.default_paragraph = Some(id);
             }
             let (part, at, name) = (s.part.clone(), s.at.clone(), s.name.clone());
-            let effective = r.context(None, Some(id), &Delta::default(), &part, warnings)?;
+            let mut effective = r.context(None, Some(id), &Delta::default(), &part, warnings)?;
             let c =
                 r.character(&effective, &Delta::default(), &RunInput::default(), &part, warnings)?;
+            if effective.para.line.is_none() || effective.para.line_rule != Some(1) {
+                // Definitions have no text: use the empty paragraph mark policy.
+                // Body paragraphs instead select script slots from actual characters.
+                let east = c.line_fonts[1].is_some();
+                let mut height = line_height::Height::default();
+                r.add_height(&mut height, c, east, &part, warnings)?;
+                effective.para.projected_line = height.project(&effective.para, east)?;
+            }
             let p = r.para_shape(&effective)?;
             format_warnings(
                 c.missing | para_missing(&effective.para),
@@ -311,9 +323,9 @@ impl Resolver {
     ) -> Result<Delta> {
         let (p, diagnose) = paragraph;
         let style = style.or(self.default_paragraph);
-        let base = self.context(None, style, direct, part, w)?;
+        let mut base = self.context(None, style, direct, part, w)?;
         p.style_ref = style.as_ref().and_then(|s| self.named.get(s)).copied();
-        p.para_shape_id = self.para_shape(&base)?;
+
         p.page_break = base.para.page_break.unwrap_or(false);
         format_warnings(para_missing(&base.para), false, part, "pPr", w)?;
         // character() reapplies direct character values after the style toggle.
@@ -326,6 +338,11 @@ impl Resolver {
             self.contexts.insert(context_key, next);
             next
         };
+        let exact = base.para.line.is_some() && base.para.line_rule == Some(1);
+        let mut height = line_height::Height::default();
+        let mut east = false;
+        let empty = p.runs.iter().all(|run| run.content.as_text().is_none_or(str::is_empty));
+        let last_run = p.runs.len().saturating_sub(1);
         for (index, run) in p.runs.iter_mut().enumerate() {
             let diagnose = diagnose.get(index).copied().unwrap_or(true);
             let input_id = run.char_shape_id.get();
@@ -347,10 +364,29 @@ impl Resolver {
                 result
             };
             run.char_shape_id = result.id;
+            // Empty source/boundary runs diagnose formatting but cannot supply
+            // script evidence in a nonempty paragraph. For an empty paragraph,
+            // only its explicit mark or final effective run supplies the height.
+            let empty_mark = empty && mark.is_none() && index == last_run;
+            if !exact && (empty_mark || run.content.as_text().is_some_and(|t| !t.is_empty())) {
+                let text = run.content.as_text().unwrap_or("");
+                let has_east = text.chars().any(line_height::east_asian);
+                let has_latin = text.chars().any(|c| !line_height::east_asian(c));
+                let empty_east = empty_mark && result.line_fonts[1].is_some();
+                east |= has_east || empty_east;
+                if has_east || empty_east {
+                    self.add_height(&mut height, result, true, part, w)?;
+                }
+                if has_latin || (!has_east && !empty_east) {
+                    self.add_height(&mut height, result, false, part, w)?;
+                }
+            }
             if diagnose {
                 format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
             }
         }
+        // Without pPr/rPr the final effective run already supplies the mark's
+        // height. Do not invent a separate default-font mark above that run.
         if let Some((mark, style)) = mark {
             let delta = self.run_input(mark.clone(), style)?.get();
             let key = (context, delta);
@@ -372,15 +408,66 @@ impl Resolver {
             };
             p.end_char_shape = Some(result.id);
             format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
+            // An unresolved explicit mark makes the entire height unverified.
+            if !exact {
+                east |= empty && result.line_fonts[1].is_some();
+                self.add_height(&mut height, result, east, part, w)?;
+            }
+        }
+        if !exact {
+            base.para.projected_line = height.project(&base.para, east)?;
+            if height.mixed() {
+                warn(w, part, "pPr", Kind::ValueApproximated, "mixed_font_line_height",
+                    "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
+            }
         }
         Ok(base)
     }
-    pub(crate) fn fragment_shape(
+    pub(crate) fn paragraph_style(&self, style: Option<StyleKey>) -> Option<StyleKey> {
+        style.or(self.default_paragraph)
+    }
+    fn add_height(
         &mut self,
-        base: &Delta,
-        first: bool,
-        last: bool,
-    ) -> Result<ParaShapeIndex> {
+        height: &mut line_height::Height,
+        c: CharResult,
+        east: bool,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<()> {
+        let key = if east {
+            c.line_fonts[1].or(c.line_fonts[0])
+        } else {
+            c.line_fonts[0].or(c.line_fonts[1])
+        };
+        let metrics = key.and_then(|key| self.definitions.fonts.metrics(key));
+        if let Some(key) = key.filter(|_| metrics.is_none()) {
+            if self.unknown_metrics.insert(key) {
+                warn(w, part, "rFonts", Kind::ValueApproximated, "unknown_font_line_height",
+                    "retain_spacing", format_args!("Unknown natural line metrics for '{}'; raw auto multiplier or specified minimum retained", self.definitions.fonts.name(key)))?;
+            }
+        }
+        height.add(c.size, metrics);
+        Ok(())
+    }
+    pub(crate) fn spacing_boundary(
+        previous: &mut Delta,
+        current: &mut Delta,
+        enabled: (bool, bool),
+    ) {
+        let after = previous.para.after.unwrap_or(0);
+        let before = current.para.before.unwrap_or(0);
+        // ISO/IEC 29500: collapse every source boundary with max, then subtract
+        // each enabled contextual side (10pt / 12pt, left enabled => 2pt).
+        let remaining = (after.max(before)
+            - if enabled.0 { after } else { 0 }
+            - if enabled.1 { before } else { 0 })
+        .max(0);
+        // Store the gap once: ordinary boundaries use the preceding after,
+        // excluding forced page starts. Preserve the contextual residual's old side.
+        previous.para.after = Some(if enabled.0 { 0 } else { remaining });
+        current.para.before = Some(if enabled.0 { remaining } else { 0 });
+    }
+    pub(crate) fn fragment_shape(base: &Delta, first: bool, last: bool) -> Delta {
         let mut derived = base.clone();
         if !first {
             derived.para.before = Some(0);
@@ -395,7 +482,7 @@ impl Resolver {
         }
         derived.para.keep_lines = Some(false);
         derived.para.widow = Some(false);
-        self.para_shape(&derived)
+        derived
     }
     // Runs and paragraph marks share character style toggles and direct overrides.
     fn character(
@@ -482,6 +569,8 @@ impl Resolver {
                 missing,
                 collapsed,
                 reference_missing: false,
+                line_fonts: [latin, east],
+                size,
             });
         }
         self.admit_shape()?;
@@ -500,6 +589,8 @@ impl Resolver {
         let mut shape = partial
             .resolve("import")
             .map_err(|e| DocxError::invalid("#format", "char", quote(e)))?;
+        // Word uses the font's space glyph width; Hancom defaults to its own space width.
+        shape.use_font_space = true;
         shape.font_latin = Some(self.definitions.fonts.name(key.0[1]).to_owned());
         shape.font_east_asian = Some(self.definitions.fonts.name(key.0[2]).to_owned());
         shape.bold = bold;
@@ -522,9 +613,11 @@ impl Resolver {
             missing,
             collapsed,
             reference_missing: false,
+            line_fonts: [latin, east],
+            size,
         })
     }
-    fn para_shape(&mut self, d: &Delta) -> Result<ParaShapeIndex> {
+    pub(crate) fn para_shape(&mut self, d: &Delta) -> Result<ParaShapeIndex> {
         let p = &d.para;
         let mut shape = ParaShape::default();
         shape.list = None;
@@ -542,15 +635,17 @@ impl Resolver {
             _ => LineSpacingType::Percentage,
         };
         shape.line_spacing_value =
-            units::canonical_float(if rule == 0 {
+            units::canonical_float(if let Some(value) = p.projected_line {
+                f64::from_bits(value)
+            } else if rule == 0 {
                 f64::from(p.line.unwrap_or(240)) * 100.0 / 240.0
             } else {
-                f64::from(
+                line_height::physical_spacing(f64::from(
                     unit(p.line.unwrap_or(240).checked_mul(5).ok_or_else(|| {
                         DocxError::invalid("#format", "line", "numeric overflow")
                     })?)?
                     .as_i32(),
-                )
+                ))
             })?;
         shape.space_before = unit(p.before.unwrap_or(0))?;
         shape.space_after = unit(p.after.unwrap_or(0))?;
@@ -560,6 +655,9 @@ impl Resolver {
         shape.keep_with_next = p.keep_next.unwrap_or(false);
         shape.keep_lines_together = p.keep_lines.unwrap_or(false);
         shape.widow_orphan = p.widow.unwrap_or(false);
+        self.intern_para(shape)
+    }
+    fn intern_para(&mut self, shape: ParaShape) -> Result<ParaShapeIndex> {
         let hash = self.hasher.hash_one((
             shape.alignment,
             shape.line_spacing_type,
@@ -643,19 +741,19 @@ fn format_warnings(
             16,
             "line_spacing",
             "use_fallback",
-            "Unresolved paragraph formatting uses 100% line spacing or zero length",
+            "Unresolved paragraph formatting uses single-line spacing or zero length",
         ),
         (
             32,
             "paragraph_spacing",
             "use_fallback",
-            "Unresolved paragraph formatting uses 100% line spacing or zero length",
+            "Unresolved paragraph formatting uses single-line spacing or zero length",
         ),
         (
             64,
             "indentation",
             "use_fallback",
-            "Unresolved paragraph formatting uses 100% line spacing or zero length",
+            "Unresolved paragraph formatting uses single-line spacing or zero length",
         ),
     ] {
         if missing & mask != 0 {

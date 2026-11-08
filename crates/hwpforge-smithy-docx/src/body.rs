@@ -75,6 +75,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut definitions = Definitions::default();
     let mut relations = Relations::default();
     let mut valid_roots = HashMap::new();
+    let mut suppress_before_page_break = false;
     // Moving the relationships avoids cloning all input strings or borrowing the
     // package through a read. Shared ZIP targets are scanned only once.
     let mut relationships = std::mem::take(&mut package.relationships);
@@ -151,7 +152,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
         ) {
             definitions.read(&bytes, part, root, &mut package.text_budget, &mut warnings)?
         } else {
-            scan(&bytes, part, root, false, &mut package.text_budget, &mut warnings)?.1
+            let scanned = scan(&bytes, part, root, false, &mut package.text_budget, &mut warnings)?;
+            suppress_before_page_break |= scanned.2;
+            scanned.1
         };
         if !root_matches {
             record(&mut warnings, Kind::OptionalPartOmitted, "optional_part", "omit", || {
@@ -202,6 +205,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
         &mut warnings,
         &mut resolver,
         &relations,
+        suppress_before_page_break,
     )?;
     let registry = resolver.registry;
     let mut document = Document::new();
@@ -259,6 +263,9 @@ fn attribute<'a>(element: &'a Element, ns: NamespaceId, name: &str) -> Option<&'
 enum Node {
     #[default]
     Other,
+    Compatibility {
+        omitted: bool,
+    },
     Body,
     Paragraph,
     Run,
@@ -307,7 +314,6 @@ struct Field {
 }
 struct TrailingBreak {
     base: Delta,
-    original_shape: ParaShapeIndex,
     first: bool,
     mark: Option<hwpforge_foundation::CharShapeIndex>,
     split_at: (Location, usize),
@@ -318,6 +324,7 @@ struct Body<'a> {
     main: bool,
     root: &'a str,
     root_matches: bool,
+    suppress_before_page_break: bool,
     body_seen: bool,
     final_section_seen: bool,
     stack: Vec<Frame>,
@@ -326,8 +333,11 @@ struct Body<'a> {
     sections: Vec<DecodedSection>,
     origins: Vec<Origin>,
     breaks: Vec<(usize, Break)>,
-    // Derive final formatting only when the trailing empty fragment moves.
+    // At most two output shapes await their final boundary: the last fragment,
+    // plus its predecessor when an empty tail may move to the next paragraph.
+    pending_shapes: Vec<(usize, Delta)>,
     trailing_break: Option<TrailingBreak>,
+    spacing_neighbor: Option<(Option<StyleKey>, bool)>,
     split_at: Option<(Location, usize)>,
     boundary_input: Option<(hwpforge_foundation::CharShapeIndex, bool)>,
     source_paragraphs: usize,
@@ -360,7 +370,7 @@ fn scan(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<(Vec<DecodedSection>, bool)> {
+) -> Result<(Vec<DecodedSection>, bool, bool)> {
     scan_inner(bytes, part, root, main, budget, warnings, None)
 }
 fn scan_formatted(
@@ -370,8 +380,18 @@ fn scan_formatted(
     warnings: &mut Vec<DocxWarning>,
     resolver: &mut Resolver,
     relations: &Relations,
+    suppress_before_page_break: bool,
 ) -> Result<Vec<DecodedSection>> {
-    Ok(scan_inner(bytes, part, "document", true, budget, warnings, Some((resolver, relations)))?.0)
+    Ok(scan_inner(
+        bytes,
+        part,
+        "document",
+        true,
+        budget,
+        warnings,
+        Some((resolver, relations, suppress_before_page_break)),
+    )?
+    .0)
 }
 fn scan_inner(
     bytes: &[u8],
@@ -380,14 +400,16 @@ fn scan_inner(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-    resources: Option<(&mut Resolver, &Relations)>,
-) -> Result<(Vec<DecodedSection>, bool)> {
-    let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
+    resources: Option<(&mut Resolver, &Relations, bool)>,
+) -> Result<(Vec<DecodedSection>, bool, bool)> {
+    let (resolver, relations, suppress_before_page_break) =
+        resources.map_or((None, None, false), |(r, i, suppress)| (Some(r), Some(i), suppress));
     let mut body = Body {
         part,
         main,
         root,
         root_matches: false,
+        suppress_before_page_break,
         body_seen: false,
         final_section_seen: false,
         stack: Vec::new(),
@@ -397,6 +419,8 @@ fn scan_inner(
         origins: Vec::new(),
         breaks: Vec::new(),
         trailing_break: None,
+        pending_shapes: Vec::new(),
+        spacing_neighbor: None,
         split_at: None,
         boundary_input: None,
         source_paragraphs: 0,
@@ -435,7 +459,7 @@ fn scan_inner(
     if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
         body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
     }
-    Ok((body.sections, body.root_matches))
+    Ok((body.sections, body.root_matches, body.suppress_before_page_break))
 }
 
 impl Body<'_> {
@@ -484,31 +508,55 @@ impl Body<'_> {
             location: location.clone(),
         };
         if !self.main {
-            if self.root == "settings"
-                && self.root_matches
-                && self.stack.len() == 1
-                && !(w && element.name == "trackRevisions")
-            {
-                if w && matches!(
-                    element.name.as_str(),
-                    "mirrorMargins" | "gutterAtTop" | "rtlGutter"
-                ) {
-                    layout::warn(
-                        self.warnings,
-                        self.part,
-                        &location,
-                        "binding_layout",
-                        "omit",
-                        "Document-wide mirrored or relocated binding margins are not applied",
-                    )?;
-                } else {
-                    self.warn(
-                        Kind::DocumentSettingsOmitted,
-                        &location,
-                        || "Document setting is not applied",
-                        "document_settings",
-                        "ignore",
-                    )?;
+            if self.root == "settings" && self.root_matches {
+                if self.stack.len() == 1 {
+                    if w && element.name == "compat" {
+                        frame.node = Node::Compatibility { omitted: false };
+                    } else if w
+                        && matches!(
+                            element.name.as_str(),
+                            "mirrorMargins" | "gutterAtTop" | "rtlGutter"
+                        )
+                    {
+                        layout::warn(
+                            self.warnings,
+                            self.part,
+                            &location,
+                            "binding_layout",
+                            "omit",
+                            "Document-wide mirrored or relocated binding margins are not applied",
+                        )?;
+                    } else if !(w && element.name == "trackRevisions") {
+                        self.warn(
+                            Kind::DocumentSettingsOmitted,
+                            &location,
+                            || "Document setting is not applied",
+                            "document_settings",
+                            "ignore",
+                        )?;
+                    }
+                } else if let Some(parent) = self.stack.last_mut() {
+                    if let Node::Compatibility { omitted } = &mut parent.node {
+                        if w && element.name == "suppressSpBfAfterPgBrk" {
+                            match attr(&element, "val") {
+                                None | Some("1" | "true" | "on") => self.suppress_before_page_break = true,
+                                Some("0" | "false" | "off") => self.suppress_before_page_break = false,
+                                Some(_) => self.warn(Kind::UnsupportedValue, &location,
+                                    || "Invalid suppressSpBfAfterPgBrk boolean; previous value retained",
+                                    "document_settings", "inherit_or_default")?,
+                            }
+                        } else if !*omitted {
+                            *omitted = true;
+                            let at = parent.location.clone();
+                            self.warn(
+                                Kind::DocumentSettingsOmitted,
+                                &at,
+                                || "Unsupported compatibility settings are not applied",
+                                "document_settings",
+                                "ignore",
+                            )?;
+                        }
+                    }
                 }
             }
             self.stack.push(frame);
@@ -747,6 +795,9 @@ impl Body<'_> {
                     frame.blocked = true;
                 }
                 name => {
+                    if name == "tbl" {
+                        self.spacing_neighbor = None;
+                    }
                     let loss = match name {
                         "tbl" => "table",
                         "drawing" | "pict" => "image_shape",
@@ -975,18 +1026,29 @@ impl Body<'_> {
     }
     fn move_trailing_break(&mut self) -> Result<bool> {
         let Some(pending) = self.trailing_break.take() else { return Ok(false) };
-        let shape = if pending.first {
-            pending.original_shape
+        self.pending_shapes.pop();
+        let shape = &mut self.pending_shapes.last_mut().unwrap().1;
+        *shape = if pending.first {
+            pending.base
         } else {
-            self.resolver.as_mut().unwrap().fragment_shape(&pending.base, false, true)?
+            Resolver::fragment_shape(&pending.base, false, true)
         };
         self.paragraphs.pop();
         self.origins.pop();
         self.output_paragraphs -= 1;
         let previous = self.paragraphs.last_mut().unwrap();
-        previous.para_shape_id = shape;
         previous.end_char_shape = pending.mark;
         Ok(true)
+    }
+    fn finalize_shapes(&mut self, keep: usize) -> Result<()> {
+        let ready = self.pending_shapes.len().saturating_sub(keep);
+        for (index, delta) in self.pending_shapes.drain(..ready) {
+            // The only output paragraph shape assignment: all restoration,
+            // fragment derivation and boundary spacing edits precede this point.
+            self.paragraphs[index].para_shape_id =
+                self.resolver.as_mut().unwrap().para_shape(&delta)?;
+        }
+        Ok(())
     }
     fn finish_paragraph(&mut self) -> Result<()> {
         let mut paragraph = self
@@ -994,7 +1056,7 @@ impl Body<'_> {
             .take()
             .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?;
         let moved_break = paragraph.page_break;
-        let base = self
+        let mut base = self
             .resolver
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing resolver"))?
@@ -1007,6 +1069,28 @@ impl Body<'_> {
                 self.warnings,
             )?;
         paragraph.page_break |= moved_break;
+        let resolver = self.resolver.as_mut().unwrap();
+        let style = resolver.paragraph_style(self.paragraph_style);
+        let contextual = base.para.contextual == Some(true);
+        // Word has a separate suppressSpBfAfterPgBrk option (off by default).
+        // Preserve both sides at forced page starts, including approximated columns;
+        // this is a compatibility-based choice, not a Word/Hancom layout measurement.
+        // Test the final flag AFTER restoring the moved trailing break.
+        if paragraph.page_break {
+            if self.suppress_before_page_break {
+                base.para.before = Some(0);
+            }
+        } else if let Some((previous_style, previous_contextual)) = self.spacing_neighbor {
+            if let Some((_, previous)) = self.pending_shapes.last_mut() {
+                let same_style = previous_style == style;
+                Resolver::spacing_boundary(
+                    previous,
+                    &mut base,
+                    (same_style && previous_contextual, same_style && contextual),
+                );
+            }
+        }
+        self.spacing_neighbor = Some((style, contextual));
         let total = self.breaks.len() + 1;
         let trailing =
             self.breaks.last().is_some_and(|(start, _)| empty_text_runs(&paragraph.runs[*start..]));
@@ -1017,7 +1101,6 @@ impl Body<'_> {
             if trailing {
                 self.trailing_break = Some(TrailingBreak {
                     base: base.clone(),
-                    original_shape: paragraph.para_shape_id,
                     first: total == 2,
                     mark: paragraph.end_char_shape,
                     split_at: at,
@@ -1041,12 +1124,12 @@ impl Body<'_> {
             }
             start = end;
             let cause = fragment.checked_sub(1).map(|i| self.breaks[i].1);
+            let shape = if total > 1 {
+                Resolver::fragment_shape(&base, fragment == 0, fragment + 1 == total)
+            } else {
+                base.clone()
+            };
             if total > 1 {
-                p.para_shape_id = self.resolver.as_mut().unwrap().fragment_shape(
-                    &base,
-                    fragment == 0,
-                    fragment + 1 == total,
-                )?;
                 p.page_break = if fragment == 0 { paragraph.page_break } else { cause.is_some() };
                 if fragment + 1 != total {
                     p.end_char_shape = None;
@@ -1061,7 +1144,9 @@ impl Body<'_> {
                 fragment,
                 cause,
             });
+            self.pending_shapes.push((self.paragraphs.len(), shape));
             self.paragraphs.push(p);
+            self.finalize_shapes(if trailing { 2 } else { 1 })?;
         }
         Ok(())
     }
@@ -1200,6 +1285,8 @@ impl Body<'_> {
                 self.warn_split(&pending.split_at)?;
             }
         }
+        self.finalize_shapes(0)?;
+        self.spacing_neighbor = None;
         self.sections.push(DecodedSection {
             core: Section::with_paragraphs(std::mem::take(&mut self.paragraphs), page),
             origins: std::mem::take(&mut self.origins),
@@ -1380,3 +1467,6 @@ mod format_tests;
 
 #[cfg(test)]
 mod layout_tests;
+
+#[cfg(test)]
+mod line_spacing_tests;

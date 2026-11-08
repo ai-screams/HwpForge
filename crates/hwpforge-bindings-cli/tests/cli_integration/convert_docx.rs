@@ -239,3 +239,164 @@ fn distribute_uses_referenced_hwpx_alignment_without_warnings() {
         .collect();
     assert_eq!(actual, ["LEFT", "DISTRIBUTE"]);
 }
+
+// 이것을 실패시키는 것: 물리 줄 간격을 반값으로 넘기거나 case/default를 뒤집고 참조하지 않는 모양만 검사.
+#[test]
+fn physical_spacing_uses_both_referenced_hwpx_branches() {
+    use std::io::Read;
+
+    let tmp = test_tmp();
+    let input = tmp.join("spacing.docx");
+    let output = tmp.join("spacing.hwpx");
+    let body: String = [("exact", 400), ("atLeast", 360)]
+        .iter()
+        .map(|(rule, line)| format!("<w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='{rule}'/></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t></w:r></w:p>"))
+        .collect();
+    std::fs::write(&input, docx::package(&body)).unwrap();
+    let (value, stderr, code) =
+        run_json(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{value} {stderr}");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(output).unwrap()).unwrap();
+    let mut header = String::new();
+    zip.by_name("Contents/header.xml").unwrap().read_to_string(&mut header).unwrap();
+    let mut section = String::new();
+    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut section).unwrap();
+    let header = xml::Element::parse(&header);
+    let section = xml::Element::parse(&section);
+    let properties = header.find("hh:paraProperties");
+    let actual: Vec<_> = section
+        .children
+        .iter()
+        .filter(|p| p.name == "hp:p")
+        .map(|p| {
+            let shape = properties
+                .children
+                .iter()
+                .find(|s| s.name == "hh:paraPr" && s.attr("id") == p.attr("paraPrIDRef"))
+                .unwrap();
+            let switch = shape.child("hp:switch");
+            let case = switch.child("hp:case").child("hh:lineSpacing");
+            let default = switch.child("hp:default").child("hh:lineSpacing");
+            (
+                case.attr("type").unwrap(),
+                case.attr("value").unwrap(),
+                default.attr("type").unwrap(),
+                default.attr("value").unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [("FIXED", "2000", "FIXED", "4000"), ("AT_LEAST", "1902", "AT_LEAST", "3804")]
+    );
+}
+
+fn font_space_properties(output: &std::path::Path) -> xml::Element {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(output).unwrap()).unwrap();
+    let mut header = String::new();
+    zip.by_name("Contents/header.xml").unwrap().read_to_string(&mut header).unwrap();
+    xml::Element::parse(&header)
+}
+
+fn assert_body_font_space(output: &std::path::Path, header: &xml::Element, heights: &[&str]) {
+    use std::io::Read;
+    let properties = header.find("hh:charProperties");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(output).unwrap()).unwrap();
+    let mut text = String::new();
+    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut text).unwrap();
+    let section = xml::Element::parse(&text);
+    let mut references = std::collections::BTreeSet::new();
+    for paragraph in &section.children {
+        assert_eq!(paragraph.name, "hp:p");
+        for run in &paragraph.children {
+            if run.name == "hp:run" {
+                references.insert(run.attr("charPrIDRef").unwrap());
+            }
+        }
+    }
+    assert!(!references.is_empty());
+    let mut actual_heights = Vec::new();
+    for reference in &references {
+        let shape = properties.children.iter().find(|s| s.attr("id") == Some(*reference)).unwrap();
+        assert_eq!(shape.attr("useFontSpace"), Some("1"), "body reference {reference}");
+        actual_heights.push(shape.attr("height").unwrap());
+    }
+    actual_heights.sort_unstable();
+    assert_eq!(actual_heights, heights);
+    // The bridge's built-in styles are unused by these body paragraphs.
+    assert!(properties.children.iter().any(|shape| {
+        !references.contains(shape.attr("id").unwrap()) && shape.attr("useFontSpace") == Some("0")
+    }));
+}
+
+// 이것을 실패시키는 것: DOCX 본문 run·빈 문단·문단 끝이 useFontSpace=0인 모양을 참조,
+// 본문 참조 대신 미사용 모양만 확인하거나 facade가 bridge 기본값까지 덮어씀.
+#[test]
+fn docx_font_space_covers_body_references_and_preserves_bridge_defaults() {
+    use std::io::{Cursor, Read, Write};
+    let tmp = test_tmp();
+    let input = tmp.join("font-space.docx");
+    let output = tmp.join("font-space.hwpx");
+    // No text and no definitions still create a DOCX fallback character shape.
+    std::fs::write(&input, docx::package("<w:p/>")).unwrap();
+    let (value, stderr, code) =
+        run_json(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{value} {stderr}");
+    let header = font_space_properties(&output);
+    assert_body_font_space(&output, &header, &["1000"]);
+
+    let source = docx::package_with_defaults(
+        "<w:p/><w:p><w:pPr><w:rPr><w:sz w:val='26'/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val='24'/></w:rPr><w:t>A B</w:t></w:r><w:r><w:rPr><w:rStyle w:val='character'/></w:rPr><w:t>가 나</w:t></w:r></w:p>", "");
+    let mut source = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+    let mut package = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..source.len() {
+        let mut part = source.by_index(i).unwrap();
+        let mut text = String::new();
+        part.read_to_string(&mut text).unwrap();
+        if part.name().unwrap() == "styles.xml" {
+            text = text.replace("</w:styles>", "<w:style w:type='paragraph' w:styleId='unused'><w:rPr><w:sz w:val='30'/></w:rPr></w:style><w:style w:type='character' w:styleId='character'><w:rPr><w:sz w:val='28'/></w:rPr></w:style></w:styles>");
+        }
+        package.start_file(part.name().unwrap(), zip::write::SimpleFileOptions::default()).unwrap();
+        package.write_all(text.as_bytes()).unwrap();
+    }
+    std::fs::write(&input, package.finish().unwrap().into_inner()).unwrap();
+    let (value, stderr, code) =
+        run_json(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{value} {stderr}");
+    let header = font_space_properties(&output);
+    let properties = header.find("hh:charProperties");
+    assert_body_font_space(&output, &header, &["1000", "1200", "1300", "1400"]);
+    // The unused named definition must also survive projection.
+    let style = header
+        .find("hh:styles")
+        .children
+        .iter()
+        .find(|style| style.attr("name") == Some("import_p_000000"))
+        .unwrap();
+    let definition = properties
+        .children
+        .iter()
+        .find(|shape| shape.attr("id") == style.attr("charPrIDRef"))
+        .unwrap();
+    assert_eq!(definition.attr("height"), Some("1500"));
+}
+
+// 이것을 실패시키는 것: Blueprint 기본값 또는 공용 HWPX 인코더에서 useFontSpace를 1로 변경.
+#[test]
+fn markdown_font_space_retains_hancom_defaults() {
+    let tmp = test_tmp();
+    let input = tmp.join("font-space.md");
+    let output = tmp.join("font-space.hwpx");
+    std::fs::write(&input, "# 제목\n\n본문 **굵게** *기울임*\n").unwrap();
+    let (value, stderr, code) =
+        run_json(&["convert", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{value} {stderr}");
+    let header = font_space_properties(&output);
+    let properties = header.find("hh:charProperties");
+    assert!(!properties.children.is_empty());
+    for shape in &properties.children {
+        assert_eq!(shape.name, "hh:charPr");
+        assert_eq!(shape.attr("useFontSpace"), Some("0"));
+    }
+}

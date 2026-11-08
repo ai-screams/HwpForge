@@ -9,6 +9,7 @@ pub(super) struct FontKey(pub(super) usize);
 #[derive(Default)]
 pub(super) struct Fonts {
     names: Vec<Rc<str>>,
+    metrics: Vec<Option<line_height::Metrics>>,
     buckets: HashMap<u64, Vec<FontKey>>,
     hasher: RandomState,
     source_fonts: HashSet<FontKey>,
@@ -69,8 +70,12 @@ impl Fonts {
             self.copied_bytes += name.len();
         }
         self.names.push(Rc::from(name));
+        self.metrics.push(line_height::metrics(name));
         self.buckets.entry(hash).or_default().push(id);
         Ok(id)
+    }
+    pub(super) fn metrics(&self, key: FontKey) -> Option<line_height::Metrics> {
+        self.metrics[key.0]
     }
     pub(super) fn name(&self, key: FontKey) -> &str {
         &self.names[key.0]
