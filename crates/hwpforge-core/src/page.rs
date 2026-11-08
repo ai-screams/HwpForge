@@ -56,13 +56,13 @@ pub struct PageSettings {
     pub margin_left: HwpUnit,
     /// Right margin.
     pub margin_right: HwpUnit,
-    /// Top margin.
+    /// Distance from the top paper edge to the start of the header region.
     pub margin_top: HwpUnit,
-    /// Bottom margin.
+    /// Distance from the bottom paper edge to the outer edge of the footer region.
     pub margin_bottom: HwpUnit,
-    /// Header margin (distance from page top to header baseline).
+    /// Header region height. Body starts at `margin_top + header_margin` from the top edge.
     pub header_margin: HwpUnit,
-    /// Footer margin (distance from page bottom to footer baseline).
+    /// Footer region height. Body ends at `margin_bottom + footer_margin` from the bottom edge.
     pub footer_margin: HwpUnit,
     /// Binding gutter width. Defaults to 0 (no gutter).
     #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
@@ -164,7 +164,9 @@ impl PageSettings {
         self.width - self.margin_left - self.margin_right
     }
 
-    /// Returns the printable height (page height minus top and bottom margins).
+    /// Returns the height between the top and bottom margins, including the
+    /// header and footer regions. For body height, also subtract `header_margin`
+    /// and `footer_margin` from this value.
     pub fn printable_height(&self) -> HwpUnit {
         self.height - self.margin_top - self.margin_bottom
     }

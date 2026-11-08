@@ -293,6 +293,48 @@ impl Layout {
                 )?;
             }
         }
+        // Missing attributes use the Word equivalents of Core defaults, so a
+        // fully absent pgMar keeps Core geometry rather than reinterpreting it.
+        let defaults = PageSettings::default();
+        for (outer, area, outer_present, area_present, default_outer, default_area, loss) in [
+            (
+                &mut self.page.margin_top,
+                &mut self.page.header_margin,
+                self.margins_present[0],
+                self.margins_present[4],
+                defaults.margin_top,
+                defaults.header_margin,
+                "header_distance",
+            ),
+            (
+                &mut self.page.margin_bottom,
+                &mut self.page.footer_margin,
+                self.margins_present[2],
+                self.margins_present[5],
+                defaults.margin_bottom,
+                defaults.footer_margin,
+                "footer_distance",
+            ),
+        ] {
+            let body_distance = if outer_present { *outer } else { default_outer + default_area };
+            let region_distance =
+                if area_present { *area } else { default_outer.min(body_distance) };
+            if region_distance > body_distance {
+                *outer = body_distance;
+                *area = HwpUnit::ZERO;
+                warn(
+                    warnings,
+                    part,
+                    at,
+                    loss,
+                    "approximate",
+                    "Header/footer distance exceeds body margin; body extent preserved",
+                )?;
+            } else {
+                *outer = region_distance;
+                *area = body_distance - region_distance;
+            }
+        }
         let width = self.page.width;
         let height = self.page.height;
         let actual = if width == height { self.orient.unwrap_or(false) } else { width > height };
@@ -320,7 +362,9 @@ impl Layout {
             - i64::from(self.page.gutter.as_i32());
         let content_height = i64::from(height.as_i32())
             - i64::from(self.page.margin_top.as_i32())
-            - i64::from(self.page.margin_bottom.as_i32());
+            - i64::from(self.page.margin_bottom.as_i32())
+            - i64::from(self.page.header_margin.as_i32())
+            - i64::from(self.page.footer_margin.as_i32());
         for (name, value) in [("content width", content_width), ("content height", content_height)]
         {
             if value <= 0 {

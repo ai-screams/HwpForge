@@ -4881,19 +4881,19 @@
           "$ref": "#/$defs/HwpUnit"
         },
         "margin_top": {
-          "description": "Top margin.",
+          "description": "Distance from the top paper edge to the start of the header region.",
           "$ref": "#/$defs/HwpUnit"
         },
         "margin_bottom": {
-          "description": "Bottom margin.",
+          "description": "Distance from the bottom paper edge to the outer edge of the footer region.",
           "$ref": "#/$defs/HwpUnit"
         },
         "header_margin": {
-          "description": "Header margin (distance from page top to header baseline).",
+          "description": "Header region height. Body starts at `margin_top + header_margin` from the top edge.",
           "$ref": "#/$defs/HwpUnit"
         },
         "footer_margin": {
-          "description": "Footer margin (distance from page bottom to footer baseline).",
+          "description": "Footer region height. Body ends at `margin_bottom + footer_margin` from the bottom edge.",
           "$ref": "#/$defs/HwpUnit"
         },
         "gutter": {

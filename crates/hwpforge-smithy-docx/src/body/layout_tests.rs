@@ -119,7 +119,7 @@ fn page_geometry_normalizes_orientation_and_margins() {
                 p.footer_margin
             ]
             .map(|v| v.as_i32()),
-            [500, 1000, 1500, 2000, 250, 300]
+            [250, 1000, 300, 2000, 250, 1200]
         );
         assert_eq!(losses(&d, "page_orientation"), warnings);
     }
@@ -323,7 +323,7 @@ fn retained_wrappers_do_not_promote_nested_sections() {
     assert_eq!(losses(&d, "nested_section"), 1);
 }
 
-// 이것을 실패시키는 것: 분할·빈 최종 구역의 문단 상한 또는 빈 run 상한 검사 제거.
+// 이것을 실패시키는 것: 분할·빈 구역·run 한도 제거, 대기 조각 차감을 다음 문단 한도 검사 뒤로 이동.
 #[test]
 fn fragment_and_empty_section_growth_use_document_limits() {
     use super::*;
@@ -342,6 +342,8 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         sections: vec![],
         origins: vec![],
         breaks: vec![],
+        trailing_break: None,
+        split_at: None,
         boundary_input: None,
         source_paragraphs: 1,
         paragraph_top_level: true,
@@ -382,6 +384,43 @@ fn fragment_and_empty_section_growth_use_document_limits() {
     assert!(matches!(
         body.ensure_fragment_run(&at),
         Err(DocxError::Limit { observed: 4_000_001, limit: 4_000_000, .. })
+    ));
+    // Inject the boundary count, without allocating a million paragraphs.
+    body.runs = 0;
+    body.output_paragraphs = MAX_PARAGRAPHS - 1;
+    body.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
+    body.breaks.clear();
+    body.split_at = None;
+    body.diagnose_runs.clear();
+    body.boundary_input = None;
+    body.split(false, &at).unwrap();
+    body.ensure_fragment_run(&at).unwrap();
+    body.finish_paragraph().unwrap();
+    assert_eq!(body.paragraphs.len(), 2);
+    assert!(body.trailing_break.is_some());
+    body.stack.push(Frame {
+        node: Node::Body,
+        blocked: false,
+        in_body: true,
+        properties: false,
+        location: at.clone(),
+    });
+    let element = || Element {
+        namespace: Rc::from(W_NS.1),
+        namespace_id: W_NS.0,
+        name: "p".into(),
+        attributes: vec![],
+    };
+    body.start(element()).unwrap();
+    assert_eq!(body.output_paragraphs, 1_000_000);
+    assert_eq!(body.paragraphs.len(), 1);
+    assert_eq!(body.origins.len(), 1);
+    assert!(body.paragraph.as_ref().unwrap().page_break);
+    body.ensure_fragment_run(&at).unwrap();
+    body.finish_paragraph().unwrap();
+    assert!(matches!(
+        body.start(element()),
+        Err(DocxError::Limit { observed: 1_000_001, limit: 1_000_000, .. })
     ));
 }
 
@@ -631,5 +670,240 @@ fn nested_results_inside_outer_instructions_are_present_but_do_not_split() {
             assert_eq!(losses(&d, "paragraph_split"), 0);
             assert_eq!(losses(&d, "column_break"), 0);
         }
+    }
+}
+
+// 이것을 실패시키는 것: Word 거리를 Core에 그대로 복사, 영역 높이를 본문 높이에서 빼지 않음.
+#[test]
+fn word_report_margins_preserve_body_extents() {
+    let body = "<w:sectPr><w:pgSz w:w='11906' w:h='16838'/><w:pgMar w:top='1701' w:right='1440' w:bottom='1440' w:left='1440' w:header='851' w:footer='992' w:gutter='0'/></w:sectPr>";
+    let d = read(body);
+    let p = d.document.sections()[0].page_settings;
+    assert_eq!(
+        [p.margin_top, p.header_margin, p.margin_bottom, p.footer_margin].map(|n| n.as_i32()),
+        [4255, 4250, 4960, 2240]
+    );
+    assert_eq!((p.margin_top + p.header_margin).as_i32(), 8505);
+    assert_eq!((p.margin_bottom + p.footer_margin).as_i32(), 7200);
+    assert_eq!([p.margin_left, p.margin_right, p.gutter].map(|n| n.as_i32()), [7200, 7200, 0]);
+    assert_eq!(indexed(body).0[0].content_height.as_i32(), 68485);
+    assert_eq!(
+        losses(&d, "header_distance") + losses(&d, "footer_distance") + losses(&d, "page_margins"),
+        0
+    );
+}
+
+// 이것을 실패시키는 것: 음수 차 그대로 저장, 원래 본문 거리 변경, 경고 누락·중복·분류 변경, 같은 거리도 근사.
+#[test]
+fn overlapping_header_footer_distances_clamp_once_per_section() {
+    for (top, header, bottom, footer, expected, warnings) in [
+        (500, 720, 800, 200, [2500, 0, 1000, 3000], vec![("header_distance", 1)]),
+        (800, 200, 500, 720, [1000, 3000, 2500, 0], vec![("footer_distance", 1)]),
+        (
+            500,
+            720,
+            500,
+            720,
+            [2500, 0, 2500, 0],
+            vec![("header_distance", 1), ("footer_distance", 1)],
+        ),
+        (500, 500, 500, 500, [2500, 0, 2500, 0], vec![]),
+    ] {
+        let layout = format!("<w:sectPr><w:pgSz w:w='11906' w:h='16838'/><w:pgMar w:top='{top}' w:header='{header}' w:bottom='{bottom}' w:footer='{footer}' w:left='0' w:right='0' w:gutter='0'/></w:sectPr>");
+        let d = read(&layout);
+        let p = d.document.sections()[0].page_settings;
+        assert_eq!(
+            [p.margin_top, p.header_margin, p.margin_bottom, p.footer_margin].map(|n| n.as_i32()),
+            expected
+        );
+        let actual: Vec<_> = d
+            .warnings
+            .iter()
+            .filter(|w| matches!(w.loss(), "header_distance" | "footer_distance"))
+            .map(|w| {
+                assert_eq!(
+                    (w.code(), w.action()),
+                    ("DOCX_PAGE_LAYOUT_APPROXIMATED", "approximate")
+                );
+                (w.loss(), w.count())
+            })
+            .collect();
+        assert_eq!(actual, warnings);
+        let d = read(&format!("<w:p><w:pPr>{layout}</w:pPr></w:p>{layout}"));
+        for (loss, _) in warnings {
+            assert_eq!(losses(&d, loss), 2);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 누락 기본값 오해·명시값 덮어쓰기·본문 거리 변경·누락 header/footer 이중 근사 경고.
+#[test]
+fn missing_vertical_attributes_use_core_default_meanings_individually() {
+    for (attrs, expected, distances) in [
+        ("", [5669, 2835, 5669, 2835], [8504, 8504]),
+        ("w:top='2000' w:bottom='2000'", [5669, 4331, 5669, 4331], [10000, 10000]),
+        ("w:header='720' w:footer='720'", [3600, 4904, 3600, 4904], [8504, 8504]),
+        ("w:top='500' w:bottom='500'", [2500, 0, 2500, 0], [2500, 2500]),
+    ] {
+        let d = read(&format!("<w:sectPr><w:pgMar {attrs}/></w:sectPr>"));
+        let p = d.document.sections()[0].page_settings;
+        assert_eq!(
+            [p.margin_top, p.header_margin, p.margin_bottom, p.footer_margin].map(|n| n.as_i32()),
+            expected
+        );
+        assert_eq!(
+            [
+                (p.margin_top + p.header_margin).as_i32(),
+                (p.margin_bottom + p.footer_margin).as_i32()
+            ],
+            distances
+        );
+        assert_eq!(losses(&d, "header_distance") + losses(&d, "footer_distance"), 0);
+        assert_eq!(losses(&d, "page_margins"), 1);
+    }
+}
+
+// 이것을 실패시키는 것: 대응 뒤 바깥 여백만으로 본문 높이 검사, 0 허용, 음수 top/bottom 수용.
+#[test]
+fn mapped_body_height_rejects_zero_and_negative_but_accepts_one() {
+    for (top, bottom, height, valid) in [
+        (500, 500, "1000", false),
+        (501, 500, "1000", false),
+        (500, 500, "50.01pt", true),
+        (-1, 500, "1000", false),
+        (500, -1, "1000", false),
+    ] {
+        let body = format!("<w:sectPr><w:pgSz w:w='11906' w:h='{height}'/><w:pgMar w:top='{top}' w:bottom='{bottom}' w:header='100' w:footer='100'/></w:sectPr>");
+        assert_eq!(decode_docx(&package(&body, &[])).is_ok(), valid, "{body}");
+        if valid {
+            assert_eq!(indexed(&body).0[0].content_height.as_i32(), 1);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 후행 빈 조각 유지, 나누기 전달 누락, 선행·중간 조각 제거, run 경계에 따른 차이, split 경고 중복.
+#[test]
+fn trailing_break_moves_only_to_next_output_paragraph() {
+    for kind in ["page", "column"] {
+        for (content, expected, breaks) in [
+            (format!("<w:r><w:t>A</w:t><w:br w:type='{kind}'/><w:t>B</w:t><w:br w:type='{kind}'/></w:r>"), vec!["A", "B", "C"], vec![false, true, true]),
+            (format!("<w:r><w:t>A</w:t></w:r><w:r><w:br w:type='{kind}'/></w:r><w:r><w:t>B</w:t></w:r><w:r><w:br w:type='{kind}'/></w:r><w:r><w:t/></w:r>"), vec!["A", "B", "C"], vec![false, true, true]),
+            (format!("<w:r><w:br w:type='{kind}'/><w:br w:type='{kind}'/></w:r>"), vec!["", "", "C"], vec![false, true, true]),
+        ] {
+            for before in ["", "<w:pageBreakBefore/>"] {
+                let d = read(&format!("<w:p>{content}</w:p><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:pPr>{before}</w:pPr><w:r><w:t>C</w:t></w:r></w:p>"));
+                assert_eq!(texts(&d).as_slice(), std::slice::from_ref(&expected));
+                assert_eq!(d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(), breaks);
+                assert_eq!(losses(&d, "paragraph_split"), 1);
+            }
+        }
+    }
+    let d = read("<w:p><w:r><w:t>다</w:t></w:r></w:p><w:p><w:r><w:br w:type='page'/></w:r></w:p><w:p><w:r><w:t>둘째</w:t></w:r></w:p>");
+    assert_eq!(texts(&d), [vec!["다", "", "둘째"]]);
+    assert_eq!(
+        d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(),
+        [false, false, true]
+    );
+    let d = read("<w:p><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p><w:p/><w:p><w:r><w:t>C</w:t></w:r></w:p>");
+    assert_eq!(texts(&d), [vec!["A", "", "C"]]);
+    assert_eq!(
+        d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(),
+        [false, true, false]
+    );
+}
+
+// 이것을 실패시키는 것: 본문 run이 있는 후행 조각 삭제, 구역 끝 조각 삭제, 다음 구역에 pending 나누기 유출.
+#[test]
+fn visible_tail_and_section_end_keep_their_fragments() {
+    for (tail, text) in [
+        ("<w:t>X</w:t>", "X"),
+        ("<w:tab/>", "\t"),
+        ("<w:br/>", "\n"),
+        ("<w:t xml:space='preserve'> </w:t>", " "),
+    ] {
+        let d = read(&format!("<w:p><w:r><w:t>A</w:t><w:br w:type='page'/>{tail}</w:r></w:p><w:p><w:r><w:t>C</w:t></w:r></w:p>"));
+        assert_eq!(texts(&d), [vec!["A", text, "C"]]);
+        assert_eq!(
+            d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+    }
+    let d = read("<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/><w:t>B</w:t><w:br w:type='page'/></w:r></w:p><w:p><w:r><w:t>C</w:t></w:r></w:p>");
+    assert_eq!(texts(&d), [vec!["A", "B", ""], vec!["C"]]);
+    assert_eq!(
+        d.document
+            .sections()
+            .iter()
+            .map(|s| s.paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        [vec![false, true, true], vec![false]]
+    );
+}
+
+// 이것을 실패시키는 것: 뒤 간격·keepNext·끝 모양을 삭제된 조각에 남김, 첫 조각 속성 삭제·마지막 조각에 복제, 여러 원본의 pending 덮어쓰기.
+#[test]
+fn moved_tail_restores_last_fragment_properties_and_origins() {
+    for prefix in ["", "<w:t>A</w:t><w:br w:type='page'/>"] {
+        let source = format!("<w:p><w:pPr><w:spacing w:before='20' w:after='40'/><w:ind w:firstLine='10'/><w:keepNext/><w:rPr><w:color w:val='123456'/></w:rPr></w:pPr><w:r>{prefix}<w:t>B</w:t><w:br w:type='page'/></w:r></w:p>");
+        let body = format!("{source}{source}<w:p><w:r><w:t>C</w:t></w:r></w:p>");
+        let d = read(&body);
+        let p = &d.document.sections()[0].paragraphs;
+        let n = if prefix.is_empty() { 1 } else { 2 };
+        assert_eq!(p.len(), n * 2 + 1);
+        for start in [0, n] {
+            let first = &d.registry.para_shapes[p[start].para_shape_id.get()];
+            let last = &d.registry.para_shapes[p[start + n - 1].para_shape_id.get()];
+            assert_eq!((first.space_before.as_i32(), first.indent_first_line.as_i32()), (100, 50));
+            assert_eq!((last.space_after.as_i32(), last.keep_with_next), (200, true));
+            assert_eq!(
+                (last.space_before.as_i32(), last.indent_first_line.as_i32()),
+                if n == 1 { (100, 50) } else { (0, 0) }
+            );
+            let mark = p[start + n - 1].end_char_shape.unwrap();
+            assert_eq!(
+                d.registry.char_shapes[mark.get()].color,
+                hwpforge_foundation::Color::from_rgb(0x12, 0x34, 0x56)
+            );
+        }
+        assert_eq!(losses(&d, "paragraph_split"), if prefix.is_empty() { 0 } else { 2 });
+    }
+    let s = indexed(
+        "<w:p><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p><w:p><w:r><w:t>B</w:t></w:r></w:p>",
+    )
+    .0;
+    assert_eq!(
+        s[0].origins.iter().map(|o| (o.paragraph, o.fragment, o.cause)).collect::<Vec<_>>(),
+        [(1, 0, None), (2, 0, None)]
+    );
+}
+
+// 이것을 실패시키는 것: 한 조각에도 fragment_shape 적용, keepLines·widow·간격 손실, 분할 경고 유지.
+#[test]
+fn moved_single_fragment_preserves_original_shape_without_split_warning() {
+    let d = read("<w:p><w:pPr><w:keepLines/><w:widowControl/><w:spacing w:before='20' w:after='40'/></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p><w:p><w:r><w:t>B</w:t></w:r></w:p>");
+    let paragraphs = &d.document.sections()[0].paragraphs;
+    assert_eq!(texts(&d), [vec!["A", "B"]]);
+    let shape = &d.registry.para_shapes[paragraphs[0].para_shape_id.get()];
+    assert!(shape.keep_lines_together);
+    assert!(shape.widow_orphan);
+    assert_eq!((shape.space_before.as_i32(), shape.space_after.as_i32()), (100, 200));
+    assert_eq!(paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(), [false, true]);
+    assert_eq!(losses(&d, "paragraph_split"), 0);
+}
+
+// 이것을 실패시키는 것: 구역 끝에서 버릴 마지막 조각 복구 모양을 미리 intern, 끝 빈 조각·분할 경고 삭제.
+#[test]
+fn section_end_does_not_intern_unused_tail_restoration() {
+    for (body, expected_texts, shape_count) in [
+        ("<w:p><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p>", vec!["A", ""], 1),
+        ("<w:p><w:pPr><w:keepLines/><w:spacing w:before='20' w:after='40'/></w:pPr><w:r><w:t>base</w:t></w:r></w:p><w:p><w:pPr><w:keepLines/><w:spacing w:before='20' w:after='40'/></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/></w:r></w:p>", vec!["base", "A", ""], 3),
+    ] {
+        let d = read(body);
+        let paragraphs = &d.document.sections()[0].paragraphs;
+        assert_eq!(texts(&d), [expected_texts]);
+        assert_eq!(d.registry.para_shapes.len(), shape_count);
+        let used: std::collections::HashSet<_> = paragraphs.iter().map(|p| p.para_shape_id.get()).collect();
+        assert_eq!(used.len(), shape_count);
+        assert_eq!(losses(&d, "paragraph_split"), 1);
     }
 }

@@ -305,6 +305,14 @@ struct Field {
     has_result: bool,
     location: Location,
 }
+struct TrailingBreak {
+    base: Delta,
+    original_shape: ParaShapeIndex,
+    first: bool,
+    mark: Option<hwpforge_foundation::CharShapeIndex>,
+    split_at: (Location, usize),
+}
+
 struct Body<'a> {
     part: &'a str,
     main: bool,
@@ -318,6 +326,9 @@ struct Body<'a> {
     sections: Vec<DecodedSection>,
     origins: Vec<Origin>,
     breaks: Vec<(usize, Break)>,
+    // Derive final formatting only when the trailing empty fragment moves.
+    trailing_break: Option<TrailingBreak>,
+    split_at: Option<(Location, usize)>,
     boundary_input: Option<(hwpforge_foundation::CharShapeIndex, bool)>,
     source_paragraphs: usize,
     paragraph_top_level: bool,
@@ -385,6 +396,8 @@ fn scan_inner(
         sections: Vec::new(),
         origins: Vec::new(),
         breaks: Vec::new(),
+        trailing_break: None,
+        split_at: None,
         boundary_input: None,
         source_paragraphs: 0,
         paragraph_top_level: false,
@@ -599,6 +612,7 @@ impl Body<'_> {
                             "nested body paragraph",
                         ));
                     }
+                    let moved_break = self.move_trailing_break()?;
                     self.output_paragraphs = admit_count(
                         self.part,
                         location,
@@ -610,6 +624,7 @@ impl Body<'_> {
                     self.paragraph_top_level =
                         self.stack.last().is_some_and(|f| matches!(f.node, Node::Body));
                     self.breaks.clear();
+                    self.split_at = None;
                     self.diagnose_runs.clear();
                     self.run_diagnosed = false;
                     self.boundary_input = None;
@@ -619,7 +634,9 @@ impl Body<'_> {
                     self.mark = None;
                     self.mark_style = None;
                     self.paragraph_style = None;
-                    self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
+                    let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
+                    paragraph.page_break = moved_break;
+                    self.paragraph = Some(paragraph);
                     frame.node = Node::Paragraph;
                 }
                 "r" => {
@@ -946,11 +963,37 @@ impl Body<'_> {
         self.run_diagnosed = true;
         Ok(())
     }
+    fn warn_split(&mut self, at: &(Location, usize)) -> Result<()> {
+        let count = self.warnings.len();
+        self.warn(Kind::ParagraphSplitApproximated, &at.0, || "Paragraph split; list grouping, indentation, keep and paragraph-end effects are approximated", "paragraph_split", "split")?;
+        // Classification waits for the final fragment count; retain source order.
+        if self.warnings.len() > count {
+            let warning = self.warnings.pop().unwrap();
+            self.warnings.insert(at.1, warning);
+        }
+        Ok(())
+    }
+    fn move_trailing_break(&mut self) -> Result<bool> {
+        let Some(pending) = self.trailing_break.take() else { return Ok(false) };
+        let shape = if pending.first {
+            pending.original_shape
+        } else {
+            self.resolver.as_mut().unwrap().fragment_shape(&pending.base, false, true)?
+        };
+        self.paragraphs.pop();
+        self.origins.pop();
+        self.output_paragraphs -= 1;
+        let previous = self.paragraphs.last_mut().unwrap();
+        previous.para_shape_id = shape;
+        previous.end_char_shape = pending.mark;
+        Ok(true)
+    }
     fn finish_paragraph(&mut self) -> Result<()> {
         let mut paragraph = self
             .paragraph
             .take()
             .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?;
+        let moved_break = paragraph.page_break;
         let base = self
             .resolver
             .as_mut()
@@ -963,7 +1006,24 @@ impl Body<'_> {
                 self.part,
                 self.warnings,
             )?;
+        paragraph.page_break |= moved_break;
         let total = self.breaks.len() + 1;
+        let trailing =
+            self.breaks.last().is_some_and(|(start, _)| empty_text_runs(&paragraph.runs[*start..]));
+        if let Some(at) = self.split_at.take() {
+            if !trailing || total > 2 {
+                self.warn_split(&at)?;
+            }
+            if trailing {
+                self.trailing_break = Some(TrailingBreak {
+                    base: base.clone(),
+                    original_shape: paragraph.para_shape_id,
+                    first: total == 2,
+                    mark: paragraph.end_char_shape,
+                    split_at: at,
+                });
+            }
+        }
         let mut start = 0;
         let run_count = paragraph.runs.len();
         let mut runs = std::mem::take(&mut paragraph.runs).into_iter();
@@ -1079,7 +1139,7 @@ impl Body<'_> {
             }
         }
         if self.breaks.is_empty() {
-            self.warn(Kind::ParagraphSplitApproximated, at, || "Paragraph split; list grouping, indentation, keep and paragraph-end effects are approximated", "paragraph_split", "split")?;
+            self.split_at = Some((at.clone(), self.warnings.len()));
         }
         if column {
             self.warn(
@@ -1134,6 +1194,11 @@ impl Body<'_> {
             self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
             self.ensure_fragment_run(&at)?;
             self.finish_paragraph()?;
+        }
+        if let Some(pending) = self.trailing_break.take() {
+            if pending.first {
+                self.warn_split(&pending.split_at)?;
+            }
         }
         self.sections.push(DecodedSection {
             core: Section::with_paragraphs(std::mem::take(&mut self.paragraphs), page),
