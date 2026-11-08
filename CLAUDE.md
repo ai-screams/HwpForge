@@ -39,6 +39,7 @@ This enables:
 - Shared integration-test helpers live in `crates/<crate>/tests/support/<concern>.rs`, included with `#[path = "support/<concern>.rs"] mod <concern>;`. Reuse them before adding a helper.
 - CLI integration tests are one binary split by command: `crates/hwpforge-bindings-cli/tests/cli_integration/<command>.rs`.
 - Generated `.hwpx` inputs must be reproducible from `crates/*/examples` (see `crates/hwpforge-smithy-hwpx/tests/generated_inputs.rs`).
+- Assert output XML through the parsed tree in `crates/hwpforge-smithy-hwpx/tests/support/xml.rs` (`Element`: exact attribute values, child order), not `contains`. Expected wire values stay literal; never reference the encoder constants.
 
 ---
 
@@ -65,8 +66,11 @@ bacon / bacon test    # watch mode
 - **No fake support**: do not silently normalize unknown semantics into arbitrary defaults just to keep output green.
 - **Unhandled enum ≠ bug**: an unmatched enum arm is a real gap only if that value actually exists in the reference enum (hwpxlib/libhwp) or in a document saved by Hancom Office. Verify existence first — otherwise `_ => default` is correct and a guessed mapping is fake support. (See `HWP5_WIRE_SPEC.md §22`: numbering code 11 and image fill mode were real bugs; 가나다 numbering and diagonal types 1/4/5 were false positives.)
 - **Shared-model first**: if HWP5 discovers a semantic that Core/HWPX cannot carry, extend the shared representation first and wire HWP5 after.
+- **Layer ownership, no cross-layer patches**: Core holds format-neutral structure and references only, Blueprint holds style definitions, Smithy alone maps them to format numbers and wire values. Never compute or correct one format's detail (output positions, built-in style-set size, wire literals) in another layer; move the value to its owner or add a query there (`Paragraph.style_ref` → `HwpxStyleStore` is the example, #279).
 - **Semver-first for public API**: if a design touches public structs, enums, or externally constructible types, surface the breakage before implementation and get approval first.
 - **Editing surfaces fail closed on semantic loss**: preserve-first editors (stamper, cell-edit) reject with their existing error type when encoding emits a semantic warning (`NoteHeadSkipped` etc.). Admission compares Core only and cannot see wire damage, so never return success silently.
+- **quick-xml event loops**: `&amp;`/`&#xAC00;` arrive as a separate `Event::GeneralRef` (and CDATA as `Event::CData`). Collect every text and reference event inside one value boundary, resolve with `wire_xml::resolve_general_ref`, then settle the value; dropping the event silently cuts the text.
+- **Repeated wire values** (dropcapstyle, field `fieldid`, placeholder run key, chart series name) have one source in `crates/hwpforge-smithy-hwpx/src/encoder/wire_rules.rs`; add new copies there, not as literals in a builder.
 
 Always: **TDD edge-first** · **atomic conventional commits** (breaking = `type(scope)!:`) · **100% rustdoc** (`#![deny(missing_docs)]`) · **zero clippy warnings**.
 

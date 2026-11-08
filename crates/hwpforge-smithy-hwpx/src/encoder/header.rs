@@ -189,11 +189,13 @@ fn build_fill_brush_xml(border_fill: &HwpxBorderFill) -> String {
         ActiveBorderFillBrush::Image(fill) => build_image_fill_brush_xml(fill),
         ActiveBorderFillBrush::Gradient(fill) => build_gradient_fill_brush_xml(fill),
         ActiveBorderFillBrush::WinBrush { face_color, hatch_color, hatch_style, alpha } => {
-            let hatch_style_attr =
-                hatch_style.map(|style| format!(r#" hatchStyle="{style}""#)).unwrap_or_default();
-            format!(
-                r##"<hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="{hatch_color}"{hatch_style_attr} alpha="{alpha}"/></hc:fillBrush>"##
-            )
+            let attributes = super::wire_rules::win_brush_attributes(
+                face_color,
+                hatch_color,
+                hatch_style,
+                alpha,
+            );
+            format!(r#"<hc:fillBrush><hc:winBrush {attributes}/></hc:fillBrush>"#)
         }
         ActiveBorderFillBrush::None => {
             unreachable!("fill brush must exist when serializing border fill")

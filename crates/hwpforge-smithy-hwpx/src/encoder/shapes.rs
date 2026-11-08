@@ -4,6 +4,7 @@
 //! Functions here convert `Control::TextBox`, `Control::Line`, `Control::Ellipse`,
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
+use super::wire_rules;
 use hwpforge_core::control::geometry::{
     drop_original_size, drop_original_sizes, frame_plan, group_child_frame_plan, group_plan,
     local_transform, preserve_group_child, AngleRounding, CoefficientRounding, EmissionPolicy,
@@ -242,14 +243,10 @@ pub(crate) fn scale_matrix(scale: (f64, f64)) -> HxMatrix {
     if scale == (1.0, 1.0) {
         return HxMatrix::identity();
     }
-    HxMatrix {
-        e1: format!("{:.6}", scale.0),
-        e2: "0".to_string(),
-        e3: "0".to_string(),
-        e4: "0".to_string(),
-        e5: format!("{:.6}", scale.1),
-        e6: "0".to_string(),
-    }
+    let mut matrix = HxMatrix::identity();
+    matrix.e1 = wire_rules::decimal_coefficient(scale.0);
+    matrix.e5 = wire_rules::decimal_coefficient(scale.1);
+    matrix
 }
 
 /// `<hp:sz protect>` of an object: its frame's size lock.
@@ -278,12 +275,12 @@ pub(crate) fn build_shape_common(
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
     // 이것을 실패시키는 것: `Fill::None` 갈래를 지우기 — 채우기 없던 도형이
-    // 흰 채우기로 다시 써진다 (`no_fill_shape_writes_no_fill_brush`,
-    // `tests/shape_no_fill.rs`).
+    // 흰 채우기로 다시 써진다 (같은 파일의
+    // `tests::no_fill_shape_writes_no_fill_brush`).
     let mut no_fill = false;
 
     // Rotation angle in integer degrees for HWPX schema
-    let mut angle: i32 = 0;
+    let angle = wire_rules::rotation_angle(style.and_then(|s| s.rotation));
     let mut hx_flip = HxFlip { horizontal: 0, vertical: 0 };
 
     if let Some(s) = style {
@@ -322,7 +319,6 @@ pub(crate) fn build_shape_common(
                 } => {
                     // xs:choice: fillBrush has exactly ONE child (winBrush|gradation|imgBrush).
                     // When using gradation, winBrush must be absent (hwpxlib reference confirms).
-                    fill_brush.win_brush = None;
                     // Absent values (`None`) keep what this encoder always
                     // wrote, so old JSON and API gradients encode unchanged:
                     // LINEAR: center=0,0 for one-directional gradient.
@@ -333,23 +329,24 @@ pub(crate) fn build_shape_common(
                         GradientType::Linear => (0, 0),
                         _ => (50, 50),
                     };
-                    fill_brush.gradation = Some(super::super::schema::shapes::HxGradation {
-                        gradation_type: gradient_type.to_string(),
-                        angle: *angle,
-                        center_x: center_x.unwrap_or(cx),
-                        center_y: center_y.unwrap_or(cy),
-                        step: step.map_or(255, |s| i32::try_from(s).unwrap_or(i32::MAX)),
-                        color_num: colors.len() as i32,
-                        step_center: step_center
-                            .map_or(50, |s| i32::try_from(s).unwrap_or(i32::MAX)),
-                        alpha: 0,
-                        colors: colors
-                            .iter()
-                            .map(|(c, _pos)| super::super::schema::shapes::HxGradColor {
-                                value: c.to_hex_rgb(),
-                            })
-                            .collect(),
-                    });
+                    fill_brush =
+                        HxFillBrush::from_gradation(super::super::schema::shapes::HxGradation {
+                            gradation_type: gradient_type.to_string(),
+                            angle: *angle,
+                            center_x: center_x.unwrap_or(cx),
+                            center_y: center_y.unwrap_or(cy),
+                            step: step.map_or(255, |s| i32::try_from(s).unwrap_or(i32::MAX)),
+                            color_num: colors.len() as i32,
+                            step_center: step_center
+                                .map_or(50, |s| i32::try_from(s).unwrap_or(i32::MAX)),
+                            alpha: 0,
+                            colors: colors
+                                .iter()
+                                .map(|(c, _pos)| super::super::schema::shapes::HxGradColor {
+                                    value: c.to_hex_rgb(),
+                                })
+                                .collect(),
+                        });
                 }
                 Fill::Pattern { fg_color, bg_color, pattern_type } => {
                     if let Some(ref mut wb) = fill_brush.win_brush {
@@ -373,8 +370,7 @@ pub(crate) fn build_shape_common(
                         .iter()
                         .find(|(_, m)| m == mode)
                         .map_or("TILE", |(wire, _)| wire);
-                    fill_brush.win_brush = None;
-                    fill_brush.img_brush = Some(crate::schema::header::HxImgBrush {
+                    fill_brush = HxFillBrush::from_img_brush(crate::schema::header::HxImgBrush {
                         mode: wire_mode.to_string(),
                         img: Some(crate::schema::header::HxImg {
                             binary_item_id_ref: binary_ref.to_string(),
@@ -388,14 +384,6 @@ pub(crate) fn build_shape_common(
                 Fill::None => no_fill = true,
                 _ => {} // future Fill variants
             }
-        }
-
-        // Rotation: Core uses degrees (f32), HWPX uses integer degrees.
-        // rem_euclid normalises negatives to [0,360). NaN/INF pass through
-        // as NaN but Rust's saturating cast maps NaN → 0, so angle stays 0.
-        if let Some(rot) = s.rotation {
-            let clamped = rot.rem_euclid(360.0);
-            angle = clamped.round() as i32;
         }
 
         // Flip
@@ -433,27 +421,13 @@ pub(crate) fn build_shape_common(
     let has_flip = hx_flip.horizontal != 0 || hx_flip.vertical != 0;
     let rot_matrix = if angle == 0 && !has_flip {
         HxMatrix::identity()
-    } else if angle == 0 {
-        let h = hx_flip.horizontal != 0;
-        let v = hx_flip.vertical != 0;
-        HxMatrix {
-            e1: if h { "-1" } else { "1" }.to_string(),
-            e2: "0".to_string(),
-            e3: if h { width.to_string() } else { "0".to_string() },
-            e4: "0".to_string(),
-            e5: if v { "-1" } else { "1" }.to_string(),
-            e6: if v { height.to_string() } else { "0".to_string() },
-        }
     } else {
         let m = local_transform(ctrl, &HWPX_POLICY)
             .map_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], |t| t.matrix());
-        HxMatrix {
-            e1: format!("{:.6}", m[0]),
-            e2: format!("{:.6}", m[1]),
-            e3: format!("{:.6}", m[2]),
-            e4: format!("{:.6}", m[3]),
-            e5: format!("{:.6}", m[4]),
-            e6: format!("{:.6}", m[5]),
+        if angle == 0 {
+            HxMatrix::from_coefficients(m.map(|value| (value as i32).to_string()))
+        } else {
+            HxMatrix::from_coefficients(m.map(wire_rules::decimal_coefficient))
         }
     };
     // the original box and the scale to the displayed one.
@@ -1426,8 +1400,8 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     // 이것을 실패시키는 것: 14173 상수로 되돌리기(`textart_frame_round_trips`).
     let plan = shape_frame_plan(ctrl, as_group_child)?;
     let (org_w, org_h) = plan.original_size();
-    let sca_x = format!("{:.6}", plan.scale().0);
-    let sca_y = format!("{:.6}", plan.scale().1);
+    let sca_x = wire_rules::decimal_coefficient(plan.scale().0);
+    let sca_y = wire_rules::decimal_coefficient(plan.scale().1);
     let protect = size_protect(ctrl);
     let center_x = w / 2;
     let center_y = h / 2;
@@ -1452,7 +1426,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     };
 
     Ok(format!(
-        r##"<hp:textart id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="{dropcap}" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="{org_w}" height="{org_h}"/><hp:curSz width="{cur_w}" height="{cur_h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="{org_w}" y="0"/><hc:pt2 x="{org_w}" y="{org_h}"/><hc:pt3 x="0" y="{org_h}"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
+        r##"<hp:textart id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="{dropcap}" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="{org_w}" height="{org_h}"/><hp:curSz width="{cur_w}" height="{cur_h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo>{trans}{scale}{rot}</hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush {brush}/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/>{points}<hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
         dropcap = crate::encoder::wire_rules::DEFAULT_DROP_CAP,
         id = id,
         instid = instid,
@@ -1465,9 +1439,16 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
         cur_h = h as u32,
         center_x = center_x,
         center_y = center_y,
-        sca_x = sca_x,
-        sca_y = sca_y,
-        face_color = face_color,
+        trans = wire_rules::matrix_xml("transMatrix", wire_rules::IDENTITY),
+        rot = wire_rules::matrix_xml("rotMatrix", wire_rules::IDENTITY),
+        scale = {
+            let mut values = wire_rules::IDENTITY;
+            values[0] = &sca_x;
+            values[4] = &sca_y;
+            wire_rules::matrix_xml("scaMatrix", values)
+        },
+        points = wire_rules::rect_points_xml(org_w, org_h),
+        brush = wire_rules::win_brush_attributes(&face_color, "#000000", None, "0"),
         font_name = font_name_esc,
         font_style = font_style_esc,
         shape = shape_esc,
@@ -1493,8 +1474,8 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
 /// tag name, so the first-match replace only touches `transMatrix`.
 fn set_group_child_translate(xml: &str, x: i32, y: i32) -> String {
     xml.replacen(
-        r#"<hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
-        &format!(r#"<hc:transMatrix e1="1" e2="0" e3="{x}" e4="0" e5="1" e6="{y}"/>"#),
+        &wire_rules::matrix_xml("transMatrix", wire_rules::IDENTITY),
+        &wire_rules::translation_matrix_xml(x, y),
         1,
     )
 }
@@ -1732,18 +1713,6 @@ fn with_image_center(mut xml: String, node: &GroupNodePlan) -> String {
     xml
 }
 
-/// A coefficient as the plan stores it: `0` and `1` as Hancom writes them,
-/// any other value with six decimals.
-fn coefficient(v: f64) -> String {
-    if v == 0.0 {
-        "0".to_string()
-    } else if v == 1.0 {
-        "1".to_string()
-    } else {
-        format!("{v:.6}")
-    }
-}
-
 /// `xml` with its own (first) `<hp:renderingInfo>` replaced by the group
 /// plan's chain for this node — the translation, then every enclosing
 /// group's pair and its own — when an enclosing group stores a
@@ -1759,20 +1728,11 @@ fn with_node_chain(xml: String, node: Option<&GroupNodePlan>) -> String {
         return xml;
     };
     let m = |tag: &str, c: &[f64; 6]| {
-        format!(
-            r#"<hc:{tag} e1="{}" e2="{}" e3="{}" e4="{}" e5="{}" e6="{}"/>"#,
-            coefficient(c[0]),
-            coefficient(c[1]),
-            coefficient(c[2]),
-            coefficient(c[3]),
-            coefficient(c[4]),
-            coefficient(c[5])
-        )
+        let values = c.map(wire_rules::group_coefficient);
+        wire_rules::matrix_xml(tag, values.each_ref().map(String::as_str))
     };
     let (tx, ty) = node.translation();
-    let mut chain = format!(
-        r#"<hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="{tx}" e4="0" e5="1" e6="{ty}"/>"#
-    );
+    let mut chain = format!("<hp:renderingInfo>{}", wire_rules::translation_matrix_xml(tx, ty));
     for (sca, rot) in node.pairs() {
         chain.push_str(&m("scaMatrix", sca));
         chain.push_str(&m("rotMatrix", rot));
@@ -1990,6 +1950,16 @@ pub(crate) fn object_out_margin(placement: Option<&ObjectPlacement>) -> HxTableM
 mod tests {
     use super::*;
 
+    // 이것을 실패시키는 것: 그룹의 -1을 정수로 쓰기, 음수 계수의 부호 제거, 음수 0을 소수로 쓰기.
+    #[test]
+    fn group_coefficient_spellings_preserve_negative_and_zero() {
+        for (value, expected) in
+            [(0.0, "0"), (-0.0, "0"), (1.0, "1"), (-1.0, "-1.000000"), (1.25, "1.250000")]
+        {
+            assert_eq!(wire_rules::group_coefficient(value), expected);
+        }
+    }
+
     #[test]
     fn no_fill_shape_writes_no_fill_brush() {
         use hwpforge_core::control::Fill;
@@ -2130,6 +2100,20 @@ mod tests {
             *s = style.cloned();
         }
         build_shape_common(&ctrl, &shape_frame_plan(&ctrl, false).unwrap(), false)
+    }
+
+    // 이것을 실패시키는 것: 그룹 metadata의 비유한값을 1로 저장.
+    #[test]
+    fn nonfinite_group_rotation_metadata_stays_zero() {
+        for rotation in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut ctrl =
+                Control::rect(HwpUnit::new(100).unwrap(), HwpUnit::new(50).unwrap()).unwrap();
+            if let Control::Rect { style, .. } = &mut ctrl {
+                *style = Some(ShapeStyle { rotation: Some(rotation), ..Default::default() });
+            }
+            let plan = shape_frame_plan(&ctrl, true).unwrap();
+            assert_eq!(build_shape_common(&ctrl, &plan, true).rotation_info.angle, 0);
+        }
     }
 
     #[test]

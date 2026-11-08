@@ -27,24 +27,20 @@ pub(crate) fn plan(
     frame: &FramePlan,
 ) -> StandalonePlan {
     let (w, h) = size;
-    let angle = rotation.unwrap_or(0.0).rem_euclid(360.0).round() as i32;
+    let angle = super::wire_rules::rotation_angle(rotation);
     let horizontal = matches!(flip, Some(Flip::Horizontal | Flip::Both));
     let vertical = matches!(flip, Some(Flip::Vertical | Flip::Both));
-    let q = |v: f64| format!("{v:.6}").parse::<f64>().expect("finite coefficient");
+    let q = |v: f64| {
+        super::wire_rules::decimal_coefficient(v).parse::<f64>().expect("finite coefficient")
+    };
     let (r, layout, (tx, ty)) =
         hwpforge_core::control::geometry::standalone_layout(size, rotation, flip);
     let [a, b, c, d, e, f] = r.matrix();
     let mut trans = HxMatrix::identity();
     trans.e3 = (tx).to_string();
     trans.e6 = (ty).to_string();
-    let rot = HxMatrix {
-        e1: format!("{a:.6}"),
-        e2: format!("{b:.6}"),
-        e3: format!("{c:.6}"),
-        e4: format!("{d:.6}"),
-        e5: format!("{e:.6}"),
-        e6: format!("{f:.6}"),
-    };
+    let rot =
+        HxMatrix::from_coefficients([a, b, c, d, e, f].map(super::wire_rules::decimal_coefficient));
     let (sx, sy) = frame.scale();
     let stored = ShapeTransform::from_matrix([1.0, 0.0, f64::from(tx), 0.0, 1.0, f64::from(ty)])
         .then(r)
@@ -95,4 +91,24 @@ pub(crate) fn residual(frame: &FramePlan, exact: &FramePlan, emitted: &Standalon
             (p.0 - minimum.0 - q.0).hypot(p.1 - minimum.1 - q.1)
         })
         .fold(0.0, f64::max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // 이것을 실패시키는 것: standalone metadata의 비유한값을 1로 저장.
+    #[test]
+    fn nonfinite_standalone_rotation_metadata_stays_zero() {
+        let ctrl = hwpforge_core::Control::rect(
+            hwpforge_foundation::HwpUnit::new(100).unwrap(),
+            hwpforge_foundation::HwpUnit::new(50).unwrap(),
+        )
+        .unwrap();
+        let frame =
+            hwpforge_core::control::geometry::frame_plan(&ctrl, &super::super::shapes::HWPX_POLICY)
+                .unwrap();
+        for rotation in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(plan((100, 50), Some(rotation), None, &frame).rotation.angle, 0);
+        }
+    }
 }

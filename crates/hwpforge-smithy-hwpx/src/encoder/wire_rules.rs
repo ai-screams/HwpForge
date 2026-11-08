@@ -60,6 +60,62 @@ pub(crate) fn series_name_xml(name: &str) -> String {
     format!("<c:tx><c:v>{}</c:v></c:tx>", super::escape_xml(name))
 }
 
+/// Integer identity spelling shared by DTO and manual XML writers.
+pub(crate) const IDENTITY: [&str; 6] = ["1", "0", "0", "0", "1", "0"];
+
+/// Wrap in f32 before rounding; the saturating cast keeps nonfinite input at zero.
+pub(crate) fn rotation_angle(rotation: Option<f32>) -> i32 {
+    rotation.unwrap_or(0.0).rem_euclid(360.0).round() as i32
+}
+
+/// Keep six decimal places, including signed zero, for matrix coefficients.
+pub(crate) fn decimal_coefficient(value: f64) -> String {
+    format!("{value:.6}")
+}
+
+/// Group chains use integer 0/1, including negative zero; other values keep six decimals.
+pub(crate) fn group_coefficient(value: f64) -> String {
+    if value == 0.0 {
+        "0".to_string()
+    } else if value == 1.0 {
+        "1".to_string()
+    } else {
+        decimal_coefficient(value)
+    }
+}
+
+/// Write six coefficients in HWPX row order under the common namespace.
+pub(crate) fn matrix_xml(tag: &str, [e1, e2, e3, e4, e5, e6]: [&str; 6]) -> String {
+    format!(r#"<hc:{tag} e1="{e1}" e2="{e2}" e3="{e3}" e4="{e4}" e5="{e5}" e6="{e6}"/>"#)
+}
+
+/// Write an integer translation with the remaining identity coefficients.
+pub(crate) fn translation_matrix_xml(x: i32, y: i32) -> String {
+    let (x, y) = (x.to_string(), y.to_string());
+    let mut values = IDENTITY;
+    values[2] = &x;
+    values[5] = &y;
+    matrix_xml("transMatrix", values)
+}
+
+/// Write rectangle corners in order under the common namespace.
+pub(crate) fn rect_points_xml(width: i32, height: i32) -> String {
+    format!(
+        r#"<hc:pt0 x="0" y="0"/><hc:pt1 x="{width}" y="0"/><hc:pt2 x="{width}" y="{height}"/><hc:pt3 x="0" y="{height}"/>"#
+    )
+}
+
+/// Attributes only: callers retain the brush selection and surrounding elements.
+pub(crate) fn win_brush_attributes(
+    face: &str,
+    hatch: &str,
+    style: Option<&str>,
+    alpha: &str,
+) -> String {
+    let hatch_style = style.map(|style| format!(r#" hatchStyle="{style}""#)).unwrap_or_default();
+    format!(r#"faceColor="{face}" hatchColor="{hatch}"{hatch_style} alpha="{alpha}""#)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

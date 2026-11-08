@@ -47,17 +47,11 @@ fn fixture(width: i32) -> Vec<u8> {
 }
 
 fn caches(bytes: &[u8]) -> Vec<std::collections::BTreeMap<String, String>> {
-    fn collect(e: &xml::Element, out: &mut Vec<std::collections::BTreeMap<String, String>>) {
-        if e.name == "hp:lineseg" {
-            out.push(e.attributes.clone());
-        }
-        for child in &e.children {
-            collect(child, out);
-        }
-    }
-    let mut out = Vec::new();
-    collect(&xml::Element::parse(&package::section_xml(bytes)), &mut out);
-    out
+    xml::Element::parse(&package::section_xml(bytes))
+        .descendants("hp:lineseg")
+        .into_iter()
+        .map(|node| node.attributes.clone())
+        .collect()
 }
 fn edit(bytes: &[u8], text: &str) -> Vec<u8> {
     HwpxCellEditor::set_cells(

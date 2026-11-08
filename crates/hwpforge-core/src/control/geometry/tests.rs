@@ -1190,3 +1190,22 @@ fn image_fill_admission_uses_one_absolute_boundary() {
         }
     }
 }
+
+// 이것을 실패시키는 것: Core만 또는 Smithy와 함께 round 뒤 modulo, wrap 제거, truncation, 비유한값을 1로 저장.
+#[test]
+fn stored_angle_whole_degrees_matches_literals() {
+    for (input, expected) in [
+        (None, 0.),
+        (Some(0.), 0.),
+        (Some(29.5), 30.),
+        (Some(30.5), 31.),
+        (Some(-30.), 330.),
+        (Some(359.6), 360.),
+        (Some(-0.4), 360.),
+        (Some(f32::NAN), 0.),
+        (Some(f32::INFINITY), 0.),
+        (Some(f32::NEG_INFINITY), 0.),
+    ] {
+        assert_eq!(stored_angle(input, AngleRounding::WholeDegrees), expected);
+    }
+}
