@@ -70,7 +70,7 @@ enum Frame {
     Level(Owner),
     ThemeElements,
     FontScheme,
-    Family(usize),
+    Family(usize, Option<FontKey>),
     Section,
 }
 impl Definitions {
@@ -143,6 +143,7 @@ impl Definitions {
     ) -> Result<bool> {
         let mut stack: Vec<Frame> = Vec::new();
         let mut matches = false;
+        let mut hang_selected = false;
         let mut ordinal = 0;
         let shared_part: Rc<str> = Rc::from(part);
         #[cfg(test)]
@@ -178,9 +179,9 @@ impl Definitions {
                             frame = match (parent, e.name.as_str()) {
                                 (Frame::Root, "themeElements") => Frame::ThemeElements,
                                 (Frame::ThemeElements, "fontScheme") => Frame::FontScheme,
-                                (Frame::FontScheme, "majorFont") => Frame::Family(0),
-                                (Frame::FontScheme, "minorFont") => Frame::Family(1),
-                                (Frame::Family(f), "latin" | "ea" | "cs") => {
+                                (Frame::FontScheme, "majorFont") => Frame::Family(0, None),
+                                (Frame::FontScheme, "minorFont") => Frame::Family(1, None),
+                                (Frame::Family(f, _), "latin" | "ea" | "cs") => {
                                     let slot = match e.name.as_str() {
                                         "latin" => 0,
                                         "ea" => 1,
@@ -193,17 +194,19 @@ impl Definitions {
                                         .transpose()?;
                                     Frame::Leaf
                                 }
-                                (Frame::Family(_), "font") => {
+                                (Frame::Family(f, hang), "font") => {
                                     diagnosed = true;
-                                    warn(
-                                        warnings,
-                                        part,
-                                        &e.name,
-                                        Kind::UnsupportedAttribute,
-                                        "theme_script_font",
-                                        "ignore",
-                                        "Theme script-specific fonts are not selected",
-                                    )?;
+                                    if let Some(name) =
+                                        e.attribute("typeface").filter(|v| !v.is_empty())
+                                    {
+                                        if e.attribute("script") == Some("Hang") && hang.is_none() {
+                                            let key = self.fonts.intern(name, part, &e.name)?;
+                                            *stack.last_mut().unwrap() =
+                                                Frame::Family(f, Some(key));
+                                        } else {
+                                            theme_script_warning(warnings, part)?;
+                                        }
+                                    }
                                     Frame::Ignored
                                 }
                                 _ => Frame::Ignored,
@@ -534,14 +537,43 @@ impl Definitions {
                     stack.push(frame);
                 }
                 XmlEvent::End => {
-                    stack.pop();
+                    if let Some(Frame::Family(f, Some(hang))) = stack.pop() {
+                        // Resolve at family end: explicit ea wins regardless of child order.
+                        if self.theme.fonts[f][1].is_none() {
+                            self.theme.fonts[f][1] = Some(hang);
+                            hang_selected = true;
+                        } else {
+                            theme_script_warning(warnings, part)?;
+                        }
+                    }
                 }
                 XmlEvent::Text(_) => {}
             }
             Ok(())
         })?;
+        if hang_selected {
+            for warning in warnings
+                .iter_mut()
+                .filter(|w| w.loss() == "theme_script_font" && w.part() == Some(part))
+            {
+                if let DocxWarning::UnsupportedAttribute { reason, .. } = warning {
+                    *reason = "Hang script font used for the Korean slot; other script-specific fonts are not selected".into();
+                }
+            }
+        }
         Ok(matches)
     }
+}
+fn theme_script_warning(warnings: &mut Vec<DocxWarning>, part: &str) -> Result<()> {
+    warn(
+        warnings,
+        part,
+        "font",
+        Kind::UnsupportedAttribute,
+        "theme_script_font",
+        "ignore",
+        "Theme script-specific fonts are not selected",
+    )
 }
 // Explicit attributes for admitted definition frames only. Unsupported subtrees are
 // diagnosed once at their boundary and never acquire an owner from descendant names.
@@ -559,7 +591,7 @@ fn definition_attributes(
         | Frame::DefaultRun
         | Frame::DefaultPara
         | Frame::ThemeElements
-        | Frame::Family(_) => (&[], &[]),
+        | Frame::Family(_, _) => (&[], &[]),
         Frame::Style(_) => (&["type", "styleId", "default"], &["customStyle"]), // Authoring provenance only.
         Frame::Table(_) => (&["type"], &[]),
         Frame::Abstract(_) => (&["abstractNumId"], &[]),

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "../../../hwpforge/tests/support/docx.rs"]
 mod docx;
+#[path = "../../../hwpforge-smithy-hwpx/tests/support/xml.rs"]
+mod xml;
 
 // 이것을 실패시키는 것: 확장자로 거부, ImportMeta 대신 경고 문자열/횟수 요약 출력.
 #[test]
@@ -196,4 +198,44 @@ fn same_file_output_is_rejected_before_decoding_an_invalid_input() {
     assert_eq!(code, 1);
     assert_eq!(value["code"], "INVALID_OUTPUT_PATH");
     assert_eq!(std::fs::read(&input).unwrap(), b"not a ZIP");
+}
+
+// 이것을 실패시키는 것: distribute를 Left로 대체·경고 유지, 문단이 다른 paraPr를 참조하거나 HWPX horizontal을 잘못 출력.
+#[test]
+fn distribute_uses_referenced_hwpx_alignment_without_warnings() {
+    use std::io::Read;
+
+    let tmp = test_tmp();
+    let input = tmp.join("distribute.docx");
+    let output = tmp.join("distribute.hwpx");
+    std::fs::write(&input, docx::package_with_defaults("<w:p><w:r><w:t>왼쪽</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val='distribute'/></w:pPr><w:r><w:t>배분 정렬</w:t></w:r></w:p><w:sectPr><w:pgSz w:w='11906' w:h='16838'/><w:pgMar w:top='0' w:right='0' w:bottom='0' w:left='0' w:header='0' w:footer='0' w:gutter='0'/></w:sectPr>", "")).unwrap();
+    let (value, stderr, code) =
+        run_json(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{value} {stderr}");
+    assert_eq!(value["warnings"], serde_json::json!([]));
+    assert_eq!(stderr, "");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(output).unwrap()).unwrap();
+    let mut header = String::new();
+    zip.by_name("Contents/header.xml").unwrap().read_to_string(&mut header).unwrap();
+    let mut section = String::new();
+    zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut section).unwrap();
+    let header = xml::Element::parse(&header);
+    let section = xml::Element::parse(&section);
+    let paragraphs: Vec<_> = section.children.iter().filter(|p| p.name == "hp:p").collect();
+    assert_eq!(paragraphs.len(), 2);
+    let properties = header.find("hh:paraProperties");
+    let actual: Vec<_> = paragraphs
+        .iter()
+        .map(|p| {
+            properties
+                .children
+                .iter()
+                .find(|s| s.name == "hh:paraPr" && s.attr("id") == p.attr("paraPrIDRef"))
+                .unwrap()
+                .child("hh:align")
+                .attr("horizontal")
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(actual, ["LEFT", "DISTRIBUTE"]);
 }

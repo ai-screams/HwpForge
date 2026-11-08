@@ -532,6 +532,7 @@ impl Resolver {
             Some(1) => Alignment::Center,
             Some(2) => Alignment::Right,
             Some(3) => Alignment::Justify,
+            Some(4) => Alignment::Distribute,
             _ => Alignment::Left,
         };
         let rule = if p.line.is_none() { 0 } else { p.line_rule.unwrap_or(0) };

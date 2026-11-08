@@ -269,3 +269,33 @@ fn definition_attribute_reason_keeps_attribute_and_element_lazy() {
     assert_eq!((warnings[0].count(), repeated[0].count()), (1, 32));
     assert_eq!(bytes - first, 0);
 }
+
+// 이것을 실패시키는 것: Hang을 intern/식별자 한도 밖에서 저장, major/minor 한쪽만 검사, UTF-8 바이트 대신 문자 수 검사.
+#[test]
+fn hang_theme_font_uses_identifier_byte_limit() {
+    for family in ["major", "minor"] {
+        for length in [4095, 4096, 4097] {
+            let name = format!("한{}", "x".repeat(length - 3));
+            let xml = format!("<a:theme xmlns:a='{}'><a:themeElements><a:fontScheme><a:{family}Font><a:font script='Hang' typeface='{name}'/></a:{family}Font></a:fontScheme></a:themeElements></a:theme>", A_NS.1);
+            let mut d = Definitions::default();
+            let result =
+                d.read(xml.as_bytes(), "part", "theme", &mut TextBudget::default(), &mut vec![]);
+            if length <= 4096 {
+                assert!(result.is_ok());
+                let key = d.theme.font(&format!("{family}EastAsia")).unwrap();
+                assert_eq!(d.fonts.name(key), name);
+                assert_eq!(d.fonts.copied_bytes, length);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DocxError::Limit {
+                        resource: "identifier bytes",
+                        observed: 4097,
+                        limit: 4096,
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+}

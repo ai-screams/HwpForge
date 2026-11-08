@@ -323,7 +323,7 @@ fn optional_value_matrix_recovers_only_the_bad_property() {
         "<w:spacing w:line='-1'/>",
         "<w:spacing w:line='240' w:lineRule='other'/>",
         "<w:spacing w:line='20000001' w:lineRule='exact'/>",
-        "<w:jc w:val='distribute'/>",
+        "<w:jc w:val='thaiDistribute'/>",
     ] {
         let d=read("<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:line='360'/></w:pPr></w:pPrDefault></w:docDefaults>",&format!("<w:p><w:pPr>{props}</w:pPr></w:p>"));
         let p = &d.document.sections()[0].paragraphs[0];
@@ -1111,5 +1111,83 @@ fn optional_outline_values_recover_in_body_and_unused_definitions() {
                 .collect::<Vec<_>>(),
             [("DOCX_UNSUPPORTED_ATTRIBUTE", "outline_level", "ignore", 1)]
         );
+    }
+}
+
+// 이것을 실패시키는 것: Hang 미선택·ea 덮어쓰기·family 혼합·요소 순서 의존·빈 값 경고·중복 마지막 값 선택·선택 여부와 경고 문장 불일치.
+#[test]
+fn hang_theme_fallback_preserves_ea_and_aggregated_losses() {
+    for family in ["major", "minor"] {
+        for (ea, scripts, expected, ignored) in [
+            ("<a:ea typeface=''/>", "<a:font script='Hang' typeface='맑은 고딕'/>", "맑은 고딕", 0),
+            ("", "<a:font script='Hang' typeface='맑은 고딕'/>", "맑은 고딕", 0),
+            ("<a:ea typeface='명시 글꼴'/>", "<a:font script='Hang' typeface='맑은 고딕'/>", "명시 글꼴", 1),
+            ("<a:ea typeface=''/>", "", "Latin", 0),
+            ("<a:ea typeface=''/>", "<a:font script='Jpan' typeface='日本'/><a:font script='Hans' typeface='简体'/><a:font script='Hant' typeface='繁體'/><a:font script='Arab' typeface='Arabic'/>", "Latin", 4),
+            ("", "<a:font script='Hang' typeface='맑은 고딕'/><a:font script='Hang' typeface='둘째'/><a:font script='Jpan' typeface='日本'/>", "맑은 고딕", 2),
+            ("", "<a:font script='Hang' typeface=''/><a:font script='Jpan' typeface=''/><a:font script='Arab'/>", "Latin", 0),
+        ] {
+            for reverse in [false, true] {
+                let children = if reverse { format!("{scripts}{ea}") } else { format!("{ea}{scripts}") };
+                let other = if family == "major" { "minor" } else { "major" };
+                let theme = format!("<a:theme xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main'><a:themeElements><a:fontScheme><a:{other}Font><a:font script='Hang' typeface='다른 family'/></a:{other}Font><a:{family}Font><a:latin typeface='Latin'/>{children}</a:{family}Font></a:fontScheme></a:themeElements></a:theme>");
+                let styles = format!("<w:styles xmlns:w='{W}'><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:hAnsiTheme='{family}HAnsi' w:eastAsiaTheme='{family}EastAsia'/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>");
+                let d = decode_docx(&package("<w:p><w:r><w:t>한글</w:t></w:r></w:p>", &[("styles", "styles.xml", &styles), ("theme", "theme.xml", &theme)])).unwrap();
+                assert_eq!(shape(&d, 0).font_east_asian.as_deref(), Some(expected));
+                assert_eq!(shape(&d, 0).font_latin.as_deref(), Some("Latin"));
+                let warnings: Vec<_> = d.warnings.iter().filter(|w| w.loss() == "theme_script_font").collect();
+                assert_eq!(warnings.len(), usize::from(ignored > 0));
+                if ignored > 0 {
+                    assert_eq!((warnings[0].code(), warnings[0].action(), warnings[0].count()), ("DOCX_UNSUPPORTED_ATTRIBUTE", "ignore", ignored));
+                }
+                assert_eq!(d.warnings.iter().filter(|w| w.loss() == "theme_font").map(|w| w.count()).sum::<u64>(), u64::from(expected == "Latin"));
+                assert_eq!(d.warnings.iter().filter(|w| w.loss() == "east_asian_font").map(|w| w.count()).sum::<u64>(), u64::from(expected == "Latin"));
+                assert!(!d.warnings.iter().any(|w| w.loss() == "theme_definition"));
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: distribute의 Left 대체·경고 유지, 다른 jc의 기존 계약 변경.
+#[test]
+fn distribute_alignment_and_other_jc_contracts() {
+    use hwpforge_foundation::Alignment;
+    for (value, alignment, warnings) in [
+        ("distribute", Alignment::Distribute, 0),
+        ("start", Alignment::Left, 0),
+        ("end", Alignment::Right, 0),
+        ("thaiDistribute", Alignment::Left, 1),
+        ("lowKashida", Alignment::Left, 1),
+        ("mediumKashida", Alignment::Left, 1),
+        ("highKashida", Alignment::Left, 1),
+        ("numTab", Alignment::Left, 1),
+    ] {
+        let d = read("<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii='A' w:eastAsia='A'/><w:sz w:val='20'/><w:color w:val='000000'/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line='240' w:before='0' w:after='0'/><w:ind w:left='0' w:right='0' w:firstLine='0'/></w:pPr></w:pPrDefault></w:docDefaults>", &format!("<w:p><w:pPr><w:jc w:val='{value}'/></w:pPr><w:r><w:t>가 나</w:t></w:r></w:p>"));
+        let p = &d.document.sections()[0].paragraphs[0];
+        assert_eq!(d.registry.para_shapes[p.para_shape_id.get()].alignment, alignment);
+        assert_eq!(d.warnings.len(), warnings, "{value}: {:?}", d.warnings);
+    }
+}
+
+// 이것을 실패시키는 것: Hang 선택 시 예전 문장 유지, 미선택 시 문장 변경, script 요소 순서 의존.
+#[test]
+fn script_font_warning_describes_actual_hang_selection() {
+    for family in ["major", "minor"] {
+        for (ea, hang, reason) in [
+            ("", "<a:font script='Hang' typeface='Korean'/>", "Hang script font used for the Korean slot; other script-specific fonts are not selected"),
+            ("<a:ea typeface='Explicit'/>", "<a:font script='Hang' typeface='Korean'/>", "Theme script-specific fonts are not selected"),
+            ("", "", "Theme script-specific fonts are not selected"),
+        ] {
+            for reverse in [false, true] {
+                let other = "<a:font script='Jpan' typeface='Japanese'/>";
+                let fonts = if reverse { format!("{other}{hang}{ea}") } else { format!("{ea}{hang}{other}") };
+                let theme = format!("<a:theme xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main'><a:themeElements><a:fontScheme><a:{family}Font>{fonts}</a:{family}Font></a:fontScheme></a:themeElements></a:theme>");
+                let d = decode_docx(&package("<w:p/>", &[("theme", "theme.xml", &theme)])).unwrap();
+                let warnings: Vec<_> = d.warnings.iter().filter(|w| w.loss() == "theme_script_font").collect();
+                assert_eq!(warnings.len(), 1);
+                let expected = if ea.is_empty() { reason.to_owned() } else { format!("{reason} (total 2 occurrences; first example only; subsequent locations omitted)") };
+                assert_eq!(warnings[0].message(), expected);
+            }
+        }
     }
 }

@@ -271,6 +271,7 @@ pub(super) fn read_property(
                     "center" => Some(1),
                     "right" | "end" => Some(2),
                     "both" => Some(3),
+                    "distribute" => Some(4),
                     v => {
                         r.bad(v)?;
                         None
