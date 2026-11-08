@@ -3,6 +3,15 @@
 # =============================================================================
 #
 # Triggered on GitHub Release creation (after release-plz publishes a release).
+# It can also be started by hand for an existing release tag (workflow_dispatch,
+# input `tag`, e.g. v0.20.0): the jobs then build and publish that tag's code
+# with this workflow file, and skip packages that are already published. A
+# re-run of a release-triggered run uses the workflow file of the tag instead.
+# The `resolve` job fixes the commit first: the release event's commit, or for
+# a manual run the commit that refs/tags/<tag> points to (never a branch).
+# npm provenance of a manual run names the ref and commit the run was started
+# from (main when started there), not the tag; the resolved tag commit is
+# written to the run summary.
 # Builds hwpforge-mcp for 5 targets, publishes platform packages, then the
 # base @hwpforge/mcp package with updated optionalDependencies.
 #
@@ -17,18 +26,65 @@ name: npm publish
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish, e.g. v0.20.0"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: npm-publish-${{ github.ref }}
+  group: npm-publish-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: "npm › resolve release"
+    # Releases whose tag does not start with v (crate tags) are skipped, as before.
+    if: startsWith(inputs.tag || github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+      version: ${{ steps.ref.outputs.version }}
+    steps:
+      - name: Validate tag and resolve its commit
+        id: ref
+        shell: bash
+        env:
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${TAG_NAME#v}"
+          if [[ "$TAG_NAME" != v* || ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag '$TAG_NAME'"
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            sha="$EVENT_SHA"
+          else
+            # Only the tag namespace is consulted, so a branch of the same name
+            # cannot be published.
+            if ! sha=$(gh api "repos/${REPO}/commits/refs/tags/${TAG_NAME}" --jq .sha); then
+              echo "::error::Tag '$TAG_NAME' not found"
+              exit 1
+            fi
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${TAG_NAME} (version ${version}) from commit ${sha}" >> "$GITHUB_STEP_SUMMARY"
+
   publish-platform:
     name: "npm › ${{ matrix.npm-suffix }}"
-    if: startsWith(github.ref_name, 'v')
+    needs: [resolve]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     permissions:
@@ -42,12 +98,15 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            # Runner labels follow actions/runner-images: the macos-14 label was
+            # refused for the 0.20.0 run, and macos-15-intel is the current
+            # Intel label.
+            runner: macos-15
             npm-suffix: darwin-arm64
             cross: false
             bin-ext: ""
           - target: x86_64-apple-darwin
-            runner: macos-14
+            runner: macos-15-intel
             npm-suffix: darwin-x64
             cross: false
             bin-ext: ""
@@ -70,6 +129,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Install Rust toolchain
         run: rustup show
@@ -93,24 +154,11 @@ jobs:
         if: matrix.cross
         run: cross build --release -p hwpforge-bindings-mcp --target ${{ matrix.target }}
 
-      - name: Extract and validate version from tag
-        id: version
-        shell: bash
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          version="${TAG_NAME#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version '$version' from tag '$TAG_NAME'"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - name: Update platform package.json version
         shell: bash
         run: |
           pkg="npm/packages/mcp-${{ matrix.npm-suffix }}/package.json"
-          jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' "$pkg" > "$pkg.tmp"
+          jq --arg v "${{ needs.resolve.outputs.version }}" '.version = $v' "$pkg" > "$pkg.tmp"
           mv "$pkg.tmp" "$pkg"
 
       - name: Copy binary to npm package
@@ -180,7 +228,7 @@ jobs:
 
   publish-base:
     name: "npm › @hwpforge/mcp (base)"
-    needs: [publish-platform]
+    needs: [resolve, publish-platform]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -192,24 +240,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Extract and validate version from tag
-        id: version
-        shell: bash
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          version="${TAG_NAME#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version '$version' from tag '$TAG_NAME'"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Wait for npm registry propagation
         shell: bash
         run: |
-          version="${{ steps.version.outputs.version }}"
+          version="${{ needs.resolve.outputs.version }}"
           for pkg in mcp-darwin-arm64 mcp-darwin-x64 mcp-linux-x64 mcp-linux-arm64 mcp-win32-x64; do
             for i in $(seq 1 30); do
               if npm view "@hwpforge/${pkg}@${version}" version 2>/dev/null; then
@@ -229,7 +266,7 @@ jobs:
         shell: bash
         run: |
           pkg="npm/packages/mcp/package.json"
-          v="${{ steps.version.outputs.version }}"
+          v="${{ needs.resolve.outputs.version }}"
           jq --arg v "$v" '
             .version = $v |
             .optionalDependencies |= with_entries(.value = $v)
@@ -240,7 +277,7 @@ jobs:
         shell: bash
         run: |
           actual=$(jq -r '.version' npm/packages/mcp/package.json)
-          expected="${{ steps.version.outputs.version }}"
+          expected="${{ needs.resolve.outputs.version }}"
           if [[ "$actual" != "$expected" ]]; then
             echo "::error::Version mismatch: expected $expected, got $actual"
             exit 1
@@ -284,13 +321,15 @@ jobs:
 
   refresh-context7:
     name: "Context7 › Refresh"
-    needs: [publish-base]
+    needs: [resolve, publish-base]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Refresh Context7 index
         uses: rennf93/upsert-context7@c29ca04a37ecbab62635c0e94c3d8908049b9ed5 # 1.1
