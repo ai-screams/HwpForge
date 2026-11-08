@@ -786,7 +786,6 @@ def test_import_report_matches_rust_serialization() -> None:
     _keys_match_stub(payload, "ImportReport")
     assert payload["sections"] == 1
     assert payload["paragraphs"] == 1
-    assert len(payload["warnings"]) == 3
     expected = [
         (
             "DOCX_OPTIONAL_PART_OMITTED",
@@ -798,9 +797,9 @@ def test_import_report_matches_rust_serialization() -> None:
         ("DOCX_PAGE_LAYOUT_APPROXIMATED", "body.xml", "body#0", "page_size", "use_defaults"),
         ("DOCX_PAGE_LAYOUT_APPROXIMATED", "body.xml", "body#0", "page_margins", "use_defaults"),
     ]
-    for warning, (code, part, location, loss, action) in zip(
-        payload["warnings"], expected, strict=True
-    ):
+    # zip(strict=True) needs Python 3.10; the package supports 3.9, so check the length first.
+    assert len(payload["warnings"]) == len(expected)
+    for warning, (code, part, location, loss, action) in zip(payload["warnings"], expected):
         _keys_match_stub(warning, "WarningInfo")
         _keys_match_stub(warning["context"], "WarningContext")
         assert warning["code"] == code
