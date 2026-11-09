@@ -48,6 +48,8 @@ fn input_section(section: Section, styles: &hwpforge_smithy_hwpx::HwpxStyleStore
     let mut doc = Document::new();
     doc.add_section(section);
     let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), styles, &ImageStore::new()).unwrap();
+    // Keep source-layout tests eligible under the measured-font requirement.
+    let bytes = package::splice_part(&bytes, "Contents/header.xml", "함초롬돋움", "맑은 고딕");
     let xml = package::section_xml(&bytes);
     let cache_start = r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos=""#;
     let cache_end = r#"" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="42520" flags="393216"/></hp:linesegarray></hp:p>"#;
@@ -121,6 +123,7 @@ fn patch_at(bytes: &[u8], section_index: usize, paragraph: usize, text: &str) ->
 /// patch에서 필드 범위 투영 호출 삭제.
 #[test]
 fn body_edit_keeps_plain_tail_verbatim() {
+    // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
     let bytes = input(vec![para("앞"), para("원래 값"), para("뒤")]);
     let original = caches(&package::section_xml(&bytes));
     for text in ["가".to_string(), format!("원래 값 {}", "가".repeat(70)), "원래 값\n가".into()]
@@ -1044,9 +1047,10 @@ fn direct_cell_merges_alignment_and_nonwrapping_placement_are_not_extra_gates() 
 }
 
 // 이것을 실패시키는 것: 공용 원문 검사 무조건 true, patch 또는 fill 한쪽에서만 증거 검사,
-// 원문 누락을 Core 기본값으로 승인, lineGrid 검사 생략, raw splice에 재인코드 글꼴 대조 적용.
+// 원문 누락을 Core 기본값으로 승인, lineGrid 검사 생략, raw splice에서 측정하지 않은 이름 통과.
 #[test]
 fn preserving_patch_and_fill_require_the_same_explicit_source_properties() {
+    // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
     for (part, from, to, keep) in [
         ("Contents/section0.xml", "lineGrid=\"0\"", "lineGrid=\"1\"", false),
         ("Contents/section0.xml", "lineGrid=\"0\"", "", false),
@@ -1058,7 +1062,7 @@ fn preserving_patch_and_fill_require_the_same_explicit_source_properties() {
         // 이것을 실패시키는 것: 스타일 PARA 타입 요구 복원.
         ("Contents/header.xml", "type=\"PARA\"", "type=\"CHAR\"", true),
         ("Contents/header.xml", "<hh:offset hangul=\"0\"", "<hh:offset hangul=\"1\"", false),
-        ("Contents/header.xml", "face=\"함초롬돋움\"", "face=\" 함초롬돋움 \"", true),
+        ("Contents/header.xml", "face=\"맑은 고딕\"", "face=\" 맑은 고딕 \"", false),
     ] {
         for is_field in [false, true] {
             let body = if is_field { field("edit") } else { para("원래 값") };

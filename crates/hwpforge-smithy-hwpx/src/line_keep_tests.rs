@@ -122,12 +122,8 @@ fn wire_fixture() -> (RawPackage, crate::HwpxDocument) {
     let mut styles = HwpxStyleStore::new();
     for language in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
         for index in 0..2 {
-            let mut font =
-                crate::style_store::HwpxFont::new(index, format!("{language}{index}"), language);
-            font.substitute = Some(crate::style_store::HwpxSubstFont::new(
-                Some(crate::style_store::HwpxFontType::Ttf),
-                format!("Sub{language}{index}"),
-            ));
+            // Keep this fixture eligible so unrelated source-proof checks remain exercised.
+            let font = crate::style_store::HwpxFont::new(index, "맑은 고딕", language);
             styles.push_font(font);
         }
     }
@@ -200,50 +196,61 @@ fn explicit_definitions_must_match_the_values_used_by_the_proof() {
     }
 }
 
-// 이것을 실패시키는 것: fontRef 숫자만 비교, 언어군 평탄화, 글꼴 대조를 raw splice에도 적용,
-// face 정리·type/substFont/typeInfo 부재를 기본값으로 덮어 승인.
+// 이것을 실패시키는 것: raw 경로의 글꼴 검사 우회, 허용표 이름/type 정규화,
+// substFont/임베딩 검사 삭제, 일곱 슬롯 동일 항목 검사 삭제, 참조 위치 검사 삭제.
 #[test]
-fn reencoded_fonts_resolve_each_language_position_and_metadata() {
+fn measured_fonts_are_required_even_without_reencoding() {
     let (mut package, decoded) = wire_fixture();
-    assert!(proof(&package, &decoded, true));
     let xml = package.read_text_entry(HEADER_PART).unwrap();
-    for (language, index) in [
-        ("HANGUL", 0),
-        ("LATIN", 1),
-        ("HANJA", 0),
-        ("JAPANESE", 0),
-        ("OTHER", 1),
-        ("SYMBOL", 0),
-        ("USER", 0),
+    for reencoded in [false, true] {
+        assert!(proof(&package, &decoded, reencoded));
+    }
+    for (from, to) in [
+        ("face=\"맑은 고딕\"", "face=\"Times New Roman\""),
+        ("face=\"맑은 고딕\"", "face=\"돋움체\""),
+        ("face=\"맑은 고딕\"", "face=\"맑은고딕\""),
+        ("face=\"맑은 고딕\"", "face=\" 맑은 고딕 \""),
+        ("face=\"맑은 고딕\"", "face=\"Unknown\""),
+        ("type=\"TTF\"", "type=\"HFT\""),
+        ("type=\"TTF\"", "type=\"ttf\""),
+        ("type=\"TTF\"", ""),
+        ("isEmbedded=\"0\"", "isEmbedded=\"1\""),
+        ("isEmbedded=\"0\"", ""),
+        ("</hh:font>", "<hh:substFont face=\"맑은 고딕\" type=\"TTF\" isEmbedded=\"0\" binaryItemIDRef=\"\"/></hh:font>"),
+        ("<hh:fontRef hangul=\"0\"", "<hh:fontRef hangul=\"1\""),
+        ("<hh:font id=\"0\"", "<hh:font id=\"1\""),
+        ("<hh:font id=\"0\"", "<hh:font"),
+        ("lang=\"USER\"", "lang=\"LATIN\""),
     ] {
-        let start =
-            xml.find(&format!("<hh:font id=\"{index}\" face=\"{language}{index}\"")).unwrap();
-        let end = start + xml[start..].find("</hh:font>").unwrap() + "</hh:font>".len();
-        let font = &xml[start..end];
-        let info_start = font.find("<hh:typeInfo").unwrap();
-        let info_end = info_start + font[info_start..].find("/>").unwrap() + 2;
-        let sub_start = font.find("<hh:substFont").unwrap();
-        let sub_end = sub_start + font[sub_start..].find("/>").unwrap() + 2;
-        for changed in [
-            font.replace(&format!("face=\"Sub{language}{index}\""), "face=\"Different\""),
-            font.replace(&format!("face=\"Sub{language}{index}\" type=\"TTF\""), &format!("face=\"Sub{language}{index}\" type=\"HFT\"")),
-            format!("{}{}", &font[..sub_start], &font[sub_end..]),
-            font.replace(&format!("face=\"{language}{index}\""), "face=\"Other\""),
-            font.replace(&format!("face=\"{language}{index}\""), &format!("face=\" {language}{index} \"")),
-            font.replace("type=\"TTF\"", "type=\"HFT\""),
-            font.replace("type=\"TTF\"", ""),
-            font.replace("</hh:font>", "<hh:substFont face=\"Other\" type=\"TTF\" isEmbedded=\"0\" binaryItemIDRef=\"\"/></hh:font>"),
-            font.replace("weight=\"6\"", "weight=\"7\""),
-            format!("{}{}", &font[..info_start], &font[info_end..]),
-            font.replacen("isEmbedded=\"0\"", "isEmbedded=\"1\"", 1),
-            font.replace(&font[sub_start..sub_end], &font[sub_start..sub_end].replace("isEmbedded=\"0\"", "isEmbedded=\"1\"")),
-            font.replace("familyType=\"FCAT_GOTHIC\"", "familyType=\"FCAT_MYUNGJO\""),
-        ] {
-            assert_ne!(font, changed);
-            package.replace_text_entry(HEADER_PART, format!("{}{}{}", &xml[..start], changed, &xml[end..]));
-            assert!(proof(&package, &decoded, false), "raw {language}");
-            assert!(!proof(&package, &decoded, true), "reencoded {language}: {changed}");
+        let changed = xml.replacen(from, to, 1);
+        assert_ne!(changed, xml, "{from}");
+        package.replace_text_entry(HEADER_PART, changed);
+        for reencoded in [false, true] {
+            assert!(!proof(&package, &decoded, reencoded), "{from} -> {to}, reencoded={reencoded}");
         }
+    }
+}
+
+// 이것을 실패시키는 것: 왕복 메타데이터 검사를 raw 경로에도 강제하거나 재인코드에서 생략.
+// 이것을 실패시키는 것: roundtrip = matches로 마지막 슬롯만 반영하거나 첫 슬롯만 반영.
+#[test]
+fn only_reencoding_requires_font_metadata_roundtrip() {
+    let (mut package, decoded) = wire_fixture();
+    let xml = package.read_text_entry(HEADER_PART).unwrap();
+    assert!(proof(&package, &decoded, false));
+    assert!(proof(&package, &decoded, true));
+    for (lang, index) in LANGUAGES.into_iter().zip([0, 1, 0, 0, 1, 0, 0]) {
+        let group = xml.find(&format!("<hh:fontface lang=\"{lang}\"")).unwrap();
+        let start = group + xml[group..].find(&format!("<hh:font id=\"{index}\"")).unwrap();
+        let end = start + xml[start..].find("</hh:font>").unwrap() + "</hh:font>".len();
+        let changed = xml[start..end].replace("weight=\"6\"", "weight=\"7\"");
+        assert_ne!(changed, xml[start..end], "{lang}");
+        package.replace_text_entry(
+            HEADER_PART,
+            format!("{}{}{}", &xml[..start], changed, &xml[end..]),
+        );
+        assert!(proof(&package, &decoded, false), "{lang}");
+        assert!(!proof(&package, &decoded, true), "{lang}");
     }
 }
 
@@ -425,9 +432,9 @@ fn direct_paragraph_and_character_references_can_differ_from_the_style() {
     }
 }
 
-// 이것을 실패시키는 것: Header::read에서 글꼴 대조를 미리 계산하거나 raw 소비자가 초기화.
+// 이것을 실패시키는 것: raw 소비자의 글꼴 캐시 초기화 생략 또는 Header::read에서 미리 계산.
 #[test]
-fn font_evidence_is_initialized_only_by_a_reencoded_consumer() {
+fn font_evidence_is_shared_by_preserving_and_reencoded_consumers() {
     let (package, decoded) = wire_fixture();
     let header = Header::read(&package, &decoded.style_store, || {}).unwrap();
     assert!(header.fonts.get().is_none());
@@ -441,7 +448,7 @@ fn font_evidence_is_initialized_only_by_a_reencoded_consumer() {
     .unwrap();
     let paragraph = &decoded.document.sections()[0].paragraphs[0];
     assert!(header.proves(&section, &source, paragraph, &decoded.style_store, false));
-    assert!(header.fonts.get().is_none());
+    assert!(header.fonts.get().is_some());
     assert!(header.proves(&section, &source, paragraph, &decoded.style_store, true));
     let cached = header.fonts.get().unwrap().as_ptr();
     assert!(header.proves(&section, &source, paragraph, &decoded.style_store, true));
@@ -607,6 +614,7 @@ fn mixed_foreign_section_carriers_are_rejected_by_both_collectors() {
 // 이것을 실패시키는 것: 글자 정의마다 원문 글꼴 목록 재구성 또는 저장소 목록 재순회.
 #[test]
 fn font_evidence_work_is_linear_in_fonts_plus_characters() {
+    // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
     use hwpforge_core::{Document, ImageStore, PageSettings, Run, Section};
     use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
     for (font_count, char_count) in [(8, 16), (128, 16), (128, 128)] {
@@ -615,7 +623,7 @@ fn font_evidence_work_is_linear_in_fonts_plus_characters() {
             for index in 0..font_count {
                 styles.push_font(crate::style_store::HwpxFont::new(
                     index as u32,
-                    format!("{language}{index}"),
+                    "맑은 고딕",
                     language,
                 ));
             }
@@ -654,7 +662,7 @@ fn font_evidence_work_is_linear_in_fonts_plus_characters() {
         crate::work::WORK.set(0);
         let fonts = header.fonts(&decoded.style_store);
         assert_eq!(fonts.len(), char_count);
-        assert!(fonts.iter().all(|&allowed| allowed));
+        assert!(fonts.iter().all(|&allowed| allowed == Some(true)));
         // Source traversal + store traversal + metadata, then seven lookups per character.
         assert_eq!(crate::work::WORK.get(), 7 * (3 * font_count + char_count));
         assert_eq!(header.fonts(&decoded.style_store), fonts);
@@ -672,7 +680,7 @@ fn mixed_foreign_fontfaces_remain_visible_to_the_deferred_check() {
         .replace("<hh:head ", "<hh:head xmlns:x='urn:foreign' ")
         .replace("</hh:refList>", "<x:fontfaces/></hh:refList>");
     package.replace_text_entry(HEADER_PART, xml);
-    assert!(proof(&package, &decoded, false));
+    assert!(!proof(&package, &decoded, false));
     assert!(!proof(&package, &decoded, true));
 }
 
@@ -742,4 +750,123 @@ fn borrowed_namespace_scope_restores_inherited_bindings() {
         Tag::opening_with_bindings("<hp:p xmlns:hp='urn:foreign'>", &namespaces).unwrap();
     assert_eq!(Tag::opening("<hp:run/>", &rebound).unwrap().name, "{foreign}run");
     assert_eq!(Tag::opening("<hp:run/>", &namespaces).unwrap().name, "run");
+}
+
+// 이것을 실패시키는 것: 언어 목록 길이/중복 id 검사 삭제, 목록 위치 대신 authored id 조회.
+#[test]
+fn font_lists_require_complete_unambiguous_position_correspondence() {
+    let (mut package, decoded) = wire_fixture();
+    let xml = package.read_text_entry(HEADER_PART).unwrap();
+    let start = xml.find("<hh:font id=\"1\"").unwrap();
+    let end = start + xml[start..].find("</hh:font>").unwrap() + "</hh:font>".len();
+    let extra = &xml[start..end];
+    for changed in [
+        xml.replacen("<hh:font id=\"1\"", "<hh:font id=\"0\"", 1),
+        format!("{}{}", &xml[..start], &xml[end..]),
+        format!("{}{}{}", &xml[..end], extra.replace("id=\"1\"", "id=\"2\""), &xml[end..]),
+    ] {
+        package.replace_text_entry(HEADER_PART, changed);
+        for reencoded in [false, true] {
+            assert!(!proof(&package, &decoded, reencoded));
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 어느 한 언어 슬롯의 검사를 건너뛰기.
+#[test]
+fn every_language_slot_requires_the_same_measured_face() {
+    let (mut package, decoded) = wire_fixture();
+    let xml = package.read_text_entry(HEADER_PART).unwrap();
+    for lang in LANGUAGES {
+        let start = xml.find(&format!("<hh:fontface lang=\"{lang}\"")).unwrap();
+        let end = start + xml[start..].find("</hh:fontface>").unwrap();
+        for face in ["Times New Roman", "돋움체"] {
+            let changed = xml[start..end].replace("맑은 고딕", face);
+            package.replace_text_entry(
+                HEADER_PART,
+                format!("{}{}{}", &xml[..start], changed, &xml[end..]),
+            );
+            assert!(!proof(&package, &decoded, false), "{lang}: {face}");
+        }
+    }
+}
+
+fn metadata_fixture() -> (RawPackage, crate::HwpxDocument) {
+    use hwpforge_core::{Document, ImageStore, PageSettings, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
+    let mut styles = HwpxStyleStore::new();
+    for language in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        for index in 0..2 {
+            let mut font =
+                crate::style_store::HwpxFont::new(index, format!("{language}{index}"), language);
+            font.substitute = Some(crate::style_store::HwpxSubstFont::new(
+                Some(crate::style_store::HwpxFontType::Ttf),
+                format!("Sub{language}{index}"),
+            ));
+            styles.push_font(font);
+        }
+    }
+    let mut character = HwpxCharShape::default();
+    character.font_ref.latin = FontIndex::new(1);
+    character.font_ref.other = FontIndex::new(1);
+    styles.push_char_shape(character);
+    styles.push_para_shape(crate::style_store::HwpxParaShape::default());
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("가", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let bytes =
+        crate::HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::new()).unwrap();
+    (RawPackage::read(&bytes).unwrap(), crate::HwpxDecoder::decode(&bytes).unwrap())
+}
+
+// Substitutes cannot qualify for width, but the existing roundtrip contract stays intact.
+// 이것을 실패시키는 것: font_matches를 무조건 승인.
+#[test]
+fn font_metadata_roundtrip_retains_substitute_and_type_info_checks() {
+    let (package, decoded) = metadata_fixture();
+    let xml = package.read_text_entry(HEADER_PART).unwrap();
+    for (language, index) in [
+        ("HANGUL", 0),
+        ("LATIN", 1),
+        ("HANJA", 0),
+        ("JAPANESE", 0),
+        ("OTHER", 1),
+        ("SYMBOL", 0),
+        ("USER", 0),
+    ] {
+        let start =
+            xml.find(&format!("<hh:font id=\"{index}\" face=\"{language}{index}\"")).unwrap();
+        let end = start + xml[start..].find("</hh:font>").unwrap() + "</hh:font>".len();
+        let font = &xml[start..end];
+        let info_start = font.find("<hh:typeInfo").unwrap();
+        let info_end = info_start + font[info_start..].find("/>").unwrap() + 2;
+        let sub_start = font.find("<hh:substFont").unwrap();
+        let sub_end = sub_start + font[sub_start..].find("/>").unwrap() + 2;
+        for changed in [
+            font.replace(&format!("face=\"Sub{language}{index}\""), "face=\"Different\""),
+            font.replace(&format!("face=\"Sub{language}{index}\" type=\"TTF\""), &format!("face=\"Sub{language}{index}\" type=\"HFT\"")),
+            format!("{}{}", &font[..sub_start], &font[sub_end..]),
+            font.replace(&format!("face=\"{language}{index}\""), "face=\"Other\""),
+            font.replace(&format!("face=\"{language}{index}\""), &format!("face=\" {language}{index} \"")),
+            font.replace("type=\"TTF\"", "type=\"HFT\""),
+            font.replace("type=\"TTF\"", ""),
+            font.replace("</hh:font>", "<hh:substFont face=\"Other\" type=\"TTF\" isEmbedded=\"0\" binaryItemIDRef=\"\"/></hh:font>"),
+            font.replace("weight=\"6\"", "weight=\"7\""),
+            format!("{}{}", &font[..info_start], &font[info_end..]),
+            font.replacen("isEmbedded=\"0\"", "isEmbedded=\"1\"", 1),
+            font.replace(&font[sub_start..sub_end], &font[sub_start..sub_end].replace("isEmbedded=\"0\"", "isEmbedded=\"1\"")),
+            font.replace("familyType=\"FCAT_GOTHIC\"", "familyType=\"FCAT_MYUNGJO\""),
+        ] {
+            assert_ne!(font, changed);
+            let stored = decoded.style_store.iter_fonts().find(|f| f.lang == language && f.id == index).unwrap();
+            let parse = |font: &str| Tag::read(&format!("<root{}>{font}</root>", crate::encoder::package::XMLNS_DECLS)).unwrap().children.pop().unwrap();
+            assert!(font_matches(&parse(font), stored).is_some());
+            assert!(font_matches(&parse(&changed), stored).is_none(), "{language}: {changed}");
+        }
+    }
 }
