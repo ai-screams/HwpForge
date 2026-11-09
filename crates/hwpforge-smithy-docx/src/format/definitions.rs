@@ -11,7 +11,13 @@ use std::{
 #[derive(Default)]
 pub(super) struct Number {
     pub(super) abstract_id: Option<u32>,
-    pub(super) levels: BTreeMap<u32, Delta>,
+    pub(super) has_override: bool,
+    pub(super) levels: BTreeMap<u32, super::lists::Level>,
+}
+#[derive(Default)]
+pub(super) struct AbstractMetadata {
+    single_level: bool,
+    style_link: Option<StyleKey>,
 }
 #[derive(Default)]
 pub(crate) struct Definitions {
@@ -22,10 +28,12 @@ pub(crate) struct Definitions {
     pub(crate) defaults: Delta,
     pub(super) theme: Theme,
     pub(super) fonts: Fonts,
-    pub(super) abstracts: HashMap<u32, BTreeMap<u32, Delta>>,
+    pub(super) abstracts: HashMap<u32, BTreeMap<u32, super::lists::Level>>,
     pub(super) numbers: HashMap<u32, Number>,
+    abstract_metadata: HashMap<u32, AbstractMetadata>,
     counts: [usize; 4],
     level_count: usize,
+    pub(super) numbering_part: Option<Rc<str>>,
     #[cfg(test)]
     pub(super) part_copied_bytes: usize,
     #[cfg(test)]
@@ -74,6 +82,57 @@ enum Frame {
     Section,
 }
 impl Definitions {
+    pub(super) fn numbering_base(
+        &self,
+        id: u32,
+    ) -> Option<(u32, &BTreeMap<u32, super::lists::Level>)> {
+        let levels = self.abstracts.get(&id)?;
+        if !levels.is_empty() {
+            return Some((id, levels));
+        }
+        let key = self.abstract_metadata.get(&id)?.style_link?;
+        let style = self.style(key).filter(|s| s.kind == StyleKind::Numbering)?;
+        let number = self.numbers.get(&style.delta.para.num_id.filter(|&n| n != 0)?)?;
+        let linked = number.abstract_id.filter(|&next| next != id)?;
+        // One hop only. An empty destination never recursively resolves a link.
+        self.abstracts.get(&linked).filter(|ls| !ls.is_empty()).map(|ls| (linked, ls))
+    }
+    pub(super) fn effective_level(&self, num: u32, level: u32) -> u32 {
+        let Some(number) = self.numbers.get(&num) else {
+            return level;
+        };
+        let Some(id) = number.abstract_id else {
+            return level;
+        };
+        let Some((base_id, levels)) = self.numbering_base(id) else {
+            return level;
+        };
+        if self.abstract_metadata.get(&base_id).is_some_and(|m| m.single_level)
+            && !levels.contains_key(&level)
+            && !number.levels.get(&level).is_some_and(|l| l.defined)
+        {
+            0
+        } else {
+            level
+        }
+    }
+    pub(super) fn warn_numbering_links(&self, warnings: &mut Vec<DocxWarning>) -> Result<()> {
+        for (&id, meta) in &self.abstract_metadata {
+            if meta.style_link.is_some() && self.numbering_base(id).is_none() {
+                warn(
+                    warnings,
+                    self.numbering_part.as_deref().unwrap_or("#numbering"),
+                    "numStyleLink",
+                    Kind::UnsupportedAttribute,
+                    "numbering_style_link",
+                    "ignore",
+                    "Numbering style link is missing, cyclic or requires another hop",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn lookup_style(&self, id: &str, hash: u64) -> Option<StyleKey> {
         self.style_ids.get(&hash)?.iter().copied().find(|key| {
             let name = self.style_names[key.0].as_ref();
@@ -129,8 +188,12 @@ impl Definitions {
         match owner {
             Owner::Defaults => Some(&mut self.defaults),
             Owner::Style(k) => self.styles.get_mut(k.0)?.as_mut().map(|s| &mut s.delta),
-            Owner::Abstract(id, level) => self.abstracts.get_mut(&id)?.get_mut(&level),
-            Owner::Number(id, level) => self.numbers.get_mut(&id)?.levels.get_mut(&level),
+            Owner::Abstract(id, level) => {
+                self.abstracts.get_mut(&id)?.get_mut(&level).map(|l| &mut l.delta)
+            }
+            Owner::Number(id, level) => {
+                self.numbers.get_mut(&id)?.levels.get_mut(&level).map(|l| &mut l.delta)
+            }
         }
     }
     pub(crate) fn read(
@@ -170,6 +233,9 @@ impl Definitions {
                             && e.namespace_id == if root == "theme" { A_NS.0 } else { W_NS.0 };
                         if matches {
                             frame = Frame::Root;
+                            if root == "numbering" {
+                                self.numbering_part = Some(shared_part.clone());
+                            }
                         }
                     } else if matches {
                         if w && matches!(parent, Frame::Section) {
@@ -412,7 +478,10 @@ impl Definitions {
                                     let n = self.numbers.get_mut(&num).ok_or_else(|| {
                                         DocxError::invalid(part, "num", "missing admitted number")
                                     })?;
-                                    if n.levels.insert(level, Delta::default()).is_some() {
+                                    if n.levels
+                                        .insert(level, super::lists::Level::default())
+                                        .is_some()
+                                    {
                                         return Err(DocxError::invalid(
                                             part,
                                             "lvlOverride",
@@ -438,7 +507,16 @@ impl Definitions {
                                             "missing admitted abstract",
                                         )
                                     })?;
-                                    if levels.insert(level, Delta::default()).is_some() {
+                                    if levels
+                                        .insert(
+                                            level,
+                                            super::lists::Level {
+                                                defined: true,
+                                                ..Default::default()
+                                            },
+                                        )
+                                        .is_some()
+                                    {
                                         return Err(DocxError::invalid(
                                             part,
                                             "lvl",
@@ -459,9 +537,90 @@ impl Definitions {
                                     if let Some(f) = stack.last_mut() {
                                         *f = Frame::Override { num, level, has_level: true };
                                     }
+                                    self.numbers.get_mut(&num).unwrap().has_override = true;
+                                    self.numbers
+                                        .get_mut(&num)
+                                        .unwrap()
+                                        .levels
+                                        .get_mut(&level)
+                                        .unwrap()
+                                        .defined = true;
                                     Frame::Level(Owner::Number(num, level))
                                 }
-                                (Frame::Level(owner), "pPr") => Frame::Properties(owner, false),
+                                (Frame::Level(owner), "pPr" | "rPr") => {
+                                    Frame::Properties(owner, e.name == "rPr")
+                                }
+                                (
+                                    Frame::Level(owner),
+                                    "start" | "numFmt" | "lvlText" | "lvlRestart"
+                                    | "lvlPicBulletId",
+                                ) => {
+                                    let target = match owner {
+                                        Owner::Abstract(id, level) => self
+                                            .abstracts
+                                            .get_mut(&id)
+                                            .unwrap()
+                                            .get_mut(&level)
+                                            .unwrap(),
+                                        Owner::Number(id, level) => self
+                                            .numbers
+                                            .get_mut(&id)
+                                            .unwrap()
+                                            .levels
+                                            .get_mut(&level)
+                                            .unwrap(),
+                                        _ => unreachable!(),
+                                    };
+                                    match e.name.as_str() {
+                                        "start" => target.start = Some(integer(&e, "val", part)?),
+                                        "lvlRestart" => {
+                                            let index = match owner {
+                                                Owner::Abstract(_, level)
+                                                | Owner::Number(_, level) => level,
+                                                _ => unreachable!(),
+                                            };
+                                            let value = integer(&e, "val", part)?;
+                                            target.restart = value != index;
+                                        }
+                                        "lvlPicBulletId" => {
+                                            integer(&e, "val", part)?;
+                                            target.picture = true;
+                                        }
+                                        "numFmt" => {
+                                            target.format =
+                                                super::lists::Format::parse(attr(&e, "val"))
+                                        }
+                                        _ => target.text = attr(&e, "val").map(Rc::from),
+                                    }
+                                    Frame::Leaf
+                                }
+                                (Frame::Override { num, level, .. }, "startOverride") => {
+                                    self.numbers.get_mut(&num).unwrap().has_override = true;
+                                    self.numbers
+                                        .get_mut(&num)
+                                        .unwrap()
+                                        .levels
+                                        .get_mut(&level)
+                                        .unwrap()
+                                        .start_override = Some(integer(&e, "val", part)?);
+                                    Frame::Leaf
+                                }
+                                (Frame::Abstract(id), "multiLevelType") => {
+                                    self.abstract_metadata.entry(id).or_default().single_level =
+                                        attr(&e, "val") == Some("singleLevel");
+                                    Frame::Metadata
+                                }
+                                (Frame::Abstract(id), "numStyleLink") => {
+                                    let key = attr(&e, "val")
+                                        .map(|value| self.intern_style(value, part, "numStyleLink"))
+                                        .transpose()?;
+                                    self.abstract_metadata.entry(id).or_default().style_link = key;
+                                    Frame::Leaf
+                                }
+                                (Frame::Level(_), "suff" | "lvlJc" | "pStyle") => {
+                                    // Alignment/suffix layout is not carried by the shared marker model.
+                                    Frame::Ignored
+                                }
                                 // Numbering identity/edit-history metadata, not level formatting.
                                 (Frame::Abstract(_), "nsid" | "tmpl" | "name")
                                 | (Frame::Root, "numIdMacAtCleanup") => Frame::Metadata,
@@ -498,7 +657,29 @@ impl Definitions {
                                 warnings,
                             )?;
                             frame = Frame::Property(state);
-                            if let Some(target) = self.target(owner) {
+                            let marker = match owner {
+                                Owner::Abstract(id, level) if character => {
+                                    self.abstracts.get_mut(&id).and_then(|ls| ls.get_mut(&level))
+                                }
+                                Owner::Number(id, level) if character => {
+                                    self.numbers.get_mut(&id).and_then(|n| n.levels.get_mut(&level))
+                                }
+                                _ => None,
+                            };
+                            if let Some(marker) = marker {
+                                let mut marker_only = delta.char.clone();
+                                marker_only.fonts = [None; 4];
+                                if marker_only != CharDelta::default() {
+                                    warn(warnings, part, &e.name, Kind::FormattingOmitted, "marker_format", "omit", "Marker character effects are not represented by the shared list definition")?;
+                                }
+                                for (target, source) in
+                                    marker.fonts.iter_mut().zip(delta.char.fonts)
+                                {
+                                    if source.is_some() {
+                                        *target = source;
+                                    }
+                                }
+                            } else if let Some(target) = self.target(owner) {
                                 target.overlay(&delta, false);
                             }
                             if w && e.name == "numPr"

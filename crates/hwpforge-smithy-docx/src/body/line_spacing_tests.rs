@@ -146,7 +146,10 @@ fn ordinary_boundaries_match_word_literal_groups() {
 fn ordinary_boundaries_stop_at_tables_and_sections() {
     for separator in ["</w:pPr></w:p><w:tbl/>", "<w:sectPr/></w:pPr></w:p>"] {
         let d = read("", &format!("<w:p><w:pPr><w:spacing w:before='60' w:after='200'/>{separator}<w:p><w:pPr><w:spacing w:before='240' w:after='80'/></w:pPr></w:p><w:p><w:pPr><w:spacing w:before='100'/></w:pPr></w:p>"));
-        assert_eq!(gaps(&d), [(300, 1000), (1200, 500), (0, 0)]);
+        assert_eq!(
+            gaps(&d),
+            [(300, 1000), (if separator.contains("sectPr") { 0 } else { 1200 }, 500), (0, 0)]
+        );
     }
 }
 
@@ -182,7 +185,7 @@ fn contextual_spacing_respects_identity_and_each_side_switch() {
 #[test]
 fn contextual_spacing_boundaries_and_split_fragments() {
     let d = read(&contextual_styles(), "<w:p/><w:tbl/><w:p><w:pPr><w:sectPr/></w:pPr></w:p><w:p/>");
-    assert_eq!(gaps(&d), [(200, 800), (200, 800), (200, 800)]);
+    assert_eq!(gaps(&d), [(200, 800), (200, 800), (0, 800)]);
     let d = read(
         &contextual_styles(),
         "<w:p/><w:p><w:r><w:t>가</w:t><w:br w:type='page'/><w:t>나</w:t></w:r></w:p><w:p/>",

@@ -2,6 +2,7 @@
 mod definitions;
 mod keys;
 mod line_height;
+mod lists;
 use keys::{FontKey, Fonts};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct StyleKey(usize);
@@ -100,6 +101,7 @@ pub(crate) struct ParaDelta {
     num_present: Option<bool>,
     level: Option<u32>,
     outline: Option<u32>,
+    projected_list: Option<lists::ListRef>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Delta {

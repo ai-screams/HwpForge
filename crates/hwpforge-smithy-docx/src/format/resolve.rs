@@ -3,7 +3,7 @@ use hwpforge_blueprint::{
     registry::StyleRegistry,
     style::{ParaShape, PartialCharShape},
 };
-use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::{paragraph::Paragraph, ParagraphListRef};
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, FontId, FontIndex, HwpUnit, LineSpacingType, ParaShapeIndex,
     StrikeoutShape, StyleRef, UnderlineType, VerticalPosition,
@@ -47,6 +47,7 @@ pub(crate) struct Resolver {
     fonts: HashMap<FontKey, FontIndex>,
     hasher: RandomState,
     owned_font_bytes: usize,
+    lists: lists::Lists,
     #[cfg(test)]
     combinations_built: usize,
     #[cfg(test)]
@@ -62,6 +63,8 @@ impl Resolver {
         warnings: &mut Vec<DocxWarning>,
     ) -> Result<Self> {
         let fallback_font = definitions.fonts.fallback()?;
+        definitions.warn_numbering_links(warnings)?;
+        let lists = lists::Lists::new(&definitions)?;
         let mut r = Self {
             definitions,
             registry: StyleRegistry::with_fonts(vec![]),
@@ -80,6 +83,7 @@ impl Resolver {
             fonts: HashMap::new(),
             hasher: RandomState::new(),
             owned_font_bytes: 0,
+            lists,
             #[cfg(test)]
             combinations_built: 0,
             #[cfg(test)]
@@ -261,50 +265,20 @@ impl Resolver {
         }
         selection.overlay(direct, false);
         if let Some(num) = selection.para.num_id.filter(|id| *id != 0) {
-            let level = selection.para.level.unwrap_or(0);
+            let level = self.definitions.effective_level(num, selection.para.level.unwrap_or(0));
             let number = self.definitions.numbers.get(&num);
             let base = number
                 .and_then(|n| n.abstract_id)
-                .and_then(|id| self.definitions.abstracts.get(&id))
+                .and_then(|id| self.definitions.numbering_base(id))
+                .map(|(_, levels)| levels)
                 .and_then(|levels| levels.get(&level));
             let over = number.and_then(|n| n.levels.get(&level));
             if let Some(d) = base {
-                apply(&mut result, d, true, part, "numPr", w)?;
+                apply(&mut result, &d.delta, true, part, "numPr", w)?;
             }
             if let Some(d) = over {
-                apply(&mut result, d, true, part, "numPr", w)?;
+                apply(&mut result, &d.delta, true, part, "numPr", w)?;
             }
-            if base.is_none() && over.is_none() {
-                warn(
-                    w,
-                    part,
-                    "numPr",
-                    Kind::StyleReferenceLost,
-                    "numbering_reference",
-                    "ignore_link",
-                    "Numbering level is not defined",
-                )?;
-            }
-            warn(
-                w,
-                part,
-                "numPr",
-                Kind::FormattingOmitted,
-                "list_markers",
-                "omit",
-                "List markers are not applied",
-            )?;
-        }
-        if selection.para.num_present == Some(true) && selection.para.num_id.is_none() {
-            warn(
-                w,
-                part,
-                "numPr",
-                Kind::FormattingOmitted,
-                "list_markers",
-                "omit",
-                "Unresolved list markers are not applied",
-            )?;
         }
         if let Some(d) = paragraph {
             apply(&mut result, &d, true, part, "style", w)?;
@@ -421,6 +395,8 @@ impl Resolver {
                     "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
             }
         }
+        base.para.projected_list =
+            self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
         Ok(base)
     }
     pub(crate) fn paragraph_style(&self, style: Option<StyleKey>) -> Option<StyleKey> {
@@ -475,6 +451,7 @@ impl Resolver {
             derived.para.num_id = Some(0);
             derived.para.num_present = Some(false);
             derived.para.outline = Some(9);
+            derived.para.projected_list = None;
         }
         if !last {
             derived.para.after = Some(0);
@@ -621,7 +598,7 @@ impl Resolver {
     pub(crate) fn para_shape(&mut self, d: &Delta) -> Result<ParaShapeIndex> {
         let p = &d.para;
         let mut shape = ParaShape::default();
-        shape.list = None;
+        shape.list = p.projected_list.map(lists::ListRef::core);
         shape.alignment = match p.alignment {
             Some(1) => Alignment::Center,
             Some(2) => Alignment::Right,
@@ -650,9 +627,10 @@ impl Resolver {
             })?;
         shape.space_before = unit(p.before.unwrap_or(0))?;
         shape.space_after = unit(p.after.unwrap_or(0))?;
-        shape.indent_left = unit(p.left.unwrap_or(0))?;
+        let (left, first) = marker_indent(&shape.list, p.left.unwrap_or(0), p.first.unwrap_or(0));
+        shape.indent_left = unit(left)?;
         shape.indent_right = unit(p.right.unwrap_or(0))?;
-        shape.indent_first_line = unit(p.first.unwrap_or(0))?;
+        shape.indent_first_line = unit(first)?;
         shape.keep_with_next = p.keep_next.unwrap_or(false);
         shape.keep_lines_together = p.keep_lines.unwrap_or(false);
         // Word defaults widowControl to on after style/direct inheritance.
@@ -671,7 +649,7 @@ impl Resolver {
             shape.indent_first_line,
             shape.keep_with_next,
             shape.keep_lines_together,
-            shape.widow_orphan,
+            (shape.widow_orphan, lists::ListRef::from_core(shape.list)),
         ));
         if let Some(id) = self.paras.get(&hash).and_then(|bucket| {
             bucket.iter().find(|id| self.registry.para_shapes[id.get()] == shape)
@@ -774,6 +752,18 @@ fn format_warnings(
         )?;
     }
     Ok(())
+}
+/// Word puts a list marker at the hanging position (`left + first`, `first < 0`) and the text at
+/// `left`. Hancom ignores a negative first line on a numbered or bulleted paragraph and puts the
+/// marker at the left margin, wrapping later lines after the marker. Folding the hanging amount
+/// into the left margin keeps the marker where Word draws it.
+fn marker_indent(list: &Option<ParagraphListRef>, left: i32, first: i32) -> (i32, i32) {
+    match list {
+        Some(ParagraphListRef::Number { .. } | ParagraphListRef::Bullet { .. }) if first < 0 => {
+            (left.saturating_add(first), 0)
+        }
+        _ => (left, first),
+    }
 }
 fn unit(n: i32) -> Result<HwpUnit> {
     HwpUnit::new(n).map_err(|e| DocxError::invalid("#format", "length", quote(e)))

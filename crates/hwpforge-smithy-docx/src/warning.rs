@@ -80,8 +80,13 @@ macro_rules! warnings {
     };
 }
 warnings! {
+    ListReferenceLost => ("DOCX_LIST_REFERENCE_LOST", "A list definition or level is missing."),
+    ListNumberingLost => ("DOCX_LIST_NUMBERING_LOST", "An unsupported numbering sequence or marker was omitted."),
+    BulletGlyphApproximated => ("DOCX_BULLET_GLYPH_APPROXIMATED", "A font-specific bullet uses the fixed Unicode approximation."),
+    BulletGlyphLost => ("DOCX_BULLET_GLYPH_LOST", "A bullet glyph could not be represented without guessing."),
+    HeadingNumberLost => ("DOCX_HEADING_NUMBER_LOST", "An outline paragraph keeps its outline level without its list number."),
     UnsupportedAttribute => ("DOCX_UNSUPPORTED_ATTRIBUTE", "A formatting property or attribute is not represented."),
-    UnsupportedValue => ("DOCX_UNSUPPORTED_VALUE", "An invalid or unsupported formatting value uses its inherited value or fallback."),
+    UnsupportedValue => ("DOCX_UNSUPPORTED_VALUE", "An invalid or unsupported formatting value was omitted or replaced."),
     StyleReferenceLost => ("DOCX_STYLE_REFERENCE_LOST", "A missing, incompatible or cyclic style connection was ignored."),
     FormatDefaulted => ("DOCX_FORMAT_DEFAULTED", "An unresolved formatting category uses the documented import fallback."),
     ScriptFormatCollapsed => ("DOCX_SCRIPT_FORMAT_COLLAPSED", "Distinct script formatting values were collapsed into the available slots."),

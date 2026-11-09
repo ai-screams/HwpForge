@@ -97,12 +97,22 @@ pub fn warnings() -> Vec<(&'static str, OpsWarning)> {
         e.push(("settings.xml".into(), "<w:settings xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:zoom w:percent='100'/></w:settings>".into()));
     });
     let mut seen = std::collections::BTreeSet::new();
+    let lists = docx::package_with_numbering(
+        "<w:p><w:pPr><w:numPr><w:numId w:val='1'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='2'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='3'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='1'/></w:numPr><w:outlineLvl w:val='0'/></w:pPr></w:p>",
+        "<w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:numFmt w:val='ganada'/><w:rPr><w:b/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId='2'><w:lvl w:ilvl='0'><w:numFmt w:val='bullet'/><w:lvlText w:val='&#xF0B7;'/><w:rPr><w:rFonts w:ascii='Symbol'/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId='3'><w:lvl w:ilvl='0'><w:numFmt w:val='bullet'/><w:lvlText w:val='&#xF06C;'/></w:lvl></w:abstractNum><w:num w:numId='1'><w:abstractNumId w:val='1'/></w:num><w:num w:numId='2'><w:abstractNumId w:val='2'/></w:num><w:num w:numId='3'><w:abstractNumId w:val='3'/></w:num>",
+    );
     decode_docx(&bytes)
         .unwrap()
         .warnings
         .into_iter()
+        .chain(decode_docx(&lists).unwrap().warnings)
         .map(|w| {
             let name = match &w {
+                DocxWarning::ListReferenceLost { .. } => "ListReferenceLost",
+                DocxWarning::ListNumberingLost { .. } => "ListNumberingLost",
+                DocxWarning::BulletGlyphApproximated { .. } => "BulletGlyphApproximated",
+                DocxWarning::BulletGlyphLost { .. } => "BulletGlyphLost",
+                DocxWarning::HeadingNumberLost { .. } => "HeadingNumberLost",
                 DocxWarning::UnsupportedAttribute { .. } => "UnsupportedAttribute",
                 DocxWarning::UnsupportedValue { .. } => "UnsupportedValue",
                 DocxWarning::StyleReferenceLost { .. } => "StyleReferenceLost",

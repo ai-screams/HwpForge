@@ -79,6 +79,36 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "ListReferenceLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ListNumberingLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "BulletGlyphApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "BulletGlyphLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "HeadingNumberLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "UnsupportedAttribute",
           "shape": "struct",
           "cfg": [],

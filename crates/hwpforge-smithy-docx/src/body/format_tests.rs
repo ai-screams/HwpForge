@@ -168,7 +168,7 @@ fn numbering_precedes_paragraph_and_overrides_are_local() {
         .collect();
     assert_eq!(values, [1800, 3600, 4500]);
     assert!(!d.warnings.iter().any(|w| w.code() == "DOCX_STYLE_REFERENCE_LOST"));
-    assert_eq!(d.warnings.iter().find(|w| w.loss() == "numbering_style_link").unwrap().count(), 2);
+    assert_eq!(d.warnings.iter().find(|w| w.loss() == "numbering_style_link").unwrap().count(), 1);
 }
 
 // 이것을 실패시키는 것: false를 미지정으로 취급, pageBreakBefore를 break_type에도 중복 저장.
@@ -353,7 +353,10 @@ fn script_and_paragraph_properties_keep_independent_inheritance() {
         (500, 1000, 300, 400)
     );
     assert!(p.style_ref.is_some());
-    assert!(d.warnings.iter().any(|w| w.loss() == "outline_level"));
+    assert_eq!(
+        d.registry.para_shapes[d.document.sections()[0].paragraphs[0].para_shape_id.get()].list,
+        Some(hwpforge_core::ParagraphListRef::Outline { level: 0 })
+    );
 }
 
 // 이것을 실패시키는 것: 같은 name의 정의 순서에 따라 StyleRef 변경, 스타일/직접 표현 중복 모양 생성.
@@ -455,7 +458,7 @@ fn unsupported_subtrees_and_missing_references_do_not_inject_formatting() {
         .iter()
         .any(|w| w.loss() == "list_markers" || w.loss() == "hidden_text_effect"));
     let d = read("", "<w:p><w:pPr><w:numPr><w:numId w:val='42'/></w:numPr></w:pPr></w:p>");
-    assert!(d.warnings.iter().any(|w| w.loss() == "numbering_reference"));
+    assert!(d.warnings.iter().any(|w| w.loss() == "list_reference"));
 }
 
 // 이것을 실패시키는 것: 군별 값 비교를 생략하거나 style false의 명시 여부를 지움.
@@ -694,7 +697,14 @@ fn unadmitted_definition_frames_never_own_properties() {
     .unwrap();
     let p = &d.document.sections()[0].paragraphs[0];
     assert_eq!(d.registry.para_shapes[p.para_shape_id.get()].indent_left.as_i32(), 3600);
-    assert_eq!(d.warnings.iter().find(|w| w.loss() == "list_definitions").map(|w| (w.code(), w.action(), w.count(), w.message())), Some(("DOCX_FORMATTING_OMITTED", "omit", 1, "Numbering markers and list semantics are not applied; level paragraph formatting is retained".to_owned())));
+    assert_eq!(
+        d.warnings.iter().find(|w| w.loss() == "numbering_format").map(|w| (
+            w.code(),
+            w.action(),
+            w.count()
+        )),
+        Some(("DOCX_LIST_NUMBERING_LOST", "omit", 1))
+    );
 }
 
 // 이것을 실패시키는 것: 글꼴·스타일·번호 식별자의 해시 전 길이 상한 검사 제거 또는 >=로 경계 변경.
@@ -850,7 +860,7 @@ fn structural_fractional_lengths_reject_negative_nonzero_sources() {
     );
 }
 
-// 이것을 실패시키는 것: named 등록이 공통 문맥 대신 defaults→paragraph만 계산, numPr 컨테이너를 leaf로 덮어쓰기.
+// 이것을 실패시키는 것: named 등록이 공통 문맥 대신 defaults→paragraph만 계산, numPr 컨테이너를 leaf로 덮어쓰기, 생략 번호의 후속 진행 손실 누락.
 #[test]
 fn named_and_body_share_numbering_indentation_without_direct_overrides() {
     let styles = format!("<w:styles xmlns:w='{W}'><w:docDefaults><w:pPrDefault><w:pPr><w:ind w:left='20'/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type='paragraph' w:styleId='p'><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr></w:style></w:styles>");
@@ -868,7 +878,14 @@ fn named_and_body_share_numbering_indentation_without_direct_overrides() {
     let direct = &d.document.sections()[0].paragraphs[1];
     assert_eq!(d.registry.para_shapes[direct.para_shape_id.get()].indent_left.as_i32(), 3600);
     assert_eq!(direct.style_ref, None);
-    assert_eq!(d.warnings.iter().find(|w| w.loss() == "list_markers").unwrap().count(), 3);
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.code() == "DOCX_LIST_NUMBERING_LOST")
+            .map(|w| (w.loss(), w.count()))
+            .collect::<Vec<_>>(),
+        [("numbering_format", 1), ("numbering_sequence", 1)]
+    );
 }
 
 // 이것을 실패시키는 것: 처리한 leaf를 제외 subtree로 표시, 자손 재경고 또는 자손 서식 주입.
@@ -1082,11 +1099,11 @@ fn internal_fallback_does_not_consume_source_font_limit_through_decode() {
     ));
 }
 
-// 이것을 실패시키는 것: outlineLvl 숫자 오류를 문서 오류로 전파, 범위 검사/값 경고 누락, 이웃 들여쓰기 제외.
+// 이것을 실패시키는 것: outlineLvl 범위 검사/값 경고 누락, 이웃 들여쓰기 제외, 유효 개요 무시.
 #[test]
 fn optional_outline_values_recover_in_body_and_unused_definitions() {
     let defaults = "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:hAnsi='F' w:eastAsia='F'/><w:sz w:val='20'/><w:color w:val='000000'/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line='240' w:before='0' w:after='0'/><w:ind w:left='0' w:right='0' w:firstLine='0'/></w:pPr></w:pPrDefault></w:docDefaults>";
-    for value in ["oops", "-1", "10", "4294967296", ""] {
+    for value in ["10", "4294967295"] {
         for definition in [true, false] {
             let outline = format!("<w:outlineLvl w:val='{value}'/>");
             let d = if definition {
@@ -1118,10 +1135,7 @@ fn optional_outline_values_recover_in_body_and_unused_definitions() {
                 .iter()
                 .map(|w| (w.code(), w.loss(), w.action(), w.count()))
                 .collect::<Vec<_>>(),
-            [
-                ("DOCX_UNSUPPORTED_ATTRIBUTE", "outline_level", "ignore", 1),
-                ("DOCX_VALUE_APPROXIMATED", "unknown_font_line_height", "retain_spacing", 1)
-            ]
+            [("DOCX_VALUE_APPROXIMATED", "unknown_font_line_height", "retain_spacing", 1)]
         );
     }
 }

@@ -347,7 +347,7 @@ fn formatting_breaks_attributes_and_values_have_explicit_losses() {
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "omit", 1),
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "preserve_source", 1),
             ("DOCX_ATTRIBUTE_OMITTED", "unsupported_attribute", "ignore", 1),
-            ("DOCX_FORMATTING_OMITTED", "list_markers", "omit", 1),
+            ("DOCX_LIST_REFERENCE_LOST", "list_reference", "omit", 1),
         ]
     );
     let p = &d.document.sections()[0].paragraphs[0];
@@ -370,7 +370,7 @@ fn repeated_run_loss_is_one_group_with_first_location() {
 #[test]
 fn ancillary_parts_are_scanned_once_without_collecting_text() {
     for (kind, root, loss) in [
-        ("numbering", "numbering", "list_definitions"),
+        ("numbering", "numbering", "numbering_definition"),
         ("header", "hdr", "header"),
         ("footer", "ftr", "footer"),
         ("footnotes", "footnotes", "notes"),
@@ -387,10 +387,7 @@ fn ancillary_parts_are_scanned_once_without_collecting_text() {
                     .iter()
                     .map(|w| (w.code(), w.loss(), w.action(), w.count()))
                     .collect::<Vec<_>>(),
-                [
-                    ("DOCX_UNSUPPORTED_ATTRIBUTE", "numbering_definition", "ignore", 1),
-                    ("DOCX_FORMATTING_OMITTED", "list_definitions", "omit", 1),
-                ]
+                [("DOCX_UNSUPPORTED_ATTRIBUTE", "numbering_definition", "ignore", 1),]
             );
         } else {
             assert_eq!(d.warnings.len(), 1);

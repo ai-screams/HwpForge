@@ -375,13 +375,10 @@ pub(super) fn read_property(
                 Ok(())
             }),
             "outlineLvl" => r.leaf(&["val"], |r| {
-                // Outline is optional formatting, not a structural/reference ID.
-                let value = attr(e, "val").unwrap_or("");
-                d.para.outline = value.parse::<u32>().ok().filter(|&n| n <= 9);
-                if d.para.outline.is_some() {
-                    r.unsupported("outline_level")?;
-                } else {
-                    r.bad(value)?;
+                d.para.outline = r.unsigned()?;
+                if d.para.outline.is_some_and(|n| n > 9) {
+                    r.bad(attr(e, "val").unwrap_or(""))?;
+                    d.para.outline = None;
                 }
                 Ok(())
             }),

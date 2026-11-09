@@ -349,6 +349,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         trailing_break: None,
         pending_shapes: Vec::new(),
         spacing_neighbor: None,
+        section_layout_known: false,
         split_at: None,
         boundary_input: None,
         source_paragraphs: 1,

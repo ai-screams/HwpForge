@@ -439,3 +439,82 @@ fn forced_page_starts_drop_before_and_keep_previous_after() {
         assert_eq!(gaps, expected_gaps, "{body}");
     }
 }
+
+// 이것을 실패시키는 것: import 번호 재배정 누락, 시작값/표시 문자열 변경,
+// 개요 표시/offset 부활, 계속 조각 표식 복제, 같은 abstract의 numId 분리.
+#[test]
+fn list_references_and_outline_heads_reach_wire() {
+    let numbering = "<w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:start w:val='1'/><w:numFmt w:val='decimal'/><w:lvlText w:val='%1.'/></w:lvl></w:abstractNum><w:num w:numId='7'><w:abstractNumId w:val='1'/></w:num><w:num w:numId='8'><w:abstractNumId w:val='1'/></w:num><w:num w:numId='9'><w:abstractNumId w:val='1'/><w:lvlOverride w:ilvl='0'><w:startOverride w:val='5'/></w:lvlOverride></w:num>";
+    let body = "<w:p><w:pPr><w:outlineLvl w:val='0'/><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr><w:r><w:t>Title</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr><w:r><w:t>A</w:t><w:br w:type='page'/><w:t>B</w:t></w:r></w:p><w:p><w:r><w:t>body</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:numId w:val='8'/></w:numPr></w:pPr><w:r><w:t>C</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr><w:r><w:t>D</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:numId w:val='9'/></w:numPr></w:pPr><w:r><w:t>E</w:t></w:r></w:p>";
+    let output = convert_docx(&docx::package_with_numbering(body, numbering)).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.bytes)).unwrap();
+    let mut parse = |name| {
+        let mut text = String::new();
+        archive.by_name(name).unwrap().read_to_string(&mut text).unwrap();
+        Element::parse(&text)
+    };
+    let header = parse("Contents/header.xml");
+    let section = parse("Contents/section0.xml");
+    let definitions = header.descendants("hh:numbering");
+    assert_eq!(definitions.len(), 2);
+    assert_eq!(
+        definitions.iter().map(|n| n.attr("id")).collect::<Vec<_>>(),
+        [Some("1"), Some("2")]
+    );
+    for head in &definitions[0].children {
+        assert_eq!(head.text, "");
+        assert_eq!(head.attr("textOffset"), Some("0"));
+    }
+    assert_eq!(
+        (
+            definitions[1].attr("start"),
+            definitions[1].children[0].attr("start"),
+            definitions[1].children[0].text.as_str()
+        ),
+        (Some("5"), Some("5"), "^1.")
+    );
+    assert_eq!(section.find("hp:secPr").attr("outlineShapeIDRef"), Some("1"));
+    let markers: Vec<_> = section
+        .descendants("hp:p")
+        .into_iter()
+        .map(|p| {
+            let h = shape(&header, p).child("hh:heading");
+            (h.attr("type"), h.attr("idRef"), h.attr("level"))
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        [
+            (Some("OUTLINE"), Some("0"), Some("0")),
+            (Some("NONE"), Some("0"), Some("0")),
+            (Some("NONE"), Some("0"), Some("0")),
+            (Some("NONE"), Some("0"), Some("0")),
+            (Some("NONE"), Some("0"), Some("0")),
+            (Some("NONE"), Some("0"), Some("0")),
+            (Some("NUMBER"), Some("2"), Some("0"))
+        ]
+    );
+}
+
+// 이것을 실패시키는 것: glyph 매핑 후 bridge에서 다른 문자로 대체, 수준을 1부터 기록.
+#[test]
+fn mapped_bullets_reach_wire() {
+    let numbering="<w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:numFmt w:val='bullet'/><w:lvlText w:val='&#xF0B7;'/><w:rPr><w:rFonts w:ascii='Symbol'/></w:rPr></w:lvl><w:lvl w:ilvl='1'><w:numFmt w:val='bullet'/><w:lvlText w:val='o'/><w:rPr><w:rFonts w:ascii='Courier New'/></w:rPr></w:lvl></w:abstractNum><w:num w:numId='7'><w:abstractNumId w:val='1'/></w:num>";
+    let body="<w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='7'/><w:ilvl w:val='1'/></w:numPr></w:pPr></w:p>";
+    let output = convert_docx(&docx::package_with_numbering(body, numbering)).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(output.bytes)).unwrap();
+    let mut text = String::new();
+    archive.by_name("Contents/header.xml").unwrap().read_to_string(&mut text).unwrap();
+    let header = Element::parse(&text);
+    assert_eq!(
+        header.descendants("hh:bullet").iter().map(|b| b.attr("char")).collect::<Vec<_>>(),
+        [Some("•"), Some("◦")]
+    );
+    let heads: Vec<_> = header
+        .descendants("hh:heading")
+        .into_iter()
+        .filter(|h| h.attr("type") == Some("BULLET"))
+        .map(|h| (h.attr("idRef"), h.attr("level")))
+        .collect();
+    assert_eq!(heads, [(Some("1"), Some("0")), (Some("2"), Some("1"))]);
+}

@@ -168,9 +168,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             }
             relations.admit(&relation, &main)?;
             let loss = match relation.kind {
-                RelationshipKind::Numbering => {
-                    Some((Kind::FormattingOmitted, "list_definitions", "omit"))
-                }
                 RelationshipKind::Header => Some((Kind::ContentOmitted, "header", "omit")),
                 RelationshipKind::Footer => Some((Kind::ContentOmitted, "footer", "omit")),
                 RelationshipKind::Footnotes | RelationshipKind::Endnotes => {
@@ -184,11 +181,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
                     (
                         Some(part),
                         Some("#root"),
-                        if relation.kind == RelationshipKind::Numbering {
-                            "Numbering markers and list semantics are not applied; level paragraph formatting is retained"
-                        } else {
-                            "Part was checked for safety; its content is not applied"
-                        },
+                        "Part was checked for safety; its content is not applied",
                     )
                 })?;
             }
@@ -329,11 +322,12 @@ struct Body<'a> {
     sections: Vec<DecodedSection>,
     origins: Vec<Origin>,
     breaks: Vec<(usize, Break)>,
-    // At most two output shapes await their final boundary: the last fragment,
-    // plus its predecessor when an empty tail may move to the next paragraph.
+    // The last fragment and a movable empty tail await their boundary. A later
+    // section also holds its first shape until the trailing section type is known.
     pending_shapes: Vec<(usize, Delta)>,
     trailing_break: Option<TrailingBreak>,
     spacing_neighbor: Option<(Option<StyleKey>, bool)>,
+    section_layout_known: bool,
     split_at: Option<(Location, usize)>,
     boundary_input: Option<(hwpforge_foundation::CharShapeIndex, bool)>,
     source_paragraphs: usize,
@@ -405,6 +399,7 @@ fn scan_inner(
         trailing_break: None,
         pending_shapes: Vec::new(),
         spacing_neighbor: None,
+        section_layout_known: false,
         split_at: None,
         boundary_input: None,
         source_paragraphs: 0,
@@ -1025,7 +1020,12 @@ impl Body<'_> {
     }
     fn finalize_shapes(&mut self, keep: usize) -> Result<()> {
         let ready = self.pending_shapes.len().saturating_sub(keep);
-        for (index, delta) in self.pending_shapes.drain(..ready) {
+        let pending: Vec<_> = self.pending_shapes.drain(..ready).collect();
+        for (index, delta) in pending {
+            if index == 0 && !self.sections.is_empty() && !self.section_layout_known {
+                self.pending_shapes.insert(0, (index, delta));
+                continue;
+            }
             // The only output paragraph shape assignment: all restoration,
             // fragment derivation and boundary spacing edits precede this point.
             self.paragraphs[index].para_shape_id =
@@ -1240,6 +1240,7 @@ impl Body<'_> {
         Ok(())
     }
     fn close_section(&mut self, layout: Layout, at: Location) -> Result<()> {
+        let starts_page = !layout.continuous;
         let (page, mut references, content_width, content_height) =
             layout.finish(self.part, &at, self.warnings)?;
         if let Some(previous) = self.sections.last() {
@@ -1268,7 +1269,15 @@ impl Body<'_> {
                 self.warn_split(&pending.split_at)?;
             }
         }
+        if !self.sections.is_empty() && starts_page {
+            if let Some((_, delta)) = self.pending_shapes.iter_mut().find(|(index, _)| *index == 0)
+            {
+                delta.para.before = Some(0);
+            }
+        }
+        self.section_layout_known = true;
         self.finalize_shapes(0)?;
+        self.section_layout_known = false;
         self.spacing_neighbor = None;
         self.sections.push(DecodedSection {
             core: Section::with_paragraphs(std::mem::take(&mut self.paragraphs), page),
@@ -1453,3 +1462,6 @@ mod layout_tests;
 
 #[cfg(test)]
 mod line_spacing_tests;
+
+#[cfg(test)]
+mod list_tests;

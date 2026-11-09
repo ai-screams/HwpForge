@@ -242,7 +242,7 @@ fn numbering_style_parent_loss_is_explicit() {
 fn definition_subtree_losses_are_counted_once_at_the_boundary() {
     for (root, content, expected) in [
         ("styles", "<w:style w:type='table' w:styleId='t'><w:tblStylePr w:type='firstRow'><x:future/></w:tblStylePr></w:style>", "conditional_table_style"),
-        ("numbering", "<w:abstractNum w:abstractNumId='1'><w:numStyleLink w:val='n'><x:future/></w:numStyleLink></w:abstractNum>", "numbering_style_link"),
+        ("numbering", "<w:abstractNum w:abstractNumId='1'><w:styleLink w:val='n'><x:future/></w:styleLink></w:abstractNum>", "numbering_style_link"),
         ("theme", "<w:themeElements><w:fontScheme><w:majorFont><w:font script='Test' typeface='A'><x:future/></w:font></w:majorFont></w:fontScheme></w:themeElements>", "theme_script_font"),
     ] {
         let (_, warnings) = parse_definition(root, content);

@@ -85,6 +85,7 @@ pub(super) struct Layout {
     margins_present: [bool; 7],
     columns_approximated: bool,
     orient: Option<bool>,
+    pub(super) continuous: bool,
     pub(super) references: References,
 }
 impl Layout {
@@ -151,6 +152,7 @@ impl Layout {
                 &["top", "right", "bottom", "left", "header", "footer", "gutter"]
             }
             "type" => {
+                self.continuous = attr(e, "val") == Some("continuous");
                 if !matches!(attr(e, "val"), None | Some("nextPage")) {
                     warn(
                         warnings,

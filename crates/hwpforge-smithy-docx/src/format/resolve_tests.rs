@@ -43,10 +43,16 @@ fn table_context_precedes_numbering_paragraph_character_and_direct() {
     let mut d=definitions("<w:docDefaults><w:rPrDefault><w:rPr><w:b w:val='0'/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type='table' w:styleId='t'><w:rPr><w:b/></w:rPr><w:pPr><w:ind w:left='1440'/></w:pPr></w:style><w:style w:type='paragraph' w:styleId='p'><w:rPr><w:b/></w:rPr><w:pPr><w:ind w:left='360'/></w:pPr></w:style>");
     let mut level = Delta::default();
     level.para.left = Some(3600);
-    d.abstracts.insert(1, std::collections::BTreeMap::from([(0, level)]));
+    d.abstracts.insert(
+        1,
+        std::collections::BTreeMap::from([(
+            0,
+            super::super::lists::Level { delta: level, defined: true, ..Default::default() },
+        )]),
+    );
     d.numbers.insert(
         7,
-        super::super::definitions::Number { abstract_id: Some(1), levels: Default::default() },
+        super::super::definitions::Number { abstract_id: Some(1), ..Default::default() },
     );
     let mut warnings = vec![];
     let mut r = Resolver::new(d, &mut warnings).unwrap();
@@ -303,8 +309,8 @@ fn shared_identifiers_do_not_scale_with_references() {
         );
         assert_eq!(key_bytes(&font_key), 8);
         assert_eq!(key_bytes(&r.default_paragraph.unwrap()), 8);
-        // Two private optional fields add two 8-byte Hash discriminants.
-        assert_eq!(key_bytes(&delta), 288);
+        // The projected marker adds one fixed-size optional discriminant.
+        assert_eq!(key_bytes(&delta), 296);
         for i in 0..16 {
             let input = r.run_input(delta.clone(), None).unwrap();
             let mut p = Paragraph::new(ParaShapeIndex::new(0));

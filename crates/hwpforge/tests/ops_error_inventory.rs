@@ -320,6 +320,11 @@ const WARNING_MAPPING: Table = &[
     (
         "DocxWarning",
         &[
+            ("ListReferenceLost", "DOCX_LIST_REFERENCE_LOST"),
+            ("ListNumberingLost", "DOCX_LIST_NUMBERING_LOST"),
+            ("BulletGlyphApproximated", "DOCX_BULLET_GLYPH_APPROXIMATED"),
+            ("BulletGlyphLost", "DOCX_BULLET_GLYPH_LOST"),
+            ("HeadingNumberLost", "DOCX_HEADING_NUMBER_LOST"),
             ("UnsupportedAttribute", "DOCX_UNSUPPORTED_ATTRIBUTE"),
             ("UnsupportedValue", "DOCX_UNSUPPORTED_VALUE"),
             ("StyleReferenceLost", "DOCX_STYLE_REFERENCE_LOST"),
