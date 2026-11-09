@@ -364,9 +364,9 @@ fn source_tags_require_a_unique_well_formed_element() {
         .is("textDirection", "HORIZONTAL"));
 }
 
-/// 이것을 실패시키는 것: 원본 구역의 파일명 대응을 spine 대응으로 변경(공유 carry의 기존 바이트 계약).
+/// 이것을 실패시키는 것: carry의 원본 조회를 출력 파일명으로 되돌리기.
 #[test]
-fn reversed_spine_keeps_the_existing_missing_cache_result() {
+fn reversed_spine_keeps_the_untouched_sections_cache() {
     let base = fixture();
     let mut decoded = HwpxDecoder::decode(&base).unwrap();
     let cached = decoded.document.sections()[0].clone();
@@ -389,10 +389,13 @@ fn reversed_spine_keeps_the_existing_missing_cache_result() {
     let input = package.write().unwrap();
     let decoded = HwpxDecoder::decode(&input).unwrap();
     assert!(decoded.document.sections()[0].paragraphs[1].layout_cache.is_some());
-    let edited = HwpxCellEditor::set_cells(&input, &specs()).unwrap();
+    let mut edits = specs();
+    edits[0].table = 1; // Original section0 is second in reading order and has no cache.
+    let edited = HwpxCellEditor::set_cells(&input, &edits).unwrap();
     let output = RawPackage::read(&edited.bytes).unwrap();
     let tree = xml::Element::parse(&output.read_text_entry("Contents/section0.xml").unwrap());
-    assert!(tree.children.iter().all(|p| p.children.iter().all(|c| c.name != "hp:linesegarray")));
+    assert_eq!(tree.descendants("hp:linesegarray").len(), 3);
+    assert_eq!(tree.children[1].find("hp:t").text, "뒤");
 }
 
 /// 이것을 실패시키는 것: marker가 하나라도 있으면 모든 후보 취소, 같은 host의 경고 경로로 후보 취소, 구역 번호 무시,
