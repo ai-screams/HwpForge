@@ -1151,7 +1151,7 @@ fn page_recalculation_requires_registered_section_parts() {
 }
 
 // Synthetic XML with independently stated observed values; no saved application bytes.
-fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> String {
+pub(crate) fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> String {
     let rows = if merged { 3 } else { 2 };
     let horizontal = if merged { "PARA" } else { "COLUMN" };
     let mut xml = format!("<hp:tbl id='7' zOrder='0' numberingType='TABLE' textWrap='TOP_AND_BOTTOM' textFlow='BOTH_SIDES' lock='0' dropcapstyle='None' pageBreak='CELL' repeatHeader='1' rowCnt='{rows}' colCnt='3' cellSpacing='0' noAdjust='{no_adjust}'><hp:sz width='48189' widthRelTo='ABSOLUTE' height='10000' heightRelTo='ABSOLUTE' protect='0'/><hp:pos treatAsChar='1' affectLSpacing='0' flowWithText='1' allowOverlap='0' holdAnchorAndSO='0' vertRelTo='PARA' horzRelTo='{horizontal}' vertAlign='TOP' horzAlign='LEFT' vertOffset='0' horzOffset='0'/><hp:outMargin left='283' right='283' top='283' bottom='1000'/><hp:inMargin left='510' right='510' top='141' bottom='141'/>");
@@ -1547,5 +1547,59 @@ fn table_cell_evidence_requires_paragraph_namespace() {
             let table_id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
             assert!(table_profiles::matches(part, table_id));
         }
+    }
+}
+
+// 이것을 실패시키는 것: fieldBegin 후보가 없으면 종류와 무관하게 inventory 항목 생략.
+#[test]
+fn authored_field_requires_a_field_begin_candidate() {
+    use hwpforge_core::{Control, Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("원문", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let bytes = crate::HwpxEncoder::encode(
+        &document.validate().unwrap(),
+        &crate::style_store_for_preset("default").unwrap(),
+        &ImageStore::new(),
+    )
+    .unwrap();
+    let package = crate::raw_package::RawPackage::read(&bytes).unwrap();
+    let mut decoded = crate::HwpxDecoder::decode(&bytes).unwrap();
+    DerivedFacts::collect(&package, &decoded).unwrap();
+    // The source records a text run. An authored field at that path has no wire begin.
+    decoded.document.sections_mut()[0].paragraphs[0].runs[0] = Run::control(
+        Control::Field {
+            field_type: hwpforge_foundation::FieldType::ClickHere,
+            hint_text: None,
+            help_text: None,
+            name: Some("input".into()),
+            display_text: String::new(),
+        },
+        CharShapeIndex::new(0),
+    );
+    let inventory =
+        hwpforge_core::field_inventory::FieldInventory::from_sections(decoded.document.sections());
+    assert_eq!(inventory.fields().len(), 1);
+    assert_eq!(inventory.fields()[0].kind(), "CLICK_HERE");
+    let path = hwpforge_core::node_path::CorePath::new(0, inventory.fields()[0].start());
+    assert!(decoded.source_maps[0].node(&path).is_some());
+    assert!(matches!(
+        DerivedFacts::collect(&package, &decoded),
+        Err(crate::HwpxError::InvalidStructure { .. })
+    ));
+}
+
+// 이것을 실패시키는 것: BOM 없는 reader 좌표로 원문 꼬리를 슬라이스.
+#[test]
+fn negative_scan_tail_uses_original_utf8_boundary() {
+    for bom in ["", "\u{feff}"] {
+        let xml = format!("{bom}<hs:sec xmlns:hs='http://www.hancom.co.kr/hwpml/2011/section' label='가나'><p/></hs:sec>");
+        assert!(safe_negative(&xml));
     }
 }

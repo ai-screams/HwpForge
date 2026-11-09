@@ -398,3 +398,38 @@ mod tests {
         assert_eq!(err.code, "INPUT_NOT_ROUNDTRIP_SAFE");
     }
 }
+
+#[cfg(test)]
+mod preserving_tests {
+    use super::*;
+    use crate::preview_tests::fixture as preserving_fixture;
+    // 이것을 실패시키는 것: MCP 원문 삭제 성공 거부, 경고 누락, 거부 뒤 출력 쓰기.
+    #[test]
+    fn preserving_delete_matches_codec_and_preserves_failed_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.hwpx");
+        let output = dir.path().join("output.hwpx");
+        let absent = dir.path().join("absent.hwpx");
+        let base = preserving_fixture::paragraph_base();
+        std::fs::write(&input, &base).unwrap();
+        let codec = hwpforge_smithy_hwpx::HwpxStructuralEditor::delete_paragraphs(
+            &base,
+            &[hwpforge_smithy_hwpx::ParagraphLocator { section: 0, index: 1 }],
+        )
+        .unwrap();
+        let result =
+            run_delete_para(input.to_str().unwrap(), 0, &[1], output.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), codec);
+        assert_eq!(
+            result.warnings.iter().map(|w| w.code.as_str()).collect::<Vec<_>>(),
+            ["PREVIEW_REMOVED"]
+        );
+        for path in [&output, &absent] {
+            assert!(
+                run_delete_para(input.to_str().unwrap(), 0, &[0], path.to_str().unwrap()).is_err()
+            );
+        }
+        assert_eq!(std::fs::read(&output).unwrap(), codec);
+        assert!(!absent.exists());
+    }
+}

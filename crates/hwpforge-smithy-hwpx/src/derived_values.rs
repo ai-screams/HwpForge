@@ -11,6 +11,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FlowOrdinal(usize);
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code, reason = "insertion boundaries are not consumed by deletion")]
 pub(crate) enum FlowBoundary {
     Before(FlowOrdinal),
     EndOfBody,
@@ -20,11 +21,13 @@ pub(crate) enum DerivedEdit<'a> {
         section: usize,
         paragraphs: &'a [FlowOrdinal],
     },
+    #[allow(dead_code, reason = "insert retains its existing admission contract")]
     Insert {
         section: usize,
         at: FlowBoundary,
         fragment: &'a str,
     },
+    #[allow(dead_code, reason = "text edits retain their existing admission contract")]
     Text {
         section: usize,
         changed: &'a [FlowOrdinal],
@@ -91,6 +94,9 @@ enum TargetKey {
 #[cfg(test)]
 thread_local! {pub(crate) static COLLECTIONS: std::cell::Cell<usize> = const {std::cell::Cell::new(0)};}
 
+#[cfg(test)]
+thread_local! {pub(crate) static DECISIONS:std::cell::RefCell<Vec<&'static str>>=const{std::cell::RefCell::new(Vec::new())};}
+
 impl<'a> DerivedFacts<'a> {
     pub(crate) fn collect(
         package: &crate::raw_package::RawPackage,
@@ -98,6 +104,8 @@ impl<'a> DerivedFacts<'a> {
     ) -> HwpxResult<Self> {
         #[cfg(test)]
         COLLECTIONS.with(|count| count.set(count.get() + 1));
+        #[cfg(test)]
+        DECISIONS.with(|d| d.borrow_mut().push("collect"));
         let sections: HashMap<_, _> = (0..decoded.source_maps.len())
             .map(|s| Ok((package.section_path(s)?, s)))
             .collect::<HwpxResult<_>>()?;
@@ -142,7 +150,11 @@ impl<'a> DerivedFacts<'a> {
                         .iter()
                         .filter_map(|r| by_span.get(&(r.start, r.end)).copied())
                         .collect();
-                    if entry.kind() == "BOOKMARK" && candidates.is_empty() {
+                    // Native bookmarks and autoNum carriers have no fieldBegin display.
+                    // Their source identities and stored values are checked in the raw ledger.
+                    if candidates.is_empty()
+                        && matches!(entry.kind(), "BOOKMARK" | "PAGE_NUM" | "AUTO_NUMBER")
+                    {
                         continue;
                     }
                     require(candidates.len() == 1)?;
@@ -204,6 +216,7 @@ impl<'a> DerivedFacts<'a> {
         let p = map.paragraphs.get(index).ok_or_else(invalid)?;
         part.ordinal_at(p.outer.start, true)
     }
+    #[allow(dead_code, reason = "insert retains its existing admission contract")]
     pub(crate) fn insertion_boundary(
         &self,
         section: usize,
@@ -448,12 +461,13 @@ fn safe_negative(xml: &str) -> bool {
     let Some((root, scope)) = Tag::opening_with_bindings(xml, &Default::default()) else {
         return false;
     };
-    let mut reader = quick_xml::Reader::from_str(xml);
+    let input = crate::wire_xml::PositionedXml::new(xml);
+    let mut reader = quick_xml::Reader::from_str(input.as_str());
     let mut end = 0;
     while let Ok(event) = reader.read_event() {
         match event {
             quick_xml::events::Event::Start(_) | quick_xml::events::Event::Empty(_) => {
-                end = reader.buffer_position() as usize;
+                end = input.original_offset(reader.buffer_position());
                 break;
             }
             quick_xml::events::Event::Decl(_) => {}
@@ -545,7 +559,7 @@ mod table_ledger;
 mod table_profiles;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Default)]
 struct Effect {
@@ -776,6 +790,8 @@ impl DerivedEffects<'_, '_> {
     }
 
     pub(crate) fn check_derived_values(&self) -> HwpxResult<()> {
+        #[cfg(test)]
+        DECISIONS.with(|d| d.borrow_mut().push("check"));
         let facts = self.facts;
         let effects = &self.effects;
         if effects.is_empty() {
@@ -1090,6 +1106,8 @@ fn crossref_unchanged(
 
 impl DerivedEffects<'_, '_> {
     pub(crate) fn collect_height_invalidations(&self) -> HwpxResult<Vec<HeightInvalidation>> {
+        #[cfg(test)]
+        DECISIONS.with(|d| d.borrow_mut().push("heights"));
         let facts = self.facts;
         let effects = &self.effects;
         let mut heights = Vec::new();

@@ -446,3 +446,51 @@ fn delete_para_has_empty_warnings_on_a_clean_fixture() {
     assert_eq!(value["warnings"].as_array().map(Vec::len), Some(0), "{value}");
     assert!(stderr.is_empty(), "{stderr}");
 }
+
+use super::preview_fixture as preserving_fixture;
+
+// 이것을 실패시키는 것: CLI 원문 삭제 성공 거부, Preview 경고 누락, 실패 뒤 파일 생성/덮어쓰기.
+#[test]
+fn preserving_delete_matches_codec_and_preserves_failed_output() {
+    let dir = test_tmp();
+    let input = dir.join("preserving-input.hwpx");
+    let output = dir.join("preserving-output.hwpx");
+    let absent = dir.join("preserving-absent.hwpx");
+    let base = preserving_fixture::paragraph_base();
+    std::fs::write(&input, &base).unwrap();
+    let codec = hwpforge_smithy_hwpx::HwpxStructuralEditor::delete_paragraphs(
+        &base,
+        &[hwpforge_smithy_hwpx::ParagraphLocator { section: 0, index: 1 }],
+    )
+    .unwrap();
+    let (value, _, code) = run_json(&[
+        "delete-para",
+        input.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "1",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(std::fs::read(&output).unwrap(), codec);
+    let warnings = value["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].as_str().unwrap().starts_with("PREVIEW_REMOVED:"));
+    for path in [&output, &absent] {
+        let (_, _, code) = run_json(&[
+            "delete-para",
+            input.to_str().unwrap(),
+            "--section",
+            "0",
+            "--index",
+            "0",
+            "-o",
+            path.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 1);
+    }
+    assert_eq!(std::fs::read(&output).unwrap(), codec);
+    assert!(!absent.exists());
+}

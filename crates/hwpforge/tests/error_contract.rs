@@ -200,6 +200,7 @@ fn manifest_sites_match_the_production_generation_sites() {
     // 이것을 실패시키는 것: patch/fill Preview 최종 대조의 Verification 생성 지점 등록 삭제.
     // 이것을 실패시키는 것: 패키지 무결성 거부의 Decode 생성 지점 등록 삭제.
     // 이것을 실패시키는 것: structural 구간 Verification/캐시 원장 invariant 등록 삭제·오기.
+    // 이것을 실패시키는 것: 원문 보존 삭제의 header 정규화 거부 생성 지점 등록 삭제.
     let manifest = error_contract::load(&error_inventory::workspace_root());
     let scan = error_inventory::collect_sites(&manifest.audited_variants);
 

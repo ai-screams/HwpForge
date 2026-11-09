@@ -192,3 +192,31 @@ fn the_decode_warning_precedes_the_delete_advisory() {
     let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
     assert_eq!(codes, ["LAYOUT_CACHE_DROPPED", "INDEX_MARK_REMOVED"], "documented order");
 }
+
+// 이것을 실패시키는 것: ops가 원문 보존 성공을 거부하거나 Preview 경고 누락/중복.
+#[test]
+fn preserving_delete_matches_codec_bytes_and_preview_warning() {
+    use hwpforge::hwpx::{HwpxStructuralEditor, ParagraphLocator};
+    use std::io::{Cursor, Write};
+    let mut writer = zip::ZipWriter::new_append(Cursor::new(four_paragraphs())).unwrap();
+    for (path, bytes) in [
+        ("Preview/PrvText.txt", b"old preview".as_slice()),
+        ("Scripts/retained.bin", b"keep".as_slice()),
+    ] {
+        writer.start_file(path, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    let base = writer.finish().unwrap().into_inner();
+    let codec = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(
+        &base,
+        &[ParagraphLocator { section: 0, index: 1 }],
+    )
+    .unwrap();
+    let out = delete_para(&base, &DeleteParaOptions::default().with_indexes(vec![1])).unwrap();
+    assert_eq!(out.bytes, codec.value);
+    assert_eq!(
+        out.meta().warnings.into_iter().map(|w| w.code).collect::<Vec<_>>(),
+        ["PREVIEW_REMOVED"]
+    );
+    assert_eq!(texts(&out.bytes), ["첫째", "셋째", "넷째"]);
+}

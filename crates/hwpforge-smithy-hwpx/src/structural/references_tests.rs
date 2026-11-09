@@ -130,6 +130,7 @@ fn finish_delete(base: &[u8]) -> Result<Vec<u8>, StructuralEditError> {
         expected,
         &crate::raw_package::OutputChanges { rewritten: vec![path.into()], ..Default::default() },
         &[crate::structural::SectionChange {
+            ids: super::super::ParagraphIds::Reindex,
             section: 0,
             path: path.into(),
             original: xml,

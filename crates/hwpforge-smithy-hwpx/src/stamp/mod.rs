@@ -36,6 +36,8 @@ pub use request::{
 // cell editing reuses the stamp admission gate (decode→encode→decode
 // no-op equality + ZIP closed-world) so both mutation facades share one
 // fail-closed contract.
+#[cfg(test)]
+pub(crate) use stamper::ZIP_CARRY_CHECKS;
 pub(crate) use stamper::{
     admission_compare, check_zip_carry, delta_compare, encode_hwpx, first_diff_path,
     reject_input_content_loss, EncodePurpose,

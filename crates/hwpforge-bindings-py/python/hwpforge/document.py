@@ -587,9 +587,14 @@ class Document:
     ) -> DocumentResult[StructuralReport]:
         """Return a new document with paragraphs removed; the receiver is unchanged.
 
-        Like the other structural edits this re-encodes the whole package, so
-        it refuses a document carrying entries the encoder would not keep —
-        `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
+        Verified plain or empty top-level body paragraphs can also be deleted
+        from Hancom-saved HWPX. Indexes address positions in the input. On the
+        source-preserving path, surviving paragraph IDs and unrelated payloads
+        are retained; affected line caches are removed and supported affected
+        table heights become zero for Hancom to lay out again. Preview and its
+        connections are removed with ``PREVIEW_REMOVED``; saving again in Hancom
+        rebuilds it. An unverifiable deletion returns its original admission
+        error and no bytes.
 
         HWP5 (.hwp) input is converted first; results are HWPX.
         Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
@@ -604,9 +609,9 @@ class Document:
 
         Raises:
             HwpForgeError: If an index is out of range, if deleting would
-                leave the section unreadable, or if the document carries
-                package entries a re-encode would not keep
-                (``INPUT_ENTRIES_NOT_CARRIED``).
+                leave the section unreadable, or if the input fails admission
+                and deletion cannot be verified within the plain/empty paragraph scope
+                (``INPUT_ENTRIES_NOT_CARRIED`` or ``INPUT_NOT_ROUNDTRIP_SAFE``).
         """
         data, report = _hwpforge.delete_para(
             self._data,

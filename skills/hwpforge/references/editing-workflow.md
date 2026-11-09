@@ -1,22 +1,25 @@
 # JSON Round-Trip Editing
 
-Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it back. Use this (not Markdown conversion) when images, styles, tables and layout must survive. For 누름틀 use `fill`, and for grid or paragraph edits on files 한컴 did not save see [structural-edit.md](structural-edit.md). Every edit ends with the verify loop in SKILL.md ("Verify every edit").
+Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it back. Use this (not Markdown conversion) when images, styles, tables and layout must survive. For 누름틀 use `fill`, and for grid edits, paragraph insertion or verified plain/empty paragraph deletion see [structural-edit.md](structural-edit.md). Every edit ends with the verify loop in SKILL.md ("Verify every edit").
 
 ## Which surface a 한컴-saved document accepts
 
-A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. `set-cell`, `insert-para`, `delete-para` and `stamp` refuse such inputs at their admission checks; `from-json --base` and `restyle` rebuild them with the losses described below.
+A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. `set-cell`, `insert-para` and `stamp` refuse such inputs at their admission checks; `from-json --base` and `restyle` rebuild them with the losses described below.
 
-| Surface                      | 한컴-saved document | CLI result                                                                                                           |
-| ---------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `fill`                       | works               | writes named 누름틀; removes an existing Preview on text changes (except document re-encoding)                       |
-| `patch`                      | works               | text inside existing paragraphs and cells; removes an existing Preview on text changes (except document re-encoding) |
-| `set-cell`                   | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
-| `insert-para`, `delete-para` | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
-| `stamp`                      | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
-| `from-json --base`           | lossy               | succeeds; inherits images and trusted unchanged caches, drops the entries above once anything changed                |
-| `restyle` (MCP, Python)      | lossy               | succeeds; re-encodes like `from-json` — see [templates.md](templates.md)                                             |
+| Surface                 | 한컴-saved document              | CLI result                                                                                                           |
+| ----------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `fill`                  | works                            | writes named 누름틀; removes an existing Preview on text changes (except document re-encoding)                       |
+| `patch`                 | works                            | text inside existing paragraphs and cells; removes an existing Preview on text changes (except document re-encoding) |
+| `set-cell`              | refused                          | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `insert-para`           | refused                          | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `delete-para`           | verified plain/empty body subset | success, otherwise the original admission error, exit 1                                                              |
+| `stamp`                 | refused                          | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `from-json --base`      | lossy                            | succeeds; inherits images and trusted unchanged caches, drops the entries above once anything changed                |
+| `restyle` (MCP, Python) | lossy                            | succeeds; re-encodes like `from-json` — see [templates.md](templates.md)                                             |
 
 The refusal codes differ by interface — Python and MCP name them differently; see [errors.md](errors.md).
+
+Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output.
 
 **The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, change any other text (including table cells) with `to-json --section N` → edit `content.Text` → `patch`. `from-json --base` is **never** a way around a refusal from `set-cell`, `insert-para`, `delete-para` or `stamp`. Use it only when the user explicitly asks for a structural change to that file **and** accepts that the result is a new file that loses the 한컴 package entries and the layout caches around each change, and that they must check it in 한컴.
 

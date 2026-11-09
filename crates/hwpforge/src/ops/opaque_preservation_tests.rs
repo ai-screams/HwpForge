@@ -212,10 +212,10 @@ fn opaque_gate_insert_para() {
     });
 }
 
-// 이것을 실패시키는 것: delete_para 최종 게이트 호출 제거.
+// 이것을 실패시키는 것: delete_para 최종 게이트 호출 제거 또는 원문 보존 삭제 거부.
 #[test]
 fn opaque_gate_delete_para() {
-    check_admission(|b| {
+    check_preserving(|b| {
         delete_para(b, &DeleteParaOptions::default().with_indexes(vec![1])).map(|o| o.bytes)
     });
 }
