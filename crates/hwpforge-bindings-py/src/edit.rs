@@ -164,6 +164,14 @@ pub(crate) fn insert_para<'py>(
 
 /// Deletes paragraphs by index.
 ///
+/// Deletes verified plain or empty body paragraphs from Hancom-saved HWPX too.
+/// Indexes address positions in the input. On the source-preserving path,
+/// affected line caches are removed;
+/// supported affected table heights become zero for Hancom to lay out again.
+/// Preview and its connections are removed with PREVIEW_REMOVED. Saving again
+/// in Hancom rebuilds the preview. An unverifiable edit returns its original
+/// admission error and no bytes.
+///
 /// Args:
 ///     data: The HWPX package or HWP5 (.hwp) bytes.
 ///     accept_conversion_loss: Allow semantic conversion loss (default false).

@@ -129,10 +129,16 @@ Constructors and accessors beside these: `Document.open(path)` (bounded at 100 M
 `INPUT_TOO_LARGE` beyond it), `Document.from_bytes(data)` (no bound — the caller already holds
 the bytes), `to_bytes()`, `save(path)`, and `len()` / `==` / `hash()` over the bytes.
 
-`set_cell`, `insert_para`, `delete_para` and `stamp` re-encode the whole package, so they
+`set_cell`, `insert_para` and `stamp` re-encode the whole package, so they
 refuse a document Hancom saved with `INPUT_ENTRIES_NOT_CARRIED` or
 `INPUT_NOT_ROUNDTRIP_SAFE` rather than drop the entries it carries. `fill` and `patch` work on
-such a document.
+such a document. `delete_para` also supports verified plain or empty top-level body
+paragraphs in Hancom-saved HWPX, using input indexes. Its source-preserving path keeps
+surviving paragraph IDs and unrelated payloads, removes affected line caches, zeroes
+supported affected table heights, and removes Preview and its connections with
+`PREVIEW_REMOVED`. Hancom lays out the document again when it is opened.
+Saving it again in Hancom rebuilds Preview.
+An unverifiable deletion returns the original admission error and no bytes.
 
 ### Module functions
 

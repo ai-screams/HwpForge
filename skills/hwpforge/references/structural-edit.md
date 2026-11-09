@@ -1,6 +1,6 @@
 # Grid and Paragraph Edits (`set-cell`, `insert-para`, `delete-para`)
 
-These surfaces edit cells and top-level paragraphs without a JSON round-trip while keeping unrelated content. Paragraph edits splice XML and invalidate affected layout caches; cell edits re-encode. They share admission checks, so **a 한컴-saved document is refused** (`INPUT_NOT_ROUNDTRIP_SAFE` or `INPUT_ENTRIES_NOT_CARRIED`, exit 1) — use `fill` or `to-json --section N` → `patch` there ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; `set-cell` refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — text inside a bookmark span or a memo field), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
+These surfaces edit cells and top-level paragraphs without a JSON round-trip while keeping unrelated content. Paragraph edits splice XML and invalidate affected layout caches; cell edits re-encode. `insert-para` and `set-cell` require round-trip-safe inputs and refuse Hancom-saved documents (`INPUT_NOT_ROUNDTRIP_SAFE` or `INPUT_ENTRIES_NOT_CARRIED`, exit 1). Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. For other text changes use `fill` or `to-json --section N` → `patch` ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; `set-cell` refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — text inside a bookmark span or a memo field), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
 
 ## `set-cell` — table cells by grid address
 
@@ -51,7 +51,7 @@ Fail-closed refusals (exit 1):
 | `SECTION_PROPERTIES_PARAGRAPH` | is the section's first paragraph                                        |
 | `EMPTY_SECTION`                | the deletion would leave the section empty                              |
 
-Deleting a paragraph that holds an index mark succeeds with an advisory in `warnings` (JSON array; stderr without `--json`).
+On a round-trip-safe input, deleting a paragraph that holds an index mark succeeds with an advisory in `warnings` (JSON array; stderr without `--json`). The source-preserving Hancom subset is limited to plain or empty paragraphs.
 
 ## Reading the diff of a paragraph edit
 

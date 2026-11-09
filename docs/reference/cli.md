@@ -368,7 +368,7 @@ hwpforge insert-para [OPTIONS] --section <SECTION> --anchor <ANCHOR> --text <TEX
 
 ### delete-para
 
-최상위 본문 문단을 인덱스로 삭제합니다. 전부 성공하거나 전부 취소됩니다.
+최상위 본문 문단을 인덱스로 삭제합니다. 전부 성공하거나 전부 취소됩니다. 한컴 저장 HWPX에서도 검증 가능한 최상위 본문 평문·빈 문단을 삭제할 수 있습니다. 문단 번호는 입력 문서의 위치 기준입니다. 원문 보존 삭제에서는 영향을 받는 줄 조판 캐시를 지우고, 지원하는 표의 저장 높이를 0으로 만들어 한컴에서 다시 배치하도록 합니다. 기존 Preview와 관련 연결은 제거하고 `PREVIEW_REMOVED`를 알립니다. 한컴에서 다시 저장하면 미리보기가 만들어집니다. 검증할 수 없는 입력은 기존 오류로 거부하며 출력하지 않습니다.
 
 ```console
 hwpforge delete-para [OPTIONS] --section <SECTION> --output <OUTPUT> <FILE>
@@ -470,9 +470,11 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 
 0.18에서 바뀌는 종료 값은 다음 일곱 변경군입니다.
 
+`delete-para`의 사전 validate·encode·재decode 실패도 `INPUT_NOT_ROUNDTRIP_SAFE` / 1입니다. 마지막 의미 왕복 비교 또는 ZIP carry 호출의 실패만 원문 보존 삭제를 시도하며, 그 시도에서 어느 검증이든 실패하면 원래 오류를 그대로 반환합니다.
+
 | 명령·실패                                                               |    이전 | 0.18 코드·종료                 |
 | ----------------------------------------------------------------------- | ------: | ------------------------------ |
-| `delete-para`·`insert-para`: no-op validate·encode·재decode             |       2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
+| `insert-para`: no-op validate·encode·재decode                           |       2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
 | `stamp`: no-op validate·encode·재decode                                 |       2 | `INPUT_NOT_ROUNDTRIP_SAFE` / 1 |
 | `set-cell`: 입력 decode·원본 패키지 읽기                                |       1 | `DECODE_FAILED` / 2            |
 | `delete-para`·`insert-para`: 출력 decode·생성 산출물 읽기·fragment 파싱 |       2 | `SELF_VERIFY_FAILED` / 1       |

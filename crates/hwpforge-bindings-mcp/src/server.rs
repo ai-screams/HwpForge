@@ -679,7 +679,7 @@ impl HwpForgeServer {
     /// Delete top-level paragraphs (structural edit).
     #[tool(
         name = "hwpforge_delete_para",
-        description = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify the result with hwpforge_diff."
+        description = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. Verify the result with hwpforge_diff."
     )]
     async fn hwpforge_delete_para(
         &self,
