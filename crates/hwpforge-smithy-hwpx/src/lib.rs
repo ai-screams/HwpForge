@@ -55,6 +55,9 @@ mod color;
 pub mod decoder;
 pub mod default_styles;
 mod depth;
+// Internal preparation; public editors retain their established admission contract.
+#[allow(dead_code, reason = "derived-value admission is prepared for structural editors")]
+mod derived_values;
 pub mod diagnostics;
 mod diff;
 mod encoder;

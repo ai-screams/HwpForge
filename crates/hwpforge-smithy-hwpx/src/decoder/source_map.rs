@@ -80,6 +80,7 @@ pub(crate) struct ParagraphSource {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct SourceMap {
+    pub(crate) source_digest: [u8; 32],
     nodes: BTreeMap<CorePath, SourceNode>,
     slots: Vec<PreservedTextSlot>,
     // Core validation placeholders without a wire run, not editable wire slots.
@@ -199,6 +200,7 @@ impl SourceRecorder {
     }
     pub(crate) fn finish(&self, section: &Section, section_index: usize, part: &str) -> SourceMap {
         let mut result = SourceMap {
+            source_digest: *self.source.digest(),
             cache_flow: crate::cache_flow::ParagraphFlow::from_source(&self.source),
             ..SourceMap::default()
         };

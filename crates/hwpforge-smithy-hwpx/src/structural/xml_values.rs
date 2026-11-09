@@ -80,9 +80,30 @@ pub(crate) fn scan_values<E>(
     xml: &str,
     fields: bool,
     failure: impl Fn(crate::HwpxError) -> E,
+    attribute: impl FnMut(usize, &str, &str) -> Result<(), E>,
+    text_value: impl FnMut(usize, &str) -> Result<(), E>,
+    mut field_value: impl FnMut(&str, &BTreeMap<String, String>) -> Result<(), E>,
+) -> Result<(), E> {
+    scan_positioned_values(xml, fields, failure, attribute, text_value, |_, kind, values| {
+        field_value(kind, values)
+    })
+}
+
+/// Raw begin offsets join normalized values to the decoder's source identities.
+pub(crate) fn scan_fields(
+    xml: &str,
+    field: impl FnMut(usize, &str, &BTreeMap<String, String>) -> crate::HwpxResult<()>,
+) -> crate::HwpxResult<()> {
+    scan_positioned_values(xml, true, |e| e, |_, _, _| Ok(()), |_, _| Ok(()), field)
+}
+
+fn scan_positioned_values<E>(
+    xml: &str,
+    fields: bool,
+    failure: impl Fn(crate::HwpxError) -> E,
     mut attribute: impl FnMut(usize, &str, &str) -> Result<(), E>,
     mut text_value: impl FnMut(usize, &str) -> Result<(), E>,
-    mut field_value: impl FnMut(&str, &BTreeMap<String, String>) -> Result<(), E>,
+    mut field_value: impl FnMut(usize, &str, &BTreeMap<String, String>) -> Result<(), E>,
 ) -> Result<(), E> {
     let refused = || {
         failure(crate::HwpxError::InvalidStructure {
@@ -94,15 +115,18 @@ pub(crate) fn scan_values<E>(
             .into(),
         })
     };
-    let mut reader = NsReader::from_str(xml);
+    // Both readers address the same BOM-free input; callbacks address original bytes.
+    let input = xml.strip_prefix('\u{feff}').unwrap_or(xml);
+    let prefix_len = xml.len() - input.len();
+    let mut reader = NsReader::from_str(input);
     // Structural fields keep their existing lexical namespace policy. Only
     // descriptor values need expanded attribute names and reserved-prefix checks.
-    let mut field_reader = fields.then(|| quick_xml::Reader::from_str(xml));
+    let mut field_reader = fields.then(|| quick_xml::Reader::from_str(input));
     let mut depth = 0usize;
     let mut ordinal = 0;
     let mut texts: Vec<(usize, usize, String)> = Vec::new();
     let mut all_text = String::new();
-    let mut field: Option<(usize, String, BTreeMap<String, String>)> = None;
+    let mut field: Field = None;
     let mut parameter: Option<(usize, String, String)> = None;
     let mut container = None;
     loop {
@@ -165,9 +189,15 @@ pub(crate) fn scan_values<E>(
                     if field.is_some() {
                         return Err(refused());
                     }
-                    field =
-                        Some((depth, attrs.remove("type").unwrap_or_default(), BTreeMap::new()));
-                } else if let Some((field_depth, _, _)) = &field {
+                    field = Some((
+                        depth,
+                        attrs.remove("type").unwrap_or_default(),
+                        BTreeMap::new(),
+                        field_reader.as_ref().unwrap().buffer_position() as usize + prefix_len
+                            - e.len()
+                            - if empty { 3 } else { 2 },
+                    ));
+                } else if let Some((field_depth, _, _, _)) = &field {
                     // 이것을 실패시키는 것: parameters 밖 값 또는 미해석 자식 요소 무시.
                     if name == "parameters" {
                         if depth != field_depth + 1 {
@@ -251,7 +281,7 @@ pub(crate) fn scan_values<E>(
     }
 }
 
-type Field = Option<(usize, String, BTreeMap<String, String>)>;
+type Field = Option<(usize, String, BTreeMap<String, String>, usize)>;
 type Parameter = Option<(usize, String, String)>;
 
 fn close<E>(
@@ -259,7 +289,7 @@ fn close<E>(
     field: &mut Field,
     parameter: &mut Parameter,
     container: &mut Option<usize>,
-    field_value: &mut impl FnMut(&str, &BTreeMap<String, String>) -> Result<(), E>,
+    field_value: &mut impl FnMut(usize, &str, &BTreeMap<String, String>) -> Result<(), E>,
     refused: &impl Fn() -> E,
 ) -> Result<(), E> {
     if parameter.as_ref().is_some_and(|p| p.0 == depth) {
@@ -274,8 +304,8 @@ fn close<E>(
         *container = None;
     }
     if field.as_ref().is_some_and(|f| f.0 == depth) {
-        let (_, kind, values) = field.take().unwrap();
-        field_value(&kind, &values)?;
+        let (_, kind, values, start) = field.take().unwrap();
+        field_value(start, &kind, &values)?;
     }
     Ok(())
 }

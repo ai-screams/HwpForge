@@ -41,6 +41,7 @@
 mod chart;
 mod equation;
 mod field;
+pub(crate) use field::{ref_content_type_wire_code, ref_type_wire_code};
 mod header_footer;
 mod memo;
 mod picture;
