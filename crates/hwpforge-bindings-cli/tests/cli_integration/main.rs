@@ -9,6 +9,8 @@ mod hwp5;
 mod inspect;
 mod outline;
 mod patch;
+#[path = "../../../hwpforge/tests/support/preview.rs"]
+mod preview_fixture;
 mod read;
 mod schema;
 mod set_cell;

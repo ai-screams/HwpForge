@@ -95,6 +95,8 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 | `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                               |
 | `restyle(*, preset)`                                                                        | `DocumentResult` | `PRESET_NOT_FOUND` — lossy, see [templates.md](templates.md)              |
 
+Editing operations (`fill`, `patch`, `set_cell`, `insert_para`, `delete_para`, `stamp`, `restyle`, `from_json(base=…)`) also raise `DECODE_FAILED` when the HWPX package carries a digital signature or encryption marker; such a document cannot be edited.
+
 | Module function                                                               | Returns                                                            |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `convert_md(text, *, preset="default", base_dir=None)`                        | `DocumentResult` — pass `base_dir` so relative image paths resolve |

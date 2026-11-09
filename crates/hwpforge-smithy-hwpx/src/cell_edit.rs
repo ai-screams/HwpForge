@@ -664,6 +664,12 @@ impl HwpxCellEditor {
     ) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
         let d0 = HwpxDecoder::decode(base)
             .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        // 이것을 실패시키는 것: decode 뒤 공통 무결성 검사 호출 제거.
+        package
+            .ensure_editable()
+            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission)
             .map_err(map_admission_error)?;
         let d1 = HwpxDecoder::decode(&e0)
@@ -692,8 +698,6 @@ impl HwpxCellEditor {
             })
             .unzip();
         let resolved = resolve_edits(&d0.document, &specs)?;
-        let package = crate::patch::RawPackage::read(base)
-            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
         let mut candidates = line_keep::candidates(&d0, &package, &resolved);
         let HwpxDocument {
             source_maps: _,

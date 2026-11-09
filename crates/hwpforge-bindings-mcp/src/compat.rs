@@ -131,14 +131,14 @@ const TABLE: &[Row] = &[
     row!(StampPlan, DecodeFailed, "Check that the file is valid HWPX."),
     row!(InsertPara, DecodeFailed, "Check that the file is valid HWPX."),
     row!(DeletePara, DecodeFailed, "Check that the file is valid HWPX."),
-    row!(SetCell, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 — 둘 다 원본 ZIP 엔트리를 보존합니다."),
+    row!(SetCell, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
     row!(SetCell, InputEntriesNotCarried, "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
     row!(SetCell, UpstreamUnmapped, "Report this as a bug."),
 
     row!(InsertPara, InsertTextRequired, "Use `text` for a single paragraph or `texts` for a contiguous block."),
     row!(DeletePara, DeleteNoTarget, "indices must be a non-empty list of top-level paragraph indices."),
-    row!(InsertPara, InputNotRoundtripSafe, "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
-    row!(DeletePara, InputNotRoundtripSafe, "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
+    row!(InsertPara, InputNotRoundtripSafe, "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill."),
+    row!(DeletePara, InputNotRoundtripSafe, "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill."),
     row!(DeletePara, ReferenceStranded, "This paragraph carries a bookmark/cross-ref/footnote; deleting it could strand a reference."),
     row!(DeletePara, HardBreakLoss, "This paragraph carries a hard page/column break."),
     row!(InsertPara, SectionPropertiesParagraph, "The section's first paragraph holds page setup; it cannot be deleted or displaced."),
@@ -158,8 +158,8 @@ const TABLE: &[Row] = &[
     row!(InsertPara, SpanCountMismatch, "The structural edit was refused."),
     row!(DeletePara, SpanCountMismatch, "The structural edit was refused."),
 
-    row!(InsertPara, InputEntriesNotCarried, "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
-    row!(DeletePara, InputEntriesNotCarried, "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
+    row!(InsertPara, InputEntriesNotCarried, "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill."),
+    row!(DeletePara, InputEntriesNotCarried, "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill."),
     row!(InsertPara, UpstreamUnmapped, "The structural edit was refused."),
     row!(DeletePara, UpstreamUnmapped, "The structural edit was refused."),
 
@@ -326,11 +326,21 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
 
     let code = err.code();
     let message = err.to_string();
-    match TABLE.iter().find(|row| row.tool == tool && row.code == code) {
-        Some(row) => {
-            ToolErrorInfo::new(code, message, row.hint.or_else(|| err.hint()).unwrap_or_default())
-        }
-        None => ToolErrorInfo::new(code, message, err.hint().unwrap_or_default()),
+    let hint = TABLE
+        .iter()
+        .find(|row| row.tool == tool && row.code == code)
+        .and_then(|row| row.hint)
+        .or_else(|| err.hint())
+        .unwrap_or_default();
+    if code == OpsCode::InputEntriesNotCarried {
+        // set-cell·stamp 행은 한국어 hint 이므로 같은 언어의 안내를 붙인다.
+        let notice = match tool {
+            Tool::SetCell | Tool::Stamp => crate::PREVIEW_EDIT_NOTICE_KO,
+            _ => crate::PREVIEW_EDIT_NOTICE,
+        };
+        ToolErrorInfo::new(code, message, format!("{hint} {notice}"))
+    } else {
+        ToolErrorInfo::new(code, message, hint)
     }
 }
 
@@ -932,6 +942,8 @@ mod tests {
     }
 
     #[test]
+    // 이것을 실패시키는 것: 거부 이유·대안·언어 변경 또는 fidelity-gap에 Preview 안내 추가.
+    // 이것을 실패시키는 것: Preview 존재 조건·문서 재인코드 예외 누락 또는 안내 언어 변경.
     fn all_policy_rows_match_baseline() {
         // 이것을 실패시키는 것: TABLE 행의 코드·힌트·종료 값 변경, 행 추가 또는 기준선에서 TABLE 행 삭제.
         let mut covered = Vec::new();

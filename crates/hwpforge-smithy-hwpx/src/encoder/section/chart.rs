@@ -73,9 +73,9 @@ pub(super) fn build_embedded_chart_run_xml(
             r#"<hp:flip horizontal="0" vertical="0"/>"#,
             r#"<hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>"#,
             r#"<hp:renderingInfo>"#,
-            r#"<hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
-            r#"<hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
-            r#"<hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
+            r#"{transMatrix}"#,
+            r#"{scaMatrix}"#,
+            r#"{rotMatrix}"#,
             r#"</hp:renderingInfo>"#,
             r#"<hc:extent x="7200" y="7200"/>"#,
             r##"<hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" "##,
@@ -91,6 +91,18 @@ pub(super) fn build_embedded_chart_run_xml(
             r#"</hp:switch>"#,
             r#"<hp:t/>"#,
             r#"</hp:run>"#,
+        ),
+        transMatrix = crate::encoder::wire_rules::matrix_xml(
+            "transMatrix",
+            crate::encoder::wire_rules::IDENTITY
+        ),
+        scaMatrix = crate::encoder::wire_rules::matrix_xml(
+            "scaMatrix",
+            crate::encoder::wire_rules::IDENTITY
+        ),
+        rotMatrix = crate::encoder::wire_rules::matrix_xml(
+            "rotMatrix",
+            crate::encoder::wire_rules::IDENTITY
         ),
         dropcap = crate::encoder::wire_rules::DEFAULT_DROP_CAP,
         cpr = char_pr_id_ref,

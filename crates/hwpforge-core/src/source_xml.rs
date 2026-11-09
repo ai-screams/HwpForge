@@ -231,7 +231,10 @@ impl XmlSource {
             digest: Sha256::digest(xml.as_bytes()).into(),
             ..Self::default()
         };
-        let mut reader = Reader::from_str(xml);
+        // Reader offsets exclude a consumed UTF-8 BOM; spans address original bytes.
+        let input = xml.strip_prefix('\u{feff}').unwrap_or(xml);
+        let prefix_len = xml.len() - input.len();
+        let mut reader = Reader::from_str(input);
         reader.config_mut().trim_text(false);
         let mut stack = Vec::<usize>::new();
         let mut inserted = Vec::new();
@@ -240,7 +243,7 @@ impl XmlSource {
         let mut parents = vec![0];
         loop {
             let event = reader.read_event().map_err(|e| e.to_string())?;
-            let end = reader.buffer_position() as usize;
+            let end = reader.buffer_position() as usize + prefix_len;
             match event {
                 Event::Start(e) | Event::Empty(e) => {
                     let empty = xml.as_bytes().get(end.saturating_sub(2)) == Some(&b'/');

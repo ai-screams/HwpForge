@@ -8,6 +8,7 @@
 
 use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_foundation::diagnostics::WarningInfo;
+use hwpforge_smithy_hwpx::decoder::HwpxEditBase;
 use hwpforge_smithy_hwpx::presets::{builtin_presets, PresetInfo};
 use hwpforge_smithy_hwpx::{DecodeWarning, EncodeOptions, HwpxDecoder, HwpxEncoder};
 use serde::Serialize;
@@ -188,7 +189,7 @@ pub struct RestyleMeta {
 ///
 /// - [`OpsError::PresetNotFound`] — no built-in preset has that name.
 /// - [`OpsError::Decode`] (`DECODE_FAILED`) — the bytes are not a decodable
-///   HWPX package.
+///   HWPX package, or signature/encryption markers forbid editing.
 /// - [`OpsError::Encode`] (`ENCODE_FAILED`) — re-encoding failed.
 /// - [`OpsError::NoFonts`] — the document declares no font to rebind.
 /// - [`OpsError::Core`] (`VALIDATION_FAILED`) — the decoded document does
@@ -224,19 +225,21 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
         .font
         .clone();
 
-    let decoded = HwpxDecoder::decode(hwpx)
+    // 이것을 실패시키는 것: restyle 읽기를 HwpxDecoder::decode로 되돌리기.
+    let base = HwpxEditBase::read(hwpx)
         .map_err(|e| super::input::classify_decode_failure(hwpx, OpsError::decode(e)))?;
+    let decoded = base.decoded();
     reject_input_content_loss(&decoded.warnings)?;
     let decode_warnings: Vec<OpsWarning> =
-        decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
-    let mut style_store = decoded.style_store;
+        decoded.warnings.iter().cloned().map(OpsWarning::Decode).collect();
+    let mut style_store = decoded.style_store.clone();
 
     let Some(base) = style_store.iter_fonts().next().map(|f| f.face_name.clone()) else {
         return Err(OpsError::NoFonts);
     };
     style_store.replace_font(&base, &preset_font);
 
-    let validated = decoded.document.validate()?;
+    let validated = decoded.document.clone().validate()?;
     let sections = validated.sections().len();
     let paragraphs: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();
     let outcome = HwpxEncoder::encode_with_diagnostics(

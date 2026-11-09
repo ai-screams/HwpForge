@@ -562,6 +562,13 @@ impl ParagraphFlow {
         None
     }
 
+    /// Direct caches of the original paragraph. Structural edits keep their
+    /// established body-only policy while sharing the complete flow ledger.
+    pub(crate) fn paragraph_caches(&self, offset: usize) -> Option<&[Range<usize>]> {
+        let p = self.paragraph_at(offset)?;
+        (self.spans[p].start == offset).then_some(self.caches[p].as_slice())
+    }
+
     /// The caches the changed `paragraphs` make stale ([`stale_caches`]).
     pub(crate) fn stale_caches(
         &self,
@@ -607,7 +614,7 @@ fn start_range(element: &hwpforge_core::source_xml::XmlElement) -> Range<usize> 
 /// quoted `>` and either quote style. No tag scanner or XML reader is needed.
 /// `None` when the recorded range is not a start tag of `xml` (for example
 /// the empty range of the document's virtual root). Counts the bytes read.
-fn source_start<'a>(
+pub(crate) fn source_start<'a>(
     xml: &'a str,
     element: &hwpforge_core::source_xml::XmlElement,
 ) -> Option<quick_xml::events::BytesStart<'a>> {
@@ -701,9 +708,12 @@ pub(crate) fn splice(
     crate::work::tick_n(xml.len() / 1024);
     let mut out = String::with_capacity(xml.len());
     let mut cursor = 0;
+    let mut previous = None;
     for (range, text) in replacements {
         crate::work::tick();
-        if range.start < cursor
+        // 이것을 실패시키는 것: 같은 위치의 빈 삽입 범위 중복 허용.
+        if previous.as_ref() == Some(&range)
+            || range.start < cursor
             || range.end < range.start
             || !xml.is_char_boundary(range.start)
             || !xml.is_char_boundary(range.end)
@@ -715,6 +725,7 @@ pub(crate) fn splice(
         out.push_str(&xml[cursor..range.start]);
         out.push_str(&text);
         cursor = range.end;
+        previous = Some(range);
     }
     out.push_str(&xml[cursor..]);
     Ok(out)
@@ -723,6 +734,37 @@ pub(crate) fn splice(
 #[cfg(test)]
 #[path = "cache_flow/text_edits_tests.rs"]
 mod text_edits_tests;
+
+/// Compare final bytes with the exact declared replacements and untouched gaps.
+pub(crate) fn verify_replacements(
+    original: &str,
+    output: &str,
+    mut allowed: Vec<(Range<usize>, String)>,
+) -> HwpxResult<()> {
+    let mismatch = || HwpxError::InvalidStructure {
+        detail: "bytes differ outside declared replacements".into(),
+    };
+    allowed.sort_unstable_by_key(|(range, _)| (range.start, range.end));
+    let (mut source_at, mut output_at) = (0, 0);
+    for (range, replacement) in allowed {
+        let gap = original.get(source_at..range.start).ok_or_else(mismatch)?;
+        for expected in [gap, replacement.as_str()] {
+            // 이것을 실패시키는 것: 허용 구간 밖 같은 길이 변조 또는 추가 치환 허용.
+            if output.as_bytes().get(output_at..output_at + expected.len())
+                != Some(expected.as_bytes())
+            {
+                return Err(mismatch());
+            }
+            output_at += expected.len();
+        }
+        source_at = range.end;
+    }
+    // 이것을 실패시키는 것: 마지막 허용 구간 뒤의 변조/추가 바이트 무시.
+    if original.get(source_at..) != output.get(output_at..) {
+        return Err(mismatch());
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

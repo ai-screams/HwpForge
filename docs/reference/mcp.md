@@ -73,6 +73,8 @@ crates.io 패키지 이름은 `hwpforge-bindings-mcp`이고 설치되는 바이�
 
 `hwpforge_to_json`의 인라인 응답은 직렬화된 응답이 1 MB 미만일 때만 가능하며, 더 큰 내보내기는 `OUTPUT_TOO_LARGE`로 거부되므로 `output_path`를 주세요. 전체 문서 내보내기는 `hwpforge_from_json`이, `section`을 준 내보내기는 `hwpforge_patch`가 읽습니다.
 
+MCP `hwpforge_from_json`이나 Markdown으로 HWPX를 재생성할 때 원본 패키지의 서명·암호화 상태는 승계되지 않습니다.
+
 ### 읽기 · 검사
 
 | 도구                | 용도                                                                          | 매개변수                                                                                                    |
@@ -97,6 +99,8 @@ crates.io 패키지 이름은 `hwpforge-bindings-mcp`이고 설치되는 바이�
 | `hwpforge_delete_para` | 최상위 본문 문단을 인덱스로 삭제합니다                                | `file_path`, `section`, `indices`, `output_path`                                                                                                                |
 | `hwpforge_stamp_plan`  | 자리표시자 후보를 찾습니다                                            | `file_path`                                                                                                                                                     |
 | `hwpforge_stamp`       | 승인된 명세로 자리표시자를 누름틀로 승격합니다                        | `file_path`, `specs`(텍스트 명세), `cells`(셀 명세), `source_sha256`(`cells`를 쓰면 필수), `output_path`(.hwpx), `manifest_path`(기본 `<output>.manifest.json`) |
+
+전자서명·암호화 표지가 있는 문서는 편집할 수 없으며, 이 거부 오류는 decode 단계의 `DECODE_FAILED`로 보고됩니다.
 
 편집 도구의 동작 규칙은 [CLI 레퍼런스](./cli.md)의 대응하는 명령(예: `hwpforge_insert_para`는 `insert-para`)과 같습니다. 주의할 점은 다음과 같습니다.
 

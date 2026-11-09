@@ -1,5 +1,8 @@
 //! Shared preserve-first HWPX package storage.
 
+pub(crate) mod integrity;
+pub(crate) mod preview;
+
 use crate::decoder::package::PackageReader;
 use crate::encoder::package::MIMETYPE_PART;
 use crate::error::{HwpxError, HwpxResult};
@@ -10,11 +13,23 @@ use std::io::{Cursor, Write as _};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct RawPackage {
     pub(crate) order: crate::decoder::package_order::PackageOrder,
     entries: Vec<RawPackageEntry>,
     index_by_path: BTreeMap<String, usize>,
+}
+
+impl Clone for RawPackage {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        PACKAGE_CLONES.with(|count| count.set(count.get() + 1));
+        Self {
+            order: self.order.clone(),
+            entries: self.entries.clone(),
+            index_by_path: self.index_by_path.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,20 +44,23 @@ struct RawPackageEntry {
 thread_local! {
     // Capture the declaration actually submitted by each editor on this thread.
     static VERIFIED_CHANGES: std::cell::RefCell<Option<OutputChanges>> = const { std::cell::RefCell::new(None) };
+    pub(crate) static PACKAGE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static OUTPUT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     // Full-package reads and writes, excluding metadata opens.
-    static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    pub(crate) static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// Exact parts an editor replaces/rebuilds; never path prefixes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct OutputChanges {
     pub(crate) rewritten: Vec<String>,
+    pub(crate) deleted: Vec<String>,
 }
 
 impl OutputChanges {
     /// Full-document editors rebuild these exact parts. Existing media, charts,
     /// and OLE still owe payload preservation. Master pages are rebuilt from Core.
-    fn reencoded(sections: &[hwpforge_core::Section]) -> Self {
+    pub(crate) fn reencoded(sections: &[hwpforge_core::Section]) -> Self {
         use crate::encoder::package::{masterpage_part_name, section_part_name};
         let masterpage_count =
             sections.iter().flat_map(|s| s.master_pages.iter().flatten()).count();
@@ -53,6 +71,7 @@ impl OutputChanges {
                 .chain((0..sections.len()).map(section_part_name))
                 .chain((0..masterpage_count).map(masterpage_part_name))
                 .collect(),
+            ..Default::default()
         }
     }
 }
@@ -87,7 +106,7 @@ impl RawPackage {
 
     /// [`Self::verify_output`] against `self`, which must be `base` exactly as
     /// read. Never pass a package the editor has changed; re-read `base` then.
-    fn verify_output_with(
+    pub(crate) fn verify_output_with(
         &self,
         base: &[u8],
         output: &[u8],
@@ -112,7 +131,10 @@ impl RawPackage {
         max_total: u64,
     ) -> Result<(), crate::error::CodecFailure> {
         #[cfg(test)]
-        VERIFIED_CHANGES.with(|observed| *observed.borrow_mut() = Some(changes.clone()));
+        {
+            VERIFIED_CHANGES.with(|observed| *observed.borrow_mut() = Some(changes.clone()));
+            OUTPUT_READS.with(|count| count.set(count.get() + 1));
+        }
         let verify = || -> HwpxResult<()> {
             let fresh;
             let original = match read_base {
@@ -149,7 +171,23 @@ impl RawPackage {
                     return Err(violation(MIMETYPE_PART, "must be stored uncompressed"));
                 }
             }
+            let mut deleted = std::collections::BTreeSet::new();
+            for path in &changes.deleted {
+                let entry = original.index_by_path.get(path).map(|&i| &original.entries[i]);
+                if !deleted.insert(path)
+                    || changes.rewritten.contains(path)
+                    || entry.is_none_or(|entry| entry.opaque)
+                {
+                    return Err(violation(path, "invalid deletion declaration"));
+                }
+                if index_by_path.contains_key(path.as_str()) {
+                    return Err(violation(path, "deleted part remains"));
+                }
+            }
             for entry in &original.entries {
+                if deleted.contains(&entry.path) {
+                    continue;
+                }
                 if Self::is_directory_placeholder(&entry.path, entry.opaque) {
                     continue;
                 }
@@ -310,6 +348,12 @@ impl RawPackage {
         if let Some(index) = self.index_by_path.get(path).copied() {
             self.entries[index].bytes = content.into_bytes();
         }
+    }
+
+    pub(crate) fn remove_entries_exact(&mut self, paths: &[String]) {
+        self.entries.retain(|entry| !paths.contains(&entry.path));
+        self.index_by_path =
+            self.entries.iter().enumerate().map(|(i, entry)| (entry.path.clone(), i)).collect();
     }
 
     pub(crate) fn write(&self) -> HwpxResult<Vec<u8>> {

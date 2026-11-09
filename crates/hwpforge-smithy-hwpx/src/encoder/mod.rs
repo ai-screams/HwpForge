@@ -409,6 +409,11 @@ use self::section::encode_section_with_note_counters;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
+    /// Derived preview data was removed after an effective raw edit.
+    PreviewRemoved {
+        /// Actual removed package paths, sorted and unique.
+        parts: Vec<String>,
+    },
     /// A source-backed unmatched field is carried without inventing an end.
     UnclosedFieldBoundary {
         /// Original section part.
@@ -596,7 +601,8 @@ impl EncodeWarning {
             | Self::ContentLost { .. }
             | Self::PackageIdConflict { .. }
             | Self::ImageReferenceUnresolved { .. } => true,
-            Self::UnclosedFieldBoundary { .. }
+            Self::PreviewRemoved { .. }
+            | Self::UnclosedFieldBoundary { .. }
             | Self::LayoutCacheDropped { .. }
             | Self::XmlForbiddenCharsRemoved { .. }
             | Self::ObjectIdConflict { .. } => false,
@@ -622,6 +628,7 @@ impl EncodeWarning {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::PreviewRemoved { .. } => "PREVIEW_REMOVED",
             Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
@@ -657,7 +664,8 @@ impl EncodeWarning {
     #[must_use]
     pub fn part(&self) -> Option<&str> {
         match self {
-            Self::LayoutCacheDropped { .. }
+            Self::PreviewRemoved { .. }
+            | Self::LayoutCacheDropped { .. }
             | Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
             | Self::NoteRestartIgnored { .. }
@@ -689,6 +697,7 @@ impl EncodeWarning {
     #[must_use]
     pub fn location(&self) -> Option<String> {
         match self {
+            Self::PreviewRemoved { .. } => None,
             Self::LayoutCacheDropped { path, .. }
             | Self::NoteHeadSkipped { path, .. }
             | Self::TitleMarkSkipped { path, .. }
@@ -724,6 +733,9 @@ impl EncodeWarning {
     #[must_use]
     pub fn message(&self) -> String {
         match self {
+            Self::PreviewRemoved { parts } => {
+                format!("removed preview parts after editing: {}", parts.join(", "))
+            }
             Self::UnclosedFieldBoundary { reason, .. } => {
                 format!("unclosed source field: {reason}")
             }
@@ -797,6 +809,7 @@ pub(crate) fn split_successful_encode(
 impl std::fmt::Display for EncodeWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PreviewRemoved { .. } => f.write_str(&self.message()),
             Self::LayoutCacheDropped { path, reason } => {
                 write!(f, "layout cache dropped at {path}: {reason}")
             }
@@ -905,6 +918,7 @@ mod is_semantic_loss_tests {
                 "NOTE_RESTART_IGNORED",
                 "OBJECT_ID_CONFLICT",
                 "PACKAGE_ID_CONFLICT",
+                "PREVIEW_REMOVED",
                 "TITLE_MARK_SKIPPED",
                 "UNCLOSED_FIELD_BOUNDARY",
                 "XML_FORBIDDEN_CHARS_REMOVED",
@@ -916,9 +930,13 @@ mod is_semantic_loss_tests {
     /// 깨진다).
     #[test]
     fn message_leaves_the_location_out() {
+        // 이것을 실패시키는 것: PreviewRemoved에 위치를 붙이거나 message에 위치를 중복 삽입.
         for w in crate::decoder::warning_samples::encode() {
-            let loc = w.location().unwrap();
-            assert!(!w.message().contains(&loc), "{w:?}: {}", w.message());
+            let location = w.location();
+            assert_eq!(location.is_none(), matches!(w, EncodeWarning::PreviewRemoved { .. }));
+            if let Some(loc) = location {
+                assert!(!w.message().contains(&loc), "{w:?}: {}", w.message());
+            }
         }
     }
 
@@ -972,6 +990,7 @@ mod is_semantic_loss_tests {
                     EncodeWarning::PackageIdConflict { id, .. } => id.clone(),
                     EncodeWarning::ImageReferenceUnresolved { reference, .. } => reference.clone(),
                     EncodeWarning::ObjectIdConflict { id, .. } => id.to_string(),
+                    EncodeWarning::PreviewRemoved { parts } => parts.join(", "),
                 })
                 .collect::<Vec<_>>()
         };
@@ -1173,7 +1192,8 @@ impl HwpxEncoder {
     /// `options.emit_layout_cache` is overridden by this selective policy.
     /// Images come from `image_store`, as in [`Self::encode_with_diagnostics`].
     /// When the complete typed document (except caches), styles and images are
-    /// unchanged, returns the original package byte for byte. Original values
+    /// unchanged and the base is editable, returns the original package byte
+    /// for byte. Original values
     /// absent from Core are then retained along with the caches; cache validity
     /// is not re-certified. Regenerated output always uses the layout proof.
     ///
@@ -1186,6 +1206,8 @@ impl HwpxEncoder {
     ///
     /// Returns an error if the base cannot be decoded, the prepared Core
     /// document cannot be validated, or encoding/package I/O fails.
+    /// Signature or encryption markers in the base are rejected with
+    /// [`HwpxError::InvalidStructure`], even when the typed inputs are unchanged.
     ///
     /// # Examples
     ///

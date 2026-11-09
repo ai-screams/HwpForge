@@ -1043,6 +1043,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "PreviewRemoved",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "UnclosedFieldBoundary",
           "shape": "struct",
           "cfg": [],

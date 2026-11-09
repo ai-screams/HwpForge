@@ -244,6 +244,10 @@ mod tests {
         for warning in warning_samples::encode() {
             let line = encode_warning_line(&warning);
             let expected = match &warning {
+                EncodeWarning::PreviewRemoved { .. } => {
+                    "PREVIEW_REMOVED: removed preview parts after editing: Preview/PrvText.txt"
+                        .to_string()
+                }
                 EncodeWarning::LayoutCacheDropped { .. } => {
                     "LAYOUT_CACHE_DROPPED at section[0].para[0]: sample".to_string()
                 }

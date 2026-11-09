@@ -1,8 +1,10 @@
 //! Preserve-first HWPX patching utilities.
 //!
 //! Unlike [`crate::HwpxEncoder`], this module is intentionally conservative:
-//! it keeps untouched ZIP entries byte-for-byte and only patches section XML
+//! it patches section XML and removes existing derived Preview parts and their
+//! connections when text changes, keeping other untouched entries byte-for-byte
 //! when the semantic change is text-only and a stable preservation plan exists.
+//! Document re-encoding, such as header normalization, is outside this guarantee.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -31,6 +33,11 @@ use crate::{HwpxDecoder, HwpxStyleStore};
 /// mutations until a preserving structural patcher exists.
 #[derive(Debug, Clone, Copy)]
 pub struct HwpxPatcher;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PRESERVING_BRANCHES: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 
 /// Why a preserving section patch, or the preservation-metadata export it
 /// relies on, failed.
@@ -136,7 +143,8 @@ impl HwpxPatcher {
         preservation_from_map(&section_xml, &section_path, section, map, section_idx, None)
     }
 
-    /// Patches a single section while preserving untouched package entries.
+    /// Patches section text, retaining unrelated entries except derived Preview and
+    /// its connections. Affected layout caches may also change.
     ///
     /// The preserving path currently supports text-only edits. Any structural
     /// change (style changes, table geometry changes, control changes, etc.)
@@ -197,7 +205,11 @@ impl HwpxPatcher {
     /// Same bytes as [`HwpxPatcher::patch_section_preserving`]. The patch
     /// splices XML rather than re-encoding the package, so the decode
     /// warnings come from decoding the base to check the replacement against
-    /// it, and the encode warnings describe only the edited text slots: a
+    /// it. Changed text in a document with existing Hancom previews removes
+    /// Preview and reports PREVIEW_REMOVED. Document re-encoding, such as header
+    /// normalization, is outside this guarantee.
+    /// Preview consumers may lack that data until a Hancom re-save.
+    /// Unchanged text keeps the original; rewriting styles has no such warning guarantee. A
     /// replacement text that holds characters XML 1.0 cannot represent (the
     /// C0 controls other than TAB, LF, CR and U+001F, plus U+FFFE/U+FFFF) is
     /// written without them, and each such slot adds one
@@ -271,6 +283,25 @@ impl HwpxPatcher {
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
     ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, PatchError> {
+        Self::patch_section_preserving_with_changes(
+            base_bytes,
+            section_idx,
+            replacement,
+            styles,
+            preservation,
+            None,
+        )
+    }
+
+    // Fill collects exact declarations and verifies the original-to-final package once.
+    pub(crate) fn patch_section_preserving_with_changes(
+        base_bytes: &[u8],
+        section_idx: usize,
+        replacement: &Section,
+        styles: Option<&HwpxStyleStore>,
+        preservation: Option<&SectionPreservation>,
+        mut accumulated: Option<&mut crate::raw_package::OutputChanges>,
+    ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, PatchError> {
         // 이것을 실패시키는 것: replacement.clone() 앞 관문 삭제.
         replacement.check_nesting_depth().map_err(core(CodecStage::Validation))?;
         let preservation = preservation.ok_or_else(|| {
@@ -302,6 +333,8 @@ impl HwpxPatcher {
         }
 
         let mut decoded = HwpxDecoder::decode(base_bytes).map_err(codec(CodecStage::Decode))?;
+        // 이것을 실패시키는 것: 보존 patch의 무결성 검사 제거.
+        raw_package.ensure_editable().map_err(codec(CodecStage::Decode))?;
         crate::paragraph_measure::validate_measure_output(&decoded.style_store)
             .map_err(codec(CodecStage::Validation))?;
         let normalize_measures = decoded.requires_header_normalization();
@@ -580,6 +613,8 @@ impl HwpxPatcher {
                 .style_index(0)
                 .is_err()
         {
+            #[cfg(test)]
+            PRESERVING_BRANCHES.with(|branches| branches.borrow_mut().push("reencode"));
             let outcome = crate::HwpxEncoder::encode_with_base(
                 base_bytes,
                 &validated,
@@ -588,6 +623,11 @@ impl HwpxPatcher {
                 crate::EncodeOptions::default(),
             )
             .map_err(codec(CodecStage::Encode))?;
+            if let Some(changes) = &mut accumulated {
+                changes.rewritten.extend(
+                    crate::raw_package::OutputChanges::reencoded(validated.sections()).rewritten,
+                );
+            }
             encode_warnings.extend(outcome.warnings);
             return Ok(crate::diagnostics::WithCodecWarnings::new(
                 outcome.bytes,
@@ -604,12 +644,29 @@ impl HwpxPatcher {
             ));
         }
 
+        #[cfg(test)]
+        PRESERVING_BRANCHES.with(|branches| branches.borrow_mut().push("raw"));
+        let preview = crate::raw_package::preview::PreviewRemoval::plan(&raw_package)
+            .map_err(codec(CodecStage::Verification))?;
+        // Fill retains its own original for accumulated verification;
+        // only an independent patch needs its own untouched payload snapshot.
+        let original = accumulated.is_none().then(|| raw_package.clone());
+        let mut changes = crate::raw_package::OutputChanges {
+            rewritten: vec![expected_section_path.clone()],
+            ..Default::default()
+        };
         raw_package.replace_text_entry(&expected_section_path, patched_section_xml);
-        Ok(crate::diagnostics::WithCodecWarnings::new(
-            raw_package.write().map_err(codec(CodecStage::Encode))?,
-            decode_warnings,
-            encode_warnings,
-        ))
+        preview.apply(&mut raw_package, &mut changes).map_err(codec(CodecStage::Verification))?;
+        let bytes = raw_package.write().map_err(codec(CodecStage::Encode))?;
+        if let Some(accumulated) = accumulated {
+            accumulated.rewritten.extend(changes.rewritten);
+            accumulated.deleted.extend(changes.deleted);
+        } else if let Some(original) = original {
+            original.verify_output_with(base_bytes, &bytes, &changes).map_err(PatchError::Codec)?;
+        }
+        encode_warnings
+            .extend(preview.verify_final(&bytes).map_err(codec(CodecStage::Verification))?);
+        Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
 }
 

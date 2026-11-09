@@ -81,7 +81,7 @@ cargo add hwpforge --features full
 
 ```cpp
 [dependencies]
-hwpforge = "0.19"
+hwpforge = "0.20"
 ```
 
 ### 🔨 Hammer — CLI로 시작하기
@@ -422,7 +422,7 @@ let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).
 
 ```toml
 # Markdown 지원과 공유 연산 계층 포함 (schemars 제외)
-hwpforge = { version = "0.19", features = ["full"] }
+hwpforge = { version = "0.20", features = ["full"] }
 ```
 
 ## 📜 지원 콘텐츠

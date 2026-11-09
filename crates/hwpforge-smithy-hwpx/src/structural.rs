@@ -11,14 +11,20 @@
 //! delete that would strand a reference, or lose a hard page/column break,
 //! is refused rather than silently corrupting the document.
 //!
-//! This module owns the conservative reference scan; precise reference
-//! resolution (which id is referenced from where, to allow deleting an
-//! unreferenced bookmark) is a documented follow-up.
+//! The conservative reference preflight keeps its existing rejection policy.
+//! Final section checks additionally verify source ranges and surviving wire
+//! references; they do not grant permission to delete protected material.
 
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use serde_json::Value;
+
+mod paragraph_refs;
+mod references;
+mod source_ranges;
+pub(crate) mod xml_values;
+use source_ranges::SectionChange;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::error::{CodecFailure, CodecStage};
@@ -259,16 +265,22 @@ fn map_admission(error: StamperError) -> StructuralEditError {
 
 /// Input admission gate shared by insert and delete: the base must round-trip
 /// (decode→encode→decode is a no-op) so a byte-splice edit can be verified.
-/// Returns the decoded base on success.
-fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
+/// Returns the decoded base and its checked package for reuse by the edit.
+fn admit(base: &[u8]) -> Result<(HwpxDocument, RawPackage), StructuralEditError> {
     let d0 = HwpxDecoder::decode(base)
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    let package = RawPackage::read(base)
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    // 이것을 실패시키는 것: admission 전 무결성 검사 제거.
+    package
+        .ensure_editable()
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
     let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission).map_err(map_admission)?;
     let d1 = HwpxDecoder::decode(&e0)
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
     admission_compare(&d0, &d1).map_err(map_admission)?;
     check_zip_carry(base, &e0).map_err(map_admission)?;
-    Ok(d0)
+    Ok((d0, package))
 }
 
 /// Reverse-delta self-verify shared by insert and delete: the re-decoded output
@@ -293,8 +305,8 @@ fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEd
 pub struct HwpxStructuralEditor;
 
 impl HwpxStructuralEditor {
-    /// Deletes top-level paragraphs, all-or-nothing, preserving every other
-    /// byte of the package exactly.
+    /// Deletes top-level paragraphs, all-or-nothing, retaining unrelated content.
+    /// Affected caches and derived Preview may be removed.
     ///
     /// Pipeline: input admission gate → per-target rejection scan
     /// (reference / hard-break) → declared-delta build + `validate()` →
@@ -341,13 +353,33 @@ impl HwpxStructuralEditor {
         base: &[u8],
         targets: &[ParagraphLocator],
     ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
+        Self::delete_paragraphs_with_codec_diagnostics(base, targets).map(|result| {
+            crate::diagnostics::WithDecodeWarnings::new(result.value, result.decode_warnings)
+        })
+    }
+
+    /// Deletes paragraphs while retaining decode and encode diagnostics.
+    /// Empty requests return the original bytes. Existing admission remains unchanged.
+    ///
+    /// # Errors
+    /// See [`StructuralEditError`].
+    pub fn delete_paragraphs_with_codec_diagnostics(
+        base: &[u8],
+        targets: &[ParagraphLocator],
+    ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
         // Deleting nothing is a byte-identical no-op (the CLI/MCP surfaces nudge
         // the caller with an explicit "no target" error instead).
         if targets.is_empty() {
-            return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
+            return Ok(crate::diagnostics::WithCodecWarnings::new(
+                base.to_vec(),
+                Vec::new(),
+                Vec::new(),
+            ));
         }
         // ── input admission: base must round-trip so we can verify ──
-        let d0 = admit(base)?;
+        let (d0, mut package) = admit(base)?;
+        let preview = crate::raw_package::preview::PreviewRemoval::plan(&package)
+            .map_err(verification_error)?;
         let decode_warnings = d0.warnings.clone();
         let sections = d0.document.sections();
 
@@ -411,14 +443,15 @@ impl HwpxStructuralEditor {
         })?;
 
         // ── byte-splice each affected section's XML ──
-        let mut package = RawPackage::read(base)
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        // 이것을 실패시키는 것: 원본의 문단 참조 검사 호출 생략.
+        paragraph_refs::check(&package)?;
         let mut by_section: std::collections::BTreeMap<usize, Vec<usize>> =
             std::collections::BTreeMap::new();
         for t in targets {
             by_section.entry(t.section).or_default().push(t.index);
         }
         let mut changes = crate::raw_package::OutputChanges::default();
+        let mut section_changes = Vec::new();
         for (section_idx, mut indices) in by_section {
             let path = package
                 .section_path(section_idx)
@@ -451,14 +484,28 @@ impl HwpxStructuralEditor {
             let out = splice_paragraphs(&xml, map, &indices, None)?;
             changes.rewritten.push(path.clone());
             package.replace_text_entry(&path, out);
+            section_changes.push(SectionChange {
+                section: section_idx,
+                path,
+                original: xml,
+                deleted: indices,
+                inserted: None,
+            });
         }
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
-        let bytes = finish_edit(base, package, &d0, expected, &changes)?;
+        preview.apply(&mut package, &mut changes).map_err(verification_error)?;
+        let bytes = finish_edit(base, package, &d0, expected, &changes, &section_changes)?;
+        let preview_warning = preview.verify_final(&bytes).map_err(verification_error)?;
 
-        Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
+        Ok(crate::diagnostics::WithCodecWarnings::new(
+            bytes,
+            decode_warnings,
+            preview_warning.into_iter().collect(),
+        ))
     }
 
-    /// Inserts one new paragraph, preserving every other byte of the package.
+    /// Inserts a paragraph, invalidating affected caches and removing derived Preview
+    /// and its connections when present; unrelated content is retained.
     ///
     /// Delegates to [`Self::insert_paragraphs`] with a single-text batch —
     /// one implementation, two surfaces.
@@ -478,8 +525,8 @@ impl HwpxStructuralEditor {
         )
     }
 
-    /// Inserts a contiguous block of new paragraphs at one anchor, preserving
-    /// every other byte of the package (batch form of
+    /// Inserts a contiguous block at one anchor, retaining unrelated content
+    /// while invalidating affected caches and removing Preview (batch form of
     /// [`Self::insert_paragraph`]).
     ///
     /// Every inserted paragraph **uniformly** inherits the anchor's paragraph
@@ -546,7 +593,7 @@ impl HwpxStructuralEditor {
     /// admission gate's read of `base`, as in
     /// [`Self::insert_paragraphs_with_diagnostics`].
     ///
-    /// `encode_warnings` covers the texts alone. This path encodes the
+    /// `encode_warnings` covers text cleanup and removal of derived Preview parts. This path encodes the
     /// declared delta only to source the new paragraphs' bytes and throws
     /// that package away, so its diagnostics are not reported. What is
     /// reported is the entry clean-up: each text has the characters XML 1.0
@@ -607,7 +654,9 @@ impl HwpxStructuralEditor {
         }
 
         // ── input admission ──
-        let d0 = admit(base)?;
+        let (d0, mut package) = admit(base)?;
+        let preview = crate::raw_package::preview::PreviewRemoval::plan(&package)
+            .map_err(verification_error)?;
         let decode_warnings = d0.warnings.clone();
 
         let sections = d0.document.sections();
@@ -646,8 +695,8 @@ impl HwpxStructuralEditor {
         }
         // Each text is cleaned once here; the cleaned text is what is encoded,
         // spliced and expected by the self-verify below.
-        let mut package = RawPackage::read(base)
-            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        // 이것을 실패시키는 것: 원본의 문단 참조 검사 호출 생략.
+        paragraph_refs::check(&package)?;
         let path = package
             .section_path(anchor.section)
             .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
@@ -776,10 +825,21 @@ impl HwpxStructuralEditor {
         let out =
             splice_paragraphs(&xml, map, &[], Some((insert_index, texts.len(), &new_para_bytes)))?;
         package.replace_text_entry(&path, out);
-        let mut changes = crate::raw_package::OutputChanges { rewritten: vec![path] };
+        let section_changes = [SectionChange {
+            section: anchor.section,
+            path: path.clone(),
+            original: xml,
+            deleted: Vec::new(),
+            inserted: Some((insert_index, texts.len(), new_para_bytes)),
+        }];
+        let mut changes =
+            crate::raw_package::OutputChanges { rewritten: vec![path], ..Default::default() };
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
-        let bytes = finish_edit(base, package, &d0, expected, &changes)?;
+        preview.apply(&mut package, &mut changes).map_err(verification_error)?;
+        let bytes = finish_edit(base, package, &d0, expected, &changes, &section_changes)?;
+        let preview_warning = preview.verify_final(&bytes).map_err(verification_error)?;
 
+        encode_warnings.extend(preview_warning);
         Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
 }
@@ -794,6 +854,7 @@ fn finish_edit(
     d0: &HwpxDocument,
     expected: Document,
     changes: &crate::raw_package::OutputChanges,
+    section_changes: &[SectionChange],
 ) -> Result<Vec<u8>, StructuralEditError> {
     let bytes = package
         .write()
@@ -809,11 +870,14 @@ fn finish_edit(
     };
     self_verify(&bytes, &expected_doc)?;
     RawPackage::verify_output(base, &bytes, changes).map_err(StructuralEditError::Codec)?;
+    // 이것을 실패시키는 것: 최종 ZIP의 section 원문/생존 참조 검사 생략.
+    source_ranges::verify_output(&bytes, d0, section_changes)?;
     Ok(bytes)
 }
 
 // Admission has already validated the original definitions and proved the
-// header round-trips. Body splicing keeps positional references unchanged.
+// header round-trips. Style definition positions stay unchanged; paragraph
+// anchor consumers have already been refused before splicing.
 fn normalize_header_for_edit(
     package: &mut RawPackage,
     decoded: &HwpxDocument,
@@ -837,10 +901,13 @@ fn normalize_header_for_edit(
 /// New encoder output only. Original-document positions come exclusively from
 /// the decoder's SourceMap; never call this on a package's original XML.
 fn encoded_paragraph_spans(xml: &str) -> Result<Vec<std::ops::Range<usize>>, StructuralEditError> {
-    let (_, source) = hwpforge_core::source_xml::XmlSource::read(xml).map_err(|detail| {
+    let source = references::source(xml).map_err(|error| {
         StructuralEditError::Codec(CodecFailure::hwpx(
             CodecStage::Verification,
-            &crate::HwpxError::XmlParse { file: "encoded section fragment".into(), detail },
+            &crate::HwpxError::XmlParse {
+                file: "encoded section fragment".into(),
+                detail: error.to_string(),
+            },
         ))
     })?;
     let root = source.elements().iter().find(|e| e.name() == "sec").ok_or_else(|| {
@@ -863,16 +930,37 @@ fn splice_paragraphs(
     deleted: &[usize],
     inserted: Option<(usize, usize, &str)>,
 ) -> Result<String, StructuralEditError> {
+    let edits = paragraph_replacements(map, deleted, inserted)?;
+    crate::cache_flow::splice(xml, edits).map_err(verification_error)
+}
+
+fn verification_error(error: crate::HwpxError) -> StructuralEditError {
+    StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Verification, &error))
+}
+
+fn paragraph_replacements(
+    map: &crate::decoder::source_map::SourceMap,
+    deleted: &[usize],
+    inserted: Option<(usize, usize, &str)>,
+) -> Result<Vec<(std::ops::Range<usize>, String)>, StructuralEditError> {
     let first =
         inserted.map(|(at, _, _)| at).or_else(|| deleted.first().copied()).unwrap_or(usize::MAX);
     let mut edits = Vec::new();
+    let deleted_set: std::collections::HashSet<_> = deleted.iter().copied().collect();
     for (index, p) in map.paragraphs.iter().enumerate() {
-        if deleted.contains(&index) {
+        // 이것을 실패시키는 것: 삭제 집합을 무시해 부모 삭제와 자식 치환을 겹치게 만들기.
+        if deleted_set.contains(&index) {
             edits.push((p.outer.clone(), String::new()));
+            // 이것을 실패시키는 것: 삭제 부모 안 ID/캐시 치환을 남기기.
             continue;
         }
         if index >= first {
-            edits.extend(p.line_segments.iter().cloned().map(|r| (r, String::new())));
+            let caches = map.cache_flow.paragraph_caches(p.outer.start).ok_or_else(|| {
+                StructuralEditError::Invariant {
+                    detail: "paragraph missing from cache flow".into(),
+                }
+            })?;
+            edits.extend(caches.iter().cloned().map(|range| (range, String::new())));
         }
         let new_index = index - deleted.partition_point(|i| *i < index)
             + inserted.map_or(0, |(at, count, _)| if index >= at { count } else { 0 });
@@ -894,12 +982,7 @@ fn splice_paragraphs(
         };
         edits.push((at..at, fragment.to_owned()));
     }
-    edits.sort_by(|a, b| b.0.start.cmp(&a.0.start).then(b.0.end.cmp(&a.0.end)));
-    let mut out = xml.to_owned();
-    for (range, replacement) in edits {
-        out.replace_range(range, &replacement);
-    }
-    Ok(out)
+    Ok(edits)
 }
 
 fn encode_insert_fragment(document: &HwpxDocument) -> Result<Vec<u8>, StructuralEditError> {
@@ -1151,7 +1234,8 @@ mod tests {
             encoded_paragraph_spans("<other/>"),
             Err(StructuralEditError::Invariant { .. })
         ));
-        let doc = admit(&fixture("plain_paragraphs.hwpx")).unwrap();
+        // 이것을 실패시키는 것: self_verify의 decode 실패 stage를 Decode로 변경.
+        let (doc, _) = admit(&fixture("plain_paragraphs.hwpx")).unwrap();
         let error = self_verify(b"bad", &doc).unwrap_err();
         assert!(matches!(
             error,

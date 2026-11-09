@@ -348,6 +348,7 @@ const WARNING_MAPPING: Table = &[
     (
         "EncodeWarning",
         &[
+            ("PreviewRemoved", "PREVIEW_REMOVED"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             ("NoteHeadSkipped", "NOTE_HEAD_SKIPPED"),
@@ -871,6 +872,12 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
         "EncodeWarning",
         vec![
             (
+                "PreviewRemoved",
+                OpsWarning::Encode(EncodeWarning::PreviewRemoved {
+                    parts: vec!["Preview/PrvText.txt".into()],
+                }),
+            ),
+            (
                 "UnclosedFieldBoundary",
                 OpsWarning::Encode(EncodeWarning::UnclosedFieldBoundary {
                     part: "Contents/section0.xml".into(),
@@ -1157,6 +1164,7 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
 #[test]
 fn inventory_matches_the_tracked_file() {
     // 이것을 실패시키는 것: snapshot에서 DocxWarning::FormatDefaulted 항목을 빼기.
+    // 이것도 실패시키는 것: 추적 snapshot에서 PreviewRemoved variant 삭제.
     let regenerated = error_inventory::collect();
     let rendered = serde_json::to_string_pretty(&regenerated).expect("serialise") + "\n";
 
@@ -1256,6 +1264,7 @@ fn manifest_files_hold_no_unnamed_diagnostic_enum() {
 #[test]
 fn every_wrapped_variant_has_a_mapping() {
     // 이것을 실패시키는 것: DocxWarning::FormatDefaulted 매핑 행 제거.
+    // 이것도 실패시키는 것: PreviewRemoved의 기존 경고 채널 매핑 표 등록 삭제.
     let inventory = error_inventory::collect();
     let tables: Vec<&(&str, &[(&str, &str)])> =
         ERROR_MAPPING.iter().chain(WARNING_MAPPING.iter()).collect();
@@ -1314,6 +1323,7 @@ fn constructed_errors_produce_the_mapped_code() {
 #[test]
 fn constructed_warnings_produce_the_mapped_code() {
     // 이것을 실패시키는 것: FormatDefaulted를 기존 FORMAT 계열의 다른 코드로 오매핑.
+    // 이것도 실패시키는 것: PreviewRemoved의 경고 코드를 OTHER로 변경.
     // DOCX diagnostic codes must neither alias each other nor an existing ops code.
     let docx_codes = WARNING_MAPPING.iter().find(|(name, _)| *name == "DocxWarning").unwrap().1;
     let mut unique = BTreeSet::new();

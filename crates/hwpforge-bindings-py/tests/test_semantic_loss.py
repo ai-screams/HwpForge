@@ -15,7 +15,9 @@ document model.
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from typing import TYPE_CHECKING
 
 import pytest
@@ -64,6 +66,19 @@ def test_regenerating_edit_fails_closed(note_head_document: Document) -> None:
 
     assert caught.value.code == "ENCODE_SEMANTIC_LOSS"
     assert caught.value.message
+
+
+# 이것을 실패시키는 것: ops restyle 읽기를 HwpxDecoder::decode로 되돌리기.
+def test_restyle_refuses_signature_markers() -> None:
+    package = io.BytesIO(hwpforge.convert_md("본문").document.to_bytes())
+    with zipfile.ZipFile(package, "a") as archive:
+        archive.writestr("META-INF/signatures.xml", b"")
+
+    with pytest.raises(HwpForgeError) as caught:
+        Document.from_bytes(package.getvalue()).restyle(preset="modern")
+
+    assert caught.value.code == "DECODE_FAILED"
+    assert "package integrity" in caught.value.message
 
 
 def test_the_refusal_carries_the_warnings_that_caused_it(note_head_document: Document) -> None:

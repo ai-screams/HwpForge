@@ -110,3 +110,24 @@ fn fill_has_no_warnings_key_on_a_clean_fixture() {
     assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
     assert!(stderr.is_empty(), "{stderr}");
 }
+
+// 이것을 실패시키는 것: CLI가 경고를 누락하거나 편집 전 bytes를 저장.
+#[test]
+fn preview_is_removed_by_fill() {
+    let dir = test_tmp();
+    let base = preview_fixture::base();
+    let input = dir.join("base.hwpx");
+    std::fs::write(&input, &base).unwrap();
+    let output = dir.join("edited.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "fill",
+        input.to_str().unwrap(),
+        "--set",
+        "name=new",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    preview_fixture::assert_warning(&value);
+    preview_fixture::assert_removed(&std::fs::read(output).unwrap());
+}

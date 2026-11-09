@@ -146,6 +146,7 @@ fn shell(value: &Value) -> Value {
 mod styles;
 use styles::Styles;
 mod wire;
+pub(crate) use wire::settings_paragraph_refs_are_safe;
 use wire::PackageAnalysis as Wire;
 mod planner;
 pub use planner::{plan_invalidation, ChangeSet, InvalidationPlan, ParagraphCorrespondence};

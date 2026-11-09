@@ -124,3 +124,27 @@ fn patch_surfaces_layout_cache_dropped_decode_warning() {
     assert_eq!(code2, 0);
     assert!(text_stderr.contains("[patch] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
 }
+
+// 이것을 실패시키는 것: CLI가 경고를 누락하거나 편집 전 bytes를 저장.
+#[test]
+fn preview_is_removed_by_patch() {
+    let dir = test_tmp();
+    let base = preview_fixture::base();
+    let input = dir.join("base.hwpx");
+    std::fs::write(&input, &base).unwrap();
+    let output = dir.join("edited.hwpx");
+    let json = dir.join("section.json");
+    std::fs::write(&json, preview_fixture::patch_json(&base)).unwrap();
+    let (value, stderr, code) = run_json(&[
+        "patch",
+        input.to_str().unwrap(),
+        json.to_str().unwrap(),
+        "--section",
+        "0",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    preview_fixture::assert_warning(&value);
+    preview_fixture::assert_removed(&std::fs::read(output).unwrap());
+}

@@ -2516,6 +2516,31 @@ fn get_field_param(fb: &HxFieldBegin, name: &str) -> Option<String> {
     None
 }
 
+/// Parses an object reference with the decoder's unsigned integer rules.
+/// Shared by structural reference closure, including wire definitions.
+pub(crate) fn reference_object_id(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok()
+}
+
+/// Decodes one RefPath envelope, retaining unrecognized object syntax as Raw.
+/// Structural editing rejects Raw instead of guessing its target.
+pub(crate) fn decode_crossref_target(
+    path: &str,
+    ref_type: &hwpforge_foundation::RefType,
+) -> hwpforge_core::control::RefTarget {
+    use hwpforge_core::control::RefTarget;
+    let target = path.strip_prefix('?').unwrap_or(path);
+    let target = target.strip_suffix(';').unwrap_or(target);
+    // 이것을 실패시키는 것: 책갈피 이름을 숫자 객체로 해석하거나 숫자 파싱을 문자열 비교로 대체.
+    if matches!(ref_type, hwpforge_foundation::RefType::Bookmark) {
+        RefTarget::Name(target.strip_prefix('#').unwrap_or(target).to_string())
+    } else if let Some(id) = target.strip_prefix('#').and_then(reference_object_id) {
+        RefTarget::Object(hwpforge_core::ObjectId::new(id))
+    } else {
+        RefTarget::Raw(target.to_string())
+    }
+}
+
 /// Decodes a fieldBegin into the appropriate Core `Control`, using the run's text as display text.
 ///
 /// Returns `None` for unrecognized field types.
@@ -2608,14 +2633,7 @@ fn decode_field_control(
             // - files corrupted by the old accumulating bug (`??…;;`)
             //   stabilize after one unwrap per decode but are NOT healed
             //   back to a clean Object/Name form.
-            let target_str = get_field_param(fb, "RefPath")
-                .map(|p| {
-                    let s = p.as_str();
-                    let s = s.strip_prefix('?').unwrap_or(s);
-                    let s = s.strip_suffix(';').unwrap_or(s);
-                    s.to_string()
-                })
-                .unwrap_or_default();
+            let path = get_field_param(fb, "RefPath").unwrap_or_default();
             let rt = get_field_param(fb, "RefType")
                 .and_then(|s| s.parse::<hwpforge_foundation::RefType>().ok())
                 .unwrap_or_default();
@@ -2623,25 +2641,7 @@ fn decode_field_control(
                 .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
                 .unwrap_or_default();
             let hl = get_field_param(fb, "RefHyperLink").map(|s| s == "true").unwrap_or(false);
-            // boundary-decode the parsed target.
-            // For Bookmark refs (ref_type == Bookmark) treat the path as
-            // a name; otherwise look for `#<u64>` and lift to SystemId.
-            // Failure preserves Raw so caller still sees the wire value.
-            let target = if matches!(rt, hwpforge_foundation::RefType::Bookmark) {
-                // Bookmark refpaths may carry an anchor-style `#` before the
-                // name (`?#mybook`) — tolerate and strip it.
-                hwpforge_core::control::RefTarget::Name(
-                    target_str.strip_prefix('#').unwrap_or(&target_str).to_string(),
-                )
-            } else if let Some(rest) = target_str.strip_prefix('#') {
-                if let Ok(id) = rest.parse::<u64>() {
-                    hwpforge_core::control::RefTarget::Object(hwpforge_core::ObjectId::new(id))
-                } else {
-                    hwpforge_core::control::RefTarget::Raw(target_str.clone())
-                }
-            } else {
-                hwpforge_core::control::RefTarget::Raw(target_str.clone())
-            };
+            let target = decode_crossref_target(&path, &rt);
             // The field body is the text the reference
             // displays — kept, so the encoder writes it back (before, it was
             // dropped and the encoder wrote the target's name instead). Only

@@ -200,11 +200,13 @@ impl HwpxPatcher {
     /// Apply a section export back, keeping both warning channels.
     ///
     /// Same outcome as [`HwpxPatcher::patch_exported_section`]. A preserving
-    /// patch re-writes one section's XML and leaves every other ZIP entry
+    /// patch re-writes one section's XML, removes Preview and its descriptor
+    /// references on effective raw edits, and leaves other ZIP entries
     /// alone. The decode warnings come from decoding the base to validate
     /// the replacement against it; the encode warnings are the ones
     /// [`HwpxPatcher::patch_section_preserving_with_codec_diagnostics`]
-    /// reports for edited text that held characters XML 1.0 cannot carry.
+    /// reports for text cleanup and derived Preview removal. Raw no-ops keep
+    /// the original; fallback and legacy re-encoding have no removal guarantee.
     ///
     /// # Errors
     ///

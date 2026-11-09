@@ -148,7 +148,8 @@ impl<T> WithEncodeWarnings<T> {
 /// characters XML 1.0 cannot represent, and reports each cleaned value as an
 /// [`EncodeWarning::XmlForbiddenCharsRemoved`] at the head of
 /// `encode_warnings`. For a preserve-first editor, which splices XML instead
-/// of encoding the package, those are the only encode warnings: the
+/// of encoding the package, these warnings describe text cleanup; effective
+/// raw edits also report [`EncodeWarning::PreviewRemoved`]. The text cleanup
 /// `location` names the edited value (a field, a text slot, a new paragraph)
 /// rather than an element.
 #[derive(Debug)]

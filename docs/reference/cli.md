@@ -307,7 +307,7 @@ hwpforge validate [OPTIONS] <FILE>
 
 ### fill
 
-이름 있는 누름틀을 값으로 채웁니다. 건드리지 않는 패키지 엔트리는 바이트 그대로 보존합니다.
+이름 있는 누름틀을 값으로 채웁니다. 기존 한컴 미리보기가 있던 문서에서 내용을 실제로 바꾸면 미리보기(Preview)를 지우고 PREVIEW_REMOVED 경고를 냅니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 내용이 같으면 원본 파일을 돌려줍니다. 머리글 정규화·스타일 정의 변경 등 문서 재인코드가 필요하거나 이전 형식의 문서 전체 JSON을 쓰는 경우는 이 보장 밖입니다.
 
 ```console
 hwpforge fill [OPTIONS] --output <OUTPUT> <FILE>
@@ -350,7 +350,7 @@ hwpforge patch [OPTIONS] --section <SECTION> --output <OUTPUT> <BASE> <SECTION_J
 
 ### insert-para
 
-기준 문단 앞이나 뒤에 새 최상위 문단을 삽입합니다. 다른 바이트는 그대로 둡니다.
+기준 문단 앞이나 뒤에 새 최상위 문단을 삽입합니다. 관련 없는 내용을 유지하며, 영향을 받는 조판 캐시를 고칩니다. 한컴 저장 문서는 아래 사전 검사에서 거부됩니다.
 
 ```console
 hwpforge insert-para [OPTIONS] --section <SECTION> --anchor <ANCHOR> --text <TEXTS> --output <OUTPUT> <FILE>
@@ -455,6 +455,8 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 | 아직 분류하지 않은 상류 variant                                               | `UPSTREAM_UNMAPPED`                                         |
 
 `HWP5_INPUT`이면 먼저 `hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>`로 변환하세요. 확장자가 아닌 내용으로 판정하며, ZIP으로 열리는 접두사 HWPX는 이 코드로 재분류하지 않습니다.
+
+전자서명·암호화 표지가 있는 문서는 편집할 수 없으며, 이 거부 오류는 decode 단계의 `DECODE_FAILED`로 보고됩니다.
 
 `INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
 

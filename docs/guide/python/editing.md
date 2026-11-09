@@ -10,7 +10,9 @@ result = doc.fill({"user_email": "kim@example.com"})
 doc = result.document          # 이 줄이 없으면 아무것도 바뀌지 않은 것입니다
 ```
 
-편집기는 두 부류입니다. **보존 우선(preserve-first)** 편집기(`fill`·`patch`)는 건드리는 XML 조각만 바꾸고 나머지 바이트를 그대로 두며, **재인코드** 편집기(`set_cell`·`stamp`·`restyle`)는 문서를 모델로 디코드해 고친 뒤 패키지를 다시 씁니다. `insert_para`/`delete_para`는 구역 XML에서 해당 문단만 넣고 빼지만, 재인코드 편집기와 같은 사전 검사(원본 패키지의 엔트리가 재인코드 뒤에도 남는지, 디코드–인코드 왕복이 안전한지)를 통과해야 합니다. 이 차이가 아래 "한컴 저장 문서" 표를 만듭니다.
+기존 한컴 미리보기가 있던 문서에서 내용을 실제로 바꾸면 미리보기(Preview)를 지우고 PREVIEW_REMOVED 경고를 냅니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 입력이 편집 가능 검사를 통과하고 내용이 같으면 원본 파일을 돌려줍니다. `header.xml` 정규화·스타일 정의 변경 등 문서 재인코드가 필요하거나 이전 형식의 문서 전체 JSON을 쓰는 경우는 이 보장 밖입니다.
+
+편집기는 두 부류입니다. **보존 우선(preserve-first)** 편집기(`fill`·`patch`)는 건드리는 XML 조각과 Preview 및 그 연결 정보를 바꾸며, **재인코드** 편집기(`set_cell`·`stamp`·`restyle`)는 문서를 모델로 디코드해 고친 뒤 패키지를 다시 씁니다. `insert_para`/`delete_para`는 구역 XML에서 해당 문단만 넣고 빼지만, 재인코드 편집기와 같은 사전 검사(원본 패키지의 엔트리가 재인코드 뒤에도 남는지, 디코드–인코드 왕복이 안전한지)를 통과해야 합니다. 이 차이가 아래 "한컴 저장 문서" 표를 만듭니다.
 
 ## HWP5 입력과 변환 손실
 
@@ -37,13 +39,13 @@ result.document.save("filled.hwpx")
 
 한컴 오피스가 저장한 `.hwpx`에는 HwpForge 인코더가 재현하지 않는 패키지 엔트리(`Preview/PrvText.txt`·`Preview/PrvImage.png`·`META-INF/container.rdf`)가 들어 있습니다. 네 연산은 이런 문서를 조용히 손상시키는 대신 **fail-closed로 거부**합니다.
 
-| 연산                                           | 한컴 저장 문서 | 결과                                                              |
-| ---------------------------------------------- | -------------- | ----------------------------------------------------------------- |
-| `fill`                                         | 동작           | 누름틀만 쓰고 나머지 엔트리는 바이트 그대로 보존                  |
-| `patch`                                        | 동작           | 기존 문단·셀의 텍스트만 바꾸고 패키지를 보존                      |
-| `set_cell`·`insert_para`·`delete_para`·`stamp` | 거부           | `INPUT_ENTRIES_NOT_CARRIED` 또는 `INPUT_NOT_ROUNDTRIP_SAFE`       |
-| `restyle`                                      | 동작           | 재인코드하므로 위 엔트리와 조판 캐시가 사라지며 `warnings`로 알림 |
-| `from_json(base=...)`                          | 부분 승계      | 이미지만 승계하고 위 엔트리는 버려집니다(별도 경고 없음)          |
+| 연산                                           | 한컴 저장 문서 | 결과                                                                 |
+| ---------------------------------------------- | -------------- | -------------------------------------------------------------------- |
+| `fill`                                         | 동작           | 누름틀을 쓰고 내용 변경에서 기존 Preview 제거·경고(재인코드 제외)    |
+| `patch`                                        | 동작           | 기존 문단·셀의 텍스트를 바꾸고 기존 Preview 제거·경고(재인코드 제외) |
+| `set_cell`·`insert_para`·`delete_para`·`stamp` | 거부           | `INPUT_ENTRIES_NOT_CARRIED` 또는 `INPUT_NOT_ROUNDTRIP_SAFE`          |
+| `restyle`                                      | 동작           | 재인코드하므로 위 엔트리와 조판 캐시가 사라지며 `warnings`로 알림    |
+| `from_json(base=...)`                          | 부분 승계      | 이미지만 승계하고 위 엔트리는 버려집니다(별도 경고 없음)             |
 
 ```python
 hancom = hwpforge.Document.open("hancom.hwpx")
@@ -88,7 +90,7 @@ except hwpforge.HwpForgeError as exc:
 
 ## `patch` — 구역 JSON을 편집해 되돌려 넣기
 
-텍스트를 바꾸는 보존 우선 경로입니다. `export_section`이 낸 JSON의 텍스트를 고쳐 `patch`로 넣으면 그 구역 XML의 텍스트 슬롯만 치환됩니다.
+텍스트를 바꾸는 보존 우선 경로입니다. `export_section`이 낸 JSON의 텍스트를 고쳐 `patch`로 넣으면 그 구역의 텍스트를 바꿉니다. 변경의 영향을 받는 조판 캐시를 고칩니다. 기존 한컴 미리보기가 있던 문서에서는 내용을 실제로 바꾸면 미리보기와 그 연결 정보를 제거하며 `PREVIEW_REMOVED`를 보고합니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.
 
 ```python
 import json
@@ -165,7 +167,7 @@ print(dl.report)                     # {'inserted': 0, 'deleted': 2, 'warnings':
 - `text`는 문자열 하나 = 문단 하나, 시퀀스 = 원소마다 문단 하나입니다. 문자열을 글자 단위 시퀀스로 풀지 않습니다. 시퀀스의 원소는 `str`만 받습니다.
 - `anchor`/`indexes`는 그 구역의 **최상위** 문단 인덱스입니다(표 셀 안의 문단은 세지 않습니다). 범위를 넘으면 `PARAGRAPH_OUT_OF_RANGE`.
 - 삭제는 전부-아니면-무(all-or-nothing)이며 fail-closed 정책이 있습니다: 구역 속성을 가진 첫 문단(`SECTION_PROPERTIES_PARAGRAPH`), 책갈피·상호참조·각주 등 참조를 가진 문단, 쪽/단 나눔을 가진 문단(`HARD_BREAK_LOSS`), 구역을 비우는 삭제는 거부됩니다. 같은 이유로 첫 문단 앞에는 넣을 수 없습니다(`INSERT_BEFORE_SECTION_PROPERTIES`).
-- 두 연산은 대상 구역 XML만 바꾸고 다른 엔트리는 바이트 그대로 둡니다. 다만 현재는 재인코드 편집기와 같은 사전 검사를 거치므로 한컴 저장 문서를 `INPUT_ENTRIES_NOT_CARRIED`로 거부합니다(위 표).
+- 두 연산은 대상 구역 XML과 변경의 영향을 받는 조판 캐시를 고치며, 관련 없는 내용을 유지합니다. 현재는 재인코드 편집기와 같은 사전 검사를 거치므로 한컴 저장 문서를 `INPUT_ENTRIES_NOT_CARRIED`로 거부합니다(위 표).
 
 ```python
 try:
@@ -230,7 +232,7 @@ print([w["code"] for w in restyled.report["warnings"]])
 
 ## 편집 뒤에 할 일
 
-1. `result.report["warnings"]`를 읽습니다. 비어 있어야 정상이고, `LAYOUT_CACHE_DROPPED` 같은 코드는 한컴에서 다시 저장해야 쪽 배치가 복원된다는 뜻입니다.
+1. `result.report["warnings"]`를 읽습니다. `PREVIEW_REMOVED`는 내용 변경에 따른 미리보기 제거를 뜻하며, `LAYOUT_CACHE_DROPPED` 같은 코드는 한컴에서 다시 저장해야 쪽 배치가 복원된다는 뜻입니다.
 2. `result.document.validate()["ok"]`로 모델이 유효한지 봅니다.
-3. `original.diff(result.document)`로 바뀐 범위가 의도와 같은지 봅니다 — `package["changed"]`가 대상 구역 하나뿐인지가 좋은 검사입니다.
+3. `original.diff(result.document)`로 바뀐 범위가 의도와 같은지 봅니다 — 대상 구역과 영향을 받는 캐시, 미리보기 연결 정보만 바뀌었는지 확인합니다. 기존 Preview가 있는 보존 우선 편집에서 `package.removed`의 `Preview/PrvText.txt`·`Preview/PrvImage.png`·빈 `Preview/` 디렉터리(있는 경우), `package.changed`의 `META-INF/container.xml` rootfile 줄 제거와 `Contents/content.hpf`의 Preview manifest/spine 연결 제거는 정상입니다. 그 밖의 삭제나 관련 없는 descriptor 변경은 중단하고 확인합니다.
 4. `save` 합니다. 파일명은 `.hwpx`로.

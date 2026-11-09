@@ -2637,14 +2637,11 @@ pub struct HxMatrix {
 impl HxMatrix {
     /// Creates an identity transformation matrix.
     pub fn identity() -> Self {
-        Self {
-            e1: "1".to_string(),
-            e2: "0".to_string(),
-            e3: "0".to_string(),
-            e4: "0".to_string(),
-            e5: "1".to_string(),
-            e6: "0".to_string(),
-        }
+        Self::from_coefficients(crate::encoder::wire_rules::IDENTITY.map(str::to_owned))
+    }
+
+    pub(crate) fn from_coefficients([e1, e2, e3, e4, e5, e6]: [String; 6]) -> Self {
+        Self { e1, e2, e3, e4, e5, e6 }
     }
 }
 
