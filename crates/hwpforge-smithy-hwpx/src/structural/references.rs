@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 type Attributes = BTreeMap<String, String>;
 
 #[derive(Default)]
-pub(super) struct Removed {
+pub(crate) struct Removed {
     ids: BTreeSet<String>,
     object_ids: BTreeSet<u64>,
     names: BTreeSet<String>,
@@ -207,7 +207,7 @@ impl Removed {
             || value == "settings.xml"
     }
 
-    fn field_is_safe(&self, kind: &str, params: &BTreeMap<String, String>) -> bool {
+    pub(crate) fn field_is_safe(&self, kind: &str, params: &BTreeMap<String, String>) -> bool {
         if matches!(
             kind,
             "CLICK_HERE" | "BOOKMARK" | "MEMO" | "SUMMERY" | "DATE" | "PATH" | "PAGE_NUM"

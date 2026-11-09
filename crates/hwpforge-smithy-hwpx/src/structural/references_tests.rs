@@ -135,6 +135,7 @@ fn finish_delete(base: &[u8]) -> Result<Vec<u8>, StructuralEditError> {
             original: xml,
             deleted: vec![1],
             inserted: None,
+            heights: Vec::new(),
         }],
     )
 }

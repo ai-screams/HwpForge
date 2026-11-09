@@ -500,7 +500,7 @@ pub(super) fn build_auto_number_run_xml(
 /// boundary: typed [`RefType`] → HWP5 `%xrf`
 /// N1 wire code. Returns the canonical code for known variants and
 /// `Unknown(code)` preserves the original byte.
-pub(super) fn ref_type_wire_code(ref_type: &hwpforge_foundation::RefType) -> u8 {
+pub(crate) fn ref_type_wire_code(ref_type: &hwpforge_foundation::RefType) -> u8 {
     use hwpforge_foundation::RefType::*;
     match ref_type {
         Table => 0,
@@ -520,7 +520,7 @@ pub(super) fn ref_type_wire_code(ref_type: &hwpforge_foundation::RefType) -> u8 
 
 /// boundary: typed [`RefContentType`] → HWP5
 /// `%xrf` N2 wire code, RefType-relative.
-pub(super) fn ref_content_type_wire_code(
+pub(crate) fn ref_content_type_wire_code(
     ref_type: &hwpforge_foundation::RefType,
     content: &hwpforge_foundation::RefContentType,
 ) -> u8 {
