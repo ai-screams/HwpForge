@@ -21,7 +21,7 @@ use hwpforge_core::run::Run;
 use serde_json::Value;
 
 mod paragraph_refs;
-mod references;
+pub(crate) mod references;
 mod source_ranges;
 pub(crate) mod xml_values;
 use source_ranges::SectionChange;
@@ -481,16 +481,20 @@ impl HwpxStructuralEditor {
                 }
             }
             indices.sort_unstable();
-            let out = splice_paragraphs(&xml, map, &indices, None)?;
-            changes.rewritten.push(path.clone());
-            package.replace_text_entry(&path, out);
-            section_changes.push(SectionChange {
+            let change = SectionChange {
                 section: section_idx,
                 path,
                 original: xml,
                 deleted: indices,
                 inserted: None,
-            });
+                // 공개 삭제는 높이 치환을 하지 않는다. `Vec::new()` 는 heap 을 요청하지 않는다.
+                heights: Vec::new(),
+            };
+            let out = crate::cache_flow::splice(&change.original, change.replacements(map)?)
+                .map_err(verification_error)?;
+            changes.rewritten.push(change.path.clone());
+            package.replace_text_entry(&change.path, out);
+            section_changes.push(change);
         }
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
         preview.apply(&mut package, &mut changes).map_err(verification_error)?;
@@ -822,16 +826,19 @@ impl HwpxStructuralEditor {
         let new_para_bytes = new_para_bytes
             .replace("<hp:", &format!("<{replacement}"))
             .replace("</hp:", &format!("</{replacement}"));
-        let out =
-            splice_paragraphs(&xml, map, &[], Some((insert_index, texts.len(), &new_para_bytes)))?;
-        package.replace_text_entry(&path, out);
-        let section_changes = [SectionChange {
+        let change = SectionChange {
             section: anchor.section,
             path: path.clone(),
             original: xml,
             deleted: Vec::new(),
             inserted: Some((insert_index, texts.len(), new_para_bytes)),
-        }];
+            // 공개 삽입은 높이 치환을 하지 않는다. `Vec::new()` 는 heap 을 요청하지 않는다.
+            heights: Vec::new(),
+        };
+        let out = crate::cache_flow::splice(&change.original, change.replacements(map)?)
+            .map_err(verification_error)?;
+        package.replace_text_entry(&path, out);
+        let section_changes = [change];
         let mut changes =
             crate::raw_package::OutputChanges { rewritten: vec![path], ..Default::default() };
         normalize_header_for_edit(&mut package, &d0, &mut changes)?;
@@ -924,14 +931,38 @@ fn encoded_paragraph_spans(xml: &str) -> Result<Vec<std::ops::Range<usize>>, Str
 
 /// Apply every edit in original coordinates once. Cache ranges and paragraph
 /// spans are decoder records, so deletion/insertion never triggers a rescan.
+#[cfg(test)]
 fn splice_paragraphs(
     xml: &str,
     map: &crate::decoder::source_map::SourceMap,
     deleted: &[usize],
     inserted: Option<(usize, usize, &str)>,
 ) -> Result<String, StructuralEditError> {
-    let edits = paragraph_replacements(map, deleted, inserted)?;
+    let change = SectionChange {
+        section: 0,
+        path: String::new(),
+        original: xml.into(),
+        deleted: deleted.into(),
+        inserted: inserted.map(|(at, count, text)| (at, count, text.into())),
+        heights: Vec::new(),
+    };
+    let edits = change.replacements(map)?;
     crate::cache_flow::splice(xml, edits).map_err(verification_error)
+}
+
+/// The writer and final source verifier consume the same approved original deltas.
+fn structural_replacements(
+    section: usize,
+    xml: &str,
+    map: &crate::decoder::source_map::SourceMap,
+    deleted: &[usize],
+    inserted: Option<(usize, usize, &str)>,
+    heights: &[crate::derived_values::HeightInvalidation],
+) -> Result<Vec<(std::ops::Range<usize>, String)>, StructuralEditError> {
+    let mut edits = paragraph_replacements(map, deleted, inserted)?;
+    crate::derived_values::append_height_replacements(xml, map, section, heights, &mut edits)
+        .map_err(verification_error)?;
+    Ok(edits)
 }
 
 fn verification_error(error: crate::HwpxError) -> StructuralEditError {

@@ -134,28 +134,13 @@ impl ParagraphFlow {
             crate::work::tick();
             changed[p] = true;
         }
-        let edited = || {
-            changed.iter().enumerate().filter_map(|(p, &yes)| {
+        if !self.text_seeds_can_be_proven() {
+            return self.stale_caches(changed.iter().enumerate().filter_map(|(p, &yes)| {
                 crate::work::tick();
                 yes.then_some(p)
-            })
-        };
-        if !self.has_horizontal_section
-            || self.incompatible_section
-            || self.has_wrapping_object
-            || self.unproven_fields
-        {
-            return self.stale_caches(edited());
+            }));
         }
-        // 이것을 실패시키는 것: 호출자의 proven을 소유 관계/자기 조건 없이 신뢰,
-        // 성공한 한 줄 편집을 장벽 또는 내부 흐름 전파 시작점에 포함.
-        let seeds: Vec<bool> = changed
-            .iter()
-            .enumerate()
-            .map(|(p, &edited)| {
-                edited && !(proven.get(p).copied().unwrap_or(false) && self.self_owned(p))
-            })
-            .collect();
+        let seeds = self.effective_text_seeds(&changed, proven);
         let starts = || seeds.iter().enumerate().filter_map(|(p, &yes)| yes.then_some(p));
         let stale = stale_paragraphs(&self.para_list, &self.list_host, starts(), &mut || {});
         let nested = stale_paragraphs(
@@ -183,6 +168,45 @@ impl ParagraphFlow {
             }
         }
         ranges
+    }
+
+    fn text_seeds_can_be_proven(&self) -> bool {
+        self.has_horizontal_section
+            && !self.incompatible_section
+            && !self.has_wrapping_object
+            && !self.unproven_fields
+    }
+
+    pub(crate) fn effective_text_seeds(&self, changed: &[bool], proven: &[bool]) -> Vec<bool> {
+        let can_prove = self.text_seeds_can_be_proven();
+        changed
+            .iter()
+            .enumerate()
+            .map(|(p, &edited)| {
+                if !can_prove {
+                    crate::work::tick();
+                }
+                edited
+                    && !(can_prove && proven.get(p).copied().unwrap_or(false) && self.self_owned(p))
+            })
+            .collect()
+    }
+
+    pub(crate) fn affected_paragraphs(&self, seeds: &[bool]) -> Vec<bool> {
+        stale_paragraphs(
+            &self.para_list,
+            &self.list_host,
+            seeds.iter().enumerate().filter_map(|(p, &yes)| yes.then_some(p)),
+            &mut || {},
+        )
+    }
+
+    pub(crate) fn span(&self, p: usize) -> Option<Range<usize>> {
+        self.spans.get(p).cloned()
+    }
+
+    pub(crate) fn parent(&self, p: usize) -> Option<usize> {
+        self.parent[p]
     }
 
     fn self_owned(&self, p: usize) -> bool {
@@ -781,6 +805,25 @@ mod tests {
     use hwpforge_core::table::{Table, TableCell, TableRow};
     use hwpforge_core::{PageSettings, Paragraph};
     use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
+
+    // 이것을 실패시키는 것: 수평/호환/비감싸기/필드 증명 중 하나 없이 proven으로 꼬리 무효화 축소.
+    #[test]
+    fn unproven_text_edits_keep_conservative_flow_tail() {
+        for gate in 0..4 {
+            let flow = super::ParagraphFlow {
+                spans: vec![0..10, 10..20, 20..30],
+                caches: vec![vec![1..2], vec![11..12], vec![21..22]],
+                para_list: vec![0, 0, 0],
+                list_host: vec![None],
+                has_horizontal_section: gate != 0,
+                incompatible_section: gate == 1,
+                has_wrapping_object: gate == 2,
+                unproven_fields: gate == 3,
+                ..Default::default()
+            };
+            assert_eq!(flow.caches_to_drop_for_text_edits([1], &[true; 3]), [11..12, 21..22]);
+        }
+    }
 
     fn para(text: &str) -> Paragraph {
         Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))

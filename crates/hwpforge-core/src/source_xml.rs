@@ -342,6 +342,10 @@ impl XmlSource {
         annotated.push_str(&xml[offset..]);
         Ok((annotated, source))
     }
+    /// SHA-256 of the original XML, computed during tokenization.
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
     /// All elements in source order, including the identity-zero sentinel.
     pub fn elements(&self) -> &[XmlElement] {
         &self.elements
@@ -387,6 +391,15 @@ mod verification_tests {
         zip.start_file("Contents/section0.xml", zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(xml.as_bytes()).unwrap();
         Arc::from(zip.finish().unwrap().into_inner())
+    }
+
+    /// 이것을 실패시키는 것: 이미 계산한 source digest 대신 빈 값이나 다른 원문 digest 반환.
+    #[test]
+    fn parsed_digest_binds_complete_original_bytes() {
+        let xml = "<sec><p>원문</p></sec>";
+        let source = XmlSource::read(xml).unwrap().1;
+        assert_eq!(*source.digest(), <[u8; 32]>::from(Sha256::digest(xml.as_bytes())));
+        assert_ne!(XmlSource::read("<sec/>").unwrap().1.digest(), source.digest());
     }
 
     /// 이것을 실패시키는 것: 원본 증거 경로에서 공용 ZIP 이름 검사를 우회하기.
