@@ -481,7 +481,8 @@ impl Resolver {
             derived.para.keep_next = Some(false);
         }
         derived.para.keep_lines = Some(false);
-        derived.para.widow = Some(false);
+        // Hancom treats each fragment as a separate paragraph, so preserve the
+        // original effective widow control to protect lone lines at page ends.
         derived
     }
     // Runs and paragraph marks share character style toggles and direct overrides.
@@ -654,7 +655,8 @@ impl Resolver {
         shape.indent_first_line = unit(p.first.unwrap_or(0))?;
         shape.keep_with_next = p.keep_next.unwrap_or(false);
         shape.keep_lines_together = p.keep_lines.unwrap_or(false);
-        shape.widow_orphan = p.widow.unwrap_or(false);
+        // Word defaults widowControl to on after style/direct inheritance.
+        shape.widow_orphan = p.widow.unwrap_or(true);
         self.intern_para(shape)
     }
     fn intern_para(&mut self, shape: ParaShape) -> Result<ParaShapeIndex> {

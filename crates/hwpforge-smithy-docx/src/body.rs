@@ -75,7 +75,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut definitions = Definitions::default();
     let mut relations = Relations::default();
     let mut valid_roots = HashMap::new();
-    let mut suppress_before_page_break = false;
     // Moving the relationships avoids cloning all input strings or borrowing the
     // package through a read. Shared ZIP targets are scanned only once.
     let mut relationships = std::mem::take(&mut package.relationships);
@@ -153,7 +152,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             definitions.read(&bytes, part, root, &mut package.text_budget, &mut warnings)?
         } else {
             let scanned = scan(&bytes, part, root, false, &mut package.text_budget, &mut warnings)?;
-            suppress_before_page_break |= scanned.2;
             scanned.1
         };
         if !root_matches {
@@ -205,7 +203,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
         &mut warnings,
         &mut resolver,
         &relations,
-        suppress_before_page_break,
     )?;
     let registry = resolver.registry;
     let mut document = Document::new();
@@ -324,7 +321,6 @@ struct Body<'a> {
     main: bool,
     root: &'a str,
     root_matches: bool,
-    suppress_before_page_break: bool,
     body_seen: bool,
     final_section_seen: bool,
     stack: Vec<Frame>,
@@ -370,7 +366,7 @@ fn scan(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<(Vec<DecodedSection>, bool, bool)> {
+) -> Result<(Vec<DecodedSection>, bool)> {
     scan_inner(bytes, part, root, main, budget, warnings, None)
 }
 fn scan_formatted(
@@ -380,18 +376,8 @@ fn scan_formatted(
     warnings: &mut Vec<DocxWarning>,
     resolver: &mut Resolver,
     relations: &Relations,
-    suppress_before_page_break: bool,
 ) -> Result<Vec<DecodedSection>> {
-    Ok(scan_inner(
-        bytes,
-        part,
-        "document",
-        true,
-        budget,
-        warnings,
-        Some((resolver, relations, suppress_before_page_break)),
-    )?
-    .0)
+    Ok(scan_inner(bytes, part, "document", true, budget, warnings, Some((resolver, relations)))?.0)
 }
 fn scan_inner(
     bytes: &[u8],
@@ -400,16 +386,14 @@ fn scan_inner(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-    resources: Option<(&mut Resolver, &Relations, bool)>,
-) -> Result<(Vec<DecodedSection>, bool, bool)> {
-    let (resolver, relations, suppress_before_page_break) =
-        resources.map_or((None, None, false), |(r, i, suppress)| (Some(r), Some(i), suppress));
+    resources: Option<(&mut Resolver, &Relations)>,
+) -> Result<(Vec<DecodedSection>, bool)> {
+    let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
     let mut body = Body {
         part,
         main,
         root,
         root_matches: false,
-        suppress_before_page_break,
         body_seen: false,
         final_section_seen: false,
         stack: Vec::new(),
@@ -459,7 +443,7 @@ fn scan_inner(
     if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
         body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
     }
-    Ok((body.sections, body.root_matches, body.suppress_before_page_break))
+    Ok((body.sections, body.root_matches))
 }
 
 impl Body<'_> {
@@ -539,10 +523,9 @@ impl Body<'_> {
                     if let Node::Compatibility { omitted } = &mut parent.node {
                         if w && element.name == "suppressSpBfAfterPgBrk" {
                             match attr(&element, "val") {
-                                None | Some("1" | "true" | "on") => self.suppress_before_page_break = true,
-                                Some("0" | "false" | "off") => self.suppress_before_page_break = false,
+                                None | Some("1" | "true" | "on" | "0" | "false" | "off") => {},
                                 Some(_) => self.warn(Kind::UnsupportedValue, &location,
-                                    || "Invalid suppressSpBfAfterPgBrk boolean; previous value retained",
+                                    || "Invalid suppressSpBfAfterPgBrk boolean; forced page-start spacing retained",
                                     "document_settings", "inherit_or_default")?,
                             }
                         } else if !*omitted {
@@ -1072,14 +1055,14 @@ impl Body<'_> {
         let resolver = self.resolver.as_mut().unwrap();
         let style = resolver.paragraph_style(self.paragraph_style);
         let contextual = base.para.contextual == Some(true);
-        // Word has a separate suppressSpBfAfterPgBrk option (off by default).
-        // Preserve both sides at forced page starts, including approximated columns;
-        // this is a compatibility-based choice, not a Word/Hancom layout measurement.
-        // Test the final flag AFTER restoring the moved trailing break.
-        if paragraph.page_break {
-            if self.suppress_before_page_break {
-                base.para.before = Some(0);
-            }
+        // Word drops the space before at the top of a page started by a forced break,
+        // while Hancom draws it, so emit 0 and keep the previous paragraph's space after.
+        // Include the empty first fragment of a leading page/approximated column break;
+        // decide before boundary collapse so the preceding after is retained.
+        let leading_break =
+            self.breaks.first().is_some_and(|(end, _)| empty_text_runs(&paragraph.runs[..*end]));
+        if paragraph.page_break || leading_break {
+            base.para.before = Some(0);
         } else if let Some((previous_style, previous_contextual)) = self.spacing_neighbor {
             if let Some((_, previous)) = self.pending_shapes.last_mut() {
                 let same_style = previous_style == style;

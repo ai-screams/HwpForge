@@ -156,8 +156,8 @@ fn ordinary_boundaries_stop_at_tables_and_sections() {
 fn ordinary_boundaries_keep_fragment_and_page_break_contracts() {
     for (runs, next_props, expected) in [
         ("<w:t>A</w:t><w:br w:type='page'/><w:t>B</w:t>", "", vec![(300, 0), (0, 1200), (0, 400)]),
-        ("<w:t>A</w:t><w:br w:type='page'/>", "", vec![(300, 1000), (1200, 400)]),
-        ("<w:t>A</w:t>", "<w:pageBreakBefore/>", vec![(300, 1000), (1200, 400)]),
+        ("<w:t>A</w:t><w:br w:type='page'/>", "", vec![(300, 1000), (0, 400)]),
+        ("<w:t>A</w:t>", "<w:pageBreakBefore/>", vec![(300, 1000), (0, 400)]),
     ] {
         let d = read("", &format!("<w:p><w:pPr><w:spacing w:before='60' w:after='200'/></w:pPr><w:r>{runs}</w:r></w:p><w:p><w:pPr><w:spacing w:before='240' w:after='80'/>{next_props}</w:pPr><w:r><w:t>C</w:t></w:r></w:p>"));
         assert_eq!(gaps(&d), expected);
@@ -192,7 +192,7 @@ fn contextual_spacing_boundaries_and_split_fragments() {
         &contextual_styles(),
         "<w:p/><w:p><w:r><w:t>가</w:t><w:br w:type='page'/></w:r></w:p><w:p/>",
     );
-    assert_eq!(gaps(&d), [(200, 0), (0, 800), (200, 800)]);
+    assert_eq!(gaps(&d), [(200, 0), (0, 800), (0, 800)]);
 }
 
 // 이것을 실패시키는 것: 빈 run의 fallback으로 끝 서식 가리기, exact에서 미지 metric 경고, 누락 line의 auto 규칙 무시.
@@ -251,7 +251,7 @@ fn absent_mark_follows_final_run_but_explicit_mark_is_inherited() {
 #[test]
 fn page_break_before_excludes_contextual_but_natural_implicit_style_still_matches() {
     let d = read(&contextual_styles(), "<w:p/><w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>");
-    assert_eq!(gaps(&d), [(200, 800), (200, 800)]);
+    assert_eq!(gaps(&d), [(200, 800), (0, 800)]);
     assert!(d.document.sections()[0].paragraphs[1].page_break);
     let p =
         "<w:p><w:pPr><w:contextualSpacing/><w:spacing w:before='40' w:after='160'/></w:pPr></w:p>";
@@ -374,7 +374,7 @@ fn only_final_output_shapes_are_interned() {
     let tail = "A</w:t><w:br w:type='page'/><w:t>";
     for (body, count, expected) in [
         (p("", "A").repeat(3), 2, vec![(200, 800), (0, 800), (0, 800)]),
-        (format!("{}{}", p("", tail), p("", "B")), 1, vec![(200, 800), (200, 800)]),
+        (format!("{}{}", p("", tail), p("", "B")), 2, vec![(200, 800), (0, 800)]),
         (p("", split), 2, vec![(200, 0), (0, 800)]),
         (p("", tail), 2, vec![(200, 0), (0, 800)]),
         (format!("{}<w:p/>", p("", tail)), 2, vec![(200, 800), (0, 0)]),
@@ -399,8 +399,8 @@ fn only_final_output_shapes_are_interned() {
         ),
         (
             format!("{}{}", p("<w:contextualSpacing/>", tail), p("<w:contextualSpacing/>", "B")),
-            1,
-            vec![(200, 800), (200, 800)],
+            2,
+            vec![(200, 800), (0, 800)],
         ),
         (format!("{}<w:p/>", p("<w:sectPr/>", tail)), 3, vec![(200, 0), (0, 800), (0, 0)]),
     ] {
@@ -428,19 +428,19 @@ fn empty_paragraph_uses_only_final_mark_formatting() {
 }
 
 // 이것을 실패시키는 것: 최종 page_break 무시, column 이동 누락, contextual을 강제 경계에 적용,
-// suppressSpBfAfterPgBrk를 무시하거나 꺼짐을 참으로 해석, 자연 경계까지 억제.
+// suppressSpBfAfterPgBrk 꺼짐에서 before 보존, 자연 경계까지 억제.
 #[test]
-fn forced_boundaries_preserve_each_side_unless_settings_suppress_before() {
+fn forced_boundaries_drop_before_independently_of_settings() {
     for (setting, before) in [
-        ("", 1200),
+        ("", 0),
         ("<w:suppressSpBfAfterPgBrk/>", 0),
         ("<w:suppressSpBfAfterPgBrk w:val='1'/>", 0),
         ("<w:suppressSpBfAfterPgBrk w:val='true'/>", 0),
         ("<w:suppressSpBfAfterPgBrk w:val='on'/>", 0),
-        ("<w:suppressSpBfAfterPgBrk w:val='0'/>", 1200),
-        ("<w:suppressSpBfAfterPgBrk w:val='false'/>", 1200),
-        ("<w:suppressSpBfAfterPgBrk w:val='off'/>", 1200),
-        ("<w:suppressSpBfAfterPgBrk/><w:suppressSpBfAfterPgBrk w:val='false'/>", 1200),
+        ("<w:suppressSpBfAfterPgBrk w:val='0'/>", 0),
+        ("<w:suppressSpBfAfterPgBrk w:val='false'/>", 0),
+        ("<w:suppressSpBfAfterPgBrk w:val='off'/>", 0),
+        ("<w:suppressSpBfAfterPgBrk/><w:suppressSpBfAfterPgBrk w:val='false'/>", 0),
     ] {
         let settings =
             format!("<w:settings xmlns:w='{W}'><w:compat>{setting}</w:compat></w:settings>");
@@ -480,29 +480,29 @@ fn forced_boundaries_preserve_each_side_unless_settings_suppress_before() {
     }
 }
 
-// 이것을 실패시키는 것: settings/root/compat/namespace 범위를 벗어난 옵션 적용,
-// 잘못된 boolean을 참으로 처리하거나 경고 없이 무시, 나머지 compat 손실 경고 제거.
+// 이것을 실패시키는 것: settings/root/compat/namespace 경고 범위 변경,
+// 잘못된 boolean 경고 제거, 나머지 compat 손실 경고 제거.
 #[test]
-fn suppress_before_setting_is_scoped_and_other_settings_still_warn() {
+fn suppress_before_setting_validation_is_scoped_and_other_settings_still_warn() {
     for (kind, root, children, before, omitted, invalid) in [
-        ("settings", "settings", "<w:suppressSpBfAfterPgBrk/>", 1200, 1, 0),
-        ("settings", "settings", "<x:compat><w:suppressSpBfAfterPgBrk/></x:compat>", 1200, 1, 0),
-        ("settings", "settings", "<w:compat><x:suppressSpBfAfterPgBrk/></w:compat>", 1200, 1, 0),
+        ("settings", "settings", "<w:suppressSpBfAfterPgBrk/>", 0, 1, 0),
+        ("settings", "settings", "<x:compat><w:suppressSpBfAfterPgBrk/></x:compat>", 0, 1, 0),
+        ("settings", "settings", "<w:compat><x:suppressSpBfAfterPgBrk/></w:compat>", 0, 1, 0),
         (
             "settings",
             "settings",
             "<w:compat><w:other><w:suppressSpBfAfterPgBrk/></w:other></w:compat>",
-            1200,
+            0,
             1,
             0,
         ),
-        ("settings", "wrong", "<w:compat><w:suppressSpBfAfterPgBrk/></w:compat>", 1200, 0, 0),
-        ("header", "hdr", "<w:compat><w:suppressSpBfAfterPgBrk/></w:compat>", 1200, 0, 0),
+        ("settings", "wrong", "<w:compat><w:suppressSpBfAfterPgBrk/></w:compat>", 0, 0, 0),
+        ("header", "hdr", "<w:compat><w:suppressSpBfAfterPgBrk/></w:compat>", 0, 0, 0),
         (
             "settings",
             "settings",
             "<w:compat><w:suppressSpBfAfterPgBrk w:val='bad'/></w:compat>",
-            1200,
+            0,
             0,
             1,
         ),
@@ -538,5 +538,35 @@ fn suppress_before_setting_is_scoped_and_other_settings_still_warn() {
             d.warnings.iter().filter(|w| w.code() == "DOCX_UNSUPPORTED_VALUE").count(),
             invalid
         );
+    }
+}
+
+// 이것을 실패시키는 것: leading break 판정 누락/반전, 빈 run을 내용으로 취급,
+// contextual 잔여값을 leading page break의 빈 조각에 기록, 끝 나누기 이동 때 before 복원,
+// 확정 전 모양 intern, 비어 있지 않은 첫 조각의 before 삭제, 빈/본문 조각의 widow 초기화.
+#[test]
+fn leading_break_discards_before_on_every_fragment_before_interning() {
+    for kind in ["page", "column"] {
+        for prefix in ["", "<w:r/>", "<w:r><w:t></w:t></w:r>"] {
+            for contextual in ["", "<w:contextualSpacing/>"] {
+                for tail in ["", "<w:br w:type='page'/>"] {
+                    let body = format!("<w:p><w:pPr><w:spacing w:after='200'/>{contextual}</w:pPr></w:p><w:p><w:pPr><w:spacing w:before='240' w:after='80'/>{contextual}</w:pPr>{prefix}<w:r><w:br w:type='{kind}'/><w:t>B</w:t>{tail}</w:r></w:p><w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>");
+                    let d = read("", &body);
+                    assert_eq!(gaps(&d), [(0, 1000), (0, 0), (0, 400), (0, 0)], "{body}");
+                    let used: std::collections::HashSet<_> = d.document.sections()[0]
+                        .paragraphs
+                        .iter()
+                        .map(|p| p.para_shape_id)
+                        .collect();
+                    assert_eq!(used.len(), d.registry.para_shapes.len(), "{body}");
+                    assert!(shapes(&d)[1].widow_orphan && shapes(&d)[2].widow_orphan);
+                }
+            }
+        }
+    }
+    // 이것을 실패시키는 것: 첫 조각의 공백/일반 줄바꿈까지 빈 내용으로 간주.
+    for content in ["<w:t xml:space='preserve'> </w:t>", "<w:br/>"] {
+        let d = read("", &format!("<w:p><w:pPr><w:spacing w:before='240'/></w:pPr><w:r>{content}<w:br w:type='page'/><w:t>B</w:t></w:r></w:p>"));
+        assert_eq!(gaps(&d), [(1200, 0), (0, 0)]);
     }
 }

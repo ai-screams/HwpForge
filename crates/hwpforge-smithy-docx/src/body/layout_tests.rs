@@ -16,33 +16,37 @@ fn losses(d: &DocxDecoded, loss: &str) -> u64 {
 }
 
 // 이것을 실패시키는 것: 선행·후행·연속 빈 조각 제거, pageBreakBefore 복제,
-// 앞뒤 간격·첫 줄·keep·끝 모양을 모든 조각에 복사, StyleRef 삭제.
+// 앞뒤 간격·첫 줄·keep·끝 모양을 모든 조각에 복사, StyleRef 삭제, 상속된 widow를 조각에서 초기화.
 #[test]
 fn split_edges_distribute_properties_and_preserve_style_identity() {
-    let styles = format!("<w:styles xmlns:w='{W}'><w:style w:type='paragraph' w:styleId='p'><w:pPr><w:spacing w:before='20' w:after='40'/><w:ind w:left='60' w:right='80' w:firstLine='10'/><w:keepNext/><w:keepLines/><w:widowControl/></w:pPr></w:style></w:styles>");
-    for content in [
-        "<w:r><w:br w:type='page'/><w:t>A</w:t><w:br w:type='page'/><w:br w:type='page'/></w:r>",
-        "<w:r><w:br w:type='page'/></w:r><w:r><w:t>A</w:t></w:r><w:r><w:br w:type='page'/></w:r><w:r><w:br w:type='page'/></w:r>",
-    ] {
-        for before in [false, true] {
-            let pb = if before { "<w:pageBreakBefore/>" } else { "" };
-            let body = format!("<w:p><w:pPr><w:pStyle w:val='p'/>{pb}<w:rPr><w:color w:val='123456'/></w:rPr></w:pPr>{content}</w:p>");
-            let d = decode_docx(&package(&body, &[("styles", "styles.xml", &styles)])).unwrap();
-            assert_eq!(texts(&d), [vec!["", "A", "", ""]]);
-            let p = &d.document.sections()[0].paragraphs;
-            assert_eq!(p.iter().map(|p| p.page_break).collect::<Vec<_>>(), [before, true, true, true]);
-            assert!(p.iter().all(|p| !p.column_break && p.style_ref == Some(hwpforge_foundation::StyleRef::new(0))));
-            assert_eq!(p.iter().map(|p| p.runs.len()).collect::<Vec<_>>(), [1, 1, 1, 1]);
-            let s: Vec<_> = p.iter().map(|p| &d.registry.para_shapes[p.para_shape_id.get()]).collect();
-            assert_eq!(s.iter().map(|s| s.space_before.as_i32()).collect::<Vec<_>>(), [100, 0, 0, 0]);
-            assert_eq!(s.iter().map(|s| s.space_after.as_i32()).collect::<Vec<_>>(), [0, 0, 0, 200]);
-            assert_eq!(s.iter().map(|s| s.indent_first_line.as_i32()).collect::<Vec<_>>(), [50, 0, 0, 0]);
-            assert_eq!(s.iter().map(|s| s.keep_with_next).collect::<Vec<_>>(), [false, false, false, true]);
-            assert!(s.iter().all(|s| !s.keep_lines_together && !s.widow_orphan && s.indent_left.as_i32() == 300 && s.indent_right.as_i32() == 400 && s.list.is_none()));
-            assert!(p[..3].iter().all(|p| p.end_char_shape.is_none()));
-            let mark = p[3].end_char_shape.unwrap();
-            assert_eq!(d.registry.char_shapes[mark.get()].color, hwpforge_foundation::Color::from_rgb(0x12, 0x34, 0x56));
-            assert_eq!(losses(&d, "paragraph_split"), 1);
+    for (widow, expected_widow) in
+        [("", true), ("<w:widowControl/>", true), ("<w:widowControl w:val='0'/>", false)]
+    {
+        let styles = format!("<w:styles xmlns:w='{W}'><w:style w:type='paragraph' w:styleId='p'><w:pPr><w:spacing w:before='20' w:after='40'/><w:ind w:left='60' w:right='80' w:firstLine='10'/><w:keepNext/><w:keepLines/>{widow}</w:pPr></w:style></w:styles>");
+        for content in [
+            "<w:r><w:br w:type='page'/><w:t>A</w:t><w:br w:type='page'/><w:br w:type='page'/></w:r>",
+            "<w:r><w:br w:type='page'/></w:r><w:r><w:t>A</w:t></w:r><w:r><w:br w:type='page'/></w:r><w:r><w:br w:type='page'/></w:r>",
+        ] {
+            for before in [false, true] {
+                let pb = if before { "<w:pageBreakBefore/>" } else { "" };
+                let body = format!("<w:p><w:pPr><w:pStyle w:val='p'/>{pb}<w:rPr><w:color w:val='123456'/></w:rPr></w:pPr>{content}</w:p>");
+                let d = decode_docx(&package(&body, &[("styles", "styles.xml", &styles)])).unwrap();
+                assert_eq!(texts(&d), [vec!["", "A", "", ""]]);
+                let p = &d.document.sections()[0].paragraphs;
+                assert_eq!(p.iter().map(|p| p.page_break).collect::<Vec<_>>(), [before, true, true, true]);
+                assert!(p.iter().all(|p| !p.column_break && p.style_ref == Some(hwpforge_foundation::StyleRef::new(0))));
+                assert_eq!(p.iter().map(|p| p.runs.len()).collect::<Vec<_>>(), [1, 1, 1, 1]);
+                let s: Vec<_> = p.iter().map(|p| &d.registry.para_shapes[p.para_shape_id.get()]).collect();
+                assert_eq!(s.iter().map(|s| s.space_before.as_i32()).collect::<Vec<_>>(), [0, 0, 0, 0]);
+                assert_eq!(s.iter().map(|s| s.space_after.as_i32()).collect::<Vec<_>>(), [0, 0, 0, 200]);
+                assert_eq!(s.iter().map(|s| s.indent_first_line.as_i32()).collect::<Vec<_>>(), [50, 0, 0, 0]);
+                assert_eq!(s.iter().map(|s| s.keep_with_next).collect::<Vec<_>>(), [false, false, false, true]);
+                assert!(s.iter().all(|s| !s.keep_lines_together && s.widow_orphan == expected_widow && s.indent_left.as_i32() == 300 && s.indent_right.as_i32() == 400 && s.list.is_none()));
+                assert!(p[..3].iter().all(|p| p.end_char_shape.is_none()));
+                let mark = p[3].end_char_shape.unwrap();
+                assert_eq!(d.registry.char_shapes[mark.get()].color, hwpforge_foundation::Color::from_rgb(0x12, 0x34, 0x56));
+                assert_eq!(losses(&d, "paragraph_split"), 1);
+            }
         }
     }
     let d = read(
@@ -184,7 +188,6 @@ fn indexed(body: &str) -> (Vec<super::DecodedSection>, super::Relations) {
         &mut warnings,
         &mut resolver,
         &relations,
-        false,
     )
     .unwrap();
     (sections, relations)
@@ -335,7 +338,6 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         main: true,
         root: "document",
         root_matches: true,
-        suppress_before_page_break: false,
         body_seen: true,
         final_section_seen: false,
         stack: vec![],
@@ -844,7 +846,7 @@ fn visible_tail_and_section_end_keep_their_fragments() {
     );
 }
 
-// 이것을 실패시키는 것: 뒤 간격·keepNext·끝 모양을 삭제된 조각에 남김, 첫 조각 속성 삭제·마지막 조각에 복제, 여러 원본의 pending 덮어쓰기, 이동된 강제 경계에서 다음 원본의 before 억제.
+// 이것을 실패시키는 것: 뒤 간격·keepNext·끝 모양을 삭제된 조각에 남김, 첫 조각 속성 삭제·마지막 조각에 복제, 여러 원본의 pending 덮어쓰기, 이동된 강제 경계에서 다음 원본의 before 복원.
 #[test]
 fn moved_tail_restores_last_fragment_properties_and_origins() {
     for prefix in ["", "<w:t>A</w:t><w:br w:type='page'/>"] {
@@ -857,7 +859,7 @@ fn moved_tail_restores_last_fragment_properties_and_origins() {
         for start in [0, n] {
             let first = &d.registry.para_shapes[p[start].para_shape_id.get()];
             let last = &d.registry.para_shapes[p[start + n - 1].para_shape_id.get()];
-            let before = 100;
+            let before = if start == 0 { 100 } else { 0 };
             assert_eq!(
                 (first.space_before.as_i32(), first.indent_first_line.as_i32()),
                 (before, 50)

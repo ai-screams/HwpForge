@@ -1225,3 +1225,28 @@ fn font_space_is_enabled_for_every_docx_blueprint_shape() {
     actual.sort_unstable();
     assert_eq!(actual, [(1000, true), (1200, true), (1300, true), (1400, true), (1500, true)]);
 }
+
+// 이것을 실패시키는 것: widow 기본값 false, docDefaults/기본 스타일/basedOn 상속 누락,
+// 스타일 값을 직접 끔보다 우선하거나 미지정을 명시 끔으로 취급.
+#[test]
+fn widow_control_resolves_defaults_styles_and_direct_overrides() {
+    for (defaults, base, style, direct, expected) in [
+        ("", "", "", "", true),
+        ("<w:widowControl w:val='0'/>", "", "", "", false),
+        ("", "<w:widowControl w:val='0'/>", "", "", false),
+        ("<w:widowControl w:val='0'/>", "", "<w:widowControl/>", "", true),
+        ("", "<w:widowControl/>", "", "<w:widowControl w:val='0'/>", false),
+        ("", "<w:widowControl w:val='0'/>", "", "<w:widowControl/>", true),
+    ] {
+        let styles = format!("<w:docDefaults><w:pPrDefault><w:pPr>{defaults}</w:pPr></w:pPrDefault></w:docDefaults><w:style w:type='paragraph' w:styleId='base'><w:pPr>{base}</w:pPr></w:style><w:style w:type='paragraph' w:styleId='p' w:default='1'><w:basedOn w:val='base'/><w:pPr>{style}</w:pPr></w:style>");
+        for selection in ["", "<w:pStyle w:val='p'/>"] {
+            let d = read(&styles, &format!("<w:p><w:pPr>{selection}{direct}</w:pPr></w:p>"));
+            let p = &d.document.sections()[0].paragraphs[0];
+            assert_eq!(
+                d.registry.para_shapes[p.para_shape_id.get()].widow_orphan,
+                expected,
+                "{styles} {selection} {direct}"
+            );
+        }
+    }
+}

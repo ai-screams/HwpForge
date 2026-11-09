@@ -2,9 +2,13 @@
 
 use hwpforge::ops::{convert_docx, ImportMeta, OpsError};
 use serde_json::json;
+use std::io::{Cursor, Read};
+use xml::Element;
 
 #[path = "support/docx.rs"]
 mod docx;
+#[path = "../../hwpforge-smithy-hwpx/tests/support/xml.rs"]
+mod xml;
 
 // 이것을 실패시키는 것: DOCX 대신 HWPX 디코더 호출, 본문/개수 변경, 미해결 서식 경고 제거 또는 meta count를 1로 초기화.
 // 알려진 글꼴의 한 줄 환산을 무시하고 경고를 무조건 100%라고 표기하는 경우도 실패한다.
@@ -336,5 +340,102 @@ fn physical_line_spacing_survives_hwpx_encoding() {
         let p = &decoded.document.sections()[0].paragraphs[0];
         let shape = decoded.style_store.para_shape(p.para_shape_id).unwrap();
         assert_eq!(shape.line_spacing, expected);
+    }
+}
+
+fn trees(body: &str) -> (Element, Element) {
+    let output = convert_docx(&docx::package(body)).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(output.bytes)).unwrap();
+    let mut parse = |name: &str| {
+        let mut text = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut text).unwrap();
+        Element::parse(&text)
+    };
+    (parse("Contents/header.xml"), parse("Contents/section0.xml"))
+}
+
+fn shape<'a>(header: &'a Element, paragraph: &Element) -> &'a Element {
+    header
+        .descendants("hh:paraPr")
+        .into_iter()
+        .find(|s| s.attr("id") == paragraph.attr("paraPrIDRef"))
+        .unwrap()
+}
+
+// 이것을 실패시키는 것: DOCX 미지정 widow 기본값 false, 명시 켬/끔 폐기,
+// bridge 또는 encoder에서 widowOrphan 고정, 분할 조각의 widow 초기화 또는 keepLines 보존.
+#[test]
+fn widow_control_defaults_on_keeps_explicit_off() {
+    for kind in ["page", "column"] {
+        for (props, expected) in [
+            ("", ["1", "1", "0", "1", "1"]),
+            ("<w:widowControl/>", ["1", "1", "0", "1", "1"]),
+            ("<w:widowControl w:val='0'/>", ["1", "1", "0", "0", "0"]),
+        ] {
+            let body = format!("<w:p><w:r><w:t>A</w:t></w:r></w:p><w:p><w:pPr><w:widowControl/></w:pPr><w:r><w:t>B</w:t></w:r></w:p><w:p><w:pPr><w:widowControl w:val='0'/></w:pPr><w:r><w:t>C</w:t></w:r></w:p><w:p><w:pPr><w:keepLines/>{props}</w:pPr><w:r><w:t>D</w:t><w:br w:type='{kind}'/><w:t>E</w:t></w:r></w:p>");
+            let (header, section) = trees(&body);
+            let settings: Vec<_> = section
+                .descendants("hp:p")
+                .into_iter()
+                .map(|p| shape(&header, p).child("hh:breakSetting"))
+                .collect();
+            assert_eq!(
+                settings.iter().map(|s| s.attr("widowOrphan").unwrap()).collect::<Vec<_>>(),
+                expected,
+                "{body}"
+            );
+            assert_eq!(
+                settings[3..].iter().map(|s| s.attr("keepLines")).collect::<Vec<_>>(),
+                [Some("0"), Some("0")],
+                "{body}"
+            );
+        }
+    }
+}
+
+// 이것을 실패시키는 것: pageBreakBefore / moved trailing page break / column break approximation의 before 보존,
+// leading page break의 빈 첫 조각 before 보존 또는 자연 경계 결합, 강제 경계에서 앞 after 삭제, 자연 경계 max 결합 제거.
+#[test]
+fn forced_page_starts_drop_before_and_keep_previous_after() {
+    for (tail, props, head, expected_breaks, expected_gaps) in [
+        ("", "<w:pageBreakBefore/>", "", vec!["0", "1"], vec![("0", "1000"), ("0", "400")]),
+        ("<w:br w:type='page'/>", "", "", vec!["0", "1"], vec![("0", "1000"), ("0", "400")]),
+        (
+            "",
+            "",
+            "<w:br w:type='page'/>",
+            vec!["0", "0", "1"],
+            vec![("0", "1000"), ("0", "0"), ("0", "400")],
+        ),
+        ("<w:br w:type='column'/>", "", "", vec!["0", "1"], vec![("0", "1000"), ("0", "400")]),
+        (
+            "",
+            "",
+            "<w:br w:type='column'/>",
+            vec!["0", "0", "1"],
+            vec![("0", "1000"), ("0", "0"), ("0", "400")],
+        ),
+        ("", "", "", vec!["0", "0"], vec![("0", "1200"), ("0", "400")]),
+    ] {
+        let body = format!("<w:p><w:pPr><w:spacing w:after='200'/></w:pPr><w:r><w:t>A</w:t>{tail}</w:r></w:p><w:p><w:pPr><w:spacing w:before='240' w:after='80'/>{props}</w:pPr><w:r>{head}<w:t>B</w:t></w:r></w:p>");
+        let (header, section) = trees(&body);
+        let paragraphs = section.descendants("hp:p");
+        assert_eq!(
+            paragraphs.iter().map(|p| p.attr("pageBreak").unwrap()).collect::<Vec<_>>(),
+            expected_breaks,
+            "{body}"
+        );
+        let gaps: Vec<_> = paragraphs
+            .iter()
+            .map(|p| {
+                let margin =
+                    shape(&header, p).child("hp:switch").child("hp:case").child("hh:margin");
+                (
+                    margin.child("hc:prev").attr("value").unwrap(),
+                    margin.child("hc:next").attr("value").unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(gaps, expected_gaps, "{body}");
     }
 }
