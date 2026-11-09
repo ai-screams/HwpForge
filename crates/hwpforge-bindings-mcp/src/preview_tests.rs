@@ -1,5 +1,5 @@
 #[path = "../../hwpforge/tests/support/preview.rs"]
-mod fixture;
+pub(crate) mod fixture;
 
 // 이것을 실패시키는 것: 공통 encode 경고 코드가 OTHER로 바뀌거나 endpoint가 최종 bytes/경고를 버림.
 #[test]

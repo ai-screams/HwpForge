@@ -4571,13 +4571,13 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "admit",
+          "function": "admit_delete",
           "stage": "Decode",
           "occurrence": 1
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
+          "function": "delete_admitted",
           "stage": "Decode",
           "occurrence": 1
         },
@@ -4589,14 +4589,14 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "admit",
+          "function": "admit_delete",
           "stage": "Decode",
           "occurrence": 2,
           "anchor": "입구로 이동한 원본 패키지 읽기"
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "admit",
+          "function": "admit_delete",
           "stage": "Decode",
           "occurrence": 3,
           "anchor": "원본 decode 뒤 패키지 무결성 거부"
@@ -4622,7 +4622,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "admit",
+          "function": "admit_delete",
           "stage": "Admission",
           "occurrence": 1
         }
@@ -4647,7 +4647,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
+          "function": "delete_admitted",
           "stage": "Validation",
           "occurrence": 1
         },
@@ -4769,9 +4769,9 @@
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
+          "function": "delete_admitted",
           "variant": "StructuralEditError::Invariant",
-          "occurrence": 1
+          "occurrence": 2
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
@@ -4808,6 +4808,13 @@
           "function": "paragraph_replacements",
           "variant": "StructuralEditError::Invariant",
           "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+          "function": "delete_admitted",
+          "variant": "StructuralEditError::Invariant",
+          "occurrence": 1,
+          "anchor": "원문 보존 삭제에서 header 정규화 필요 입력 거부"
         }
       ]
     },
@@ -5130,7 +5137,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-          "function": "HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics",
+          "function": "delete_admitted",
           "variant": "StructuralEditError::ProtectedFieldRange",
           "occurrence": 1
         },

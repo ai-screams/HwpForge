@@ -51,7 +51,12 @@ fn deleted_parent_excludes_child_replacements_and_keeps_nested_tail() {
     assert_eq!(parsed.children[0].child_names(), ["run", "linesegarray"]);
     assert_eq!(parsed.children[1].child_names(), ["run"]);
     assert_eq!(parsed.find("subList").child("p").child_names(), ["run", "linesegarray"]);
-    verify_section(original, &output, paragraph_replacements(&map, &[1], None).unwrap()).unwrap();
+    verify_section(
+        original,
+        &output,
+        paragraph_replacements(&map, &[1], None, super::super::ParagraphIds::Reindex).unwrap(),
+    )
+    .unwrap();
 }
 
 // 이것을 실패시키는 것: 허용 원문 간격 또는 마지막 꼬리 비교 생략.
@@ -114,6 +119,7 @@ fn final_zip_rejects_semantically_invisible_extra_edit() {
         expected,
         &crate::raw_package::OutputChanges { rewritten: vec![path.into()], ..Default::default() },
         &[SectionChange {
+            ids: super::super::ParagraphIds::Reindex,
             section: 0,
             path: path.into(),
             original: RawPackage::read(&base).unwrap().read_text_entry(path).unwrap(),
@@ -176,6 +182,7 @@ fn final_checks_read_only_required_xml_with_large_binary() {
         &output,
         &decoded,
         &[SectionChange {
+            ids: super::super::ParagraphIds::Reindex,
             section: 0,
             path: "Contents/section0.xml".into(),
             original,
@@ -271,6 +278,7 @@ fn prepare_height_delete(
     let path = "Contents/section0.xml";
     let original = package.read_text_entry(path).map_err(verification_error)?;
     let change = SectionChange {
+        ids: super::super::ParagraphIds::Reindex,
         section: 0,
         path: path.into(),
         original,
@@ -371,7 +379,8 @@ fn height_plan_is_shared_with_final_package_verification() {
             &decoded.source_maps[0],
             &[1],
             None,
-            &[height]
+            &[height],
+            super::super::ParagraphIds::Reindex,
         )
         .is_err());
     }
@@ -382,6 +391,7 @@ fn height_plan_is_shared_with_final_package_verification() {
         &[1, 2],
         None,
         &original_heights,
+        super::super::ParagraphIds::Reindex,
     )
     .unwrap();
     assert!(crate::cache_flow::splice(&change.original, inside_deleted).is_err());

@@ -1318,9 +1318,14 @@ pub(crate) fn first_diff_path<T: Serialize>(a: &T, b: &T) -> String {
     walk(&va, &vb, "$").unwrap_or_else(|| "(equal under serde projection)".to_string())
 }
 
+#[cfg(test)]
+thread_local! { pub(crate) static ZIP_CARRY_CHECKS: std::cell::Cell<usize> = const {std::cell::Cell::new(0)}; }
+
 /// Closed-world ZIP check: every input entry must exist in the re-encoded
 /// package, or stamping would silently drop it.
 pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), StamperError> {
+    #[cfg(test)]
+    ZIP_CARRY_CHECKS.with(|c| c.set(c.get() + 1));
     let base_entries = zip_entry_names(base)
         .map_err(|e| StamperError::Codec(CodecFailure::core(CodecStage::Decode, &e)))?;
     let out_entries = zip_entry_names(encoded)

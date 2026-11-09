@@ -35,6 +35,27 @@
 
 use std::borrow::Cow;
 
+/// Event readers use BOM-free input; source ranges always address original bytes.
+pub(crate) struct PositionedXml<'a> {
+    text: &'a str,
+    prefix_len: usize,
+}
+
+impl<'a> PositionedXml<'a> {
+    pub(crate) fn new(xml: &'a str) -> Self {
+        let text = xml.strip_prefix('\u{feff}').unwrap_or(xml);
+        Self { text, prefix_len: xml.len() - text.len() }
+    }
+
+    pub(crate) fn as_str(&self) -> &'a str {
+        self.text
+    }
+
+    pub(crate) fn original_offset(&self, position: u64) -> usize {
+        position as usize + self.prefix_len
+    }
+}
+
 /// Resolves a streaming XML reference; unknown entities remain errors.
 pub(crate) fn resolve_general_ref(
     reference: &str,
