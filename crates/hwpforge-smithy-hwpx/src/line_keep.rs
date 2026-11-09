@@ -1,4 +1,9 @@
 //! Conservative single-line evidence shared by preserving text and cell edits.
+//!
+//! 글꼴 폭 자격(`MEASURED_FONTS`)은 측정 환경 기준의 경험적 보장이다.
+//! 런타임에 글꼴 파일을 읽지 않고, XML 속성값 정규화 뒤의 선언 이름과 type 을 추가 정규화 없이 정확히 비교한다.
+//! 문서의 선언 이름은 실행 환경의 실제 글꼴과 묶이지 않는다.
+//! substFont가 없다고 해서 암묵적 대체가 없다는 증명이 되지는 않는다.
 use crate::encoder::package::HEADER_PART;
 use crate::patch::RawPackage;
 use crate::style_store::{HwpxCharShape, HwpxStyleStore};
@@ -473,7 +478,8 @@ fn character_allows(definition: &Tag, shape: &HwpxCharShape) -> Option<()> {
 pub(crate) struct Header {
     paragraphs: Vec<bool>,
     characters: Vec<bool>,
-    fonts: std::cell::OnceCell<Vec<bool>>,
+    // Per charPr: Some(roundtrip) qualifies for width; None does not.
+    fonts: std::cell::OnceCell<Vec<Option<bool>>>,
     root: Tag,
 }
 impl Header {
@@ -516,7 +522,7 @@ impl Header {
             .retain(|t| matches!(t.name.rsplit('}').next(), Some("fontfaces" | "charProperties")));
         Some(Self { paragraphs, characters, fonts: std::cell::OnceCell::new(), root })
     }
-    fn fonts(&self, styles: &HwpxStyleStore) -> &[bool] {
+    fn fonts(&self, styles: &HwpxStyleStore) -> &[Option<bool>] {
         self.fonts.get_or_init(|| {
             let Some(fonts) = font_evidence(&self.root, styles) else {
                 return Vec::new();
@@ -531,7 +537,7 @@ impl Header {
                     styles
                         .char_shape(hwpforge_foundation::CharShapeIndex::new(i))
                         .ok()
-                        .is_some_and(|shape| fonts_allow(c, shape, &fonts).is_some())
+                        .and_then(|shape| fonts_allow(c, shape, &fonts))
                 })
                 .collect()
         })
@@ -556,7 +562,11 @@ impl Header {
             && paragraph.style_ref.and_then(|r| store.style_position(r).ok()) == Some(source.style)
             && source.characters.iter().all(|&id| id == c)
             && self.allows(section, p, c)
-            && (!reencoded || self.fonts(store).get(c) == Some(&true))
+            // Width qualification is source evidence for every edit route. Metadata
+            // roundtrip agreement additionally protects only reencoded output.
+            && self.fonts(store).get(c).copied().flatten().is_some_and(|roundtrip| {
+                !reencoded || roundtrip
+            })
     }
     pub(crate) fn allows(
         &self,
@@ -573,7 +583,9 @@ const LANGUAGES: [&str; 7] = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "
 
 // Resolve each source/store language list once, then compare font metadata once
 // per position. Character definitions only perform seven indexed lookups.
-fn font_evidence(root: &Tag, store: &HwpxStyleStore) -> Option<[Vec<bool>; 7]> {
+type FontEvidence = [Vec<(Option<usize>, bool)>; 7];
+
+fn font_evidence(root: &Tag, store: &HwpxStyleStore) -> Option<FontEvidence> {
     let groups = root.child("fontfaces")?.definitions("fontface")?;
     let mut stored: [Vec<_>; 7] = std::array::from_fn(|_| Vec::new());
     for font in store.iter_fonts() {
@@ -590,18 +602,29 @@ fn font_evidence(root: &Tag, store: &HwpxStyleStore) -> Option<[Vec<bool>; 7]> {
             return None;
         }
         let raw = group.definitions("font")?;
+        // Position is the decoder's reference domain. Missing, duplicated or
+        // relabelled definitions cannot supply unambiguous source evidence.
+        if raw.len() != stored[language].len()
+            || raw.iter().enumerate().any(|(position, font)| {
+                font.attrs.get("id").and_then(|id| id.parse::<usize>().ok()) != Some(position)
+            })
+        {
+            return None;
+        }
         evidence[language] = raw
             .into_iter()
             .zip(&stored[language])
-            .map(|(font, stored)| font_matches(font, stored).is_some())
+            .map(|(font, stored)| (measured_font(font), font_matches(font, stored).is_some()))
             .collect();
     }
     Some(evidence)
 }
 
-fn fonts_allow(character: &Tag, shape: &HwpxCharShape, fonts: &[Vec<bool>; 7]) -> Option<()> {
+fn fonts_allow(character: &Tag, shape: &HwpxCharShape, fonts: &FontEvidence) -> Option<bool> {
     let refs = character.child("fontRef")?;
     let ids = shape.font_ref;
+    let mut measured = None;
+    let mut roundtrip = true;
     for ((language, index), fonts) in [
         ("hangul", ids.hangul),
         ("latin", ids.latin),
@@ -619,11 +642,33 @@ fn fonts_allow(character: &Tag, shape: &HwpxCharShape, fonts: &[Vec<bool>; 7]) -
         if raw_index != index.get() {
             return None;
         }
-        if fonts.get(raw_index) != Some(&true) {
+        let &(face, matches) = fonts.get(raw_index)?;
+        let face = face?;
+        if measured.get_or_insert(face) != &face {
             return None;
         }
+        roundtrip &= matches;
     }
-    Some(())
+    Some(roundtrip)
+}
+
+// 보장 범위는 모듈 문서 참조.
+const MEASURED_FONTS: [(&str, &str); 2] = [
+    // malgun.ttf, Version 6.50M, unitsPerEm=2048. All 11,172 Hangul syllables,
+    // space, digits and . , - ( ) / : present in cmap. Max advances: 2048/720/1128/840.
+    // Integer bounds: 204800 <= 215040; 72000 <= 102400; 112800 <= 204800.
+    ("맑은 고딕", "TTF"),
+    // DotumChe.TTF, Version 2.24, unitsPerEm=1024. Same complete character coverage.
+    // Hangul/space/digits/punctuation max advances: 1024/512/512/512.
+    // Integer bounds: 102400 <= 107520; 51200 <= 51200; 51200 <= 102400.
+    ("돋움체", "TTF"),
+];
+
+fn measured_font(font: &Tag) -> Option<usize> {
+    if !font.definitions("substFont")?.is_empty() || !font.is("isEmbedded", "0") {
+        return None;
+    }
+    MEASURED_FONTS.iter().position(|&(face, kind)| font.is("face", face) && font.is("type", kind))
 }
 
 fn font_matches(font: &Tag, stored: &crate::style_store::HwpxFont) -> Option<()> {

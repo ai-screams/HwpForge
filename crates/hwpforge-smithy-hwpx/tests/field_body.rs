@@ -45,7 +45,9 @@ fn package(body: &str) -> Vec<u8> {
         )],
         PageSettings::a4(),
     ));
-    let styles = style_store_for_preset("default").unwrap();
+    // Run/field preservation remains the subject; supply an eligible measured face.
+    let mut styles = style_store_for_preset("default").unwrap();
+    styles.replace_font("함초롬돋움", "맑은 고딕");
     let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::new()).unwrap();
     let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -1877,6 +1879,7 @@ fn runless_paragraph_cases() -> Vec<String> {
 /// 무편집 출력 바이트 추가, 무관한 ZIP 엔트리 변경.
 #[test]
 fn preserving_patch_keeps_runless_paragraphs() {
+    // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
     use hwpforge_smithy_hwpx::{ExportedSection, HwpxPatcher};
     for empty in runless_paragraph_cases() {
         for (kind, wrapped) in containers(&empty).into_iter().enumerate() {
@@ -1955,6 +1958,7 @@ fn preserving_patch_keeps_runless_paragraphs() {
 /// `source_maps[0]` 을 넘기기(구역 0 에는 가상 run 이 없어 슬롯 수가 어긋난다).
 #[test]
 fn preserving_patch_keeps_runless_paragraphs_in_a_later_section() {
+    // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
     use hwpforge_smithy_hwpx::HwpxPatcher;
     let section = |text: &str| {
         Section::with_paragraphs(
@@ -1968,7 +1972,9 @@ fn preserving_patch_keeps_runless_paragraphs_in_a_later_section() {
     let mut doc = Document::new();
     doc.add_section(section("구역0"));
     doc.add_section(section("구역1"));
-    let styles = style_store_for_preset("default").unwrap();
+    // Run/field preservation remains the subject; supply an eligible measured face.
+    let mut styles = style_store_for_preset("default").unwrap();
+    styles.replace_font("함초롬돋움", "맑은 고딕");
     let encoded =
         HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::new()).unwrap();
     let read = |bytes: &[u8], name: &str| {

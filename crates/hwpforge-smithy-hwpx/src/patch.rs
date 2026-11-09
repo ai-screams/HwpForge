@@ -1402,6 +1402,7 @@ mod tests {
     // 빈 값 조회가 필요하지 않은데도 필드 슬롯 색인 생성, 후보마다 header 재파싱.
     #[test]
     fn self_check_work_is_limited_to_supported_candidates() {
+        // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
         use hwpforge_core::layout::{LayoutCache, LineSeg};
         use hwpforge_core::{Document, ImageStore, PageSettings};
         use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex};
@@ -1443,9 +1444,12 @@ mod tests {
                 vec![first, para(&"미편집 본문".repeat(1000)), host, para("뒤")],
                 PageSettings::a4(),
             ));
+            // Keep the work-count fixture eligible for the source proof.
+            let mut styles = crate::style_store_for_preset("default").unwrap();
+            styles.replace_font("함초롬돋움", "맑은 고딕");
             let bytes = crate::HwpxEncoder::encode_with_options(
                 &doc.validate().unwrap(),
-                &crate::style_store_for_preset("default").unwrap(),
+                &styles,
                 &ImageStore::new(),
                 crate::EncodeOptions::default().with_emit_layout_cache(true),
             )
