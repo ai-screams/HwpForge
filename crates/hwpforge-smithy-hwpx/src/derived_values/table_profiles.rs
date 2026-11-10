@@ -69,13 +69,8 @@ const INNER_MARGIN: Attributes =
     &[("left", "510"), ("right", "510"), ("top", "141"), ("bottom", "141")];
 const OUTER_MARGIN: Attributes =
     &[("left", "283"), ("right", "283"), ("top", "283"), ("bottom", "1000")];
-const INLINE_TABLE: Attributes = &[
-    ("numberingType", "TABLE"),
-    ("zOrder", "0"),
-    ("lock", "0"),
-    ("dropcapstyle", "None"),
-    ("cellSpacing", "0"),
-];
+const INLINE_TABLE: Attributes =
+    &[("numberingType", "TABLE"), ("lock", "0"), ("dropcapstyle", "None"), ("cellSpacing", "0")];
 const INLINE_SIZE: Attributes = &[
     ("heightRelTo", "ABSOLUTE"),
     ("width", "48189"),
@@ -94,21 +89,21 @@ const TABLE_PROFILES: &[TableProfile] = &[
         cells: CellRules::DefaultFlow,
     },
     TableProfile {
-        table: &[TABLE, INLINE_TABLE, &[("noAdjust", "0")]],
+        table: &[TABLE, INLINE_TABLE, &[("noAdjust", "0"), ("zOrder", "0")]],
         position: &[POSITION, &[("treatAsChar", "1"), ("horzRelTo", "COLUMN")]],
         size: INLINE_SIZE,
         sublist: SUBLIST,
         cells: CellRules::Fixed { rows: 2, columns: 3, height: "0", layout: SIMPLE },
     },
     TableProfile {
-        table: &[TABLE, INLINE_TABLE, &[("noAdjust", "0")]],
+        table: &[TABLE, INLINE_TABLE, &[("noAdjust", "0"), ("zOrder", "0")]],
         position: &[POSITION, &[("treatAsChar", "1"), ("horzRelTo", "PARA")]],
         size: INLINE_SIZE,
         sublist: SUBLIST,
         cells: CellRules::Fixed { rows: 3, columns: 3, height: "4688", layout: MERGED },
     },
     TableProfile {
-        table: &[TABLE, INLINE_TABLE, &[("noAdjust", "1")]],
+        table: &[TABLE, INLINE_TABLE, &[("noAdjust", "1"), ("zOrder", "0")]],
         position: &[POSITION, &[("treatAsChar", "1"), ("horzRelTo", "PARA")]],
         size: INLINE_SIZE,
         sublist: SUBLIST,
@@ -118,6 +113,7 @@ const TABLE_PROFILES: &[TableProfile] = &[
 
 pub(super) fn matches(part: &Part<'_>, table: usize) -> bool {
     TABLE_PROFILES.iter().any(|profile| profile.check(part, table).is_ok())
+        || check_inline_category(part, table).is_ok()
 }
 
 impl TableProfile {
@@ -221,4 +217,131 @@ impl TableProfile {
             }
         }
     }
+}
+
+fn number(part: &Part<'_>, id: usize, key: &str, low: u32, high: u32) -> HwpxResult<u32> {
+    let raw = attr(&part.tags[id], key)?;
+    require(raw.bytes().all(|b| b.is_ascii_digit()))?;
+    require(raw == "0" || !raw.starts_with('0'))?;
+    let value = raw.parse::<u32>().map_err(|_| invalid())?;
+    require((low..=high).contains(&value))?;
+    Ok(value)
+}
+fn margin(part: &Part<'_>, id: usize, allowed: &[[u32; 4]]) -> HwpxResult<()> {
+    let mut sides = [0; 4];
+    for (side, key) in sides.iter_mut().zip(["left", "right", "top", "bottom"]) {
+        *side = number(part, id, key, 0, u32::MAX)?;
+    }
+    require(allowed.contains(&sides))
+}
+
+// Inline body tables were checked with bounded grids, unequal widths, both height
+// policies, three alignments, merges and consecutive tables. Stored heights are
+// invalidated without calculating layout or changing cell content.
+fn check_inline_category(part: &Part<'_>, table: usize) -> HwpxResult<()> {
+    let tags = &part.tags;
+    let elements = part.source.elements();
+    exact(&tags[table], TABLE)?;
+    exact(&tags[table], INLINE_TABLE)?;
+    let no_adjust = attr(&tags[table], "noAdjust")?;
+    require(matches!(no_adjust, "0" | "1"))?;
+    number(part, table, "zOrder", 0, 237)?;
+    let rows = number(part, table, "rowCnt", 1, 22)? as usize;
+    let columns = number(part, table, "colCnt", 1, 6)? as usize;
+    let size = part.one_child(table, "sz")?;
+    exact(
+        &tags[size],
+        &[("widthRelTo", "ABSOLUTE"), ("heightRelTo", "ABSOLUTE"), ("protect", "0")],
+    )?;
+    number(part, size, "width", 16084, 48545)?;
+    number(part, size, "height", 1, 52523)?;
+    let position = part.one_child(table, "pos")?;
+    exact(&tags[position], POSITION)?;
+    exact(&tags[position], &[("treatAsChar", "1"), ("horzRelTo", "PARA")])?;
+    margin(
+        part,
+        part.one_child(table, "inMargin")?,
+        &[[141, 141, 141, 141], [510, 510, 141, 141], [283, 283, 283, 283]],
+    )?;
+    margin(
+        part,
+        part.one_child(table, "outMargin")?,
+        &[
+            [283, 283, 283, 283],
+            [0, 0, 0, 0],
+            [141, 141, 141, 141],
+            [141, 141, 0, 141],
+            [283, 283, 0, 0],
+            [283, 283, 283, 1000],
+        ],
+    )?;
+    require(elements[table].children().iter().all(|&child| {
+        matches!(tags[child].name.as_str(), "sz" | "pos" | "outMargin" | "inMargin" | "tr")
+    }))?;
+    let row_ids: Vec<_> = elements[table]
+        .children()
+        .iter()
+        .copied()
+        .filter(|&id| elements[id].name() == "tr")
+        .collect();
+    require(row_ids.len() == rows)?;
+    let mut occupied = [false; 132];
+    let mut anchors = 0;
+    for (row_index, row) in row_ids.into_iter().enumerate() {
+        for &cell in elements[row].children() {
+            crate::work::tick();
+            // CELL 속성 검사와 겹치지만 행 자식의 이름도 확인하는 중복 방어다.
+            require(tags[cell].name == "tc")?;
+            require(elements[cell].children().iter().all(|&child| {
+                matches!(
+                    tags[child].name.as_str(),
+                    "subList" | "cellAddr" | "cellSpan" | "cellSz" | "cellMargin"
+                )
+            }))?;
+            exact(&tags[cell], CELL)?;
+            let address = part.one_child(cell, "cellAddr")?;
+            let r = number(part, address, "rowAddr", 0, rows as u32 - 1)? as usize;
+            let c = number(part, address, "colAddr", 0, columns as u32 - 1)? as usize;
+            require(r == row_index)?;
+            let span = part.one_child(cell, "cellSpan")?;
+            let rs = number(part, span, "rowSpan", 1, rows as u32)? as usize;
+            let cs = number(part, span, "colSpan", 1, columns as u32)? as usize;
+            require(rs == 1 || cs == 1 || rs == 2 && cs == 2)?;
+            let end_row = r.checked_add(rs).ok_or_else(invalid)?;
+            let end_column = c.checked_add(cs).ok_or_else(invalid)?;
+            require(end_row <= rows)?;
+            require(end_column <= columns)?;
+            for rr in r..end_row {
+                for cc in c..end_column {
+                    let index = rr
+                        .checked_mul(columns)
+                        .and_then(|v| v.checked_add(cc))
+                        .ok_or_else(invalid)?;
+                    let slot = occupied.get_mut(index).ok_or_else(invalid)?;
+                    require(!*slot)?;
+                    *slot = true;
+                }
+            }
+            let size = part.one_child(cell, "cellSz")?;
+            number(part, size, "width", 1303, 48545)?;
+            let (low, high) = if no_adjust == "0" { (282, 19637) } else { (1282, 6260) };
+            number(part, size, "height", low, high)?;
+            exact(&tags[part.one_child(cell, "cellMargin")?], INNER_MARGIN)?;
+            let list = part.one_child(cell, "subList")?;
+            exact(&tags[list], SUBLIST)?;
+            require(matches!(attr(&tags[list], "vertAlign")?, "TOP" | "CENTER" | "BOTTOM"))?;
+            anchors += 1;
+        }
+    }
+    require(occupied[..rows * columns].iter().all(|&slot| slot))?;
+    let descendants = || {
+        elements
+            .iter()
+            .enumerate()
+            .skip(table + 1)
+            .take_while(|(_, e)| e.outer().start < elements[table].outer().end)
+    };
+    require(descendants().filter(|(_, e)| e.name() == "tc").count() == anchors)?;
+    require(descendants().filter(|(_, e)| e.name() == "subList").count() == anchors)?;
+    require(!descendants().any(|(_, e)| e.name() == "tbl"))
 }
