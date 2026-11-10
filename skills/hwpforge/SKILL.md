@@ -74,6 +74,8 @@ HWP5 edits (`fill`, `set-cell`, `insert-para`, `delete-para`, `stamp`) refuse se
 
 **한컴-saved HWPX files** carry `Preview/*` and `META-INF/container.rdf`. Nearly every file a person saved in 한컴 does. When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. If the input passes the edit checks and the text is unchanged, the original file is returned. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee. `set-cell`, `insert-para` and `stamp` refuse. Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. Surface table: [editing-workflow.md](references/editing-workflow.md).
 
+CONTENT_LOST reports information not represented by the input decode. Source-preserving delete succeeds only after separately proving that information survives in the output and does not affect the deletion decision; the original decode warnings remain. This applies only to some losses whose information remains in the source XML (such as per-language character values); all other CONTENT_LOST inputs retain their original refusal. Input-loss refusals for whole-document re-encoding edits remain in force.
+
 ## Verify every edit
 
 ```bash

@@ -181,7 +181,9 @@ pub struct RestyleMeta {
 ///
 /// The input is refused the same way when its decode already lost content
 /// (`DecodeWarning::is_content_loss`, for example a picture inside a group):
-/// regenerating would make that loss permanent.
+/// regenerating would make that loss permanent. `CONTENT_LOST` describes the input
+/// decode. Source-preserving delete separately proves output preservation and
+/// decision safety, and retains those warnings on success.
 ///
 /// # Errors
 ///
@@ -375,7 +377,8 @@ pub fn validate(hwpx: &[u8]) -> Result<ValidateOutput, OpsError> {
 
 /// Refuses an input whose decode reported lost content: a regenerating edit
 /// would write that loss into its output (`INPUT_NOT_ROUNDTRIP_SAFE`, the code
-/// stamping and cell edits report for the same condition).
+/// stamping and cell edits report for the same condition). This is a whole-package
+/// regeneration guard; source-preserving delete has its own narrower proof.
 fn reject_input_content_loss(warnings: &[DecodeWarning]) -> Result<(), OpsError> {
     match warnings.iter().find(|w| w.is_content_loss()) {
         Some(lost) => Err(OpsError::Rejected {
