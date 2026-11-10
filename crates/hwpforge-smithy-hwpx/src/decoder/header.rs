@@ -59,7 +59,15 @@ pub struct HeaderParseResult {
 /// quick-xml's serde deserializer does not expand custom entities and will
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
+#[cfg(test)]
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
+    parse_header_with_losses(xml).map(|(result, _)| result)
+}
+
+pub(crate) fn parse_header_with_losses(
+    xml: &str,
+) -> HwpxResult<(HeaderParseResult, Vec<super::preserved_loss::LossEvidence>)> {
+    let mut losses = Vec::new();
     let mut head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
         file: "header.xml".into(),
         detail: xml_error_detail(&e),
@@ -131,7 +139,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
         populate_store_from_ref_list(&mut store, ref_list, &mut warnings)?;
         store.header_fidelity.capture(ref_list);
         normalize_measures = renumbered || requires_header_normalization(ref_list, &store);
-        warnings.extend(per_language_scalar_losses(ref_list));
+        warnings.extend(per_language_scalar_losses(ref_list, xml, warnings.len(), &mut losses));
         warnings.extend(border_offset_losses(ref_list));
         warnings.extend(char_shadow_losses(ref_list));
         warnings.extend(font_embedding_losses(ref_list));
@@ -139,15 +147,18 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
 
     crate::header_references::HeaderReferences::build(&store)?;
     warnings.extend(list_semantics_losses(&store));
-    Ok(HeaderParseResult {
-        style_store: store,
-        begin_num,
-        warnings,
-        memo_count,
-        track_change_count,
-        track_change_author_count,
-        requires_header_normalization: normalize_measures,
-    })
+    Ok((
+        HeaderParseResult {
+            style_store: store,
+            begin_num,
+            warnings,
+            memo_count,
+            track_change_count,
+            track_change_author_count,
+            requires_header_normalization: normalize_measures,
+        },
+        losses,
+    ))
 }
 
 /// A paragraph list reference the shared list semantics cannot carry (a
@@ -407,12 +418,28 @@ fn char_shadow_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
         .collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    static SCALAR_HEADER_DIGEST_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A `charPr` whose ratio, spacing, relative size or offset differs between
 /// languages: the style store keeps one value per field (the hangul one),
 /// so a re-encode writes it for every language and the other scripts' glyph
 /// widths and positions change. Reported as lost, one warning per `charPr`.
-fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+fn per_language_scalar_losses(
+    ref_list: &HxRefList,
+    xml: &str,
+    offset: usize,
+    losses: &mut Vec<super::preserved_loss::LossEvidence>,
+) -> Vec<super::DecodeWarning> {
     let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
+    use sha2::Digest;
+    let digest = std::cell::LazyCell::new(|| {
+        #[cfg(test)]
+        SCALAR_HEADER_DIGEST_CALLS.with(|calls| calls.set(calls.get() + 1));
+        sha2::Sha256::digest(xml.as_bytes()).into()
+    });
     let uniform = |v: &Option<crate::schema::header::HxLangValues>| {
         v.as_ref().is_none_or(|v| {
             crate::schema::header::uniform([
@@ -434,15 +461,23 @@ fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning>
             .filter(|(_, v)| !uniform(v))
             .map(|(name, _)| name)
             .collect();
-            (!fields.is_empty()).then(|| super::DecodeWarning::ContentLost {
-                part: HEADER_PART.to_string(),
-                path: super::ParagraphPath::default(),
-                kind: "char_shape_per_language".to_string(),
-                reason: format!(
-                    "charPr {} has per-language {} values; only the hangul value is kept",
-                    cp.id,
-                    fields.join(", ")
-                ),
+            (!fields.is_empty()).then(|| {
+                use super::preserved_loss::{LossCause, LossEvidence, LossLocation};
+                losses.push(LossEvidence {
+                    warning: offset + losses.len(),
+                    cause: LossCause::PerLanguageScalar,
+                    location: LossLocation::Header { definition: cp.id, digest: *digest },
+                });
+                super::DecodeWarning::ContentLost {
+                    part: HEADER_PART.to_string(),
+                    path: super::ParagraphPath::default(),
+                    kind: "char_shape_per_language".to_string(),
+                    reason: format!(
+                        "charPr {} has per-language {} values; only the hangul value is kept",
+                        cp.id,
+                        fields.join(", ")
+                    ),
+                }
             })
         })
         .collect()
@@ -1552,6 +1587,61 @@ mod tests {
         Alignment, BorderFillIndex, BreakType, Color, LineSpacingType, StrikeoutShape,
         UnderlineType, WordBreakType,
     };
+
+    // 이것을 실패시키는 것: 손실 검사 전에 digest를 강제로 평가하기.
+    #[test]
+    fn lossless_document_does_not_hash_header_for_scalar_evidence() {
+        use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("손실 없는 본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let bytes = crate::HwpxEncoder::encode(
+            &document.validate().unwrap(),
+            &crate::style_store_for_preset("default").unwrap(),
+            &ImageStore::new(),
+        )
+        .unwrap();
+        SCALAR_HEADER_DIGEST_CALLS.with(|calls| calls.set(0));
+        let decoded = crate::HwpxDecoder::decode(&bytes).unwrap();
+        assert!(!decoded.warnings.iter().any(super::super::DecodeWarning::is_content_loss));
+        SCALAR_HEADER_DIGEST_CALLS.with(|calls| assert_eq!(calls.get(), 0));
+    }
+
+    // 이것을 실패시키는 것: 손실마다 digest 재계산 또는 실제 header 대신 다른 바이트 해시 사용.
+    #[test]
+    fn scalar_losses_share_one_header_digest() {
+        use super::super::preserved_loss::{LossCause, LossLocation};
+        use super::super::{DecodeWarning, ParagraphPath};
+        use sha2::Digest;
+        let xml = r#"<head version="1.4" secCnt="1"><refList><charProperties itemCnt="3">
+            <charPr id="0"><ratio hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/></charPr>
+            <charPr id="1"><ratio hangul="100" latin="91" hanja="100" japanese="100" other="100" symbol="100" user="100"/></charPr>
+            <charPr id="2"><spacing hangul="0" latin="1" hanja="0" japanese="0" other="0" symbol="0" user="0"/></charPr>
+            </charProperties></refList></head>"#;
+        SCALAR_HEADER_DIGEST_CALLS.with(|calls| calls.set(0));
+        let (decoded, losses) = parse_header_with_losses(xml).unwrap();
+        SCALAR_HEADER_DIGEST_CALLS.with(|calls| assert_eq!(calls.get(), 1));
+        let digest: [u8; 32] = sha2::Sha256::digest(xml.as_bytes()).into();
+        assert_eq!(losses.len(), 2);
+        for (loss, (definition, field)) in losses.iter().zip([(1, "ratio"), (2, "spacing")]) {
+            assert_eq!(loss.cause, LossCause::PerLanguageScalar);
+            assert!(
+                matches!(loss.location, LossLocation::Header { definition: id, digest: hash } if id == definition && hash == digest)
+            );
+            assert_eq!(decoded.warnings[loss.warning], DecodeWarning::ContentLost {
+                part: HEADER_PART.into(),
+                path: ParagraphPath::default(),
+                kind: "char_shape_per_language".into(),
+                reason: format!("charPr {definition} has per-language {field} values; only the hangul value is kept"),
+            });
+        }
+    }
 
     // ── Minimal header ───────────────────────────────────────────
 

@@ -116,12 +116,11 @@ fn scan_positioned_values<E>(
         })
     };
     // Both readers address the same BOM-free input; callbacks address original bytes.
-    let input = xml.strip_prefix('\u{feff}').unwrap_or(xml);
-    let prefix_len = xml.len() - input.len();
-    let mut reader = NsReader::from_str(input);
+    let input = crate::wire_xml::PositionedXml::new(xml);
+    let mut reader = NsReader::from_str(input.as_str());
     // Structural fields keep their existing lexical namespace policy. Only
     // descriptor values need expanded attribute names and reserved-prefix checks.
-    let mut field_reader = fields.then(|| quick_xml::Reader::from_str(input));
+    let mut field_reader = fields.then(|| quick_xml::Reader::from_str(input.as_str()));
     let mut depth = 0usize;
     let mut ordinal = 0;
     let mut texts: Vec<(usize, usize, String)> = Vec::new();
@@ -193,7 +192,7 @@ fn scan_positioned_values<E>(
                         depth,
                         attrs.remove("type").unwrap_or_default(),
                         BTreeMap::new(),
-                        field_reader.as_ref().unwrap().buffer_position() as usize + prefix_len
+                        input.original_offset(field_reader.as_ref().unwrap().buffer_position())
                             - e.len()
                             - if empty { 3 } else { 2 },
                     ));

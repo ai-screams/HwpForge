@@ -333,16 +333,30 @@ pub(crate) fn carry_line_segs(
 
     let mut changed = false;
     for path in section_paths {
+        // Output part numbers are Core indices; only the original retains its spine names.
+        // 이것을 실패시키는 것: 출력 파일명으로 원본 조회, 경로 누락 때 unwrap.
+        let Some(section) = section_index(&path) else {
+            continue;
+        };
+        let Ok(original_path) = orig_pkg.section_path(section) else {
+            continue;
+        };
         // Alignment/decoding fallback must not suppress a semantic selection
         // error. These borrowed reads do not decompress or reparse metadata.
-        for package in [&orig_pkg, &base_pkg, &out_pkg, &src_pkg, &probe_pkg] {
-            match package.read_entry(&path) {
+        for (package, part) in [
+            (&orig_pkg, &original_path),
+            (&base_pkg, &path),
+            (&out_pkg, &path),
+            (&src_pkg, &path),
+            (&probe_pkg, &path),
+        ] {
+            match package.read_entry(part) {
                 Ok(_) | Err(HwpxError::MissingFile { .. }) => {}
                 Err(error) => return Err(CodecFailure::hwpx(CodecStage::Verification, &error)),
             }
         }
         let (Ok(orig_xml), Ok(base_xml), Ok(out_xml), Ok(src_xml), Ok(probe_xml)) = (
-            orig_pkg.read_text_entry(&path),
+            orig_pkg.read_text_entry(&original_path),
             base_pkg.read_text_entry(&path),
             out_pkg.read_text_entry(&path),
             src_pkg.read_text_entry(&path),
@@ -357,7 +371,7 @@ pub(crate) fn carry_line_segs(
         {
             // a marker's ordinal counts within its own section.
             // 이것을 실패시키는 것: 문서 전체 번호로 읽기(`drops_in_two_sections_are_each_reported`).
-            let section_drops = section_index(&path).and_then(|i| source.dropped.get(i));
+            let section_drops = source.dropped.get(section);
             reported.extend(
                 dropped.into_iter().filter_map(|i| section_drops.and_then(|d| d.get(i)).cloned()),
             );
@@ -923,5 +937,210 @@ mod tests {
         assert!(splice_section(&base, &short, &base, &source).is_none());
         assert!(splice_section(&base, &output, &base, &short).is_none());
         assert!(splice_section(&base, &output, &base, &source.replace("힣힣힣", "가")).is_none());
+    }
+
+    fn cached_document(count: usize) -> hwpforge_core::Document<hwpforge_core::Draft> {
+        use hwpforge_core::layout::{LayoutCache, LineSeg};
+        use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let mut doc = Document::new();
+        for _ in 0..count {
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("AB", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![LineSeg::default()]));
+            doc.add_section(Section::with_paragraphs(vec![p], PageSettings::a4()));
+        }
+        doc
+    }
+
+    // 이것을 실패시키는 것: section_index 실패 때 unwrap, section_path 실패 때 unwrap.
+    #[test]
+    fn unresolved_original_sections_and_nonnumeric_output_parts_are_skipped() {
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::ImageStore::new();
+        let doc = cached_document(2).validate().unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let original =
+            crate::HwpxEncoder::encode(&cached_document(1).validate().unwrap(), &styles, &images)
+                .unwrap();
+        use std::io::{Cursor, Write};
+        let package = RawPackage::read(&output).unwrap();
+        let section = package.read_text_entry("Contents/section0.xml").unwrap();
+        let mut zip = zip::ZipWriter::new_append(Cursor::new(output)).unwrap();
+        zip.start_file("Contents/section-extra.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(section.as_bytes()).unwrap();
+        let output = zip.finish().unwrap().into_inner();
+        let (bytes, warnings) =
+            carry_line_segs(&original, &output, &output, &output, &source).unwrap();
+        assert_eq!(bytes, output);
+        assert!(warnings.is_empty());
+    }
+
+    // 이것을 실패시키는 것: 원본 대응이 없는 출력 구역에서 건너뛰지 않고 출력 파일명으로 원본 조회.
+    // 원본 spine 은 캐시가 있는 `section1.xml` 하나뿐이라, 출력 section0 은 그 캐시를 받고
+    // 대응이 없는 출력 section1 은 같은 이름의 원본 캐시를 받지 않아야 한다.
+    #[test]
+    fn an_output_section_without_an_original_counterpart_takes_no_same_named_cache() {
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::ImageStore::new();
+        let doc = cached_document(2).validate().unwrap();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let mut original_doc = cached_document(2);
+        original_doc.sections_mut()[0].paragraphs[0].layout_cache = None;
+        let original_source =
+            cache_source(&original_doc.validate().unwrap(), &styles, &images).unwrap();
+        let mut original = RawPackage::read(&original_source.bytes).unwrap();
+        let mut content = original.read_text_entry("Contents/content.hpf").unwrap();
+        for tag in ["<opf:item id=\"section0\"", "<opf:itemref idref=\"section0\""] {
+            let start = content.find(tag).unwrap();
+            let end = start + content[start..].find("/>").unwrap() + 2;
+            content.replace_range(start..end, "");
+        }
+        original.replace_text_entry("Contents/content.hpf", content);
+        original.remove_entries_exact(&["Contents/section0.xml".to_string()]);
+        let original = original.write().unwrap();
+        assert_eq!(
+            RawPackage::read(&original).unwrap().section_path(0).unwrap(),
+            "Contents/section1.xml"
+        );
+
+        let (bytes, warnings) =
+            carry_line_segs(&original, &output, &output, &output, &source).unwrap();
+        assert!(warnings.is_empty());
+        let package = RawPackage::read(&bytes).unwrap();
+        let caches: Vec<usize> = (0..2)
+            .map(|i| {
+                crate::test_support::xml::Element::parse(
+                    &package.read_text_entry(&format!("Contents/section{i}.xml")).unwrap(),
+                )
+                .descendants("hp:linesegarray")
+                .len()
+            })
+            .collect();
+        assert_eq!(caches, [1, 0]);
+    }
+
+    // 이것을 실패시키는 것: 선행 오류 검사에서 원본에도 출력 파일명을 사용.
+    #[test]
+    fn original_semantic_read_errors_follow_reading_order_before_cache_fallback() {
+        use std::io::{Cursor, Write};
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::ImageStore::new();
+        let doc = cached_document(1).validate().unwrap();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let original =
+            crate::HwpxEncoder::encode(&cached_document(2).validate().unwrap(), &styles, &images)
+                .unwrap();
+        let mut package = RawPackage::read(&original).unwrap();
+        let content = package.read_text_entry("Contents/content.hpf").unwrap();
+        package.replace_text_entry(
+            "Contents/content.hpf",
+            content
+                .replace("idref=\"section0\"", "idref=\"swap\"")
+                .replace("idref=\"section1\"", "idref=\"section0\"")
+                .replace("idref=\"swap\"", "idref=\"section1\""),
+        );
+        let mut zip = zip::ZipWriter::new_append(Cursor::new(package.write().unwrap())).unwrap();
+        zip.start_file("Contents/section1.xml/", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"").unwrap();
+        let original = zip.finish().unwrap().into_inner();
+        let error = carry_line_segs(&original, &output, &output, &output, &source)
+            .expect_err("opaque original section must be refused");
+        assert_eq!(error.stage, CodecStage::Verification);
+        assert_eq!(error.detail, "Invalid HWPX structure: opaque ZIP entry selected semantically: 'Contents/section1.xml'");
+    }
+
+    // 이것을 실패시키는 것: source.dropped를 원본 파일 번호 또는 문서 전체 marker 번호로 조회.
+    #[test]
+    fn permuted_sections_report_each_marker_reason_at_its_output_path() {
+        use hwpforge_core::layout::LineSeg;
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::ImageStore::new();
+        let mut doc = cached_document(3);
+        doc.sections_mut()[0].paragraphs[0].layout_cache.as_mut().unwrap().lines[0].textpos = 99;
+        doc.sections_mut()[1].paragraphs[0]
+            .layout_cache
+            .as_mut()
+            .unwrap()
+            .lines
+            .push(LineSeg::default());
+        doc.sections_mut()[2].paragraphs[0].layout_cache = None;
+        let doc = doc.validate().unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        assert_eq!(source.dropped.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 0]);
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let mut original = RawPackage::read(&source.bytes).unwrap();
+        let sections: Vec<_> = (0..3)
+            .map(|i| original.read_text_entry(&format!("Contents/section{i}.xml")).unwrap())
+            .collect();
+        for (i, file) in [2, 0, 1].into_iter().enumerate() {
+            original
+                .replace_text_entry(&format!("Contents/section{file}.xml"), sections[i].clone());
+        }
+        let content = original.read_text_entry("Contents/content.hpf").unwrap();
+        original.replace_text_entry(
+            "Contents/content.hpf",
+            content
+                .replace("idref=\"section0\"", "idref=\"swap\"")
+                .replace("idref=\"section1\"", "idref=\"section0\"")
+                .replace("idref=\"section2\"", "idref=\"section1\"")
+                .replace("idref=\"swap\"", "idref=\"section2\""),
+        );
+        let (bytes, warnings) =
+            carry_line_segs(&original.write().unwrap(), &output, &output, &output, &source)
+                .unwrap();
+        let observed: Vec<_> = warnings
+            .iter()
+            .map(|warning| {
+                let crate::EncodeWarning::LayoutCacheDropped { path, reason } = warning else {
+                    panic!("cache warning")
+                };
+                (path.to_string(), reason.as_str())
+            })
+            .collect();
+        assert_eq!(
+            observed,
+            [
+                ("section[0].para[0]".into(), "core textpos 99: coordinate 99 outside [0, 2]"),
+                ("section[1].para[0]".into(), "line starts do not increase: [0, 0]")
+            ]
+        );
+        for i in 0..3 {
+            let package = RawPackage::read(&bytes).unwrap();
+            let tree = crate::test_support::xml::Element::parse(
+                &package.read_text_entry(&format!("Contents/section{i}.xml")).unwrap(),
+            );
+            assert!(tree.descendants("hp:linesegarray").is_empty());
+        }
+    }
+
+    // 이것을 실패시키는 것: carry_prepared의 파트 필터에서 masterpage 제외.
+    #[test]
+    fn prepared_carry_preserves_master_page_cache() {
+        use hwpforge_core::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let mut doc = cached_document(1);
+        let paragraph = doc.sections()[0].paragraphs[0].clone();
+        doc.sections_mut()[0].master_pages =
+            Some(vec![MasterPage::new(ApplyPageType::Both, vec![paragraph])]);
+        let doc = doc.validate().unwrap();
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::ImageStore::new();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let result = carry_prepared(&output, source).unwrap();
+        assert!(result.warnings.is_empty());
+        let package = RawPackage::read(&result.bytes).unwrap();
+        let tree = crate::test_support::xml::Element::parse(
+            &package.read_text_entry("Contents/masterpage0.xml").unwrap(),
+        );
+        assert_eq!(tree.descendants("hp:linesegarray").len(), 1);
+        assert_eq!(tree.find("hp:lineseg").attr("textpos"), Some("0"));
     }
 }

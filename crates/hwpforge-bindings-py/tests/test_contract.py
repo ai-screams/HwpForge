@@ -706,7 +706,7 @@ def test_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
             continue
         operation = case["surfaces"]["python"]["operation"]
         source = OSError(errno.EACCES, "denied", "first", None, "second")
-        source.winerror = 5  # ty: ignore[unresolved-attribute]  # Synthetic Windows field.
+        source.winerror = 5  # ty: ignore[missing-attribute]  # Synthetic Windows field.
         with monkeypatch.context() as patch:
             if operation in ("io.read", "io.write"):
 
@@ -765,7 +765,7 @@ def test_io_repr_preserves_subclass_and_os_fields():
     from hwpforge import HwpForgeFileNotFoundError, HwpForgeIOError
 
     source = OSError(13, "denied", "first", None, "second")
-    source.winerror = 5  # ty: ignore[unresolved-attribute]
+    source.winerror = 5  # ty: ignore[missing-attribute]
     for cls in (HwpForgeIOError, HwpForgeFileNotFoundError):
         error = cls("FILE_READ_FAILED", "failed", os_error=source)
         rendered = repr(error)

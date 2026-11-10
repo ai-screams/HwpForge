@@ -11,6 +11,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FlowOrdinal(usize);
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code, reason = "insertion boundaries are not consumed by deletion")]
 pub(crate) enum FlowBoundary {
     Before(FlowOrdinal),
     EndOfBody,
@@ -20,11 +21,13 @@ pub(crate) enum DerivedEdit<'a> {
         section: usize,
         paragraphs: &'a [FlowOrdinal],
     },
+    #[allow(dead_code, reason = "insert retains its existing admission contract")]
     Insert {
         section: usize,
         at: FlowBoundary,
         fragment: &'a str,
     },
+    #[allow(dead_code, reason = "text edits retain their existing admission contract")]
     Text {
         section: usize,
         changed: &'a [FlowOrdinal],
@@ -91,6 +94,9 @@ enum TargetKey {
 #[cfg(test)]
 thread_local! {pub(crate) static COLLECTIONS: std::cell::Cell<usize> = const {std::cell::Cell::new(0)};}
 
+#[cfg(test)]
+thread_local! {pub(crate) static DECISIONS:std::cell::RefCell<Vec<&'static str>>=const{std::cell::RefCell::new(Vec::new())};}
+
 impl<'a> DerivedFacts<'a> {
     pub(crate) fn collect(
         package: &crate::raw_package::RawPackage,
@@ -98,6 +104,8 @@ impl<'a> DerivedFacts<'a> {
     ) -> HwpxResult<Self> {
         #[cfg(test)]
         COLLECTIONS.with(|count| count.set(count.get() + 1));
+        #[cfg(test)]
+        DECISIONS.with(|d| d.borrow_mut().push("collect"));
         let sections: HashMap<_, _> = (0..decoded.source_maps.len())
             .map(|s| Ok((package.section_path(s)?, s)))
             .collect::<HwpxResult<_>>()?;
@@ -142,7 +150,11 @@ impl<'a> DerivedFacts<'a> {
                         .iter()
                         .filter_map(|r| by_span.get(&(r.start, r.end)).copied())
                         .collect();
-                    if entry.kind() == "BOOKMARK" && candidates.is_empty() {
+                    // Native bookmarks and autoNum carriers have no fieldBegin display.
+                    // Their source identities and stored values are checked in the raw ledger.
+                    if candidates.is_empty()
+                        && matches!(entry.kind(), "BOOKMARK" | "PAGE_NUM" | "AUTO_NUMBER")
+                    {
                         continue;
                     }
                     require(candidates.len() == 1)?;
@@ -204,6 +216,7 @@ impl<'a> DerivedFacts<'a> {
         let p = map.paragraphs.get(index).ok_or_else(invalid)?;
         part.ordinal_at(p.outer.start, true)
     }
+    #[allow(dead_code, reason = "insert retains its existing admission contract")]
     pub(crate) fn insertion_boundary(
         &self,
         section: usize,
@@ -448,12 +461,13 @@ fn safe_negative(xml: &str) -> bool {
     let Some((root, scope)) = Tag::opening_with_bindings(xml, &Default::default()) else {
         return false;
     };
-    let mut reader = quick_xml::Reader::from_str(xml);
+    let input = crate::wire_xml::PositionedXml::new(xml);
+    let mut reader = quick_xml::Reader::from_str(input.as_str());
     let mut end = 0;
     while let Ok(event) = reader.read_event() {
         match event {
             quick_xml::events::Event::Start(_) | quick_xml::events::Event::Empty(_) => {
-                end = reader.buffer_position() as usize;
+                end = input.original_offset(reader.buffer_position());
                 break;
             }
             quick_xml::events::Event::Decl(_) => {}
@@ -545,7 +559,7 @@ mod table_ledger;
 mod table_profiles;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Default)]
 struct Effect {
@@ -744,10 +758,43 @@ fn record_delta(effect: &mut Effect, e: &XmlElement, tag: &Tag) {
 /// Effects are bound to their source facts and shared by both decisions.
 pub(crate) struct DerivedEffects<'facts, 'source> {
     facts: &'facts DerivedFacts<'source>,
+    affected_tables: BTreeMap<usize, AffectedTables>,
     effects: BTreeMap<usize, Effect>,
     flow: bool,
     kinds: BTreeSet<String>,
     page_restart: bool,
+}
+
+struct AffectedTables {
+    by_table: Vec<bool>,
+    // Sorted starts with prefix maximum ends also cover nested table ranges.
+    starts_and_max_ends: Vec<(usize, usize)>,
+}
+impl AffectedTables {
+    fn new(by_table: Vec<bool>, tables: &[table_ledger::FlowTable]) -> Self {
+        let mut starts_and_max_ends: Vec<_> = by_table
+            .iter()
+            .zip(tables)
+            .filter_map(|(&affected, table)| {
+                crate::work::tick();
+                affected.then_some((table.outer.start, table.outer.end))
+            })
+            .collect();
+        starts_and_max_ends.sort_unstable_by_key(|&(start, _)| start);
+        let mut max_end = 0;
+        for (_, end) in &mut starts_and_max_ends {
+            crate::work::tick();
+            max_end = max_end.max(*end);
+            *end = max_end;
+        }
+        Self { by_table, starts_and_max_ends }
+    }
+
+    fn overlaps(&self, span: &Range<usize>) -> bool {
+        crate::work::tick();
+        let before = self.starts_and_max_ends.partition_point(|&(start, _)| start < span.end);
+        before > 0 && self.starts_and_max_ends[before - 1].1 > span.start
+    }
 }
 impl<'source> DerivedFacts<'source> {
     pub(crate) fn effects(
@@ -758,10 +805,36 @@ impl<'source> DerivedFacts<'source> {
         let flow = effects.values().any(|e| e.flow);
         let kinds = effects.values().flat_map(|e| e.kinds.iter().cloned()).collect();
         let page_restart = effects.values().any(|e| e.page_restart);
-        Ok(DerivedEffects { facts: self, effects, flow, kinds, page_restart })
+        let affected_tables = effects
+            .iter()
+            .map(|(&section, effect)| {
+                let part = self.section(section)?;
+                let mut affected = part.tables.affected_tables(&part.flow, &effect.seeds);
+                for (yes, record) in affected.iter_mut().zip(&part.tables.tables) {
+                    *yes |= effect.body_structure && record.host.is_none() && record.boundary == 0;
+                }
+                Ok((section, AffectedTables::new(affected, &part.tables.tables)))
+            })
+            .collect::<HwpxResult<_>>()?;
+        Ok(DerivedEffects { facts: self, effects, affected_tables, flow, kinds, page_restart })
     }
 }
 impl DerivedEffects<'_, '_> {
+    pub(crate) fn check_preserved_loss(
+        &self,
+        section: usize,
+        span: &Range<usize>,
+        digest: &[u8; 32],
+    ) -> HwpxResult<()> {
+        let part = self.facts.section(section)?;
+        require(part.source.digest() == digest)?;
+        require(part.source.elements()[part.element_at(span.start)?].outer() == *span)?;
+        if let Some(effect) = self.effects.get(&section) {
+            require(effect.survives(span)?)?;
+            require(!self.affected_tables[&section].overlaps(span))?;
+        }
+        Ok(())
+    }
     // Every stored number representation uses the same policy decision.
     fn number_unchanged(&self, part: &Part<'_>, kind: &str) -> HwpxResult<()> {
         match kind {
@@ -776,6 +849,8 @@ impl DerivedEffects<'_, '_> {
     }
 
     pub(crate) fn check_derived_values(&self) -> HwpxResult<()> {
+        #[cfg(test)]
+        DECISIONS.with(|d| d.borrow_mut().push("check"));
         let facts = self.facts;
         let effects = &self.effects;
         if effects.is_empty() {
@@ -1090,17 +1165,17 @@ fn crossref_unchanged(
 
 impl DerivedEffects<'_, '_> {
     pub(crate) fn collect_height_invalidations(&self) -> HwpxResult<Vec<HeightInvalidation>> {
+        #[cfg(test)]
+        DECISIONS.with(|d| d.borrow_mut().push("heights"));
         let facts = self.facts;
         let effects = &self.effects;
         let mut heights = Vec::new();
         for (&section, effect) in effects {
             let part = facts.section(section)?;
-            let affected = part.tables.affected_tables(&part.flow, &effect.seeds);
+            let affected = &self.affected_tables[&section].by_table;
             for (table, record) in part.tables.tables.iter().enumerate() {
                 let survives = effect.survives(&record.outer)?;
-                let unknown_body_owner =
-                    effect.body_structure && record.host.is_none() && record.boundary == 0;
-                if survives && (affected[table] || unknown_body_owner) {
+                if survives && affected[table] {
                     if let Some(height) = height_for_table(part, table)? {
                         heights.push(height);
                     }

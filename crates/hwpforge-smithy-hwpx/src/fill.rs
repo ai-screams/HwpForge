@@ -526,7 +526,9 @@ mod tests {
         section.paragraphs = paragraphs;
         doc.add_section(section);
         let validated = doc.validate().expect("validate");
-        let styles = crate::style_store_for_preset("default").expect("preset");
+        // Field traversal/cache tests need measured fonts to reach their original predicates.
+        let mut styles = crate::style_store_for_preset("default").expect("preset");
+        styles.replace_font("함초롬돋움", "맑은 고딕");
         crate::HwpxEncoder::encode(&validated, &styles, images).expect("encode")
     }
 
@@ -601,6 +603,7 @@ mod tests {
 
     #[test]
     fn equivalent_name_spellings_reach_the_filled_paragraph() {
+        // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
         // 이것을 실패시키는 것: 이름을 문자열 needle(`name="…"`)로 찾기 —
         // 엔티티·작은따옴표·`=` 공백·속성 안 `>` 를 못 찾아 캐시가 남는다.
         // 이름을 정규화 없이 raw 로 비교 → 엔티티 행이 위치 불일치 오류.
@@ -625,6 +628,14 @@ mod tests {
             } else {
                 named_with(|xml| xml.replacen("name=\"user_email\"", wire, 1))
             };
+            // This fixture checks field-name spelling, so keep its font width qualified.
+            let mut package = RawPackage::read(&bytes).unwrap();
+            let header = package.read_text_entry("Contents/header.xml").unwrap();
+            package.replace_text_entry(
+                "Contents/header.xml",
+                header.replace("함초롬돋움", "맑은 고딕").replace("함초롬바탕", "맑은 고딕"),
+            );
+            let bytes = package.write().unwrap();
             let listed = HwpxFiller::list_fields(&bytes).expect("list");
             assert_eq!(listed[0].name.as_deref(), Some(decoded), "fixture premise for {wire}");
             let xml = fill_xml(&bytes, &[(decoded, "채움")])
@@ -704,6 +715,7 @@ mod tests {
     // A proven cell edit starts no propagation; overflow retains the conservative rule.
     #[test]
     fn cell_fill_preserves_proven_lines_and_drops_overflow_tail() {
+        // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
         let cell = TableCell::new(
             vec![para(vec![text("c0")]), para(vec![field("mid", "칸")]), para(vec![text("c2")])],
             size(4000),

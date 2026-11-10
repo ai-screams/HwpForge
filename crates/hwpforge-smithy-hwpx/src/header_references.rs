@@ -109,6 +109,15 @@ impl HeaderReferences {
         xml: &str,
         part: &str,
     ) -> HwpxResult<Vec<crate::DecodeWarning>> {
+        self.validate_auxiliary_with_losses(xml, part, None)
+    }
+
+    pub(crate) fn validate_auxiliary_with_losses(
+        &self,
+        xml: &str,
+        part: &str,
+        mut source: Option<&mut crate::decoder::source_map::SourceRecorder>,
+    ) -> HwpxResult<Vec<crate::DecodeWarning>> {
         use quick_xml::events::Event;
         let mut warnings = Vec::new();
         let mut reader = quick_xml::Reader::from_str(xml);
@@ -197,6 +206,20 @@ impl HeaderReferences {
                     }
                     "charStyleIDRef" => {
                         self.style_index(id)?;
+                        if let Some(source) = source.as_deref_mut() {
+                            let origin = element
+                                .attributes()
+                                .filter_map(Result::ok)
+                                .find(|a| a.key.as_ref() == "_hwpforge_origin")
+                                .and_then(|a| a.value.as_ref().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            source.record_loss(
+                                warnings.len(),
+                                crate::decoder::preserved_loss::LossCause::InlineStyle,
+                                part,
+                                origin,
+                            );
+                        }
                         format!("validated inline style {id} is not carried by Core")
                     }
                     _ => {

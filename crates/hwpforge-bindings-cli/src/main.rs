@@ -224,7 +224,7 @@ enum Commands {
 
     /// Delete top-level paragraphs (structural edit).
     #[command(
-        long_about = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+        long_about = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. Verify with `diff base out`."
     )]
     DeletePara {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.

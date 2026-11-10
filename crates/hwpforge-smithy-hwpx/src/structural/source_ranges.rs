@@ -10,8 +10,9 @@ thread_local! {
     static XML_READS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-// Public editors leave this authorization list empty without requesting heap storage.
+// The writer and final verifier share the approved ID and height policy.
 pub(super) struct SectionChange {
+    pub ids: super::ParagraphIds,
     pub section: usize,
     pub path: String,
     pub original: String,
@@ -69,6 +70,7 @@ impl SectionChange {
             &self.deleted,
             inserted,
             &self.heights,
+            self.ids,
         )
     }
 }

@@ -16,6 +16,13 @@ use hwpforge_core::{
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{CellSpec, CellTarget, HwpxCellEditor, HwpxEncoder};
 
+// Preserve the cache/geometry test subjects after font qualification tightened.
+fn measured_store() -> hwpforge_smithy_hwpx::HwpxStyleStore {
+    let mut store = encoding::minimal_store();
+    store.replace_font("함초롬돋움", "맑은 고딕");
+    store
+}
+
 fn fixture(width: i32) -> Vec<u8> {
     let table = Table::new(vec![TableRow::new(vec![
         TableCell::new(vec![text_para("가")], HwpUnit::new(8000).unwrap()),
@@ -33,12 +40,9 @@ fn fixture(width: i32) -> Vec<u8> {
         ],
         PageSettings::a4(),
     ));
-    let bytes = HwpxEncoder::encode(
-        &doc.validate().unwrap(),
-        &encoding::minimal_store(),
-        &ImageStore::new(),
-    )
-    .unwrap();
+    let bytes =
+        HwpxEncoder::encode(&doc.validate().unwrap(), &measured_store(), &ImageStore::new())
+            .unwrap();
     let section = package::section_xml(&bytes);
     let section = section.replace("</hp:p>", &format!(r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="100" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="{width}" flags="393216"/></hp:linesegarray></hp:p>"#));
     let bytes = package::with_section(&bytes, &section);
@@ -65,6 +69,7 @@ fn edit(bytes: &[u8], text: &str) -> Vec<u8> {
 /// 이것을 실패시키는 것: 경계의 <= 를 < 로 변경, 후보 캐시 재부착 삭제, probe 대신 output 비교.
 #[test]
 fn one_line_width_boundary_preserves_every_cache_field() {
+    // 이것을 실패시키는 것: 측정 허용표에서 맑은 고딕 제거.
     let base = fixture(1050);
     let output = edit(&base, "힣");
     assert_eq!(caches(&output), caches(&base));
@@ -226,12 +231,9 @@ fn nested_fixture(textbox: bool) -> Vec<u8> {
         ],
         PageSettings::a4(),
     ));
-    let bytes = HwpxEncoder::encode(
-        &doc.validate().unwrap(),
-        &encoding::minimal_store(),
-        &ImageStore::new(),
-    )
-    .unwrap();
+    let bytes =
+        HwpxEncoder::encode(&doc.validate().unwrap(), &measured_store(), &ImageStore::new())
+            .unwrap();
     let section = package::section_xml(&bytes).replace("</hp:p>", r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="100" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="1050" flags="393216"/></hp:linesegarray></hp:p>"#);
     let bytes = package::with_section(&bytes, &section);
     assert_eq!(caches(&bytes).len(), 5);
@@ -290,6 +292,8 @@ fn stamp_output_bytes_remain_identical() {
     use hwpforge_smithy_hwpx::stamp::{plan, HwpxStamper, StampAction, StampSpec};
     use sha2::{Digest, Sha256};
     let base = package::splice(&fixture(40000), ">가</hp:t>", ">( )</hp:t>");
+    // This byte fingerprint covers stamp, whose source font must stay unchanged.
+    let base = package::splice_part(&base, "Contents/header.xml", "맑은 고딕", "함초롬돋움");
     let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&base).unwrap();
     let specs: Vec<_> = plan(&decoded.document)
         .into_iter()
@@ -382,12 +386,9 @@ fn second_cell_and_two_candidates_preserve_all_caches() {
 }
 
 fn encode_cached(doc: Document<hwpforge_core::Draft>) -> Vec<u8> {
-    let bytes = HwpxEncoder::encode(
-        &doc.validate().unwrap(),
-        &encoding::minimal_store(),
-        &ImageStore::new(),
-    )
-    .unwrap();
+    let bytes =
+        HwpxEncoder::encode(&doc.validate().unwrap(), &measured_store(), &ImageStore::new())
+            .unwrap();
     let section = package::section_xml(&bytes).replace("</hp:p>", r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="100" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="40000" flags="393216"/></hp:linesegarray></hp:p>"#);
     package::with_section(&bytes, &section)
 }

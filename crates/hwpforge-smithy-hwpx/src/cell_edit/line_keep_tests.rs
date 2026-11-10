@@ -23,7 +23,7 @@ fn paragraph(text: &str) -> Paragraph {
     para
 }
 fn styles() -> HwpxStyleStore {
-    let mut styles = HwpxStyleStore::with_default_fonts("함초롬바탕");
+    let mut styles = HwpxStyleStore::with_default_fonts("맑은 고딕");
     styles.push_char_shape(HwpxCharShape::default());
     styles.push_para_shape(crate::style_store::HwpxParaShape::default());
     styles
@@ -364,9 +364,9 @@ fn source_tags_require_a_unique_well_formed_element() {
         .is("textDirection", "HORIZONTAL"));
 }
 
-/// 이것을 실패시키는 것: 원본 구역의 파일명 대응을 spine 대응으로 변경(공유 carry의 기존 바이트 계약).
+/// 이것을 실패시키는 것: carry의 원본 조회를 출력 파일명으로 되돌리기.
 #[test]
-fn reversed_spine_keeps_the_existing_missing_cache_result() {
+fn reversed_spine_keeps_the_untouched_sections_cache() {
     let base = fixture();
     let mut decoded = HwpxDecoder::decode(&base).unwrap();
     let cached = decoded.document.sections()[0].clone();
@@ -389,10 +389,13 @@ fn reversed_spine_keeps_the_existing_missing_cache_result() {
     let input = package.write().unwrap();
     let decoded = HwpxDecoder::decode(&input).unwrap();
     assert!(decoded.document.sections()[0].paragraphs[1].layout_cache.is_some());
-    let edited = HwpxCellEditor::set_cells(&input, &specs()).unwrap();
+    let mut edits = specs();
+    edits[0].table = 1; // Original section0 is second in reading order and has no cache.
+    let edited = HwpxCellEditor::set_cells(&input, &edits).unwrap();
     let output = RawPackage::read(&edited.bytes).unwrap();
     let tree = xml::Element::parse(&output.read_text_entry("Contents/section0.xml").unwrap());
-    assert!(tree.children.iter().all(|p| p.children.iter().all(|c| c.name != "hp:linesegarray")));
+    assert_eq!(tree.descendants("hp:linesegarray").len(), 3);
+    assert_eq!(tree.children[1].find("hp:t").text, "뒤");
 }
 
 /// 이것을 실패시키는 것: marker가 하나라도 있으면 모든 후보 취소, 같은 host의 경고 경로로 후보 취소, 구역 번호 무시,
@@ -747,14 +750,15 @@ fn cell_and_splice_collect_the_same_source_evidence() {
     }
 }
 
-// 이것을 실패시키는 것: set-cell에서 fontRef 숫자만 비교하거나 raw 보존 경로에 글꼴 대조 적용.
+// 정확한 선언 이름만 측정했으므로 공백이 붙은 이름은 양쪽 모두 탈락한다.
+// 이것을 실패시키는 것: raw 보존 경로의 글꼴 검사 우회 또는 이름 trim.
 #[test]
-fn reencoded_cell_drops_cleaned_font_evidence_while_patch_keeps_it() {
+fn both_cell_and_patch_drop_unmeasured_spaced_font_names() {
     let mut package = RawPackage::read(&fixture()).unwrap();
     let header = package.read_text_entry("Contents/header.xml").unwrap();
     package.replace_text_entry(
         "Contents/header.xml",
-        header.replace("face=\"함초롬바탕\"", "face=\" 함초롬바탕 \""),
+        header.replace("face=\"맑은 고딕\"", "face=\" 맑은 고딕 \""),
     );
     let bytes = package.write().unwrap();
     let decoded = HwpxDecoder::decode(&bytes).unwrap();
@@ -778,7 +782,7 @@ fn reencoded_cell_drops_cleaned_font_evidence_while_patch_keeps_it() {
         Some(&preservation),
     )
     .unwrap();
-    for (out, keep) in [(edited.bytes, false), (patched, true)] {
+    for (out, keep) in [(edited.bytes, false), (patched, false)] {
         let xml = RawPackage::read(&out).unwrap().read_text_entry("Contents/section0.xml").unwrap();
         let tree = xml::Element::parse(&xml);
         let p = tree.find("hp:tc").find("hp:p");
@@ -803,5 +807,32 @@ fn source_collectors_close_on_nested_namespace_rebinding() {
         let mut map = decoded.source_map(0).unwrap().clone();
         map.prove_cache_text_tail(&xml, &Default::default(), 0);
         assert!(map.cache_flow.section_evidence(&xml).is_none());
+    }
+}
+
+// 이것을 실패시키는 것: 임베딩 또는 원본 fontRef 불일치를 후보 단계에서 승인.
+#[test]
+fn embedded_or_mismatched_source_fonts_are_not_cell_candidates() {
+    let mut package = RawPackage::read(&fixture()).unwrap();
+    // Both positions are valid measured faces, so only the source/store reference mismatch rejects.
+    let header = package.read_text_entry("Contents/header.xml").unwrap();
+    let start = header.find("<hh:font id=\"0\"").unwrap();
+    let end = start + header[start..].find("</hh:font>").unwrap() + "</hh:font>".len();
+    let second = header[start..end].replace("id=\"0\"", "id=\"1\"");
+    package.replace_text_entry(
+        "Contents/header.xml",
+        header
+            .replace("fontCnt=\"1\"", "fontCnt=\"2\"")
+            .replace("</hh:fontface>", &format!("{second}</hh:fontface>")),
+    );
+    let decoded = HwpxDecoder::decode(&package.write().unwrap()).unwrap();
+    let edits = resolve_edits(&decoded.document, &specs()).unwrap();
+    let header = package.read_text_entry("Contents/header.xml").unwrap();
+    for (from, to) in [
+        ("isEmbedded=\"0\"", "isEmbedded=\"1\""),
+        ("<hh:fontRef hangul=\"0\"", "<hh:fontRef hangul=\"1\""),
+    ] {
+        package.replace_text_entry("Contents/header.xml", header.replace(from, to));
+        assert!(candidates(&decoded, &package, &edits).is_empty());
     }
 }

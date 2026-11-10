@@ -31,6 +31,12 @@ pub struct SourceNode {
     envelopes: Vec<usize>,
 }
 impl SourceNode {
+    #[cfg(test)]
+    pub(crate) fn with_coverage(&self, copy: SourceCoverage) -> Self {
+        let mut node = self.clone();
+        node.copy = copy;
+        node
+    }
     /// Shared Core address.
     pub fn path(&self) -> &CorePath {
         &self.path
@@ -91,6 +97,14 @@ pub struct SourceMap {
     pub(crate) cache_flow: crate::cache_flow::ParagraphFlow,
 }
 impl SourceMap {
+    #[cfg(test)]
+    pub(crate) fn set_node_coverage(&mut self, path: &CorePath, copy: SourceCoverage) {
+        self.nodes.get_mut(path).unwrap().copy = copy;
+    }
+    #[cfg(test)]
+    pub(crate) fn text_slots_mut(&mut self) -> &mut [PreservedTextSlot] {
+        &mut self.slots
+    }
     /// Builds the text-tail gates the preserving text editors' cache
     /// question needs ([`crate::cache_flow::ParagraphFlow::prove_text_tail`]):
     /// reads `xml`, this section's original text, once more, and places the
@@ -141,6 +155,7 @@ struct ParagraphOrigin {
 }
 #[derive(Debug, Default)]
 pub(crate) struct SourceRecorder {
+    pub(crate) losses: Vec<super::preserved_loss::LossEvidence>,
     source: XmlSource,
     paragraphs: HashMap<usize, ParagraphOrigin>,
 }
@@ -150,7 +165,26 @@ impl SourceRecorder {
     pub(crate) fn read(xml: &str) -> HwpxResult<(String, Self)> {
         let (annotated, source) = XmlSource::read(xml)
             .map_err(|detail| HwpxError::XmlParse { file: "section.xml".into(), detail })?;
-        Ok((annotated, Self { source, paragraphs: HashMap::new() }))
+        Ok((annotated, Self { source, paragraphs: HashMap::new(), losses: Vec::new() }))
+    }
+    pub(crate) fn record_loss(
+        &mut self,
+        warning: usize,
+        cause: super::preserved_loss::LossCause,
+        part: &str,
+        node: usize,
+    ) {
+        if let Some(element) = self.source.element(node) {
+            self.losses.push(super::preserved_loss::LossEvidence {
+                warning,
+                cause,
+                location: super::preserved_loss::LossLocation::Body {
+                    part: part.into(),
+                    span: element.outer(),
+                    digest: *self.source.digest(),
+                },
+            });
+        }
     }
     pub(crate) fn child(&self, node: usize, tag: &str, index: usize) -> usize {
         self.source.child(node, tag, index)

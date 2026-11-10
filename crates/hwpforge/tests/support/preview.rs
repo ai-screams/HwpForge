@@ -1,4 +1,5 @@
 //! Generated preview-bearing document shared by binding boundary tests.
+#![allow(dead_code)]
 use hwpforge::{core, foundation, hwpx};
 use std::io::{Cursor, Read, Write};
 
@@ -87,4 +88,27 @@ pub(crate) fn assert_warning(value: &serde_json::Value) {
         .collect();
     assert_eq!(warnings.len(), 1, "{value}");
     assert!(warnings[0].get("parts").is_none());
+}
+
+/// A preview-bearing form followed by two independently addressable plain paragraphs.
+pub(crate) fn paragraph_base() -> Vec<u8> {
+    let mut original = zip::ZipArchive::new(Cursor::new(base())).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..original.len() {
+        let mut entry = original.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == "Contents/section0.xml" {
+            bytes=String::from_utf8(bytes).unwrap().replace("</hs:sec>",r#"<hp:p id="701" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>삭제할 문단</hp:t></hp:run></hp:p><hp:p id="007" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>유지할 문단</hp:t></hp:run></hp:p></hs:sec>"#).into_bytes();
+        }
+        output
+            .start_file(
+                name,
+                zip::write::SimpleFileOptions::default().compression_method(entry.compression()),
+            )
+            .unwrap();
+        output.write_all(&bytes).unwrap();
+    }
+    output.finish().unwrap().into_inner()
 }

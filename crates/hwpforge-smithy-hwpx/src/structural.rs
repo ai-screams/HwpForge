@@ -20,7 +20,9 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use serde_json::Value;
 
+mod delete_source;
 mod paragraph_refs;
+mod preserved_loss;
 pub(crate) mod references;
 mod source_ranges;
 pub(crate) mod xml_values;
@@ -30,6 +32,41 @@ use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::error::{CodecFailure, CodecStage};
 use crate::patch::RawPackage;
 use crate::stamp::{admission_compare, check_zip_carry, delta_compare, encode_hwpx, StamperError};
+
+// Keep fault injection out of the production control flow.
+macro_rules! edit_checkpoint {
+    ($stage:literal) => {
+        #[cfg(test)]
+        preserving_delete_tests::checkpoint($stage)?;
+    };
+    ($stage:literal => $result:expr) => {{
+        #[cfg(test)]
+        {
+            preserving_delete_tests::checkpoint($stage).and_then(|()| $result)
+        }
+        #[cfg(not(test))]
+        {
+            $result
+        }
+    }};
+}
+
+macro_rules! edit_test {
+    ($statement:stmt) => {
+        #[cfg(test)]
+        $statement
+    };
+    ($value:ident => $change:expr) => {{
+        #[cfg(test)]
+        {
+            $change
+        }
+        #[cfg(not(test))]
+        {
+            $value
+        }
+    }};
+}
 
 /// Addresses a **top-level body-flow** paragraph for structural editing.
 ///
@@ -263,24 +300,52 @@ fn map_admission(error: StamperError) -> StructuralEditError {
     }
 }
 
-/// Input admission gate shared by insert and delete: the base must round-trip
-/// (decode→encode→decode is a no-op) so a byte-splice edit can be verified.
-/// Returns the decoded base and its checked package for reuse by the edit.
-fn admit(base: &[u8]) -> Result<(HwpxDocument, RawPackage), StructuralEditError> {
+/// Only the two final admission calls can authorize a preserving delete attempt.
+fn admit_delete(
+    base: &[u8],
+) -> Result<(HwpxDocument, RawPackage, Option<StructuralEditError>), StructuralEditError> {
+    edit_checkpoint!("input-decode");
     let d0 = HwpxDecoder::decode(base)
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    edit_checkpoint!("package-read");
     let package = RawPackage::read(base)
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
     // 이것을 실패시키는 것: admission 전 무결성 검사 제거.
+    edit_checkpoint!("integrity");
     package
         .ensure_editable()
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+    edit_checkpoint!("admission-encode");
     let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission).map_err(map_admission)?;
+    edit_checkpoint!("admission-decode");
     let d1 = HwpxDecoder::decode(&e0)
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
-    admission_compare(&d0, &d1).map_err(map_admission)?;
-    check_zip_carry(base, &e0).map_err(map_admission)?;
-    Ok((d0, package))
+    let comparison = admission_compare(&d0, &d1).map_err(map_admission);
+    let comparison = edit_checkpoint!("compare" => comparison);
+    let error = match comparison {
+        Err(error) => Some(error),
+        Ok(()) => {
+            let carry =
+                edit_checkpoint!("carry" => check_zip_carry(base, &e0).map_err(map_admission));
+            carry.err()
+        }
+    };
+    Ok((d0, package, error))
+}
+
+/// Insert retains its immediate admission refusal contract.
+fn admit(base: &[u8]) -> Result<(HwpxDocument, RawPackage), StructuralEditError> {
+    let (decoded, package, error) = admit_delete(base)?;
+    match error {
+        Some(error) => Err(error),
+        None => Ok((decoded, package)),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParagraphIds {
+    Reindex,
+    Preserve,
 }
 
 /// Reverse-delta self-verify shared by insert and delete: the re-decoded output
@@ -298,6 +363,219 @@ fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEd
         }
         other => StructuralEditError::DeltaMismatch { detail: other.to_string() },
     })
+}
+
+fn apply_section_change(
+    package: &mut RawPackage,
+    changes: &mut crate::raw_package::OutputChanges,
+    change: &SectionChange,
+    map: &crate::decoder::source_map::SourceMap,
+) -> Result<(), StructuralEditError> {
+    edit_checkpoint!("splice");
+    let out = crate::cache_flow::splice(&change.original, change.replacements(map)?)
+        .map_err(verification_error)?;
+    changes.rewritten.push(change.path.clone());
+    package.replace_text_entry(&change.path, out);
+    Ok(())
+}
+
+fn delete_admitted(
+    base: &[u8],
+    targets: &[ParagraphLocator],
+    d0: HwpxDocument,
+    mut package: RawPackage,
+    ids: ParagraphIds,
+) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
+    if ids == ParagraphIds::Preserve {
+        edit_checkpoint!("input-loss");
+        preserved_loss::check_candidates(base, &package, &d0).map_err(verification_error)?;
+        edit_checkpoint!("header");
+        if d0.requires_header_normalization() {
+            return Err(StructuralEditError::Invariant {
+                detail: "header normalization required".into(),
+            });
+        }
+    }
+    edit_checkpoint!("preview-plan");
+    let preview =
+        crate::raw_package::preview::PreviewRemoval::plan(&package).map_err(verification_error)?;
+    let decode_warnings = d0.warnings.clone();
+    let sections = d0.document.sections();
+
+    edit_checkpoint!("target-preflight");
+    let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(sections);
+    // ── preflight: ranges, duplicates, rejection rules ──
+    let mut seen = std::collections::BTreeSet::new();
+    for t in targets {
+        let section = sections.get(t.section).ok_or(StructuralEditError::SectionOutOfRange {
+            section: t.section,
+            available: sections.len(),
+        })?;
+        let para =
+            section.paragraphs.get(t.index).ok_or(StructuralEditError::ParagraphOutOfRange {
+                section: t.section,
+                index: t.index,
+                available: section.paragraphs.len(),
+            })?;
+        if !seen.insert((t.section, t.index)) {
+            return Err(StructuralEditError::DuplicateTarget {
+                section: t.section,
+                index: t.index,
+            });
+        }
+        if scan_paragraph_references(para).has_reference_material() {
+            return Err(StructuralEditError::ReferenceStranded {
+                section: t.section,
+                index: t.index,
+            });
+        }
+        // 이것을 실패시키는 것: 문단 삭제에서 공통 구간 preflight 생략.
+        if fields.protects_paragraph(t.section, "paragraphs", t.index) {
+            return Err(StructuralEditError::ProtectedFieldRange {
+                section: t.section,
+                index: t.index,
+                detail: "protected field range: paragraph deletion".into(),
+            });
+        }
+        if para.page_break || para.column_break {
+            return Err(StructuralEditError::HardBreakLoss { section: t.section, index: t.index });
+        }
+    }
+
+    // ── declared delta: base document minus the targets ──
+    let mut expected = d0.document.clone();
+    remove_targets(&mut expected, targets)?;
+    // Core invariants do not ride along the byte-splice path, so assert
+    // them explicitly on the declared result. Empty-section is checked
+    // precisely (which section) before the generic validate().
+    for (idx, section) in expected.sections().iter().enumerate() {
+        if section.paragraphs.is_empty() {
+            return Err(StructuralEditError::EmptySection { section: idx });
+        }
+    }
+    expected
+        .clone()
+        .validate()
+        .map_err(|e| StructuralEditError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
+
+    // ── byte-splice each affected section's XML ──
+    // 이것을 실패시키는 것: 원본의 문단 참조 검사 호출 생략.
+    edit_checkpoint!("paragraph-references");
+    paragraph_refs::check(&package)?;
+    let mut by_section: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for t in targets {
+        by_section.entry(t.section).or_default().push(t.index);
+    }
+    let mut changes = crate::raw_package::OutputChanges::default();
+    let mut section_changes = Vec::new();
+    for (section_idx, mut indices) in by_section {
+        let path = package
+            .section_path(section_idx)
+            .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
+        let xml = package
+            .read_text_entry(&path)
+            .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
+        let map = &d0.source_maps[section_idx];
+        let spans: Vec<_> = map.paragraphs.iter().map(|p| p.outer.clone()).collect();
+        if spans.len() != sections[section_idx].paragraphs.len() {
+            return Err(StructuralEditError::SpanCountMismatch {
+                section: section_idx,
+                decoded: sections[section_idx].paragraphs.len(),
+                wire: spans.len(),
+            });
+        }
+        // Section properties (<hp:secPr>) live inside a paragraph (the
+        // first) in HWPX; cutting that paragraph would silently reset the
+        // section layout. Refuse — the self-verify would catch it, but a
+        // clear rejection beats an opaque delta mismatch.
+        for &idx in &indices {
+            if map.paragraphs[idx].has_properties {
+                return Err(StructuralEditError::SectionPropertiesParagraph {
+                    section: section_idx,
+                    index: idx,
+                });
+            }
+        }
+        indices.sort_unstable();
+        if ids == ParagraphIds::Preserve {
+            edit_checkpoint!("plain-source");
+            delete_source::check(
+                &xml,
+                &path,
+                map,
+                section_idx,
+                &indices,
+                &sections[section_idx].paragraphs,
+            )?;
+        }
+        let change = SectionChange {
+            section: section_idx,
+            path,
+            original: xml,
+            deleted: indices,
+            inserted: None,
+            ids,
+            heights: Vec::new(),
+        };
+        if ids == ParagraphIds::Reindex {
+            apply_section_change(&mut package, &mut changes, &change, map)?;
+        }
+        section_changes.push(change);
+    }
+    if ids == ParagraphIds::Preserve {
+        use crate::derived_values::{DerivedEdit, DerivedFacts};
+        edit_checkpoint!("derived-collect");
+        let facts = DerivedFacts::collect(&package, &d0).map_err(verification_error)?;
+        let ordinals = section_changes
+            .iter()
+            .map(|change| {
+                change
+                    .deleted
+                    .iter()
+                    .map(|&index| facts.body_ordinal(change.section, index))
+                    .collect::<crate::HwpxResult<Vec<_>>>()
+            })
+            .collect::<crate::HwpxResult<Vec<_>>>()
+            .map_err(verification_error)?;
+        let edits: Vec<_> = section_changes
+            .iter()
+            .zip(&ordinals)
+            .map(|(change, paragraphs)| DerivedEdit::Delete { section: change.section, paragraphs })
+            .collect();
+        edit_checkpoint!("derived-effects");
+        let effects = facts.effects(&edits).map_err(verification_error)?;
+        edit_checkpoint!("loss-location");
+        preserved_loss::check_locations(&d0, &effects).map_err(verification_error)?;
+        edit_checkpoint!("derived-check");
+        effects.check_derived_values().map_err(verification_error)?;
+        edit_checkpoint!("derived-heights");
+        let heights = effects.collect_height_invalidations().map_err(verification_error)?;
+        for change in &mut section_changes {
+            change.heights =
+                heights.iter().filter(|h| h.section == change.section).cloned().collect();
+            apply_section_change(
+                &mut package,
+                &mut changes,
+                change,
+                &d0.source_maps[change.section],
+            )?;
+        }
+    } else {
+        normalize_header_for_edit(&mut package, &d0, &mut changes)?;
+    }
+    edit_checkpoint!("preview-apply");
+    preview.apply(&mut package, &mut changes).map_err(verification_error)?;
+    let bytes = finish_edit(base, package, &d0, expected, &changes, &section_changes)?;
+    edit_checkpoint!("preview-final");
+    let bytes = edit_test!(bytes => preserving_delete_tests::tamper_preview(bytes));
+    let preview_warning = preview.verify_final(&bytes).map_err(verification_error)?;
+
+    Ok(crate::diagnostics::WithCodecWarnings::new(
+        bytes,
+        decode_warnings,
+        preview_warning.into_iter().collect(),
+    ))
 }
 
 /// Byte-splice structural editor (preserve-first, admission-gated).
@@ -359,7 +637,11 @@ impl HwpxStructuralEditor {
     }
 
     /// Deletes paragraphs while retaining decode and encode diagnostics.
-    /// Empty requests return the original bytes. Existing admission remains unchanged.
+    /// Empty requests return the original bytes. If only the semantic comparison or ZIP
+    /// carry gate fails, verified plain/empty body paragraphs can be deleted from
+    /// the original source. Surviving IDs and unrelated part payloads are retained;
+    /// affected caches, supported table heights and Preview are invalidated.
+    /// Any failure in that path returns the original admission error.
     ///
     /// # Errors
     /// See [`StructuralEditError`].
@@ -376,136 +658,13 @@ impl HwpxStructuralEditor {
                 Vec::new(),
             ));
         }
-        // ── input admission: base must round-trip so we can verify ──
-        let (d0, mut package) = admit(base)?;
-        let preview = crate::raw_package::preview::PreviewRemoval::plan(&package)
-            .map_err(verification_error)?;
-        let decode_warnings = d0.warnings.clone();
-        let sections = d0.document.sections();
-
-        let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(sections);
-        // ── preflight: ranges, duplicates, rejection rules ──
-        let mut seen = std::collections::BTreeSet::new();
-        for t in targets {
-            let section =
-                sections.get(t.section).ok_or(StructuralEditError::SectionOutOfRange {
-                    section: t.section,
-                    available: sections.len(),
-                })?;
-            let para = section.paragraphs.get(t.index).ok_or(
-                StructuralEditError::ParagraphOutOfRange {
-                    section: t.section,
-                    index: t.index,
-                    available: section.paragraphs.len(),
-                },
-            )?;
-            if !seen.insert((t.section, t.index)) {
-                return Err(StructuralEditError::DuplicateTarget {
-                    section: t.section,
-                    index: t.index,
-                });
-            }
-            if scan_paragraph_references(para).has_reference_material() {
-                return Err(StructuralEditError::ReferenceStranded {
-                    section: t.section,
-                    index: t.index,
-                });
-            }
-            // 이것을 실패시키는 것: 문단 삭제에서 공통 구간 preflight 생략.
-            if fields.protects_paragraph(t.section, "paragraphs", t.index) {
-                return Err(StructuralEditError::ProtectedFieldRange {
-                    section: t.section,
-                    index: t.index,
-                    detail: "protected field range: paragraph deletion".into(),
-                });
-            }
-            if para.page_break || para.column_break {
-                return Err(StructuralEditError::HardBreakLoss {
-                    section: t.section,
-                    index: t.index,
-                });
-            }
+        let (d0, package, error) = admit_delete(base)?;
+        match error {
+            // One boundary restores the original object for every preserving-path failure.
+            Some(error) => delete_admitted(base, targets, d0, package, ParagraphIds::Preserve)
+                .map_err(|_| error),
+            None => delete_admitted(base, targets, d0, package, ParagraphIds::Reindex),
         }
-
-        // ── declared delta: base document minus the targets ──
-        let mut expected = d0.document.clone();
-        remove_targets(&mut expected, targets)?;
-        // Core invariants do not ride along the byte-splice path, so assert
-        // them explicitly on the declared result. Empty-section is checked
-        // precisely (which section) before the generic validate().
-        for (idx, section) in expected.sections().iter().enumerate() {
-            if section.paragraphs.is_empty() {
-                return Err(StructuralEditError::EmptySection { section: idx });
-            }
-        }
-        expected.clone().validate().map_err(|e| {
-            StructuralEditError::Codec(CodecFailure::core(CodecStage::Validation, &e))
-        })?;
-
-        // ── byte-splice each affected section's XML ──
-        // 이것을 실패시키는 것: 원본의 문단 참조 검사 호출 생략.
-        paragraph_refs::check(&package)?;
-        let mut by_section: std::collections::BTreeMap<usize, Vec<usize>> =
-            std::collections::BTreeMap::new();
-        for t in targets {
-            by_section.entry(t.section).or_default().push(t.index);
-        }
-        let mut changes = crate::raw_package::OutputChanges::default();
-        let mut section_changes = Vec::new();
-        for (section_idx, mut indices) in by_section {
-            let path = package
-                .section_path(section_idx)
-                .map_err(|e| StructuralEditError::Invariant { detail: e.to_string() })?;
-            let xml = package.read_text_entry(&path).map_err(|e| {
-                StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e))
-            })?;
-            let map = &d0.source_maps[section_idx];
-            let spans: Vec<_> = map.paragraphs.iter().map(|p| p.outer.clone()).collect();
-            if spans.len() != sections[section_idx].paragraphs.len() {
-                return Err(StructuralEditError::SpanCountMismatch {
-                    section: section_idx,
-                    decoded: sections[section_idx].paragraphs.len(),
-                    wire: spans.len(),
-                });
-            }
-            // Section properties (<hp:secPr>) live inside a paragraph (the
-            // first) in HWPX; cutting that paragraph would silently reset the
-            // section layout. Refuse — the self-verify would catch it, but a
-            // clear rejection beats an opaque delta mismatch.
-            for &idx in &indices {
-                if map.paragraphs[idx].has_properties {
-                    return Err(StructuralEditError::SectionPropertiesParagraph {
-                        section: section_idx,
-                        index: idx,
-                    });
-                }
-            }
-            indices.sort_unstable();
-            let change = SectionChange {
-                section: section_idx,
-                path,
-                original: xml,
-                deleted: indices,
-                inserted: None,
-                // 공개 삭제는 높이 치환을 하지 않는다. `Vec::new()` 는 heap 을 요청하지 않는다.
-                heights: Vec::new(),
-            };
-            let out = crate::cache_flow::splice(&change.original, change.replacements(map)?)
-                .map_err(verification_error)?;
-            changes.rewritten.push(change.path.clone());
-            package.replace_text_entry(&change.path, out);
-            section_changes.push(change);
-        }
-        normalize_header_for_edit(&mut package, &d0, &mut changes)?;
-        preview.apply(&mut package, &mut changes).map_err(verification_error)?;
-        let bytes = finish_edit(base, package, &d0, expected, &changes, &section_changes)?;
-        let preview_warning = preview.verify_final(&bytes).map_err(verification_error)?;
-
-        Ok(crate::diagnostics::WithCodecWarnings::new(
-            bytes,
-            decode_warnings,
-            preview_warning.into_iter().collect(),
-        ))
     }
 
     /// Inserts a paragraph, invalidating affected caches and removing derived Preview
@@ -834,6 +993,7 @@ impl HwpxStructuralEditor {
             inserted: Some((insert_index, texts.len(), new_para_bytes)),
             // 공개 삽입은 높이 치환을 하지 않는다. `Vec::new()` 는 heap 을 요청하지 않는다.
             heights: Vec::new(),
+            ids: ParagraphIds::Reindex,
         };
         let out = crate::cache_flow::splice(&change.original, change.replacements(map)?)
             .map_err(verification_error)?;
@@ -863,6 +1023,8 @@ fn finish_edit(
     changes: &crate::raw_package::OutputChanges,
     section_changes: &[SectionChange],
 ) -> Result<Vec<u8>, StructuralEditError> {
+    edit_test!(preserving_delete_tests::record_changes(changes));
+    edit_checkpoint!("write");
     let bytes = package
         .write()
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
@@ -875,9 +1037,12 @@ fn finish_edit(
         style_store: d0.style_store.clone(),
         image_store: d0.image_store.clone(),
     };
+    edit_checkpoint!("self-verify");
     self_verify(&bytes, &expected_doc)?;
+    edit_checkpoint!("package-final");
     RawPackage::verify_output(base, &bytes, changes).map_err(StructuralEditError::Codec)?;
     // 이것을 실패시키는 것: 최종 ZIP의 section 원문/생존 참조 검사 생략.
+    edit_checkpoint!("source-final");
     source_ranges::verify_output(&bytes, d0, section_changes)?;
     Ok(bytes)
 }
@@ -945,6 +1110,7 @@ fn splice_paragraphs(
         deleted: deleted.into(),
         inserted: inserted.map(|(at, count, text)| (at, count, text.into())),
         heights: Vec::new(),
+        ids: ParagraphIds::Reindex,
     };
     let edits = change.replacements(map)?;
     crate::cache_flow::splice(xml, edits).map_err(verification_error)
@@ -958,8 +1124,9 @@ fn structural_replacements(
     deleted: &[usize],
     inserted: Option<(usize, usize, &str)>,
     heights: &[crate::derived_values::HeightInvalidation],
+    ids: ParagraphIds,
 ) -> Result<Vec<(std::ops::Range<usize>, String)>, StructuralEditError> {
-    let mut edits = paragraph_replacements(map, deleted, inserted)?;
+    let mut edits = paragraph_replacements(map, deleted, inserted, ids)?;
     crate::derived_values::append_height_replacements(xml, map, section, heights, &mut edits)
         .map_err(verification_error)?;
     Ok(edits)
@@ -973,6 +1140,7 @@ fn paragraph_replacements(
     map: &crate::decoder::source_map::SourceMap,
     deleted: &[usize],
     inserted: Option<(usize, usize, &str)>,
+    ids: ParagraphIds,
 ) -> Result<Vec<(std::ops::Range<usize>, String)>, StructuralEditError> {
     let first =
         inserted.map(|(at, _, _)| at).or_else(|| deleted.first().copied()).unwrap_or(usize::MAX);
@@ -995,8 +1163,10 @@ fn paragraph_replacements(
         }
         let new_index = index - deleted.partition_point(|i| *i < index)
             + inserted.map_or(0, |(at, count, _)| if index >= at { count } else { 0 });
-        if let Some(range) = &p.id_value {
-            edits.push((range.clone(), new_index.to_string()));
+        if ids == ParagraphIds::Reindex {
+            if let Some(range) = &p.id_value {
+                edits.push((range.clone(), new_index.to_string()));
+            }
         }
     }
     if let Some((index, _, fragment)) = inserted {
@@ -2106,3 +2276,6 @@ mod tests {
         assert!(many.to_string().contains("index-mark entries"), "{many}");
     }
 }
+
+#[cfg(test)]
+mod preserving_delete_tests;
