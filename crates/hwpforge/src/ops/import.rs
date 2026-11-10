@@ -1,10 +1,9 @@
 //! Office document import into HWPX.
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_docx::decode_docx;
-use hwpforge_smithy_hwpx::ListHeadPolicy;
 use serde::{Deserialize, Serialize};
 
-use super::{encode_registry::encode_registry, OpsError, OpsWarning};
+use super::{encode_registry::encode_import_registry, OpsError, OpsWarning};
 
 /// Generated HWPX bytes and diagnostics in decode, project, encode order.
 #[derive(Debug)]
@@ -57,12 +56,8 @@ pub struct ImportMeta {
 /// Projection, rebinding, validation and encoding use the shared ops errors.
 pub fn convert_docx(bytes: &[u8]) -> Result<ImportOutput, OpsError> {
     let decoded = decode_docx(bytes).map_err(OpsError::DocxDecode)?;
-    let encoded = encode_registry(
-        decoded.document,
-        &decoded.registry,
-        &decoded.image_store,
-        ListHeadPolicy::PreserveEffective,
-    )?;
+    let encoded =
+        encode_import_registry(decoded.document, &decoded.registry, &decoded.image_store)?;
     let mut warnings: Vec<_> = decoded.warnings.into_iter().map(OpsWarning::Docx).collect();
     warnings.extend(encoded.bridge_warnings.into_iter().map(OpsWarning::Projection));
     warnings.extend(encoded.encode_warnings.into_iter().map(OpsWarning::Encode));

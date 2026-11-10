@@ -108,7 +108,13 @@ impl Layout {
                         .zip(&mut self.size_present)
                 {
                     if let Some(value) = attr(e, key) {
-                        *target = dimension(value, 1, part, at, key)?;
+                        *target = dimension(
+                            value,
+                            crate::format::StructuralDimension::PageSize,
+                            part,
+                            at,
+                            key,
+                        )?;
                         *present = true;
                     }
                 }
@@ -145,7 +151,13 @@ impl Layout {
                 .zip(&mut self.margins_present)
                 {
                     if let Some(value) = attr(e, key) {
-                        *target = dimension(value, 0, part, at, key)?;
+                        *target = dimension(
+                            value,
+                            crate::format::StructuralDimension::Margin,
+                            part,
+                            at,
+                            key,
+                        )?;
                         *present = true;
                     }
                 }
@@ -402,8 +414,15 @@ pub(super) fn exclude(
     )?;
     Ok(PropertyState::Excluded)
 }
-fn dimension(value: &str, minimum: i32, part: &str, at: &Location, key: &str) -> Result<HwpUnit> {
-    let n = crate::format::structural_length(value, minimum).map_err(|reason| {
+fn dimension(
+    value: &str,
+    kind: crate::format::StructuralDimension,
+    part: &str,
+    at: &Location,
+    key: &str,
+) -> Result<HwpUnit> {
+    let minimum = kind.minimum();
+    let n = crate::format::structural_length(value, kind).map_err(|reason| {
         DocxError::invalid(
             part,
             at,

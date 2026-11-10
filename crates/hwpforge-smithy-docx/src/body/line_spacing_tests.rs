@@ -144,12 +144,17 @@ fn ordinary_boundaries_match_word_literal_groups() {
 // 이것을 실패시키는 것: 표 뒤 이웃 초기화 누락, 구역 경계를 건너 결합.
 #[test]
 fn ordinary_boundaries_stop_at_tables_and_sections() {
-    for separator in ["</w:pPr></w:p><w:tbl/>", "<w:sectPr/></w:pPr></w:p>"] {
+    for separator in [
+        "</w:pPr></w:p><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>",
+        "<w:sectPr/></w:pPr></w:p>",
+    ] {
         let d = read("", &format!("<w:p><w:pPr><w:spacing w:before='60' w:after='200'/>{separator}<w:p><w:pPr><w:spacing w:before='240' w:after='80'/></w:pPr></w:p><w:p><w:pPr><w:spacing w:before='100'/></w:pPr></w:p>"));
-        assert_eq!(
-            gaps(&d),
-            [(300, 1000), (if separator.contains("sectPr") { 0 } else { 1200 }, 500), (0, 0)]
-        );
+        let expected = if separator.contains("sectPr") {
+            vec![(300, 1000), (0, 500), (0, 0)]
+        } else {
+            vec![(300, 1000), (0, 0), (1200, 500), (0, 0)]
+        };
+        assert_eq!(gaps(&d), expected);
     }
 }
 
@@ -184,8 +189,8 @@ fn contextual_spacing_respects_identity_and_each_side_switch() {
 // 이것을 실패시키는 것: 표·구역을 건너 억제, 분할 조각을 새 이웃으로 판단, 이동된 강제 경계에 contextual 적용.
 #[test]
 fn contextual_spacing_boundaries_and_split_fragments() {
-    let d = read(&contextual_styles(), "<w:p/><w:tbl/><w:p><w:pPr><w:sectPr/></w:pPr></w:p><w:p/>");
-    assert_eq!(gaps(&d), [(200, 800), (200, 800), (0, 800)]);
+    let d = read(&contextual_styles(), "<w:p/><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:pPr><w:sectPr/></w:pPr></w:p><w:p/>");
+    assert_eq!(gaps(&d), [(200, 800), (0, 0), (200, 800), (0, 800)]);
     let d = read(
         &contextual_styles(),
         "<w:p/><w:p><w:r><w:t>가</w:t><w:br w:type='page'/><w:t>나</w:t></w:r></w:p><w:p/>",

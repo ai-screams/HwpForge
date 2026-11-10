@@ -79,6 +79,36 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "ContentLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TablePositionApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableWidthApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableBorderApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableMergeApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "ListReferenceLost",
           "shape": "struct",
           "cfg": [],

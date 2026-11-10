@@ -334,6 +334,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
     let mut warnings = Vec::new();
     let mut resolver = Resolver::new(Definitions::default(), &mut warnings).unwrap();
     let mut body = Body {
+        tables: table::Tables::default(),
         part: "body.xml",
         main: true,
         root: "document",
@@ -402,10 +403,11 @@ fn fragment_and_empty_section_growth_use_document_limits() {
     body.boundary_input = None;
     body.split(false, &at).unwrap();
     body.ensure_fragment_run(&at).unwrap();
-    body.finish_paragraph().unwrap();
+    body.finish_paragraph(true).unwrap();
     assert_eq!(body.paragraphs.len(), 2);
     assert!(body.trailing_break.is_some());
     body.stack.push(Frame {
+        passes_content: false,
         node: Node::Body,
         blocked: false,
         in_body: true,
@@ -424,7 +426,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
     assert_eq!(body.origins.len(), 1);
     assert!(body.paragraph.as_ref().unwrap().page_break);
     body.ensure_fragment_run(&at).unwrap();
-    body.finish_paragraph().unwrap();
+    body.finish_paragraph(true).unwrap();
     assert!(matches!(
         body.start(element()),
         Err(DocxError::Limit { observed: 1_000_001, limit: 1_000_000, .. })
@@ -518,19 +520,17 @@ fn break_only_field_results_are_present_in_simple_complex_and_nested_fields() {
     assert_eq!(losses(&d, "field_result"), 1);
 }
 
-// 이것을 실패시키는 것: 표 셀 텍스트 펼침, 제외 표의 구역·나누기 적용 또는 추가 배치 경고.
+// 이것을 실패시키는 것: 셀 문단을 최상위로 펼치거나 셀 구역 설정을 적용.
 #[test]
-fn excluded_tables_do_not_contribute_text_sections_or_breaks() {
+fn tables_keep_cell_layout_inside_the_container() {
     let d = read("<w:p><w:r><w:t>A</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:pPr><w:sectPr><w:pgSz w:w='oops'/></w:sectPr></w:pPr><w:r><w:t>CELL</w:t><w:br w:type='page'/><w:br w:type='column'/></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>B</w:t></w:r></w:p>");
-    assert_eq!(texts(&d), [vec!["A", "B"]]);
+    assert_eq!(texts(&d), [vec!["A", "", "B"]]);
     assert_eq!(
         d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(),
-        [false, false]
+        [false, false, false]
     );
-    let w = d.warnings.iter().find(|w| w.loss() == "table").unwrap();
-    assert_eq!((w.code(), w.action(), w.count()), ("DOCX_CONTENT_OMITTED", "omit", 1));
     for loss in ["nested_section", "cell_break", "paragraph_split", "column_break"] {
-        assert_eq!(losses(&d, loss), 0);
+        assert!(losses(&d, loss) > 0);
     }
     assert!(matches!(
         decode_docx(&package("<w:tbl><w:tr><w:tc><w:p><w:ins/></w:p></w:tc></w:tr></w:tbl>", &[])),
@@ -798,7 +798,7 @@ fn trailing_break_moves_only_to_next_output_paragraph() {
             (format!("<w:r><w:br w:type='{kind}'/><w:br w:type='{kind}'/></w:r>"), vec!["", "", "C"], vec![false, true, true]),
         ] {
             for before in ["", "<w:pageBreakBefore/>"] {
-                let d = read(&format!("<w:p>{content}</w:p><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:pPr>{before}</w:pPr><w:r><w:t>C</w:t></w:r></w:p>"));
+                let d = read(&format!("<w:p>{content}</w:p><w:p><w:pPr>{before}</w:pPr><w:r><w:t>C</w:t></w:r></w:p>"));
                 assert_eq!(texts(&d).as_slice(), std::slice::from_ref(&expected));
                 assert_eq!(d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(), breaks);
                 assert_eq!(losses(&d, "paragraph_split"), 1);

@@ -1,5 +1,6 @@
 //! Word natural line height approximation; no font files or line breaking.
 use super::*;
+use hwpforge_foundation::HwpUnit;
 
 #[derive(Clone, Copy)]
 pub(super) struct Metrics {
@@ -76,16 +77,44 @@ impl Height {
         // individual height; size variation still approximates line breaking.
         self.different_sizes || self.ascent + self.descent > self.max_single
     }
+    fn natural(&self, east: bool) -> f64 {
+        (self.ascent + self.descent) * if east { 1.3 } else { 1.0 }
+    }
+    // Word line advance is shared by paragraph spacing projection and cell minima.
+    fn word_spacing(&self, p: &ParaDelta, east: bool) -> f64 {
+        let rule = if p.line.is_none() { 0 } else { p.line_rule.unwrap_or(0) };
+        let line = f64::from(p.line.unwrap_or(240));
+        // Unknown metrics retain the existing raw multiplier / specified minimum fallback.
+        let natural = if self.unknown { f64::from(self.size) } else { self.natural(east) };
+        match rule {
+            1 => line * 5.0,
+            2 => {
+                if self.unknown {
+                    line * 5.0
+                } else {
+                    natural.max(line * 5.0)
+                }
+            }
+            _ => natural * line / 240.0,
+        }
+    }
+    pub(super) fn word_line(&self, p: &ParaDelta, east: bool) -> Result<i32> {
+        let height = self.word_spacing(p, east);
+        let height = units::canonical_float(height.round())?;
+        HwpUnit::new(height as i32)
+            .map(|h| h.as_i32())
+            .map_err(|e| DocxError::invalid("#format", "line", e.to_string()))
+    }
     pub(super) fn project(&self, p: &ParaDelta, east: bool) -> Result<Option<u64>> {
         if self.unknown || self.size == 0 {
             return Ok(None);
         }
-        let single = (self.ascent + self.descent) * if east { 1.3 } else { 1.0 };
+        let spacing = self.word_spacing(p, east);
         let rule = if p.line.is_none() { 0 } else { p.line_rule.unwrap_or(0) };
         let value = if rule == 2 {
-            physical_spacing(single.round().max(f64::from(p.line.unwrap_or(240)) * 5.0))
+            physical_spacing(spacing.round())
         } else {
-            single / f64::from(self.size) * f64::from(p.line.unwrap_or(240)) * 100.0 / 240.0
+            spacing * 100.0 / f64::from(self.size)
         };
         Ok(Some(units::canonical_float(value)?.to_bits()))
     }

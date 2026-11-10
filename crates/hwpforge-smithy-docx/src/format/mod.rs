@@ -8,6 +8,7 @@ use keys::{FontKey, Fonts};
 pub(crate) struct StyleKey(usize);
 mod properties;
 mod resolve;
+pub(crate) mod table;
 mod units;
 
 use crate::{
@@ -22,11 +23,28 @@ use properties::read_property;
 pub(crate) use properties::PropertyState;
 pub(crate) use resolve::Resolver;
 use std::rc::Rc;
+/// Structural lengths in HwpUnit after unit conversion, checked before rounding.
+/// Widths/page sizes require 1..=100_000_000; row heights and margins allow zero.
+#[derive(Clone, Copy)]
+pub(crate) enum StructuralDimension {
+    Width,
+    PageSize,
+    RowHeight,
+    Margin,
+}
+impl StructuralDimension {
+    pub(crate) fn minimum(self) -> i32 {
+        match self {
+            Self::Width | Self::PageSize => 1,
+            Self::RowHeight | Self::Margin => 0,
+        }
+    }
+}
 pub(crate) fn structural_length(
     value: &str,
-    minimum: i32,
+    dimension: StructuralDimension,
 ) -> std::result::Result<i32, &'static str> {
-    units::length(value, 5, minimum)
+    units::length(value, 5, dimension.minimum())
 }
 
 const MAX_DEFINITIONS: usize = 16_384;
@@ -171,6 +189,7 @@ pub(super) struct Style {
     parent: Option<StyleKey>,
     name: Option<String>,
     delta: Delta,
+    table: table::TableProperties,
     part: Rc<str>,
     at: String,
     default: bool,
@@ -212,4 +231,28 @@ fn apply(
         warn(warnings,part,at,Kind::UnsupportedValue,"format_value","inherit_or_default","Inherited line rule and value exceed the length range; preceding line spacing retained")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod structural_dimension_tests {
+    use super::*;
+    // 이것을 실패시키는 것: 폭/쪽 크기와 높이/여백의 최솟값 교환, 상한 또는 반올림 전 경계 검증 제거.
+    #[test]
+    fn structural_dimensions_have_explicit_inclusive_ranges() {
+        for (dimension, minimum) in [
+            (StructuralDimension::Width, 1),
+            (StructuralDimension::PageSize, 1),
+            (StructuralDimension::RowHeight, 0),
+            (StructuralDimension::Margin, 0),
+        ] {
+            assert_eq!(structural_length("0", dimension).ok(), (minimum == 0).then_some(0));
+            assert_eq!(structural_length("0.2", dimension).unwrap(), 1);
+            assert_eq!(structural_length("20000000", dimension).unwrap(), 100_000_000);
+            assert!(structural_length("20000000.01", dimension).is_err());
+            assert!(structural_length("-0.01", dimension).is_err());
+            if minimum == 1 {
+                assert!(structural_length("0.19", dimension).is_err());
+            }
+        }
+    }
 }

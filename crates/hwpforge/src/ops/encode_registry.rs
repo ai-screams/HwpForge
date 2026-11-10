@@ -5,9 +5,12 @@ use hwpforge_core::{
     image::ImageStore,
 };
 use hwpforge_smithy_hwpx::{
-    EncodeOptions, EncodeWarning, HancomStyleSet, HwpxEncoder, HwpxRegistryBridge, ListHeadPolicy,
+    EncodeOptions, EncodeWarning, HancomStyleSet, HwpxEncoder, HwpxRegistryBridge,
     RegistryBridgeWarning,
 };
+
+#[cfg(any(feature = "ops-md", test))]
+use hwpforge_smithy_hwpx::ListHeadPolicy;
 
 use super::OpsError;
 
@@ -19,6 +22,7 @@ pub(crate) struct RegistryEncoded {
     pub encode_warnings: Vec<EncodeWarning>,
 }
 
+#[cfg(any(feature = "ops-md", test))]
 pub(crate) fn encode_registry(
     document: Document<Draft>,
     registry: &StyleRegistry,
@@ -31,6 +35,25 @@ pub(crate) fn encode_registry(
         list_policy,
     )
     .map_err(OpsError::style_store)?;
+    encode_projected(document, images, bridge)
+}
+
+#[cfg(feature = "ops-docx")]
+pub(crate) fn encode_import_registry(
+    document: Document<Draft>,
+    registry: &StyleRegistry,
+    images: &ImageStore,
+) -> Result<RegistryEncoded, OpsError> {
+    let bridge = HwpxRegistryBridge::from_registry_for_import(registry, HancomStyleSet::default())
+        .map_err(OpsError::style_store)?;
+    encode_projected(document, images, bridge)
+}
+
+fn encode_projected(
+    document: Document<Draft>,
+    images: &ImageStore,
+    bridge: hwpforge_smithy_hwpx::WithBridgeWarnings<HwpxRegistryBridge>,
+) -> Result<RegistryEncoded, OpsError> {
     let rebound = bridge.value.rebind_draft_document(document).map_err(OpsError::style_rebind)?;
     let validated = rebound.validate()?;
     let sections = validated.sections().len();
@@ -53,7 +76,7 @@ pub(crate) fn encode_registry(
 
 #[cfg(all(test, feature = "ops-docx"))]
 #[path = "../../tests/support/docx.rs"]
-mod docx;
+pub(super) mod docx;
 
 #[cfg(all(test, feature = "ops-docx"))]
 mod tests {

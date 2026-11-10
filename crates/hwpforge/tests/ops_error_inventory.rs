@@ -320,6 +320,12 @@ const WARNING_MAPPING: Table = &[
     (
         "DocxWarning",
         &[
+            // 이것을 실패시키는 것: 표 경고 매핑 누락 또는 다른 코드로 교체.
+            ("ContentLost", "DOCX_CONTENT_LOST"),
+            ("TablePositionApproximated", "DOCX_TABLE_POSITION_APPROXIMATED"),
+            ("TableWidthApproximated", "DOCX_TABLE_WIDTH_APPROXIMATED"),
+            ("TableBorderApproximated", "DOCX_TABLE_BORDER_APPROXIMATED"),
+            ("TableMergeApproximated", "DOCX_TABLE_MERGE_APPROXIMATED"),
             ("ListReferenceLost", "DOCX_LIST_REFERENCE_LOST"),
             ("ListNumberingLost", "DOCX_LIST_NUMBERING_LOST"),
             ("BulletGlyphApproximated", "DOCX_BULLET_GLYPH_APPROXIMATED"),

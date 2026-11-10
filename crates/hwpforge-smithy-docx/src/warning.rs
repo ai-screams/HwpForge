@@ -80,6 +80,11 @@ macro_rules! warnings {
     };
 }
 warnings! {
+    ContentLost => ("DOCX_CONTENT_LOST", "Content or decoration within a supported structure (such as a table or cell) was removed for structural reasons, including merge continuation content or background. Unsupported object kinds removed as a whole use ContentOmitted."),
+    TablePositionApproximated => ("DOCX_TABLE_POSITION_APPROXIMATED", "Omitted table positions were filled or the grid was inferred."),
+    TableWidthApproximated => ("DOCX_TABLE_WIDTH_APPROXIMATED", "Table widths use the reported container or proportional approximation."),
+    TableBorderApproximated => ("DOCX_TABLE_BORDER_APPROXIMATED", "Table borders use default lines or a conflict approximation."),
+    TableMergeApproximated => ("DOCX_TABLE_MERGE_APPROXIMATED", "An orphan vertical continuation was retained as an ordinary cell."),
     ListReferenceLost => ("DOCX_LIST_REFERENCE_LOST", "A list definition or level is missing."),
     ListNumberingLost => ("DOCX_LIST_NUMBERING_LOST", "An unsupported numbering sequence or marker was omitted."),
     BulletGlyphApproximated => ("DOCX_BULLET_GLYPH_APPROXIMATED", "A font-specific bullet uses the fixed Unicode approximation."),
@@ -94,7 +99,7 @@ warnings! {
     DocumentSettingsOmitted => ("DOCX_DOCUMENT_SETTINGS_OMITTED", "Document settings are not applied."),
     StructuredWrapperFlattened => ("DOCX_STRUCTURED_WRAPPER_FLATTENED", "Wrapper meaning is discarded while child content is retained."),
     FormattingOmitted => ("DOCX_FORMATTING_OMITTED", "Character, paragraph, list, or section formatting uses defaults."),
-    ContentOmitted => ("DOCX_CONTENT_OMITTED", "An unsupported object or content subtree was excluded."),
+    ContentOmitted => ("DOCX_CONTENT_OMITTED", "An unsupported object kind was excluded as a whole. Content or decoration removed for structural reasons within a supported structure uses ContentLost."),
     WhitespaceApproximated => ("DOCX_WHITESPACE_APPROXIMATED", "Boundary whitespace without explicit preservation was kept."),
     FieldInstructionOmitted => ("DOCX_FIELD_INSTRUCTION_OMITTED", "A field keeps only its saved result."),
     FieldResultMissing => ("DOCX_FIELD_RESULT_MISSING", "A field has no saved result and contributes empty text."),

@@ -33,8 +33,11 @@ pub(crate) struct Resolver {
     pub(crate) definitions: Definitions,
     pub(crate) registry: StyleRegistry,
     inherited: HashMap<StyleKey, (Delta, usize)>,
+    inherited_tables: HashMap<StyleKey, table::TableProperties>,
     named: HashMap<StyleKey, StyleRef>,
     default_paragraph: Option<StyleKey>,
+    default_table: Option<StyleKey>,
+    pub(crate) table_style: Option<StyleKey>,
     deltas: HashMap<RunInput, usize>,
     inputs: Vec<RunInput>,
     contexts: HashMap<(Delta, CharDelta), usize>,
@@ -69,8 +72,11 @@ impl Resolver {
             definitions,
             registry: StyleRegistry::with_fonts(vec![]),
             inherited: HashMap::new(),
+            inherited_tables: HashMap::new(),
             named: HashMap::new(),
             default_paragraph: None,
+            default_table: None,
+            table_style: None,
             deltas: HashMap::new(),
             inputs: vec![],
             contexts: HashMap::new(),
@@ -97,6 +103,9 @@ impl Resolver {
         }
         for id in ids {
             let Some(s) = r.definitions.style(id) else { continue };
+            if s.kind == StyleKind::Table && s.default && r.default_table.replace(id).is_some() {
+                return Err(DocxError::invalid(&s.part, &s.at, "multiple default table styles"));
+            }
             if s.kind != StyleKind::Paragraph {
                 continue;
             }
@@ -163,12 +172,14 @@ impl Resolver {
         let s = s.clone();
         path.push(id);
         let mut result = Delta::default();
+        let mut table = table::TableProperties::default();
         let mut height = 1;
         if let Some(parent) = s.parent {
             let valid = self.definitions.style(parent).is_some_and(|p| p.kind == s.kind);
             if valid && !path.contains(&parent) {
                 let (base, h) = self.inherit(parent, path, warnings)?;
                 result = base;
+                table = self.inherited_tables[&parent].clone();
                 height = h + 1;
             } else {
                 warn(
@@ -184,6 +195,8 @@ impl Resolver {
         }
         apply(&mut result, &s.delta, false, &s.part, &s.at, warnings)?;
         path.pop();
+        table.overlay(&s.table);
+        self.inherited_tables.insert(id, table);
         self.inherited.insert(id, (result.clone(), height));
         Ok((result, height))
     }
@@ -245,7 +258,36 @@ impl Resolver {
             Ok(None)
         }
     }
-    // The table argument is retained for whole-table contexts, even while table output is omitted.
+    pub(crate) fn empty_properties() -> Delta {
+        Delta {
+            para: ParaDelta {
+                num_id: Some(0),
+                outline: Some(9),
+                before: Some(0),
+                after: Some(0),
+                first: Some(0),
+                left: Some(0),
+                right: Some(0),
+                page_break: Some(false),
+                keep_next: Some(false),
+                keep_lines: Some(false),
+                contextual: Some(false),
+                ..ParaDelta::default()
+            },
+            ..Delta::default()
+        }
+    }
+    pub(crate) fn table_properties(
+        &self,
+        id: Option<StyleKey>,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<(Option<StyleKey>, table::TableProperties)> {
+        let key = id.or(self.default_table);
+        let valid = self.style(key, StyleKind::Table, part, w)?.is_some();
+        let key = if valid { key } else { self.default_table };
+        Ok((key, key.and_then(|k| self.inherited_tables.get(&k)).cloned().unwrap_or_default()))
+    }
     fn context(
         &self,
         table: Option<StyleKey>,
@@ -288,16 +330,18 @@ impl Resolver {
     }
     pub(crate) fn finish(
         &mut self,
-        paragraph: (&mut Paragraph, &[bool]),
+        paragraph: (&mut Paragraph, &[bool], Option<usize>),
         style: Option<StyleKey>,
         direct: &Delta,
         mark: Option<(&Delta, Option<StyleKey>)>,
         part: &str,
         w: &mut Vec<DocxWarning>,
-    ) -> Result<Delta> {
-        let (p, diagnose) = paragraph;
+    ) -> Result<(Delta, i32)> {
+        let (p, diagnose, fragment_end) = paragraph;
+        let measure_lines = fragment_end.is_some();
+        let fragment_end = fragment_end.unwrap_or(0);
         let style = style.or(self.default_paragraph);
-        let mut base = self.context(None, style, direct, part, w)?;
+        let mut base = self.context(self.table_style, style, direct, part, w)?;
         p.style_ref = style.as_ref().and_then(|s| self.named.get(s)).copied();
 
         p.page_break = base.para.page_break.unwrap_or(false);
@@ -314,6 +358,11 @@ impl Resolver {
         };
         let exact = base.para.line.is_some() && base.para.line_rule == Some(1);
         let mut height = line_height::Height::default();
+        let mut line_height = line_height::Height::default();
+        let mut line_east = false;
+        let mut line_used = false;
+        let mut line_format = None;
+        let mut minimum_height = 0_i32;
         let mut east = false;
         let empty = p.runs.iter().all(|run| run.content.as_text().is_none_or(str::is_empty));
         let last_run = p.runs.len().saturating_sub(1);
@@ -355,6 +404,39 @@ impl Resolver {
                     self.add_height(&mut height, result, false, part, w)?;
                 }
             }
+            if measure_lines && index < fragment_end {
+                line_format = Some(result);
+                let text = run.content.as_text().unwrap_or("");
+                let mut segments = text.split('\n').peekable();
+                while let Some(text) = segments.next() {
+                    let ended = segments.peek().is_some();
+                    if !exact && (!text.is_empty() || ended) {
+                        let has_east = text.chars().any(line_height::east_asian);
+                        let empty_east = text.is_empty() && result.line_fonts[1].is_some();
+                        line_east |= has_east || empty_east;
+                        if has_east || empty_east {
+                            self.add_height(&mut line_height, result, true, part, w)?;
+                        }
+                        if text.chars().any(|c| !line_height::east_asian(c))
+                            || (!has_east && !empty_east)
+                        {
+                            self.add_height(&mut line_height, result, false, part, w)?;
+                        }
+                        line_used = true;
+                    }
+                    if ended {
+                        minimum_height = minimum_height
+                            .checked_add(line_height.word_line(&base.para, line_east)?)
+                            .filter(|h| *h <= HwpUnit::MAX_VALUE)
+                            .ok_or_else(|| {
+                                DocxError::invalid(part, "p", "cell line height overflow")
+                            })?;
+                        line_height = line_height::Height::default();
+                        line_east = false;
+                        line_used = false;
+                    }
+                }
+            }
             if diagnose {
                 format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
             }
@@ -386,6 +468,11 @@ impl Resolver {
             if !exact {
                 east |= empty && result.line_fonts[1].is_some();
                 self.add_height(&mut height, result, east, part, w)?;
+                if measure_lines && fragment_end == p.runs.len() {
+                    line_east |= !line_used && result.line_fonts[1].is_some();
+                    self.add_height(&mut line_height, result, line_east, part, w)?;
+                    line_used = true;
+                }
             }
         }
         if !exact {
@@ -397,7 +484,21 @@ impl Resolver {
         }
         base.para.projected_list =
             self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
-        Ok(base)
+        if measure_lines {
+            // A trailing empty line uses the paragraph mark, or the final effective
+            // run at this boundary. Page/column breaks exclude all later fragments.
+            if !exact && !line_used {
+                if let Some(result) = line_format {
+                    line_east = result.line_fonts[1].is_some();
+                    self.add_height(&mut line_height, result, line_east, part, w)?;
+                }
+            }
+            minimum_height = minimum_height
+                .checked_add(line_height.word_line(&base.para, line_east)?)
+                .filter(|h| *h <= HwpUnit::MAX_VALUE)
+                .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?;
+        }
+        Ok((base, minimum_height))
     }
     pub(crate) fn paragraph_style(&self, style: Option<StyleKey>) -> Option<StyleKey> {
         style.or(self.default_paragraph)
@@ -425,11 +526,14 @@ impl Resolver {
         height.add(c.size, metrics);
         Ok(())
     }
+    pub(crate) fn spacing_after(paragraph: &Delta) -> i32 {
+        paragraph.para.after.unwrap_or(0)
+    }
     pub(crate) fn spacing_boundary(
         previous: &mut Delta,
         current: &mut Delta,
         enabled: (bool, bool),
-    ) {
+    ) -> i32 {
         let after = previous.para.after.unwrap_or(0);
         let before = current.para.before.unwrap_or(0);
         // ISO/IEC 29500: collapse every source boundary with max, then subtract
@@ -442,6 +546,7 @@ impl Resolver {
         // excluding forced page starts. Preserve the contextual residual's old side.
         previous.para.after = Some(if enabled.0 { 0 } else { remaining });
         current.para.before = Some(if enabled.0 { remaining } else { 0 });
+        remaining
     }
     pub(crate) fn fragment_shape(base: &Delta, first: bool, last: bool) -> Delta {
         let mut derived = base.clone();

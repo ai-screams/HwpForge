@@ -66,6 +66,8 @@ enum Frame {
     DefaultPara,
     Style(StyleKey),
     Table(StyleKey),
+    TableProperties(StyleKey, table::TableProperty),
+    CellProperties,
     Properties(Owner, bool),
     NumPr(Owner),
     Abstract(u32),
@@ -322,6 +324,7 @@ impl Definitions {
                                         parent: None,
                                         name: None,
                                         delta: Delta::default(),
+                                        table: table::TableProperties::default(),
                                         part: shared_part.clone(),
                                         at: format!("style:{}", quote(id)),
                                         default: properties::boolean(
@@ -380,6 +383,31 @@ impl Definitions {
                                         s.name = attr(&e, "val").map(str::to_owned);
                                     }
                                     Frame::Leaf
+                                }
+                                (Frame::Style(key), "tblPr") => {
+                                    Frame::TableProperties(key, table::TableProperty::Root)
+                                }
+                                (Frame::Style(_) | Frame::Table(_), "tcPr") => {
+                                    Frame::CellProperties
+                                }
+                                (Frame::CellProperties, "shd") => {
+                                    table::TableProperties::default().read(
+                                        table::TableProperty::Root,
+                                        &e,
+                                        part,
+                                        "shd",
+                                        warnings,
+                                    )?;
+                                    diagnosed = true;
+                                    Frame::Ignored
+                                }
+                                (Frame::TableProperties(key, state), _) => {
+                                    let mut props = std::mem::take(
+                                        &mut self.styles[key.0].as_mut().unwrap().table,
+                                    );
+                                    let state = props.read(state, &e, part, &e.name, warnings)?;
+                                    self.styles[key.0].as_mut().unwrap().table = props;
+                                    Frame::TableProperties(key, state)
                                 }
                                 (Frame::Style(key), "tblStylePr") => {
                                     if attr(&e, "type") == Some("wholeTable") {
@@ -771,6 +799,7 @@ fn definition_attributes(
         | Frame::Defaults
         | Frame::DefaultRun
         | Frame::DefaultPara
+        | Frame::CellProperties
         | Frame::ThemeElements
         | Frame::Family(_, _) => (&[], &[]),
         Frame::Style(_) => (&["type", "styleId", "default"], &["customStyle"]), // Authoring provenance only.
@@ -801,7 +830,8 @@ fn definition_attributes(
         | Frame::Property(_)
         | Frame::Properties(_, _)
         | Frame::NumPr(_)
-        | Frame::Section => return Ok(()), // Property reader or subtree loss already accounts for these.
+        | Frame::Section
+        | Frame::TableProperties(_, _) => return Ok(()), // Property reader or subtree loss already accounts for these.
     };
     let namespace = if root == "theme" { xml::NamespaceId::NONE } else { W_NS.0 };
     for (ns, key, _) in &e.attributes {

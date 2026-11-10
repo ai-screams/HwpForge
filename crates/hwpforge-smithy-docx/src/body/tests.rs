@@ -270,7 +270,6 @@ fn recording_setting_without_changes_is_accepted() {
 #[test]
 fn excluded_objects_do_not_leak_text_or_orphan_marks() {
     let cases = [
-        ("w:tbl", "table"),
         ("w:drawing", "image_shape"),
         ("w:pict", "image_shape"),
         ("w:object", "embedded_object"),
@@ -645,11 +644,7 @@ fn field_results_respect_all_enclosing_boundaries() {
 // 이것을 실패시키는 것: 내용 제외 후 빈 구역 방치, 최소 빈 문단/run 생성 생략.
 #[test]
 fn empty_body_and_excluded_only_body_have_valid_minimal_structure() {
-    for body in [
-        "",
-        "<w:drawing><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:drawing>",
-        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
-    ] {
+    for body in ["", "<w:drawing><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:drawing>"] {
         let d = decoded(body);
         assert_eq!(texts(&d), [""]);
         assert_eq!(counts(&d), [1]);
@@ -908,4 +903,18 @@ fn unique_targets_only_hash_their_names_and_index_entries_once() {
             assert_eq!(d.warnings[0].loss(), if missing { "optional_part" } else { "header" });
         }
     }
+}
+
+// 이것을 실패시키는 것: 지원 문단의 잘못 놓인 텍스트/문서 배경을 객체 종류 제외로 분류.
+#[test]
+fn misplaced_text_and_document_decoration_are_structural_losses() {
+    let d = decoded("<w:p>discard<w:r><w:t>A</w:t></w:r></w:p>");
+    assert_eq!(d.warnings[0].code(), "DOCX_CONTENT_LOST");
+    assert_eq!(d.warnings[0].loss(), "unplaced_text");
+    let bytes = rewrite(&package("<w:p/>", &[]), "text/body.xml", |s| {
+        s.replace("<w:body>", "<w:background/><w:body>")
+    });
+    let d = decode_structure(&bytes).unwrap();
+    assert_eq!(d.warnings[0].code(), "DOCX_CONTENT_LOST");
+    assert_eq!(d.warnings[0].loss(), "outside_body");
 }

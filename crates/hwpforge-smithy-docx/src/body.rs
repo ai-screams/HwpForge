@@ -16,6 +16,7 @@ use hwpforge_core::{
 };
 use hwpforge_foundation::ParaShapeIndex;
 mod layout;
+mod table;
 use layout::{Break, DecodedSection, Layout, Origin, Relations};
 use std::{
     collections::{HashMap, HashSet},
@@ -249,14 +250,40 @@ fn attribute<'a>(element: &'a Element, ns: NamespaceId, name: &str) -> Option<&'
         .map(|(_, _, value)| value.as_str())
 }
 
+fn object_loss(element: &Element) -> Option<&'static str> {
+    if element.namespace_id == M_NS.0 {
+        return Some("math");
+    }
+    if element.namespace_id != W_NS.0 {
+        return None;
+    }
+    Some(match element.name.as_str() {
+        "drawing" | "pict" => "image_shape",
+        "object" | "altChunk" => "embedded_object",
+        "footnoteReference" | "endnoteReference" => "notes",
+        "commentReference" | "commentRangeStart" | "commentRangeEnd" => "comments",
+        "sym" => "symbol_character",
+        _ => return None,
+    })
+}
+
 #[derive(Default)]
 enum Node {
     #[default]
     Other,
+    OmittedObject,
     Compatibility {
         omitted: bool,
     },
     Body,
+    Table,
+    TableRow,
+    TableCell,
+    TableGrid,
+    TableProperties(crate::format::table::TableProperty),
+    CellProperties(crate::format::table::TableProperty),
+    RowProperties,
+    TableLeaf,
     Paragraph,
     Run,
     ParaProperties,
@@ -291,6 +318,8 @@ impl fmt::Display for Location {
 struct Frame {
     node: Node,
     blocked: bool,
+    // Selected content wrappers are transparent only to structural parent lookup.
+    passes_content: bool,
     in_body: bool,
     // Properties suppress text but still classify nested list/section/mark formatting.
     properties: bool,
@@ -310,6 +339,7 @@ struct TrailingBreak {
 }
 
 struct Body<'a> {
+    tables: table::Tables,
     part: &'a str,
     main: bool,
     root: &'a str,
@@ -384,6 +414,7 @@ fn scan_inner(
 ) -> Result<(Vec<DecodedSection>, bool)> {
     let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
     let mut body = Body {
+        tables: table::Tables::default(),
         part,
         main,
         root,
@@ -481,11 +512,27 @@ impl Body<'_> {
         }
         let mut frame = Frame {
             node: Node::Other,
+            passes_content: false,
             blocked: self.stack.last().is_some_and(|f| f.blocked),
             in_body: self.stack.last().is_some_and(|f| f.in_body),
             properties: self.stack.last().is_some_and(|f| f.properties),
             location: location.clone(),
         };
+        if self.main
+            && frame.blocked
+            && self.tables.discard()
+            && object_loss(&element).is_some()
+            && !self.stack.iter().any(|f| matches!(f.node, Node::OmittedObject))
+        {
+            self.warn(
+                Kind::ContentOmitted,
+                &location,
+                || "Unsupported object in merge continuation omitted",
+                object_loss(&element).unwrap(),
+                "omit",
+            )?;
+            frame.node = Node::OmittedObject;
+        }
         if !self.main {
             if self.root == "settings" && self.root_matches {
                 if self.stack.len() == 1 {
@@ -581,7 +628,7 @@ impl Body<'_> {
             if !frame.blocked {
                 if !frame.in_body {
                     self.warn(
-                        Kind::ContentOmitted,
+                        Kind::ContentLost,
                         &location,
                         || "Content outside body is excluded",
                         "outside_body",
@@ -600,14 +647,23 @@ impl Body<'_> {
         let location_value = frame.location.clone();
         let location = &location_value;
         let w = element.namespace_id == W_NS.0;
+        if self.tables.inside() && self.table_element(element, frame)? {
+            return Ok(());
+        }
         if element.namespace_id == MC_NS.0 {
             match element.name.as_str() {
-                "AlternateContent" => frame.node = Node::Alternate { fallback: false },
+                "AlternateContent" => {
+                    frame.node = Node::Alternate { fallback: false };
+                    frame.passes_content = true;
+                }
                 "Fallback"
                     if self
                         .stack
                         .last()
-                        .is_some_and(|f| matches!(f.node, Node::Alternate { .. })) => {}
+                        .is_some_and(|f| matches!(f.node, Node::Alternate { .. })) =>
+                {
+                    frame.passes_content = true;
+                }
                 _ => {
                     frame.blocked = true;
                     self.warn(
@@ -627,10 +683,40 @@ impl Body<'_> {
                 "math",
                 "omit",
             )?;
+            frame.node = Node::OmittedObject;
             frame.blocked = true;
         } else if w {
             match element.name.as_str() {
+                "tbl" => {
+                    if self.tables.inside() {
+                        self.prepare_cell_content()?;
+                    }
+                    if self.tables.discard() {
+                        self.warn(
+                            Kind::ContentLost,
+                            location,
+                            || "Nested table in merge continuation omitted",
+                            "merge_continuation",
+                            "omit",
+                        )?;
+                        frame.blocked = true;
+                    } else {
+                        self.begin_table(frame)?;
+                    }
+                    return Ok(());
+                }
+                "tcPr" => {
+                    self.begin_cell_properties(frame)?;
+                    return Ok(());
+                }
                 "p" => {
+                    if self.tables.inside() {
+                        self.prepare_cell_content()?;
+                        if self.tables.discard() {
+                            frame.blocked = true;
+                            return Ok(());
+                        }
+                    }
                     if self.paragraph.is_some() {
                         return Err(DocxError::invalid(
                             self.part,
@@ -723,6 +809,7 @@ impl Body<'_> {
                 "fldSimple" => {
                     self.begin_field(true, location)?;
                     frame.node = Node::SimpleField;
+                    frame.passes_content = true;
                 }
                 "fldChar" => {
                     self.field_char(attribute(element, W_NS.0, "fldCharType"), location)?
@@ -739,13 +826,16 @@ impl Body<'_> {
                     }
                     frame.blocked = true;
                 }
-                "hyperlink" => self.warn(
-                    Kind::LinkTargetOmitted,
-                    location,
-                    || "Hyperlink target discarded; run text retained",
-                    "hyperlink_target",
-                    "keep_text",
-                )?,
+                "hyperlink" => {
+                    self.warn(
+                        Kind::LinkTargetOmitted,
+                        location,
+                        || "Hyperlink target discarded; run text retained",
+                        "hyperlink_target",
+                        "keep_text",
+                    )?;
+                    frame.passes_content = true;
+                }
                 "smartTag" | "customXml" | "dir" | "bdo" | "customXmlPr" | "smartTagPr" => {
                     self.warn(
                         Kind::StructuredWrapperFlattened,
@@ -755,6 +845,7 @@ impl Body<'_> {
                         "keep_content",
                     )?;
                     frame.blocked = matches!(element.name.as_str(), "customXmlPr" | "smartTagPr");
+                    frame.passes_content = !frame.blocked;
                     // Attributes describe the same discarded wrapper semantics.
                     return Ok(());
                 }
@@ -767,24 +858,31 @@ impl Body<'_> {
                         "keep_content",
                     )?;
                     frame.node = Node::Sdt;
+                    frame.passes_content = true;
                 }
-                "sdtContent" if self.stack.last().is_some_and(|f| matches!(f.node, Node::Sdt)) => {}
-                "lastRenderedPageBreak" | "proofErr" | "bookmarkStart" | "bookmarkEnd" => {
+                "sdtContent" if self.stack.last().is_some_and(|f| matches!(f.node, Node::Sdt)) => {
+                    frame.passes_content = true;
+                }
+                "lastRenderedPageBreak"
+                | "proofErr"
+                | "bookmarkStart"
+                | "bookmarkEnd"
+                | "permStart"
+                | "permEnd" => {
+                    frame.blocked = true;
+                }
+                "tblPrEx" => {
+                    self.warn(
+                        Kind::ContentLost,
+                        location,
+                        || "Table property exceptions are omitted",
+                        "table_property_exceptions",
+                        "omit",
+                    )?;
                     frame.blocked = true;
                 }
                 name => {
-                    if name == "tbl" {
-                        self.spacing_neighbor = None;
-                    }
-                    let loss = match name {
-                        "tbl" => "table",
-                        "drawing" | "pict" => "image_shape",
-                        "object" | "altChunk" => "embedded_object",
-                        "footnoteReference" | "endnoteReference" => "notes",
-                        "commentReference" | "commentRangeStart" | "commentRangeEnd" => "comments",
-                        "sym" => "symbol_character",
-                        _ => "unknown_element",
-                    };
+                    let loss = object_loss(element).unwrap_or("unknown_element");
                     self.warn(
                         Kind::ContentOmitted,
                         location,
@@ -792,6 +890,7 @@ impl Body<'_> {
                         loss,
                         "omit",
                     )?;
+                    frame.node = Node::OmittedObject;
                     frame.blocked = true;
                 }
             }
@@ -874,6 +973,21 @@ impl Body<'_> {
             .last()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing parent frame"))?;
         if !self.main || frame.blocked {
+            if self.main
+                && self.tables.discard()
+                && !self.stack.iter().any(|f| matches!(f.node, Node::OmittedObject))
+                && frame.location.name.as_ref() == "t"
+                && !text.is_empty()
+            {
+                let at = frame.location.clone();
+                self.warn(
+                    Kind::ContentLost,
+                    &at,
+                    || "Merge continuation text omitted",
+                    "merge_continuation",
+                    "omit",
+                )?;
+            }
             return Ok(());
         }
         let location = frame.location.clone();
@@ -894,7 +1008,7 @@ impl Body<'_> {
             self.append(&text, &location)?;
         } else if !text.trim().is_empty() {
             self.warn(
-                Kind::ContentOmitted,
+                Kind::ContentLost,
                 &location,
                 || "Text outside a WordprocessingML text element excluded",
                 "unplaced_text",
@@ -1033,18 +1147,23 @@ impl Body<'_> {
         }
         Ok(())
     }
-    fn finish_paragraph(&mut self) -> Result<()> {
+    fn finish_paragraph(&mut self, measure_first: bool) -> Result<()> {
         let mut paragraph = self
             .paragraph
             .take()
             .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?;
         let moved_break = paragraph.page_break;
-        let mut base = self
+        if let Some(resolver) = self.resolver.as_mut() {
+            resolver.table_style = self.tables.style();
+        }
+        let fragment_end = (measure_first && self.tables.measures_paragraph())
+            .then(|| self.breaks.first().map_or(paragraph.runs.len(), |b| b.0));
+        let (mut base, minimum_lines_height) = self
             .resolver
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing resolver"))?
             .finish(
-                (&mut paragraph, &self.diagnose_runs),
+                (&mut paragraph, &self.diagnose_runs, fragment_end),
                 self.paragraph_style,
                 &self.direct_para,
                 self.mark.as_ref().map(|d| (d, self.mark_style)),
@@ -1061,17 +1180,32 @@ impl Body<'_> {
         // decide before boundary collapse so the preceding after is retained.
         let leading_break =
             self.breaks.first().is_some_and(|(end, _)| empty_text_runs(&paragraph.runs[..*end]));
+        let mut cell_gap = 0;
         if paragraph.page_break || leading_break {
             base.para.before = Some(0);
+            if self.spacing_neighbor.is_some() {
+                if let Some((_, previous)) = self.pending_shapes.last() {
+                    cell_gap = Resolver::spacing_after(previous);
+                }
+            }
         } else if let Some((previous_style, previous_contextual)) = self.spacing_neighbor {
             if let Some((_, previous)) = self.pending_shapes.last_mut() {
                 let same_style = previous_style == style;
-                Resolver::spacing_boundary(
+                cell_gap = Resolver::spacing_boundary(
                     previous,
                     &mut base,
                     (same_style && previous_contextual, same_style && contextual),
                 );
             }
+        }
+        if measure_first {
+            self.tables.paragraph_minimum(
+                minimum_lines_height,
+                cell_gap,
+                base.para.before.unwrap_or(0),
+                Resolver::spacing_after(&base),
+                self.part,
+            )?;
         }
         self.spacing_neighbor = Some((style, contextual));
         let total = self.breaks.len() + 1;
@@ -1209,6 +1343,16 @@ impl Body<'_> {
         if self.breaks.is_empty() {
             self.split_at = Some((at.clone(), self.warnings.len()));
         }
+        if self.tables.inside() {
+            layout::warn(
+                self.warnings,
+                self.part,
+                at,
+                "cell_break",
+                "split",
+                "Forced break inside a cell retains fragments; display is approximated",
+            )?;
+        }
         if column {
             self.warn(
                 Kind::ColumnBreakApproximated,
@@ -1262,7 +1406,7 @@ impl Body<'_> {
             self.boundary_input = None;
             self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
             self.ensure_fragment_run(&at)?;
-            self.finish_paragraph()?;
+            self.finish_paragraph(true)?;
         }
         if let Some(pending) = self.trailing_break.take() {
             if pending.first {
@@ -1279,6 +1423,13 @@ impl Body<'_> {
         self.finalize_shapes(0)?;
         self.section_layout_known = false;
         self.spacing_neighbor = None;
+        table::apply_pending(
+            std::mem::take(&mut self.tables.pending),
+            &mut self.paragraphs,
+            content_width.as_i32(),
+            self.part,
+            self.warnings,
+        )?;
         self.sections.push(DecodedSection {
             core: Section::with_paragraphs(std::mem::take(&mut self.paragraphs), page),
             origins: std::mem::take(&mut self.origins),
@@ -1411,6 +1562,11 @@ impl Body<'_> {
             .pop()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing closing frame"))?;
         match frame.node {
+            Node::Table => self.finish_table(&frame.location)?,
+            Node::TableCell => self.finish_cell(&frame.location)?,
+            Node::CellProperties(crate::format::table::TableProperty::Root) => {
+                self.prepare_cell_content()?
+            }
             Node::Run => {
                 let (text, keep) = self
                     .run
@@ -1422,7 +1578,7 @@ impl Body<'_> {
             }
             Node::Paragraph => {
                 self.ensure_fragment_run(&frame.location)?;
-                self.finish_paragraph()?;
+                self.finish_paragraph(true)?;
                 if let Some((layout, at)) = self.paragraph_layout.take() {
                     self.close_section(layout, at)?;
                 }
@@ -1465,3 +1621,6 @@ mod line_spacing_tests;
 
 #[cfg(test)]
 mod list_tests;
+
+#[cfg(test)]
+mod table_tests;

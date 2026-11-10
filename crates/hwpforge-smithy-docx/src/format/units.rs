@@ -77,8 +77,12 @@ pub(crate) fn structural(e: &crate::xml::Element, part: &str) -> Result<()> {
     };
     for key in keys {
         if let Some(value) = super::attr(e, key) {
-            let minimum = if e.name == "pgSz" { 1 } else { 0 };
-            length(value, 5, minimum)
+            let dimension = if e.name == "pgSz" {
+                super::StructuralDimension::PageSize
+            } else {
+                super::StructuralDimension::Margin
+            };
+            super::structural_length(value, dimension)
                 .map_err(|reason| DocxError::invalid(part, &e.name, reason))?;
         }
     }

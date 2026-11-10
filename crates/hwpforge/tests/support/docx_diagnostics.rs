@@ -101,13 +101,21 @@ pub fn warnings() -> Vec<(&'static str, OpsWarning)> {
         "<w:p><w:pPr><w:numPr><w:numId w:val='1'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='2'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='3'/></w:numPr></w:pPr></w:p><w:p><w:pPr><w:numPr><w:numId w:val='1'/></w:numPr><w:outlineLvl w:val='0'/></w:pPr></w:p>",
         "<w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:numFmt w:val='ganada'/><w:rPr><w:b/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId='2'><w:lvl w:ilvl='0'><w:numFmt w:val='bullet'/><w:lvlText w:val='&#xF0B7;'/><w:rPr><w:rFonts w:ascii='Symbol'/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId='3'><w:lvl w:ilvl='0'><w:numFmt w:val='bullet'/><w:lvlText w:val='&#xF06C;'/></w:lvl></w:abstractNum><w:num w:numId='1'><w:abstractNumId w:val='1'/></w:num><w:num w:numId='2'><w:abstractNumId w:val='2'/></w:num><w:num w:numId='3'><w:abstractNumId w:val='3'/></w:num>",
     );
+    // 이것을 실패시키는 것: 실제 표 손실 입력 또는 variant 이름 연결을 제거.
+    let tables = docx::package("<w:tbl><w:tblPr><w:tblBorders><w:top w:val='double'/></w:tblBorders></w:tblPr><w:tr><w:tc><w:tcPr><w:vMerge/><w:shd w:fill='FF0000'/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>");
     decode_docx(&bytes)
         .unwrap()
         .warnings
         .into_iter()
         .chain(decode_docx(&lists).unwrap().warnings)
+        .chain(decode_docx(&tables).unwrap().warnings)
         .map(|w| {
             let name = match &w {
+                DocxWarning::ContentLost { .. } => "ContentLost",
+                DocxWarning::TablePositionApproximated { .. } => "TablePositionApproximated",
+                DocxWarning::TableWidthApproximated { .. } => "TableWidthApproximated",
+                DocxWarning::TableBorderApproximated { .. } => "TableBorderApproximated",
+                DocxWarning::TableMergeApproximated { .. } => "TableMergeApproximated",
                 DocxWarning::ListReferenceLost { .. } => "ListReferenceLost",
                 DocxWarning::ListNumberingLost { .. } => "ListNumberingLost",
                 DocxWarning::BulletGlyphApproximated { .. } => "BulletGlyphApproximated",
