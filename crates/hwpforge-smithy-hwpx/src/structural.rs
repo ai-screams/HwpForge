@@ -22,6 +22,7 @@ use serde_json::Value;
 
 mod delete_source;
 mod paragraph_refs;
+mod preserved_loss;
 pub(crate) mod references;
 mod source_ranges;
 pub(crate) mod xml_values;
@@ -387,7 +388,7 @@ fn delete_admitted(
 ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
     if ids == ParagraphIds::Preserve {
         edit_checkpoint!("input-loss");
-        crate::stamp::reject_input_content_loss(&d0.warnings).map_err(map_admission)?;
+        preserved_loss::check_candidates(base, &package, &d0).map_err(verification_error)?;
         edit_checkpoint!("header");
         if d0.requires_header_normalization() {
             return Err(StructuralEditError::Invariant {
@@ -544,6 +545,8 @@ fn delete_admitted(
             .collect();
         edit_checkpoint!("derived-effects");
         let effects = facts.effects(&edits).map_err(verification_error)?;
+        edit_checkpoint!("loss-location");
+        preserved_loss::check_locations(&d0, &effects).map_err(verification_error)?;
         edit_checkpoint!("derived-check");
         effects.check_derived_values().map_err(verification_error)?;
         edit_checkpoint!("derived-heights");

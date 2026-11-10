@@ -1008,3 +1008,6 @@ fn batch_plain_source_work_scales_with_paragraphs_and_deletions() {
     eprintln!("plain source work: 160={small}, 320={large}");
     assert!(small > 0 && large > small && large <= small * 2 + 64);
 }
+
+#[path = "preserved_loss_tests.rs"]
+mod losses;

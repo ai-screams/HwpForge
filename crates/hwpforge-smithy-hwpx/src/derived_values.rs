@@ -758,10 +758,43 @@ fn record_delta(effect: &mut Effect, e: &XmlElement, tag: &Tag) {
 /// Effects are bound to their source facts and shared by both decisions.
 pub(crate) struct DerivedEffects<'facts, 'source> {
     facts: &'facts DerivedFacts<'source>,
+    affected_tables: BTreeMap<usize, AffectedTables>,
     effects: BTreeMap<usize, Effect>,
     flow: bool,
     kinds: BTreeSet<String>,
     page_restart: bool,
+}
+
+struct AffectedTables {
+    by_table: Vec<bool>,
+    // Sorted starts with prefix maximum ends also cover nested table ranges.
+    starts_and_max_ends: Vec<(usize, usize)>,
+}
+impl AffectedTables {
+    fn new(by_table: Vec<bool>, tables: &[table_ledger::FlowTable]) -> Self {
+        let mut starts_and_max_ends: Vec<_> = by_table
+            .iter()
+            .zip(tables)
+            .filter_map(|(&affected, table)| {
+                crate::work::tick();
+                affected.then_some((table.outer.start, table.outer.end))
+            })
+            .collect();
+        starts_and_max_ends.sort_unstable_by_key(|&(start, _)| start);
+        let mut max_end = 0;
+        for (_, end) in &mut starts_and_max_ends {
+            crate::work::tick();
+            max_end = max_end.max(*end);
+            *end = max_end;
+        }
+        Self { by_table, starts_and_max_ends }
+    }
+
+    fn overlaps(&self, span: &Range<usize>) -> bool {
+        crate::work::tick();
+        let before = self.starts_and_max_ends.partition_point(|&(start, _)| start < span.end);
+        before > 0 && self.starts_and_max_ends[before - 1].1 > span.start
+    }
 }
 impl<'source> DerivedFacts<'source> {
     pub(crate) fn effects(
@@ -772,10 +805,36 @@ impl<'source> DerivedFacts<'source> {
         let flow = effects.values().any(|e| e.flow);
         let kinds = effects.values().flat_map(|e| e.kinds.iter().cloned()).collect();
         let page_restart = effects.values().any(|e| e.page_restart);
-        Ok(DerivedEffects { facts: self, effects, flow, kinds, page_restart })
+        let affected_tables = effects
+            .iter()
+            .map(|(&section, effect)| {
+                let part = self.section(section)?;
+                let mut affected = part.tables.affected_tables(&part.flow, &effect.seeds);
+                for (yes, record) in affected.iter_mut().zip(&part.tables.tables) {
+                    *yes |= effect.body_structure && record.host.is_none() && record.boundary == 0;
+                }
+                Ok((section, AffectedTables::new(affected, &part.tables.tables)))
+            })
+            .collect::<HwpxResult<_>>()?;
+        Ok(DerivedEffects { facts: self, effects, affected_tables, flow, kinds, page_restart })
     }
 }
 impl DerivedEffects<'_, '_> {
+    pub(crate) fn check_preserved_loss(
+        &self,
+        section: usize,
+        span: &Range<usize>,
+        digest: &[u8; 32],
+    ) -> HwpxResult<()> {
+        let part = self.facts.section(section)?;
+        require(part.source.digest() == digest)?;
+        require(part.source.elements()[part.element_at(span.start)?].outer() == *span)?;
+        if let Some(effect) = self.effects.get(&section) {
+            require(effect.survives(span)?)?;
+            require(!self.affected_tables[&section].overlaps(span))?;
+        }
+        Ok(())
+    }
     // Every stored number representation uses the same policy decision.
     fn number_unchanged(&self, part: &Part<'_>, kind: &str) -> HwpxResult<()> {
         match kind {
@@ -1113,12 +1172,10 @@ impl DerivedEffects<'_, '_> {
         let mut heights = Vec::new();
         for (&section, effect) in effects {
             let part = facts.section(section)?;
-            let affected = part.tables.affected_tables(&part.flow, &effect.seeds);
+            let affected = &self.affected_tables[&section].by_table;
             for (table, record) in part.tables.tables.iter().enumerate() {
                 let survives = effect.survives(&record.outer)?;
-                let unknown_body_owner =
-                    effect.body_structure && record.host.is_none() && record.boundary == 0;
-                if survives && (affected[table] || unknown_body_owner) {
+                if survives && affected[table] {
                     if let Some(height) = height_for_table(part, table)? {
                         heights.push(height);
                     }
