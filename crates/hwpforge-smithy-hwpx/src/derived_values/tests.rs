@@ -1198,13 +1198,19 @@ pub(crate) fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> 
     xml
 }
 fn assert_inline_profile(cell_height: &str, no_adjust: &str, merged: bool) {
-    let good =
-        section(&format!("{}{}", p("삭제"), p(&inline_table(cell_height, no_adjust, merged))));
+    // 새 범주의 높이 상한 밖에서 기존 병합 프로필의 축 결합만 검사한다.
+    let table_height = if merged { "60000" } else { "10000" };
+    let table = inline_table(cell_height, no_adjust, merged).replacen(
+        "height='10000'",
+        &format!("height='{table_height}'"),
+        1,
+    );
+    let good = section(&format!("{}{}", p("삭제"), p(&table)));
     let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
     let f = facts(std::slice::from_ref(&good));
     let heights = collect_height_invalidations(&f, &edit).unwrap();
     assert_eq!(heights.len(), 1);
-    assert_eq!(&good[heights[0].value.clone()], "10000");
+    assert_eq!(&good[heights[0].value.clone()], table_height);
     let horizontal = if merged { "PARA" } else { "COLUMN" };
     let other_horizontal = if merged { "COLUMN" } else { "PARA" };
     let opposite_adjust = if no_adjust == "0" { "1" } else { "0" };
@@ -1366,17 +1372,17 @@ fn assert_inline_profile(cell_height: &str, no_adjust: &str, merged: bool) {
 
 // 이것을 실패시키는 것: inline zero-cell 프로필 누락, 단일 축 완화, 다른 행의 축을 섞어 승인.
 #[test]
-fn inline_zero_cell_table_requires_exact_shape() {
+fn inline_zero_cell_table_preserves_established_profile() {
     assert_inline_profile("0", "0", false);
 }
-// 이것을 실패시키는 것: 병합 최소 높이 프로필 누락, 병합 배치를 개수로만 검사, 치수/칸 규칙 완화.
+// 이것을 실패시키는 것: 기존 병합 프로필의 noAdjust와 셀 높이를 서로 다른 행에서 OR로 조합.
 #[test]
-fn inline_merged_minimum_cells_require_exact_shape() {
+fn inline_merged_minimum_cells_preserve_established_profile() {
     assert_inline_profile("4688", "0", true);
 }
-// 이것을 실패시키는 것: 병합 고정 높이 프로필 누락, noAdjust와 cellSz를 서로 다른 행에서 조합.
+// 이것을 실패시키는 것: 기존 병합 프로필의 noAdjust와 셀 높이를 서로 다른 행에서 OR로 조합.
 #[test]
-fn inline_merged_fixed_cells_require_exact_shape() {
+fn inline_merged_fixed_cells_preserve_established_profile() {
     assert_inline_profile("2148", "1", true);
 }
 
@@ -1642,4 +1648,642 @@ fn shared_affected_tables_keep_structure_hosts_and_boundaries() {
         table("20", "칸")
     ))]);
     assert_eq!(independent.effects(&end).unwrap().affected_tables[&0].by_table, [false]);
+}
+
+// Synthetic values are stated independently of the production profile constants.
+pub(crate) fn inline_six_column_table() -> String {
+    let mut xml = "<hp:tbl id='7' zOrder='3' numberingType='TABLE' textWrap='TOP_AND_BOTTOM' textFlow='BOTH_SIDES' lock='0' dropcapstyle='None' pageBreak='CELL' repeatHeader='1' rowCnt='2' colCnt='6' cellSpacing='0' noAdjust='1'><hp:sz width='47816' widthRelTo='ABSOLUTE' height='3130' heightRelTo='ABSOLUTE' protect='0'/><hp:pos treatAsChar='1' affectLSpacing='0' flowWithText='1' allowOverlap='0' holdAnchorAndSO='0' vertRelTo='PARA' horzRelTo='PARA' vertAlign='TOP' horzAlign='LEFT' vertOffset='0' horzOffset='0'/><hp:outMargin left='283' right='283' top='283' bottom='283'/><hp:inMargin left='141' right='141' top='141' bottom='141'/>".to_owned();
+    for row in 0..2 {
+        xml.push_str("<hp:tr>");
+        for (column, width) in [7969, 7969, 7969, 7969, 7969, 7971].iter().enumerate() {
+            xml.push_str(&format!("<hp:tc header='0' hasMargin='0' protect='0' editable='0' dirty='0'><hp:subList textDirection='HORIZONTAL' lineWrap='BREAK' vertAlign='CENTER' textWidth='0' textHeight='0' hasTextRef='0' hasNumRef='0' linkListIDRef='0' linkListNextIDRef='0'>{}</hp:subList><hp:cellAddr rowAddr='{row}' colAddr='{column}'/><hp:cellSpan rowSpan='1' colSpan='1'/><hp:cellSz width='{width}' height='1565'/><hp:cellMargin left='510' right='510' top='141' bottom='141'/></hp:tc>", p("칸")));
+        }
+        xml.push_str("</hp:tr>");
+    }
+    xml.push_str("</hp:tbl>");
+    xml
+}
+
+pub(crate) fn inline_single_axis_tables() -> Vec<String> {
+    let base = inline_six_column_table();
+    vec![
+        base.clone(),
+        base.replace("zOrder='3'", "zOrder='0'"),
+        base.replace("width='47816'", "width='48189'")
+            .replace("width='7969'", "width='8031'")
+            .replace("width='7971'", "width='8034'"),
+        base.replace("inMargin left='141' right='141'", "inMargin left='510' right='510'"),
+        base.replace("bottom='283'", "bottom='1000'"),
+    ]
+}
+
+// 이것을 실패시키는 것: 승인 축을 exact 조합 목록으로 제한, 범위 밖 폭·여백·셀 높이 승인,
+// DefaultFlow의 셀 높이 계약을 inline 표와 혼동.
+#[test]
+fn inline_six_column_tables_combine_approved_axes() {
+    let base = inline_six_column_table();
+    let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
+    for mask in 0u32..16 {
+        if mask.count_ones() < 2 {
+            continue;
+        }
+        let mut changed = base.clone();
+        for (bit, from, to) in [
+            (1, "zOrder='3'", "zOrder='0'"),
+            (2, "width='47816'", "width='48189'"),
+            (4, "inMargin left='141' right='141'", "inMargin left='510' right='510'"),
+            (8, "bottom='283'", "bottom='1000'"),
+        ] {
+            if mask & bit != 0 {
+                changed = changed.replace(from, to);
+            }
+        }
+        if mask & 2 != 0 {
+            changed = changed
+                .replace("width='7969'", "width='8031'")
+                .replace("width='7971'", "width='8034'");
+        }
+        let xml = section(&format!("{}{}", p("삭제"), p(&changed)));
+        assert_eq!(
+            collect_height_invalidations(&facts(&[xml]), &edit).unwrap().len(),
+            1,
+            "mask={mask}"
+        );
+    }
+    for (from, to) in [
+        ("zOrder='3'", "zOrder='238'"),
+        ("width='47816'", "width='0'"),
+        ("inMargin left='141'", "inMargin left='142'"),
+        ("bottom='283'", "bottom='284'"),
+        ("treatAsChar='1'", "treatAsChar='0'"),
+        ("flowWithText='1'", "flowWithText='0'"),
+        ("horzRelTo='PARA'", "horzRelTo='COLUMN'"),
+        ("vertOffset='0'", "vertOffset='1'"),
+        ("height='1565'", "height='0'"),
+        ("rowCnt='2'", "rowCnt='3'"),
+        ("colCnt='6'", "colCnt='5'"),
+        ("colAddr='5'", "colAddr='4'"),
+        ("rowSpan='1'", "rowSpan='2'"),
+        ("header='0'", "header='1'"),
+        ("cellMargin left='510'", "cellMargin left='141'"),
+        ("lineWrap='BREAK'", "lineWrap='SQUEEZE'"),
+    ] {
+        let changed = base.replacen(from, to, 1);
+        assert_ne!(changed, base);
+        let xml = section(&format!("{}{}", p("삭제"), p(&changed)));
+        assert!(collect_height_invalidations(&facts(&[xml]), &edit).is_err(), "{from} => {to}");
+    }
+    // Floating COLUMN tables must retain their own cell-height contract.
+    let floating = base
+        .replace("treatAsChar='1'", "treatAsChar='0'")
+        .replace("horzRelTo='PARA'", "horzRelTo='COLUMN'");
+    let xml = section(&format!("{}{}", p("삭제"), p(&floating)));
+    assert!(collect_height_invalidations(&facts(&[xml]), &edit).is_err());
+}
+
+// 이것을 실패시키는 것: 범주 안의 폭·zOrder·여백 축을 제한하거나 연속 영향 표를 하나만 수집.
+#[test]
+fn inline_six_column_tables_invalidate_each_surviving_table() {
+    let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
+    let mut cases: Vec<_> = inline_single_axis_tables().into_iter().map(|t| p(&t)).collect();
+    cases.push(
+        p(&inline_six_column_table()) + &p(&inline_six_column_table().replace("id='7'", "id='8'")),
+    );
+    for (index, tables) in cases.into_iter().enumerate() {
+        let xml = section(&(p("삭제") + &tables));
+        let heights =
+            collect_height_invalidations(&facts(std::slice::from_ref(&xml)), &edit).unwrap();
+        assert_eq!(heights.len(), [1, 1, 1, 1, 1, 2][index]);
+        for height in heights {
+            assert_eq!(&xml[height.value], "3130");
+        }
+    }
+}
+
+// A small raw grid builder: the first anchor may cover a rectangle; covered cells are absent.
+pub(crate) fn inline_grid(rows: usize, columns: usize, row_span: usize, col_span: usize) -> String {
+    let base = inline_six_column_table();
+    let head = base
+        .split("<hp:tr>")
+        .next()
+        .unwrap()
+        .replace("rowCnt='2'", &format!("rowCnt='{rows}'"))
+        .replace("colCnt='6'", &format!("colCnt='{columns}'"));
+    let start = base.find("<hp:tc ").unwrap();
+    let end = start + base[start..].find("</hp:tc>").unwrap() + 8;
+    let cell = &base[start..end];
+    let mut xml = head;
+    for row in 0..rows {
+        xml.push_str("<hp:tr>");
+        for col in 0..columns {
+            if (row != 0 || col != 0) && row < row_span && col < col_span {
+                continue;
+            }
+            let mut anchor = cell
+                .replace("rowAddr='0'", &format!("rowAddr='{row}'"))
+                .replace("colAddr='0'", &format!("colAddr='{col}'"));
+            if row == 0 && col == 0 {
+                anchor = anchor
+                    .replace("rowSpan='1'", &format!("rowSpan='{row_span}'"))
+                    .replace("colSpan='1'", &format!("colSpan='{col_span}'"));
+            }
+            xml.push_str(&anchor);
+        }
+        xml.push_str("</hp:tr>");
+    }
+    xml.push_str("</hp:tbl>");
+    xml
+}
+pub(crate) fn inline_tall_table() -> String {
+    let grid = inline_grid(22, 6, 2, 2)
+        .replace("noAdjust='1'", "noAdjust='0'")
+        .replace("zOrder='3'", "zOrder='237'")
+        .replace(
+            "inMargin left='141' right='141' top='141' bottom='141'",
+            "inMargin left='283' right='283' top='283' bottom='283'",
+        )
+        .replace(
+            "outMargin left='283' right='283' top='283' bottom='283'",
+            "outMargin left='0' right='0' top='0' bottom='0'",
+        )
+        .replace("width='47816'", "width='16084'")
+        .replace("height='3130'", "height='52523'");
+    let mut chunks = grid.split("<hp:tr>");
+    let mut xml = chunks.next().unwrap().to_owned();
+    for (row, cells) in chunks.enumerate() {
+        xml.push_str("<hp:tr>");
+        let height = match row {
+            2 => "282",
+            3 => "19637",
+            _ => "1565",
+        };
+        let mut cells = cells.replace("height='1565'", &format!("height='{height}'"));
+        for (column, width) in [1303, 2000, 2500, 3000, 3500, 3781].into_iter().enumerate() {
+            let prefix = format!(
+                "colAddr='{column}'/><hp:cellSpan rowSpan='1' colSpan='1'/><hp:cellSz width="
+            );
+            cells = cells.replace(&format!("{prefix}'7969'"), &format!("{prefix}'{width}'"));
+        }
+        xml.push_str(&if row == 0 {
+            cells.replacen("height='1565'", "height='3130'", 1).replacen(
+                "width='7969'",
+                "width='3303'",
+                1,
+            )
+        } else {
+            cells
+        });
+    }
+    xml
+}
+fn inline_result(table: &str) -> HwpxResult<Vec<HeightInvalidation>> {
+    let xml = section(&(p("삭제") + &p(table)));
+    let source = XmlSource::read(&xml).map_err(|_| invalid())?.1;
+    let flow = ParagraphFlow::from_source(&source);
+    let part = Part::read(Some(0), xml, source, flow, None)?;
+    collect_height_invalidations(
+        &DerivedFacts::from_parts(vec![part]),
+        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
+    )
+}
+fn inline_case(label: &str, xml: &str, accepted: bool) {
+    assert_eq!(inline_result(xml).is_ok(), accepted, "{label}");
+}
+
+// 이것을 실패시키는 것: H 검사 제거·exact fallback 잔존·H를 기존 경로에도 적용·0/누락 조기 성공.
+#[test]
+fn inline_category_stored_height_edges() {
+    for base in inline_single_axis_tables() {
+        for (height, accepted) in [
+            ("1", true),
+            ("52523", true),
+            ("52524", false),
+            ("0", false),
+            ("-1", false),
+            ("1.5", false),
+            ("4294967296", false),
+            ("+1", false),
+        ] {
+            inline_case(
+                height,
+                &base.replace("height='3130'", &format!("height='{height}'")),
+                accepted,
+            );
+        }
+        inline_case("missing height", &base.replace("height='3130'", ""), false);
+    }
+    for base in [
+        inline_table("0", "0", false),
+        inline_table("4688", "0", true),
+        inline_table("2148", "1", true),
+        table("10000", "칸"),
+    ] {
+        for h in ["0", ""] {
+            let changed =
+                base.replacen("height='10000'", if h.is_empty() { "" } else { "height='0'" }, 1);
+            assert!(inline_result(&changed).unwrap().is_empty());
+        }
+        inline_case(
+            "old path height above category",
+            &base.replacen("height='10000'", "height='52524'", 1),
+            true,
+        );
+        for h in ["-1", "1.5", "4294967296"] {
+            inline_case(h, &base.replacen("height='10000'", &format!("height='{h}'"), 1), false);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: NA1에 NA0 범위 사용·NA0 상하한 생략·미지 NA 기본값·0 허용.
+// NA1 6260은 별도 승인 상한이며 직접 저장 실측의 극값으로 간주하지 않는다.
+#[test]
+fn inline_category_cell_height_policies() {
+    for (na, lo, hi) in [(0, 282, 19637), (1, 1282, 6260)] {
+        let base = inline_grid(2, 6, 1, 1).replace("noAdjust='1'", &format!("noAdjust='{na}'"));
+        for h in [lo, 1565, 5107, hi] {
+            inline_case(
+                &format!("NA{na} {h}"),
+                &base.replacen("height='1565'", &format!("height='{h}'"), 1),
+                true,
+            );
+        }
+        for h in [0, lo - 1, hi + 1] {
+            inline_case(
+                &format!("NA{na} {h}"),
+                &base.replacen("height='1565'", &format!("height='{h}'"), 1),
+                false,
+            );
+        }
+        inline_case("all zero", &base.replace("height='1565'", "height='0'"), false);
+        inline_case(
+            "merged upper",
+            &inline_grid(2, 6, 2, 1).replace("noAdjust='1'", &format!("noAdjust='{na}'")).replacen(
+                "height='1565'",
+                &format!("height='{hi}'"),
+                1,
+            ),
+            true,
+        );
+    }
+    let base = inline_grid(2, 6, 1, 1);
+    let split = base.find("</hp:tr>").unwrap();
+    let varied = base[..split].replace("height='1565'", "height='1282'")
+        + &base[split..].replace("height='1565'", "height='5107'");
+    inline_case("policy with distinct row heights", &varied, true);
+    for value in ["noAdjust='2'", ""] {
+        inline_case(
+            "unknown policy",
+            &inline_six_column_table().replace("noAdjust='1'", value),
+            false,
+        );
+    }
+    let varied = inline_grid(2, 6, 1, 1)
+        .replace("noAdjust='1'", "noAdjust='0'")
+        .replacen("height='1565'", "height='282'", 1)
+        .replacen("height='1565'", "height='19637'", 1);
+    inline_case("different heights within one row", &varied, true);
+}
+
+// 이것을 실패시키는 것: 행·열 범위/실제 행 수/점유 누락, 임의 블록 병합 허용, 주소·span 검사 생략.
+#[test]
+fn inline_category_grid_and_merge_edges() {
+    for (rows, cols) in [(1, 1), (1, 6), (22, 1), (22, 6)] {
+        inline_case("grid edge", &inline_grid(rows, cols, 1, 1), true);
+    }
+    for (rows, cols) in [(0, 1), (23, 1), (1, 0), (1, 7)] {
+        inline_case("grid outside", &inline_grid(rows, cols, 1, 1), false);
+    }
+    for (r, c, ok) in [
+        (2, 1, true),
+        (1, 2, true),
+        (22, 1, true),
+        (1, 6, true),
+        (2, 2, true),
+        (2, 3, false),
+        (3, 2, false),
+    ] {
+        inline_case(&format!("span {r}/{c}"), &inline_grid(22, 6, r, c), ok);
+    }
+    let base = inline_grid(2, 6, 1, 1);
+    for (label, from, to) in [
+        ("actual rows", "rowCnt='2'", "rowCnt='3'"),
+        ("duplicate address", "colAddr='1'", "colAddr='0'"),
+        ("wrong row", "rowAddr='0'", "rowAddr='1'"),
+        ("span zero", "rowSpan='1'", "rowSpan='0'"),
+        ("column span zero", "colSpan='1'", "colSpan='0'"),
+        ("row overflow", "rowSpan='1'", "rowSpan='3'"),
+        ("column overflow", "colSpan='1'", "colSpan='7'"),
+        ("overlap", "colSpan='1'", "colSpan='2'"),
+        ("address overflow", "colAddr='0'", "colAddr='4294967296'"),
+        ("address outside", "colAddr='0'", "colAddr='6'"),
+        ("span overflow", "rowSpan='1'", "rowSpan='4294967296'"),
+    ] {
+        inline_case(label, &base.replacen(from, to, 1), false);
+    }
+    inline_case(
+        "row addresses exchanged",
+        &base
+            .replace("rowAddr='0'", "rowAddr='swap'")
+            .replace("rowAddr='1'", "rowAddr='0'")
+            .replace("rowAddr='swap'", "rowAddr='1'"),
+        false,
+    );
+    inline_case(
+        "extra empty direct row",
+        &base.replacen("</hp:tbl>", "<hp:tr/></hp:tbl>", 1),
+        false,
+    );
+    // Admission also checks row counts; exercise the profile itself so that its
+    // direct-row check cannot be masked by that earlier rejection.
+    let extra_row = base.replacen("</hp:tbl>", "<hp:tr/></hp:tbl>", 1);
+    let f = facts(&[section(&p(&extra_row))]);
+    let part = &f.parts[0];
+    let id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
+    assert!(!table_profiles::matches(part, id), "extra direct row in profile");
+    inline_case(
+        "last row span beyond grid",
+        &base.replacen(
+            "rowAddr='1' colAddr='0'/><hp:cellSpan rowSpan='1'",
+            "rowAddr='1' colAddr='0'/><hp:cellSpan rowSpan='2'",
+            1,
+        ),
+        false,
+    );
+    inline_case(
+        "last column span beyond grid",
+        &base.replacen(
+            "colAddr='5'/><hp:cellSpan rowSpan='1' colSpan='1'",
+            "colAddr='5'/><hp:cellSpan rowSpan='1' colSpan='2'",
+            1,
+        ),
+        false,
+    );
+    let merged = inline_grid(2, 6, 2, 2);
+    let start = base.find("<hp:tc ").unwrap();
+    let end = start + base[start..].find("</hp:tc>").unwrap() + 8;
+    for (from, to) in [("rowSpan='1'", "rowSpan='0'"), ("colSpan='1'", "colSpan='0'")] {
+        let ghost = base[start..end].replace("colAddr='0'", "colAddr='1'").replace(from, to);
+        inline_case(
+            "empty anchor on covered coordinate",
+            &merged.replacen("</hp:tr>", &(ghost + "</hp:tr>"), 1),
+            false,
+        );
+    }
+    let start = base.rfind("<hp:tc ").unwrap();
+    let end = start + base[start..].find("</hp:tc>").unwrap() + 8;
+    inline_case(
+        "last cell crosses column boundary",
+        &base.replacen(
+            &base[start..end],
+            &base[start..end].replace("colSpan='1'", "colSpan='2'"),
+            1,
+        ),
+        false,
+    );
+    inline_case("hole", &(base[..start].to_owned() + &base[end..]), false);
+}
+
+// 이것을 실패시키는 것: 폭·zOrder 상하한 완화/축소, ASCII 숫자 검사 제거, exact 폭 배열 잔존.
+#[test]
+fn inline_category_numeric_edges() {
+    let base = inline_six_column_table();
+    for (from, cases) in [
+        (
+            "width='47816'",
+            vec![
+                ("16084", true),
+                ("48545", true),
+                ("30000", true),
+                ("16083", false),
+                ("48546", false),
+            ],
+        ),
+        (
+            "width='7969'",
+            vec![
+                ("1303", true),
+                ("48545", true),
+                ("2000", true),
+                ("1302", false),
+                ("48546", false),
+            ],
+        ),
+        (
+            "zOrder='3'",
+            vec![("0", true), ("1", true), ("237", true), ("238", false), ("-1", false)],
+        ),
+    ] {
+        let key = from.split('=').next().unwrap();
+        for (n, ok) in cases.into_iter().chain([
+            ("+16084", false),
+            ("1.2", false),
+            ("4294967296", false),
+            ("", false),
+        ]) {
+            inline_case(
+                &format!("{key}={n}"),
+                &base.replacen(from, &format!("{key}='{n}'"), 1),
+                ok,
+            );
+        }
+        inline_case("missing number", &base.replacen(from, "", 1), false);
+    }
+}
+
+// 이것을 실패시키는 것: 새 범주의 숫자 helper에서 앞자리 0 검사를 제거.
+#[test]
+fn inline_category_rejects_leading_zero_numbers() {
+    let base = inline_six_column_table();
+    for (from, to) in [
+        ("zOrder='3'", "zOrder='0237'"),
+        ("height='3130'", "height='052523'"),
+        ("zOrder='3'", "zOrder='00'"),
+    ] {
+        inline_case(to, &base.replacen(from, to, 1), false);
+    }
+}
+
+// 이것을 실패시키는 것: 유한 여백을 면별 범위로 확장·승인 튜플 누락·셀 여백/flag/subList/위치/흐름 검사 생략.
+// O3·O5는 관측·판정 합집합 승인으로, 독립 시각 판정으로 세지 않는다.
+#[test]
+fn inline_category_semantic_attributes() {
+    let base = inline_six_column_table();
+    for (name, tuples) in [
+        ("inMargin", vec![(141, 141, 141, 141), (510, 510, 141, 141), (283, 283, 283, 283)]),
+        (
+            "outMargin",
+            vec![
+                (283, 283, 283, 283),
+                (0, 0, 0, 0),
+                (141, 141, 141, 141),
+                (141, 141, 0, 141),
+                (283, 283, 0, 0),
+                (283, 283, 283, 1000),
+            ],
+        ),
+    ] {
+        let start = base.find(&format!("<hp:{name} ")).unwrap();
+        let end = start + base[start..].find("/>").unwrap() + 2;
+        for (l, r, t, b) in tuples {
+            inline_case(
+                name,
+                &format!(
+                    "{}<hp:{name} left='{l}' right='{r}' top='{t}' bottom='{b}'/>{}",
+                    &base[..start],
+                    &base[end..]
+                ),
+                true,
+            );
+        }
+        for (l, r, t, b) in [(141, 283, 141, 141), (0, 283, 0, 0), (1000, 1000, 1000, 1000)] {
+            inline_case(
+                "unapproved tuple",
+                &format!(
+                    "{}<hp:{name} left='{l}' right='{r}' top='{t}' bottom='{b}'/>{}",
+                    &base[..start],
+                    &base[end..]
+                ),
+                false,
+            );
+        }
+    }
+    let mixed = base.replacen("vertAlign='CENTER'", "vertAlign='TOP'", 1).replacen(
+        "vertAlign='CENTER'",
+        "vertAlign='BOTTOM'",
+        1,
+    );
+    inline_case("three alignments", &mixed, true);
+    for (from, to) in [
+        ("cellMargin left='510'", "cellMargin left='511'"),
+        ("header='0'", "header='1'"),
+        ("hasMargin='0'", "hasMargin='1'"),
+        ("protect='0' editable", "protect='1' editable"),
+        ("editable='0'", "editable='1'"),
+        ("dirty='0'", "dirty='1'"),
+        ("vertAlign='CENTER'", "vertAlign='UNKNOWN'"),
+        ("textDirection='HORIZONTAL'", "textDirection='VERTICAL'"),
+        ("lineWrap='BREAK'", "lineWrap='SQUEEZE'"),
+        ("textWidth='0'", "textWidth='1'"),
+        ("textHeight='0'", "textHeight='1'"),
+        ("hasTextRef='0'", "hasTextRef='1'"),
+        ("hasNumRef='0'", "hasNumRef='1'"),
+        ("linkListIDRef='0'", "linkListIDRef='1'"),
+        ("linkListNextIDRef='0'", "linkListNextIDRef='1'"),
+        ("treatAsChar='1'", "treatAsChar='0'"),
+        ("flowWithText='1'", "flowWithText='0'"),
+        ("horzRelTo='PARA'", "horzRelTo='COLUMN'"),
+        ("vertRelTo='PARA'", "vertRelTo='PAGE'"),
+        ("vertAlign='TOP'", "vertAlign='CENTER'"),
+        ("horzAlign='LEFT'", "horzAlign='RIGHT'"),
+        ("vertOffset='0'", "vertOffset='1'"),
+        ("horzOffset='0'", "horzOffset='1'"),
+        ("affectLSpacing='0'", "affectLSpacing='1'"),
+        ("allowOverlap='0'", "allowOverlap='1'"),
+        ("holdAnchorAndSO='0'", "holdAnchorAndSO='1'"),
+        ("widthRelTo='ABSOLUTE'", "widthRelTo='RELATIVE'"),
+        ("heightRelTo='ABSOLUTE'", "heightRelTo='RELATIVE'"),
+        ("protect='0'/>", "protect='1'/>"),
+        ("pageBreak='CELL'", "pageBreak='NONE'"),
+        ("repeatHeader='1'", "repeatHeader='0'"),
+        ("textWrap='TOP_AND_BOTTOM'", "textWrap='SQUARE'"),
+        ("textFlow='BOTH_SIDES'", "textFlow='LEFT_ONLY'"),
+        ("numberingType='TABLE'", "numberingType='PICTURE'"),
+        ("lock='0'", "lock='1'"),
+        ("dropcapstyle='None'", "dropcapstyle='DoubleLine'"),
+        ("cellSpacing='0'", "cellSpacing='1'"),
+    ] {
+        assert!(base.contains(from));
+        inline_case(&format!("{from} -> {to}"), &base.replacen(from, to, 1), false);
+    }
+}
+
+// 이것을 실패시키는 것: 자식 허용 목록·one_child 유일성·후손 소유 검사 생략.
+#[test]
+fn inline_category_children_and_ownership() {
+    let base = inline_six_column_table();
+    // 이것을 실패시키는 것: 정상 tc까지 거부하도록 행 자식 검사를 반전.
+    let f = facts(&[section(&p(&base))]);
+    let part = &f.parts[0];
+    let id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
+    assert!(table_profiles::matches(part, id), "direct cells in profile");
+    for host in ["tbl", "tc", "tr"] {
+        for child in ["caption", "cellzoneList", "label", "parameterset", "unknownChild"] {
+            inline_case(
+                &format!("{host}/{child}"),
+                &base.replacen(&format!("</hp:{host}>"), &format!("<hp:{child}/></hp:{host}>"), 1),
+                false,
+            );
+        }
+    }
+    for name in [
+        "sz",
+        "pos",
+        "outMargin",
+        "inMargin",
+        "subList",
+        "cellAddr",
+        "cellSpan",
+        "cellSz",
+        "cellMargin",
+    ] {
+        let start = base.find(&format!("<hp:{name} ")).unwrap();
+        let end = if name == "subList" {
+            start + base[start..].find("</hp:subList>").unwrap() + 13
+        } else {
+            start + base[start..].find("/>").unwrap() + 2
+        };
+        let node = &base[start..end];
+        inline_case(
+            &format!("duplicate {name}"),
+            &base.replacen(node, &(node.to_owned() + node), 1),
+            false,
+        );
+        inline_case(&format!("missing {name}"), &base.replacen(node, "", 1), false);
+    }
+    for child in ["<hp:tc/>", "<hp:subList/>", "<hp:tbl/>"] {
+        let changed = base.replacen("</hp:subList>", &format!("{child}</hp:subList>"), 1);
+        inline_case("hidden descendants", &changed, false);
+        let f = facts(&[section(&p(&changed))]);
+        let part = &f.parts[0];
+        let id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
+        assert!(!table_profiles::matches(part, id), "matcher must reject {child}");
+    }
+    for name in ["tr", "tc", "sz", "pos", "subList"] {
+        let alias = base.replace(&format!("hp:{name}"), &format!("alias:{name}"));
+        let alias = alias.replacen("<hp:tbl ", &format!("<hp:tbl xmlns:alias='{NS}' "), 1);
+        inline_case("same namespace alias", &alias, true);
+        inline_case(
+            "wrong namespace",
+            &alias.replace(&format!("xmlns:alias='{NS}'"), "xmlns:alias='urn:foreign'"),
+            false,
+        );
+    }
+}
+
+// 이것을 실패시키는 것: zOrder 237·표 폭 16084·안 여백 283·바깥 여백 0의 결합을 거부.
+// 이것을 실패시키는 것: 표 높이=셀 합·행 안 동일 높이·단일 문단/텍스트 전용 조건 추가·work tick 제거.
+#[test]
+fn inline_category_preserves_content_and_visits_all_cells() {
+    let base = inline_tall_table();
+    inline_case("tall mixed grid", &base, true);
+    let mut wrapped = inline_grid(2, 6, 1, 1).replace("height='3130'", "height='4447'");
+    for width in [1303, 2000, 3000, 5000, 10000, 26513, 1303, 2000, 3000, 5000, 10000, 26513] {
+        wrapped = wrapped.replacen("width='7969'", &format!("width='{width}'"), 1);
+    }
+    inline_case("stored height independent of cells", &wrapped, true);
+    inline_case(
+        "two paragraphs",
+        &wrapped.replacen("</hp:subList>", &format!("{}</hp:subList>", p("두 번째")), 1),
+        true,
+    );
+    let measure = |rows| {
+        let f = facts(&[section(&p(&inline_grid(rows, 6, 1, 1)))]);
+        let part = &f.parts[0];
+        let id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
+        crate::work::WORK.with(|w| w.set(0));
+        assert!(table_profiles::matches(part, id));
+        crate::work::WORK.with(|w| w.get())
+    };
+    assert_eq!(measure(1), 6);
+    assert_eq!(measure(22), 132);
 }
