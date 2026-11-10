@@ -31,9 +31,11 @@ use hwpforge_foundation::{
     BulletIndex, CharShapeIndex, FontId, FontIndex, NumberingIndex, ParaShapeIndex, StyleRef,
 };
 
+use crate::border_fill::{BorderFill, Fill};
 use crate::error::{BlueprintError, BlueprintResult};
 use crate::style::{CharShape, ParaShape, PartialStyle};
 use crate::template::{Template, TemplateTabDef};
+use hwpforge_foundation::{BorderLineType, FoundationError};
 
 /// A resolved style entry with allocated indices.
 ///
@@ -117,6 +119,8 @@ pub struct StyleRegistry {
     /// Original display names, keyed by style identity rather than display text.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     style_display_names: IndexMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    border_fills: Vec<BorderFill>,
 }
 
 // Schemars follows serde's try_from for the deserialize contract. Keep the
@@ -143,6 +147,8 @@ struct StyleRegistryWire {
     /// Original display names, keyed by style identity rather than display text.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     style_display_names: IndexMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    border_fills: Vec<BorderFill>,
 }
 
 impl TryFrom<StyleRegistryWire> for StyleRegistry {
@@ -159,7 +165,18 @@ impl TryFrom<StyleRegistryWire> for StyleRegistry {
             style_positions: style_positions(&wire.style_entries),
             style_entries: wire.style_entries,
             style_display_names: wire.style_display_names,
+            border_fills: wire.border_fills,
         };
+        for (index, value) in registry.border_fills.iter().enumerate() {
+            validate_border_fill(value)?;
+            if registry.border_fills[..index].contains(value) {
+                return Err(FoundationError::InvalidField {
+                    field: "border_fills".into(),
+                    reason: "duplicate border definition would change reference identity".into(),
+                }
+                .into());
+            }
+        }
         for key in registry.style_display_names.keys() {
             registry.validate_display_name_key(key)?;
         }
@@ -194,6 +211,31 @@ fn style_positions(entries: &IndexMap<String, StyleEntry>) -> BTreeMap<StyleIden
 }
 
 impl StyleRegistry {
+    /// Registers a four-sided border definition and returns its one-based local reference.
+    ///
+    /// Each side must use `None` or `Solid`, with unspecified width and color.
+    /// The fill must equal [`Fill::default`]. These restrictions allow exactly
+    /// sixteen definitions. Equal definitions reuse their existing reference.
+    /// Pass the registry and its document together to the import bridge; the
+    /// reference is not an HWPX store position.
+    ///
+    /// # Errors
+    /// Returns [`FoundationError::InvalidField`] for any other definition.
+    /// A failed registration leaves the registry unchanged.
+    pub fn register_border_fill(&mut self, value: BorderFill) -> Result<u32, FoundationError> {
+        validate_border_fill(&value)?;
+        if let Some(index) = self.border_fills.iter().position(|existing| *existing == value) {
+            return Ok(index as u32 + 1);
+        }
+        self.border_fills.push(value);
+        Ok(self.border_fills.len() as u32)
+    }
+
+    /// Looks up a one-based registry-local border definition.
+    /// Zero and references beyond the registered definitions return `None`.
+    pub fn border_fill(&self, id: u32) -> Option<&BorderFill> {
+        id.checked_sub(1).and_then(|index| self.border_fills.get(index as usize))
+    }
     /// Returns registered entries in insertion order.
     pub fn style_entries(&self) -> &IndexMap<String, StyleEntry> {
         &self.style_entries
@@ -292,6 +334,7 @@ impl StyleRegistry {
             style_entries: IndexMap::new(),
             style_positions: BTreeMap::new(),
             style_display_names: IndexMap::new(),
+            border_fills: Vec::new(),
         }
     }
 
@@ -369,6 +412,7 @@ impl StyleRegistry {
             style_positions: style_positions(&style_entries),
             style_entries,
             style_display_names: IndexMap::new(),
+            border_fills: Vec::new(),
         })
     }
 
@@ -680,6 +724,22 @@ fn validate_tab_reference(
         tab_id: tab_def_id,
         reason: "no matching tab definition exists in template.tabs".to_string(),
     })
+}
+
+fn validate_border_fill(value: &BorderFill) -> Result<(), FoundationError> {
+    let border = &value.border;
+    if [border.left, border.right, border.top, border.bottom].iter().any(|side| {
+        !matches!(side.line_type, BorderLineType::None | BorderLineType::Solid)
+            || side.width.is_some()
+            || side.color.is_some()
+    }) || value.fill != Fill::default()
+    {
+        return Err(FoundationError::InvalidField {
+            field: "border_fills".into(),
+            reason: "only None/Solid sides without width, color or fill are supported".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
