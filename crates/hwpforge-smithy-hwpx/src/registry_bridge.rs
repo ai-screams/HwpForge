@@ -149,6 +149,7 @@ pub struct HwpxRegistryBridge {
     style_store: HwpxStyleStore,
     char_shape_map: Vec<CharShapeIndex>,
     para_shape_map: Vec<ParaShapeIndex>,
+    border_fill_map: Option<Vec<u32>>,
 }
 
 impl HwpxRegistryBridge {
@@ -182,7 +183,62 @@ impl HwpxRegistryBridge {
         let RegistryStoreBuild { store, char_shape_map, para_shape_map, warnings } =
             HwpxStyleStore::from_registry_with_mappings(registry, style_set, list_policy)?;
         Ok(crate::WithBridgeWarnings {
-            value: Self { style_store: store, char_shape_map, para_shape_map },
+            value: Self {
+                style_store: store,
+                char_shape_map,
+                para_shape_map,
+                border_fill_map: None,
+            },
+            warnings,
+        })
+    }
+
+    /// Builds an import bridge with effective lists and registry-local table borders.
+    ///
+    /// Every explicit table/cell `border_fill_id` must be a one-based reference
+    /// registered in `registry`. Rebinding maps it to the actual store position
+    /// exactly once, including nested tables, captions, headers and footers.
+    /// `None` remains an absent reference, not a borderless definition.
+    /// The caller must keep the document and registry paired: raw store IDs
+    /// cannot be distinguished from local IDs with the same numeric value.
+    /// Existing constructors retain their raw border-reference semantics.
+    ///
+    /// # Errors
+    /// Returns an error for invalid registry references, unsupported character
+    /// or paragraph border references, or overflowing diagnostic counts.
+    /// Rebinding rejects unregistered table/cell references and explicit page
+    /// or cell-zone borders, which this import contract does not yet support.
+    pub fn from_registry_for_import(
+        registry: &StyleRegistry,
+        style_set: HancomStyleSet,
+    ) -> HwpxResult<crate::WithBridgeWarnings<Self>> {
+        let RegistryStoreBuild { mut store, char_shape_map, para_shape_map, warnings } =
+            HwpxStyleStore::from_registry_import_mappings(registry, style_set)?;
+        let mut border_fill_map = Vec::new();
+        let mut id = 1;
+        while let Some(value) = registry.border_fill(id) {
+            let mut fill = crate::style_store::HwpxBorderFill::default_table_border();
+            fill.diagonal = None;
+            for (source, target) in [
+                (&value.border.left, &mut fill.left),
+                (&value.border.right, &mut fill.right),
+                (&value.border.top, &mut fill.top),
+                (&value.border.bottom, &mut fill.bottom),
+            ] {
+                if source.line_type == hwpforge_foundation::BorderLineType::None {
+                    target.line_type = "NONE".into();
+                }
+            }
+            border_fill_map.push(store.push_border_fill(fill));
+            id += 1;
+        }
+        Ok(crate::WithBridgeWarnings {
+            value: Self {
+                style_store: store,
+                char_shape_map,
+                para_shape_map,
+                border_fill_map: Some(border_fill_map),
+            },
             warnings,
         })
     }
@@ -199,9 +255,13 @@ impl HwpxRegistryBridge {
 
     /// Rebinds a registry-backed draft document into store-local ids.
     ///
-    /// This remaps only the unambiguous shared-IR axes:
+    /// All constructors remap these shared-IR axes:
     /// - `Paragraph.para_shape_id`
     /// - `Run.char_shape_id`
+    ///
+    /// Bridges made with [`Self::from_registry_for_import`] additionally remap
+    /// every table/cell border reference from the paired registry. Other
+    /// constructors leave raw table/cell border references unchanged.
     ///
     /// Style references retain their document identity; the store resolves them
     /// to the selected default set's definition positions.
@@ -220,6 +280,37 @@ impl HwpxRegistryBridge {
             crate::depth::check_section_depth(section, si)?;
         }
 
+        if let Some(map) = &self.border_fill_map {
+            if document.sections().iter().any(|section| section.page_border_fills.is_some()) {
+                return Err(HwpxError::InvalidStructure {
+                    detail: "import page border references are unsupported".into(),
+                });
+            }
+            let mut error = None;
+            document.for_each_table_mut(|table| {
+                if error.is_some() {
+                    return;
+                }
+                let result = (|| {
+                    if !table.cell_zones.is_empty() {
+                        return Err(HwpxError::InvalidStructure {
+                            detail: "import cell-zone border references are unsupported".into(),
+                        });
+                    }
+                    rebind_border(&mut table.border_fill_id, map)?;
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            rebind_border(&mut cell.border_fill_id, map)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                error = result.err();
+            });
+            if let Some(error) = error {
+                return Err(error);
+            }
+        }
         self.rebind_sections(document.sections_mut())?;
         Ok(document)
     }
@@ -321,6 +412,17 @@ impl HwpxRegistryBridge {
             max: self.para_shape_map.len() as u32,
         })
     }
+}
+
+fn rebind_border(reference: &mut Option<u32>, map: &[u32]) -> HwpxResult<()> {
+    if let Some(id) = reference {
+        *id = id.checked_sub(1).and_then(|index| map.get(index as usize)).copied().ok_or_else(
+            || HwpxError::InvalidStructure {
+                detail: format!("unregistered import border reference {id}"),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1408,7 +1408,28 @@ impl HwpxStyleStore {
         style_set: HancomStyleSet,
         list_policy: ListHeadPolicy,
     ) -> HwpxResult<RegistryStoreBuild> {
+        if registry.border_fill(1).is_some() {
+            return Err(HwpxError::InvalidStructure {
+                detail: "registry border definitions require HwpxRegistryBridge::from_registry_for_import".into(),
+            });
+        }
         build_store_from_registry_with(registry, style_set, list_policy)
+    }
+
+    pub(crate) fn from_registry_import_mappings(
+        registry: &StyleRegistry,
+        style_set: HancomStyleSet,
+    ) -> HwpxResult<RegistryStoreBuild> {
+        if registry.char_shapes.iter().any(|s| s.char_border_fill_id.is_some())
+            || registry.para_shapes.iter().any(|s| s.border_fill_id.is_some())
+        {
+            return Err(HwpxError::InvalidStructure {
+                detail:
+                    "import border definitions currently support table and cell references only"
+                        .into(),
+            });
+        }
+        build_store_from_registry_with(registry, style_set, ListHeadPolicy::PreserveEffective)
     }
 
     // ── Fonts ────────────────────────────────────────────────────
