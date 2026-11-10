@@ -155,6 +155,7 @@ struct ParagraphOrigin {
 }
 #[derive(Debug, Default)]
 pub(crate) struct SourceRecorder {
+    pub(crate) losses: Vec<super::preserved_loss::LossEvidence>,
     source: XmlSource,
     paragraphs: HashMap<usize, ParagraphOrigin>,
 }
@@ -164,7 +165,26 @@ impl SourceRecorder {
     pub(crate) fn read(xml: &str) -> HwpxResult<(String, Self)> {
         let (annotated, source) = XmlSource::read(xml)
             .map_err(|detail| HwpxError::XmlParse { file: "section.xml".into(), detail })?;
-        Ok((annotated, Self { source, paragraphs: HashMap::new() }))
+        Ok((annotated, Self { source, paragraphs: HashMap::new(), losses: Vec::new() }))
+    }
+    pub(crate) fn record_loss(
+        &mut self,
+        warning: usize,
+        cause: super::preserved_loss::LossCause,
+        part: &str,
+        node: usize,
+    ) {
+        if let Some(element) = self.source.element(node) {
+            self.losses.push(super::preserved_loss::LossEvidence {
+                warning,
+                cause,
+                location: super::preserved_loss::LossLocation::Body {
+                    part: part.into(),
+                    span: element.outer(),
+                    digest: *self.source.digest(),
+                },
+            });
+        }
     }
     pub(crate) fn child(&self, node: usize, tag: &str, index: usize) -> usize {
         self.source.child(node, tag, index)

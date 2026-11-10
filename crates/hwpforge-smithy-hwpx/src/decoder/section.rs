@@ -192,10 +192,14 @@ pub(crate) fn parse_section_with_references(
     let mut footers = Vec::new();
     let mut ctx = DecodeCtx::for_section(section_index, part);
     ctx.references = references.cloned();
-    if let Some(references) = references {
-        ctx.warnings.extend(references.validate_auxiliary_xml(&xml, &ctx.part)?);
-    }
     ctx.source = source;
+    if let Some(references) = references {
+        ctx.warnings.extend(references.validate_auxiliary_with_losses(
+            &xml,
+            &ctx.part,
+            Some(&mut ctx.source),
+        )?);
+    }
     ctx.image_pixels = image_pixels.clone();
     // Once per section, at the section's own path (the sub-list rule,
     // [`note_sublist_content`]). serde hands over no whitespace-only text,
@@ -336,6 +340,7 @@ pub(crate) fn parse_section_with_references(
 /// [`enter`]: DecodeCtx::enter
 /// [`leave`]: DecodeCtx::leave
 pub(crate) struct DecodeCtx {
+    source_node: usize,
     has_memo: bool,
     references: Option<crate::header_references::HeaderReferences>,
     source: super::source_map::SourceRecorder,
@@ -414,6 +419,7 @@ impl DecodeCtx {
     pub(crate) fn for_section(section_index: usize, part: &str) -> Self {
         Self {
             has_memo: false,
+            source_node: 0,
             references: None,
             source: super::source_map::SourceRecorder::default(),
             last_origins: Vec::new(),
@@ -437,6 +443,7 @@ impl DecodeCtx {
     pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
         Self {
             has_memo: false,
+            source_node: 0,
             references: None,
             source: super::source_map::SourceRecorder::default(),
             last_origins: Vec::new(),
@@ -520,6 +527,33 @@ impl DecodeCtx {
             kind: kind.into(),
             reason: reason.into(),
         });
+    }
+
+    pub(crate) fn preserved_loss(
+        &mut self,
+        cause: super::preserved_loss::LossCause,
+        reason: impl Into<String>,
+    ) {
+        self.source.record_loss(self.warnings.len(), cause, &self.part, self.source_node);
+        self.content_lost(cause.kind(), reason);
+    }
+
+    pub(crate) fn source_loss(&mut self, loss: super::preserved_loss::LossEvidence) {
+        self.source.losses.push(loss);
+    }
+
+    pub(crate) fn take_losses(&mut self, mark: usize) -> Vec<super::preserved_loss::LossEvidence> {
+        let at = self.source.losses.partition_point(|loss| loss.warning < mark);
+        self.source.losses.split_off(at)
+    }
+
+    pub(crate) fn restore_losses(
+        &mut self,
+        mark: usize,
+        losses: Vec<super::preserved_loss::LossEvidence>,
+    ) {
+        self.take_losses(mark);
+        self.source.losses.extend(losses);
     }
 
     pub(crate) fn enter(&mut self, seg: super::PathSeg) {
@@ -1271,6 +1305,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             folded_begin = ctx.source.child(source_id, "fieldBegin", 0);
         }
         let emitted_before = runs.len();
+        let previous_source_node = std::mem::replace(&mut ctx.source_node, source_id);
         match kind {
             HxRunChildKind::Text => {
                 let text = &hx.texts[idx];
@@ -1287,6 +1322,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
                     // 마커 사이 텍스트 = 필드 본문 (문서 순서라 무모호).
                     field_body.push_str(&text.text());
                     body_sources.push(source_id);
+                    ctx.source_node = previous_source_node;
                     continue;
                 }
                 let content = text.to_run_content();
@@ -1411,6 +1447,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             }
             HxRunChildKind::SecPr | HxRunChildKind::TitleMark => {}
         }
+        ctx.source_node = previous_source_node;
         for run in &mut runs[emitted_before..] {
             let texts = match &run.content {
                 RunContent::Text(_) | RunContent::InlineText(_) => vec![source_id],
@@ -7524,5 +7561,33 @@ mod ws_preserve_tests {
             cache.lines[1].textpos
         };
         assert_eq!(core_textpos("&#13;"), core_textpos("x"));
+    }
+}
+
+#[cfg(test)]
+mod loss_evidence_tests {
+    use super::*;
+    // 이것을 실패시키는 것: 같은 kind/인덱스라도 재시도의 다른 원본 객체 근거를 첫 경고에 남김.
+    #[test]
+    fn retry_restores_the_original_warning_evidence() {
+        use crate::decoder::preserved_loss::{LossCause, LossLocation};
+        let original = "<sec><p><run><rect/><rect/></run></p></sec>";
+        let (_, source) = crate::decoder::source_map::SourceRecorder::read(original).unwrap();
+        let mut ctx = DecodeCtx::for_section(0, "Contents/section0.xml");
+        ctx.source = source;
+        ctx.source_node = 4;
+        ctx.preserved_loss(LossCause::DrawnExtentOnly, "first object");
+        let warnings = ctx.warnings.split_off(0);
+        let first = ctx.take_losses(0);
+        ctx.source_node = 5;
+        ctx.preserved_loss(LossCause::DrawnExtentOnly, "retried object");
+        ctx.warnings = warnings;
+        ctx.restore_losses(0, first);
+        let evidence = ctx.take_losses(0);
+        let LossLocation::Body { span, .. } = &evidence[0].location else { panic!() };
+        assert_eq!(&original[span.clone()], "<rect/>");
+        assert_eq!(span.start, original.find("<rect/>").unwrap());
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].warning, 0);
     }
 }

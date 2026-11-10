@@ -10,6 +10,7 @@ pub(crate) const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackageOrder {
+    pub(crate) header_only_nonlinear: bool,
     /// Core section indices always index this list, also during cache analysis.
     pub sections: Vec<String>,
     /// Whether the entire container XML can be excluded from the global layout fingerprint.
@@ -44,15 +45,31 @@ impl PackageOrder {
             Ok(excludable) => result.container_excludable = excludable,
             Err(reason) => result.problems.push(format!("container: {reason}")),
         }
+        let mut mode = SpineMode::default();
         match content
             .ok_or_else(|| "missing content.hpf".to_string())
-            .and_then(|xml| resolve_spine(xml, paths, &result.sections))
+            .and_then(|xml| resolve_spine_with_mode(xml, paths, &result.sections, &mut mode))
         {
             Ok((sections, excludable)) => {
                 result.sections = sections;
                 result.content_excludable = excludable;
             }
             Err(reason) => {
+                // Retry the same resolver only for its typed nonlinear cause. Public decode
+                // still uses the original file-number fallback and warning.
+                if mode.nonlinear {
+                    if let Some(xml) = content {
+                        let mut narrow =
+                            SpineMode { allow_header_nonlinear: true, ..SpineMode::default() };
+                        if let Ok((sections, excludable)) =
+                            resolve_spine_with_mode(xml, paths, &result.sections, &mut narrow)
+                        {
+                            result.header_only_nonlinear = result.container_excludable
+                                && excludable
+                                && sections == result.sections;
+                        }
+                    }
+                }
                 result.content_problem_reported = true;
                 result.problems.push(format!("spine: {reason}; using file-number fallback"))
             }
@@ -189,10 +206,26 @@ fn validate_container(xml: &str, paths: &[String]) -> Result<bool, String> {
     Ok(excludable)
 }
 
+#[derive(Default)]
+struct SpineMode {
+    allow_header_nonlinear: bool,
+    nonlinear: bool,
+}
+
+#[cfg(test)]
 fn resolve_spine(
     xml: &str,
     paths: &[String],
     fallback: &[String],
+) -> Result<(Vec<String>, bool), String> {
+    resolve_spine_with_mode(xml, paths, fallback, &mut SpineMode::default())
+}
+
+fn resolve_spine_with_mode(
+    xml: &str,
+    paths: &[String],
+    fallback: &[String],
+    mode: &mut SpineMode,
 ) -> Result<(Vec<String>, bool), String> {
     let mut excludable = true;
     let mut manifest: BTreeMap<String, Option<(String, String)>> = BTreeMap::new();
@@ -243,10 +276,17 @@ fn resolve_spine(
             }
             ["package", "spine", "itemref"] => {
                 excludable &= attrs.keys().all(|k| matches!(k.as_str(), "idref" | "linear"));
-                if attrs.get("linear").is_some_and(|v| v != "yes") {
-                    return Err("unsupported spine itemref attributes".into());
+                let nonlinear = attrs.get("linear").is_some_and(|v| v != "yes");
+                if nonlinear {
+                    mode.nonlinear = true;
+                    if !mode.allow_header_nonlinear {
+                        return Err("unsupported spine itemref attributes".into());
+                    }
+                    if attrs.get("linear").map(String::as_str) != Some("no") {
+                        return Err("unsupported spine itemref attributes".into());
+                    }
                 }
-                refs.push(get("idref")?);
+                refs.push((get("idref")?, nonlinear));
             }
             ["package", "spine", ..] => return Err("unsupported spine child".into()),
             _ => {}
@@ -258,11 +298,14 @@ fn resolve_spine(
     }
     let mut sections = Vec::new();
     let mut seen = BTreeSet::new();
-    for id in refs {
+    for (id, nonlinear) in refs {
         let (target, media) = manifest
             .get(&id)
             .and_then(Option::as_ref)
             .ok_or_else(|| format!("missing/ambiguous manifest item {id}"))?;
+        if nonlinear && target != HEADER_PART {
+            return Err("unsupported spine itemref attributes".into());
+        }
         if !paths.contains(target) || !seen.insert(target.clone()) {
             return Err(format!("missing/duplicate spine target {target}"));
         }

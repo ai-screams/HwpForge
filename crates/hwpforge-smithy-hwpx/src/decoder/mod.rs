@@ -279,7 +279,9 @@ pub enum DecodeWarning {
     ///
     /// 디코드는 계속되지만, 이 결과를 다시 인코드하면 손실이 굳는다. 그래서
     /// 입력을 재인코드해 돌려주는 편집기(stamp·set-cell·restyle)는 이 경고가
-    /// 있는 입력을 거부한다 ([`DecodeWarning::is_content_loss`]).
+    /// 있는 입력을 거부한다 ([`DecodeWarning::is_content_loss`]). 원문 보존 삭제는
+    /// 출력 원문 보존과 판정 안전성을 별도로 입증한 경우 성공하며, 입력 decode
+    /// 손실을 알리는 이 경고의 순서와 횟수는 그대로 유지한다.
     ContentLost {
         /// 손실이 난 패키지 part 이름 (예: `Contents/section0.xml`).
         part: String,
@@ -750,9 +752,12 @@ impl std::fmt::Display for ParagraphPath {
 /// ```
 pub struct HwpxDecoder;
 
+pub(crate) mod preserved_loss;
+
 /// Decoder-only context: callers cannot construct this type or derive it from a claim.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SourceBasis {
+    pub(crate) losses: Vec<preserved_loss::LossEvidence>,
     // Header-read fact belongs to the original package, not editable JSON styles.
     requires_header_normalization: bool,
     package: std::sync::Arc<[u8]>,
@@ -760,6 +765,12 @@ pub(crate) struct SourceBasis {
         hwpforge_core::node_path::CorePath,
         hwpforge_core::source_xml::UnclosedOrigin,
     >,
+}
+
+impl SourceBasis {
+    pub(crate) fn matches_package(&self, base: &[u8]) -> bool {
+        self.package.as_ref() == base
+    }
 }
 
 impl HwpxDecoder {
@@ -822,7 +833,7 @@ impl HwpxDecoder {
 
         // Step 2: Parse header (style store + begin_num)
         let header_xml = pkg.read_header_xml()?;
-        let header_result = header::parse_header(&header_xml)?;
+        let (header_result, mut losses) = header::parse_header_with_losses(&header_xml)?;
         let style_store = header_result.style_store;
         let mut references = crate::header_references::HeaderReferences::build(&style_store)?;
         references.memos = header_result.memo_count;
@@ -837,6 +848,8 @@ impl HwpxDecoder {
         let parsed_metadata = pkg
             .read_text_entry(crate::encoder::package::CONTENT_HPF_PART)
             .and_then(|xml| metadata::parse_content_hpf_metadata(&xml));
+        // Warning deduplication must not hide a second cause from preservation evidence.
+        let metadata_parsed = parsed_metadata.is_ok();
         // Any content.hpf problem the package-order pass reported (unreadable
         // XML, a missing part, or a spine/manifest error) already marks the
         // document lossy, so the metadata failure is not reported twice.
@@ -889,8 +902,20 @@ impl HwpxDecoder {
             kind: dropped.field,
             reason: dropped.reason,
         }));
+        for loss in &mut losses {
+            loss.warning += warnings.len();
+        }
         warnings.extend(header_result.warnings);
         warnings.extend(references.validate_auxiliary_xml(&header_xml, HEADER_PART)?);
+        if pkg.order.header_only_nonlinear && metadata_parsed {
+            losses.push(preserved_loss::LossEvidence {
+                warning: warnings.len(),
+                cause: preserved_loss::LossCause::HeaderOnlyNonlinearOrder,
+                location: preserved_loss::LossLocation::Package {
+                    sections: pkg.section_paths().to_vec(),
+                },
+            });
+        }
         warnings.extend(pkg.order.problems.iter().map(|reason| DecodeWarning::ContentLost {
             part: "Contents/content.hpf / META-INF/container.xml".into(),
             path: ParagraphPath::default(),
@@ -914,6 +939,10 @@ impl HwpxDecoder {
                 &image_pixels,
                 Some(&references),
             )?;
+            for mut loss in std::mem::take(&mut result.source.losses) {
+                loss.warning += warnings.len();
+                losses.push(loss);
+            }
             warnings.append(&mut result.warnings);
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
@@ -1095,6 +1124,7 @@ impl HwpxDecoder {
             package.clone(),
         );
         let source_basis = std::sync::Arc::new(SourceBasis {
+            losses,
             requires_header_normalization: header_result.requires_header_normalization,
             package,
             origins: origins.into_iter().map(|origin| (origin.path().clone(), origin)).collect(),
@@ -1506,6 +1536,7 @@ mod tests {
                 Arc::from(altered.write().unwrap())
             };
             let stale = Arc::new(SourceBasis {
+                losses: basis.losses.clone(),
                 package,
                 origins: basis.origins.clone(),
                 requires_header_normalization: basis.requires_header_normalization,

@@ -88,6 +88,11 @@ enum FrameCheck {
     Kept,
     Dropped(String),
     DrawnExtent(String),
+    UnprovenExtent(String),
+}
+
+fn scalar_extent(with: f64, without: f64) -> bool {
+    with.is_finite() && without.is_finite()
 }
 
 fn check_frame(
@@ -113,10 +118,15 @@ fn check_frame(
             org.0, org.1
         ));
     }
-    FrameCheck::DrawnExtent(format!(
+    let reason = format!(
         "matrix extent {:.0}x{:.0} differs from layout size {}x{} by {without:.2}",
         extent.0, extent.1, displayed.0, displayed.1
-    ))
+    );
+    if scalar_extent(with, without) {
+        FrameCheck::DrawnExtent(reason)
+    } else {
+        FrameCheck::UnprovenExtent(reason)
+    }
 }
 
 /// The displayed width and height of a control with a frame.
@@ -428,7 +438,10 @@ pub(crate) fn settle_shape_frame(
             put_contents(control, contents);
             ctx.content_lost("object_original_size", reason);
         }
-        FrameCheck::DrawnExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
+        FrameCheck::DrawnExtent(reason) => {
+            ctx.preserved_loss(super::preserved_loss::LossCause::DrawnExtentOnly, reason)
+        }
+        FrameCheck::UnprovenExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
     }
 }
 
@@ -671,7 +684,10 @@ pub(crate) fn settle_picture_frame(
             image.frame.original_size = None;
             ctx.content_lost("object_original_size", reason);
         }
-        FrameCheck::DrawnExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
+        FrameCheck::DrawnExtent(reason) => {
+            ctx.preserved_loss(super::preserved_loss::LossCause::DrawnExtentOnly, reason)
+        }
+        FrameCheck::UnprovenExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
     }
 }
 
@@ -1999,6 +2015,10 @@ pub(crate) fn decode_container(
         }
     }
     let own = ctx.warnings.split_off(mark);
+    let mut own_losses = ctx.take_losses(mark);
+    for loss in &mut own_losses {
+        loss.warning -= mark;
+    }
     crate::work::tick_n(own.len());
     if !ctx.group_calls.is_empty() {
         // Nested: keep it in a slot, the parent records the slot. A lost
@@ -2006,7 +2026,13 @@ pub(crate) fn decode_container(
         // are gathered once, at the outermost group (copying them to
         // the parent as well doubled them at every lost level).
         // 이것을 실패시키는 것: 잃은 묶음 경고를 부모에도 넣기(`lost_nested_groups_report_each_warning_once`).
-        let slot = GroupSlot { run, placed: false, warnings: own, children: frame.record };
+        let slot = GroupSlot {
+            run,
+            placed: false,
+            warnings: own,
+            losses: own_losses,
+            children: frame.record,
+        };
         #[cfg(test)]
         if let Some(r) = &slot.run {
             // Tests count the paragraphs the slots hold.
@@ -2027,6 +2053,10 @@ pub(crate) fn decode_container(
     }
     // The outermost group: its own warnings, then every kept group's — placed
     // or lost — once each, in call order.
+    for mut loss in own_losses {
+        loss.warning += ctx.warnings.len();
+        ctx.source_loss(loss);
+    }
     ctx.warnings.extend(own);
     let mut slots = std::mem::take(&mut ctx.group_slots);
     let placed = run.is_some();
@@ -2038,7 +2068,12 @@ pub(crate) fn decode_container(
         None => None,
     };
     let mut gathered = Vec::new();
-    gather_slot_warnings(&frame.record, &mut slots, &mut gathered, placed)?;
+    let mut gathered_losses = Vec::new();
+    gather_slot_warnings(&frame.record, &mut slots, &mut gathered, placed, &mut gathered_losses)?;
+    for mut loss in gathered_losses {
+        loss.warning += ctx.warnings.len();
+        ctx.source_loss(loss);
+    }
     ctx.warnings.extend(gathered);
     if let Some(left) = slots.iter().position(Option::is_some) {
         return Err(crate::HwpxError::InvalidStructure {
@@ -2058,6 +2093,7 @@ pub(crate) struct GroupSlot {
     placed: bool,
     /// The warnings of its own level (not of the groups decoded inside it).
     warnings: Vec<crate::DecodeWarning>,
+    losses: Vec<super::preserved_loss::LossEvidence>,
     /// The slots of the groups decoded directly inside it.
     children: Vec<usize>,
 }
@@ -2078,6 +2114,7 @@ fn gather_slot_warnings(
     slots: &mut [Option<GroupSlot>],
     out: &mut Vec<crate::DecodeWarning>,
     parent_placed: bool,
+    losses: &mut Vec<super::preserved_loss::LossEvidence>,
 ) -> HwpxResult<()> {
     for &id in ids {
         let slot = slots.get_mut(id).and_then(Option::take).ok_or_else(|| {
@@ -2091,8 +2128,12 @@ fn gather_slot_warnings(
             });
         }
         crate::work::tick_n(slot.warnings.len());
+        for mut loss in slot.losses {
+            loss.warning += out.len();
+            losses.push(loss);
+        }
         out.extend(slot.warnings);
-        gather_slot_warnings(&slot.children, slots, out, parent_placed && slot.placed)?;
+        gather_slot_warnings(&slot.children, slots, out, parent_placed && slot.placed, losses)?;
     }
     Ok(())
 }
@@ -2210,6 +2251,7 @@ fn settle_group_frames(
         return Ok(Some(run));
     }
     let first_warnings = ctx.warnings.split_off(mark);
+    let first_losses = ctx.take_losses(mark);
     ctx.group_frames = false;
     // The retry takes the groups the first decode made inside this one back
     // from their slots, by call order (see `decode_container`).
@@ -2241,11 +2283,14 @@ fn settle_group_frames(
     }
     ctx.warnings.truncate(mark);
     ctx.warnings.extend(first_warnings);
+    ctx.restore_losses(mark, first_losses);
     *candidates = first_candidates;
-    ctx.content_lost(
-        "shape_drawn_extent",
-        format!("a group's shapes land {with:.2} from where its matrices draw them"),
-    );
+    let reason = format!("a group's shapes land {with:.2} from where its matrices draw them");
+    if scalar_extent(with, without) {
+        ctx.preserved_loss(super::preserved_loss::LossCause::DrawnExtentOnly, reason);
+    } else {
+        ctx.content_lost("shape_drawn_extent", reason);
+    }
     Ok(Some(run))
 }
 
@@ -2766,8 +2811,8 @@ fn decode_group_picture(
              same centre",
         );
     }
-    for reason in group_picture_losses(pic) {
-        ctx.content_lost("group_child_picture", reason);
+    for (cause, reason) in group_picture_losses(pic) {
+        ctx.preserved_loss(cause, reason);
     }
     image.width = HwpUnit::new(fold.width()).unwrap_or(HwpUnit::ZERO);
     image.height = HwpUnit::new(fold.height()).unwrap_or(HwpUnit::ZERO);
@@ -2804,23 +2849,32 @@ fn decode_group_picture(
 /// `<hp:effects>`), a visible border (`<hp:lineShape>`). A crop is carried
 /// ([`Image::crop`](hwpforge_core::image::Image::crop), decoded with the
 /// picture by `convert_picture`).
-fn group_picture_losses(pic: &crate::schema::section::HxPic) -> Vec<String> {
+fn group_picture_losses(
+    pic: &crate::schema::section::HxPic,
+) -> Vec<(super::preserved_loss::LossCause, String)> {
+    use super::preserved_loss::LossCause::GroupPictureAppearance;
     let mut out = Vec::new();
     if let Some(img) = pic.img.as_ref() {
         let plain_effect = img.effect.is_empty() || img.effect == "REAL_PIC";
         let opaque = img.alpha.is_empty() || img.alpha == "0";
         if !plain_effect || img.bright != 0 || img.contrast != 0 || !opaque {
-            out.push(format!(
-                "effect: {} (brightness {}, contrast {}, alpha {})",
-                img.effect, img.bright, img.contrast, img.alpha
+            out.push((
+                GroupPictureAppearance,
+                format!(
+                    "effect: {} (brightness {}, contrast {}, alpha {})",
+                    img.effect, img.bright, img.contrast, img.alpha
+                ),
             ));
         }
     }
     if pic.effects.as_ref().is_some_and(|e| !e.items.is_empty()) {
-        out.push("effect: shadow, glow, soft edge or reflection".to_string());
+        out.push((
+            GroupPictureAppearance,
+            "effect: shadow, glow, soft edge or reflection".to_string(),
+        ));
     }
     if let Some(line) = pic.line_shape.as_ref().filter(|l| l.style != "NONE") {
-        out.push(format!("border: {} line {}", line.style, line.width));
+        out.push((GroupPictureAppearance, format!("border: {} line {}", line.style, line.width)));
     }
     out
 }
@@ -6506,7 +6560,7 @@ mod group_tests {
     fn reasons(pic: &crate::schema::section::HxPic) -> Vec<String> {
         super::group_picture_losses(pic)
             .into_iter()
-            .map(|r| r.split(':').next().unwrap().to_string())
+            .map(|(_, r)| r.split(':').next().unwrap().to_string())
             .collect()
     }
 
@@ -7418,6 +7472,7 @@ mod group_tests {
             run: Some(hwpforge_core::run::Run::text("x", char_shape)),
             placed: false,
             warnings: Vec::new(),
+            losses: Vec::new(),
             children: Vec::new(),
         }));
         assert!(super::decode_container(container, char_shape, 0, &mut ctx).is_err());
@@ -7428,13 +7483,23 @@ mod group_tests {
                 run: Some(hwpforge_core::run::Run::text("x", char_shape)),
                 placed: false,
                 warnings: Vec::new(),
+                losses: Vec::new(),
                 children: Vec::new(),
             })
         };
         let mut out = Vec::new();
-        assert!(super::gather_slot_warnings(&[0], &mut [slot()], &mut out, true).is_err());
-        assert!(super::gather_slot_warnings(&[0], &mut [slot()], &mut out, false).is_ok());
-        assert!(super::gather_slot_warnings(&[0, 0], &mut [slot()], &mut out, false).is_err());
+        assert!(super::gather_slot_warnings(&[0], &mut [slot()], &mut out, true, &mut Vec::new())
+            .is_err());
+        assert!(super::gather_slot_warnings(&[0], &mut [slot()], &mut out, false, &mut Vec::new())
+            .is_ok());
+        assert!(super::gather_slot_warnings(
+            &[0, 0],
+            &mut [slot()],
+            &mut out,
+            false,
+            &mut Vec::new()
+        )
+        .is_err());
         // Without it the same decode succeeds.
         let mut ctx = crate::decoder::section::DecodeCtx::new(0);
         assert!(super::decode_container(container, char_shape, 0, &mut ctx).unwrap().is_some());
@@ -8081,6 +8146,23 @@ mod frame_tests {
             let out = encode(content);
             assert!(out.contains(&format!(r#"noAdjust="{no_adjust}""#)), "{out}");
             assert!(out.contains(&format!(r#"protect="{protect}""#)), "{out}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod extent_evidence_tests {
+    use super::*;
+    // 이것을 실패시키는 것: 길이 불일치의 무한 잔차를 scalar 기하 손실로 분류.
+    #[test]
+    fn nonfinite_frame_residual_is_not_scalar_evidence() {
+        let points = [(0.0, 0.0), (1000.0, 1000.0)];
+        for (kept, dropped) in [(&points[..1], &points[..]), (&points[..], &points[..1])] {
+            let source = [(0.0, 0.0), (2000.0, 2000.0)];
+            assert!(!matches!(
+                check_frame(kept, dropped, &source, (2000.0, 2000.0), (1000, 1000), (1000, 1000)),
+                FrameCheck::DrawnExtent(_)
+            ));
         }
     }
 }

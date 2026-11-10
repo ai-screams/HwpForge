@@ -36,6 +36,29 @@ fn table(height: &str, content: &str) -> String {
 fn field(kind: &str, params: &[(&str, &str)], display: &str) -> String {
     format!("<hp:ctrl><hp:fieldBegin id='10' type='{kind}' dirty='0'><hp:parameters>{}</hp:parameters></hp:fieldBegin></hp:ctrl><hp:t>{display}</hp:t><hp:ctrl><hp:fieldEnd beginIDRef='10'/></hp:ctrl>", params.iter().map(|(k,v)|format!("<hp:stringParam name='{k}'>{v}</hp:stringParam>")).collect::<String>())
 }
+
+// 이것을 실패시키는 것: 영향 여부 무시, 시작점 정렬 생략, 중첩 범위의 최대 끝점 누락, 접촉 경계의 겹침 처리.
+#[test]
+fn affected_table_index_matches_exhaustive_overlap() {
+    let tables: Vec<_> = [7..8, 1..12, 3..5, 1..2, 12..14, 7..8, 5..7]
+        .into_iter()
+        .map(|outer| table_ledger::FlowTable { outer, host: None, parent: None, boundary: 0 })
+        .collect();
+    for mask in 0..1 << tables.len() {
+        let affected: Vec<_> = (0..tables.len()).map(|t| mask & (1 << t) != 0).collect();
+        let index = AffectedTables::new(affected.clone(), &tables);
+        assert_eq!(index.by_table, affected);
+        for start in 0..=15 {
+            for end in start..=15 {
+                let span = start..end;
+                let expected = tables.iter().zip(&affected).any(|(table, &affected)| {
+                    affected && table.outer.start < span.end && span.start < table.outer.end
+                });
+                assert_eq!(index.overlaps(&span), expected, "mask={mask}, span={span:?}");
+            }
+        }
+    }
+}
 fn num(kind: &str) -> String {
     format!("<hp:ctrl><hp:autoNum num='0' numType='{kind}'><hp:autoNumFormat type='DIGIT' userChar='' prefixChar='' suffixChar='' supscript='0'/></hp:autoNum></hp:ctrl>")
 }
@@ -1602,4 +1625,21 @@ fn negative_scan_tail_uses_original_utf8_boundary() {
         let xml = format!("{bom}<hs:sec xmlns:hs='http://www.hancom.co.kr/hwpml/2011/section' label='가나'><p/></hs:sec>");
         assert!(safe_negative(&xml));
     }
+}
+
+// 이것을 실패시키는 것: 공유 영향 표 집합에서 본문 구조 변경·host·독립 흐름 경계 조건 중 하나 생략.
+#[test]
+fn shared_affected_tables_keep_structure_hosts_and_boundaries() {
+    let body = facts(&[section(&format!("{}{}", p("<hp:t>old</hp:t>"), table("20", "칸")))]);
+    let end =
+        [DerivedEdit::Insert { section: 0, at: FlowBoundary::EndOfBody, fragment: &p("추가") }];
+    assert_eq!(body.effects(&end).unwrap().affected_tables[&0].by_table, [true]);
+    let hosted = facts(&[section(&p(&table("20", "칸")))]);
+    assert_eq!(hosted.effects(&end).unwrap().affected_tables[&0].by_table, [false]);
+    let independent = facts(&[section(&format!(
+        "{}<hp:header><hp:subList>{}</hp:subList></hp:header>",
+        p("앞"),
+        table("20", "칸")
+    ))]);
+    assert_eq!(independent.effects(&end).unwrap().affected_tables[&0].by_table, [false]);
 }
