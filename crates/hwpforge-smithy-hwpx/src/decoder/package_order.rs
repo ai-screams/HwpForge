@@ -11,6 +11,7 @@ pub(crate) const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackageOrder {
     pub(crate) header_only_nonlinear: bool,
+    pub(crate) script_auxiliary_order: bool,
     /// Core section indices always index this list, also during cache analysis.
     pub sections: Vec<String>,
     /// Whether the entire container XML can be excluded from the global layout fingerprint.
@@ -55,18 +56,26 @@ impl PackageOrder {
                 result.content_excludable = excludable;
             }
             Err(reason) => {
-                // Retry the same resolver only for its typed nonlinear cause. Public decode
+                // Retry the same resolver only for its typed failure cause. Public decode
                 // still uses the original file-number fallback and warning.
-                if mode.nonlinear {
+                if mode.nonlinear || mode.known_script {
                     if let Some(xml) = content {
-                        let mut narrow =
-                            SpineMode { allow_header_nonlinear: true, ..SpineMode::default() };
+                        let mut narrow = SpineMode {
+                            allow_header_nonlinear: true,
+                            allow_known_scripts: true,
+                            ..SpineMode::default()
+                        };
                         if let Ok((sections, excludable)) =
                             resolve_spine_with_mode(xml, paths, &result.sections, &mut narrow)
                         {
-                            result.header_only_nonlinear = result.container_excludable
+                            if result.container_excludable
                                 && excludable
-                                && sections == result.sections;
+                                && sections == result.sections
+                            {
+                                result.script_auxiliary_order = narrow.used_known_script;
+                                result.header_only_nonlinear =
+                                    !narrow.used_known_script && narrow.used_header_nonlinear;
+                            }
                         }
                     }
                 }
@@ -209,8 +218,21 @@ fn validate_container(xml: &str, paths: &[String]) -> Result<bool, String> {
 #[derive(Default)]
 struct SpineMode {
     allow_header_nonlinear: bool,
+    allow_known_scripts: bool,
     nonlinear: bool,
+    known_script: bool,
+    used_header_nonlinear: bool,
+    used_known_script: bool,
 }
+
+// XML 속성 정규화 뒤 값으로 비교한다(문자 참조로 쓴 공백도 같은 값).
+fn is_known_script_auxiliary(target: &str, media: &str) -> bool {
+    matches!(target, "Scripts/headerScripts.js" | "Scripts/sourceScripts.js")
+        && media == "application/x-javascript ;charset=utf-16"
+}
+
+#[cfg(test)]
+thread_local! { static RESOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[cfg(test)]
 fn resolve_spine(
@@ -227,8 +249,11 @@ fn resolve_spine_with_mode(
     fallback: &[String],
     mode: &mut SpineMode,
 ) -> Result<(Vec<String>, bool), String> {
+    #[cfg(test)]
+    RESOLVES.with(|count| count.set(count.get() + 1));
     let mut excludable = true;
     let mut manifest: BTreeMap<String, Option<(String, String)>> = BTreeMap::new();
+    let mut script_hrefs = BTreeMap::<String, usize>::new();
     let mut refs = Vec::new();
     let mut spines = 0;
     let mut manifests = 0;
@@ -272,6 +297,12 @@ fn resolve_spine_with_mode(
                     .all(|k| matches!(k.as_str(), "id" | "href" | "media-type" | "isEmbeded"));
                 let id = get("id")?;
                 let value = (get("href")?, get("media-type")?);
+                if matches!(
+                    value.0.as_str(),
+                    "Scripts/headerScripts.js" | "Scripts/sourceScripts.js"
+                ) {
+                    *script_hrefs.entry(value.0.clone()).or_default() += 1;
+                }
                 manifest.entry(id).and_modify(|v| *v = None).or_insert(Some(value));
             }
             ["package", "spine", "itemref"] => {
@@ -279,7 +310,7 @@ fn resolve_spine_with_mode(
                 let nonlinear = attrs.get("linear").is_some_and(|v| v != "yes");
                 if nonlinear {
                     mode.nonlinear = true;
-                    if !mode.allow_header_nonlinear {
+                    if !(mode.allow_header_nonlinear || mode.allow_known_scripts) {
                         return Err("unsupported spine itemref attributes".into());
                     }
                     if attrs.get("linear").map(String::as_str) != Some("no") {
@@ -303,13 +334,25 @@ fn resolve_spine_with_mode(
             .get(&id)
             .and_then(Option::as_ref)
             .ok_or_else(|| format!("missing/ambiguous manifest item {id}"))?;
-        if nonlinear && target != HEADER_PART {
+        let known_script = is_known_script_auxiliary(target, media);
+        if nonlinear
+            && !(target == HEADER_PART && mode.allow_header_nonlinear)
+            && !(known_script && mode.allow_known_scripts)
+        {
             return Err("unsupported spine itemref attributes".into());
         }
         if !paths.contains(target) || !seen.insert(target.clone()) {
             return Err(format!("missing/duplicate spine target {target}"));
         }
+        if known_script && mode.allow_known_scripts {
+            mode.used_known_script = true;
+            continue;
+        }
+        if nonlinear {
+            mode.used_header_nonlinear = true;
+        }
         if media != "application/xml" {
+            mode.known_script = known_script;
             return Err(format!("unsupported spine media-type {media} ({target})"));
         }
         if numbered_part(target, "Contents/section").is_some() {
@@ -318,7 +361,15 @@ fn resolve_spine_with_mode(
             return Err(format!("non-section spine target {target}"));
         }
         // Header and masterpage are known structural entries in Hancom's spine;
-        // their content is decoded separately. Other targets are never ignored.
+        // their content is decoded separately. Only proven script auxiliaries are skipped.
+    }
+    // Unreferenced ambiguous IDs remain compatible with the ordinary/header resolver,
+    // but cannot establish the stronger proof that script auxiliaries are the only loss.
+    if mode.used_known_script
+        && (manifest.values().any(Option::is_none)
+            || script_hrefs.values().any(|&count| count != 1))
+    {
+        return Err("ambiguous manifest item in script package".into());
     }
     if sections.len() != fallback.len() || fallback.iter().any(|p| !sections.contains(p)) {
         return Err("spine does not cover each section exactly once".into());
@@ -347,6 +398,84 @@ mod tests {
         ]
         .map(str::to_owned)
         .to_vec()
+    }
+
+    fn script_package() -> (String, Vec<String>) {
+        let xml = CONTENT_XML.replace("<p:itemref idref='beta'/><p:itemref idref='alpha'/>", "<p:itemref idref='alpha'/><p:itemref idref='beta'/>")
+            .replace("</p:manifest>", "<p:item id='aux' href='Scripts/headerScripts.js' media-type='application/x-javascript ;charset=utf-16'/></p:manifest>")
+            .replace("<p:spine>", "<p:spine><p:itemref idref='aux'/>");
+        let mut paths = paths();
+        paths.push("Scripts/headerScripts.js".into());
+        (xml, paths)
+    }
+
+    // 이것을 실패시키는 것: header 실패 후 별도 script 재시도, 실제 사용 flag 누락, 최초 오류 변경.
+    #[test]
+    fn script_header_no_uses_one_retry() {
+        let (xml, paths) = script_package();
+        for xml in [
+            xml.clone(),
+            xml.replace("idref='head'", "idref='head' linear='no'"),
+            xml.replace("<p:itemref idref='aux'/>", "")
+                .replace("</p:spine>", "<p:itemref idref='aux' linear='no'/></p:spine>")
+                .replace("idref='head'", "idref='head' linear='no'"),
+        ] {
+            RESOLVES.with(|c| c.set(0));
+            let order = PackageOrder::resolve(&paths, Some(&xml), Some(CONTAINER_XML));
+            assert_eq!(RESOLVES.with(std::cell::Cell::get), 2);
+            assert!(order.script_auxiliary_order);
+            assert!(!order.header_only_nonlinear);
+            assert!(!order.content_excludable);
+            assert_eq!(order.sections, ["Contents/section0.xml", "Contents/section1.xml"]);
+            let mut strict = SpineMode::default();
+            let error =
+                resolve_spine_with_mode(&xml, &paths, &order.sections, &mut strict).unwrap_err();
+            let expected = match strict.nonlinear {
+                true => "unsupported spine itemref attributes",
+                false => "unsupported spine media-type application/x-javascript ;charset=utf-16 (Scripts/headerScripts.js)",
+            };
+            assert_eq!(error, expected);
+            assert_eq!(order.problems, [format!("spine: {expected}; using file-number fallback")]);
+            let mut narrow = SpineMode {
+                allow_header_nonlinear: true,
+                allow_known_scripts: true,
+                ..Default::default()
+            };
+            resolve_spine_with_mode(&xml, &paths, &order.sections, &mut narrow).unwrap();
+            assert!(narrow.used_known_script);
+            assert_eq!(narrow.used_header_nonlinear, strict.nonlinear);
+        }
+        RESOLVES.with(|c| c.set(0));
+        PackageOrder::resolve(&paths, Some(CONTENT_XML), Some(CONTAINER_XML));
+        assert_eq!(RESOLVES.with(std::cell::Cell::get), 1);
+        RESOLVES.with(|c| c.set(0));
+        let other = xml.replace("Scripts/headerScripts.js", "Scripts/other.js");
+        PackageOrder::resolve(&paths, Some(&other), Some(CONTAINER_XML));
+        assert_eq!(RESOLVES.with(std::cell::Cell::get), 1);
+    }
+
+    // 이것을 실패시키는 것: 방문 단계에서 script 전용 no 거부, loop에서 header 비트 조건 제거.
+    #[test]
+    fn script_mode_bits_are_independent() {
+        let (xml, paths) = script_package();
+        let fallback = vec!["Contents/section0.xml".into(), "Contents/section1.xml".into()];
+        let mut mode = SpineMode { allow_header_nonlinear: true, ..Default::default() };
+        assert!(resolve_spine_with_mode(&xml, &paths, &fallback, &mut mode).is_err());
+        let script_no = xml.replace("idref='aux'", "idref='aux' linear='no'");
+        let mut mode = SpineMode { allow_known_scripts: true, ..Default::default() };
+        resolve_spine_with_mode(&script_no, &paths, &fallback, &mut mode).unwrap();
+        assert!(mode.used_known_script);
+        assert!(!mode.used_header_nonlinear);
+        let header_no = xml.replace("idref='head'", "idref='head' linear='no'");
+        let mut mode = SpineMode { allow_known_scripts: true, ..Default::default() };
+        assert!(resolve_spine_with_mode(&header_no, &paths, &fallback, &mut mode).is_err());
+        let section_no = xml.replace("idref='alpha'", "idref='alpha' linear='no'");
+        let mut mode = SpineMode {
+            allow_header_nonlinear: true,
+            allow_known_scripts: true,
+            ..Default::default()
+        };
+        assert!(resolve_spine_with_mode(&section_no, &paths, &fallback, &mut mode).is_err());
     }
 
     // 이것을 실패시키는 것: version/future 때문에 순서를 버리거나 레이아웃에서 제외하기.

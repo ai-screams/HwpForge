@@ -53,7 +53,10 @@ pub(super) fn check_candidates(
             ) => {
                 require(part == original)?;
             }
-            (LossCause::HeaderOnlyNonlinearOrder, LossLocation::Package { sections }) => {
+            (
+                LossCause::HeaderOnlyNonlinearOrder | LossCause::ScriptAuxiliaryOrder,
+                LossLocation::Package { sections },
+            ) => {
                 require(part == "Contents/content.hpf / META-INF/container.xml")?;
                 require(
                     *sections

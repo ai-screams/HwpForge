@@ -8,6 +8,7 @@ pub(crate) enum LossCause {
     GroupPictureAppearance,
     InlineStyle,
     HeaderOnlyNonlinearOrder,
+    ScriptAuxiliaryOrder,
 }
 impl LossCause {
     pub(crate) fn kind(self) -> &'static str {
@@ -16,7 +17,7 @@ impl LossCause {
             Self::DrawnExtentOnly => "shape_drawn_extent",
             Self::GroupPictureAppearance => "group_child_picture",
             Self::InlineStyle => "t.charStyleIDRef",
-            Self::HeaderOnlyNonlinearOrder => "package_reading_order",
+            Self::HeaderOnlyNonlinearOrder | Self::ScriptAuxiliaryOrder => "package_reading_order",
         }
     }
 }
