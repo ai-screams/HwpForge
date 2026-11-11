@@ -907,14 +907,24 @@ impl HwpxDecoder {
         }
         warnings.extend(header_result.warnings);
         warnings.extend(references.validate_auxiliary_xml(&header_xml, HEADER_PART)?);
-        if pkg.order.header_only_nonlinear && metadata_parsed {
-            losses.push(preserved_loss::LossEvidence {
-                warning: warnings.len(),
-                cause: preserved_loss::LossCause::HeaderOnlyNonlinearOrder,
-                location: preserved_loss::LossLocation::Package {
-                    sections: pkg.section_paths().to_vec(),
-                },
-            });
+        // flag의 container_excludable 조건과 겹치는 방어이며 problems를 넣는 곳이 늘면 의미가 생긴다.
+        if metadata_parsed && pkg.order.problems.len() == 1 {
+            let cause = if pkg.order.script_auxiliary_order {
+                Some(preserved_loss::LossCause::ScriptAuxiliaryOrder)
+            } else if pkg.order.header_only_nonlinear {
+                Some(preserved_loss::LossCause::HeaderOnlyNonlinearOrder)
+            } else {
+                None
+            };
+            if let Some(cause) = cause {
+                losses.push(preserved_loss::LossEvidence {
+                    warning: warnings.len(),
+                    cause,
+                    location: preserved_loss::LossLocation::Package {
+                        sections: pkg.section_paths().to_vec(),
+                    },
+                });
+            }
         }
         warnings.extend(pkg.order.problems.iter().map(|reason| DecodeWarning::ContentLost {
             part: "Contents/content.hpf / META-INF/container.xml".into(),
