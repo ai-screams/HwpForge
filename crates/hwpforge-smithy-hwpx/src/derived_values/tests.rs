@@ -2511,3 +2511,52 @@ fn nested_seeds_and_derived_effects_agree() {
         assert_eq!(collect_height_invalidations(&f, &edits).is_ok(), success);
     }
 }
+
+// 이것을 실패시키는 것: note 정책 수집에서 중복 numbering의 첫 자식을 정책으로 선택.
+#[test]
+fn duplicate_note_numbering_is_unknown_before_public_decode() {
+    use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        ["처음", "삭제", "생존"]
+            .map(|text| {
+                Paragraph::with_runs(
+                    vec![Run::text(text, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )
+            })
+            .to_vec(),
+        PageSettings::a4(),
+    ));
+    let bytes = crate::HwpxEncoder::encode(
+        &doc.validate().unwrap(),
+        &crate::style_store_for_preset("default").unwrap(),
+        &ImageStore::new(),
+    )
+    .unwrap();
+    for note in ["footNote", "endNote"] {
+        let package = crate::raw_package::RawPackage::read(&bytes).unwrap();
+        let source =
+            std::str::from_utf8(package.read_entry("Contents/section0.xml").unwrap()).unwrap();
+        let start = source.find(&format!("<hp:{note}Pr>")).unwrap();
+        let end = source[start..].find(&format!("</hp:{note}Pr>")).unwrap()
+            + start
+            + format!("</hp:{note}Pr>").len();
+        let pr = &source[start..end];
+        let numbering_start = pr.find("<hp:numbering ").unwrap();
+        let numbering_end = pr[numbering_start..].find("/>").unwrap() + numbering_start + 2;
+        let numbering = &pr[numbering_start..numbering_end];
+        let duplicate = pr.replacen(numbering, &format!("{numbering}{numbering}"), 1);
+        let source = source.replacen(pr, &duplicate, 1).replacen("<hp:t>생존</hp:t>", &format!("<hp:ctrl><hp:{note} number='1'><hp:subList><hp:p><hp:run><hp:t>주석</hp:t></hp:run></hp:p></hp:subList></hp:{note}></hp:ctrl>"), 1);
+        let f = facts(std::slice::from_ref(&source));
+        assert!(
+            check_derived_values(
+                &f,
+                &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(1)] }]
+            )
+            .is_err(),
+            "{note}"
+        );
+    }
+}
