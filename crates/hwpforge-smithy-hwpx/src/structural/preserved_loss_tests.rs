@@ -663,34 +663,38 @@ fn script_original_admission_error_and_noop() {
     failures(&[]);
 }
 
-// Only these exact manifest/spine additions differ; Scripts payloads stay in both inputs.
+// Normalize only the declared manifest/spine additions and the normal control comment.
+// Scripts payloads stay in both inputs when the order-loss case carries them.
 fn without_script_order_items(content: &str) -> String {
     content
+        .replace("<!--script editor control-->", "")
         .replace("<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>", "")
         .replace("<opf:item id='aux-h' href='Scripts/headerScripts.js' media-type='application/x-javascript ;charset=utf-16'/>", "")
         .replace("<opf:item id='aux-s' href='Scripts/sourceScripts.js' media-type='application/x-javascript ;charset=utf-16'/>", "")
 }
 
-fn assert_script_editor_result<T, M, E>(
-    api: &str,
+fn assert_editor_result<T, M, E>(
+    (api, expected_success, successes): (&str, bool, &mut usize),
     input: &[u8],
     control_input: &[u8],
     actual: Result<crate::diagnostics::WithCodecWarnings<T>, E>,
     control: Result<crate::diagnostics::WithCodecWarnings<T>, E>,
+    normalize: impl Fn(&str, &[u8]) -> Vec<u8>,
     view: impl for<'a> Fn(&'a T, &[u8]) -> (&'a [u8], M),
-) -> bool
-where
+) where
     T: std::fmt::Debug,
     M: std::fmt::Debug + PartialEq,
     E: std::fmt::Debug + std::fmt::Display,
 {
+    assert_eq!(actual.is_ok(), expected_success, "{api}: expected actual success");
+    assert_eq!(control.is_ok(), expected_success, "{api}: expected control success");
     match (actual, control) {
         (Ok(actual), Ok(control)) => {
             // The input package warning is intentional; each editor must retain it exactly.
             assert_eq!(
                 actual.decode_warnings,
                 HwpxDecoder::decode(input).unwrap().warnings,
-                "{api}: script decode warnings"
+                "{api}: input decode warnings"
             );
             assert_eq!(
                 control.decode_warnings,
@@ -711,21 +715,7 @@ where
             for path in actual_package.entry_paths() {
                 let actual_entry = actual_package.read_entry(path).unwrap();
                 let control_entry = control_package.read_entry(path).unwrap();
-                if path == "Contents/content.hpf" {
-                    assert_eq!(
-                        actual_entry,
-                        RawPackage::read(input).unwrap().read_entry(path).unwrap(),
-                        "{api}: script manifest preservation"
-                    );
-                    assert_eq!(
-                        without_script_order_items(std::str::from_utf8(actual_entry).unwrap()),
-                        std::str::from_utf8(control_entry).unwrap(),
-                        "{api}: {path}"
-                    );
-                } else {
-                    // Includes edited section XML, header and every preserved opaque payload.
-                    assert_eq!(actual_entry, control_entry, "{api}: {path}");
-                }
+                assert_eq!(normalize(path, actual_entry), control_entry, "{api}: {path}");
                 if matches!(path, "Scripts/headerScripts.js" | "Scripts/sourceScripts.js") {
                     assert_eq!(
                         actual_entry,
@@ -739,23 +729,58 @@ where
                     );
                 }
             }
-            true
+            *successes += 1;
         }
         (Err(actual), Err(control)) => {
             assert_eq!(std::mem::discriminant(&actual), std::mem::discriminant(&control), "{api}");
             assert_eq!(actual.to_string(), control.to_string(), "{api}");
             assert_eq!(format!("{actual:?}"), format!("{control:?}"), "{api}: error fields");
-            false
         }
         (actual, control) => panic!("{api}: script={actual:?}, control={control:?}"),
     }
 }
 
-// 이것을 실패시키는 것: 성공을 유지한 script patch의 편집 XML/보존 payload 훼손 또는 decode/encode 경고 삭제.
-#[test]
-fn script_other_editors_and_reencode_unchanged() {
-    let seed = generated();
-    let mut doc = HwpxDecoder::decode(&seed).unwrap().document;
+fn assert_script_editor_result<T, M, E>(
+    expectation: (&str, bool, &mut usize),
+    input: &[u8],
+    control_input: &[u8],
+    actual: Result<crate::diagnostics::WithCodecWarnings<T>, E>,
+    control: Result<crate::diagnostics::WithCodecWarnings<T>, E>,
+    view: impl for<'a> Fn(&'a T, &[u8]) -> (&'a [u8], M),
+) where
+    T: std::fmt::Debug,
+    M: std::fmt::Debug + PartialEq,
+    E: std::fmt::Debug + std::fmt::Display,
+{
+    let api = expectation.0;
+    assert_editor_result(
+        expectation,
+        input,
+        control_input,
+        actual,
+        control,
+        |path, bytes| {
+            if path == "Contents/content.hpf" {
+                let original = RawPackage::read(input).unwrap();
+                if original.read_text_entry(path).unwrap().contains("idref='aux-h'") {
+                    assert_eq!(
+                        bytes,
+                        original.read_entry(path).unwrap(),
+                        "{api}: script manifest preservation"
+                    );
+                }
+                without_script_order_items(std::str::from_utf8(bytes).unwrap()).into_bytes()
+            } else {
+                bytes.to_vec()
+            }
+        },
+        view,
+    )
+}
+
+fn editor_control(seed: &[u8], label: &str) -> Vec<u8> {
+    let decoded = HwpxDecoder::decode(seed).unwrap();
+    let mut doc = decoded.document;
     doc.sections_mut()[0].paragraphs.push(Paragraph::with_runs(
         vec![Run::control(
             hwpforge_core::Control::Field {
@@ -769,34 +794,55 @@ fn script_other_editors_and_reencode_unchanged() {
         )],
         ParaShapeIndex::new(0),
     ));
-    let field = crate::HwpxEncoder::encode(
-        &doc.validate().unwrap(),
-        &crate::style_store_for_preset("default").unwrap(),
-        &ImageStore::new(),
-    )
-    .unwrap();
+    doc.sections_mut()[0].paragraphs[0] = paragraph(label);
+    crate::HwpxEncoder::encode(&doc.validate().unwrap(), &decoded.style_store, &decoded.image_store)
+        .unwrap()
+}
 
-    let mut patch_successes = 0;
-    for base in [
-        seed.clone(),
-        scalar(&seed),
-        inline(&seed, "남음"),
-        body_object(&seed, "남음", &shape()),
-        body_object(
-            &seed,
-            "남음",
-            &object(
-                "container",
-                1000,
-                1000,
-                "1",
-                &picture("1", r#"<hp:lineShape style="SOLID" width="42"/>"#),
+// 이것을 실패시키는 것: script 입력군에서 stamp/patch/fill/insert 성공 결과의 payload 한 바이트 변경 또는 경고 삭제.
+// 손실 입력의 기존 오류와 정상 대조 입력의 API별 성공 건수를 함께 고정한다.
+#[test]
+fn script_other_editors_and_reencode_unchanged() {
+    let seed = generated();
+    let field = editor_control(&seed, "script editor control");
+
+    let mut successes = [0; 4];
+    for (base, has_order, expected) in [
+        (seed.clone(), true, [false, true, false, false]),
+        (scalar(&seed), true, [false, true, false, false]),
+        (inline(&seed, "남음"), true, [false, true, false, false]),
+        (body_object(&seed, "남음", &shape()), true, [false, true, false, false]),
+        (
+            body_object(
+                &seed,
+                "남음",
+                &object(
+                    "container",
+                    1000,
+                    1000,
+                    "1",
+                    &picture("1", r#"<hp:lineShape style="SOLID" width="42"/>"#),
+                ),
             ),
+            true,
+            [false, true, false, false],
         ),
-        header_order(&seed),
-        field,
+        (header_order(&seed), true, [false, true, false, false]),
+        (field.clone(), true, [false, true, true, false]),
+        // No opaque payload or order loss; the normal pair differs only by an XML comment.
+        // This also lets a mutation target just this input rather than its control.
+        (field, false, [true, true, true, true]),
     ] {
-        let input = scripts(&base, "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>");
+        let input = if has_order {
+            scripts(&base, "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>")
+        } else {
+            replace(
+                &base,
+                "Contents/content.hpf",
+                "</opf:metadata>",
+                "</opf:metadata><!--script editor control-->",
+            )
+        };
         // Keep the same ZIP payload so closed-world admission has the same input inventory.
         let mut control = RawPackage::read(&input).unwrap();
         let content = control.read_text_entry("Contents/content.hpf").unwrap();
@@ -812,7 +858,7 @@ fn script_other_editors_and_reencode_unchanged() {
             matches!(w,
             crate::DecodeWarning::ContentLost { kind, .. } if kind == "package_reading_order")
         };
-        assert_eq!(d.warnings.iter().filter(is_package).count(), 1);
+        assert_eq!(d.warnings.iter().filter(is_package).count(), usize::from(has_order));
         let control_package = c.warnings.iter().filter(is_package).count();
         assert_eq!(control_package, usize::from(base == header_order(&seed)));
         assert_eq!(
@@ -822,7 +868,7 @@ fn script_other_editors_and_reencode_unchanged() {
         if control_package == 1 {
             assert_eq!(d.warnings, c.warnings);
         } else {
-            assert_eq!(d.warnings.len(), c.warnings.len() + 1);
+            assert_eq!(d.warnings.len(), c.warnings.len() + usize::from(has_order));
         }
         let reencode = |decoded: &crate::HwpxDocument| {
             crate::HwpxEncoder::encode_with_diagnostics(
@@ -838,7 +884,7 @@ fn script_other_editors_and_reencode_unchanged() {
         assert_eq!(encoded.bytes, encoded_control.bytes);
         assert_eq!(encoded.warnings, encoded_control.warnings);
         assert_script_editor_result(
-            "stamp",
+            ("stamp", expected[0], &mut successes[0]),
             &input,
             &control,
             crate::stamp::HwpxStamper::stamp_with_diagnostics(&input, &[]),
@@ -874,17 +920,17 @@ fn script_other_editors_and_reencode_unchanged() {
                 Some(&preservation),
             )
         };
-        patch_successes += usize::from(assert_script_editor_result(
-            "patch",
+        assert_script_editor_result(
+            ("patch", expected[1], &mut successes[1]),
             &input,
             &control,
             patch(&input, &d),
             patch(&control, &c),
             |bytes, _| (bytes, ()),
-        ));
+        );
         let fills = [("field".into(), "채움".into())].into();
         assert_script_editor_result(
-            "fill",
+            ("fill", expected[2], &mut successes[2]),
             &input,
             &control,
             crate::HwpxFiller::fill_with_codec_diagnostics(&input, &fills),
@@ -892,7 +938,7 @@ fn script_other_editors_and_reencode_unchanged() {
             |result, _| (&result.bytes, serde_json::to_value(&result.filled).unwrap()),
         );
         assert_script_editor_result(
-            "insert",
+            ("insert", expected[3], &mut successes[3]),
             &input,
             &control,
             HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
@@ -910,7 +956,8 @@ fn script_other_editors_and_reencode_unchanged() {
             |bytes, _| (bytes, ()),
         );
     }
-    assert!(patch_successes > 0, "must exercise successful editor payload comparisons");
+    assert_eq!(successes, [1, 8, 2, 1], "stamp/patch/fill/insert success counts");
+    assert!(successes.into_iter().all(|count| count >= 1));
 }
 
 // 이것을 실패시키는 것: 허용 PAGE 삭제를 거부로 변경하거나 높이 검사 실패를 승인.
@@ -1823,4 +1870,1306 @@ fn preservation_evidence_work_scales_with_losses_and_source_nodes() {
     eprintln!("preservation table work: 160={small:?}, 320={large:?}");
     assert_eq!(small.0 * 2, large.0);
     assert!(small.1 >= 160 && large.1 > small.1 && large.1 <= small.1 * 2 + 64);
+}
+
+fn outline_seed(sections: usize, definitions: usize) -> Vec<u8> {
+    use hwpforge_core::{NumberingDef, ParaHead};
+    use hwpforge_foundation::NumberFormatType;
+    let store = crate::style_store_for_preset("default").unwrap();
+    let mut value = serde_json::to_value(&store).unwrap();
+    assert_eq!(value["numberings"].as_array().unwrap().len(), store.numbering_count());
+    value["numberings"] = serde_json::to_value(
+        (0..definitions)
+            .map(|i| NumberingDef {
+                id: 40 + i as u32,
+                start: 1,
+                levels: (1..=10)
+                    .map(|level| ParaHead {
+                        start: 1,
+                        level,
+                        num_format: NumberFormatType::Digit,
+                        text: format!("^{}{}", level, [".", "가)", ")"][i]),
+                        checkable: false,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    value["bullets"] = serde_json::json!([{"id":1,"bullet_char":"•","checked_char":null,"use_image":false,"para_head":{"start":1,"level":1,"num_format":serde_json::to_value(NumberFormatType::Digit).unwrap(),"text":"","checkable":false}}]);
+    value["styles"][0]["name"] = "Plain".into();
+    value["styles"][0]["eng_name"] = "Plain".into();
+    let store: crate::HwpxStyleStore = serde_json::from_value(value).unwrap();
+    assert_eq!(store.numbering_count(), definitions);
+    let mut doc = Document::new();
+    for section in 0..sections {
+        doc.add_section(Section::with_paragraphs(
+            ["start", "delete", "survive"]
+                .map(|text| paragraph(&format!("{section} {text}")))
+                .to_vec(),
+            PageSettings::a4(),
+        ));
+    }
+    let base =
+        crate::HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let package = RawPackage::read(&base).unwrap();
+    let header = package.read_text_entry("Contents/header.xml").unwrap();
+    assert_eq!(header.matches("<hh:numbering ").count(), definitions);
+    if definitions >= 2 {
+        assert!(header.contains("^1."));
+        assert!(header.contains("^1가)"));
+    }
+    extra(&base, "Scripts/opaque.bin", b"preserved payload")
+}
+fn outline_input() -> Vec<u8> {
+    replace(
+        &outline_seed(2, 2),
+        "Contents/section1.xml",
+        "outlineShapeIDRef=\"1\"",
+        "outlineShapeIDRef=\"2\"",
+    )
+}
+fn outline_refused(base: &[u8], targets: &[ParagraphLocator]) {
+    let expected = original_error(base);
+    let actual = HwpxStructuralEditor::delete_paragraphs(base, targets)
+        .expect_err("unexpected accepted deletion");
+    assert_eq!(actual, expected);
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    assert_eq!(actual.to_string(), expected.to_string());
+}
+
+// 이것을 실패시키는 것: 유효성 검사 생략 또는 2만 허용.
+#[test]
+fn outline_other_section_plain_delete() {
+    use crate::decoder::preserved_loss::{LossCause, LossLocation};
+    use sha2::Digest;
+    for id in [2, 3] {
+        let base = replace(
+            &outline_seed(2, id),
+            "Contents/section1.xml",
+            "outlineShapeIDRef=\"1\"",
+            &format!("outlineShapeIDRef=\"{id}\""),
+        );
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        let before = RawPackage::read(&base).unwrap();
+        let original = before.read_text_entry("Contents/section1.xml").unwrap();
+        let start = original.find("<hp:secPr ").unwrap();
+        let end = original[start..].find("</hp:secPr>").unwrap() + start + "</hp:secPr>".len();
+        let losses = &decoded.source_basis.as_ref().unwrap().losses;
+        // 이것을 실패시키는 것: selection 3의 근거 복제/cause 교환/outer 시작 이동/part SHA 대입.
+        assert_eq!(losses.len(), 1);
+        assert_eq!(losses[0].cause, LossCause::SectionOutlineSelection);
+        let LossLocation::SectionProperty { part, span, digest } = &losses[0].location else {
+            panic!("expected original section property evidence");
+        };
+        assert_eq!(part, "Contents/section1.xml");
+        assert_eq!(*span, start..end);
+        assert_eq!(
+            *digest,
+            <[u8; 32]>::from(sha2::Sha256::digest(&original.as_bytes()[start..end]))
+        );
+        let out = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(
+            &base,
+            &[ParagraphLocator { section: 0, index: 1 }],
+        )
+        .unwrap();
+        assert_eq!(out.decode_warnings, decoded.warnings);
+        assert_eq!(out.decode_warnings.len(), 1);
+        let before = RawPackage::read(&base).unwrap();
+        let after = RawPackage::read(&out.value).unwrap();
+        for part in ["Contents/section1.xml", "Contents/header.xml"] {
+            assert_eq!(before.read_entry(part).unwrap(), after.read_entry(part).unwrap());
+        }
+        let mut expected = decoded.document;
+        expected.sections_mut()[0].paragraphs.remove(1);
+        assert_eq!(HwpxDecoder::decode(&out.value).unwrap().document, expected);
+    }
+}
+
+// 이것을 실패시키는 것: section 경로 소유 개수를 1 이상이면 승인.
+#[test]
+fn outline_duplicate_section_path_refused() {
+    let base = outline_input();
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    let mut package = RawPackage::read(&base).unwrap();
+    preserved_loss::check_candidates(&base, &package, &decoded).unwrap();
+    // The real resolver rejects repeated spine targets and decodes using unique
+    // file-number fallback. Inject only that private order to reach count == 2.
+    package.order.sections[0] = package.order.sections[1].clone();
+    assert_eq!(package.section_path(0).unwrap(), package.section_path(1).unwrap());
+    let error = preserved_loss::check_candidates(&base, &package, &decoded).unwrap_err();
+    assert!(
+        matches!(error, crate::HwpxError::InvalidStructure { detail } if detail == "unproven input decode loss")
+    );
+}
+
+// 이것을 실패시키는 것: 손실 구역 membership 검사 제거.
+#[test]
+fn outline_same_section_refused() {
+    let base = outline_input();
+    outline_refused(&base, &[ParagraphLocator { section: 1, index: 1 }]);
+    outline_refused(
+        &base,
+        &[ParagraphLocator { section: 0, index: 1 }, ParagraphLocator { section: 1, index: 1 }],
+    );
+}
+
+// 이것을 실패시키는 것: found.is_ok() 검사 제거.
+#[test]
+fn outline_zero_one_and_invalid_id() {
+    for id in ["0", "1", "3"] {
+        let base = replace(
+            &outline_seed(2, 2),
+            "Contents/section1.xml",
+            "outlineShapeIDRef=\"1\"",
+            &format!("outlineShapeIDRef=\"{id}\""),
+        );
+        let d = HwpxDecoder::decode(&base).unwrap();
+        assert_eq!(d.warnings.len(), usize::from(id == "3"));
+        assert!(d.source_basis.as_ref().unwrap().losses.is_empty());
+        if id == "3" {
+            outline_refused(&base, &[ParagraphLocator { section: 0, index: 1 }]);
+        }
+    }
+    let mut missing = RawPackage::read(&outline_seed(2, 2)).unwrap();
+    let header = missing.read_text_entry("Contents/header.xml").unwrap();
+    let start = header.find("<hh:numberings ").unwrap();
+    let end = header.find("</hh:numberings>").unwrap() + 16;
+    missing.replace_text_entry(
+        "Contents/header.xml",
+        format!("{}<hh:numberings itemCnt='0'/>{}", &header[..start], &header[end..]),
+    );
+    let missing = missing.write().unwrap();
+    let decoded = HwpxDecoder::decode(&missing).unwrap();
+    assert_eq!(decoded.warnings.iter().filter(|w|matches!(w,crate::DecodeWarning::ContentLost{kind,..}if kind=="secPr.outlineShapeIDRef")).count(), 2);
+    assert!(decoded.source_basis.as_ref().unwrap().losses.is_empty());
+    outline_refused(&missing, &[ParagraphLocator { section: 0, index: 1 }]);
+    for id in ["4294967296", "invalid"] {
+        let base = replace(
+            &outline_input(),
+            "Contents/section1.xml",
+            "outlineShapeIDRef=\"2\"",
+            &format!("outlineShapeIDRef=\"{id}\""),
+        );
+        assert!(HwpxDecoder::decode(&base).is_err());
+    }
+}
+
+fn outline_check(
+    base: &[u8],
+    targets: &[ParagraphLocator],
+    change: impl FnOnce(&mut HwpxDocument),
+) -> crate::HwpxResult<()> {
+    let mut decoded = HwpxDecoder::decode(base)?;
+    change(&mut decoded);
+    let package = RawPackage::read(base)?;
+    preserved_loss::check_candidates(base, &package, &decoded)?;
+    let facts = crate::derived_values::DerivedFacts::collect(&package, &decoded)?;
+    let mut sections = std::collections::BTreeMap::<usize, Vec<_>>::new();
+    for target in targets {
+        sections
+            .entry(target.section)
+            .or_default()
+            .push(facts.body_ordinal(target.section, target.index)?);
+    }
+    let edits: Vec<_> = sections
+        .iter()
+        .map(|(&section, paragraphs)| crate::derived_values::DerivedEdit::Delete {
+            section,
+            paragraphs,
+        })
+        .collect();
+    let effects = facts.effects(&edits)?;
+    preserved_loss::check_locations(&decoded, &effects)
+}
+fn outline_change_heading(
+    base: &[u8],
+    inherited: bool,
+    kind: &str,
+    level: u32,
+    reference: u32,
+) -> Vec<u8> {
+    let decoded = HwpxDecoder::decode(base).unwrap();
+    let package = RawPackage::read(base).unwrap();
+    let shape = decoded.style_store.para_shape(ParaShapeIndex::new(0)).unwrap().clone();
+    let index = decoded.style_store.para_shape_count();
+    let mut store = decoded.style_store.clone();
+    store.push_para_shape(shape);
+    let encoded = crate::HwpxEncoder::encode(
+        &decoded.document.clone().validate().unwrap(),
+        &store,
+        &decoded.image_store,
+    )
+    .unwrap();
+    let mut header =
+        RawPackage::read(&encoded).unwrap().read_text_entry("Contents/header.xml").unwrap();
+    let marker = format!("<hh:paraPr id=\"{index}\"");
+    let start = header.find(&marker).unwrap();
+    let end = start + header[start..].find("</hh:paraPr>").unwrap() + 12;
+    let fragment = &header[start..end];
+    let changed = fragment.replace(
+        "<hh:heading type=\"NONE\" idRef=\"0\" level=\"0\"",
+        &format!("<hh:heading type=\"{kind}\" idRef=\"{reference}\" level=\"{level}\""),
+    );
+    assert_ne!(fragment, changed);
+    header.replace_range(start..end, &changed);
+    let mut result = package;
+    if inherited {
+        let at = header.find("<hh:style ").unwrap();
+        let end = at + header[at..].find("/>").unwrap() + 2;
+        let style =
+            header[at..end].replace("paraPrIDRef=\"0\"", &format!("paraPrIDRef=\"{index}\""));
+        header.replace_range(at..end, &style);
+    } else {
+        let source = result.read_text_entry("Contents/section0.xml").unwrap();
+        let span = &decoded.source_maps[0].paragraphs[1].outer;
+        let changed =
+            source[span.clone()].replace("paraPrIDRef=\"0\"", &format!("paraPrIDRef=\"{index}\""));
+        result.replace_text_entry(
+            "Contents/section0.xml",
+            format!("{}{}{}", &source[..span.start], changed, &source[span.end..]),
+        );
+    }
+    result.replace_text_entry("Contents/header.xml", header);
+    result.write().unwrap()
+}
+
+// 이것을 실패시키는 것: 개요 근거 없는 scalar 입력에도 heading 제한을 적용하거나 결과/오류를 훼손.
+fn outline_legacy_heading_control(base: &[u8]) {
+    use crate::decoder::preserved_loss::LossCause;
+    let input = scalar(base);
+    let decoded = HwpxDecoder::decode(&input).unwrap();
+    let losses = &decoded.source_basis.as_ref().unwrap().losses;
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0].cause, LossCause::PerLanguageScalar);
+    let targets = [ParagraphLocator { section: 0, index: 1 }];
+    outline_check(&input, &targets, |_| {}).unwrap();
+    // The pre-outline implementation succeeds for all six paired inputs.
+    // Compare every output byte and warning, not only the result variant.
+    let out =
+        HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&input, &targets).unwrap();
+    assert_eq!(out.decode_warnings, decoded.warnings);
+    assert!(out.encode_warnings.is_empty());
+    let mut expected = RawPackage::read(&input).unwrap();
+    let mut section = expected.read_text_entry("Contents/section0.xml").unwrap();
+    section.replace_range(decoded.source_maps[0].paragraphs[1].outer.clone(), "");
+    expected.replace_text_entry("Contents/section0.xml", section);
+    assert_eq!(out.value, expected.write().unwrap());
+}
+
+// 이것을 실패시키는 것: 직접 heading/Core heading 검사 제거.
+#[test]
+fn outline_direct_heading_refused() {
+    for kind in ["OUTLINE", "NUMBER", "BULLET"] {
+        let input = outline_change_heading(&outline_input(), false, kind, 0, 1);
+        // 이것을 실패시키는 것: heading을 가진 삭제 문단만 새 내부 검사에서 건너뛰기.
+        assert!(
+            outline_check(&input, &[ParagraphLocator { section: 0, index: 1 }], |_| {}).is_err()
+        );
+        outline_refused(&input, &[ParagraphLocator { section: 0, index: 1 }]);
+        let control = replace(
+            &input,
+            "Contents/section1.xml",
+            "outlineShapeIDRef=\"2\"",
+            "outlineShapeIDRef=\"1\"",
+        );
+        outline_legacy_heading_control(&control);
+        outline_check(&control, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+            d.document.sections_mut()[0].paragraphs[1].heading_level = Some(1)
+        })
+        .unwrap();
+    }
+    assert!(outline_check(&outline_input(), &[ParagraphLocator { section: 0, index: 1 }], |d| d
+        .document
+        .sections_mut()[0]
+        .paragraphs[1]
+        .heading_level =
+        Some(1))
+    .is_err());
+    let title = replace(
+        &outline_input(),
+        "Contents/section0.xml",
+        "<hp:t>0 delete</hp:t>",
+        "<hp:titleMark ignore='false'/><hp:t>0 delete</hp:t>",
+    );
+    assert_eq!(
+        HwpxDecoder::decode(&title).unwrap().document.sections()[0].paragraphs[1].heading_level,
+        Some(1)
+    );
+    // 이것을 실패시키는 것: 원문 titleMark가 있는 삭제 문단만 내부 검사에서 건너뛰기.
+    assert!(outline_check(&title, &[ParagraphLocator { section: 0, index: 1 }], |_| {}).is_err());
+    outline_refused(&title, &[ParagraphLocator { section: 0, index: 1 }]);
+}
+// 이것을 실패시키는 것: 스타일 경유 heading 또는 스타일 이름 heading 검사 제거.
+#[test]
+fn outline_inherited_heading_refused() {
+    for kind in ["OUTLINE", "NUMBER", "BULLET"] {
+        let input = outline_change_heading(&outline_input(), true, kind, 0, 1);
+        // 이것을 실패시키는 것: heading을 가진 삭제 문단만 새 내부 검사에서 건너뛰기.
+        assert!(
+            outline_check(&input, &[ParagraphLocator { section: 0, index: 1 }], |_| {}).is_err()
+        );
+        outline_refused(&input, &[ParagraphLocator { section: 0, index: 1 }]);
+        let control = replace(
+            &input,
+            "Contents/section1.xml",
+            "outlineShapeIDRef=\"2\"",
+            "outlineShapeIDRef=\"1\"",
+        );
+        outline_legacy_heading_control(&control);
+        outline_check(&control, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+            d.document.sections_mut()[0].paragraphs[1].heading_level = Some(1)
+        })
+        .unwrap();
+    }
+    let input =
+        replace(&outline_input(), "Contents/header.xml", "name=\"Plain\"", "name=\"개요 1\"");
+    assert!(outline_check(&input, &[ParagraphLocator { section: 0, index: 1 }], |_| {}).is_err());
+    outline_refused(&input, &[ParagraphLocator { section: 0, index: 1 }]);
+}
+// 이것을 실패시키는 것: strict 목록/스타일 조회를 lossy para_list 또는 기본 스타일로 치환.
+#[test]
+fn outline_unknown_list_and_style_refused() {
+    use hwpforge_core::StyleLookup;
+    for (kind, level, reference) in
+        [("OUTLINE", 10, 0), ("NUMBER", 10, 1), ("BULLET", 10, 1), ("UNKNOWN", 0, 0)]
+    {
+        let input = outline_change_heading(&outline_input(), false, kind, level, reference);
+        let decoded = HwpxDecoder::decode(&input).unwrap();
+        let id = decoded.document.sections()[0].paragraphs[1].para_shape_id;
+        let shape = decoded.style_store.para_shape(id).unwrap();
+        assert!(decoded.style_store.para_list(id).is_none());
+        // Unknown headings retain their independent decode loss; known invalid lists return Err.
+        assert_eq!(decoded.style_store.para_list_ref(shape).is_err(), kind != "UNKNOWN");
+        outline_refused(&input, &[ParagraphLocator { section: 0, index: 1 }]);
+    }
+    let base = outline_input();
+    let char_style = replace(
+        &base,
+        "Contents/header.xml",
+        "type=\"PARA\" name=\"Plain\"",
+        "type=\"CHAR\" name=\"Plain\"",
+    );
+    outline_refused(&char_style, &[ParagraphLocator { section: 0, index: 1 }]);
+    for change in [0, 1, 2] {
+        assert!(outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+            let p = &mut d.document.sections_mut()[0].paragraphs[1];
+            match change {
+                0 => p.style_ref = None,
+                1 => p.para_shape_id = ParaShapeIndex::new(99),
+                _ => p.style_ref = Some(hwpforge_foundation::StyleRef::new(99)),
+            }
+        })
+        .is_err());
+    }
+    for (from, to) in
+        [("paraPrIDRef=\"0\"", "paraPrIDRef=\"999\""), ("styleIDRef=\"0\"", "styleIDRef=\"999\"")]
+    {
+        let input = replace(&base, "Contents/section0.xml", from, to);
+        assert!(HwpxDecoder::decode(&input).is_err());
+    }
+}
+
+// 이것을 실패시키는 것: StyleRef::get()을 wire 위치로 사용.
+#[test]
+fn outline_style_reference_is_not_position() {
+    let base = outline_input();
+    outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+        let mut value = serde_json::to_value(&d.style_store).unwrap();
+        let positions = value["style_positions"].as_array_mut().unwrap();
+        positions.swap(0, 1);
+        d.style_store = serde_json::from_value(value).unwrap();
+        d.document.sections_mut()[0].paragraphs[1].style_ref = d.style_store.style_ref_at(0);
+        assert_ne!(d.document.sections()[0].paragraphs[1].style_ref.unwrap().get(), 0);
+    })
+    .unwrap();
+    assert!(outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+        let mut value = serde_json::to_value(&d.style_store).unwrap();
+        value["style_positions"].as_array_mut().unwrap().swap(0, 1);
+        value["styles"][0]["name"] = "개요 1".into();
+        d.style_store = serde_json::from_value(value).unwrap();
+        d.document.sections_mut()[0].paragraphs[1].style_ref = d.style_store.style_ref_at(0);
+    })
+    .is_err());
+}
+
+// 이것을 실패시키는 것: 첫 문단만 검사 또는 any(NONE)으로 배치 승인.
+#[test]
+fn outline_all_deleted_paragraphs_checked() {
+    let base = replace(
+        &outline_seed(3, 2),
+        "Contents/section2.xml",
+        "outlineShapeIDRef=\"1\"",
+        "outlineShapeIDRef=\"2\"",
+    );
+    let targets = [
+        ParagraphLocator { section: 0, index: 1 },
+        ParagraphLocator { section: 0, index: 2 },
+        ParagraphLocator { section: 1, index: 1 },
+    ];
+    HwpxStructuralEditor::delete_paragraphs(&base, &targets).unwrap();
+    for target in targets {
+        let changed = outline_change_heading(&base, false, "NUMBER", 0, 1);
+        let heading = HwpxDecoder::decode(&changed).unwrap().document.sections()[0].paragraphs[1]
+            .para_shape_id
+            .get();
+        let mut package = RawPackage::read(&changed).unwrap();
+        package.replace_text_entry(
+            "Contents/section0.xml",
+            RawPackage::read(&base).unwrap().read_text_entry("Contents/section0.xml").unwrap(),
+        );
+        let part = format!("Contents/section{}.xml", target.section);
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        let source = package.read_text_entry(&part).unwrap();
+        let span = &decoded.source_maps[target.section].paragraphs[target.index].outer;
+        let paragraph = source[span.clone()]
+            .replace("paraPrIDRef=\"0\"", &format!("paraPrIDRef=\"{heading}\""));
+        package.replace_text_entry(
+            &part,
+            format!("{}{}{}", &source[..span.start], paragraph, &source[span.end..]),
+        );
+        outline_refused(&package.write().unwrap(), &targets);
+        assert!(outline_check(&base, &targets, |d| d.document.sections_mut()[target.section]
+            .paragraphs[target.index]
+            .heading_level = Some(1))
+        .is_err());
+    }
+}
+
+// 이것을 실패시키는 것: 동일 secPr 중복 허용 또는 source map section 소유 덮어쓰기.
+#[test]
+fn outline_each_section_needs_its_own_evidence() {
+    use crate::decoder::preserved_loss::{LossCause, LossLocation};
+    let base = replace(
+        &outline_seed(3, 2),
+        "Contents/section1.xml",
+        "outlineShapeIDRef=\"1\"",
+        "outlineShapeIDRef=\"2\"",
+    );
+    let base = replace(
+        &base,
+        "Contents/section2.xml",
+        "outlineShapeIDRef=\"1\"",
+        "outlineShapeIDRef=\"2\"",
+    );
+    let d = HwpxDecoder::decode(&base).unwrap();
+    let losses = &d.source_basis.as_ref().unwrap().losses;
+    assert_eq!(losses.len(), 2);
+    for (i, loss) in losses.iter().enumerate() {
+        assert_eq!(loss.warning, i);
+        assert_eq!(loss.cause, LossCause::SectionOutlineSelection);
+        let LossLocation::SectionProperty { part, span, digest } = &loss.location else { panic!() };
+        assert_eq!(part, &format!("Contents/section{}.xml", i + 1));
+        let xml = RawPackage::read(&base).unwrap().read_text_entry(part).unwrap();
+        use sha2::Digest;
+        assert_eq!(span.start, xml.find("<hp:secPr ").unwrap());
+        assert_eq!(span.end, xml.find("</hp:secPr>").unwrap() + 11);
+        assert_eq!(*digest, <[u8; 32]>::from(sha2::Sha256::digest(&xml.as_bytes()[span.clone()])));
+    }
+    HwpxStructuralEditor::delete_paragraphs(&base, &[ParagraphLocator { section: 0, index: 1 }])
+        .unwrap();
+    for change in ["missing", "copied", "same-property", "owner"] {
+        assert!(
+            outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+                let basis = std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap());
+                match change {
+                    "missing" => {
+                        basis.losses.pop();
+                    }
+                    "copied" => basis.losses[1].location = basis.losses[0].location.clone(),
+                    "same-property" => {
+                        basis.losses[1].location = basis.losses[0].location.clone();
+                        let crate::DecodeWarning::ContentLost { part, .. } = &mut d.warnings[1]
+                        else {
+                            panic!()
+                        };
+                        *part = "Contents/section1.xml".into();
+                    }
+                    "owner" => d.source_maps[2] = d.source_maps[1].clone(),
+                    _ => unreachable!(),
+                }
+            })
+            .is_err(),
+            "{change}"
+        );
+    }
+    let mut duplicate = HwpxDecoder::decode(&base).unwrap();
+    let basis = std::sync::Arc::make_mut(duplicate.source_basis.as_mut().unwrap());
+    basis.losses[1].location = basis.losses[0].location.clone();
+    let crate::DecodeWarning::ContentLost { part, .. } = &mut duplicate.warnings[1] else {
+        panic!()
+    };
+    *part = "Contents/section1.xml".into();
+    assert!(preserved_loss::check_candidates(&base, &RawPackage::read(&base).unwrap(), &duplicate)
+        .is_err());
+}
+
+// 이것을 실패시키는 것: package/span digest·cause/location 짝·index·kind·part 대조 각각 생략.
+#[test]
+fn outline_private_evidence_is_one_to_one() {
+    use crate::decoder::preserved_loss::{LossCause, LossLocation};
+    let base = scalar(&outline_input());
+    for change in [
+        "missing",
+        "extra",
+        "index",
+        "order",
+        "kind",
+        "part",
+        "span-start",
+        "span-end",
+        "digest",
+        "cause",
+        "cause-with-kind",
+        "span-cropped-digest",
+        "body",
+        "run",
+        "package-part",
+    ] {
+        assert!(
+            outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+                let basis = std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap());
+                assert_eq!(basis.losses.len(), 2);
+                match change {
+                    "missing" => {
+                        basis.losses.pop();
+                    }
+                    "extra" => basis.losses.push(basis.losses[1].clone()),
+                    "index" => basis.losses[1].warning = 99,
+                    "order" => basis.losses.swap(0, 1),
+                    "kind" => {
+                        let crate::DecodeWarning::ContentLost { kind, .. } = &mut d.warnings[1]
+                        else {
+                            panic!()
+                        };
+                        *kind = "unknown".into();
+                    }
+                    "part" => {
+                        let crate::DecodeWarning::ContentLost { part, .. } = &mut d.warnings[1]
+                        else {
+                            panic!()
+                        };
+                        *part = "Contents/section0.xml".into();
+                    }
+                    "cause" => basis.losses[1].cause = LossCause::InlineStyle,
+                    "cause-with-kind" => {
+                        basis.losses[1].cause = LossCause::InlineStyle;
+                        let crate::DecodeWarning::ContentLost { kind, .. } = &mut d.warnings[1]
+                        else {
+                            panic!()
+                        };
+                        *kind = "t.charStyleIDRef".into();
+                    }
+                    "span-cropped-digest" => {
+                        let LossLocation::SectionProperty { part, span, digest } =
+                            &mut basis.losses[1].location
+                        else {
+                            panic!()
+                        };
+                        span.end -= 1;
+                        let source =
+                            RawPackage::read(&base).unwrap().read_text_entry(part).unwrap();
+                        use sha2::Digest;
+                        *digest = sha2::Sha256::digest(&source.as_bytes()[span.clone()]).into();
+                    }
+                    "body" => {
+                        let LossLocation::SectionProperty { part, span, digest } =
+                            basis.losses[1].location.clone()
+                        else {
+                            panic!()
+                        };
+                        basis.losses[1].location = LossLocation::Body { part, span, digest };
+                    }
+                    "run" => {
+                        let LossLocation::SectionProperty { span, .. } =
+                            &mut basis.losses[1].location
+                        else {
+                            panic!()
+                        };
+                        *span = d.source_maps[1]
+                            .nodes()
+                            .find(|n| n.kind() == hwpforge_core::node_path::NodeKind::Run)
+                            .unwrap()
+                            .ranges()[0]
+                            .clone();
+                    }
+                    _ => {
+                        let LossLocation::SectionProperty { part, span, digest } =
+                            &mut basis.losses[1].location
+                        else {
+                            panic!()
+                        };
+                        match change {
+                            "span-start" => span.start += 1,
+                            "span-end" => span.end -= 1,
+                            "digest" => digest[0] ^= 1,
+                            "package-part" => *part = "Contents/header.xml".into(),
+                            _ => unreachable!(),
+                        };
+                    }
+                }
+            })
+            .is_err(),
+            "{change}"
+        );
+    }
+    let (mut extra, package, _) = admit_delete(&base).unwrap();
+    let basis = std::sync::Arc::make_mut(extra.source_basis.as_mut().unwrap());
+    basis.losses.push(basis.losses[1].clone());
+    assert!(preserved_loss::check_candidates(&base, &package, &extra).is_err());
+    let (mut d, p, _) = admit_delete(&base).unwrap();
+    assert!(preserved_loss::check_candidates(&outline_input(), &p, &d).is_err());
+    let basis = std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap());
+    let LossLocation::SectionProperty { part, .. } = &mut basis.losses[1].location else {
+        panic!()
+    };
+    *part = "Contents/header.xml".into();
+    let crate::DecodeWarning::ContentLost { part, .. } = &mut d.warnings[1] else { panic!() };
+    *part = "Contents/header.xml".into();
+    assert!(preserved_loss::check_candidates(&base, &p, &d).is_err());
+    let mixed = inline(&scalar(&outline_input()), "0 survive");
+    outline_check(&mixed, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+        assert_eq!(
+            d.source_basis.as_ref().unwrap().losses.iter().map(|l| l.cause).collect::<Vec<_>>(),
+            [
+                LossCause::PerLanguageScalar,
+                LossCause::InlineStyle,
+                LossCause::SectionOutlineSelection
+            ]
+        );
+    })
+    .unwrap();
+    for index in [1, 2] {
+        assert!(outline_check(&mixed, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+            let loss =
+                &mut std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap()).losses[index];
+            match &mut loss.location {
+                LossLocation::Body { digest, .. }
+                | LossLocation::SectionProperty { digest, .. } => digest[0] ^= 1,
+                _ => panic!(),
+            }
+        })
+        .is_err());
+    }
+}
+
+// 이것을 실패시키는 것: reason의 validated numbering 문구로 면제.
+#[test]
+fn outline_warning_text_is_not_policy() {
+    let base = outline_input();
+    outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+        let crate::DecodeWarning::ContentLost { reason, .. } = &mut d.warnings[0] else { panic!() };
+        *reason = "opaque unrelated sentence".into();
+    })
+    .unwrap();
+    assert!(outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+        std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap()).losses.clear();
+        let crate::DecodeWarning::ContentLost { reason, .. } = &mut d.warnings[0] else { panic!() };
+        *reason = "validated numbering 2".into();
+    })
+    .is_err());
+}
+// 이것을 실패시키는 것: package 근거가 section 근거를 대체 또는 전역 warning offset 중복.
+#[test]
+fn outline_and_script_evidence_coexist() {
+    use crate::decoder::preserved_loss::LossCause;
+    let base =
+        scripts(&outline_input(), "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>");
+    let d = HwpxDecoder::decode(&base).unwrap();
+    assert_eq!(
+        d.source_basis
+            .as_ref()
+            .unwrap()
+            .losses
+            .iter()
+            .map(|l| (l.warning, l.cause))
+            .collect::<Vec<_>>(),
+        [(0, LossCause::ScriptAuxiliaryOrder), (1, LossCause::SectionOutlineSelection)]
+    );
+    HwpxStructuralEditor::delete_paragraphs(&base, &[ParagraphLocator { section: 0, index: 1 }])
+        .unwrap();
+    for change in [0, 1, 2] {
+        assert!(outline_check(&base, &[ParagraphLocator { section: 0, index: 1 }], |d| {
+            let basis = std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap());
+            match change {
+                0 | 1 => {
+                    basis.losses.remove(change);
+                }
+                _ => basis.losses.swap(0, 1),
+            }
+        })
+        .is_err());
+    }
+}
+
+// 이것을 실패시키는 것: 최종 보존/Preview 검증 또는 원래 admission 오류 복원 생략.
+#[test]
+fn outline_final_payload_corruption_refused() {
+    let base = scalar(&scripts(
+        &outline_input(),
+        "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>",
+    ));
+    let d = HwpxDecoder::decode(&base).unwrap();
+    let output = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap();
+    let mut expected = d.document.clone();
+    expected.sections_mut()[0].paragraphs.remove(1);
+    let changes = crate::raw_package::OutputChanges {
+        rewritten: vec!["Contents/section0.xml".into()],
+        ..Default::default()
+    };
+    for (part, from, to) in [
+        ("Scripts/headerScripts.js", "/\0/\0h\0", "/\0/\0x\0"),
+        (
+            "Contents/content.hpf",
+            "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>",
+            "<opf:itemref idref='aux-s'/><opf:itemref idref='aux-h'/>",
+        ),
+        ("Contents/header.xml", "latin=\"91\"", "latin=\"87\""),
+        ("Contents/section0.xml", "outlineShapeIDRef=\"1\"", "outlineShapeIDRef=\"0\""),
+        ("Contents/section1.xml", "outlineShapeIDRef=\"2\"", "outlineShapeIDRef=\"0\""),
+        ("Contents/section1.xml", "<hp:grid ", "<hp:grid changed='1' "),
+        ("Contents/section1.xml", "survive", "survivx"),
+        ("Contents/header.xml", "^1가)", "^1나)"),
+    ] {
+        let altered = replace(&output, part, from, to);
+        let change = SectionChange {
+            section: 0,
+            path: "Contents/section0.xml".into(),
+            original: xml(&base),
+            deleted: vec![1],
+            inserted: None,
+            ids: ParagraphIds::Preserve,
+            heights: vec![],
+        };
+        assert!(
+            finish_edit(
+                &base,
+                RawPackage::read(&altered).unwrap(),
+                &d,
+                expected.clone(),
+                &changes,
+                &[change]
+            )
+            .is_err(),
+            "{part}"
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 최종 보존/Preview 검증 또는 원래 admission 오류 복원 생략.
+#[test]
+fn outline_preview_removal_is_bounded() {
+    let base = extra(
+        &extra(
+            &scripts(&outline_input(), "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>"),
+            "Preview/PrvText.txt",
+            b"preview",
+        ),
+        "Preview/PrvImage.png",
+        b"image",
+    );
+    let item = "<opf:item id='prv' href='Preview/PrvText.txt' media-type='text/plain'/>";
+    let root = "<ocf:rootfile full-path='Preview/PrvText.txt' media-type='text/plain'/>";
+    let base = replace(
+        &base,
+        "Contents/content.hpf",
+        "</opf:manifest>",
+        &format!("{item}</opf:manifest>"),
+    );
+    let base = replace(
+        &base,
+        "META-INF/container.xml",
+        "</ocf:rootfiles>",
+        &format!("{root}</ocf:rootfiles>"),
+    );
+    let out =
+        HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&base, &[TARGET]).unwrap();
+    assert_eq!(out.encode_warnings.len(), 1);
+    assert_eq!(out.encode_warnings[0].code(), "PREVIEW_REMOVED");
+    let before = RawPackage::read(&base).unwrap();
+    let after = RawPackage::read(&out.value).unwrap();
+    assert!(!after.entry_paths().any(|p| p.starts_with("Preview/")));
+    for (part, removed) in [("Contents/content.hpf", item), ("META-INF/container.xml", root)] {
+        assert_eq!(
+            after.read_text_entry(part).unwrap(),
+            before.read_text_entry(part).unwrap().replace(removed, "")
+        );
+    }
+    for part in [
+        "Contents/header.xml",
+        "Scripts/headerScripts.js",
+        "Scripts/sourceScripts.js",
+        "Contents/section1.xml",
+    ] {
+        assert_eq!(before.read_entry(part).unwrap(), after.read_entry(part).unwrap());
+    }
+}
+
+// 이것을 실패시키는 것: 최종 보존/Preview 검증 또는 원래 admission 오류 복원 생략.
+#[test]
+fn outline_original_admission_error_and_noop() {
+    let base =
+        scripts(&outline_input(), "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>");
+    let out = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&base, &[]).unwrap();
+    assert_eq!(out.value, base);
+    assert!(out.decode_warnings.is_empty());
+    assert!(out.encode_warnings.is_empty());
+    let expected = original_error(&base);
+    for gate in [
+        "header",
+        "plain-source",
+        "derived-heights",
+        "package-final",
+        "source-final",
+        "preview-final",
+    ] {
+        failures(&[gate]);
+        let actual = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap_err();
+        assert_eq!(actual, expected);
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        assert_eq!(actual.to_string(), expected.to_string());
+        assert!(visits().contains(&gate));
+    }
+    failures(&[]);
+}
+
+// 이것을 실패시키는 것: 개요 근거가 다른 ContentLost 또는 비선형 body 손실까지 면제.
+#[test]
+fn outline_other_losses_and_nonlinear_remain_refused() {
+    let base = outline_input();
+    for content in [
+        "<hp:ctrl><hp:autoNum num='1' numType='UNKNOWN'/></hp:ctrl>",
+        "<hp:ctrl><hp:fieldBegin id='10' type='CROSSREF' dirty='0'><hp:parameters><hp:stringParam name='RefType'>TARGET_OUTLINE</hp:stringParam><hp:stringParam name='RefContentType'>OBJECT_TYPE_NUMBER</hp:stringParam><hp:stringParam name='RefPath'>?mark;</hp:stringParam></hp:parameters></hp:fieldBegin></hp:ctrl><hp:t>3</hp:t><hp:ctrl><hp:fieldEnd beginIDRef='10'/></hp:ctrl>",
+        "<hp:ole id='1'/>",
+    ] {
+        let input=replace(&base,"Contents/section0.xml","<hp:t>0 survive</hp:t>",content);
+        outline_refused(&input,&[ParagraphLocator {section:0,index:1}]);
+    }
+    let input = replace(
+        &base,
+        "Contents/header.xml",
+        "<hh:heading type=\"NONE\"",
+        "<hh:heading type=\"UNKNOWN\"",
+    );
+    outline_refused(&input, &[ParagraphLocator { section: 0, index: 1 }]);
+    for nonlinearity in [0, 1] {
+        let input = replace(
+            &base,
+            "Contents/content.hpf",
+            &format!("idref=\"section{nonlinearity}\" linear=\"yes\""),
+            &format!("idref=\"section{nonlinearity}\" linear=\"no\""),
+        );
+        for target in [0, 1] {
+            outline_refused(&input, &[ParagraphLocator { section: target, index: 1 }]);
+            let combined =
+                scripts(&input, "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>");
+            outline_refused(&combined, &[ParagraphLocator { section: target, index: 1 }]);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: recorder 없는 auxiliary 호출에 section 위치를 추정하여 생성.
+#[test]
+fn outline_masterpage_and_header_have_no_evidence() {
+    use hwpforge_core::section::MasterPage;
+    use hwpforge_foundation::ApplyPageType;
+    let d = HwpxDecoder::decode(&outline_seed(2, 2)).unwrap();
+    let mut doc = d.document;
+    doc.sections_mut()[0].master_pages =
+        Some(vec![MasterPage::new(ApplyPageType::Both, vec![paragraph("master")])]);
+    let base = crate::HwpxEncoder::encode(&doc.validate().unwrap(), &d.style_store, &d.image_store)
+        .unwrap();
+    let mut package = RawPackage::read(&base).unwrap();
+    let properties = package.read_text_entry("Contents/section1.xml").unwrap();
+    let a = properties.find("<hp:secPr ").unwrap();
+    let b = properties.find("</hp:secPr>").unwrap() + 11;
+    let properties = properties[a..b].replace("outlineShapeIDRef=\"1\"", "outlineShapeIDRef=\"2\"");
+    let master = package
+        .entry_paths()
+        .find(|p| p.contains("masterpage") && p.ends_with(".xml"))
+        .unwrap()
+        .to_string();
+    let xml = package
+        .read_text_entry(&master)
+        .unwrap()
+        .replace("<hp:t>master</hp:t>", &format!("{properties}<hp:t>master</hp:t>"));
+    package.replace_text_entry(&master, xml);
+    let base = extra(&package.write().unwrap(), "Scripts/opaque.bin", b"payload");
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    assert!(decoded.warnings.iter().any(|w|matches!(w,crate::DecodeWarning::ContentLost{kind,..} if kind=="secPr.outlineShapeIDRef")));
+    assert!(decoded.source_basis.as_ref().unwrap().losses.is_empty());
+    outline_refused(&base, &[ParagraphLocator { section: 0, index: 1 }]);
+    let refs = crate::header_references::HeaderReferences::build(&decoded.style_store).unwrap();
+    for part in ["Contents/header.xml", "Contents/masterpage0.xml"] {
+        assert_eq!(refs.validate_auxiliary_xml("<hp:secPr xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' outlineShapeIDRef='2'/>",part).unwrap().len(),1);
+    }
+}
+
+// 이것을 실패시키는 것: 번호/표 높이/줄 cache gate 우회.
+#[test]
+fn outline_tables_and_caches_stay_scoped() {
+    let base = outline_input();
+    let auto = |kind, format| {
+        format!("<hp:ctrl><hp:autoNum num='0' numType='{kind}'><hp:autoNumFormat type='{format}' userChar='' prefixChar='' suffixChar='' supscript='0'/></hp:autoNum></hp:ctrl>")
+    };
+    for kind in ["PAGE", "TOTAL_PAGE"] {
+        let good =
+            replace(&base, "Contents/section0.xml", "<hp:t>0 survive</hp:t>", &auto(kind, "DIGIT"));
+        HwpxStructuralEditor::delete_paragraphs(
+            &good,
+            &[ParagraphLocator { section: 0, index: 1 }],
+        )
+        .unwrap();
+        let bad = replace(
+            &base,
+            "Contents/section0.xml",
+            "<hp:t>0 survive</hp:t>",
+            &auto(kind, "UNKNOWN"),
+        );
+        outline_refused(&bad, &[ParagraphLocator { section: 0, index: 1 }]);
+    }
+    for policy in ["CONTINUOUS", "ON_SECTION", "ON_PAGE", "UNKNOWN"] {
+        let note=format!("<hp:footNotePr><hp:numbering type='{policy}'/></hp:footNotePr><hp:ctrl><hp:footNote number='1'><hp:subList><hp:p><hp:run><hp:t>note</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl>");
+        let bad = replace(&base, "Contents/section0.xml", "<hp:t>0 survive</hp:t>", &note);
+        outline_refused(&bad, &[ParagraphLocator { section: 0, index: 1 }]);
+    }
+    let mut pkg = RawPackage::read(&base).unwrap();
+    pkg.replace_text_entry("Contents/section0.xml", xml(&table_base()));
+    let table = pkg.write().unwrap();
+    let output = HwpxStructuralEditor::delete_paragraphs(
+        &table,
+        &[ParagraphLocator { section: 0, index: 1 }],
+    )
+    .unwrap();
+    let source = xml(&output);
+    assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 1);
+    assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 1);
+    assert_eq!(source.matches("<hp:linesegarray>").count(), 3);
+    let mut bad = RawPackage::read(&table).unwrap();
+    bad.replace_text_entry(
+        "Contents/section0.xml",
+        xml(&table).replace("treatAsChar=\"0\"", "treatAsChar=\"1\""),
+    );
+    let bad = bad.write().unwrap();
+    outline_refused(&bad, &[ParagraphLocator { section: 0, index: 1 }]);
+}
+
+// 이것을 실패시키는 것: outline 입력군에서 stamp/patch/fill/insert 성공 결과의 payload 한 바이트 변경 또는 경고 삭제.
+// 손실 입력의 오류 비교와 일반 re-encode의 선택 정규화도 유지한다.
+#[test]
+fn outline_other_editors_and_reencode_unchanged() {
+    let mut successes = [0; 4];
+    for (base, has_loss, expected) in [
+        (outline_input(), true, [false, true, false, false]),
+        (scalar(&outline_input()), true, [false, true, false, false]),
+        (
+            scripts(&outline_input(), "<opf:itemref idref='aux-h'/><opf:itemref idref='aux-s'/>"),
+            true,
+            [false, true, false, false],
+        ),
+        // No loss or opaque payload; the input/control differ only by an XML comment.
+        (
+            replace(
+                &editor_control(&outline_input(), "outline editor control"),
+                "Contents/content.hpf",
+                "</opf:metadata>",
+                "</opf:metadata><!--outline editor control-->",
+            ),
+            false,
+            [true, true, true, true],
+        ),
+    ] {
+        let control = if has_loss {
+            replace(
+                &base,
+                "Contents/section1.xml",
+                "outlineShapeIDRef=\"2\"",
+                "outlineShapeIDRef=\"1\"",
+            )
+        } else {
+            replace(&base, "Contents/content.hpf", "<!--outline editor control-->", "")
+        };
+        let d = HwpxDecoder::decode(&base).unwrap();
+        let c = HwpxDecoder::decode(&control).unwrap();
+        assert_eq!(d.document, c.document);
+        assert_eq!(d.style_store, c.style_store);
+        assert_eq!(d.image_store, c.image_store);
+        let reencode = |d: &HwpxDocument| {
+            crate::HwpxEncoder::encode_with_diagnostics(
+                &d.document.clone().validate().unwrap(),
+                &d.style_store,
+                &d.image_store,
+                crate::EncodeOptions::default(),
+            )
+            .unwrap()
+        };
+        let a = reencode(&d);
+        let b = reencode(&c);
+        assert_eq!(a.bytes, b.bytes);
+        assert_eq!(a.warnings, b.warnings);
+        assert!(RawPackage::read(&a.bytes)
+            .unwrap()
+            .read_text_entry("Contents/section1.xml")
+            .unwrap()
+            .contains("outlineShapeIDRef=\"1\""));
+        let normalize = |path: &str, bytes: &[u8]| {
+            if has_loss && path == "Contents/section1.xml" {
+                assert_eq!(bytes, RawPackage::read(&base).unwrap().read_entry(path).unwrap());
+                std::str::from_utf8(bytes)
+                    .unwrap()
+                    .replace("outlineShapeIDRef=\"2\"", "outlineShapeIDRef=\"1\"")
+                    .into_bytes()
+            } else if path == "Contents/content.hpf" {
+                std::str::from_utf8(bytes)
+                    .unwrap()
+                    .replace("<!--outline editor control-->", "")
+                    .into_bytes()
+            } else {
+                bytes.to_vec()
+            }
+        };
+        assert_editor_result(
+            ("stamp", expected[0], &mut successes[0]),
+            &base,
+            &control,
+            crate::stamp::HwpxStamper::stamp_with_diagnostics(&base, &[]),
+            crate::stamp::HwpxStamper::stamp_with_diagnostics(&control, &[]),
+            normalize,
+            |r, input| {
+                assert_eq!(r.manifest.source_sha256, crate::patch::sha256_hex(input));
+                assert_eq!(r.manifest.output_sha256, crate::patch::sha256_hex(&r.bytes));
+                (
+                    &r.bytes,
+                    (
+                        r.manifest.schema_version,
+                        serde_json::to_value(&r.manifest.fields).unwrap(),
+                        r.outcome.clone(),
+                    ),
+                )
+            },
+        );
+        let patch = |input: &[u8], d: &HwpxDocument| {
+            let mut section = d.document.sections()[0].clone();
+            section.paragraphs[1] = paragraph("edited\u{1}");
+            let p = crate::HwpxPatcher::export_section_preservation(
+                input,
+                0,
+                &d.document.sections()[0],
+            )
+            .unwrap();
+            crate::HwpxPatcher::patch_section_preserving_with_codec_diagnostics(
+                input,
+                0,
+                &section,
+                None,
+                Some(&p),
+            )
+        };
+        assert_editor_result(
+            ("patch", expected[1], &mut successes[1]),
+            &base,
+            &control,
+            patch(&base, &d),
+            patch(&control, &c),
+            normalize,
+            |bytes, _| (bytes, ()),
+        );
+        let fills = [("field".into(), "value".into())].into();
+        assert_editor_result(
+            ("fill", expected[2], &mut successes[2]),
+            &base,
+            &control,
+            crate::HwpxFiller::fill_with_codec_diagnostics(&base, &fills),
+            crate::HwpxFiller::fill_with_codec_diagnostics(&control, &fills),
+            normalize,
+            |r, _| (&r.bytes, serde_json::to_value(&r.filled).unwrap()),
+        );
+        assert_editor_result(
+            ("insert", expected[3], &mut successes[3]),
+            &base,
+            &control,
+            HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
+                &base,
+                ParagraphLocator { section: 0, index: 1 },
+                InsertPosition::After,
+                &["insert".into()],
+            ),
+            HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
+                &control,
+                ParagraphLocator { section: 0, index: 1 },
+                InsertPosition::After,
+                &["insert".into()],
+            ),
+            normalize,
+            |bytes, _| (bytes, ()),
+        );
+    }
+    assert_eq!(successes, [1, 4, 1, 1], "stamp/patch/fill/insert success counts");
+    assert!(successes.into_iter().all(|count| count >= 1));
+}
+
+// 이것을 실패시키는 것: 개요 손실 근거마다 전체 source map을 다시 순회.
+// 삭제 문단/InlineStyle 손실 축과 개요 손실 구역 축을 각각 두 배로 늘린다.
+#[test]
+fn outline_work_is_bounded() {
+    let measure = |n: usize, outline_sections: usize| {
+        let base = outline_seed(outline_sections + 1, 2);
+        let mut package = RawPackage::read(&base).unwrap();
+        let source = package.read_text_entry("Contents/section0.xml").unwrap();
+        let d = HwpxDecoder::decode(&base).unwrap();
+        let fragment = &source[d.source_maps[0].paragraphs[2].outer.clone()];
+        package.replace_text_entry(
+            "Contents/section0.xml",
+            source.replace(
+                "</hs:sec>",
+                &format!(
+                    "{}{}</hs:sec>",
+                    fragment.repeat(n),
+                    fragment.replace("<hp:t>", "<hp:t charStyleIDRef='0'>").repeat(n)
+                ),
+            ),
+        );
+        for section in 1..=outline_sections {
+            let part = format!("Contents/section{section}.xml");
+            let source = package
+                .read_text_entry(&part)
+                .unwrap()
+                .replace("outlineShapeIDRef=\"1\"", "outlineShapeIDRef=\"2\"");
+            package.replace_text_entry(&part, source);
+        }
+        let base = package.write().unwrap();
+        let before = HwpxDecoder::decode(&base).unwrap();
+        assert_eq!(
+            before
+                .source_basis
+                .as_ref()
+                .unwrap()
+                .losses
+                .iter()
+                .filter(|loss| {
+                    loss.cause == crate::decoder::preserved_loss::LossCause::SectionOutlineSelection
+                })
+                .count(),
+            outline_sections
+        );
+        let targets: Vec<_> = (1..=n).map(|index| ParagraphLocator { section: 0, index }).collect();
+        crate::derived_values::COLLECTIONS.with(|c| c.set(0));
+        crate::work::WORK.with(|w| w.set(0));
+        crate::derived_values::OUTLINE_BATCHES.with(|c| c.set(0));
+        let output = HwpxStructuralEditor::delete_paragraphs(&base, &targets).unwrap();
+        assert_eq!(crate::derived_values::OUTLINE_BATCHES.with(std::cell::Cell::get), 1);
+        let work = crate::work::WORK.with(std::cell::Cell::get);
+        assert_eq!(crate::derived_values::COLLECTIONS.with(std::cell::Cell::get), 1);
+        let decoded = HwpxDecoder::decode(&output).unwrap();
+        assert_eq!(decoded.document.sections()[0].paragraphs.len(), n + 3);
+        assert_eq!(
+            decoded.warnings.iter().filter(|w| w.is_content_loss()).count(),
+            n + outline_sections
+        );
+        work
+    };
+    for (small, large) in
+        [(measure(160, 2), measure(320, 2)), (measure(160, 160), measure(320, 320))]
+    {
+        assert!(large > small);
+        assert!(large <= small * 2 + 256, "{small} {large}");
+    }
+}
+
+// 이것을 실패시키는 것: 비교 helper가 호출자의 기대 실패를 기대 성공으로 덮어씀.
+// payload/metadata/decode/encode 경고 훼손도 계속 거부해야 한다.
+#[test]
+fn outline_editor_comparison_detects_corruption() {
+    use crate::diagnostics::WithCodecWarnings;
+    let base = outline_input();
+    let control = replace(
+        &base,
+        "Contents/section1.xml",
+        "outlineShapeIDRef=\"2\"",
+        "outlineShapeIDRef=\"1\"",
+    );
+    let diagnosed = |input: &[u8]| {
+        WithCodecWarnings::new(
+            (input.to_vec(), 0u8),
+            HwpxDecoder::decode(input).unwrap().warnings,
+            vec![],
+        )
+    };
+    for change in ["payload", "metadata", "decode", "control-decode", "encode", "outcome"] {
+        let mut actual = diagnosed(&base);
+        let mut expected = diagnosed(&control);
+        match change {
+            "payload" => {
+                actual.value.0 =
+                    replace(&actual.value.0, "Contents/section0.xml", "0 delete", "changed")
+            }
+            "metadata" => actual.value.1 = 1,
+            "decode" => actual.decode_warnings.clear(),
+            "control-decode" => expected.decode_warnings.push(crate::DecodeWarning::ContentLost {
+                part: "Contents/section0.xml".into(),
+                path: Default::default(),
+                kind: "unknown".into(),
+                reason: "lost".into(),
+            }),
+            "encode" => actual.encode_warnings.push(crate::EncodeWarning::PreviewRemoved {
+                parts: vec!["Preview/PrvText.txt".into()],
+            }),
+            "outcome" => {} // Paired Ok values must not satisfy an expected failure.
+            _ => unreachable!(),
+        }
+        let result = std::panic::catch_unwind(|| {
+            let mut successes = 0;
+            assert_editor_result::<_, _, crate::HwpxError>(
+                ("oracle", change != "outcome", &mut successes),
+                &base,
+                &control,
+                Ok(actual),
+                Ok(expected),
+                |path, bytes| match path {
+                    "Contents/section1.xml" => std::str::from_utf8(bytes)
+                        .unwrap()
+                        .replace("outlineShapeIDRef=\"2\"", "outlineShapeIDRef=\"1\"")
+                        .into_bytes(),
+                    _ => bytes.to_vec(),
+                },
+                |r, _| (&r.0, r.1),
+            )
+        });
+        assert!(result.is_err(), "{change}");
+    }
+}
+
+// 이것을 실패시키는 것: part 소유 section 개수를 무시하고 하나를 선택하거나 근거 소비에서 XML 전체 재파싱.
+#[test]
+fn outline_part_owners_are_unique() {
+    let base = replace(
+        &outline_seed(3, 2),
+        "Contents/section1.xml",
+        "outlineShapeIDRef=\"1\"",
+        "outlineShapeIDRef=\"2\"",
+    );
+    let base = replace(
+        &base,
+        "Contents/section2.xml",
+        "outlineShapeIDRef=\"1\"",
+        "outlineShapeIDRef=\"2\"",
+    );
+    let original = HwpxDecoder::decode(&base).unwrap();
+    let package = RawPackage::read(&base).unwrap();
+    let facts = crate::derived_values::DerivedFacts::collect(&package, &original).unwrap();
+    let ordinals = [facts.body_ordinal(0, 1).unwrap()];
+    let effects = facts
+        .effects(&[crate::derived_values::DerivedEdit::Delete {
+            section: 0,
+            paragraphs: &ordinals,
+        }])
+        .unwrap();
+    let before = hwpforge_core::source_xml::source_work();
+    preserved_loss::check_locations(&original, &effects).unwrap();
+    let after = hwpforge_core::source_xml::source_work();
+    assert_eq!((after.0, after.1), (before.0, before.1));
+    let mut ambiguous = HwpxDecoder::decode(&base).unwrap();
+    ambiguous.source_maps[2] = ambiguous.source_maps[1].clone();
+    std::sync::Arc::make_mut(ambiguous.source_basis.as_mut().unwrap()).losses.truncate(1);
+    assert!(preserved_loss::check_locations(&ambiguous, &effects).is_err());
 }

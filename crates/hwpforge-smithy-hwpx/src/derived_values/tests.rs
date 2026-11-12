@@ -2287,3 +2287,186 @@ fn inline_category_preserves_content_and_visits_all_cells() {
     assert_eq!(measure(1), 6);
     assert_eq!(measure(22), 132);
 }
+
+// 이것을 실패시키는 것: wire 속성 누락을 0으로 대체, style_ref None 기본화, strict shape/style 참조 대조 생략.
+#[test]
+fn outline_heading_references_are_strict() {
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let store = crate::style_store_for_preset("default").unwrap();
+    let mut p = hwpforge_core::Paragraph::with_runs(
+        vec![hwpforge_core::Run::text("plain", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    p.style_ref = store.style_ref_at(0);
+    let tag=Tag::read("<hp:p xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' paraPrIDRef='0' styleIDRef='0'/>").unwrap();
+    check_outline_plain_heading(&store, &p, &tag).unwrap();
+    for attrs in [
+        "styleIDRef='0'",
+        "paraPrIDRef='0'",
+        "paraPrIDRef='bad' styleIDRef='0'",
+        "paraPrIDRef='0' styleIDRef='bad'",
+        "paraPrIDRef='4294967296' styleIDRef='0'",
+        "paraPrIDRef='0' styleIDRef='4294967296'",
+    ] {
+        let tag = Tag::read(&format!(
+            "<hp:p xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' {attrs}/>"
+        ))
+        .unwrap();
+        assert!(check_outline_plain_heading(&store, &p, &tag).is_err(), "{attrs}");
+    }
+    let mut absent = p.clone();
+    absent.style_ref = None;
+    assert!(check_outline_plain_heading(&store, &absent, &tag).is_err());
+    let mut different = p.clone();
+    different.para_shape_id = ParaShapeIndex::new(1);
+    assert!(check_outline_plain_heading(&store, &different, &tag).is_err());
+    let mut different = p.clone();
+    different.style_ref = store.style_ref_at(1);
+    assert!(check_outline_plain_heading(&store, &different, &tag).is_err());
+}
+
+// 이것을 실패시키는 것: 삭제 changed/deleted/본문 index 대응 또는 secPr 소유 paragraph 유일성 검사 생략.
+#[test]
+fn outline_deletion_effects_require_complete_original_ownership() {
+    use hwpforge_core::{
+        Document, ImageStore, NumberingDef, PageSettings, Paragraph, Run, Section,
+    };
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut store = crate::style_store_for_preset("default").unwrap();
+    store.push_numbering(NumberingDef::default_outline());
+    store.push_numbering(NumberingDef::default_outline());
+    let mut doc = Document::new();
+    for _ in 0..2 {
+        doc.add_section(Section::with_paragraphs(
+            (0..3)
+                .map(|_| {
+                    Paragraph::with_runs(
+                        vec![Run::text("plain", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )
+                })
+                .collect(),
+            PageSettings::a4(),
+        ));
+    }
+    let base =
+        crate::HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let mut package = crate::raw_package::RawPackage::read(&base).unwrap();
+    let xml = package
+        .read_text_entry("Contents/section1.xml")
+        .unwrap()
+        .replace("outlineShapeIDRef=\"1\"", "outlineShapeIDRef=\"2\"");
+    package.replace_text_entry("Contents/section1.xml", xml);
+    let base = package.write().unwrap();
+    let decoded = crate::HwpxDecoder::decode(&base).unwrap();
+    let facts = DerivedFacts::collect(&package, &decoded).unwrap();
+    let part = facts.parts.iter().find(|p| p.section == Some(1)).unwrap();
+    let id = crate::decoder::source_map::section_property_origin(&part.xml, &part.source).unwrap();
+    let span = part.source.element(id).unwrap().outer();
+    use sha2::Digest;
+    let locations =
+        [(1, span.clone(), <[u8; 32]>::from(sha2::Sha256::digest(&part.xml.as_bytes()[span])))];
+    let ordinals = [facts.body_ordinal(0, 1).unwrap()];
+    let edits = [DerivedEdit::Delete { section: 0, paragraphs: &ordinals }];
+    facts.effects(&edits).unwrap().check_section_outline_losses(&decoded, &locations).unwrap();
+    for change in [
+        "empty",
+        "changed-count",
+        "changed-ordinal",
+        "not-body",
+        "map-count",
+        "map-duplicate",
+        "property-owner",
+        "property-owner-duplicate",
+        "duplicate-location",
+    ] {
+        let mut decoded = crate::HwpxDecoder::decode(&base).unwrap();
+        match change {
+            "map-count" => {
+                decoded.source_maps[0].paragraphs.pop();
+            }
+            "map-duplicate" => {
+                decoded.source_maps[0].paragraphs[2] = decoded.source_maps[0].paragraphs[1].clone()
+            }
+            "property-owner" => {
+                decoded.source_maps[1].paragraphs.remove(0);
+            }
+            "property-owner-duplicate" => {
+                let p = decoded.source_maps[1].paragraphs[0].clone();
+                decoded.source_maps[1].paragraphs.push(p);
+            }
+            _ => {}
+        }
+        let facts = DerivedFacts::collect(&package, &decoded).unwrap();
+        let mut effects = facts.effects(&edits).unwrap();
+        let effect = effects.effects.get_mut(&0).unwrap();
+        match change {
+            "empty" => {
+                effect.deleted.clear();
+                effect.changed.clear();
+            }
+            "changed-count" => {
+                effect.changed.insert(2);
+            }
+            "changed-ordinal" => {
+                effect.changed.clear();
+                effect.changed.insert(2);
+            }
+            "not-body" => {
+                effect.deleted[0].end -= 1;
+            }
+            _ => {}
+        }
+        let claims = match change {
+            "duplicate-location" => vec![locations[0].clone(), locations[0].clone()],
+            _ => locations.to_vec(),
+        };
+        assert!(effects.check_section_outline_losses(&decoded, &claims).is_err(), "{change}");
+    }
+}
+
+// 이것을 실패시키는 것: 직접/스타일 shape를 생략하거나 para_list의 lossy None을 승인.
+#[test]
+fn outline_wire_heading_checks_are_independent() {
+    use crate::style_store::{HwpxParaShape, HwpxStyle};
+    use hwpforge_core::{NumberingDef, Paragraph, Run};
+    use hwpforge_foundation::{CharShapeIndex, HeadingType, ParaShapeIndex};
+    for inherited in [false, true] {
+        for (kind, level, reference) in [
+            (HeadingType::Number, 0, 1),
+            (HeadingType::Outline, 0, 1),
+            (HeadingType::Bullet, 0, 1),
+            (HeadingType::Number, 10, 1),
+            (HeadingType::Number, 0, 99),
+            (HeadingType::Outline, 10, 0),
+            (HeadingType::Bullet, 0, 99),
+        ] {
+            let mut store = crate::HwpxStyleStore::new();
+            store.push_numbering(NumberingDef::default_outline());
+            store.push_para_shape(HwpxParaShape::default());
+            let shape = HwpxParaShape {
+                heading_type: kind,
+                heading_level: level,
+                heading_id_ref: reference,
+                ..HwpxParaShape::default()
+            };
+            store.push_para_shape(shape);
+            let (direct, style) = match inherited {
+                false => (1, 0),
+                true => (0, 1),
+            };
+            store.push_style(HwpxStyle::new(70, "PARA", "Plain", "Plain", style, 0, 0, 1042, 0));
+            let mut paragraph = Paragraph::with_runs(
+                vec![Run::text("plain", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(direct),
+            );
+            paragraph.style_ref = store.style_ref_at(0);
+            assert!(paragraph.heading_level.is_none());
+            let tag=Tag::read(&format!("<hp:p xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' paraPrIDRef='{direct}' styleIDRef='0'/>")).unwrap();
+            assert!(
+                check_outline_plain_heading(&store, &paragraph, &tag).is_err(),
+                "{inherited} {kind:?} {level} {reference}"
+            );
+        }
+    }
+}

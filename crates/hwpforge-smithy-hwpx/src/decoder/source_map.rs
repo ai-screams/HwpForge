@@ -157,6 +157,7 @@ struct ParagraphOrigin {
 pub(crate) struct SourceRecorder {
     pub(crate) losses: Vec<super::preserved_loss::LossEvidence>,
     source: XmlSource,
+    section_property_origin: Option<(usize, [u8; 32])>,
     paragraphs: HashMap<usize, ParagraphOrigin>,
 }
 impl SourceRecorder {
@@ -165,7 +166,39 @@ impl SourceRecorder {
     pub(crate) fn read(xml: &str) -> HwpxResult<(String, Self)> {
         let (annotated, source) = XmlSource::read(xml)
             .map_err(|detail| HwpxError::XmlParse { file: "section.xml".into(), detail })?;
-        Ok((annotated, Self { source, paragraphs: HashMap::new(), losses: Vec::new() }))
+        use sha2::Digest;
+        let section_property_origin = section_property_origin(xml, &source).map(|id| {
+            (id, sha2::Sha256::digest(&xml.as_bytes()[source.element(id).unwrap().outer()]).into())
+        });
+        Ok((
+            annotated,
+            Self {
+                source,
+                section_property_origin,
+                paragraphs: HashMap::new(),
+                losses: Vec::new(),
+            },
+        ))
+    }
+    pub(crate) fn record_section_property_loss(
+        &mut self,
+        warning: usize,
+        part: &str,
+        origin: usize,
+    ) {
+        let Some((id, digest)) = self.section_property_origin else { return };
+        if origin != id {
+            return;
+        }
+        self.losses.push(super::preserved_loss::LossEvidence {
+            warning,
+            cause: super::preserved_loss::LossCause::SectionOutlineSelection,
+            location: super::preserved_loss::LossLocation::SectionProperty {
+                part: part.into(),
+                span: self.source.element(id).unwrap().outer(),
+                digest,
+            },
+        });
     }
     pub(crate) fn record_loss(
         &mut self,
@@ -592,5 +625,197 @@ mod tests {
             map.nodes.values().next().unwrap().copy_source(),
             SourceCoverage::Incomplete(_)
         ));
+    }
+}
+
+/// Read an original opening tag using its ledger range and inherited namespace scope.
+pub(crate) fn original_opening(
+    xml: &str,
+    element: &hwpforge_core::source_xml::XmlElement,
+    scope: &crate::line_keep::NamespaceBindings,
+) -> Option<(crate::line_keep::Tag, crate::line_keep::NamespaceBindings)> {
+    let outer = element.outer();
+    let end = element.inner().map_or(outer.end, |inner| inner.start);
+    let (tag, scope) =
+        crate::line_keep::Tag::opening_with_bindings(xml.get(outer.start..end)?, scope)?;
+    let (prefix, _) =
+        element.qualified_name().split_once(':').unwrap_or(("", element.qualified_name()));
+    // Tag::start already compares the bound URI with line_keep::namespace().
+    // Its local name also admits an unqualified, empty namespace; exclude that
+    // exception here rather than maintain another namespace URI table.
+    if !matches!(element.name(), "sec" | "p" | "run" | "secPr")
+        || tag.name != element.name()
+        || scope.get(prefix).is_none_or(|uri| uri.is_empty())
+    {
+        return None;
+    }
+    Some((tag, scope))
+}
+
+/// A single body secPr with the direct, bound sec/p/run/secPr ancestry.
+pub(crate) fn section_property_origin(xml: &str, source: &XmlSource) -> Option<usize> {
+    let mut property = None;
+    let mut root = None;
+    for (id, element) in source.elements().iter().enumerate().skip(1) {
+        if element.name() == "secPr" && property.replace(id).is_some() {
+            return None;
+        }
+        if element.parent() == 0 && root.replace(id).is_some() {
+            return None;
+        }
+    }
+    let id = property?;
+    let property = source.element(id)?;
+    // Default selections need no preservation proof or namespace evidence reads.
+    let start = crate::cache_flow::source_start(xml, property)?;
+    let selection = start
+        .attributes()
+        .filter_map(Result::ok)
+        .find(|a| a.key.as_ref() == "outlineShapeIDRef")?
+        .normalized_value(quick_xml::XmlVersion::Explicit1_0)
+        .ok()?
+        .parse::<u32>()
+        .ok()?;
+    if selection <= 1 {
+        return None;
+    }
+    let run = source.element(property.parent())?;
+    let paragraph = source.element(run.parent())?;
+    let section = source.element(paragraph.parent())?;
+    if [section.name(), paragraph.name(), run.name(), property.name()]
+        != ["sec", "p", "run", "secPr"]
+    {
+        return None;
+    }
+    if root != Some(paragraph.parent()) {
+        return None;
+    }
+    let mut scope = crate::line_keep::NamespaceBindings::new();
+    for element in [section, paragraph, run, property] {
+        (_, scope) = original_opening(xml, element, &scope)?;
+    }
+    Some(id)
+}
+
+#[cfg(test)]
+mod outline_tests {
+    use super::*;
+    fn section() -> String {
+        "<s:sec xmlns:s='http://www.hancom.co.kr/hwpml/2011/section' xmlns:p='http://www.hancom.co.kr/hwpml/2011/paragraph'><p:p><p:run><p:secPr outlineShapeIDRef='2'><p:grid/></p:secPr></p:run></p:p></s:sec>".into()
+    }
+    // 이것을 실패시키는 것: 원본 대신 annotation 좌표 사용, local name만 검사, 중복/직접 소유 검사 제거, 기본 선택의 namespace 증거 파싱.
+    // 공통 section URI의 변경이 원본 namespace 결합 검사를 우회하지 못하는지 검증한다.
+    #[test]
+    fn outline_origin_namespace_and_owner() {
+        use sha2::Digest;
+        for xml in [
+            section(),
+            format!("\u{feff}{}", section()),
+            section()
+                .replace("<p:grid/></p:secPr>", "/>")
+                .replace("outlineShapeIDRef='2'>/>", "outlineShapeIDRef='2'/>"),
+        ] {
+            let (_, recorder) = SourceRecorder::read(&xml).unwrap();
+            let (id, digest) = recorder.section_property_origin.unwrap();
+            let span = recorder.source.element(id).unwrap().outer();
+            assert_eq!(span.start, xml.find("<p:secPr ").unwrap());
+            assert_eq!(digest, <[u8; 32]>::from(sha2::Sha256::digest(&xml.as_bytes()[span])));
+        }
+        for selection in ["0", "1", "invalid", "4294967296"] {
+            crate::line_keep::START_TAG_READS.set(0);
+            let (_, recorder) = SourceRecorder::read(
+                &section()
+                    .replace("outlineShapeIDRef='2'", &format!("outlineShapeIDRef='{selection}'")),
+            )
+            .unwrap();
+            assert!(recorder.section_property_origin.is_none());
+            assert_eq!(crate::line_keep::START_TAG_READS.get(), 0);
+        }
+        let base = section();
+        let mut invalid = vec![
+            base.replace("<p:secPr ", "<p:secPr xmlns:p='foreign' "),
+            base.replace("<p:p>", "<p:p xmlns:p='foreign'>"),
+            base.replace("<p:run>", "<p:run xmlns:p='foreign'>"),
+            base.replace("2011/section", "2011/foreign"),
+            base.replace(" xmlns:p='http://www.hancom.co.kr/hwpml/2011/paragraph'", ""),
+            base.replace("<p:run>", "<p:subList><p:run>")
+                .replace("</p:run>", "</p:run></p:subList>"),
+            base.replace("<p:p>", "<p:tbl><p:p>").replace("</p:p>", "</p:p></p:tbl>"),
+            base.replace("<p:p>", "<p:header><p:p>").replace("</p:p>", "</p:p></p:header>"),
+            base.replace("</p:run>", "<p:secPr outlineShapeIDRef='2'/></p:run>"),
+            format!("<wrapper>{base}</wrapper>"),
+            format!("{base}<other/>"),
+            format!("<other/>{base}"),
+            base.replace("<p:p><p:run>", "<p:run><p:p>")
+                .replace("</p:run></p:p>", "</p:p></p:run>"),
+            "<s:sec xmlns:s='http://www.hancom.co.kr/hwpml/2011/section'/>".into(),
+        ];
+        invalid.push(base.replace("<p:secPr ", "<q:secPr ").replace("</p:secPr>", "</q:secPr>"));
+        for xml in invalid {
+            let (_, recorder) = SourceRecorder::read(&xml).unwrap();
+            assert!(recorder.section_property_origin.is_none(), "{xml}");
+        }
+        assert!(SourceRecorder::read(&base.replace("<p:secPr ", "<p:secPr _hwpforge_origin='4' "))
+            .is_err());
+    }
+    // 이것을 실패시키는 것: annotation 동등성 검사 제거, recorder 없는 경로에서 근거 생성, 허용 밖 시작 태그 승인.
+    #[test]
+    fn outline_annotation_and_recorder_are_required() {
+        let refs: crate::header_references::HeaderReferences = {
+            let mut store = crate::HwpxStyleStore::new();
+            store.push_numbering(hwpforge_core::NumberingDef::default_outline());
+            store.push_numbering(hwpforge_core::NumberingDef::default_outline());
+            crate::header_references::HeaderReferences::build(&store).unwrap()
+        };
+        let xml = section();
+        let (annotated, recorder) = SourceRecorder::read(&xml).unwrap();
+        let origin = recorder.section_property_origin.unwrap().0;
+        for replacement in [
+            String::new(),
+            " _hwpforge_origin='0'".into(),
+            " _hwpforge_origin='1'".into(),
+            " _hwpforge_origin='bad'".into(),
+        ] {
+            let (_, mut recorder) = SourceRecorder::read(&xml).unwrap();
+            let view = annotated.replace(&format!(" _hwpforge_origin=\"{origin}\""), &replacement);
+            assert_eq!(
+                refs.validate_auxiliary_with_losses(
+                    &view,
+                    "Contents/section1.xml",
+                    Some(&mut recorder)
+                )
+                .unwrap()
+                .len(),
+                1
+            );
+            assert!(recorder.losses.is_empty());
+        }
+        let (_, mut recorder) = SourceRecorder::read(&xml).unwrap();
+        let warnings = refs
+            .validate_auxiliary_with_losses(
+                &annotated,
+                "Contents/section1.xml",
+                Some(&mut recorder),
+            )
+            .unwrap();
+        assert_eq!(recorder.losses.len(), 1);
+        assert_eq!(warnings, refs.validate_auxiliary_xml(&xml, "Contents/section1.xml").unwrap());
+        assert_eq!(warnings.len(), 1);
+        let mut absent = SourceRecorder::read("<sec/>").unwrap().1;
+        assert!(absent.section_property_origin.is_none());
+        absent.record_section_property_loss(0, "Contents/section1.xml", 1);
+        assert!(absent.losses.is_empty());
+        // 이것을 실패시키는 것: Tag의 무접두사/빈 namespace 예외를 원본 증명에도 허용.
+        for xml in ["<sec/>", "<sec xmlns=''/>", "<p/>", "<run/>", "<secPr/>"] {
+            let source = XmlSource::read(xml).unwrap().1;
+            assert!(
+                original_opening(xml, source.element(1).unwrap(), &Default::default()).is_none()
+            );
+        }
+        let unknown = "<unknown xmlns='http://www.hancom.co.kr/hwpml/2011/paragraph'/>";
+        let source = XmlSource::read(unknown).unwrap().1;
+        assert!(
+            original_opening(unknown, source.element(1).unwrap(), &Default::default()).is_none()
+        );
     }
 }
