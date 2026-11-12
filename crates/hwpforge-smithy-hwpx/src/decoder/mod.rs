@@ -909,7 +909,9 @@ impl HwpxDecoder {
         warnings.extend(references.validate_auxiliary_xml(&header_xml, HEADER_PART)?);
         // flag의 container_excludable 조건과 겹치는 방어이며 problems를 넣는 곳이 늘면 의미가 생긴다.
         if metadata_parsed && pkg.order.problems.len() == 1 {
-            let cause = if pkg.order.script_auxiliary_order {
+            let cause = if pkg.order.single_section_nonlinear_order {
+                Some(preserved_loss::LossCause::SingleSectionNonlinearOrder)
+            } else if pkg.order.script_auxiliary_order {
                 Some(preserved_loss::LossCause::ScriptAuxiliaryOrder)
             } else if pkg.order.header_only_nonlinear {
                 Some(preserved_loss::LossCause::HeaderOnlyNonlinearOrder)

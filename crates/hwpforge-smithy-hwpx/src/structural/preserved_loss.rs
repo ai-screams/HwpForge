@@ -63,18 +63,23 @@ pub(super) fn check_candidates(
                 LossLocation::SectionProperty { part: original, span, .. },
             ) => {
                 require(part == original)?;
-                // package_order.rs:343–345 rejects duplicate spine targets; its
-                // :35–41,88 fallback uses unique ZIP paths. The count-2 defense
+                // resolve_spine_with_mode rejects duplicate spine targets;
+                // PackageOrder::resolve falls back to unique ZIP paths. The count-2 defense
                 // is exercised by outline_duplicate_section_path_refused with
                 // only RawPackage's private resolved order changed.
                 require(section_paths.get(original) == Some(&1))?;
                 require(section_properties.insert((original, span.start, span.end)))?;
             }
             (
-                LossCause::HeaderOnlyNonlinearOrder | LossCause::ScriptAuxiliaryOrder,
+                LossCause::HeaderOnlyNonlinearOrder
+                | LossCause::ScriptAuxiliaryOrder
+                | LossCause::SingleSectionNonlinearOrder,
                 LossLocation::Package { sections },
             ) => {
                 require(part == "Contents/content.hpf / META-INF/container.xml")?;
+                if evidence.cause == LossCause::SingleSectionNonlinearOrder {
+                    require(sections.len() == 1)?;
+                }
                 require(
                     *sections
                         == (0..decoded.source_maps.len())

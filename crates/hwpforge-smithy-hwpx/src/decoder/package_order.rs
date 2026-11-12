@@ -12,6 +12,7 @@ pub(crate) const OCF: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 pub(crate) struct PackageOrder {
     pub(crate) header_only_nonlinear: bool,
     pub(crate) script_auxiliary_order: bool,
+    pub(crate) single_section_nonlinear_order: bool,
     /// Core section indices always index this list, also during cache analysis.
     pub sections: Vec<String>,
     /// Whether the entire container XML can be excluded from the global layout fingerprint.
@@ -63,6 +64,7 @@ impl PackageOrder {
                         let mut narrow = SpineMode {
                             allow_header_nonlinear: true,
                             allow_known_scripts: true,
+                            allow_single_section_nonlinear: true,
                             ..SpineMode::default()
                         };
                         if let Ok((sections, excludable)) =
@@ -72,9 +74,15 @@ impl PackageOrder {
                                 && excludable
                                 && sections == result.sections
                             {
-                                result.script_auxiliary_order = narrow.used_known_script;
-                                result.header_only_nonlinear =
-                                    !narrow.used_known_script && narrow.used_header_nonlinear;
+                                result.single_section_nonlinear_order =
+                                    narrow.used_single_section_nonlinear;
+                                result.script_auxiliary_order = !narrow
+                                    .used_single_section_nonlinear
+                                    && narrow.used_known_script;
+                                result.header_only_nonlinear = !narrow
+                                    .used_single_section_nonlinear
+                                    && !narrow.used_known_script
+                                    && narrow.used_header_nonlinear;
                             }
                         }
                     }
@@ -219,10 +227,12 @@ fn validate_container(xml: &str, paths: &[String]) -> Result<bool, String> {
 struct SpineMode {
     allow_header_nonlinear: bool,
     allow_known_scripts: bool,
+    allow_single_section_nonlinear: bool,
     nonlinear: bool,
     known_script: bool,
     used_header_nonlinear: bool,
     used_known_script: bool,
+    used_single_section_nonlinear: bool,
 }
 
 // XML 속성 정규화 뒤 값으로 비교한다(문자 참조로 쓴 공백도 같은 값).
@@ -310,7 +320,10 @@ fn resolve_spine_with_mode(
                 let nonlinear = attrs.get("linear").is_some_and(|v| v != "yes");
                 if nonlinear {
                     mode.nonlinear = true;
-                    if !(mode.allow_header_nonlinear || mode.allow_known_scripts) {
+                    if !(mode.allow_header_nonlinear
+                        || mode.allow_known_scripts
+                        || mode.allow_single_section_nonlinear)
+                    {
                         return Err("unsupported spine itemref attributes".into());
                     }
                     if attrs.get("linear").map(String::as_str) != Some("no") {
@@ -335,9 +348,11 @@ fn resolve_spine_with_mode(
             .and_then(Option::as_ref)
             .ok_or_else(|| format!("missing/ambiguous manifest item {id}"))?;
         let known_script = is_known_script_auxiliary(target, media);
+        let is_section = numbered_part(target, "Contents/section").is_some();
         if nonlinear
             && !(target == HEADER_PART && mode.allow_header_nonlinear)
             && !(known_script && mode.allow_known_scripts)
+            && !(is_section && fallback.len() == 1 && mode.allow_single_section_nonlinear)
         {
             return Err("unsupported spine itemref attributes".into());
         }
@@ -348,14 +363,15 @@ fn resolve_spine_with_mode(
             mode.used_known_script = true;
             continue;
         }
-        if nonlinear {
+        if nonlinear && target == HEADER_PART {
             mode.used_header_nonlinear = true;
         }
         if media != "application/xml" {
             mode.known_script = known_script;
             return Err(format!("unsupported spine media-type {media} ({target})"));
         }
-        if numbered_part(target, "Contents/section").is_some() {
+        if is_section {
+            mode.used_single_section_nonlinear |= nonlinear;
             sections.push(target.clone());
         } else if target != HEADER_PART && numbered_part(target, "Contents/masterpage").is_none() {
             return Err(format!("non-section spine target {target}"));
@@ -672,5 +688,126 @@ mod tests {
         ] {
             assert!(visit(&xml, |_, _, _| Ok(())).is_err(), "{xml}");
         }
+    }
+
+    fn encoded_package() -> (crate::raw_package::RawPackage, String, Vec<String>, String) {
+        use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            ["처음", "삭제", "생존"]
+                .map(|text| {
+                    Paragraph::with_runs(
+                        vec![Run::text(text, CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )
+                })
+                .to_vec(),
+            PageSettings::a4(),
+        ));
+        let bytes = crate::HwpxEncoder::encode(
+            &doc.validate().unwrap(),
+            &crate::style_store_for_preset("default").unwrap(),
+            &ImageStore::new(),
+        )
+        .unwrap();
+        use std::io::{Cursor, Read, Write};
+        let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..input.len() {
+            let mut entry = input.by_index(i).unwrap();
+            let mut payload = Vec::new();
+            entry.read_to_end(&mut payload).unwrap();
+            out.start_file(
+                entry.name().unwrap(),
+                zip::write::SimpleFileOptions::default().compression_method(entry.compression()),
+            )
+            .unwrap();
+            out.write_all(&payload).unwrap();
+        }
+        out.start_file("Scripts/headerScripts.js", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        out.write_all(b"/\0/\0").unwrap();
+        let p = crate::raw_package::RawPackage::read(&out.finish().unwrap().into_inner()).unwrap();
+        let content =
+            std::str::from_utf8(p.read_entry("Contents/content.hpf").unwrap()).unwrap().to_owned();
+        let container = std::str::from_utf8(p.read_entry("META-INF/container.xml").unwrap())
+            .unwrap()
+            .to_owned();
+        let paths = p.entry_paths().map(str::to_owned).collect();
+        (p, content, paths, container)
+    }
+
+    // 이것을 실패시키는 것: section 사용 비트에 의한 script 결과 억제 제거.
+    #[test]
+    fn combined_nonlinear_order_uses_one_retry() {
+        use crate::decoder::preserved_loss::LossCause;
+        let (mut p, content, paths, container) = encoded_package();
+        RESOLVES.with(|c| c.set(0));
+        let ordinary = PackageOrder::resolve(&paths, Some(&content), Some(&container));
+        assert_eq!(RESOLVES.with(std::cell::Cell::get), 1);
+        assert!(ordinary.problems.is_empty());
+        assert!(!ordinary.single_section_nonlinear_order);
+        let content = content.replace("</opf:manifest>", "<opf:item id='aux' href='Scripts/headerScripts.js' media-type='application/x-javascript ;charset=utf-16'/></opf:manifest>");
+        let start = content.find("<opf:spine>").unwrap() + "<opf:spine>".len();
+        let end = content.find("</opf:spine>").unwrap();
+        for (refs, cause) in [
+            ("<opf:itemref idref='header' linear='no'/><opf:itemref idref='section0' linear='no'/><opf:itemref idref='aux' linear='no'/>", LossCause::SingleSectionNonlinearOrder),
+            ("<opf:itemref idref='section0' linear='no'/><opf:itemref idref='aux' linear='no'/><opf:itemref idref='header' linear='no'/>", LossCause::SingleSectionNonlinearOrder),
+            ("<opf:itemref idref='aux'/><opf:itemref idref='header' linear='no'/><opf:itemref idref='section0' linear='no'/>", LossCause::SingleSectionNonlinearOrder),
+            ("<opf:itemref idref='header' linear='no'/><opf:itemref idref='section0'/>", LossCause::HeaderOnlyNonlinearOrder),
+            ("<opf:itemref idref='aux'/><opf:itemref idref='header'/><opf:itemref idref='section0'/>", LossCause::ScriptAuxiliaryOrder),
+            ("<opf:itemref idref='header' linear='no'/><opf:itemref idref='aux' linear='no'/><opf:itemref idref='section0'/>", LossCause::ScriptAuxiliaryOrder),
+        ] {
+            let xml = format!("{}{refs}{}", &content[..start], &content[end..]);
+            RESOLVES.with(|c| c.set(0));
+            let order = PackageOrder::resolve(&paths, Some(&xml), Some(&container));
+            assert_eq!(RESOLVES.with(std::cell::Cell::get), 2);
+            assert!(!order.content_excludable);
+            assert!(order.container_excludable);
+            assert!(order.content_problem_reported);
+            assert_eq!(order.sections, ["Contents/section0.xml"]);
+            let mut strict = SpineMode::default();
+            let error = resolve_spine_with_mode(&xml, &paths, &order.sections, &mut strict).unwrap_err();
+            let expected = if refs.contains("linear='no'") { "unsupported spine itemref attributes" } else { "unsupported spine media-type application/x-javascript ;charset=utf-16 (Scripts/headerScripts.js)" };
+            assert_eq!(error, expected);
+            assert_eq!(order.problems, [format!("spine: {expected}; using file-number fallback")]);
+            assert_eq!((order.single_section_nonlinear_order, order.script_auxiliary_order, order.header_only_nonlinear), (cause == LossCause::SingleSectionNonlinearOrder, cause == LossCause::ScriptAuxiliaryOrder, cause == LossCause::HeaderOnlyNonlinearOrder));
+            p.replace_text_entry("Contents/content.hpf", xml);
+            let d = crate::HwpxDecoder::decode(&p.write().unwrap()).unwrap();
+            let losses = &d.source_basis.as_ref().unwrap().losses;
+            assert_eq!(losses.len(), 1);
+            assert_eq!(losses[0].cause, cause);
+        }
+    }
+
+    // 이것을 실패시키는 것: header 사용 비트 기록에서 header target 조건 제거.
+    #[test]
+    fn single_section_mode_bits_are_independent() {
+        let (_, content, paths, _) = encoded_package();
+        let xml = content
+            .replace("idref=\"section0\" linear=\"yes\"", "idref=\"section0\" linear=\"no\"");
+        let fallback = vec!["Contents/section0.xml".into()];
+        let mut mode = SpineMode { allow_single_section_nonlinear: true, ..Default::default() };
+        let (sections, excludable) =
+            resolve_spine_with_mode(&xml, &paths, &fallback, &mut mode).unwrap();
+        assert_eq!(sections, fallback);
+        assert!(excludable);
+        assert!(mode.used_single_section_nonlinear);
+        assert!(!mode.used_header_nonlinear);
+        assert!(!mode.used_known_script);
+        let mut strict = SpineMode::default();
+        assert!(resolve_spine_with_mode(&xml, &paths, &fallback, &mut strict).is_err());
+        assert!(strict.nonlinear);
+        assert!(!strict.used_single_section_nonlinear);
+        let mut header_only = SpineMode {
+            allow_header_nonlinear: true,
+            allow_known_scripts: true,
+            ..Default::default()
+        };
+        assert!(resolve_spine_with_mode(&xml, &paths, &fallback, &mut header_only).is_err());
+        let mut normal = SpineMode { allow_single_section_nonlinear: true, ..Default::default() };
+        resolve_spine_with_mode(&content, &paths, &fallback, &mut normal).unwrap();
+        assert!(!normal.used_single_section_nonlinear);
     }
 }
