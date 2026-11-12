@@ -9,6 +9,7 @@ pub(crate) enum LossCause {
     InlineStyle,
     HeaderOnlyNonlinearOrder,
     ScriptAuxiliaryOrder,
+    SingleSectionNonlinearOrder,
     SectionOutlineSelection,
 }
 impl LossCause {
@@ -19,7 +20,9 @@ impl LossCause {
             Self::GroupPictureAppearance => "group_child_picture",
             Self::SectionOutlineSelection => "secPr.outlineShapeIDRef",
             Self::InlineStyle => "t.charStyleIDRef",
-            Self::HeaderOnlyNonlinearOrder | Self::ScriptAuxiliaryOrder => "package_reading_order",
+            Self::HeaderOnlyNonlinearOrder
+            | Self::ScriptAuxiliaryOrder
+            | Self::SingleSectionNonlinearOrder => "package_reading_order",
         }
     }
 }
