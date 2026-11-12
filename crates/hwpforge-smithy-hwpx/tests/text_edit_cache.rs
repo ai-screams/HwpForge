@@ -1114,3 +1114,195 @@ fn preserving_patch_resolves_element_aliases_from_the_section_root() {
         assert_eq!(paragraph.find("hp:t").text, "1");
     }
 }
+
+// 이것을 실패시키는 것: nested_cell_sublist를 항상 Some(false)로 반환.
+#[test]
+fn nested_cell_patch_and_fill_keep_caches() {
+    for click_here in [false, true] {
+        let middle = if click_here { field("안쪽 값") } else { para("원래 값") };
+        let bytes = input(vec![
+            para("본문 앞"),
+            table_host(vec![vec![
+                table_host(vec![vec![para("안 앞"), middle, para("안 뒤")], vec![para("형제")]]),
+                para("밖 뒤"),
+            ]]),
+            para("본문 뒤"),
+        ]);
+        let original = package::section_xml(&bytes);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        let mut section = decoded.document.sections()[0].clone();
+        let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &section).unwrap();
+        let host = cell_paragraph(&mut section, 1, 0, 0);
+        let RunContent::Table(inner) = &mut host.runs[0].content else { panic!("inner table") };
+        let middle = &mut inner.rows[0].cells[0].paragraphs[1];
+        if click_here {
+            let RunContent::Control(control) = &mut middle.runs[0].content else { panic!("field") };
+            let Control::Field { display_text, .. } = control.as_mut() else { panic!("field") };
+            *display_text = "나".into();
+        } else {
+            middle.runs[0].content = RunContent::Text("나".into());
+        }
+        let patched = HwpxPatcher::patch_section_preserving_with_codec_diagnostics(
+            &bytes,
+            0,
+            &section,
+            None,
+            Some(&preservation),
+        )
+        .unwrap();
+        assert!(patched.decode_warnings.is_empty(), "{:?}", patched.decode_warnings);
+        assert!(patched.encode_warnings.is_empty(), "{:?}", patched.encode_warnings);
+        // Full source equality fixes all direct caches, both table sizes and field boundaries.
+        assert_eq!(
+            package::section_xml(&patched.value),
+            original.replace("<hp:t>원래 값</hp:t>", "<hp:t>나</hp:t>")
+        );
+        assert_eq!(cache_marks(&package::section_xml(&patched.value)), (0..9).collect::<Vec<_>>());
+        if click_here {
+            let filled = HwpxFiller::fill(
+                &bytes,
+                &std::collections::BTreeMap::from([("안쪽 값".into(), "나".into())]),
+            )
+            .unwrap();
+            assert_eq!(filled.bytes, patched.value);
+        } else {
+            let RunContent::Table(inner) =
+                &mut cell_paragraph(&mut section, 1, 0, 0).runs[0].content
+            else {
+                panic!("inner")
+            };
+            inner.rows[0].cells[0].paragraphs[1].runs[0].content =
+                RunContent::Text("가\n나".into());
+            let negative = HwpxPatcher::patch_section_preserving_with_codec_diagnostics(
+                &bytes,
+                0,
+                &section,
+                None,
+                Some(&preservation),
+            )
+            .unwrap();
+            assert!(negative.decode_warnings.is_empty());
+            assert!(negative.encode_warnings.is_empty());
+            assert_eq!(cache_marks(&package::section_xml(&negative.value)), [0, 1, 4]);
+            // 이것을 실패시키는 것: 중첩 칸 증명에서 LATIN 글꼴 측정 게이트 생략.
+            let header = package::part(&bytes, "Contents/header.xml");
+            let start = header.find("lang=\"LATIN\"").unwrap();
+            let end = start + header[start..].find("</hh:fontface>").unwrap();
+            let latin = &header[start..end];
+            let unsupported = package::splice_part(
+                &bytes,
+                "Contents/header.xml",
+                latin,
+                &latin.replace("맑은 고딕", "Times New Roman"),
+            );
+            let out = patch_section(&unsupported, |s| {
+                let RunContent::Table(inner) = &mut cell_paragraph(s, 1, 0, 0).runs[0].content
+                else {
+                    panic!("inner")
+                };
+                inner.rows[0].cells[0].paragraphs[1].runs[0].content =
+                    RunContent::Text("나".into());
+            });
+            assert_eq!(cache_marks(&package::section_xml(&out)), [0, 1, 4]);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: nested_cell_sublist를 항상 false로 반환, 성공 문단을 최종 제거 집합에서 차감.
+#[test]
+fn nested_cell_edits_have_independent_seeds() {
+    let bytes = input(vec![
+        para("본문 앞"),
+        table_host(vec![vec![
+            table_host(vec![vec![para("안 앞"), para("편집"), para("안 뒤")], vec![para("형제")]]),
+            para("밖 뒤"),
+        ]]),
+        para("본문 뒤"),
+    ]);
+    // End-tag cache markers: B0=0, I0/I1/I2=1/2/3, J0=4, O0/O1=5/6, B1/B2=7/8.
+    let cases: &[(&[(usize, usize, &str)], &[usize])] = &[
+        (&[(0, 1, "나")], &[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        (&[(0, 2, "나")], &[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        (&[(1, 0, "나")], &[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        (&[(0, 1, "가\n나")], &[0, 1, 4]),
+        (&[(0, 1, "가\n나"), (0, 2, "나")], &[0, 1, 4]),
+        (&[(0, 1, "가\n나"), (1, 0, "나")], &[0, 1, 4]),
+    ];
+    for &(edits, expected) in cases {
+        for reverse in [false, true] {
+            let out = patch_section(&bytes, |s| {
+                let RunContent::Table(inner) = &mut cell_paragraph(s, 1, 0, 0).runs[0].content
+                else {
+                    panic!("inner")
+                };
+                let mut ordered = edits.to_vec();
+                if reverse {
+                    ordered.reverse();
+                }
+                for (cell, p, text) in ordered {
+                    inner.rows[0].cells[cell].paragraphs[p].runs[0].content =
+                        RunContent::Text(text.into());
+                }
+            });
+            let xml = package::section_xml(&out);
+            assert_eq!(cache_marks(&xml), expected, "{edits:?}, reverse={reverse}");
+            let original = Element::parse(&package::section_xml(&bytes));
+            let result = Element::parse(&xml);
+            // Compare every surviving full array, including all lines and attributes.
+            let before = original.descendants("hp:p");
+            for (old, new) in before.iter().zip(result.descendants("hp:p")) {
+                let old_cache = old.children.iter().find(|c| c.name == "hp:linesegarray").unwrap();
+                if let Some(cache) = new.children.iter().find(|c| c.name == "hp:linesegarray") {
+                    assert_eq!(cache.attributes, old_cache.attributes);
+                    assert_eq!(cache.child_names(), old_cache.child_names());
+                    for (line, old_line) in cache.children.iter().zip(&old_cache.children) {
+                        assert_eq!(line.attributes, old_line.attributes);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: nested_cell_sublist에서 바깥 direct_cell_list 검사 생략.
+#[test]
+fn nested_tables_inside_notes_stay_unproven() {
+    let nested = table_host(vec![vec![
+        table_host(vec![vec![para("편집"), para("안 꼬리")]]),
+        para("밖 꼬리"),
+    ]]);
+    let note = Paragraph::with_runs(
+        vec![Run {
+            content: RunContent::Control(Box::new(Control::footnote(vec![
+                nested,
+                para("각주 꼬리"),
+            ]))),
+            char_shape_id: CharShapeIndex::new(0),
+        }],
+        ParaShapeIndex::new(0),
+    );
+    let bytes = input(vec![para("본문 앞"), note, para("본문 뒤")]);
+    let out = patch_section(&bytes, |s| {
+        let RunContent::Control(control) = &mut s.paragraphs[1].runs[0].content else {
+            panic!("note")
+        };
+        let Control::Footnote { paragraphs, .. } = control.as_mut() else { panic!("footnote") };
+        let RunContent::Table(outer) = &mut paragraphs[0].runs[0].content else { panic!("outer") };
+        let RunContent::Table(inner) = &mut outer.rows[0].cells[0].paragraphs[0].runs[0].content
+        else {
+            panic!("inner")
+        };
+        inner.rows[0].cells[0].paragraphs[0].runs[0].content = RunContent::Text("나".into());
+    });
+    let xml = package::section_xml(&out);
+    assert_eq!(cache_marks(&xml), [0]);
+    let tree = Element::parse(&xml);
+    let note = tree.find("hp:footNote");
+    let inner = note.find("hp:tbl").find("hp:tc").find("hp:tbl").find("hp:tc").find("hp:subList");
+    assert!(inner.children[0].children.iter().all(|c| c.name != "hp:linesegarray"));
+    assert_eq!(inner.children[0].find("hp:t").text, "나");
+    assert_eq!(
+        tree.children[0].child("hp:linesegarray").child("hp:lineseg").attr("vertpos"),
+        Some("9000")
+    );
+}

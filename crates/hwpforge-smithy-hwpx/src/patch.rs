@@ -550,7 +550,8 @@ impl HwpxPatcher {
         }
 
         // Actual normalized edits own the invalidation decision. Untouched
-        // proven body and direct-cell edits start no invalidation. Other nested
+        // proven edits in the body, direct table cells and cells one table deeper
+        // in body tables start no invalidation. Other nested
         // edits keep the conservative tail and host-chain invalidation.
         // Text replacements and owned-cache removals share one checked splice.
         let mut replacements = Vec::with_capacity(edits.len());
