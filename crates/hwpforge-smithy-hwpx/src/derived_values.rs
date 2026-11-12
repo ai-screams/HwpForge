@@ -819,7 +819,93 @@ impl<'source> DerivedFacts<'source> {
         Ok(DerivedEffects { facts: self, effects, affected_tables, flow, kinds, page_restart })
     }
 }
+#[cfg(test)]
+thread_local! {pub(crate) static OUTLINE_BATCHES: std::cell::Cell<usize> = const {std::cell::Cell::new(0)};}
+
 impl DerivedEffects<'_, '_> {
+    /// Selection loss is safe only outside every edited section, with a wholly plain deletion batch.
+    pub(crate) fn check_section_outline_losses(
+        &self,
+        decoded: &crate::HwpxDocument,
+        locations: &[(usize, Range<usize>, [u8; 32])],
+    ) -> HwpxResult<()> {
+        #[cfg(test)]
+        OUTLINE_BATCHES.with(|count| count.set(count.get() + 1));
+        use crate::decoder::source_map::{original_opening, section_property_origin};
+        use sha2::Digest;
+        let parts: HashMap<_, _> = self
+            .facts
+            .parts
+            .iter()
+            .filter_map(|part| {
+                crate::work::tick();
+                part.section.map(|section| (section, part))
+            })
+            .collect();
+        let mut seen = BTreeSet::new();
+        for (section, span, digest) in locations {
+            require(seen.insert(section))?;
+            require(!self.effects.contains_key(section))?;
+            let part = parts.get(section).ok_or_else(invalid)?;
+            let id = part.element_at(span.start)?;
+            let element = &part.source.elements()[id];
+            require(element.outer() == *span)?;
+            require(
+                <[u8; 32]>::from(sha2::Sha256::digest(
+                    part.xml.as_bytes().get(span.clone()).ok_or_else(invalid)?,
+                )) == *digest,
+            )?;
+            crate::work::tick_n(part.source.elements().len());
+            require(section_property_origin(&part.xml, &part.source) == Some(id))?;
+            let owner = part
+                .source
+                .element(element.parent())
+                .and_then(|run| part.source.element(run.parent()))
+                .ok_or_else(invalid)?;
+            let map = part.map.ok_or_else(invalid)?;
+            require(
+                map.paragraphs
+                    .iter()
+                    .filter(|p| {
+                        crate::work::tick();
+                        p.outer == owner.outer()
+                    })
+                    .count()
+                    == 1,
+            )?;
+        }
+        // Match original body paragraph ranges to Core indices once per edited section.
+        for (&section, effect) in &self.effects {
+            let part = parts.get(&section).ok_or_else(invalid)?;
+            let map = part.map.ok_or_else(invalid)?;
+            let paragraphs =
+                &decoded.document.sections().get(section).ok_or_else(invalid)?.paragraphs;
+            require(map.paragraphs.len() == paragraphs.len())?;
+            let mut indices = HashMap::new();
+            for (index, paragraph) in map.paragraphs.iter().enumerate() {
+                crate::work::tick();
+                require(
+                    indices.insert((paragraph.outer.start, paragraph.outer.end), index).is_none(),
+                )?;
+            }
+            require(!effect.deleted.is_empty())?;
+            require(effect.deleted.len() == effect.changed.len())?;
+            for span in &effect.deleted {
+                crate::work::tick();
+                let index = *indices.get(&(span.start, span.end)).ok_or_else(invalid)?;
+                let ordinal = part.ordinal_at(span.start, true)?;
+                require(effect.changed.contains(&ordinal.0))?;
+                let element = &part.source.elements()[part.element_at(span.start)?];
+                let root = part.source.element(element.parent()).ok_or_else(invalid)?;
+                require(root.parent() == 0)?;
+                let (_, scope) = original_opening(&part.xml, root, &NamespaceBindings::new())
+                    .ok_or_else(invalid)?;
+                let (tag, _) = original_opening(&part.xml, element, &scope).ok_or_else(invalid)?;
+                check_outline_plain_heading(&decoded.style_store, &paragraphs[index], &tag)?;
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn check_preserved_loss(
         &self,
         section: usize,
@@ -1303,4 +1389,34 @@ pub(crate) fn append_height_replacements(
         edits.push((height.value.clone(), "0".into()));
     }
     Ok(())
+}
+
+fn check_outline_plain_heading(
+    store: &crate::HwpxStyleStore,
+    paragraph: &hwpforge_core::Paragraph,
+    tag: &Tag,
+) -> HwpxResult<()> {
+    use hwpforge_core::StyleLookup;
+    use hwpforge_foundation::{HeadingType, ParaShapeIndex};
+    let id = |name: &str| -> HwpxResult<u32> {
+        tag.attrs.get(name).ok_or_else(invalid)?.parse().map_err(|_| invalid())
+    };
+    let direct = ParaShapeIndex::new(id("paraPrIDRef")? as usize);
+    require(paragraph.para_shape_id == direct)?;
+    let position = id("styleIDRef")? as usize;
+    let reference = paragraph.style_ref.ok_or_else(invalid)?;
+    require(store.style_position(reference)? == position)?;
+    let style = store.style(position)?;
+    require(style.style_type == "PARA")?;
+    for shape in [
+        store.para_shape(direct)?,
+        store.para_shape(ParaShapeIndex::new(style.para_pr_id_ref as usize))?,
+    ] {
+        require(matches!(
+            (shape.heading_type, store.para_list_ref(shape)),
+            (HeadingType::None, Ok(None))
+        ))?;
+    }
+    require(paragraph.heading_level.is_none())?;
+    require(store.style_heading_level(reference).is_none())
 }

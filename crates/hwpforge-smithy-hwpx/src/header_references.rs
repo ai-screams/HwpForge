@@ -182,6 +182,17 @@ impl HeaderReferences {
                         if id == 1 && found.is_ok() {
                             continue;
                         }
+                        if id > 1 && found.is_ok() {
+                            if let Some(source) = source.as_deref_mut() {
+                                let origin = element
+                                    .attributes()
+                                    .filter_map(Result::ok)
+                                    .find(|a| a.key.as_ref() == "_hwpforge_origin")
+                                    .and_then(|a| a.value.as_ref().parse::<usize>().ok())
+                                    .unwrap_or(0);
+                                source.record_section_property_loss(warnings.len(), part, origin);
+                            }
+                        }
                         format!(
                             "{}; Core does not carry section outline selection; output selects 1",
                             found.err().map_or_else(
