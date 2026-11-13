@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/ai-screams/HwpForge/compare/v0.20.0...v0.20.1) - 2026-11-13
+
+### Added
+
+- *(hwpx)* [#337] edit cells of Hancom-saved documents in place with set-cell ([#354](https://github.com/ai-screams/HwpForge/pull/354))
+
+- *(hwpx)* [#143] keep source-preserving deletes open when decode losses stay in the original XML ([#345](https://github.com/ai-screams/HwpForge/pull/345))
+
+- *(hwpx)* [#143] delete verified plain paragraphs from Hancom-saved HWPX ([#343](https://github.com/ai-screams/HwpForge/pull/343))
+
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/v0.19.1...v0.20.0) - 2026-11-07
 
 HWPX 편집이 서명·암호화 문서를 거부하고, 내용을 바꾼 편집이 낡은 한컴 미리보기를 지우도록 바뀐 릴리스다. 자세한 내용과 업그레이드 주의는 `hwpforge-smithy-hwpx`를 따른다.

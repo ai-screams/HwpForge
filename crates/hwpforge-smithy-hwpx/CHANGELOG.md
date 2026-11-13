@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.0...hwpforge-smithy-hwpx-v0.20.1) - 2026-11-13
+
+### Added
+
+- *(hwpx)* [#337] edit cells of Hancom-saved documents in place with set-cell ([#354](https://github.com/ai-screams/HwpForge/pull/354))
+
+- *(hwpx)* [#143] keep source-preserving deletes open for inline tables whose cells use equal 141 margins ([#353](https://github.com/ai-screams/HwpForge/pull/353))
+
+- *(hwpx)* [#143] keep source-preserving deletes open when the only section is marked nonlinear ([#351](https://github.com/ai-screams/HwpForge/pull/351))
+
+- *(hwpx)* [#143] keep source-preserving deletes open when another section selects an outline numbering ([#350](https://github.com/ai-screams/HwpForge/pull/350))
+
+- *(hwpx)* [#143] keep source-preserving deletes open when Hancom script items reorder the package spine ([#349](https://github.com/ai-screams/HwpForge/pull/349))
+
+- *(hwpx)* [#143] admit inline body tables in Hancom-confirmed ranges for source-preserving deletes ([#346](https://github.com/ai-screams/HwpForge/pull/346))
+
+- *(hwpx)* [#143] keep source-preserving deletes open when decode losses stay in the original XML ([#345](https://github.com/ai-screams/HwpForge/pull/345))
+
+- *(hwpx)* [#143] delete verified plain paragraphs from Hancom-saved HWPX ([#343](https://github.com/ai-screams/HwpForge/pull/343))
+
+- *(hwpx)* [#143] check derived values and table heights that structural edits leave behind ([#341](https://github.com/ai-screams/HwpForge/pull/341))
+
+
+### Changed
+
+- *(hwpx)* [#280] keep repeated shape and note wire values in one place ([#334](https://github.com/ai-screams/HwpForge/pull/334))
+
+
+### Fixed
+
+- *(hwpx)* [#338] keep line caches for proven one-line edits in nested body table cells ([#352](https://github.com/ai-screams/HwpForge/pull/352))
+
+- *(hwpx)* [#339] keep one-line caches only for measured fonts ([#344](https://github.com/ai-screams/HwpForge/pull/344))
+
+- *(hwpx)* [#340] keep line caches of sections whose reading order differs from file names ([#342](https://github.com/ai-screams/HwpForge/pull/342))
+
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.1...hwpforge-smithy-hwpx-v0.20.0) - 2026-11-07
 
 HWPX 편집 경로(`patch`, `fill`, `set-cell`, `stamp`, `insert-para`, `delete-para`, `restyle`)가 문서를 더 보수적으로 다루도록 고친 릴리스다. 출력·캐시·경고의 변화와 새로 거부되는 입력은 아래와 "업그레이드 주의"에 모았다.
