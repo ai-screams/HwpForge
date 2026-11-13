@@ -1374,6 +1374,16 @@ fn assert_inline_profile(cell_height: &str, no_adjust: &str, merged: bool) {
 #[test]
 fn inline_zero_cell_table_preserves_established_profile() {
     assert_inline_profile("0", "0", false);
+    let base = inline_table("0", "0", false);
+    assert!(base.contains("horzRelTo='COLUMN'"));
+    inline_case(
+        "equal margins must not extend fixed column profile",
+        &base.replace(
+            "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+            "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+        ),
+        false,
+    );
 }
 // 이것을 실패시키는 것: 기존 병합 프로필의 noAdjust와 셀 높이를 서로 다른 행에서 OR로 조합.
 #[test]
@@ -1847,12 +1857,188 @@ fn inline_result(table: &str) -> HwpxResult<Vec<HeightInvalidation>> {
     )
 }
 fn inline_case(label: &str, xml: &str, accepted: bool) {
-    assert_eq!(inline_result(xml).is_ok(), accepted, "{label}");
+    let result = inline_result(xml);
+    assert_eq!(result.is_ok(), accepted, "{label}");
+    if let Ok(heights) = result {
+        assert_eq!(heights.len(), 1, "{label}");
+        let source = section(&(p("삭제") + &p(xml)));
+        let start = source.find("height='").unwrap() + "height='".len();
+        let end = start + source[start..].find('\'').unwrap();
+        assert_eq!(heights[0].section, 0, "{label}");
+        assert_eq!(heights[0].table_start, source.find(xml).unwrap(), "{label}");
+        assert_eq!(heights[0].value, start..end, "{label}");
+    }
+}
+
+// 이것을 실패시키는 것: 칸 여백 허용 목록에서 사방 141 튜플 제거.
+#[test]
+fn equal_cell_margins_accept_observed_table_margins() {
+    let old = "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>";
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    for grid in [
+        inline_six_column_table(),
+        inline_grid(3, 1, 1, 1),
+        inline_grid(3, 3, 2, 1),
+        inline_grid(3, 3, 1, 3),
+        inline_grid(2, 6, 2, 2),
+    ] {
+        let count = grid.matches(old).count();
+        assert_eq!(count, grid.matches("<hp:tc ").count());
+        for policy in ["0", "1"] {
+            let base =
+                grid.replace("noAdjust='1'", &format!("noAdjust='{policy}'")).replace(old, equal);
+            assert_eq!(base.matches(equal).count(), count);
+            for table in [base.clone(), base.replacen(equal, old, 1)] {
+                let heights = inline_result(&table).expect("approved equal or mixed cell margins");
+                assert_eq!(heights.len(), 1);
+                let xml = section(&(p("삭제") + &p(&table)));
+                assert_eq!(heights[0].section, 0);
+                assert_eq!(heights[0].table_start, xml.find("<hp:tbl ").unwrap());
+                let start = xml.find("height='3130'").unwrap() + "height='".len();
+                assert_eq!(heights[0].value, start..start + 4);
+                assert_eq!(&xml[heights[0].value.clone()], "3130");
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 칸 여백의 완전한 두 튜플 검사 호출 제거.
+#[test]
+fn cell_margins_reject_unlisted_tuples_in_any_cell() {
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    let base = inline_six_column_table()
+        .replace("<hp:cellMargin left='510' right='510' top='141' bottom='141'/>", equal);
+    assert_eq!(base.matches(equal).count(), 12);
+    inline_case("equal control", &base, true);
+    for (l, r, t, b) in [
+        (0, 0, 0, 0),
+        (141, 510, 141, 141),
+        (510, 141, 141, 141),
+        (142, 142, 141, 141),
+        (141, 141, 142, 141),
+        (141, 141, 141, 142),
+    ] {
+        for start in [base.find(equal).unwrap(), base.rfind(equal).unwrap()] {
+            let mut bad = base.clone();
+            bad.replace_range(
+                start..start + equal.len(),
+                &format!("<hp:cellMargin left='{l}' right='{r}' top='{t}' bottom='{b}'/>"),
+            );
+            assert_eq!(bad.matches(equal).count(), 11);
+            inline_case(&format!("unlisted tuple {l}/{r}/{t}/{b} at {start}"), &bad, false);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 표 여백 결합 판정에서 안쪽 여백 비교 제거.
+#[test]
+fn equal_cell_margins_require_inner_table_margin() {
+    let old = "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>";
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    let base = inline_six_column_table();
+    assert_eq!(base.matches(old).count(), 12);
+    for (l, r, t, b, accepted) in
+        [(141, 141, 141, 141, true), (510, 510, 141, 141, false), (283, 283, 283, 283, false)]
+    {
+        let inner = "<hp:inMargin left='141' right='141' top='141' bottom='141'/>";
+        assert_eq!(base.matches(inner).count(), 1);
+        let table = base
+            .replace(
+                inner,
+                &format!("<hp:inMargin left='{l}' right='{r}' top='{t}' bottom='{b}'/>"),
+            )
+            .replace(old, equal);
+        inline_case(&format!("inner {l}/{r}/{t}/{b}"), &table, accepted);
+    }
+    let mut last = base.replace(
+        "<hp:inMargin left='141' right='141' top='141' bottom='141'/>",
+        "<hp:inMargin left='510' right='510' top='141' bottom='141'/>",
+    );
+    let start = last.rfind(old).unwrap();
+    last.replace_range(start..start + old.len(), equal);
+    assert_eq!(last.matches(equal).count(), 1);
+    inline_case("only last cell equal with other inner margin", &last, false);
+}
+
+// 이것을 실패시키는 것: 표 여백 결합 판정에서 바깥 여백 비교 제거.
+#[test]
+fn equal_cell_margins_require_outer_table_margin() {
+    let base = inline_six_column_table().replace(
+        "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+        "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+    );
+    assert_eq!(base.matches("<hp:cellMargin left='141'").count(), 12);
+    let outer = "<hp:outMargin left='283' right='283' top='283' bottom='283'/>";
+    assert_eq!(base.matches(outer).count(), 1);
+    for (l, r, t, b, accepted) in [
+        (283, 283, 283, 283, true),
+        (0, 0, 0, 0, false),
+        (141, 141, 141, 141, false),
+        (141, 141, 0, 141, false),
+        (283, 283, 0, 0, false),
+        (283, 283, 283, 1000, false),
+    ] {
+        inline_case(
+            &format!("outer {l}/{r}/{t}/{b}"),
+            &base.replace(
+                outer,
+                &format!("<hp:outMargin left='{l}' right='{r}' top='{t}' bottom='{b}'/>"),
+            ),
+            accepted,
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 칸의 hasMargin 0 정확값 검사 제거.
+#[test]
+fn equal_cell_margins_require_disabled_cell_margin() {
+    let base = inline_six_column_table().replace(
+        "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+        "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+    );
+    assert_eq!(base.matches("hasMargin='0'").count(), 12);
+    inline_case("disabled margin control", &base, true);
+    let start = base.rfind("hasMargin='0'").unwrap();
+    let mut bad = base;
+    bad.replace_range(start..start + "hasMargin='0'".len(), "hasMargin='1'");
+    assert_eq!(bad.matches("hasMargin='1'").count(), 1);
+    inline_case("last cell enables margin", &bad, false);
+}
+
+// 이것을 실패시키는 것: 숫자 helper의 앞자리 0 거부 제거.
+#[test]
+fn cell_margins_require_canonical_numbers() {
+    let old = "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>";
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    let base = inline_six_column_table();
+    assert_eq!(base.matches(old).count(), 12);
+    inline_case("old control", &base, true);
+    let base = base.replace(old, equal);
+    inline_case("equal control", &base, true);
+    for value in ["0141", "+141", "", "141.0", "4294967296"] {
+        let tag = equal.replace("right='141'", &format!("right='{value}'"));
+        assert_eq!(base.matches(equal).count(), 12);
+        inline_case(&format!("right={value}"), &base.replacen(equal, &tag, 1), false);
+    }
+    inline_case(
+        "missing side",
+        &base.replacen(equal, &equal.replace(" right='141'", ""), 1),
+        false,
+    );
 }
 
 // 이것을 실패시키는 것: H 검사 제거·exact fallback 잔존·H를 기존 경로에도 적용·0/누락 조기 성공.
 #[test]
 fn inline_category_stored_height_edges() {
+    let equal = inline_six_column_table().replace(
+        "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+        "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+    );
+    for (h, accepted) in
+        [("1", true), ("12987", true), ("52523", true), ("0", false), ("52524", false)]
+    {
+        inline_case(h, &equal.replace("height='3130'", &format!("height='{h}'")), accepted);
+    }
     for base in inline_single_axis_tables() {
         for (height, accepted) in [
             ("1", true),
@@ -2046,6 +2232,19 @@ fn inline_category_grid_and_merge_edges() {
 // 이것을 실패시키는 것: 폭·zOrder 상하한 완화/축소, ASCII 숫자 검사 제거, exact 폭 배열 잔존.
 #[test]
 fn inline_category_numeric_edges() {
+    let equal = inline_six_column_table().replace(
+        "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+        "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+    );
+    for (w, accepted) in
+        [(1303, true), (1302, false), (565, false), (848, false), (883, false), (898, false)]
+    {
+        inline_case(
+            &format!("equal cell width {w}"),
+            &equal.replacen("<hp:cellSz width='7969'", &format!("<hp:cellSz width='{w}'"), 1),
+            accepted,
+        );
+    }
     let base = inline_six_column_table();
     for (from, cases) in [
         (
@@ -2272,20 +2471,37 @@ fn inline_category_preserves_content_and_visits_all_cells() {
     }
     inline_case("stored height independent of cells", &wrapped, true);
     inline_case(
+        "equal margins with independent stored height",
+        &wrapped.replace(
+            "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+            "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+        ),
+        true,
+    );
+    inline_case(
         "two paragraphs",
         &wrapped.replacen("</hp:subList>", &format!("{}</hp:subList>", p("두 번째")), 1),
         true,
     );
-    let measure = |rows| {
-        let f = facts(&[section(&p(&inline_grid(rows, 6, 1, 1)))]);
+    let measure = |rows, equal| {
+        let mut grid = inline_grid(rows, 6, 1, 1);
+        if equal {
+            grid = grid.replace(
+                "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>",
+                "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>",
+            );
+        }
+        let f = facts(&[section(&p(&grid))]);
         let part = &f.parts[0];
         let id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
         crate::work::WORK.with(|w| w.set(0));
         assert!(table_profiles::matches(part, id));
         crate::work::WORK.with(|w| w.get())
     };
-    assert_eq!(measure(1), 6);
-    assert_eq!(measure(22), 132);
+    assert_eq!(measure(1, false), 6);
+    assert_eq!(measure(22, false), 132);
+    assert_eq!(measure(1, true), 6);
+    assert_eq!(measure(22, true), 132);
 }
 
 // 이것을 실패시키는 것: wire 속성 누락을 0으로 대체, style_ref None 기본화, strict shape/style 참조 대조 생략.

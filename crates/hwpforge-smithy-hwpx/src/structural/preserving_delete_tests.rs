@@ -563,9 +563,39 @@ fn body_indices_resolve_across_nested_flows_and_keep_cell_caches() {
     }
 }
 
-// 이것을 실패시키는 것: 표 R 검사를 삭제하거나 원래 0인 미지원 표를 면제.
+// 이것을 실패시키는 것: 표 R 검사 삭제, 연속 표의 마지막 칸 여백 검사 누락, 원래 0인 미지원 표 면제.
 #[test]
 fn unsupported_affected_table_returns_original_admission_error() {
+    let base = table_base();
+    let original = xml(&base);
+    let source = references::source(&original).unwrap();
+    let table = source.elements().iter().filter(|e| e.name() == "tbl").nth(1).unwrap().outer();
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    let inline = crate::derived_values::tests::inline_six_column_table()
+        .replace("<hp:cellMargin left='510' right='510' top='141' bottom='141'/>", equal)
+        .replace("<hp:run>칸</hp:run>", "<hp:run charPrIDRef='0'><hp:t>칸</hp:t></hp:run>");
+    assert_eq!(inline.matches(equal).count(), 12);
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    let host = &original[decoded.source_maps[0].paragraphs[2].outer.clone()];
+    let good_host = host.replace(&original[table], &inline);
+    let last_host = good_host.replace("id=\"2\"", "id=\"900\"").replace("id='7'", "id='8'");
+    let base = replace(&base, SECTION, host, &(good_host + &last_host));
+    assert!(HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).is_ok());
+    let mut last_bad = last_host.clone();
+    let start = last_bad.rfind(equal).unwrap();
+    last_bad.replace_range(
+        start..start + equal.len(),
+        "<hp:cellMargin left='141' right='510' top='141' bottom='141'/>",
+    );
+    assert_eq!(last_bad.matches(equal).count(), 11);
+    let bad = replace(&base, SECTION, &last_host, &last_bad);
+    let untouched = bad.clone();
+    assert_eq!(
+        HwpxStructuralEditor::delete_paragraphs(&bad, &[TARGET]).unwrap_err(),
+        original_error(&bad)
+    );
+    assert_eq!(bad, untouched);
+
     for height in ["321", "0"] {
         let base = replace(&table_base(), SECTION, "treatAsChar=\"0\"", "treatAsChar=\"1\"");
         // Change both tables, including the following one.
@@ -1072,6 +1102,129 @@ fn inline_six_column_tables_zero_heights_through_public_delete() {
             original_error(&bad)
         );
     }
+}
+
+// 이것을 실패시키는 것: 칸 여백 허용 목록에서 사방 141 튜플을 제거해 공개 삭제를 거부.
+#[test]
+fn equal_cell_margins_delete_preserves_source_bytes() {
+    let base = table_base();
+    let original = xml(&base);
+    let source = references::source(&original).unwrap();
+    let table = source.elements().iter().filter(|e| e.name() == "tbl").nth(1).unwrap().outer();
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    let host = &original[decoded.source_maps[0].paragraphs[2].outer.clone()];
+    let old = "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>";
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    let mut a = crate::derived_values::tests::inline_six_column_table();
+    assert_eq!(a.matches(old).count(), 12);
+    a = a.replace(old, equal).replacen(equal, old, 1);
+    assert_eq!(a.matches(equal).count(), 11);
+    let mut b = crate::derived_values::tests::inline_six_column_table().replace("id='7'", "id='8'");
+    for (table, first_id) in [(&mut a, 100), (&mut b, 200)] {
+        *table = table
+            .replace("<hp:run>칸</hp:run>", "<hp:run charPrIDRef='0'><hp:t>칸</hp:t></hp:run>")
+            .replace("</hp:p>", &format!("{CACHE}</hp:p>"));
+        for id in first_id..first_id + 12 {
+            *table = table.replacen("<hp:p>", &format!("<hp:p id='{id}'>"), 1);
+        }
+        assert_eq!(table.matches("<hp:p id='").count(), 12);
+    }
+    let hosts = host.replace(&original[table.clone()], &a)
+        + &host.replace(&original[table], &b).replace("id=\"2\"", "id=\"900\"");
+    let base = replace(&base, SECTION, host, &hosts);
+    let base = extra(
+        &extra(&base, "Preview/PrvText.txt", b"old text"),
+        "Preview/PrvImage.png",
+        b"old image",
+    );
+    let text_ref = "<ocf:rootfile full-path='Preview/PrvText.txt' media-type='text/plain'/>";
+    let image_ref = "<ocf:rootfile full-path='Preview/PrvImage.png' media-type='image/png'/>";
+    // 한컴 저장본처럼 텍스트 Preview만 rootfile로 참조하고 이미지 payload는 ZIP에만 둔다.
+    let base = replace(
+        &base,
+        "META-INF/container.xml",
+        "</ocf:rootfiles>",
+        &format!("{text_ref}</ocf:rootfiles>"),
+    );
+    let before = RawPackage::read(&base).unwrap();
+    let container = before.read_text_entry("META-INF/container.xml").unwrap();
+    assert_eq!(container.matches(text_ref).count(), 1);
+    assert_eq!(container.matches(image_ref).count(), 0);
+    let mut expected_container = container.clone();
+    let text_ref_start = container.find(text_ref).unwrap();
+    expected_container.replace_range(text_ref_start..text_ref_start + text_ref.len(), "");
+
+    let original = xml(&base);
+    let source = references::source(&original).unwrap();
+    let elements = source.elements();
+    let top: Vec<_> = elements
+        .iter()
+        .filter(|e| e.name() == "p" && elements[e.parent()].name() == "sec")
+        .collect();
+    assert_eq!(top.len(), 5);
+    assert!(original[top[1].outer()].contains("<hp:t>삭제</hp:t>"));
+    let mut edits = vec![(top[1].outer(), "")];
+    for paragraph in &top[2..] {
+        let caches: Vec<_> = paragraph
+            .children()
+            .iter()
+            .map(|&id| &elements[id])
+            .filter(|e| e.name() == "linesegarray")
+            .collect();
+        assert_eq!(caches.len(), 1);
+        edits.push((caches[0].outer(), ""));
+    }
+    let tables: Vec<_> = elements.iter().filter(|e| e.name() == "tbl").collect();
+    assert_eq!(tables.len(), 3);
+    for table in &tables[1..] {
+        let size =
+            table.children().iter().map(|&id| &elements[id]).find(|e| e.name() == "sz").unwrap();
+        let size_range = size.outer();
+        let size_xml = &original[size_range.clone()];
+        assert_eq!(size_xml.matches("height='3130'").count(), 1);
+        let start = size_range.start + size_xml.find("height='3130'").unwrap() + "height='".len();
+        edits.push((start..start + 4, "0"));
+    }
+    assert_eq!(edits.len(), 6);
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for pair in edits.windows(2) {
+        assert!(pair[1].0.end <= pair[0].0.start);
+    }
+    let mut expected = original.clone();
+    for (range, replacement) in edits {
+        expected.replace_range(range, replacement);
+    }
+    let expected_warnings = HwpxDecoder::decode(&base).unwrap().warnings;
+    assert!(matches!(
+        original_error(&base),
+        StructuralEditError::NotRoundTripSafe { .. }
+            | StructuralEditError::UncarriedZipEntries { .. }
+    ));
+    let result = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&base, &[TARGET])
+        .expect("equal and mixed cell margins permit source-preserving delete");
+    assert_eq!(xml(&result.value), expected, "complete section splice");
+    assert_eq!(result.decode_warnings, expected_warnings);
+    assert_eq!(result.encode_warnings.len(), 1);
+    assert_eq!(result.encode_warnings[0].code(), "PREVIEW_REMOVED");
+    let after = RawPackage::read(&result.value).unwrap();
+    assert_eq!(after.read_text_entry("META-INF/container.xml").unwrap(), expected_container);
+    let before_paths: std::collections::BTreeSet<_> = before.entry_paths().collect();
+    let after_paths: std::collections::BTreeSet<_> = after.entry_paths().collect();
+    assert_eq!(
+        before_paths.difference(&after_paths).copied().collect::<Vec<_>>(),
+        ["Preview/PrvImage.png", "Preview/PrvText.txt"]
+    );
+    assert!(after_paths.difference(&before_paths).next().is_none());
+    let mut changed = Vec::new();
+    for path in before_paths.intersection(&after_paths).copied() {
+        if ["Contents/section0.xml", "META-INF/container.xml"].contains(&path) {
+            assert_ne!(before.read_entry(path).unwrap(), after.read_entry(path).unwrap());
+            changed.push(path);
+        } else {
+            assert_eq!(before.read_entry(path).unwrap(), after.read_entry(path).unwrap(), "{path}");
+        }
+    }
+    assert_eq!(changed, ["Contents/section0.xml", "META-INF/container.xml"]);
 }
 
 fn inline_mixed_height_policy_base() -> (Vec<u8>, String, String) {
