@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.20.0...hwpforge-core-v0.20.1) - 2026-11-13
+
+### Added
+
+- *(hwpx)* [#143] check derived values and table heights that structural edits leave behind ([#341](https://github.com/ai-screams/HwpForge/pull/341))
+
+
+### Changed
+
+- *(hwpx)* [#280] keep repeated shape and note wire values in one place ([#334](https://github.com/ai-screams/HwpForge/pull/334))
+
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.19.1...hwpforge-core-v0.20.0) - 2026-11-07
 
 ### Added
