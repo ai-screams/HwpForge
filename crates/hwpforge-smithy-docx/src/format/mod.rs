@@ -18,9 +18,9 @@ use crate::{
     DocxError, DocxWarning,
 };
 pub(crate) use definitions::Definitions;
-pub(crate) use properties::container_attributes;
 use properties::read_property;
 pub(crate) use properties::PropertyState;
+pub(crate) use properties::{boolean, container_attributes};
 pub(crate) use resolve::Resolver;
 use std::rc::Rc;
 /// Structural lengths in HwpUnit after unit conversion, checked before rounding.

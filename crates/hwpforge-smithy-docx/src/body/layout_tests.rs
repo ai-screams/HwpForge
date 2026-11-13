@@ -179,7 +179,8 @@ fn indexed(body: &str) -> (Vec<super::DecodedSection>, super::Relations) {
     }
     let mut warnings = Vec::new();
     let mut resolver =
-        crate::format::Resolver::new(crate::format::Definitions::default(), &mut warnings).unwrap();
+        crate::format::Resolver::new(crate::format::Definitions::default(), false, &mut warnings)
+            .unwrap();
     let bytes = package.read_main().unwrap();
     let sections = super::scan_formatted(
         &bytes,
@@ -332,7 +333,7 @@ fn retained_wrappers_do_not_promote_nested_sections() {
 fn fragment_and_empty_section_growth_use_document_limits() {
     use super::*;
     let mut warnings = Vec::new();
-    let mut resolver = Resolver::new(Definitions::default(), &mut warnings).unwrap();
+    let mut resolver = Resolver::new(Definitions::default(), false, &mut warnings).unwrap();
     let mut body = Body {
         tables: table::Tables::default(),
         part: "body.xml",
@@ -340,6 +341,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         root: "document",
         root_matches: true,
         default_tab_stop: None,
+        balance_space_width: false,
         body_seen: true,
         final_section_seen: false,
         stack: vec![],

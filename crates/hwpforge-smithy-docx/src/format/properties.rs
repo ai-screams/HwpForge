@@ -477,7 +477,7 @@ pub(crate) fn container_attributes(
 }
 
 /// Both property values and definition flags use the same on/off lexical rules.
-pub(super) fn boolean(
+pub(crate) fn boolean(
     e: &Element,
     key: &str,
     absent: Option<bool>,

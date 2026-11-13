@@ -64,6 +64,8 @@ struct CharResult {
 pub(crate) struct Resolver {
     pub(crate) definitions: Definitions,
     pub(crate) registry: StyleRegistry,
+    // Immutable for this resolver, so every character cache shares this setting.
+    balance_space_width: bool,
     inherited: HashMap<StyleKey, (Delta, usize)>,
     inherited_tables: HashMap<StyleKey, table::TableProperties>,
     named: HashMap<StyleKey, StyleRef>,
@@ -105,6 +107,7 @@ type CharKey = ([FontKey; 3], i32, [bool; 3], u32, bool, Option<u32>, u8);
 impl Resolver {
     pub(crate) fn new(
         mut definitions: Definitions,
+        balance_space_width: bool,
         warnings: &mut Vec<DocxWarning>,
     ) -> Result<Self> {
         let fallback_font = definitions.fonts.fallback()?;
@@ -113,6 +116,7 @@ impl Resolver {
         let mut r = Self {
             definitions,
             registry: StyleRegistry::with_fonts(vec![]),
+            balance_space_width,
             inherited: HashMap::new(),
             inherited_tables: HashMap::new(),
             named: HashMap::new(),
@@ -1063,8 +1067,9 @@ impl Resolver {
         let mut shape = partial
             .resolve("import")
             .map_err(|e| DocxError::invalid("#format", "char", quote(e)))?;
-        // Word uses the font's space glyph width; Hancom defaults to its own space width.
-        shape.use_font_space = true;
+        // Word's width-balancing compatibility setting uses half-em spaces.
+        // Otherwise Word uses the font's space glyph width.
+        shape.use_font_space = !self.balance_space_width;
         shape.font_latin = Some(self.definitions.fonts.name(key.0[1]).to_owned());
         shape.font_east_asian = Some(self.definitions.fonts.name(key.0[2]).to_owned());
         shape.bold = bold;

@@ -65,7 +65,7 @@ fn table_context_precedes_numbering_paragraph_character_and_direct() {
         super::super::definitions::Number { abstract_id: Some(1), ..Default::default() },
     );
     let mut warnings = vec![];
-    let mut r = Resolver::new(d, &mut warnings).unwrap();
+    let mut r = Resolver::new(d, false, &mut warnings).unwrap();
     let mut direct = Delta::default();
     direct.para.num_id = Some(7);
     let v = r
@@ -119,7 +119,7 @@ fn table_context_precedes_numbering_paragraph_character_and_direct() {
 // 이것을 실패시키는 것: 해시 일치만으로 다른 모양 합치기, 모양·delta 한도 검사 제거.
 #[test]
 fn intern_collision_verification_and_admission() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     let plain = Delta::default();
     let a = r.char_shape(&plain).unwrap().id;
     // Place the wrong candidate into the real hash bucket before its correct candidate.
@@ -149,7 +149,7 @@ fn intern_collision_verification_and_admission() {
 // 이것을 실패시키는 것: 음수 0과 양수 0을 다른 key로 등록, None/false 같은 최종값 분리.
 #[test]
 fn canonical_effective_values_share_shapes() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     let a = Delta::default();
     let mut b = a.clone();
     b.char.toggles = [Some(false); 5];
@@ -165,7 +165,7 @@ fn canonical_effective_values_share_shapes() {
 // 이것을 실패시키는 것: 유효 조합 캐시를 매 run마다 다시 계산, 글꼴 문자열 확장 예산 누락.
 #[test]
 fn combination_cache_counts_and_font_storage_are_bounded() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     let id = r.run_input(Delta::default(), None).unwrap();
     let mut p = Paragraph::new(ParaShapeIndex::new(0));
     for _ in 0..100 {
@@ -201,7 +201,7 @@ fn theme_reference_table_and_whole_table_properties() {
     }
     assert!(theme.font("unknown").is_none());
     let d=definitions("<w:style w:type='table' w:styleId='t'><w:tblStylePr w:type='firstRow'><w:rPr><w:b/></w:rPr></w:tblStylePr><w:tblStylePr w:type='wholeTable'><w:rPr><w:i/></w:rPr></w:tblStylePr></w:style>");
-    let r = Resolver::new(d, &mut vec![]).unwrap();
+    let r = Resolver::new(d, false, &mut vec![]).unwrap();
     let v = r
         .context(
             Some(r.definitions.style_key("t", "test", "style").unwrap()),
@@ -268,7 +268,7 @@ fn shared_identifiers_do_not_scale_with_references() {
         let mut d = definitions(&format!("<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:hAnsi='{font}'/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type='paragraph' w:styleId='{style}' w:default='1'/>") );
         let font_key = d.defaults.char.fonts[1].unwrap();
         d.theme.fonts[1][0] = Some(font_key);
-        let mut r = Resolver::new(d, &mut vec![]).unwrap();
+        let mut r = Resolver::new(d, false, &mut vec![]).unwrap();
         let mut delta = Delta::default();
         let e = Element {
             namespace: Rc::from(crate::xml::W_NS.1),
@@ -362,7 +362,7 @@ fn definition_children_and_shared_part_have_linear_byte_work() {
 // 이것을 실패시키는 것: 문맥·최종 조합·문단 표식 개수 한도 삭제 또는 캐시 적중에 한도 적용.
 #[test]
 fn context_and_combination_limits_precede_allocation() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     let run = r.run_input(Delta::default(), None).unwrap();
     let make = || {
         let mut p = Paragraph::new(ParaShapeIndex::new(0));
@@ -479,7 +479,7 @@ fn rational_minima_keep_signed_values_and_exact_boundaries() {
 // 이것을 실패시키는 것: 표식 캐시 적중 무시, 캐시 입력에서 문자 스타일 제거, 직접 pPr를 문자 스타일 앞에만 적용.
 #[test]
 fn styled_marks_cache_character_resolution_and_keep_direct_precedence() {
-    let mut r = Resolver::new(definitions("<w:style w:type='character' w:styleId='c'><w:rPr><w:b/><w:sz w:val='30'/></w:rPr></w:style>"), &mut vec![]).unwrap();
+    let mut r = Resolver::new(definitions("<w:style w:type='character' w:styleId='c'><w:rPr><w:b/><w:sz w:val='30'/></w:rPr></w:style>"), false, &mut vec![]).unwrap();
     let style = r.definitions.style_key("c", "body", "rStyle").unwrap();
     let mut direct = Delta::default();
     direct.char.toggles[0] = Some(false);
@@ -514,7 +514,7 @@ fn character_cache_context_keeps_direct_delta_for_runs_and_marks() {
     let mut d =
         definitions("<w:style w:type='character' w:styleId='c'><w:rPr><w:b/></w:rPr></w:style>");
     d.defaults.char.toggles[0] = Some(false);
-    let mut r = Resolver::new(d, &mut vec![]).unwrap();
+    let mut r = Resolver::new(d, false, &mut vec![]).unwrap();
     let style = r.definitions.style_key("c", "body", "rStyle").unwrap();
     let empty = Delta::default();
     let input = r.run_input(empty.clone(), Some(style)).unwrap();
@@ -544,7 +544,7 @@ fn character_cache_context_keeps_direct_delta_for_runs_and_marks() {
 // 이것을 실패시키는 것: 출력 글꼴 예산 누락·경계 거부 또는 캐시 적중에 예산 적용.
 #[test]
 fn output_font_storage_has_an_independent_budget() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     for i in 10..262_153 {
         r.fonts.insert(FontKey(i), FontIndex::new(0));
     }
@@ -561,7 +561,7 @@ fn output_font_storage_has_an_independent_budget() {
 // 이것을 실패시키는 것: 수동 해시에서 목록 배치 제외.
 #[test]
 fn paragraph_interning_includes_marker_layout() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     let mut s = ParaShape::default();
     let start = ListTextStart::FromAnchor(unit(1800).unwrap());
     for m in [
@@ -645,7 +645,7 @@ fn word_default_tab_arithmetic_is_checked() {
 // 이것을 실패시키는 것: 자동 간격의 해시 또는 동등성에서 새 설정을 누락.
 #[test]
 fn auto_spacing_participates_in_paragraph_interning() {
-    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut r = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
     let mut ids = vec![];
     for spacing in [
         None,
@@ -715,7 +715,7 @@ fn docx_auto_spacing_uses_existing_cascade_order() {
                 ..Default::default()
             },
         );
-        let mut r = Resolver::new(d, &mut vec![]).unwrap();
+        let mut r = Resolver::new(d, false, &mut vec![]).unwrap();
         let mut direct = delta(5);
         direct.para.num_id = Some(7);
         let v = r

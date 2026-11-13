@@ -1213,22 +1213,31 @@ fn script_font_warning_describes_actual_hang_selection() {
     }
 }
 
-// 이것을 실패시키는 것: 기본/본문/문단 끝/문자 스타일/미사용 문단 스타일의
-// Blueprint use_font_space 중 하나를 false로 두고 HWPX 출력에서만 보정.
+// 이것을 실패시키는 것: 설정을 스타일 생성 뒤에 적용하거나 기본/본문/문단 끝/문자 스타일/미사용 스타일 중 일부만 변경.
 #[test]
-fn font_space_is_enabled_for_every_docx_blueprint_shape() {
-    let d = read(
-        "<w:style w:type='paragraph' w:styleId='unused'><w:rPr><w:sz w:val='30'/></w:rPr></w:style><w:style w:type='character' w:styleId='character'><w:rPr><w:sz w:val='28'/></w:rPr></w:style>",
-        "<w:p/><w:p><w:pPr><w:rPr><w:sz w:val='26'/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val='24'/></w:rPr><w:t>A B</w:t></w:r><w:r><w:rPr><w:rStyle w:val='character'/></w:rPr><w:t>가 나</w:t></w:r></w:p>",
-    );
-    let mut actual: Vec<_> = d
-        .registry
-        .char_shapes
-        .iter()
-        .map(|shape| (shape.size.as_i32(), shape.use_font_space))
-        .collect();
-    actual.sort_unstable();
-    assert_eq!(actual, [(1000, true), (1200, true), (1300, true), (1400, true), (1500, true)]);
+fn font_space_setting_applies_to_every_docx_blueprint_shape() {
+    for (compat, expected) in [
+        ("", [(1000, true), (1200, true), (1300, true), (1400, true), (1500, true)]),
+        (
+            "<w:compat><w:balanceSingleByteDoubleByteWidth/></w:compat>",
+            [(1000, false), (1200, false), (1300, false), (1400, false), (1500, false)],
+        ),
+    ] {
+        let styles = format!("<w:styles xmlns:w='{W}'><w:style w:type='paragraph' w:styleId='unused'><w:rPr><w:sz w:val='30'/></w:rPr></w:style><w:style w:type='character' w:styleId='character'><w:rPr><w:sz w:val='28'/></w:rPr></w:style></w:styles>");
+        let settings = format!("<w:settings xmlns:w='{W}'>{compat}</w:settings>");
+        let d = decode_docx(&package(
+            "<w:p/><w:p><w:pPr><w:rPr><w:sz w:val='26'/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val='24'/></w:rPr><w:t>A B</w:t></w:r><w:r><w:rPr><w:rStyle w:val='character'/></w:rPr><w:t>가 나</w:t></w:r></w:p>",
+            &[("styles", "styles.xml", &styles), ("settings", "settings.xml", &settings)],
+        )).unwrap();
+        let mut actual: Vec<_> = d
+            .registry
+            .char_shapes
+            .iter()
+            .map(|shape| (shape.size.as_i32(), shape.use_font_space))
+            .collect();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+    }
 }
 
 // 이것을 실패시키는 것: widow 기본값 false, docDefaults/기본 스타일/basedOn 상속 누락,

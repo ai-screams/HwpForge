@@ -85,6 +85,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut relations = Relations::default();
     let mut valid_roots = HashMap::new();
     let mut default_tab_stop = None;
+    let mut balance_space_width = false;
     // Moving the relationships avoids cloning all input strings or borrowing the
     // package through a read. Shared ZIP targets are scanned only once.
     let mut relationships = std::mem::take(&mut package.relationships);
@@ -164,6 +165,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             let scanned = scan(&bytes, part, root, false, &mut package.text_budget, &mut warnings)?;
             if relation.kind == RelationshipKind::Settings {
                 default_tab_stop = scanned.2;
+                balance_space_width = scanned.3;
             }
             scanned.1
         };
@@ -200,7 +202,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             }
         }
     }
-    let mut resolver = Resolver::new(definitions, &mut warnings)?;
+    let mut resolver = Resolver::new(definitions, balance_space_width, &mut warnings)?;
     resolver.default_tab_stop = default_tab_stop.unwrap_or(3600);
     let bytes = package.read_main()?;
     let sections = scan_formatted(
@@ -359,6 +361,7 @@ struct Body<'a> {
     root: &'a str,
     root_matches: bool,
     default_tab_stop: Option<i32>,
+    balance_space_width: bool,
     body_seen: bool,
     final_section_seen: bool,
     stack: Vec<Frame>,
@@ -405,7 +408,7 @@ fn scan(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<(Vec<DecodedSection>, bool, Option<i32>)> {
+) -> Result<(Vec<DecodedSection>, bool, Option<i32>, bool)> {
     scan_inner(bytes, part, root, main, budget, warnings, None)
 }
 fn scan_formatted(
@@ -426,7 +429,7 @@ fn scan_inner(
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
     resources: Option<(&mut Resolver, &Relations)>,
-) -> Result<(Vec<DecodedSection>, bool, Option<i32>)> {
+) -> Result<(Vec<DecodedSection>, bool, Option<i32>, bool)> {
     let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
     let mut body = Body {
         tables: table::Tables::default(),
@@ -435,6 +438,7 @@ fn scan_inner(
         root,
         root_matches: false,
         default_tab_stop: None,
+        balance_space_width: false,
         body_seen: false,
         final_section_seen: false,
         stack: Vec::new(),
@@ -485,7 +489,7 @@ fn scan_inner(
     if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
         body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
     }
-    Ok((body.sections, body.root_matches, body.default_tab_stop))
+    Ok((body.sections, body.root_matches, body.default_tab_stop, body.balance_space_width))
 }
 
 impl Body<'_> {
@@ -608,7 +612,17 @@ impl Body<'_> {
                     }
                 } else if let Some(parent) = self.stack.last_mut() {
                     if let Node::Compatibility { omitted } = &mut parent.node {
-                        if w && element.name == "suppressSpBfAfterPgBrk" {
+                        if w && element.name == "balanceSingleByteDoubleByteWidth" {
+                            self.balance_space_width = crate::format::boolean(
+                                &element,
+                                "val",
+                                Some(true),
+                                self.part,
+                                &location.to_string(),
+                                self.warnings,
+                            )?
+                            .unwrap_or(false);
+                        } else if w && element.name == "suppressSpBfAfterPgBrk" {
                             match attr(&element, "val") {
                                 None | Some("1" | "true" | "on" | "0" | "false" | "off") => {}
                                 Some(_) => self.warn(

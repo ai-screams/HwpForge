@@ -660,6 +660,8 @@ fn document_settings_have_explicit_losses() {
     for (children, loss, expected) in [
         ("<w:defaultTabStop w:val='1440'/>", "list_marker_default_tab_settings", 1),
         ("<w:trackRevisions/>", "document_settings", 0),
+        ("<w:compat><w:balanceSingleByteDoubleByteWidth/></w:compat>", "document_settings", 0),
+        ("<w:compat><w:balanceSingleByteDoubleByteWidth/><w:compatSetting w:name='x'/></w:compat>", "document_settings", 1),
         ("<w:trackRevisions/><w:defaultTabStop w:val='1440'/>", "list_marker_default_tab_settings", 1),
         ("<w:compat><w:compatSetting w:name='x'/></w:compat><x:trackRevisions xmlns:x='urn:other'/>", "document_settings", 2),
     ] {
