@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
 - 걸침 0인 Word 목록은 지원 decimal·Symbol 표지에 기본 탭 설정을 적용한다. 공유 정의 충돌은 문서 첫 사용처의 head와 상대 margin 이동량을 선택하고 손실을 전달하며 원본 보존 편집은 실패한다.
 
-### Added
+- DOCX 가져오기가 문단별 자동 간격(`autoSpaceDE`·`autoSpaceDN`)의 유효값을 꺼짐까지 그대로 옮긴다. 기본 스타일이 자동 간격을 끈 문서에서 한글과 숫자·영문 사이가 벌어지던 출력이 Word와 같아진다.
 
 - Word 목록의 정렬·suffix·수준 번호 탭·번호 전용 문자 모양 및 Wingdings 원형·사각형을 가져온다. 공백 폭·줄 높이·칸 넘침·문단별 공유 head 충돌은 진단으로 전달하며, 의미 손실이 있는 원본 보존 편집은 실패한다.
 

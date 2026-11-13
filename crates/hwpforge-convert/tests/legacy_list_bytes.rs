@@ -148,3 +148,63 @@ fn legacy_hash_mismatch_names_changed_xml_parts() {
     .expect("changed header changes package bytes");
     assert!(message.starts_with("HWP5; XML part differences: Contents/header.xml:"), "{message}");
 }
+
+// 이것을 실패시키는 것: 미지정 자동 간격을 JSON null 또는 fidelity 항목으로 추가.
+#[test]
+fn auto_spacing_none_preserves_existing_output_bytes() {
+    let out = hwpforge::ops::convert_md(
+        "# Heading\n\n한글 Latin 123\n\n- first\n- second\n",
+        None,
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(package::fingerprint(&out.bytes), 9816744291671968531);
+    let json = hwpforge::ops::to_json(&out.bytes, &Default::default()).unwrap();
+    assert_eq!(
+        package::fingerprint(&serde_json::to_vec_pretty(&json.document).unwrap()),
+        8033325665553933243
+    );
+    let roundtrip = hwpforge::ops::from_json(
+        &serde_json::to_string(&json.document).unwrap(),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(package::fingerprint(&roundtrip.bytes), 9816744291671968531);
+    let template=hwpforge::blueprint::template::Template::from_yaml("meta:\n  name: custom\n  version: 1.0.0\nstyles:\n  body:\n    char_shape: {font: Test, size: 11pt}\n    para_shape: {alignment: Left, spacing: {after: 2pt}}\nmarkdown_mapping:\n  body: body\n").unwrap();
+    let registry = hwpforge::blueprint::registry::StyleRegistry::from_template(&template).unwrap();
+    assert_eq!(package::fingerprint(&serde_json::to_vec(&registry).unwrap()), 785943902290395916);
+    let decoded = hwpforge::md::MdDecoder::decode("한글 Latin 123", &template).unwrap();
+    let bridge =
+        hwpforge::hwpx::HwpxRegistryBridge::from_registry(&decoded.style_registry).unwrap();
+    assert_eq!(
+        package::fingerprint(&serde_json::to_vec(bridge.style_store()).unwrap()),
+        2708013691691149090
+    );
+    let doc = bridge.rebind_draft_document(decoded.document).unwrap().validate().unwrap();
+    let bytes = hwpforge::hwpx::HwpxEncoder::encode(
+        &doc,
+        bridge.style_store(),
+        &hwpforge::core::ImageStore::new(),
+    )
+    .unwrap();
+    assert_legacy_bytes(
+        "template",
+        &bytes,
+        16075229240325534192,
+        &[
+            ("version.xml", 14611401900661807598),
+            ("META-INF/container.xml", 4559238386486593401),
+            ("META-INF/manifest.xml", 15859762740291687696),
+            ("settings.xml", 14377881348694768885),
+            ("Contents/header.xml", 2494241547004455114),
+            ("Contents/section0.xml", 6831112335007471991),
+        ],
+    );
+    let (bytes, _) = hwpforge_convert::hwp5_to_hwpx_bytes(&numbered_hwp5()).unwrap();
+    assert_legacy_bytes(
+        "HWP5",
+        &bytes,
+        9288367002320471023,
+        &legacy_parts(11079467270218028339, 13958206635349407338),
+    );
+}

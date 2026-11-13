@@ -714,6 +714,36 @@ impl ListMarkerLayout {
     }
 }
 
+/// Automatic spacing between East Asian text and Latin letters or digits.
+///
+/// Both values are resolved settings and inherit as one unit; this controls
+/// whether spacing applies, not its size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct EastAsianAutoSpacing {
+    /// Whether to apply automatic spacing between East Asian text and Latin letters.
+    pub latin: bool,
+    /// Whether to apply automatic spacing between East Asian text and digits.
+    pub digit: bool,
+}
+
+impl EastAsianAutoSpacing {
+    /// Creates explicit automatic spacing settings for Latin letters and digits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_blueprint::EastAsianAutoSpacing;
+    ///
+    /// let spacing = EastAsianAutoSpacing::new(false, true);
+    /// assert!(!spacing.latin);
+    /// assert!(spacing.digit);
+    /// ```
+    pub const fn new(latin: bool, digit: bool) -> Self {
+        Self { latin, digit }
+    }
+}
+
 /// Paragraph shape with all optional fields (for YAML parsing and inheritance).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
@@ -759,6 +789,13 @@ pub struct PartialParaShape {
     /// Heading type for outline/numbering styles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_type: Option<HeadingType>,
+    /// Automatic spacing between East Asian text and Latin letters or digits.
+    ///
+    /// A child's Some replaces both parent values together. None inherits the
+    /// parent setting; if still absent after resolution, output uses source
+    /// preservation or layout-profile defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_asian_auto_spacing: Option<EastAsianAutoSpacing>,
 }
 
 impl Spacing {
@@ -850,6 +887,9 @@ impl PartialParaShape {
         if other.list_marker.is_some() {
             self.list_marker = other.list_marker;
         }
+        if other.east_asian_auto_spacing.is_some() {
+            self.east_asian_auto_spacing = other.east_asian_auto_spacing;
+        }
         if other.heading_type.is_some() {
             self.heading_type = other.heading_type;
         }
@@ -885,6 +925,7 @@ impl PartialParaShape {
             tab_def_id: self.tab_def_id.unwrap_or(0),
             list,
             list_marker: self.list_marker,
+            east_asian_auto_spacing: self.east_asian_auto_spacing,
         })
     }
 
@@ -1091,6 +1132,12 @@ pub struct ParaShape {
     /// Shared paragraph list semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list: Option<ParagraphListRef>,
+    /// Automatic spacing between East Asian text and Latin letters or digits.
+    ///
+    /// Some explicitly specifies both values. None uses source preservation
+    /// or layout-profile defaults in the output format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub east_asian_auto_spacing: Option<EastAsianAutoSpacing>,
 }
 
 pub(crate) fn validate_list_marker(
@@ -1683,6 +1730,7 @@ mod tests {
             tab_def_id: 0,
             list: None,
             list_marker: None,
+            east_asian_auto_spacing: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
@@ -1966,5 +2014,115 @@ mod list_marker_tests {
         };
         parent.merge(&child);
         assert_eq!(parent.list_marker, child.list_marker);
+    }
+}
+
+#[cfg(test)]
+mod auto_spacing_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    // 이것을 실패시키는 것: 자식 미지정으로 부모를 지우거나 두 축을 부분 병합.
+    #[test]
+    fn east_asian_auto_spacing_inherits_atomically() {
+        for (parent, child, expected) in [
+            (
+                Some(EastAsianAutoSpacing::new(false, true)),
+                None,
+                Some(EastAsianAutoSpacing::new(false, true)),
+            ),
+            (
+                Some(EastAsianAutoSpacing::new(false, true)),
+                Some(EastAsianAutoSpacing::new(true, false)),
+                Some(EastAsianAutoSpacing::new(true, false)),
+            ),
+            (None, None, None),
+        ] {
+            let mut base =
+                PartialParaShape { east_asian_auto_spacing: parent, ..Default::default() };
+            base.merge(&PartialParaShape { east_asian_auto_spacing: child, ..Default::default() });
+            assert_eq!(base.east_asian_auto_spacing, expected);
+            assert_eq!(base.resolve("body", &[], &[]).unwrap().east_asian_auto_spacing, expected);
+        }
+    }
+
+    // 이것을 실패시키는 것: None 직렬화, 내부 bool 기본값 허용, null bool 허용.
+    #[test]
+    fn east_asian_auto_spacing_json_roundtrips() {
+        for value in [
+            None,
+            Some(EastAsianAutoSpacing::new(false, false)),
+            Some(EastAsianAutoSpacing::new(false, true)),
+            Some(EastAsianAutoSpacing::new(true, false)),
+            Some(EastAsianAutoSpacing::new(true, true)),
+        ] {
+            let partial = PartialParaShape { east_asian_auto_spacing: value, ..Default::default() };
+            let full = partial.resolve("body", &[], &[]).unwrap();
+            for mut encoded in
+                [serde_json::to_value(&partial).unwrap(), serde_json::to_value(&full).unwrap()]
+            {
+                if let Some(v) = value {
+                    assert_eq!(
+                        encoded["east_asian_auto_spacing"],
+                        json!({"latin":v.latin,"digit":v.digit})
+                    );
+                } else {
+                    assert!(encoded.get("east_asian_auto_spacing").is_none());
+                }
+                assert_eq!(
+                    serde_json::from_value::<PartialParaShape>(encoded.clone())
+                        .unwrap()
+                        .east_asian_auto_spacing,
+                    value
+                );
+                if encoded.get("alignment").is_some() {
+                    assert_eq!(
+                        serde_json::from_value::<ParaShape>(encoded.clone())
+                            .unwrap()
+                            .east_asian_auto_spacing,
+                        value
+                    );
+                }
+                if value.is_none() {
+                    encoded["east_asian_auto_spacing"] = Value::Null;
+                    assert_eq!(
+                        serde_json::from_value::<PartialParaShape>(encoded.clone())
+                            .unwrap()
+                            .east_asian_auto_spacing,
+                        None
+                    );
+                    if encoded.get("alignment").is_some() {
+                        assert_eq!(
+                            serde_json::from_value::<ParaShape>(encoded)
+                                .unwrap()
+                                .east_asian_auto_spacing,
+                            None
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                serde_yaml::from_str::<PartialParaShape>(&serde_yaml::to_string(&partial).unwrap())
+                    .unwrap(),
+                partial
+            );
+            assert_eq!(
+                serde_yaml::from_str::<ParaShape>(&serde_yaml::to_string(&full).unwrap()).unwrap(),
+                full
+            );
+        }
+        for invalid in [json!({}), json!({"latin":false}), json!({"latin":null,"digit":true})] {
+            let mut full = serde_json::to_value(ParaShape::default()).unwrap();
+            full["east_asian_auto_spacing"] = invalid.clone();
+            assert!(serde_json::from_value::<ParaShape>(full).is_err());
+            assert!(serde_json::from_value::<PartialParaShape>(
+                json!({"east_asian_auto_spacing":invalid})
+            )
+            .is_err());
+        }
+        assert!(serde_json::from_value::<EastAsianAutoSpacing>(
+            json!({"latin":false,"digit":true,"future":0})
+        )
+        .is_ok());
     }
 }

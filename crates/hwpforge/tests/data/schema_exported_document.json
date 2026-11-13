@@ -6768,7 +6768,7 @@
       "type": "object",
       "properties": {
         "auto_spacing": {
-          "description": "Paragraph-shape position -> explicit automatic spacing, or source element absence.\nJSON editors that move/delete paragraph shapes must move/delete these entries too.",
+          "description": "Paragraph-shape position -> explicit automatic spacing, or source element absence.\nValues are preserved from HWPX or projected from explicit Blueprint settings.\nJSON editors that move/delete paragraph shapes must move/delete these entries too.",
           "type": "object",
           "additionalProperties": false,
           "patternProperties": {

@@ -2,7 +2,7 @@ use super::*;
 use hwpforge_blueprint::{
     registry::StyleRegistry,
     style::{ParaShape, PartialCharShape},
-    ListMarkerAlign, ListMarkerLayout, ListTextStart,
+    EastAsianAutoSpacing, ListMarkerAlign, ListMarkerLayout, ListTextStart,
 };
 use hwpforge_core::{paragraph::Paragraph, ParagraphListRef};
 use hwpforge_foundation::{
@@ -383,6 +383,7 @@ impl Resolver {
         // share `first`.
         // Direct pPr remains last. Style-inherited numPr is unmeasured and keeps
         // the existing numbering-before-paragraph-style order.
+        // Unmeasured: direct ilvl with a style numId inherits; matching style/direct numId is direct.
         if direct.para.num_id.is_some() {
             result.para.overlay_indents(&number_indent);
         }
@@ -551,21 +552,6 @@ impl Resolver {
         base.para.projected_list =
             self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
         base.para.projected_marker = self.marker_layout(&base, direct, mark, part, w)?;
-        for (value, loss) in
-            [(base.para.auto_space_de, "auto_space_de"), (base.para.auto_space_dn, "auto_space_dn")]
-        {
-            if value == Some(false) {
-                warn(
-                    w,
-                    part,
-                    "pPr",
-                    Kind::ValueApproximated,
-                    loss,
-                    "use_profile_default",
-                    "Word-compatible output enables automatic spacing",
-                )?;
-            }
-        }
         if measure_lines {
             // A trailing empty line uses the paragraph mark, or the final effective
             // run at this boundary. Page/column breaks exclude all later fragments.
@@ -1146,6 +1132,14 @@ impl Resolver {
         shape.keep_lines_together = p.keep_lines.unwrap_or(false);
         // Word defaults widowControl to on after style/direct inheritance.
         shape.widow_orphan = p.widow.unwrap_or(true);
+        shape.east_asian_auto_spacing = if p.auto_space_de.is_none() && p.auto_space_dn.is_none() {
+            None
+        } else {
+            Some(EastAsianAutoSpacing::new(
+                p.auto_space_de.unwrap_or(true),
+                p.auto_space_dn.unwrap_or(true),
+            ))
+        };
         self.intern_para(shape)
     }
     fn intern_para(&mut self, shape: ParaShape) -> Result<ParaShapeIndex> {
@@ -1160,7 +1154,12 @@ impl Resolver {
             shape.indent_first_line,
             shape.keep_with_next,
             shape.keep_lines_together,
-            (shape.widow_orphan, lists::ListRef::from_core(shape.list), shape.list_marker),
+            (
+                shape.widow_orphan,
+                lists::ListRef::from_core(shape.list),
+                shape.list_marker,
+                shape.east_asian_auto_spacing,
+            ),
         ));
         if let Some(id) = self.paras.get(&hash).and_then(|bucket| {
             bucket.iter().find(|id| {

@@ -641,3 +641,97 @@ fn word_default_tab_arithmetic_is_checked() {
         assert!(default_tab_gap(a, w, t, ListMarkerAlign::Left).is_err());
     }
 }
+
+// 이것을 실패시키는 것: 자동 간격의 해시 또는 동등성에서 새 설정을 누락.
+#[test]
+fn auto_spacing_participates_in_paragraph_interning() {
+    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut ids = vec![];
+    for spacing in [
+        None,
+        Some(EastAsianAutoSpacing::new(false, false)),
+        Some(EastAsianAutoSpacing::new(false, true)),
+        Some(EastAsianAutoSpacing::new(true, false)),
+        Some(EastAsianAutoSpacing::new(true, true)),
+    ] {
+        let mut delta = Delta::default();
+        if let Some(s) = spacing {
+            delta.para.auto_space_de = Some(s.latin);
+            delta.para.auto_space_dn = Some(s.digit);
+        }
+        let id = r.para_shape(&delta).unwrap();
+        assert_eq!(r.registry.para_shapes[id.get()].east_asian_auto_spacing, spacing);
+        assert_eq!(r.para_shape(&delta).unwrap(), id);
+        assert!(!ids.contains(&id));
+        ids.push(id);
+    }
+    // Distinct settings should occupy distinct hash buckets, rather than a linear scan.
+    assert_eq!(r.para_comparisons.get(), 5);
+}
+
+// 이것을 실패시키는 것: 번호 값을 문단 스타일 뒤에 재적용하거나 미사용 스타일을 전역 기본으로 선택.
+#[test]
+fn docx_auto_spacing_uses_existing_cascade_order() {
+    for stop in 0..6 {
+        let props = |i| {
+            if i <= stop {
+                format!(
+                    "<w:autoSpaceDE w:val='{}'/><w:autoSpaceDN w:val='{}'/>",
+                    i % 2,
+                    (i + 1) % 2
+                )
+            } else {
+                String::new()
+            }
+        };
+        let mut d = definitions(&format!("<w:docDefaults><w:pPrDefault><w:pPr>{}</w:pPr></w:pPrDefault></w:docDefaults><w:style w:type='table' w:styleId='t'><w:pPr>{}</w:pPr></w:style><w:style w:type='paragraph' w:styleId='base'><w:pPr>{}</w:pPr></w:style><w:style w:type='paragraph' w:styleId='p'><w:basedOn w:val='base'/></w:style><w:style w:type='paragraph' w:styleId='unused'><w:pPr><w:autoSpaceDE w:val='0'/><w:autoSpaceDN w:val='0'/></w:pPr></w:style>",props(0),props(1),props(4)));
+        let delta = |i| {
+            let mut v = Delta::default();
+            if i <= stop {
+                v.para.auto_space_de = Some(i % 2 == 1);
+                v.para.auto_space_dn = Some(i % 2 == 0);
+            }
+            v
+        };
+        d.abstracts.insert(
+            1,
+            std::collections::BTreeMap::from([(
+                0,
+                super::super::lists::Level { delta: delta(2), defined: true, ..Default::default() },
+            )]),
+        );
+        d.numbers.insert(
+            7,
+            super::super::definitions::Number {
+                abstract_id: Some(1),
+                levels: std::collections::BTreeMap::from([(
+                    0,
+                    super::super::lists::Level {
+                        delta: delta(3),
+                        defined: true,
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut r = Resolver::new(d, &mut vec![]).unwrap();
+        let mut direct = delta(5);
+        direct.para.num_id = Some(7);
+        let v = r
+            .context(
+                Some(r.definitions.style_key("t", "test", "style").unwrap()),
+                Some(r.definitions.style_key("p", "test", "style").unwrap()),
+                &direct,
+                "body",
+                &mut vec![],
+            )
+            .unwrap();
+        let id = r.para_shape(&v).unwrap();
+        assert_eq!(
+            r.registry.para_shapes[id.get()].east_asian_auto_spacing,
+            Some(EastAsianAutoSpacing::new(stop % 2 == 1, stop % 2 == 0)),
+            "stage {stop}"
+        );
+    }
+}

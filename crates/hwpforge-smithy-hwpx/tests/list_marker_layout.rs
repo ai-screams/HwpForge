@@ -567,7 +567,19 @@ fn hwpx_auto_spacing_fidelity_roundtrips() {
         serde_json::from_value(serde_json::to_value(d).unwrap()).unwrap();
     d.set_layout_profile(hwpforge_core::LayoutProfile::WordCompatible);
     let out = encode(&d.validate().unwrap(), &s);
-    for replacement in [r#"<hh:autoSpacing eAsianEng="0" eAsianNum="1"/>"#, ""] {
+    // 이것을 실패시키는 것: 원본 수치를 bool로 정규화하거나 요소 부재와 키 없음을 합침.
+    for (replacement, de, dn) in [
+        // 이것을 실패시키는 것: 원본 꺼짐을 프로필 기본 켬으로 덮음.
+        (r#"<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>"#, "0", "0"),
+        (r#"<hh:autoSpacing eAsianEng="0" eAsianNum="1"/>"#, "0", "1"),
+        // 이것을 실패시키는 것: 영문 켬과 숫자 꺼짐을 같은 축으로 복사.
+        (r#"<hh:autoSpacing eAsianEng="1" eAsianNum="0"/>"#, "1", "0"),
+        // 이것을 실패시키는 것: 원본 켬을 한컴 프로필 기본 꺼짐으로 덮음.
+        (r#"<hh:autoSpacing eAsianEng="1" eAsianNum="1"/>"#, "1", "1"),
+        // 이것을 실패시키는 것: 원본 비정규 수치를 bool로 정규화.
+        (r#"<hh:autoSpacing eAsianEng="2" eAsianNum="7"/>"#, "2", "7"),
+        ("", "", ""),
+    ] {
         let bytes = package::splice_part(
             &out.bytes,
             "Contents/header.xml",
@@ -587,8 +599,8 @@ fn hwpx_auto_spacing_fidelity_roundtrips() {
         if replacement.is_empty() {
             assert!(a.children.iter().all(|c| c.name != "hh:autoSpacing"));
         } else {
-            assert_eq!(a.child("hh:autoSpacing").attr("eAsianEng"), Some("0"));
-            assert_eq!(a.child("hh:autoSpacing").attr("eAsianNum"), Some("1"));
+            assert_eq!(a.child("hh:autoSpacing").attr("eAsianEng"), Some(de));
+            assert_eq!(a.child("hh:autoSpacing").attr("eAsianNum"), Some(dn));
         }
         let a =
             h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some("21")).unwrap();

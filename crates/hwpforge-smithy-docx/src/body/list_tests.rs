@@ -1137,15 +1137,24 @@ fn word_list_overflow_is_only_diagnosed() {
         1
     );
 }
-// 이것을 실패시키는 것: 파싱 시점에 false를 즉시 경고하거나 cascade에서 true 무시.
+// 이것을 실패시키는 것: 빈 요소를 false로 읽거나 첫 선언으로 고정.
 #[test]
-fn word_auto_spacing_false_is_diagnosed_after_cascade() {
+fn docx_auto_spacing_keeps_boolean_and_duplicate_rules() {
     for (props, expected) in [
-        ("<w:autoSpaceDE w:val='false'/><w:autoSpaceDN/>", true),
-        ("<w:autoSpaceDE w:val='false'/><w:autoSpaceDE/>", false),
+        ("<w:autoSpaceDE w:val='false'/><w:autoSpaceDN/>", false),
+        ("<w:autoSpaceDE w:val='false'/><w:autoSpaceDE/>", true),
+        ("<w:autoSpaceDE/>", true),
+        ("<w:autoSpaceDE w:val='1'/>", true),
+        ("<w:autoSpaceDE w:val='0'/>", false),
+        ("<w:autoSpaceDE w:val='true'/>", true),
+        ("<w:autoSpaceDE w:val='false'/>", false),
     ] {
         let d = layout_input("", props);
-        assert_eq!(d.warnings.iter().any(|w| w.loss() == "auto_space_de"), expected);
+        assert_eq!(
+            marker_shape(&d, 0).east_asian_auto_spacing,
+            Some(hwpforge_blueprint::EastAsianAutoSpacing::new(expected, true))
+        );
+        assert!(!d.warnings.iter().any(|w| w.loss() == "auto_space_de"));
         assert!(!d.warnings.iter().any(|w| w.loss() == "auto_space_dn"));
     }
 }
@@ -1281,21 +1290,24 @@ fn word_number_tabs_are_bounded_and_diagnosed() {
     ));
 }
 
-// 이것을 실패시키는 것: 미사용 스타일의 false를 경고하거나 뒤의 true 재정의를 무시.
+// 이것을 실패시키는 것: 두 축을 같은 값으로 복사하거나 직접 값으로 다른 상속값 제거.
 #[test]
-fn word_auto_spacing_uses_only_effective_paragraph_values() {
+fn docx_auto_spacing_axes_resolve_independently() {
     let styles=format!("<w:styles xmlns:w='{W}'><w:style w:type='paragraph' w:styleId='de'><w:pPr><w:autoSpaceDE w:val='false'/><w:autoSpaceDN/></w:pPr></w:style><w:style w:type='paragraph' w:styleId='unused'><w:pPr><w:autoSpaceDN w:val='false'/></w:pPr></w:style></w:styles>");
     for (direct, de, dn) in [
-        ("", true, false),
-        ("<w:autoSpaceDE/>", false, false),
-        ("<w:autoSpaceDE/><w:autoSpaceDN w:val='false'/>", false, true),
+        ("", false, true),
+        ("<w:autoSpaceDE/>", true, true),
+        ("<w:autoSpaceDE/><w:autoSpaceDN w:val='false'/>", true, false),
     ] {
         let body = format!(
             "<w:p><w:pPr><w:pStyle w:val='de'/>{direct}</w:pPr><w:r><w:t>body</w:t></w:r></w:p>"
         );
         let d = decode_docx(&package(&body, &[("styles", "styles.xml", &styles)])).unwrap();
-        assert_eq!(d.warnings.iter().any(|w| w.loss() == "auto_space_de"), de);
-        assert_eq!(d.warnings.iter().any(|w| w.loss() == "auto_space_dn"), dn);
+        assert_eq!(
+            marker_shape(&d, 0).east_asian_auto_spacing,
+            Some(hwpforge_blueprint::EastAsianAutoSpacing::new(de, dn))
+        );
+        assert!(!d.warnings.iter().any(|w| matches!(w.loss(), "auto_space_de" | "auto_space_dn")));
     }
 }
 

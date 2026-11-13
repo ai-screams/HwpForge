@@ -11,6 +11,7 @@ use crate::schema::header::{HxBulletParaHead, HxRefList};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct HeaderFidelity {
     /// Paragraph-shape position -> explicit automatic spacing, or source element absence.
+    /// Values are preserved from HWPX or projected from explicit Blueprint settings.
     /// JSON editors that move/delete paragraph shapes must move/delete these entries too.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub auto_spacing: BTreeMap<u32, Option<[u32; 2]>>,

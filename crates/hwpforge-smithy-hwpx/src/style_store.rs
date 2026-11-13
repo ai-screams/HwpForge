@@ -2104,7 +2104,7 @@ fn build_store_from_registry_with(
             })?;
             store.list_marker_layouts.insert(position, layout);
         }
-        para_shape_map.push(store.push_para_shape(HwpxParaShape {
+        let output_position = store.push_para_shape(HwpxParaShape {
             alignment: ps.alignment,
             margin_left: ParagraphMeasure::from_hwp_unit(ps.indent_left),
             margin_right: ParagraphMeasure::from_hwp_unit(ps.indent_right),
@@ -2136,7 +2136,17 @@ fn build_store_from_registry_with(
             )? as u32,
             condense: 0,
             ..HwpxParaShape::default()
-        }));
+        });
+        if let Some(value) = ps.east_asian_auto_spacing {
+            let position = u32::try_from(output_position.get()).map_err(|_| {
+                HwpxError::InvalidStructure { detail: "paragraph shape position overflow".into() }
+            })?;
+            store
+                .header_fidelity
+                .auto_spacing
+                .insert(position, Some([u32::from(value.latin), u32::from(value.digit)]));
+        }
+        para_shape_map.push(output_position);
     }
 
     for (index, mut tab) in tabs.into_iter().enumerate() {

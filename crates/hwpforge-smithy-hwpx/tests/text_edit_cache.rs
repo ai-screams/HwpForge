@@ -1185,3 +1185,58 @@ fn preserving_patch_resolves_element_aliases_from_the_section_root() {
         assert_eq!(paragraph.find("hp:t").text, "1");
     }
 }
+
+// 이것을 실패시키는 것: 0/0만으로 Word 한 줄 편집을 허용하거나 요소 부재를 0/0으로 취급.
+#[test]
+fn auto_spacing_keeps_single_line_edits_fail_closed() {
+    for is_field in [false, true] {
+        for (word, spacing, kept) in [
+            (true, Some([0, 0]), false),
+            (false, Some([0, 1]), false),
+            (false, Some([1, 0]), false),
+            (false, Some([1, 1]), false),
+            (false, None, false),
+            (false, Some([0, 0]), true),
+        ] {
+            let body = if is_field { field("edit") } else { para("원래 값") };
+            let mut bytes = input(vec![para("앞"), body, para("뒤")]);
+            if word {
+                bytes = package::splice_part(
+                    &bytes,
+                    "Contents/header.xml",
+                    "targetProgram=\"HWP201X\"",
+                    "targetProgram=\"MS_WORD\"",
+                );
+            }
+            let spacing = spacing
+                .map(|[de, dn]| format!(r#"<hh:autoSpacing eAsianEng="{de}" eAsianNum="{dn}"/>"#))
+                .unwrap_or_default();
+            bytes = package::splice_part(
+                &bytes,
+                "Contents/header.xml",
+                r#"<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>"#,
+                &spacing,
+            );
+            let out = if is_field {
+                HwpxFiller::fill(
+                    &bytes,
+                    &std::collections::BTreeMap::from([("edit".into(), "1".into())]),
+                )
+                .unwrap()
+                .bytes
+            } else {
+                patch(&bytes, "1")
+            };
+            let positions = vertpos(&package::section_xml(&out));
+            assert_eq!(
+                positions,
+                [
+                    Some("9000".into()),
+                    if kept { Some("9001".into()) } else { None },
+                    Some("9002".into())
+                ],
+                "word={word},spacing={spacing},field={is_field}"
+            );
+        }
+    }
+}

@@ -29,6 +29,31 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    // 이것을 실패시키는 것: 외부 필드 필수화, 내부 digit 선택화 또는 bool 타입 변경.
+    #[test]
+    fn east_asian_auto_spacing_schema_is_optional_and_complete() {
+        use crate::style::ParaShape;
+        use serde_json::{json, Value};
+        for (schema, name) in [
+            (serde_json::to_value(template_schema()).unwrap(), Some("PartialParaShape")),
+            (serde_json::to_value(schemars::schema_for!(ParaShape)).unwrap(), None),
+        ] {
+            let para = name.map_or(&schema, |n| &schema["$defs"][n]);
+            assert!(!para["required"]
+                .as_array()
+                .is_some_and(|r| r.contains(&json!("east_asian_auto_spacing"))));
+            let field = &para["properties"]["east_asian_auto_spacing"];
+            assert!(valid(field, &Value::Null, &schema));
+            assert!(valid(field, &json!({"latin":false,"digit":true}), &schema));
+            assert!(!valid(field, &json!({"latin":false,"digit":null}), &schema));
+            let inner = &schema["$defs"]["EastAsianAutoSpacing"];
+            assert_eq!(inner["required"], json!(["latin", "digit"]));
+            for axis in ["latin", "digit"] {
+                assert_eq!(inner["properties"][axis]["type"], "boolean");
+            }
+        }
+    }
+
     #[test]
     fn schema_is_valid_json() {
         let json = template_schema_json();

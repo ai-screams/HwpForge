@@ -701,3 +701,44 @@ fn equivalent_hancom_compatibility_keeps_proven_cell_cache() {
         1
     );
 }
+
+// 이것을 실패시키는 것: 자동 간격의 두 축 또는 compatibility 조건 중 하나를 한 줄 증명에서 생략.
+#[test]
+fn auto_spacing_keeps_single_line_edits_fail_closed() {
+    for (word, spacing, kept) in [
+        (true, Some([0, 0]), false),
+        (false, Some([0, 1]), false),
+        (false, Some([1, 0]), false),
+        (false, Some([1, 1]), false),
+        (false, None, false),
+        (false, Some([0, 0]), true),
+    ] {
+        let mut bytes = fixture(1050);
+        if word {
+            bytes = package::splice_part(
+                &bytes,
+                "Contents/header.xml",
+                "targetProgram=\"HWP201X\"",
+                "targetProgram=\"MS_WORD\"",
+            );
+        }
+        let spacing = spacing
+            .map(|[de, dn]| format!(r#"<hh:autoSpacing eAsianEng="{de}" eAsianNum="{dn}"/>"#))
+            .unwrap_or_default();
+        bytes = package::splice_part(
+            &bytes,
+            "Contents/header.xml",
+            r#"<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>"#,
+            &spacing,
+        );
+        let out = edit(&bytes, "힣");
+        assert_eq!(
+            xml::Element::parse(&package::section_xml(&out))
+                .find("hp:tc")
+                .descendants("hp:lineseg")
+                .len(),
+            usize::from(kept),
+            "word={word},spacing={spacing}"
+        );
+    }
+}
