@@ -320,6 +320,11 @@ fn admit_delete(
     edit_checkpoint!("admission-decode");
     let d1 = HwpxDecoder::decode(&e0)
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
+    crate::stamp::compare_layout_profile(
+        d0.document.layout_profile(),
+        d1.document.layout_profile(),
+    )
+    .map_err(map_admission)?;
     let comparison = admission_compare(&d0, &d1).map_err(map_admission);
     let comparison = edit_checkpoint!("compare" => comparison);
     let error = match comparison {
@@ -1061,6 +1066,7 @@ fn normalize_header_for_edit(
             &decoded.style_store,
             sections.len() as u32,
             sections.first().and_then(|s| s.begin_num.as_ref()),
+            &crate::layout_compatibility::for_document(&decoded.document),
         )
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         use crate::encoder::package::HEADER_PART;

@@ -123,7 +123,7 @@ impl Resolver {
             let mut effective = r.context(None, Some(id), &Delta::default(), &part, warnings)?;
             let c =
                 r.character(&effective, &Delta::default(), &RunInput::default(), &part, warnings)?;
-            if effective.para.line.is_none() || effective.para.line_rule != Some(1) {
+            if effective.para.line.is_some() && effective.para.line_rule == Some(2) {
                 // Definitions have no text: use the empty paragraph mark policy.
                 // Body paragraphs instead select script slots from actual characters.
                 let east = c.line_fonts[1].is_some();
@@ -357,6 +357,8 @@ impl Resolver {
             next
         };
         let exact = base.para.line.is_some() && base.para.line_rule == Some(1);
+        let project_minimum = base.para.line.is_some() && base.para.line_rule == Some(2);
+        let measure_height = project_minimum || measure_lines;
         let mut height = line_height::Height::default();
         let mut line_height = line_height::Height::default();
         let mut line_east = false;
@@ -391,7 +393,10 @@ impl Resolver {
             // script evidence in a nonempty paragraph. For an empty paragraph,
             // only its explicit mark or final effective run supplies the height.
             let empty_mark = empty && mark.is_none() && index == last_run;
-            if !exact && (empty_mark || run.content.as_text().is_some_and(|t| !t.is_empty())) {
+            if !exact
+                && measure_height
+                && (empty_mark || run.content.as_text().is_some_and(|t| !t.is_empty()))
+            {
                 let text = run.content.as_text().unwrap_or("");
                 let has_east = text.chars().any(line_height::east_asian);
                 let has_latin = text.chars().any(|c| !line_height::east_asian(c));
@@ -465,7 +470,7 @@ impl Resolver {
             p.end_char_shape = Some(result.id);
             format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
             // An unresolved explicit mark makes the entire height unverified.
-            if !exact {
+            if !exact && measure_height {
                 east |= empty && result.line_fonts[1].is_some();
                 self.add_height(&mut height, result, east, part, w)?;
                 if measure_lines && fragment_end == p.runs.len() {
@@ -475,12 +480,12 @@ impl Resolver {
                 }
             }
         }
-        if !exact {
+        if project_minimum {
             base.para.projected_line = height.project(&base.para, east)?;
-            if height.mixed() {
-                warn(w, part, "pPr", Kind::ValueApproximated, "mixed_font_line_height",
-                    "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
-            }
+        }
+        if !exact && measure_height && height.mixed() {
+            warn(w, part, "pPr", Kind::ValueApproximated, "mixed_font_line_height",
+                "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
         }
         base.para.projected_list =
             self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
@@ -520,7 +525,7 @@ impl Resolver {
         if let Some(key) = key.filter(|_| metrics.is_none()) {
             if self.unknown_metrics.insert(key) {
                 warn(w, part, "rFonts", Kind::ValueApproximated, "unknown_font_line_height",
-                    "retain_spacing", format_args!("Unknown natural line metrics for '{}'; raw auto multiplier or specified minimum retained", self.definitions.fonts.name(key)))?;
+                    "retain_spacing", format_args!("Unknown natural line metrics for '{}'; cell minimum or specified minimum uses fallback metrics", self.definitions.fonts.name(key)))?;
             }
         }
         height.add(c.size, metrics);

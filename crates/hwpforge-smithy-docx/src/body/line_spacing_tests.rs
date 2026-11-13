@@ -22,13 +22,13 @@ fn loss(d: &DocxDecoded, name: &str) -> u64 {
     d.warnings.iter().filter(|w| w.loss() == name).map(|w| w.count()).sum()
 }
 
-// 이것을 실패시키는 것: auto 배수만 복사, 바탕 lineGap 포함, 물리 간격의 ×2 누락, 최소 자연 높이 누락.
+// 이것을 실패시키는 것: auto 배수에 자연 높이 재적용, 물리 간격의 ×2 누락, 최소 자연 높이 누락.
 #[test]
 fn measured_line_height_contracts() {
     for (font, size, rule, line, kind, value) in [
-        ("맑은 고딕", 22, "auto", 276, LineSpacingType::Percentage, 199.0),
-        ("Malgun Gothic", 20, "auto", 240, LineSpacingType::Percentage, 173.0),
-        ("바탕", 22, "auto", 360, LineSpacingType::Percentage, 195.0),
+        ("맑은 고딕", 22, "auto", 276, LineSpacingType::Percentage, 115.0),
+        ("Malgun Gothic", 20, "auto", 240, LineSpacingType::Percentage, 100.0),
+        ("바탕", 22, "auto", 360, LineSpacingType::Percentage, 150.0),
         ("굴림", 24, "exact", 400, LineSpacingType::Fixed, 4000.0),
         ("맑은 고딕", 22, "atLeast", 360, LineSpacingType::AtLeast, 3804.0),
         ("맑은 고딕", 22, "atLeast", 600, LineSpacingType::AtLeast, 6000.0),
@@ -56,58 +56,58 @@ fn unknown_metrics_warn_once_per_font_and_preserve_raw_values() {
     let p = "<w:p><w:pPr><w:spacing w:line='276'/></w:pPr><w:r><w:t>가</w:t></w:r><w:r><w:t>나</w:t></w:r></w:p>";
     let d = read(&defaults("Unknown", 22), &p.repeat(3));
     assert!(shapes(&d).iter().all(|s| s.line_spacing_value == 115.0));
-    assert_eq!(loss(&d, "unknown_font_line_height"), 1);
+    assert_eq!(loss(&d, "unknown_font_line_height"), 0);
     let d = read(&defaults("Unknown", 22), "<w:p><w:pPr><w:spacing w:line='360' w:lineRule='atLeast'/></w:pPr><w:r><w:t>가</w:t></w:r></w:p>");
     assert_eq!(shapes(&d)[0].line_spacing_value, 3600.0);
     assert_eq!(loss(&d, "unknown_font_line_height"), 1);
 }
 
-// 이것을 실패시키는 것: 라틴에도 1.3 적용, 사용하지 않는 동아시아 칸을 높이로 선택.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn script_selection_and_font_aliases() {
+fn auto_multiplier_is_independent_of_script_and_font_aliases() {
     for (font, text, value) in [
-        ("Calibri", "abc", 122.0),
-        ("Cambria", "abc", 117.0),
-        ("HCR Batang", "한글", 169.0),
-        ("함초롬돋움", "한글", 169.0),
-        ("Batang", "漢字かなカナ", 130.0),
-        ("Gulim", "한글", 130.0),
-        ("함초롬바탕", "한글", 169.0),
-        ("HCR Dotum", "한글", 169.0),
+        ("Calibri", "abc", 100.0),
+        ("Cambria", "abc", 100.0),
+        ("HCR Batang", "한글", 100.0),
+        ("함초롬돋움", "한글", 100.0),
+        ("Batang", "漢字かなカナ", 100.0),
+        ("Gulim", "한글", 100.0),
+        ("함초롬바탕", "한글", 100.0),
+        ("HCR Dotum", "한글", 100.0),
     ] {
         let d = read(&defaults(font, 22), &format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"));
         assert_eq!(shapes(&d)[0].line_spacing_value.round(), value, "{font}");
     }
     let d = read("", "<w:p><w:r><w:rPr><w:rFonts w:ascii='Calibri' w:eastAsia='Unknown'/><w:sz w:val='22'/></w:rPr><w:t>abc</w:t></w:r></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 122.0);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
     assert_eq!(loss(&d, "unknown_font_line_height"), 0);
 }
 
-// 이것을 실패시키는 것: 가장 큰 run만 선택, 기준 크기 합산, 혼합 경고 중복, 끝 서식 무시.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn mixed_runs_and_paragraph_mark_use_separate_extrema() {
+fn auto_multiplier_ignores_mixed_runs_and_paragraph_mark_height() {
     let d = read(&defaults("맑은 고딕", 22), "<w:p><w:r><w:t>가</w:t></w:r><w:r><w:rPr><w:sz w:val='40'/></w:rPr><w:t>나</w:t></w:r><w:r><w:t>다</w:t></w:r></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 173.0);
-    assert_eq!(loss(&d, "mixed_font_line_height"), 1);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
+    assert_eq!(loss(&d, "mixed_font_line_height"), 0);
     let d = read(&defaults("Cambria", 22), "<w:p><w:pPr><w:rPr><w:rFonts w:ascii='Calibri' w:hAnsi='Calibri'/><w:sz w:val='40'/></w:rPr></w:pPr><w:r><w:t>abc</w:t></w:r></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 122.0);
-    assert_eq!(loss(&d, "mixed_font_line_height"), 1);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
+    assert_eq!(loss(&d, "mixed_font_line_height"), 0);
     let d = read(&defaults("Cambria", 22), "<w:p><w:r><w:t>a</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:hAnsi='맑은 고딕'/></w:rPr><w:t>b</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii='Calibri' w:hAnsi='Calibri'/></w:rPr><w:t>c</w:t></w:r></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 136.0);
-    assert_eq!(loss(&d, "mixed_font_line_height"), 1);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
+    assert_eq!(loss(&d, "mixed_font_line_height"), 0);
 }
 
-// 이것을 실패시키는 것: named style 보정값 재사용 후 재보정, run 문자 스타일·직접 크기 무시.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn inherited_spacing_is_projected_once_after_run_resolution() {
+fn inherited_auto_multiplier_matches_named_and_effective_shapes() {
     let styles = format!("{}<w:style w:type='paragraph' w:styleId='p'><w:pPr><w:spacing w:line='276'/></w:pPr></w:style><w:style w:type='character' w:styleId='c'><w:rPr><w:rFonts w:ascii='바탕' w:hAnsi='바탕' w:eastAsia='바탕'/></w:rPr></w:style>", defaults("맑은 고딕", 22));
     let d = read(&styles, "<w:p><w:pPr><w:pStyle w:val='p'/></w:pPr><w:r><w:t>한글</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val='p'/></w:pPr><w:r><w:rPr><w:rStyle w:val='c'/><w:sz w:val='40'/></w:rPr><w:t>한글</w:t></w:r></w:p>");
     assert_eq!(
         shapes(&d).iter().map(|s| s.line_spacing_value.round()).collect::<Vec<_>>(),
-        [199.0, 150.0]
+        [115.0, 115.0]
     );
     let named = d.registry.style_entries().values().next().unwrap();
-    assert_eq!(d.registry.para_shapes[named.para_shape_id.get()].line_spacing_value.round(), 199.0);
+    assert_eq!(d.registry.para_shapes[named.para_shape_id.get()].line_spacing_value.round(), 115.0);
 }
 
 fn contextual_styles() -> String {
@@ -152,7 +152,7 @@ fn ordinary_boundaries_stop_at_tables_and_sections() {
         let expected = if separator.contains("sectPr") {
             vec![(300, 1000), (0, 500), (0, 0)]
         } else {
-            vec![(300, 1000), (0, 0), (1200, 500), (0, 0)]
+            vec![(300, 1000), (1200, 500), (0, 0)]
         };
         assert_eq!(gaps(&d), expected);
     }
@@ -178,7 +178,7 @@ fn ordinary_boundaries_keep_fragment_and_page_break_contracts() {
 fn contextual_spacing_respects_identity_and_each_side_switch() {
     let d = read(&contextual_styles(), "<w:p><w:r><w:t>가</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val='p'/></w:pPr><w:r><w:t>나</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val='q'/></w:pPr></w:p>");
     assert_eq!(gaps(&d), [(200, 0), (0, 800), (0, 800)]);
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 173.0);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
     let d = read(
         &contextual_styles(),
         "<w:p/><w:p><w:pPr><w:contextualSpacing w:val='0'/></w:pPr></w:p><w:p/>",
@@ -190,7 +190,8 @@ fn contextual_spacing_respects_identity_and_each_side_switch() {
 #[test]
 fn contextual_spacing_boundaries_and_split_fragments() {
     let d = read(&contextual_styles(), "<w:p/><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:pPr><w:sectPr/></w:pPr></w:p><w:p/>");
-    assert_eq!(gaps(&d), [(200, 800), (0, 0), (200, 800), (0, 800)]);
+    // 이것을 실패시키는 것: 구역 마지막 실제 문단 앞에 합성 표 holder를 남기기.
+    assert_eq!(gaps(&d), [(200, 800), (200, 800), (0, 800)]);
     let d = read(
         &contextual_styles(),
         "<w:p/><w:p><w:r><w:t>가</w:t><w:br w:type='page'/><w:t>나</w:t></w:r></w:p><w:p/>",
@@ -207,7 +208,7 @@ fn contextual_spacing_boundaries_and_split_fragments() {
 #[test]
 fn empty_mark_exact_and_missing_line_edges() {
     let d = read("", "<w:p><w:pPr><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr></w:pPr></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 173.0);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
     let d = read(&defaults("Unknown", 22), "<w:p><w:pPr><w:spacing w:line='400' w:lineRule='exact'/></w:pPr><w:r><w:t>한글</w:t></w:r></w:p>");
     assert_eq!(shapes(&d)[0].line_spacing_value, 4000.0);
     assert_eq!(loss(&d, "unknown_font_line_height"), 0);
@@ -216,16 +217,16 @@ fn empty_mark_exact_and_missing_line_edges() {
     let s = &d.registry.para_shapes[named.para_shape_id.get()];
     assert_eq!(
         (s.line_spacing_type, s.line_spacing_value.round()),
-        (LineSpacingType::Percentage, 173.0)
+        (LineSpacingType::Percentage, 100.0)
     );
-    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 173.0);
+    assert_eq!(shapes(&d)[0].line_spacing_value.round(), 100.0);
 }
 
 // 이것을 실패시키는 것: 미지 글꼴을 문서당 하나로 합치기, 미지 metric만으로 혼합 경고, 원래 line=0을 기본값으로 대체.
 #[test]
 fn unknown_fonts_are_counted_by_id_and_zero_is_preserved() {
     let d = read(&defaults("Unknown", 22), "<w:p><w:r><w:t>가</w:t></w:r><w:r><w:rPr><w:rFonts w:eastAsia='Other'/></w:rPr><w:t>나</w:t></w:r></w:p>");
-    assert_eq!(loss(&d, "unknown_font_line_height"), 2);
+    assert_eq!(loss(&d, "unknown_font_line_height"), 0);
     assert_eq!(loss(&d, "mixed_font_line_height"), 0);
     assert_eq!(shapes(&d)[0].line_spacing_value, 100.0);
     let d = read(
@@ -235,20 +236,20 @@ fn unknown_fonts_are_counted_by_id_and_zero_is_preserved() {
     assert_eq!(shapes(&d)[0].line_spacing_value, 0.0);
 }
 
-// 이것을 실패시키는 것: 동아시아 문자를 라틴 칸으로 처리, 한 run의 다른 문자권 높이 무시.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn selected_script_slots_both_contribute_to_height() {
-    for (text, expected, mixed) in [("가", 173.0, 0), ("A가", 176.0, 1)] {
+fn auto_multiplier_is_independent_of_selected_script_slots() {
+    for (text, expected, mixed) in [("가", 100.0, 0), ("A가", 100.0, 0)] {
         let d = read("", &format!("<w:p><w:r><w:rPr><w:rFonts w:ascii='Calibri' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>{text}</w:t></w:r></w:p>"));
         assert_eq!(shapes(&d)[0].line_spacing_value.round(), expected);
         assert_eq!(loss(&d, "mixed_font_line_height"), mixed);
     }
 }
 
-// 이것을 실패시키는 것: 명시하지 않은 끝 글꼴을 기본값으로 합성, 명시한 끝 서식까지 무시.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn absent_mark_follows_final_run_but_explicit_mark_is_inherited() {
-    for (mark, expected, mixed) in [("", 195.0, 0), ("<w:rPr/>", 259.0, 0)] {
+fn auto_multiplier_is_independent_of_paragraph_mark_metrics() {
+    for (mark, expected, mixed) in [("", 150.0, 0), ("<w:rPr/>", 150.0, 0)] {
         let d = read(&defaults("맑은 고딕", 22), &format!("<w:p><w:pPr><w:spacing w:line='360'/>{mark}</w:pPr><w:r><w:rPr><w:rFonts w:ascii='바탕' w:hAnsi='바탕' w:eastAsia='바탕'/></w:rPr><w:t>한글</w:t></w:r></w:p>"));
         assert_eq!(shapes(&d)[0].line_spacing_value.round(), expected);
         assert_eq!(loss(&d, "mixed_font_line_height"), mixed);
@@ -312,21 +313,19 @@ fn empty_runs_and_moved_break_do_not_change_latin_height() {
         "<w:r><w:t>abc</w:t><w:br w:type='page'/></w:r>",
     ] {
         let d = read(&styles, &format!("<w:p><w:pPr><w:spacing w:line='240'/></w:pPr>{runs}</w:p><w:p><w:r><w:t>next</w:t></w:r></w:p>"));
-        assert_eq!(shapes(&d)[0].line_spacing_value, 122.0703125);
+        assert_eq!(shapes(&d)[0].line_spacing_value, 100.0);
         assert_eq!(loss(&d, "mixed_font_line_height"), 0);
         assert_eq!(loss(&d, "unknown_font_line_height"), 0);
         assert_eq!(loss(&d, "paragraph_split"), 0);
     }
 }
 
-// 이것을 실패시키는 것: 크기가 같고 한 글꼴이 양쪽 최대치를 제공해도 혼합 경고.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn mixed_warning_requires_composite_extrema_or_different_sizes() {
-    for (latin, expected, warnings) in [
-        ("Cambria", 172.91015625, 0),
-        ("Calibri", 176.4013671875, 1),
-        ("맑은 고딕", 172.91015625, 0),
-    ] {
+fn auto_spacing_does_not_claim_mixed_metric_approximation() {
+    for (latin, expected, warnings) in
+        [("Cambria", 100.0, 0), ("Calibri", 100.0, 0), ("맑은 고딕", 100.0, 0)]
+    {
         for text in ["A가", "가A"] {
             let d = read("", &format!("<w:p><w:r><w:rPr><w:rFonts w:ascii='{latin}' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>{text}</w:t></w:r></w:p>"));
             assert_eq!(shapes(&d)[0].line_spacing_value, expected);
@@ -335,22 +334,19 @@ fn mixed_warning_requires_composite_extrema_or_different_sizes() {
     }
 }
 
-// 이것을 실패시키는 것: 스타일 정의의 빈 문단 정책을 본문 라틴 글자 판정에 재사용.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn named_style_uses_empty_mark_policy_but_body_uses_actual_script() {
+fn auto_named_style_and_body_keep_the_same_multiplier() {
     let styles = format!("{}<w:style w:type='paragraph' w:styleId='s'/>", defaults("Calibri", 22));
     let d = read(&styles, "<w:p><w:pPr><w:pStyle w:val='s'/></w:pPr><w:r><w:t>abc</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val='s'/></w:pPr></w:p>");
     let named = d.registry.style_entries().values().next().unwrap();
-    assert_eq!(d.registry.para_shapes[named.para_shape_id.get()].line_spacing_value, 158.69140625);
-    assert_eq!(
-        shapes(&d).iter().map(|s| s.line_spacing_value).collect::<Vec<_>>(),
-        [122.0703125, 158.69140625]
-    );
+    assert_eq!(d.registry.para_shapes[named.para_shape_id.get()].line_spacing_value, 100.0);
+    assert_eq!(shapes(&d).iter().map(|s| s.line_spacing_value).collect::<Vec<_>>(), [100.0, 100.0]);
 }
 
-// 이것을 실패시키는 것: 동일 TTC metric이 확인된 자매 face를 미지 글꼴로 처리.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn sister_faces_share_verified_natural_height() {
+fn auto_sister_faces_keep_the_source_multiplier() {
     for font in [
         "돋움",
         "Dotum",
@@ -366,7 +362,7 @@ fn sister_faces_share_verified_natural_height() {
         "GungsuhChe",
     ] {
         let d = read(&defaults(font, 22), "<w:p><w:r><w:t>한글</w:t></w:r></w:p>");
-        assert_eq!(shapes(&d)[0].line_spacing_value, 130.0, "{font}");
+        assert_eq!(shapes(&d)[0].line_spacing_value, 100.0, "{font}");
         assert_eq!(loss(&d, "unknown_font_line_height"), 0, "{font}");
     }
 }
@@ -426,11 +422,11 @@ fn only_final_output_shapes_are_interned() {
     }
 }
 
-// 이것을 실패시키는 것: 빈 문단의 앞 빈 run을 문단 끝 서식보다 우선하거나 높이에 합산.
+// 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.
 #[test]
-fn empty_paragraph_uses_only_final_mark_formatting() {
+fn empty_paragraph_keeps_auto_multiplier() {
     let d = read(&defaults("Calibri", 22), "<w:p><w:r><w:rPr><w:rFonts w:eastAsia='Unknown'/><w:sz w:val='40'/></w:rPr></w:r><w:r/></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value, 158.69140625);
+    assert_eq!(shapes(&d)[0].line_spacing_value, 100.0);
     assert_eq!(loss(&d, "unknown_font_line_height"), 0);
     assert_eq!(loss(&d, "mixed_font_line_height"), 0);
 }

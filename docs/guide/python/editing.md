@@ -14,6 +14,8 @@ doc = result.document          # 이 줄이 없으면 아무것도 바뀌지 않
 
 편집기는 두 부류입니다. **보존 우선(preserve-first)** 편집기(`fill`·`patch`)는 건드리는 XML 조각과 Preview 및 그 연결 정보를 바꾸며, **재인코드** 편집기(`set_cell`·`stamp`·`restyle`)는 문서를 모델로 디코드해 고친 뒤 패키지를 다시 씁니다. `insert_para`는 구역 XML에서 문단을 넣으며 재인코드 편집기와 같은 사전 검사(원본 패키지 엔트리 보존·의미 왕복 안전성)를 통과해야 합니다. `delete_para`는 그 검사에서 마지막 의미 비교 또는 ZIP carry만 실패한 경우 검증 가능한 평문·빈 문단을 원문 보존 방식으로 삭제할 수 있습니다. 이 차이가 아래 "한컴 저장 문서" 표를 만듭니다.
 
+base 포함 편집은 base의 배치 모드·호환 플래그를 유지합니다. JSON의 모드는 base 대조용이며 다르면 거부합니다. 원본 호환 플래그를 보존하려면 base 포함 경로를 사용합니다.
+
 ## HWP5 입력과 변환 손실
 
 `Document.open("form.hwp")` 또는 `Document.from_bytes(data)`로 HWP5 입력을 받습니다. `inspect`, `outline`, `read`, `fields`, `validate`, `diff`(양쪽), `stamp_plan`, `to_md`, `to_json`, `export_section`과 편집 5종은 연산 전에 HWPX로 변환합니다. 확장자가 아니라 내용으로 판별하며, 편집 결과는 `.hwpx`입니다.

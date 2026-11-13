@@ -61,6 +61,7 @@ pub(super) enum Break {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Origin {
+    pub(super) anchor_boundary: bool,
     pub(super) paragraph: usize,
     // One source paragraph currently owns one potential list item. Splitting
     // never creates another item; only fragment zero can carry its marker.

@@ -11,6 +11,10 @@
     },
     "metadata": {
       "$ref": "#/$defs/Metadata"
+    },
+    "layout_profile": {
+      "$ref": "#/$defs/LayoutProfile",
+      "default": "hancom"
     }
   },
   "required": [
@@ -18,6 +22,21 @@
     "metadata"
   ],
   "$defs": {
+    "LayoutProfile": {
+      "description": "문서의 배치 수치를 해석하는 호환 프로필.\n\nWord 조판 재현 보장 아님. 줄 간격 수치나 문단·표 구조를 자동 변환하지 않는다.\n파일 형식별 문자열과 호환 플래그는 각 Smithy의 책임이다.",
+      "oneOf": [
+        {
+          "description": "기존 한컴 문서의 해석 규칙을 유지하는 기본값.\n백분율 줄 간격의 기준은 글자 크기(em)다.\n글꼴 자연 줄 높이를 곱셈의 기준으로 다시 적용하지 않는다.\n기존 첫 줄 배치와 컨테이너 간격 정책을 유지한다.",
+          "type": "string",
+          "const": "hancom"
+        },
+        {
+          "description": "백분율 줄 간격을 글꼴의 자연 줄 높이에 대한 배수로 해석한다.\n100은 한 배, 115는 1.15배이며 em 기준으로 미리 환산하지 않는다.\n측정한 표본에서는 첫 줄 위 여유가 포함되는 배치가 관찰됐다.\n위 여유의 정확한 산식과 컨테이너 앞뒤 간격 규칙은 미확인이다.\n표 anchor 이동과 셀 TOP 정렬은 가져오기 단계의 별도 처리다.",
+          "type": "string",
+          "const": "word_compatible"
+        }
+      ]
+    },
     "Section": {
       "description": "A document section: paragraphs + page geometry.\n\n# Examples\n\n```\nuse hwpforge_core::section::Section;\nuse hwpforge_core::PageSettings;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::ParaShapeIndex;\n\nlet section = Section::with_paragraphs(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    PageSettings::a4(),\n);\nassert_eq!(section.paragraph_count(), 1);\n```",
       "type": "object",

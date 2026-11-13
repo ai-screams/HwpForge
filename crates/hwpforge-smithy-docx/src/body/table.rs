@@ -34,11 +34,12 @@ struct Cell {
     properties: TableProperties,
     paragraphs: Vec<Paragraph>,
     nested: Vec<(usize, WidthPlan)>,
+    anchor_boundaries: Vec<usize>,
 }
 #[derive(Default)]
 struct Row {
     height: Option<i32>,
-    exact_height: bool,
+    exact_at: Option<Location>,
     before: usize,
     after: usize,
     end: usize,
@@ -76,6 +77,7 @@ struct CellWidth {
     span: usize,
     preferred: Option<i32>,
     nested: Vec<(usize, WidthPlan)>,
+    anchor_boundaries: Vec<usize>,
 }
 #[derive(Default)]
 pub(super) struct Tables {
@@ -301,20 +303,16 @@ impl Body<'_> {
                 let rule = attr(e, "hRule");
                 // Auto ignores val for layout, but explicit dimensions still require validation.
                 row.height = if rule == Some("auto") { None } else { height };
-                row.exact_height = rule == Some("exact");
+                row.exact_at = (rule == Some("exact") && height.is_some_and(|h| h > 0))
+                    .then(|| frame.location.clone());
                 if rule != Some("auto")
+                    && row.exact_at.is_none()
                     && (row.height.is_none() || !matches!(rule, None | Some("atLeast")))
                 {
                     self.warn(
                         Kind::ContentLost,
                         &frame.location,
-                        || {
-                            if rule == Some("exact") {
-                                "Exact row height approximated as a content-expanding minimum"
-                            } else {
-                                "Missing row height value or unsupported rule; using a minimum"
-                            }
-                        },
+                        || "Missing row height value or unsupported rule; using a minimum",
                         "row_height",
                         "use_default",
                     )?;
@@ -357,7 +355,7 @@ impl Body<'_> {
                                 (
                                     Some(self.part),
                                     Some(&frame.location),
-                                    "Unsupported cell vertical alignment uses the Core default",
+                                    "Unsupported cell vertical alignment uses the Word top default",
                                 )
                             },
                         )?;
@@ -505,6 +503,12 @@ impl Body<'_> {
             .ok_or_else(|| DocxError::invalid(self.part, at, "cell minimum height overflow"))?;
         cell.paragraphs = std::mem::take(&mut self.paragraphs);
         cell.nested = std::mem::take(&mut self.tables.pending);
+        cell.anchor_boundaries = self
+            .origins
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| o.anchor_boundary.then_some(i))
+            .collect();
         self.origins.clear();
         let row = source.rows.last_mut().unwrap();
         row.end = cell.col + usize::from(cell.span);
@@ -579,6 +583,7 @@ impl Body<'_> {
         }
         budget.consume(&mut self.output_paragraphs, &mut self.runs);
         holder.runs[0].content = RunContent::Table(Box::new(table));
+        holder.runs.push(empty.runs[0].clone());
         self.tables.pending.push((self.paragraphs.len() - 1, plan));
         self.spacing_neighbor = None;
         Ok(())
@@ -624,7 +629,7 @@ fn integer(e: &Element, min: usize, part: &str, at: &str) -> Result<usize> {
     Ok(n)
 }
 /// Approval precedes cell expansion, width plans and border allocation. The holder
-/// and every filler each consume one paragraph and one run from this same summary.
+/// consumes a table run and an empty text run; each filler consumes one paragraph/run.
 struct AssemblyBudget {
     width: usize,
     fillers: usize,
@@ -650,7 +655,7 @@ impl AssemblyBudget {
             .sum::<usize>();
         let growth = fillers.saturating_add(1);
         let paragraphs = paragraphs.saturating_add(growth);
-        let runs = runs.saturating_add(growth);
+        let runs = runs.saturating_add(growth).saturating_add(1);
         count(part, at, "paragraphs", paragraphs, MAX_PARAGRAPHS)?;
         count(part, at, "runs", runs, MAX_RUNS)?;
         Ok(Self { width, fillers, paragraphs, runs })
@@ -677,6 +682,25 @@ fn assemble(
         columns.resize(width, None);
     }
     let nrows = rows.len();
+    // Size protection also clips automatic rows: enable it only when every row
+    // has an exact value. Content minima omit width-dependent wrapping.
+    let size_protect = rows.iter().all(|row| row.exact_at.is_some());
+    for row in &rows {
+        if let Some(exact_at) = &row.exact_at {
+            record(w, Kind::ContentLost, "row_height", "use_default", || {
+                (
+                    Some(part),
+                    Some(exact_at),
+                    if size_protect {
+                        "Exact row height reproduced by fixing the table size; Hancom table resizing and automatic row expansion are locked; overflowing text is clipped (as in Word)"
+                    } else {
+                        "Exact row height approximated as a minimum; Hancom may expand it to fit content"
+                    },
+                )
+            })?;
+        }
+    }
+    let border_heights = borders::row_heights(&rows, width, &properties);
     let mut output: Vec<TableRow> = Vec::with_capacity(nrows);
     let mut expected = Vec::new();
     let mut plans = Vec::new();
@@ -776,7 +800,8 @@ fn assemble(
                     .ok_or_else(|| DocxError::invalid(part, &at, "row height overflow"))?;
                 cell_minima.push(height);
                 cell.margin = Some(margins);
-                cell.vertical_align = source.vertical_align;
+                cell.vertical_align =
+                    Some(source.vertical_align.unwrap_or(TableVerticalAlign::Top));
                 plans.push(CellWidth {
                     row: ri,
                     cell: ci,
@@ -784,6 +809,7 @@ fn assemble(
                     span,
                     preferred: source.properties.width.flatten(),
                     nested: source.nested,
+                    anchor_boundaries: source.anchor_boundaries,
                 });
                 overrides.push(source.properties.borders);
                 expected.push((ri, source.col, source.span, 1));
@@ -800,14 +826,16 @@ fn assemble(
             cursor += 1;
         }
         minima.push(cell_minima);
-        row_rules.push((row.height, row.exact_height));
+        row_rules.push(row.height);
         output.push(TableRow::new(cells));
         previous = current;
     }
-    // Hancom treats supplied heights as minima and expands cells for additional lines.
+    // Without size protection Hancom expands supplied minima for additional lines.
     // Merge spans are now final. A spanning anchor cannot impose its content's
     // forced lines on its starting row; retain them for the merged region below.
-    for ((row, minima), (explicit, exact)) in output.iter_mut().zip(&minima).zip(row_rules) {
+    for (((row, minima), explicit), border) in
+        output.iter_mut().zip(&minima).zip(row_rules).zip(border_heights)
+    {
         let minimum = row
             .cells
             .iter()
@@ -816,8 +844,13 @@ fn assemble(
             .map(|(_, h)| *h)
             .max()
             .unwrap_or(0);
-        let height =
-            if exact { explicit.unwrap_or(minimum) } else { minimum.max(explicit.unwrap_or(0)) };
+        let height = if size_protect {
+            i64::from(explicit.unwrap())
+        } else {
+            (i64::from(minimum) + border).max(i64::from(explicit.unwrap_or(0)))
+        };
+        let height = i32::try_from(height)
+            .map_err(|_| DocxError::invalid(part, &at, "row height overflow"))?;
         row.height =
             Some(HwpUnit::new(height).map_err(|e| DocxError::invalid(part, &at, e.to_string()))?);
     }
@@ -835,7 +868,9 @@ fn assemble(
         let explicit_heights = row.cells.iter().zip(&minima).any(|(cell, content_minimum)| {
             let end = ri + usize::from(cell.row_span);
             empty_rows[end] > empty_rows[ri]
-                || (cell.row_span > 1 && i64::from(*content_minimum) > heights[end] - heights[ri])
+                || (!size_protect
+                    && cell.row_span > 1
+                    && i64::from(*content_minimum) > heights[end] - heights[ri])
         });
         if !explicit_heights {
             continue;
@@ -844,7 +879,7 @@ fn assemble(
             let end = ri + usize::from(cell.row_span);
             if cell.height.is_none() {
                 let minimum = heights[end] - heights[ri];
-                let minimum = if cell.row_span > 1 {
+                let minimum = if !size_protect && cell.row_span > 1 {
                     minimum.max(i64::from(content_minimum))
                 } else {
                     minimum
@@ -863,6 +898,7 @@ fn assemble(
         })?;
     }
     let mut table = Table::new(output);
+    table.frame.size_protect = size_protect;
     table.in_margin = Some(margin(properties.margins));
     // Word inline tables have no outer margins, including tables inside cells.
     table.out_margin = Some(TableMargin {
@@ -903,8 +939,11 @@ fn push_filler(
         span: 1,
         preferred: None,
         nested: Vec::new(),
+        anchor_boundaries: Vec::new(),
     });
-    cells.push(TableCell::new(Vec::new(), HwpUnit::new(1).unwrap()));
+    let mut filler = TableCell::new(Vec::new(), HwpUnit::new(1).unwrap());
+    filler.vertical_align = Some(TableVerticalAlign::Top);
+    cells.push(filler);
     expected.push((row, col, 1, 1));
     overrides.push([None; 6]);
 }
@@ -923,14 +962,15 @@ mod budget_tests {
     // 이것을 실패시키는 것: 채움/보유 문단 또는 run 예산 누락, span을 셀 개수로 세거나 승인 합계 재계산.
     #[test]
     fn assembly_budget_includes_holder_before_expansion() {
+        // 이것을 실패시키는 것: 끝 anchor의 빈 text run을 사전 예산에서 제외.
         let at = Location { name: Rc::from("tbl"), ordinal: 1 };
         let rows = vec![Row {
             end: 3,
             cells: vec![Cell { col: 1, span: 2, ..Cell::default() }],
             ..Row::default()
         }];
-        // Two fillers + one holder; existing source paragraphs/runs already counted.
-        let budget = AssemblyBudget::approve(&rows, 4, 999_997, 3_999_997, "body", &at).unwrap();
+        // Two fillers + one holder with two runs; existing source paragraphs/runs already counted.
+        let budget = AssemblyBudget::approve(&rows, 4, 999_997, 3_999_996, "body", &at).unwrap();
         assert_eq!(
             (budget.width, budget.fillers, budget.paragraphs, budget.runs),
             (4, 2, 1_000_000, 4_000_000)
@@ -940,7 +980,7 @@ mod budget_tests {
             Err(DocxError::Limit { resource: "paragraphs", observed: 1_000_001, .. })
         ));
         assert!(matches!(
-            AssemblyBudget::approve(&rows, 4, 0, 3_999_998, "body", &at),
+            AssemblyBudget::approve(&rows, 4, 0, 3_999_997, "body", &at),
             Err(DocxError::Limit { resource: "runs", observed: 4_000_001, .. })
         ));
         let (table, _) = assemble(

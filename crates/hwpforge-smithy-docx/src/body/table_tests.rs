@@ -431,7 +431,7 @@ fn cell_and_table_boundaries_keep_trailing_breaks_local() {
         [("A".into(), false), ("".into(), true)]
     );
     assert!(!cells[1].paragraphs[0].page_break);
-    assert!(!d.document.sections()[0].paragraphs[1].page_break);
+    assert!(!d.document.sections()[0].paragraphs[0].page_break);
 }
 // 이것을 실패시키는 것: tblGrid 대신 충돌하는 tcW 비율을 사용하거나 tcW 추정을 생략.
 #[test]
@@ -481,7 +481,7 @@ fn table_paragraph_context_precedes_direct_properties() {
         [1200, 3000]
     );
     assert_eq!(
-        d.registry.para_shapes[d.document.sections()[0].paragraphs[1].para_shape_id.get()]
+        d.registry.para_shapes[d.document.sections()[0].paragraphs[0].para_shape_id.get()]
             .indent_left
             .as_i32(),
         0
@@ -1086,12 +1086,12 @@ fn merged_perimeter_folds_continuation_borders() {
         BorderLineType::None
     );
 }
-// 이것을 실패시키는 것: 명시 세로 정렬 누락/교환 또는 미지정에 top 강제/경고 추가.
+// 이것을 실패시키는 것: 명시 세로 정렬 누락/교환 또는 미지정의 Top 기본값 누락/경고 추가.
 #[test]
 fn explicit_vertical_alignment_preserves_default_choice() {
     use hwpforge_core::table::TableVerticalAlign::{Bottom, Center, Top};
     for (value, expected) in
-        [("", None), ("top", Some(Top)), ("center", Some(Center)), ("bottom", Some(Bottom))]
+        [("", Some(Top)), ("top", Some(Top)), ("center", Some(Center)), ("bottom", Some(Bottom))]
     {
         let pr =
             if value.is_empty() { String::new() } else { format!("<w:vAlign w:val='{value}'/>") };
@@ -1178,7 +1178,10 @@ fn row_minimum_overflow_and_unknown_alignment_are_diagnosed() {
     }
     let d =
         read("", &format!("<w:tbl><w:tr>{}</w:tr></w:tbl>", cell("<w:vAlign w:val='both'/>", "A")));
-    assert_eq!(tables(&d)[0].rows[0].cells[0].vertical_align, None);
+    assert_eq!(
+        tables(&d)[0].rows[0].cells[0].vertical_align,
+        Some(hwpforge_core::table::TableVerticalAlign::Top)
+    );
     assert_eq!(
         d.warnings
             .iter()
@@ -1278,8 +1281,8 @@ fn row_height_rules_keep_content_minima_and_exact_approximation() {
             );
             assert_eq!(
                 d.warnings[0].message(),
-                if rule.contains("exact") {
-                    "Exact row height approximated as a content-expanding minimum"
+                if rule.contains("exact") && !value.is_empty() {
+                    "Exact row height reproduced by fixing the table size; Hancom table resizing and automatic row expansion are locked; overflowing text is clipped (as in Word)"
                 } else {
                     "Missing row height value or unsupported rule; using a minimum"
                 }
@@ -1590,5 +1593,303 @@ fn forced_lines_stop_at_page_and_column_first_fragment() {
         );
         let d = read("", &small_table("", &height_cell("", &p)));
         assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 2000);
+    }
+}
+
+fn stroke_table(borders: &str, rows: &str) -> String {
+    format!("<w:tbl><w:tblPr><w:tblBorders>{borders}</w:tblBorders><w:tblCellMar><w:top w:w='0'/><w:bottom w:w='0'/></w:tblCellMar></w:tblPr>{rows}</w:tbl>")
+}
+const GRID_STROKES: &str = "<w:top w:val='single' w:sz='4'/><w:insideH w:val='single' w:sz='4'/><w:bottom w:val='single' w:sz='4'/>";
+
+// 이것을 실패시키는 것: 위 선 누락, insideH를 누락하거나 두 번 더함, 마지막 아래 선 누락.
+#[test]
+fn horizontal_strokes_add_each_boundary_once() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    for (rows, expected) in [
+        (format!("<w:tr>{c}</w:tr>"), vec![2002]),
+        (format!("<w:tr>{c}</w:tr><w:tr>{c}</w:tr>"), vec![1952, 2002]),
+    ] {
+        let style = format!("<w:style w:type='table' w:default='1' w:styleId='TableGrid'><w:tblPr><w:tblBorders>{GRID_STROKES}</w:tblBorders></w:tblPr></w:style>");
+        for d in
+            [read("", &stroke_table(GRID_STROKES, &rows)), read(&style, &stroke_table("", &rows))]
+        {
+            assert_eq!(
+                tables(&d)[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 미지정/none/nil에도 기본 선 두께 부과, 셀 none 뒤에 표 선 재상속.
+#[test]
+fn horizontal_strokes_absent_faces_add_nothing() {
+    let p = height_paragraph("auto", 240, 22, "한글");
+    for borders in ["", "<w:top w:val='none' w:sz='12'/><w:bottom w:val='nil' w:sz='12'/>"] {
+        let d = read("", &stroke_table(borders, &format!("<w:tr>{}</w:tr>", height_cell("", &p))));
+        assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 1902);
+    }
+    let c =
+        height_cell("<w:tcBorders><w:top w:val='none'/><w:bottom w:val='none'/></w:tcBorders>", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr>{c}</w:tr>")));
+    assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 1902);
+}
+
+// 이것을 실패시키는 것: 첫 셀 none을 행 전체에 적용, 셀 두께 합산, 셀 top/직전 bottom 무시.
+#[test]
+fn horizontal_strokes_use_visible_cell_maximum() {
+    let p = height_paragraph("auto", 240, 22, "한글");
+    let a = height_cell("<w:tcBorders><w:top w:val='none'/></w:tcBorders>", &p);
+    let b = height_cell("", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr>{a}{b}</w:tr>")));
+    assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 2002);
+    let a = height_cell("<w:tcBorders><w:bottom w:val='single' w:sz='12'/></w:tcBorders>", &p);
+    let b = height_cell("<w:tcBorders><w:top w:val='none'/></w:tcBorders>", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr>{a}</w:tr><w:tr>{b}</w:tr>")));
+    assert_eq!(tables(&d)[0].rows[1].height.unwrap().as_i32(), 2102);
+    let a = height_cell("", &p);
+    let b = height_cell("<w:tcBorders><w:top w:val='single' w:sz='12'/></w:tcBorders>", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr>{a}</w:tr><w:tr>{b}</w:tr>")));
+    assert_eq!(tables(&d)[0].rows[1].height.unwrap().as_i32(), 2102);
+}
+
+// 이것을 실패시키는 것: 원본 sz를 출력 기본 굵기로 대체, 단위 환산 오류, 스타일 두께 상속 누락.
+#[test]
+fn horizontal_strokes_retain_source_width_through_styles() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    let styles = "<w:style w:type='table' w:styleId='grid'><w:tblPr><w:tblBorders><w:top w:val='single' w:sz='12'/><w:bottom w:val='none'/></w:tblBorders></w:tblPr></w:style>";
+    let d = read(
+        styles,
+        &format!("<w:tbl><w:tblPr><w:tblStyle w:val='grid'/></w:tblPr><w:tr>{c}</w:tr></w:tbl>"),
+    );
+    assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 2052);
+    let d = read(styles, &format!("<w:tbl><w:tblPr><w:tblStyle w:val='grid'/><w:tblBorders><w:top w:val='single' w:sz='4'/></w:tblBorders></w:tblPr><w:tr>{c}</w:tr></w:tbl>"));
+    assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 1952);
+}
+
+// 이것을 실패시키는 것: 테두리를 명시 atLeast 위에 더함, 병합 내부에 insideH 부과, 구간 합에서 아래 선 누락.
+#[test]
+fn horizontal_strokes_keep_explicit_and_merged_minimum_rules() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    let d = read(
+        "",
+        &stroke_table(
+            GRID_STROKES,
+            &format!(
+                "<w:tr><w:trPr><w:trHeight w:val='600' w:hRule='atLeast'/></w:trPr>{c}</w:tr>"
+            ),
+        ),
+    );
+    assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), 3000);
+    let p = height_paragraph("exact", 0, 22, "");
+    let a = height_cell("<w:vMerge w:val='restart'/>", &p);
+    let b = height_cell("<w:vMerge/>", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr>{a}</w:tr><w:tr>{b}</w:tr>")));
+    let ts = tables(&d);
+    assert_eq!(ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(), [50, 50]);
+    assert_eq!(ts[0].rows[0].cells[0].height.unwrap().as_i32(), 100);
+}
+
+// 이것을 실패시키는 것: 크기 고정 제거, exact에 내용·선 최소 부과.
+#[test]
+fn all_exact_rows_lock_size_and_keep_literal_values() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr><w:trPr><w:trHeight w:val='200' w:hRule='exact'/></w:trPr>{c}</w:tr><w:tr><w:trPr><w:trHeight w:val='300' w:hRule='exact'/></w:trPr>{c}</w:tr>")));
+    let ts = tables(&d);
+    assert!(ts[0].frame.size_protect);
+    assert_eq!(
+        ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+        [1000, 1500]
+    );
+    let warnings = d.warnings.iter().filter(|w| w.loss() == "row_height").collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].count(), 2);
+    assert_eq!(warnings[0].message(), "Exact row height reproduced by fixing the table size; Hancom table resizing and automatic row expansion are locked; overflowing text is clipped (as in Word) (total 2 occurrences; first example only; subsequent locations omitted)");
+}
+
+// 이것을 실패시키는 것: 값 0 인 exact 행을 고정 높이로 인정해 표 크기를 잠그고 그 행을 높이 0 으로 두기.
+#[test]
+fn zero_exact_row_height_is_not_a_fixed_height() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    let exact = "<w:tr><w:trPr><w:trHeight w:val='200' w:hRule='exact'/></w:trPr>";
+    let zero = read("", &stroke_table(GRID_STROKES, &format!("{exact}{c}</w:tr><w:tr><w:trPr><w:trHeight w:val='0' w:hRule='exact'/></w:trPr>{c}</w:tr>")));
+    let plain =
+        read("", &stroke_table(GRID_STROKES, &format!("{exact}{c}</w:tr><w:tr>{c}</w:tr>")));
+    let (z, p) = (&tables(&zero)[0], &tables(&plain)[0]);
+    assert!(!z.frame.size_protect);
+    assert_eq!(z.rows[1].height, p.rows[1].height);
+    assert!(z.rows[1].height.unwrap().as_i32() > 0);
+}
+
+// 이것을 실패시키는 것: 고정된 병합 셀에 내용 최소를 다시 부과, 병합 구간 합 누락.
+#[test]
+fn all_exact_merged_rows_keep_the_specified_region_height() {
+    let p = height_paragraph("auto", 240, 22, "한글");
+    let a = height_cell("<w:vMerge w:val='restart'/>", &p);
+    let b = height_cell("<w:vMerge/>", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr><w:trPr><w:trHeight w:val='20' w:hRule='exact'/></w:trPr>{a}</w:tr><w:tr><w:trPr><w:trHeight w:val='40' w:hRule='exact'/></w:trPr>{b}</w:tr>")));
+    let ts = tables(&d);
+    assert!(ts[0].frame.size_protect);
+    assert_eq!(
+        ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+        [100, 200]
+    );
+    assert_eq!(ts[0].rows[0].cells[0].height.unwrap().as_i32(), 300);
+    let ordinary = height_cell("", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr><w:trPr><w:trHeight w:val='20' w:hRule='exact'/></w:trPr>{a}{ordinary}</w:tr><w:tr><w:trPr><w:trHeight w:val='40' w:hRule='exact'/></w:trPr>{b}{ordinary}</w:tr>")));
+    let ts = tables(&d);
+    assert!(ts[0].frame.size_protect);
+    assert_eq!(
+        ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+        [100, 200]
+    );
+    assert!(ts[0].rows.iter().flat_map(|r| &r.cells).all(|c| c.height.is_none()));
+}
+
+// 이것을 실패시키는 것: any exact로 표 전체 고정, 혼합 표 exact를 지정값으로 자름, 최소 근사 경고 누락.
+#[test]
+fn mixed_row_rules_keep_size_unlocked_and_exact_as_a_minimum() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    for (other, val, expected) in [
+        ("", "200", [1952, 2002]),
+        ("<w:trHeight w:hRule='auto' w:val='2000'/>", "200", [1952, 2002]),
+        ("<w:trHeight w:hRule='atLeast' w:val='600'/>", "200", [1952, 3000]),
+        ("", "600", [3000, 2002]),
+    ] {
+        let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr><w:trPr><w:trHeight w:val='{val}' w:hRule='exact'/></w:trPr>{c}</w:tr><w:tr><w:trPr>{other}</w:trPr>{c}</w:tr>")));
+        let ts = tables(&d);
+        assert!(!ts[0].frame.size_protect);
+        assert_eq!(
+            ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+            expected
+        );
+        let warnings = d.warnings.iter().filter(|w| w.loss() == "row_height").collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            (warnings[0].code(), warnings[0].action(), warnings[0].count()),
+            ("DOCX_CONTENT_LOST", "use_default", 1)
+        );
+        assert_eq!(
+            warnings[0].message(),
+            "Exact row height approximated as a minimum; Hancom may expand it to fit content"
+        );
+    }
+}
+
+// 이것을 실패시키는 것: val 없는 exact를 크기 고정 판정에 포함, val 없는 exact의 선 가산 생략.
+#[test]
+fn exact_without_a_value_uses_ordinary_row_strokes() {
+    let c = height_cell("", &height_paragraph("auto", 240, 22, "한글"));
+    for (prefix, expected) in [
+        (String::new(), vec![2002]),
+        (
+            format!("<w:tr><w:trPr><w:trHeight w:val='200' w:hRule='exact'/></w:trPr>{c}</w:tr>"),
+            vec![1952, 2002],
+        ),
+    ] {
+        let d = read(
+            "",
+            &stroke_table(
+                GRID_STROKES,
+                &format!("{prefix}<w:tr><w:trPr><w:trHeight w:hRule='exact'/></w:trPr>{c}</w:tr>"),
+            ),
+        );
+        let ts = tables(&d);
+        assert!(!ts[0].frame.size_protect);
+        assert_eq!(
+            ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+            expected
+        );
+        let warning = d.warnings.iter().find(|w| w.loss() == "row_height").unwrap();
+        assert_eq!(
+            warning.message(),
+            if expected.len() == 1 {
+                "Missing row height value or unsupported rule; using a minimum"
+            } else {
+                "Missing row height value or unsupported rule; using a minimum (total 2 occurrences; first example only; subsequent locations omitted)"
+            }
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 고아 vMerge의 위 선 제거, 고아 셀을 병합으로 처리.
+#[test]
+fn orphan_continuations_retain_their_top_strokes() {
+    let p = height_paragraph("auto", 240, 22, "한글");
+    let c = height_cell("", &p);
+    let orphan = height_cell("<w:vMerge/>", &p);
+    for (prefix, expected) in
+        [(String::new(), vec![2002]), (format!("<w:tr>{c}</w:tr>"), vec![1952, 2002])]
+    {
+        let d = read("", &stroke_table(GRID_STROKES, &format!("{prefix}<w:tr>{orphan}</w:tr>")));
+        let ts = tables(&d);
+        assert_eq!(
+            ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(ts[0].rows.last().unwrap().cells[0].row_span, 1);
+        assert!(d.warnings.iter().any(|w| w.loss() == "vertical_merge"));
+    }
+}
+
+// 이것을 실패시키는 것: gridBefore/After 또는 암시적 채움 열에 표의 가로 선 상속.
+#[test]
+fn uncovered_columns_do_not_contribute_strokes() {
+    let c = height_cell(
+        "<w:tcBorders><w:top w:val='none'/><w:bottom w:val='none'/></w:tcBorders>",
+        &height_paragraph("auto", 240, 22, "한글"),
+    );
+    for omitted in [
+        "<w:gridBefore w:val='1'/><w:gridAfter w:val='1'/>",
+        "<w:gridBefore w:val='2'/>",
+        "<w:gridAfter w:val='2'/>",
+        "",
+    ] {
+        let rows = format!(
+            "<w:tr><w:trPr>{omitted}</w:trPr>{c}</w:tr><w:tr><w:trPr>{omitted}</w:trPr>{c}</w:tr>"
+        );
+        let body = stroke_table(GRID_STROKES, &rows).replace("</w:tblPr>", "</w:tblPr><w:tblGrid><w:gridCol w:w='2000'/><w:gridCol w:w='2000'/><w:gridCol w:w='2000'/></w:tblGrid>");
+        let d = read("", &body);
+        let ts = tables(&d);
+        assert_eq!(
+            ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+            [1902, 1902]
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 같은 열의 명시 none으로 직전 행의 상속 가시선 두께까지 제거.
+#[test]
+fn explicit_none_yields_to_the_previous_inherited_stroke() {
+    let p = height_paragraph("auto", 240, 22, "한글");
+    let a = height_cell("", &p);
+    let b = height_cell("<w:tcBorders><w:top w:val='none'/></w:tcBorders>", &p);
+    let d = read("", &stroke_table(GRID_STROKES, &format!("<w:tr>{a}</w:tr><w:tr>{b}</w:tr>")));
+    // Height retains the visible inherited neighbor; border rendering has its own conflict rule.
+    assert_eq!(
+        tables(&d)[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+        [1952, 2002]
+    );
+}
+
+// 이것을 실패시키는 것: 마지막 exact에 아래 선을 가산, exact 다음 행의 위 선을 누락.
+#[test]
+fn exact_boundaries_keep_literal_stroke_placement() {
+    let c = height_cell("", &height_paragraph("exact", 0, 22, ""));
+    let exact =
+        format!("<w:tr><w:trPr><w:trHeight w:val='200' w:hRule='exact'/></w:trPr>{c}</w:tr>");
+    let auto = format!("<w:tr>{c}</w:tr>");
+    for (rows, protect, expected) in [
+        (exact.clone(), true, vec![1000]),
+        (format!("{auto}{exact}"), false, vec![50, 1000]),
+        (format!("{exact}{auto}{auto}"), false, vec![1000, 50, 100]),
+    ] {
+        let d = read("", &stroke_table(GRID_STROKES, &rows));
+        let ts = tables(&d);
+        assert_eq!(ts[0].frame.size_protect, protect);
+        assert_eq!(
+            ts[0].rows.iter().map(|r| r.height.unwrap().as_i32()).collect::<Vec<_>>(),
+            expected
+        );
     }
 }

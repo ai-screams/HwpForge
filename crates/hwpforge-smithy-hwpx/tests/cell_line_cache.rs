@@ -664,3 +664,40 @@ fn per_language_loss_still_rejects_public_cell_edits() {
     );
     assert!(result.unwrap_err().to_string().contains("char_shape_per_language"));
 }
+
+#[test]
+fn compatibility_settings_exclude_unproved_single_line_optimization() {
+    // 이것을 실패시키는 것: Word/미지원 호환 설정을 한 줄 폭 증명에 허용.
+    for (target, flags) in [("MS_WORD", ""), ("FUTURE", ""), ("HWP201X", "<hh:future/>")] {
+        let bytes = package::splice_part(
+            &fixture(1050),
+            "Contents/header.xml",
+            r#"<hh:compatibleDocument targetProgram="HWP201X"><hh:layoutCompatibility/></hh:compatibleDocument>"#,
+            &format!(
+                r#"<hh:compatibleDocument targetProgram="{target}"><hh:layoutCompatibility>{flags}</hh:layoutCompatibility></hh:compatibleDocument>"#
+            ),
+        );
+        let out = edit(&bytes, "힣");
+        let tree = xml::Element::parse(&package::section_xml(&out));
+        assert!(tree.find("hp:tc").descendants("hp:lineseg").is_empty());
+    }
+}
+
+#[test]
+fn equivalent_hancom_compatibility_keeps_proven_cell_cache() {
+    // 이것을 실패시키는 것: 구조상 같은 한컴 설정을 문자열 완전 일치로 판정.
+    let bytes = package::splice_part(
+        &fixture(1050),
+        "Contents/header.xml",
+        r#"<hh:compatibleDocument targetProgram="HWP201X"><hh:layoutCompatibility/></hh:compatibleDocument>"#,
+        "<hh:compatibleDocument targetProgram = 'HWP201X'>\n <hh:layoutCompatibility ></hh:layoutCompatibility>\n</hh:compatibleDocument>",
+    );
+    let out = edit(&bytes, "힣");
+    assert_eq!(
+        xml::Element::parse(&package::section_xml(&out))
+            .find("hp:tc")
+            .descendants("hp:lineseg")
+            .len(),
+        1
+    );
+}

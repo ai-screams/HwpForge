@@ -68,6 +68,7 @@ pub mod grid_addr;
 pub mod header_references;
 mod inline_text;
 mod layout_carry;
+mod layout_compatibility;
 pub mod layout_edit;
 mod line_keep;
 mod list_bridge;

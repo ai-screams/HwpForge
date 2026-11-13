@@ -524,10 +524,10 @@ fn break_only_field_results_are_present_in_simple_complex_and_nested_fields() {
 #[test]
 fn tables_keep_cell_layout_inside_the_container() {
     let d = read("<w:p><w:r><w:t>A</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:pPr><w:sectPr><w:pgSz w:w='oops'/></w:sectPr></w:pPr><w:r><w:t>CELL</w:t><w:br w:type='page'/><w:br w:type='column'/></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>B</w:t></w:r></w:p>");
-    assert_eq!(texts(&d), [vec!["A", "", "B"]]);
+    assert_eq!(texts(&d), [vec!["A", "B"]]);
     assert_eq!(
         d.document.sections()[0].paragraphs.iter().map(|p| p.page_break).collect::<Vec<_>>(),
-        [false, false, false]
+        [false, false]
     );
     for loss in ["nested_section", "cell_break", "paragraph_split", "column_break"] {
         assert!(losses(&d, loss) > 0);
@@ -917,4 +917,35 @@ fn section_end_does_not_intern_unused_tail_restoration() {
         assert_eq!(used.len(), shape_count);
         assert_eq!(losses(&d, "paragraph_split"), 1);
     }
+}
+
+#[test]
+fn table_anchor_removal_keeps_source_origins_aligned() {
+    // 이것을 실패시키는 것: 합성 문단만 삭제하고 origins 인덱스를 그대로 둠, 구역 경계 이동.
+    let table = |text| {
+        format!("<w:tbl><w:tr><w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>")
+    };
+    let (sections, _) = indexed(&format!("<w:p><w:r><w:t>before</w:t></w:r></w:p>{}<w:p><w:r><w:t>after</w:t></w:r></w:p>{}<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>boundary</w:t></w:r></w:p><w:p><w:r><w:t>next</w:t></w:r></w:p>", table("one"), table("two")));
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].origins.iter().map(|o| o.paragraph).collect::<Vec<_>>(), [1, 4, 7]);
+    assert_eq!(
+        sections[0].core.paragraphs.iter().map(|p| p.text_content()).collect::<Vec<_>>(),
+        ["before", "after", "boundary"]
+    );
+    // 이것을 실패시키는 것: 구역 마지막 실제 문단을 거부, 표 순서 변경, 다음 구역으로 표 이동.
+    for (index, expected) in [(1, "one"), (2, "two")] {
+        let hwpforge_core::RunContent::Table(table) =
+            &sections[0].core.paragraphs[index].runs[0].content
+        else {
+            panic!("table")
+        };
+        assert_eq!(table.rows[0].cells[0].paragraphs[0].text_content(), expected);
+    }
+    assert_eq!(sections[1].core.paragraphs.len(), 1);
+    assert_eq!(sections[1].core.paragraphs[0].runs.len(), 1);
+    assert_eq!(sections[1].core.paragraphs[0].text_content(), "next");
+    for section in &sections {
+        assert_eq!(section.origins.len(), section.core.paragraphs.len());
+    }
+    assert_eq!(sections[1].origins[0].paragraph, 8);
 }

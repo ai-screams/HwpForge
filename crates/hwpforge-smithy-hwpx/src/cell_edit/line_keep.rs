@@ -80,6 +80,11 @@ pub(super) fn candidates(
     package: &RawPackage,
     edits: &[ResolvedEdit],
 ) -> Vec<Candidate> {
+    if decoded.document.format_source::<crate::decoder::SourceBasis>().is_none_or(|basis| {
+        !basis.compatibility.proves_single_line_width(decoded.document.layout_profile())
+    }) {
+        return Vec::new();
+    }
     let header = std::cell::OnceCell::new();
     let tables = tables_in_document(&decoded.document);
     let mut parts = HashMap::new();

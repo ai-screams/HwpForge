@@ -322,6 +322,10 @@ impl HwpxRegistryBridge {
         document: &Document<Validated>,
     ) -> HwpxResult<Document<Validated>> {
         let mut draft = Document::with_metadata(document.metadata().clone());
+        draft.set_layout_profile(document.layout_profile());
+        if let Some(basis) = document.format_source::<crate::decoder::SourceBasis>() {
+            draft.set_format_source(basis);
+        }
         for section in document.sections().iter().cloned() {
             draft.add_section(section);
         }

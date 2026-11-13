@@ -109,6 +109,77 @@ fn patch(bytes: &[u8], text: &str) -> Vec<u8> {
     patch_at(bytes, 0, 1, text)
 }
 
+// 이것을 실패시키는 것: patch 또는 fill에서 Word/미지원 호환 설정의 한 줄 캐시 유지.
+fn compatibility_settings_exclude_unproved_single_line_optimization(is_field: bool) {
+    for (target, flags) in [("MS_WORD", ""), ("FUTURE", ""), ("HWP201X", "<hh:future/>")] {
+        let body = if is_field { field("edit") } else { para("원래 값") };
+        let base = input(vec![para("앞"), body, para("뒤")]);
+        let bytes = package::splice_part(
+            &base,
+            "Contents/header.xml",
+            r#"<hh:compatibleDocument targetProgram="HWP201X"><hh:layoutCompatibility/></hh:compatibleDocument>"#,
+            &format!(
+                r#"<hh:compatibleDocument targetProgram="{target}"><hh:layoutCompatibility>{flags}</hh:layoutCompatibility></hh:compatibleDocument>"#
+            ),
+        );
+        let out = if is_field {
+            HwpxFiller::fill(
+                &bytes,
+                &std::collections::BTreeMap::from([("edit".into(), "1".into())]),
+            )
+            .unwrap()
+            .bytes
+        } else {
+            patch(&bytes, "1")
+        };
+        assert_eq!(
+            vertpos(&package::section_xml(&out)),
+            [Some("9000".into()), None, Some("9002".into())],
+            "{target} {flags} field={is_field}"
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 표준 한컴 설정을 빈 요소 표기나 공백 때문에 거부.
+fn equivalent_hancom_compatibility_keeps_proven_patch_and_fill_caches(is_field: bool) {
+    for raw in [
+        "<hh:compatibleDocument targetProgram = 'HWP201X'>\n <hh:layoutCompatibility ></hh:layoutCompatibility>\n</hh:compatibleDocument>",
+        "<hh:compatibleDocument targetProgram='HWP201X'><hh:layoutCompatibility /></hh:compatibleDocument>",
+    ] {
+            let body = if is_field { field("edit") } else { para("원래 값") };
+            let base = input(vec![para("앞"), body, para("뒤")]);
+            let bytes = package::splice_part(&base, "Contents/header.xml", r#"<hh:compatibleDocument targetProgram="HWP201X"><hh:layoutCompatibility/></hh:compatibleDocument>"#, raw);
+            let out = if is_field {
+                HwpxFiller::fill(&bytes, &std::collections::BTreeMap::from([("edit".into(), "1".into())])).unwrap().bytes
+            } else { patch(&bytes, "1") };
+            assert_eq!(vertpos(&package::section_xml(&out)), [Some("9000".into()), Some("9001".into()), Some("9002".into())]);
+    }
+}
+
+// 이것을 실패시키는 것: patch 경로의 호환 설정 관문 누락.
+#[test]
+fn patch_compatibility_settings_exclude_unproved_single_line_optimization() {
+    compatibility_settings_exclude_unproved_single_line_optimization(false);
+}
+
+// 이것을 실패시키는 것: fill 경로의 호환 설정 관문 누락.
+#[test]
+fn fill_compatibility_settings_exclude_unproved_single_line_optimization() {
+    compatibility_settings_exclude_unproved_single_line_optimization(true);
+}
+
+// 이것을 실패시키는 것: patch 경로의 표준 설정을 문자열 완전 일치로 판정.
+#[test]
+fn equivalent_hancom_compatibility_keeps_proven_patch_cache() {
+    equivalent_hancom_compatibility_keeps_proven_patch_and_fill_caches(false);
+}
+
+// 이것을 실패시키는 것: fill 경로의 표준 설정을 문자열 완전 일치로 판정.
+#[test]
+fn equivalent_hancom_compatibility_keeps_proven_fill_cache() {
+    equivalent_hancom_compatibility_keeps_proven_patch_and_fill_caches(true);
+}
+
 fn patch_at(bytes: &[u8], section_index: usize, paragraph: usize, text: &str) -> Vec<u8> {
     let decoded = HwpxDecoder::decode(bytes).unwrap();
     let mut section = decoded.document.sections()[section_index].clone();

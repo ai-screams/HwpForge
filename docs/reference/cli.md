@@ -204,7 +204,9 @@ hwpforge from-json [OPTIONS] --output <OUTPUT> <INPUT>
 | 옵션             | 설명                                       |
 | ---------------- | ------------------------------------------ |
 | `-o`, `--output` | 출력 HWPX 경로(필수)                       |
-| `--base <BASE>`  | 이미지를 물려받을 기준 HWPX(왕복 충실도용) |
+| `--base <BASE>`  | 이미지·원본 호환 설정을 물려받을 기준 HWPX |
+
+원본 호환 플래그 보존은 base 포함 경로를 사용합니다. base 없이 WordCompatible JSON을 복원하면 원본의 빈·부분 플래그가 생성용 35개 묶음으로 바뀝니다. base 포함 편집에서는 JSON 모드가 base와 다르면 거부하며, Word base에 모드가 누락된 JSON도 거부합니다.
 
 ### to-md
 

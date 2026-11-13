@@ -1,10 +1,13 @@
 //! Input-local whole-table properties shared by style definitions and direct properties.
 use super::*;
+use hwpforge_foundation::HwpUnit;
 
 // left, right, top, bottom, insideH, insideV. None means inherit, not no line.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct TableProperties {
     pub(crate) borders: [Option<bool>; 6],
+    // Source widths in HwpUnit, independent of the approximated output strokes.
+    pub(crate) border_widths: [Option<i32>; 6],
     pub(crate) width: Option<Option<i32>>,
     pub(crate) margins: [Option<i32>; 4],
 }
@@ -18,6 +21,11 @@ pub(crate) enum TableProperty {
 impl TableProperties {
     pub(crate) fn overlay(&mut self, other: &Self) {
         for (a, b) in self.borders.iter_mut().zip(other.borders) {
+            if b.is_some() {
+                *a = b;
+            }
+        }
+        for (a, b) in self.border_widths.iter_mut().zip(other.border_widths) {
             if b.is_some() {
                 *a = b;
             }
@@ -70,6 +78,19 @@ impl TableProperties {
                     let line = attr(e, "val");
                     let solid = !matches!(line, Some("none" | "nil"));
                     self.borders[index] = Some(solid);
+                    self.border_widths[index] = Some(if solid {
+                        let eighths = attr(e, "sz")
+                            .unwrap_or("4")
+                            .parse::<u32>()
+                            .map_err(|_| DocxError::invalid(part, at, "invalid border width"))?;
+                        // 1pt = 100 HwpUnit; round half a unit upward.
+                        i32::try_from((u64::from(eighths) * 100 + 4) / 8)
+                            .ok()
+                            .filter(|width| *width <= HwpUnit::MAX_VALUE)
+                            .ok_or_else(|| DocxError::invalid(part, at, "border width overflow"))?
+                    } else {
+                        0
+                    });
                     if solid
                         && (line != Some("single")
                             || attr(e, "sz").is_some()

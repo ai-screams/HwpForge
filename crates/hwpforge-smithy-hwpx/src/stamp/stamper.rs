@@ -902,10 +902,25 @@ pub(crate) fn reject_input_content_loss(
     }
 }
 
+/// Preserving editors cannot change the base document's layout interpretation.
+pub(crate) fn compare_layout_profile(
+    a: hwpforge_core::LayoutProfile,
+    b: hwpforge_core::LayoutProfile,
+) -> Result<(), StamperError> {
+    if a != b {
+        return Err(StamperError::NotRoundTripSafe {
+            component: "document".into(),
+            diff_path: "/layout_profile".into(),
+        });
+    }
+    Ok(())
+}
+
 /// The no-op round-trip check that admits an input: shapes may differ by
 /// what HWPX storage does to their exact Core values (within 2 HWPUNIT, see
 /// [`align_equivalent_shapes`]).
 pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
+    compare_layout_profile(a.document.layout_profile(), b.document.layout_profile())?;
     compare_documents(a, b, true)
 }
 
@@ -1655,6 +1670,19 @@ mod tests {
             },
             image_store: ImageStore::new(),
         }
+    }
+
+    #[test]
+    fn admission_rejects_layout_profile_mismatch_with_stable_path() {
+        // 이것을 실패시키는 것: 프로필 관문 제거 또는 일반 JSON diff 경로로 대체.
+        let error = compare_layout_profile(
+            hwpforge_core::LayoutProfile::Hancom,
+            hwpforge_core::LayoutProfile::WordCompatible,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, StamperError::NotRoundTripSafe { component, diff_path } if component == "document" && diff_path == "/layout_profile")
+        );
     }
 
     #[test]

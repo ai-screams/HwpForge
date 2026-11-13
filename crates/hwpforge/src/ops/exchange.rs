@@ -483,8 +483,12 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         })
         .transpose()?;
     if let Some(base) = &base {
+        // Profile admission lives with source restoration; preserve the operation's
+        // existing encode/decode error classification without assembling its message here.
+        let same_profile =
+            exported.document.layout_profile() == base.decoded().document.layout_profile();
         HwpxDecoder::restore_source_provenance(&mut exported.document, base.decoded())
-            .map_err(OpsError::decode)?;
+            .map_err(if same_profile { OpsError::decode } else { OpsError::encode })?;
     }
 
     verify_document_addresses(&value, &exported.document)?;

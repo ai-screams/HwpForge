@@ -1254,6 +1254,7 @@ impl HwpxEncoder {
         let base = base.bytes();
         // 공개 입구 관문을 공유: provenance 검증이 재귀 순회 전에 Core 깊이를 검사한다.
         crate::HwpxDecoder::verify_source_provenance(document.sections(), decoded)?;
+        crate::layout_compatibility::require_same(document, &decoded.document)?;
         if crate::layout_edit::unchanged(decoded, document, style_store, image_store)? {
             // 이것을 실패시키는 것: Core만 비교하고 스타일/이미지/메타데이터를
             // 무시하거나 이 분기에서 새로 인코딩한 XML에 원본 캐시를 붙이기.
@@ -1430,6 +1431,11 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         crate::HwpxDecoder::verify_document_source(document)?;
+        let options = if crate::layout_compatibility::changed(document) {
+            options.with_emit_layout_cache(false)
+        } else {
+            options
+        };
         refuse_unknown_cell_zone_fills(document, style_store)?;
         // ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
@@ -1554,7 +1560,12 @@ impl HwpxEncoder {
         };
         // Only now build the output header, including missing font groups.
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
-        let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
+        let header_xml = encode_header(
+            style_store,
+            sec_cnt,
+            begin_num,
+            &crate::layout_compatibility::for_document(document),
+        )?;
         // #198: a font face loses its forbidden characters (with the other
         // controls) to `clean_font_name` before serialization, so the part
         // scan below cannot see them; they are counted here instead.

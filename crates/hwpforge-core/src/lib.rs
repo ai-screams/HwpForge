@@ -122,7 +122,7 @@ pub use control::{
     ArrowStyle, Control, DutmalMetadata, Fill, LineStyle, MemoMetadata, ShapePoint, ShapeStyle,
 };
 pub use depth::MAX_NESTING_DEPTH;
-pub use document::{Document, Draft, Validated};
+pub use document::{Document, Draft, LayoutProfile, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
 pub use frame::ObjectFrame;
 pub use image::{Image, ImageCrop, ImageFormat, ImageStore};

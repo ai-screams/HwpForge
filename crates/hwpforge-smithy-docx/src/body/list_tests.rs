@@ -76,9 +76,10 @@ fn numbering_groups_survive_body_and_sections() {
     );
     let body=format!("{}<w:p><w:r><w:t>body</w:t></w:r></w:p>{}<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>{}{}{}",item(7,0,"","A"),item(8,0,"","B"),item(9,0,"","cell"),item(7,0,"<w:sectPr/>","C"),item(8,0,"","D"),item(9,0,"","E"));
     let d = read(&defs, &body);
+    // 이것을 실패시키는 것: 구역 마지막 목록 문단 앞에 합성 표 holder를 남기기.
     assert_eq!(
         lists(&d),
-        [number(0, 0), None, number(0, 0), None, number(0, 0), number(0, 0), number(1, 0)]
+        [number(0, 0), None, number(0, 0), number(0, 0), number(0, 0), number(1, 0)]
     );
     assert_eq!(d.registry.numberings.len(), 2);
     assert_eq!(d.registry.numberings.iter().map(|n| n.start).collect::<Vec<_>>(), [1, 1]);

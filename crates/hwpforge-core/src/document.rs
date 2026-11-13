@@ -64,6 +64,28 @@ use crate::paragraph::Paragraph;
 use crate::section::Section;
 use crate::validate::validate_sections;
 
+/// 문서의 배치 수치를 해석하는 호환 프로필.
+///
+/// Word 조판 재현 보장 아님. 줄 간격 수치나 문단·표 구조를 자동 변환하지 않는다.
+/// 파일 형식별 문자열과 호환 플래그는 각 Smithy의 책임이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum LayoutProfile {
+    /// 기존 한컴 문서의 해석 규칙을 유지하는 기본값.
+    /// 백분율 줄 간격의 기준은 글자 크기(em)다.
+    /// 글꼴 자연 줄 높이를 곱셈의 기준으로 다시 적용하지 않는다.
+    /// 기존 첫 줄 배치와 컨테이너 간격 정책을 유지한다.
+    #[default]
+    Hancom,
+    /// 백분율 줄 간격을 글꼴의 자연 줄 높이에 대한 배수로 해석한다.
+    /// 100은 한 배, 115는 1.15배이며 em 기준으로 미리 환산하지 않는다.
+    /// 측정한 표본에서는 첫 줄 위 여유가 포함되는 배치가 관찰됐다.
+    /// 위 여유의 정확한 산식과 컨테이너 앞뒤 간격 규칙은 미확인이다.
+    /// 표 anchor 이동과 셀 TOP 정렬은 가져오기 단계의 별도 처리다.
+    WordCompatible,
+}
+
 /// Marker type: the document is a mutable draft.
 ///
 /// A `Document<Draft>` can be modified (add sections, set metadata)
@@ -111,6 +133,7 @@ pub struct Validated;
 pub struct Document<S = Draft> {
     sections: Vec<Section>,
     metadata: Metadata,
+    layout_profile: LayoutProfile,
     _state: PhantomData<S>,
     format_source: Option<
         std::sync::Arc<
@@ -124,6 +147,11 @@ pub struct Document<S = Draft> {
 // ---------------------------------------------------------------------------
 
 impl<S> Document<S> {
+    /// 문서의 배치 수치 해석 프로필을 반환한다.
+    pub fn layout_profile(&self) -> LayoutProfile {
+        self.layout_profile
+    }
+
     /// Immutable, non-serialized decoder context, independent of submitted nodes.
     /// Only the owning codec can interpret its private context type.
     #[doc(hidden)]
@@ -175,6 +203,14 @@ impl<S> Document<S> {
 // ---------------------------------------------------------------------------
 
 impl Document<Draft> {
+    /// 배치 수치 해석 프로필을 설정한다. 스타일 수치나 문단·표 구조는 변환하지 않는다.
+    ///
+    /// 일반 출력에서 변경하면 기존 배치 캐시를 재사용하지 않는다. 호출자가 새 의미에
+    /// 맞는 스타일과 구조를 책임진다. base 포함 보존 편집은 base와 다른 프로필을 거부한다.
+    pub fn set_layout_profile(&mut self, profile: LayoutProfile) {
+        self.layout_profile = profile;
+    }
+
     /// Bind an immutable decoder context independently of node provenance claims.
     #[doc(hidden)]
     pub fn set_format_source<
@@ -200,6 +236,7 @@ impl Document<Draft> {
         Self {
             sections: Vec::new(),
             metadata: Metadata::default(),
+            layout_profile: LayoutProfile::default(),
             format_source: None,
             _state: PhantomData,
         }
@@ -217,7 +254,13 @@ impl Document<Draft> {
     /// assert_eq!(doc.metadata().title.as_deref(), Some("Test"));
     /// ```
     pub fn with_metadata(metadata: Metadata) -> Self {
-        Self { sections: Vec::new(), metadata, format_source: None, _state: PhantomData }
+        Self {
+            sections: Vec::new(),
+            metadata,
+            layout_profile: LayoutProfile::default(),
+            format_source: None,
+            _state: PhantomData,
+        }
     }
 
     /// 문서의 문단을 문서 순서(pre-order)로 방문한다.
@@ -442,6 +485,7 @@ impl Document<Draft> {
         Ok(Document {
             sections: self.sections,
             metadata: self.metadata,
+            layout_profile: self.layout_profile,
             format_source: self.format_source,
             _state: PhantomData,
         })
@@ -463,6 +507,7 @@ impl<S> std::fmt::Debug for Document<S> {
         f.debug_struct("Document")
             .field("sections", &self.sections)
             .field("metadata", &self.metadata)
+            .field("layout_profile", &self.layout_profile)
             .finish()
     }
 }
@@ -472,6 +517,7 @@ impl<S> Clone for Document<S> {
         Self {
             sections: self.sections.clone(),
             metadata: self.metadata.clone(),
+            layout_profile: self.layout_profile,
             format_source: self.format_source.clone(),
             _state: PhantomData,
         }
@@ -480,7 +526,9 @@ impl<S> Clone for Document<S> {
 
 impl<S> PartialEq for Document<S> {
     fn eq(&self, other: &Self) -> bool {
-        self.sections == other.sections && self.metadata == other.metadata
+        self.sections == other.sections
+            && self.metadata == other.metadata
+            && self.layout_profile == other.layout_profile
     }
 }
 
@@ -499,9 +547,14 @@ impl<S> std::fmt::Display for Document<S> {
 impl<S> Serialize for Document<S> {
     fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("Document", 2)?;
+        let include_profile = self.layout_profile != LayoutProfile::Hancom;
+        let mut state =
+            serializer.serialize_struct("Document", 2 + usize::from(include_profile))?;
         state.serialize_field("sections", &self.sections)?;
         state.serialize_field("metadata", &self.metadata)?;
+        if include_profile {
+            state.serialize_field("layout_profile", &self.layout_profile)?;
+        }
         state.end()
     }
 }
@@ -512,12 +565,15 @@ impl<'de> Deserialize<'de> for Document<Draft> {
         struct DocumentData {
             sections: Vec<Section>,
             metadata: Metadata,
+            #[serde(default)]
+            layout_profile: LayoutProfile,
         }
 
         let data = DocumentData::deserialize(deserializer)?;
         Ok(Document {
             sections: data.sections,
             metadata: data.metadata,
+            layout_profile: data.layout_profile,
             format_source: None,
             _state: PhantomData,
         })
@@ -534,11 +590,14 @@ impl<S> JsonSchema for Document<S> {
     }
 
     fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut profile = gen.subschema_for::<LayoutProfile>();
+        profile.insert("default".into(), "hancom".into());
         schemars::json_schema!({
             "type": "object",
             "properties": {
                 "sections": gen.subschema_for::<Vec<Section>>(),
                 "metadata": gen.subschema_for::<crate::metadata::Metadata>(),
+                "layout_profile": profile,
             },
             "required": ["sections", "metadata"]
         })
@@ -580,6 +639,64 @@ mod tests {
             )],
             PageSettings::a4(),
         )
+    }
+
+    #[test]
+    fn layout_profile_survives_document_operations() {
+        // 이것을 실패시키는 것: 기본값 변경, 수동 복제·동등성·Debug·검증의 프로필 누락.
+        for doc in
+            [Document::new(), Document::default(), Document::with_metadata(Metadata::default())]
+        {
+            assert_eq!(doc.layout_profile(), LayoutProfile::Hancom);
+        }
+        let mut hancom = Document::new();
+        hancom.add_section(valid_section());
+        let mut word = hancom.clone();
+        word.set_layout_profile(LayoutProfile::WordCompatible);
+        assert_ne!(word, hancom);
+        assert_eq!(word.clone().layout_profile(), LayoutProfile::WordCompatible);
+        assert!(format!("{word:?}").contains("layout_profile: WordCompatible"));
+        word.set_metadata(Metadata::default());
+        word.metadata_mut().title = Some("title".into());
+        assert_eq!(word.layout_profile(), LayoutProfile::WordCompatible);
+        word.set_format_source(std::sync::Arc::new(37_u32));
+        let validated = word.clone().validate().unwrap();
+        assert_eq!(validated.layout_profile(), LayoutProfile::WordCompatible);
+        assert_eq!(*validated.format_source::<u32>().unwrap(), 37);
+    }
+
+    #[test]
+    fn layout_profile_json_is_optional_and_rejects_unknown_values() {
+        // 이것을 실패시키는 것: Hancom 출력, Word 출력·복원 누락, 미지 값 허용.
+        let hancom = serde_json::to_value(Document::new()).unwrap();
+        assert!(hancom.get("layout_profile").is_none());
+        assert_eq!(
+            serde_json::from_value::<Document>(hancom.clone()).unwrap().layout_profile(),
+            LayoutProfile::Hancom
+        );
+        let mut word = Document::new();
+        word.set_layout_profile(LayoutProfile::WordCompatible);
+        let value = serde_json::to_value(&word).unwrap();
+        assert_eq!(value["layout_profile"], "word_compatible");
+        assert_eq!(serde_json::from_value::<Document>(value).unwrap(), word);
+        for name in ["hancom", "word_compatible", "word", "unknown"] {
+            let mut value = hancom.clone();
+            value["layout_profile"] = name.into();
+            let result = serde_json::from_value::<Document>(value);
+            assert_eq!(result.is_ok(), matches!(name, "hancom" | "word_compatible"));
+        }
+        let schema = serde_json::to_value(schemars::schema_for!(Document)).unwrap();
+        assert_eq!(schema["properties"]["layout_profile"]["default"], "hancom");
+        assert_eq!(
+            schema["$defs"]["LayoutProfile"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v["const"].clone())
+                .collect::<Vec<_>>(),
+            vec![serde_json::json!("hancom"), serde_json::json!("word_compatible")]
+        );
+        assert_eq!(schema["required"], serde_json::json!(["sections", "metadata"]));
     }
 
     // === Construction ===

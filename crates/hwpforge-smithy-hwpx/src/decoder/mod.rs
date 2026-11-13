@@ -757,6 +757,7 @@ pub(crate) mod preserved_loss;
 /// Decoder-only context: callers cannot construct this type or derive it from a claim.
 #[derive(Debug, Clone)]
 pub(crate) struct SourceBasis {
+    pub(crate) compatibility: crate::layout_compatibility::Compatibility,
     pub(crate) losses: Vec<preserved_loss::LossEvidence>,
     // Header-read fact belongs to the original package, not editable JSON styles.
     requires_header_normalization: bool,
@@ -896,6 +897,9 @@ impl HwpxDecoder {
         let mut master_budget = CopyBudget::new(MASTER_PAGE_BUDGET);
         let mut named_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
+        let compatibility =
+            crate::layout_compatibility::Compatibility::read(&header_xml, &mut warnings)?;
+        document.set_layout_profile(compatibility.profile);
         warnings.extend(dropped_metadata.into_iter().map(|dropped| DecodeWarning::ContentLost {
             part: crate::encoder::package::CONTENT_HPF_PART.into(),
             path: ParagraphPath::default(),
@@ -1124,6 +1128,7 @@ impl HwpxDecoder {
             package.clone(),
         );
         let source_basis = std::sync::Arc::new(SourceBasis {
+            compatibility,
             losses,
             requires_header_normalization: header_result.requires_header_normalization,
             package,
@@ -1183,11 +1188,12 @@ impl HwpxDecoder {
     ///
     /// # Errors
     /// Rejects excessive nesting in the submitted document or base document,
-    /// and claims that cannot be restored from this base.
+    /// claims that cannot be restored from this base, or a different layout profile.
     pub fn restore_source_provenance(
         document: &mut Document<Draft>,
         base: &HwpxDocument,
     ) -> HwpxResult<()> {
+        crate::layout_compatibility::require_same(document, &base.document)?;
         for section in document.sections().iter().chain(base.document.sections()) {
             section.check_nesting_depth().map_err(|error| crate::HwpxError::InvalidStructure {
                 detail: error.to_string(),
@@ -1536,6 +1542,7 @@ mod tests {
                 Arc::from(altered.write().unwrap())
             };
             let stale = Arc::new(SourceBasis {
+                compatibility: basis.compatibility.clone(),
                 losses: basis.losses.clone(),
                 package,
                 origins: basis.origins.clone(),

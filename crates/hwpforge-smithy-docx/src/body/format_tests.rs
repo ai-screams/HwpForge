@@ -782,10 +782,7 @@ fn exported_named_defaults_are_diagnosed_before_direct_body_formatting() {
         let defaults = format!("<w:docDefaults><w:rPrDefault><w:rPr>{character}</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>{paragraph}</w:pPr></w:pPrDefault></w:docDefaults>").replace(remove, "");
         let d = read(&format!("{defaults}<w:style w:type='paragraph' w:styleId='unused'/>") , &format!("<w:p><w:pPr>{paragraph}</w:pPr><w:r><w:rPr>{character}</w:rPr><w:t>A</w:t></w:r></w:p>"));
         assert_eq!(d.registry.style_count(), 1);
-        assert_eq!(
-            d.warnings.iter().find(|w| w.loss() == "unknown_font_line_height").unwrap().count(),
-            1
-        );
+        assert!(!d.warnings.iter().any(|w| w.loss() == "unknown_font_line_height"));
         let warnings: Vec<_> = d
             .warnings
             .iter()
@@ -1120,10 +1117,7 @@ fn optional_outline_values_recover_in_body_and_unused_definitions() {
                     .iter()
                     .map(|w| (w.code(), w.loss(), w.action(), w.count()))
                     .collect::<Vec<_>>(),
-                [
-                    ("DOCX_UNSUPPORTED_VALUE", "format_value", "inherit_or_default", 1),
-                    ("DOCX_VALUE_APPROXIMATED", "unknown_font_line_height", "retain_spacing", 1)
-                ]
+                [("DOCX_UNSUPPORTED_VALUE", "format_value", "inherit_or_default", 1),]
             );
         }
     }
@@ -1135,7 +1129,7 @@ fn optional_outline_values_recover_in_body_and_unused_definitions() {
                 .iter()
                 .map(|w| (w.code(), w.loss(), w.action(), w.count()))
                 .collect::<Vec<_>>(),
-            [("DOCX_VALUE_APPROXIMATED", "unknown_font_line_height", "retain_spacing", 1)]
+            []
         );
     }
 }
@@ -1191,11 +1185,8 @@ fn distribute_alignment_and_other_jc_contracts() {
         let d = read("<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii='A' w:eastAsia='A'/><w:sz w:val='20'/><w:color w:val='000000'/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line='240' w:before='0' w:after='0'/><w:ind w:left='0' w:right='0' w:firstLine='0'/></w:pPr></w:pPrDefault></w:docDefaults>", &format!("<w:p><w:pPr><w:jc w:val='{value}'/></w:pPr><w:r><w:t>가 나</w:t></w:r></w:p>"));
         let p = &d.document.sections()[0].paragraphs[0];
         assert_eq!(d.registry.para_shapes[p.para_shape_id.get()].alignment, alignment);
-        assert_eq!(d.warnings.len(), warnings + 1, "{value}: {:?}", d.warnings);
-        assert_eq!(
-            d.warnings.iter().find(|w| w.loss() == "unknown_font_line_height").unwrap().count(),
-            1
-        );
+        assert_eq!(d.warnings.len(), warnings, "{value}: {:?}", d.warnings);
+        assert!(!d.warnings.iter().any(|w| w.loss() == "unknown_font_line_height"));
     }
 }
 

@@ -155,7 +155,13 @@ fn output_packs_both_units_and_numbers_positions() {
         let p = para(&format!("<switch>{}</switch>", branch(&margin(value, unit))));
         let mut store = HwpxStyleStore::new();
         store.push_para_shape(p);
-        let output = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+        let output = crate::encoder::header::encode_header(
+            &store,
+            1,
+            None,
+            crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+        )
+        .unwrap();
         assert!(output.contains(&format!(r#"value="{raw}" unit="HWPUNIT""#)), "{output}");
         assert!(output.contains(&format!(r#"value="{value}" unit="{unit}""#)), "{output}");
         assert!(output.contains(r#"paraPr id="0""#));
@@ -295,7 +301,13 @@ fn empty_supported_tab_case_is_authoritative() {
             } if field == "stops" && reason.contains("default stop count differs"))
             );
         }
-        let output = crate::encoder::header::encode_header(&parsed.style_store, 1, None).unwrap();
+        let output = crate::encoder::header::encode_header(
+            &parsed.style_store,
+            1,
+            None,
+            crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+        )
+        .unwrap();
         let after = parse_header(&output).unwrap();
         let tab = after.style_store.iter_tabs().find(|t| t.id == 0).unwrap();
         assert!(tab.stops.is_empty());
@@ -314,7 +326,13 @@ fn font_line_height_rust_clone_at_new_position() {
     store.set_para_font_line_height(original, 0).unwrap();
     let json = serde_json::to_string(&store).unwrap();
     let store: HwpxStyleStore = serde_json::from_str(&json).unwrap();
-    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    let xml = crate::encoder::header::encode_header(
+        &store,
+        1,
+        None,
+        crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+    )
+    .unwrap();
     let parsed = parse_header(&xml).unwrap();
     assert_eq!(parsed.style_store.para_shape(original).unwrap().font_line_height, 0);
     assert_eq!(parsed.style_store.para_shape(clone).unwrap().font_line_height, 1);
@@ -327,7 +345,13 @@ fn measure_normalization_compares_encoder_payloads() {
     use crate::schema::header::{HxHead, HxSwitch, HxSwitchCase, HxSwitchDefault};
     let mut store = HwpxStyleStore::new();
     store.push_para_shape(HwpxParaShape::default());
-    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    let xml = crate::encoder::header::encode_header(
+        &store,
+        1,
+        None,
+        crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+    )
+    .unwrap();
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
     for change in [
         "direct-margin",
@@ -427,7 +451,13 @@ fn tab_normalization_compares_encoder_payloads() {
             leader: hwpforge_foundation::TabLeader::none(),
         }],
     });
-    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    let xml = crate::encoder::header::encode_header(
+        &store,
+        1,
+        None,
+        crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+    )
+    .unwrap();
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
     for change in ["direct", "empty", "case-only", "default-only", "value", "unit", "count"] {
         let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
@@ -475,7 +505,13 @@ fn split_tab_switches_compare_ordered_case_and_default_payloads() {
             })
             .to_vec(),
     });
-    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    let xml = crate::encoder::header::encode_header(
+        &store,
+        1,
+        None,
+        crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+    )
+    .unwrap();
     let parsed = parse_header(&xml).unwrap();
     assert!(!parsed.requires_header_normalization);
     for change in [

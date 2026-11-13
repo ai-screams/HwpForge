@@ -592,6 +592,7 @@ impl HwpxPatcher {
                 &new_texts,
                 &before_fields,
                 &after_fields,
+                &validated,
                 &decoded.style_store,
                 &raw_package,
                 &base_section_xml,
@@ -682,6 +683,7 @@ fn one_line_proofs(
     new_texts: &[Option<String>],
     before_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
     after_fields: &hwpforge_core::field_inventory::FieldInventory<'_>,
+    document: &hwpforge_core::Document<Validated>,
     styles: &HwpxStyleStore,
     raw_package: &RawPackage,
     source_xml: &str,
@@ -690,6 +692,12 @@ fn one_line_proofs(
     // The flow gate excludes ranges and elements whose visible text may be
     // absent from these slots; nested flows never add to their host's width.
     let flow = &map.cache_flow;
+    let mut proven = vec![false; flow.paragraph_count()];
+    if document.format_source::<crate::decoder::SourceBasis>().is_none_or(|basis| {
+        !basis.compatibility.proves_single_line_width(document.layout_profile())
+    }) {
+        return proven;
+    }
     let mut changed_mask = vec![false; flow.paragraph_count()];
     for &p in changed {
         changed_mask[p] = true;
@@ -714,7 +722,6 @@ fn one_line_proofs(
             }
         }
     }
-    let mut proven = vec![false; flow.paragraph_count()];
     if owners.iter().any(Option::is_some) {
         self_check_count(0);
         let mut texts = vec![(String::new(), String::new(), true); flow.paragraph_count()];

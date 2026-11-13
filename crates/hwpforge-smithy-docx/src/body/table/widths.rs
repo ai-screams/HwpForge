@@ -125,7 +125,14 @@ impl WidthPlan {
             if content <= 0 {
                 return Err(error());
             }
-            apply_pending(cell.nested, &mut target.paragraphs, content, part, w)?;
+            apply_pending(
+                cell.nested,
+                &mut target.paragraphs,
+                &cell.anchor_boundaries,
+                content,
+                part,
+                w,
+            )?;
         }
         if approximate {
             record(w, Kind::TableWidthApproximated, "table_width", "fit_columns", || {
@@ -137,11 +144,13 @@ impl WidthPlan {
 }
 pub(in crate::body) fn apply_pending(
     pending: Vec<(usize, WidthPlan)>,
-    paragraphs: &mut [Paragraph],
+    paragraphs: &mut Vec<Paragraph>,
+    boundaries: &[usize],
     container: i32,
     part: &str,
     w: &mut Vec<DocxWarning>,
-) -> Result<()> {
+) -> Result<Vec<usize>> {
+    let synthetic: Vec<_> = pending.iter().map(|(index, _)| *index).collect();
     for (index, plan) in pending {
         let Some(RunContent::Table(table)) =
             paragraphs.get_mut(index).and_then(|p| p.runs.first_mut()).map(|r| &mut r.content)
@@ -150,7 +159,40 @@ pub(in crate::body) fn apply_pending(
         };
         plan.apply(table, container, part, w)?;
     }
-    Ok(())
+    Ok(move_anchors(paragraphs, &synthetic, boundaries))
+}
+
+// Only deferred plans identify generated holders. All widths, merges and heights
+// are settled before their paragraph indices change. Budget counts remain conservative.
+fn move_anchors(
+    paragraphs: &mut Vec<Paragraph>,
+    synthetic: &[usize],
+    boundaries: &[usize],
+) -> Vec<usize> {
+    let mut removed = Vec::new();
+    let mut output = Vec::with_capacity(paragraphs.len());
+    let mut holders: Vec<(usize, Paragraph)> = Vec::new();
+    for (index, mut paragraph) in std::mem::take(paragraphs).into_iter().enumerate() {
+        if synthetic.binary_search(&index).is_ok() {
+            holders.push((index, paragraph));
+            continue;
+        }
+        if boundaries.binary_search(&index).is_ok() {
+            output.extend(holders.drain(..).map(|(_, p)| p));
+        } else if !holders.is_empty() {
+            let mut runs = Vec::with_capacity(holders.len() + paragraph.runs.len());
+            for (index, mut holder) in holders.drain(..) {
+                removed.push(index);
+                runs.push(holder.runs.remove(0));
+            }
+            runs.append(&mut paragraph.runs);
+            paragraph.runs = runs;
+        }
+        output.push(paragraph);
+    }
+    output.extend(holders.into_iter().map(|(_, p)| p));
+    *paragraphs = output;
+    removed
 }
 
 #[cfg(test)]

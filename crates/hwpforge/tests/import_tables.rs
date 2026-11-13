@@ -57,15 +57,25 @@ fn cell_numbers_and_following_body_share_one_sequence() {
         trees(convert_docx(&docx::package_with_numbering(&body, defs)).unwrap().bytes);
     let shapes = header.descendants("hh:paraPr");
     let mut numbered = Vec::new();
-    for p in section.descendants("hp:p") {
+    let host = &section.children[0];
+    let mut paragraphs = host.find("hp:tbl").descendants("hp:p");
+    paragraphs.push(host);
+    for p in paragraphs {
         let id = p.attr("paraPrIDRef").unwrap();
         let shape = shapes.iter().find(|s| s.attr("id") == Some(id)).unwrap();
         let heading = shape.child("hh:heading");
         if heading.attr("type") == Some("NUMBER") {
             assert_eq!(heading.attr("idRef"), Some("2"));
             assert_eq!(heading.attr("level"), Some("0"));
-            numbered
-                .push(p.descendants("hp:t").iter().map(|t| t.text.as_str()).collect::<String>());
+            numbered.push(
+                p.children
+                    .iter()
+                    .filter(|n| n.name == "hp:run")
+                    .flat_map(|r| &r.children)
+                    .filter(|n| n.name == "hp:t")
+                    .map(|t| t.text.as_str())
+                    .collect::<String>(),
+            );
         }
     }
     assert_eq!(numbered, ["A", "B", "C"]);
@@ -121,7 +131,7 @@ fn cell_height_and_alignment_reach_hwpx() {
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
         let (_, section) = trees(result.bytes);
         for (cell, align) in
-            section.descendants("hp:tc").iter().zip(["CENTER", "TOP", "CENTER", "BOTTOM"])
+            section.descendants("hp:tc").iter().zip(["TOP", "TOP", "CENTER", "BOTTOM"])
         {
             assert_eq!(cell.child("hp:cellSz").attr("height"), Some("1902"));
             assert_eq!(cell.child("hp:subList").attr("vertAlign"), Some(align));
@@ -287,5 +297,73 @@ fn merged_content_minimum_preserves_ordinary_wire_height() {
         assert_eq!(cell.child("hp:cellAddr").attr("colAddr"), Some(col));
         assert_eq!(cell.child("hp:cellSpan").attr("rowSpan"), Some(span));
         assert_eq!(cell.child("hp:cellSz").attr("height"), Some(height));
+    }
+}
+
+#[test]
+fn word_profile_auto_spacing_and_shared_anchor_reach_the_wire() {
+    // 이것을 실패시키는 것: bridge의 프로필 유실, 표 순서/anchor 분리, auto 재환산, TOP 누락.
+    for (line, value) in [(240, "100"), (276, "115"), (360, "150")] {
+        let table = |text| {
+            format!(
+                "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            )
+        };
+        let body = format!("{}{}<w:p><w:pPr><w:spacing w:line='{line}' w:before='240' w:after='240'/></w:pPr><w:r><w:t>tail</w:t></w:r></w:p>", table("first"), table("second"));
+        let result = convert_docx(&docx::package_with_defaults(&body, "")).unwrap();
+        assert_eq!(result.paragraphs, 1);
+        let (h, s) = trees(result.bytes);
+        assert_eq!(h.find("hh:compatibleDocument").attr("targetProgram"), Some("MS_WORD"));
+        assert_eq!(h.find("hh:layoutCompatibility").children.len(), 35);
+        let ps: Vec<_> = s.children.iter().filter(|n| n.name == "hp:p").collect();
+        assert_eq!(ps.len(), 1);
+        let runs: Vec<_> = ps[0].children.iter().filter(|n| n.name == "hp:run").collect();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].find("hp:tbl").find("hp:t").text, "first");
+        assert_eq!(runs[1].find("hp:tbl").find("hp:t").text, "second");
+        assert_eq!(runs[2].find("hp:t").text, "tail");
+        for cell in s.descendants("hp:tc") {
+            assert_eq!(cell.child("hp:subList").attr("vertAlign"), Some("TOP"));
+        }
+        let shape = h
+            .descendants("hh:paraPr")
+            .into_iter()
+            .find(|p| p.attr("id") == ps[0].attr("paraPrIDRef"))
+            .unwrap();
+        assert_eq!(shape.find("hh:lineSpacing").attr("type"), Some("PERCENT"));
+        assert_eq!(shape.find("hh:lineSpacing").attr("value"), Some(value));
+    }
+}
+
+// 이것을 실패시키는 것: 모든 행 exact 판정 대신 any 사용, exact에 최소·선 합산, 혼합 표 내용 최소 누락.
+#[test]
+fn exact_table_size_protection_and_literal_cell_heights_reach_hwpx() {
+    let cell = "<w:tc><w:p><w:pPr><w:spacing w:line='240'/></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t></w:r></w:p></w:tc>";
+    for (first, last, protect, heights) in [
+        (
+            "<w:trHeight w:val='200' w:hRule='exact'/>",
+            "<w:trHeight w:val='300' w:hRule='exact'/>",
+            "1",
+            ["1000", "1000", "1500", "1500"],
+        ),
+        ("<w:trHeight w:val='200' w:hRule='exact'/>", "", "0", ["1952", "1952", "2002", "2002"]),
+        ("", "<w:trHeight w:val='200' w:hRule='exact'/>", "0", ["1952", "1952", "2002", "2002"]),
+        (
+            "<w:trHeight w:val='200' w:hRule='exact'/>",
+            "<w:trHeight w:hRule='exact'/>",
+            "0",
+            ["1952", "1952", "2002", "2002"],
+        ),
+        ("", "<w:trHeight w:val='200' w:hRule='atLeast'/>", "0", ["1952", "1952", "2002", "2002"]),
+    ] {
+        let body = format!("<w:tbl><w:tblPr><w:tblBorders><w:top w:val='single' w:sz='4'/><w:insideH w:val='single' w:sz='4'/><w:bottom w:val='single' w:sz='4'/></w:tblBorders><w:tblCellMar><w:top w:w='0'/><w:bottom w:w='0'/></w:tblCellMar></w:tblPr><w:tr><w:trPr>{first}</w:trPr>{cell}{cell}</w:tr><w:tr><w:trPr>{last}</w:trPr>{cell}{cell}</w:tr></w:tbl>");
+        let (_, section) = trees(convert_docx(&docx::package(&body)).unwrap().bytes);
+        let table = section.find("hp:tbl");
+        assert_eq!(table.child("hp:sz").attr("protect"), Some(protect));
+        let cells = table.descendants("hp:tc");
+        assert_eq!(cells.len(), 4);
+        for (cell, height) in cells.iter().zip(heights) {
+            assert_eq!(cell.child("hp:cellSz").attr("height"), Some(height));
+        }
     }
 }

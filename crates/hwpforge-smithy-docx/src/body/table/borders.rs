@@ -1,6 +1,58 @@
 use super::*;
 use hwpforge_blueprint::registry::StyleRegistry;
 
+/// Word's horizontal strokes contribute once per row boundary, before merging
+/// removes continuation cells. Cell strokes take precedence over table strokes;
+/// an absent stroke yields to a visible neighbor. Different columns use the max.
+pub(super) fn row_heights(rows: &[Row], width: usize, base: &TableProperties) -> Vec<i64> {
+    let mut previous = vec![(0, false); width];
+    let mut heights = Vec::with_capacity(rows.len());
+    for (ri, row) in rows.iter().enumerate() {
+        let top = base.border_widths[if ri == 0 { 2 } else { 4 }].unwrap_or(0);
+        let bottom = base.border_widths[if ri + 1 == rows.len() { 3 } else { 4 }].unwrap_or(0);
+        // Positions not covered by a source cell have no source stroke.
+        let mut tops = vec![(0, false); width];
+        let mut bottoms = vec![(0, false); width];
+        for cell in &row.cells {
+            let range = cell.col..cell.col + usize::from(cell.span);
+            for (side, inherited, faces) in [(2, top, &mut tops), (3, bottom, &mut bottoms)] {
+                let value = cell.properties.border_widths[side];
+                faces[range.clone()].fill((value.unwrap_or(inherited), value.is_some()));
+            }
+            if cell.continuation {
+                // Only an actual merge loses its internal face; orphan vMerge
+                // continuations remain ordinary cells with their top stroke.
+                tops[range.clone()].fill((0, false));
+                previous[range].fill((0, false));
+            }
+        }
+        let stroke = tops
+            .into_iter()
+            .zip(&previous)
+            .map(|(top, &bottom)| match (top, bottom) {
+                // An explicit none still yields to a visible neighbor, even an
+                // inherited one. This keeps the existing height approximation;
+                // output border appearance is resolved separately in apply().
+                ((0, _), (b, _)) => b,
+                ((t, _), (0, _)) => t,
+                ((t, true), (_, false)) => t,
+                ((_, false), (b, true)) => b,
+                ((t, _), (b, _)) => t.max(b),
+            })
+            .max()
+            .unwrap_or(0);
+        let bottom = if ri + 1 == rows.len() {
+            bottoms.iter().map(|(width, _)| *width).max().unwrap_or(0)
+        } else {
+            0
+        };
+        // Each source width is bounded; use i64 until the row height is checked.
+        heights.push(i64::from(stroke) + i64::from(bottom));
+        previous = bottoms;
+    }
+    heights
+}
+
 pub(super) fn apply(
     table: &mut Table,
     grid: &TableGrid,

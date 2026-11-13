@@ -200,6 +200,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     )?;
     let registry = resolver.registry;
     let mut document = Document::new();
+    document.set_layout_profile(hwpforge_core::LayoutProfile::WordCompatible);
     for section in sections {
         debug_assert_eq!(section.origins.len(), section.core.paragraphs.len());
         debug_assert!(section.content_width.as_i32() > 0 && section.content_height.as_i32() > 0);
@@ -1256,6 +1257,7 @@ impl Body<'_> {
                 }
             }
             self.origins.push(Origin {
+                anchor_boundary: !self.breaks.is_empty() || p.page_break || p.column_break,
                 paragraph: self.source_paragraphs,
                 list_item: self.source_paragraphs,
                 fragment,
@@ -1423,13 +1425,26 @@ impl Body<'_> {
         self.finalize_shapes(0)?;
         self.section_layout_known = false;
         self.spacing_neighbor = None;
-        table::apply_pending(
+        let boundaries: Vec<_> = self
+            .origins
+            .iter()
+            .enumerate()
+            .filter_map(|(i, origin)| origin.anchor_boundary.then_some(i))
+            .collect();
+        let removed = table::apply_pending(
             std::mem::take(&mut self.tables.pending),
             &mut self.paragraphs,
+            &boundaries,
             content_width.as_i32(),
             self.part,
             self.warnings,
         )?;
+        let mut index = 0;
+        self.origins.retain(|_| {
+            let keep = removed.binary_search(&index).is_err();
+            index += 1;
+            keep
+        });
         self.sections.push(DecodedSection {
             core: Section::with_paragraphs(std::mem::take(&mut self.paragraphs), page),
             origins: std::mem::take(&mut self.origins),
@@ -1618,6 +1633,8 @@ mod layout_tests;
 
 #[cfg(test)]
 mod line_spacing_tests;
+#[cfg(test)]
+mod word_layout_tests;
 
 #[cfg(test)]
 mod list_tests;

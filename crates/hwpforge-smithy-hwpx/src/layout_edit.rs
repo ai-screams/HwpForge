@@ -223,6 +223,11 @@ pub(crate) fn prepare(
     images: &hwpforge_core::image::ImageStore,
     options: crate::EncodeOptions,
 ) -> HwpxResult<(Document<Validated>, Vec<EncodeWarning>, crate::EncodeOutcome)> {
+    let mut draft: Document<Draft> = serde_json::from_value(tree(document)?)
+        .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
+    crate::HwpxDecoder::restore_source_provenance(&mut draft, base)?;
+    let bound = draft.validate()?;
+    let document = &bound;
     let trusted = tree(&base.document)?;
     let supplied = tree(document)?;
     let mut original = trusted.clone();
