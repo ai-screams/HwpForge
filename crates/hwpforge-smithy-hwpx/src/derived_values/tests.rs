@@ -2471,6 +2471,47 @@ fn outline_wire_heading_checks_are_independent() {
     }
 }
 
+// 이것을 실패시키는 것: nested_cell_sublist 항상 false, 소유만으로 proof 생략, from_source-only 흐름의 seed 제거.
+#[test]
+fn nested_seeds_and_derived_effects_agree() {
+    let xml = section(&format!(
+        "{}{}{}",
+        p("<hp:secPr textDirection='HORIZONTAL'/><hp:t>앞</hp:t>"),
+        p(&table("10", &table("20", "<hp:t>안</hp:t>"))),
+        p("<hp:t>뒤</hp:t>")
+    ));
+    let mut f = facts(&[xml]);
+    let part = &mut f.parts[0];
+    let changed = [false, false, false, true, false];
+    let proven = [true; 5];
+    assert_eq!(part.flow.effective_text_seeds(&changed, &proven), changed);
+    part.flow.prove_text_tail(&part.source, &part.xml, &Default::default(), |_| None);
+    for success in [true, false] {
+        let mut proof = proven;
+        proof[3] = success;
+        let seeds = part.flow.effective_text_seeds(&changed, &proof);
+        assert_eq!(seeds, if success { [false; 5] } else { changed });
+        assert_eq!(
+            part.flow.affected_paragraphs(&seeds),
+            if success { [false; 5] } else { [false, true, true, true, true] }
+        );
+        assert_eq!(part.tables.affected_tables(&part.flow, &seeds), [!success; 2]);
+    }
+    for success in [true, false] {
+        let mut proof = proven;
+        proof[3] = success;
+        let offset = f.parts[0].xml.find("안").unwrap();
+        let slots = [(offset..offset + "안".len(), "나".into())];
+        let edits = [DerivedEdit::Text {
+            section: 0,
+            changed: &[FlowOrdinal(3)],
+            proven: &proof,
+            slots: &slots,
+        }];
+        assert_eq!(collect_height_invalidations(&f, &edits).is_ok(), success);
+    }
+}
+
 // 이것을 실패시키는 것: note 정책 수집에서 중복 numbering의 첫 자식을 정책으로 선택.
 #[test]
 fn duplicate_note_numbering_is_unknown_before_public_decode() {

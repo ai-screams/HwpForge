@@ -2,8 +2,9 @@
 //! shared by the two preserve-first text editors: `fill` and `patch`.
 //!
 //! The conservative rule drops the edited paragraph, its flow tail and host
-//! chain. Proven single-line body and direct table-cell edits do not start
-//! invalidation. Other body edits can retain an untouched body tail whose
+//! chain. Proven single-line edits in the body, direct table cells and cells
+//! one table deeper in body tables do not start invalidation. Other body
+//! edits can retain an untouched body tail whose
 //! line breaking inputs stay fixed: Hancom restacks its vertical positions.
 //! Re-encoding callers keep the conservative rule below.
 
@@ -95,7 +96,8 @@ pub(crate) struct ParagraphFlow {
     paragraph_starts: Vec<Range<usize>>,
     run_starts: Vec<Vec<Range<usize>>>,
     sublist_starts: Vec<Option<Range<usize>>>,
-    /// Source ownership is proven only for body and direct top-level table cells.
+    /// Source ownership is proven for the body, direct table cells and cells
+    /// one table deeper in body tables.
     supported_owner: Vec<bool>,
     property_starts: Vec<[Range<usize>; 3]>,
     grid_starts: Vec<Range<usize>>,
@@ -117,7 +119,8 @@ pub(crate) struct ParagraphFlow {
 }
 
 impl ParagraphFlow {
-    /// Proven body/direct-cell edits start no invalidation. Other edits
+    /// Proven edits in the body, direct table cells and cells one table deeper
+    /// in body tables start no invalidation. Other edits
     /// retain the legacy nested-edit dependencies. In a body
     /// tail, keep the plain prefix before the first disallowed owner. A
     /// wrapping object anywhere in the section, or incompatible section
@@ -359,6 +362,7 @@ impl ParagraphFlow {
         self.has_disallowed_self_element = vec![false; self.spans.len()];
         self.supported_owner = vec![false; self.spans.len()];
         let mut direct_cell_list = vec![false; elements.len()];
+        let mut nested_cell_list = vec![false; elements.len()];
         let mut cell_sublist_count = vec![0; elements.len()];
         self.property_starts.clear();
         self.grid_starts.clear();
@@ -397,13 +401,23 @@ impl ParagraphFlow {
             }
             direct_cell_list[id] =
                 direct_cell_sublist(element, elements, xml, &cell_sublist_count)?;
+            if !direct_cell_list[id] {
+                nested_cell_list[id] = nested_cell_sublist(
+                    element,
+                    elements,
+                    xml,
+                    &cell_sublist_count,
+                    &direct_cell_list,
+                )?;
+            }
             if name == "p" {
                 if self.spans.get(paragraphs) != Some(&element.outer()) {
                     return None;
                 }
                 self.supported_owner[paragraphs] = (elements[parent].name() == "sec"
                     && elements[parent].parent() == 0)
-                    || direct_cell_list[parent];
+                    || direct_cell_list[parent]
+                    || nested_cell_list[parent];
                 nearest[id] = Some(paragraphs);
                 paragraphs += 1;
             }
@@ -627,6 +641,45 @@ fn direct_cell_sublist(
         ));
     }
     Some(false)
+}
+
+// 이것을 실패시키는 것: subList 아닌 원소 승인, tc/tr/tbl/run/p 직접 조상 생략,
+// 바깥 subList의 직속 칸 자격 생략(다른 컨테이너/깊이 3 승인),
+// 자기 칸 subList 유일성 생략, 자기 방향/줄바꿈 누락 또는 비호환 값 승인.
+// 조상/인덱스 누락은 탈락하고, 자기 시작 태그 읽기 실패는 scan 실패로 남긴다.
+fn nested_cell_sublist(
+    element: &hwpforge_core::source_xml::XmlElement,
+    elements: &[hwpforge_core::source_xml::XmlElement],
+    xml: &str,
+    cell_sublist_count: &[usize],
+    direct_cell_list: &[bool],
+) -> Option<bool> {
+    if element.name() != "subList" {
+        return Some(false);
+    }
+    let parent = element.parent();
+    let mut ancestor = parent;
+    for name in ["tc", "tr", "tbl", "run", "p"] {
+        crate::work::tick();
+        let Some(element) = elements.get(ancestor) else { return Some(false) };
+        if element.name() != name {
+            return Some(false);
+        }
+        ancestor = element.parent();
+    }
+    crate::work::tick();
+    let Some(outer_list) = elements.get(ancestor) else { return Some(false) };
+    if outer_list.name() != "subList"
+        || direct_cell_list.get(ancestor) != Some(&true)
+        || cell_sublist_count.get(parent) != Some(&1)
+    {
+        return Some(false);
+    }
+    let tag = source_start(xml, element)?;
+    Some(crate::line_keep::cell_flow_allows(
+        attribute(&tag, "textDirection").as_deref(),
+        attribute(&tag, "lineWrap").as_deref(),
+    ))
 }
 
 fn start_range(element: &hwpforge_core::source_xml::XmlElement) -> Range<usize> {
