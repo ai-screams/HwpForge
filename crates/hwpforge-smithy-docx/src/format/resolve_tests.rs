@@ -319,8 +319,8 @@ fn shared_identifiers_do_not_scale_with_references() {
         );
         assert_eq!(key_bytes(&font_key), 8);
         assert_eq!(key_bytes(&r.default_paragraph.unwrap()), 8);
-        // The projected marker adds one fixed-size optional discriminant.
-        assert_eq!(key_bytes(&delta), 320);
+        // Marker layout and its first-line spacing projection have fixed-size keys.
+        assert_eq!(key_bytes(&delta), 324);
         for i in 0..16 {
             let input = r.run_input(delta.clone(), None).unwrap();
             let mut p = Paragraph::new(ParaShapeIndex::new(0));

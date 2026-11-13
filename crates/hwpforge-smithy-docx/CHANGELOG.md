@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 번호 글꼴의 첫 줄 높이 증가를 기존 Word 글꼴 metrics와 줄 간격 규칙으로 계산해 문단 앞 간격에 더한다. 고정 줄 간격과 metrics 미지원 글꼴은 기존 간격을 유지한다. 양수 첫 줄 들여쓰기·폭 0 칸처럼 배치가 미지원인 목록도 높이 보정과 `list_marker_script`·`list_marker_line_height` 진단을 적용하되 출력에 쓰이지 않는 번호 글자 모양은 등록하지 않는다.
+
 - 단일·이중 바이트 폭 균형 호환 설정이 켜진 DOCX는 모든 글자 모양에서 반각 공백을 사용하고, 꺼지거나 생략되면 글꼴 공백 폭을 유지한다.
 
 - 유효 문단 자동 간격을 독립적으로 상속하고 출력에 전달하며, 정확히 보존되는 꺼짐 설정의 근사 경고를 제거한다.

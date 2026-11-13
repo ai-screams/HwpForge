@@ -21,6 +21,8 @@ mod marker_messages {
         "Number tab at or before the anchor cannot select the first-line target";
     pub(super) const LINE_HEIGHT: &str =
         "Marker font or size changes can affect line height; body line height retained";
+    pub(super) const LINE_HEIGHT_BEFORE: &str =
+        "First-line height difference approximated with paragraph space before";
     pub(super) const DEFAULT_TAB: &str = concat!(
         "Default tab selected from marker alignment and measured width ratios where ",
         "needed; ratios are reused across fonts and styles. The tab grid assumes the ",
@@ -555,7 +557,7 @@ impl Resolver {
         }
         base.para.projected_list =
             self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
-        base.para.projected_marker = self.marker_layout(&base, direct, mark, part, w)?;
+        base.para.projected_marker = self.marker_layout(&mut base, direct, mark, part, w)?;
         if measure_lines {
             // A trailing empty line uses the paragraph mark, or the final effective
             // run at this boundary. Page/column breaks exclude all later fragments.
@@ -574,7 +576,7 @@ impl Resolver {
     }
     fn marker_layout(
         &mut self,
-        base: &Delta,
+        base: &mut Delta,
         direct: &Delta,
         mark: Option<(&Delta, Option<StyleKey>)>,
         part: &str,
@@ -605,23 +607,10 @@ impl Resolver {
         }
         let left = base.para.left.unwrap_or(0);
         let first = base.para.first.unwrap_or(0);
-        if first > 0 {
-            if self.marker_warnings.insert((group, "list_marker_indent")) {
-                warn(
-                    w,
-                    part,
-                    "ind",
-                    Kind::ValueApproximated,
-                    "list_marker_indent",
-                    "retain_indent",
-                    marker_messages::INDENT,
-                )?;
-            }
-            self.first_marker_layouts.entry(group).or_insert(None);
-            return Ok(None);
-        }
         // A nonpositive first line and A < tab < left keep the target at or after A.
-        let anchor = marker_anchor(left, first)?;
+        // Positive first-line indents retain their independent source lengths;
+        // their unused sum need not fit a marker coordinate.
+        let anchor = if first > 0 { left } else { marker_anchor(left, first)? };
         let target = tabs
             .iter()
             .filter(|(pos, num)| **num && **pos > anchor && **pos < left)
@@ -654,6 +643,84 @@ impl Resolver {
         } else {
             None
         };
+        let mut effective = base.clone();
+        if let Some((delta, style)) = mark {
+            if let Some(d) = self.style(style, StyleKind::Character, part, w)? {
+                effective.overlay(&d, true);
+            }
+            effective.overlay(direct, false);
+            effective.overlay(delta, false);
+        }
+        let supported =
+            first <= 0 && !(suffix == lists::Suffix::Tab && target == anchor && ratio.is_none());
+        let (body_key, _, _) = self.char_key(&effective);
+        let body_fonts =
+            [effective.char.fonts[1].or(effective.char.fonts[0]), effective.char.fonts[2]];
+        if supported {
+            self.char_shape(&effective)?;
+        }
+        effective.overlay(&Delta { char: marker_char, ..Default::default() }, false);
+        let (marker_key, _, collapsed) = self.char_key(&effective);
+        let marker_fonts =
+            [effective.char.fonts[1].or(effective.char.fonts[0]), effective.char.fonts[2]];
+        // Unsupported horizontal layouts still contribute to height and diagnostics,
+        // but have no output character-shape reference.
+        let marker = if supported { Some(self.char_shape(&effective)?) } else { None };
+        if collapsed && self.marker_warnings.insert((group, "list_marker_script")) {
+            format_warnings(0, true, part, "numPr", w)?;
+        }
+        let mut body_height = line_height::Height::default();
+        if base.para.line.is_none() || base.para.line_rule != Some(1) {
+            self.add_font_height(&mut body_height, body_key.1, body_fonts, false, part, w)?;
+        }
+        let mut composite_height = body_height.clone();
+        if base.para.line.is_none() || base.para.line_rule != Some(1) {
+            self.add_font_height(
+                &mut composite_height,
+                marker_key.1,
+                marker_fonts,
+                false,
+                part,
+                w,
+            )?;
+        }
+        let before = composite_height.marker_before(&body_height, &base.para)?;
+        base.para.projected_marker_before = before;
+        if (before > 0
+            || marker_key.1 > body_key.1
+            || marker_key.0[0] != body_key.0[0]
+            || marker_key.0[1] != body_key.0[1])
+            && self.marker_warnings.insert((group, "list_marker_line_height"))
+        {
+            warn(
+                w,
+                part,
+                "rPr",
+                Kind::ValueApproximated,
+                "list_marker_line_height",
+                if before > 0 { "approximate_space_before" } else { "retain_body_line_height" },
+                if before > 0 {
+                    marker_messages::LINE_HEIGHT_BEFORE
+                } else {
+                    marker_messages::LINE_HEIGHT
+                },
+            )?;
+        }
+        if first > 0 {
+            if self.marker_warnings.insert((group, "list_marker_indent")) {
+                warn(
+                    w,
+                    part,
+                    "ind",
+                    Kind::ValueApproximated,
+                    "list_marker_indent",
+                    "retain_indent",
+                    marker_messages::INDENT,
+                )?;
+            }
+            self.first_marker_layouts.entry(group).or_insert(None);
+            return Ok(None);
+        }
         if suffix == lists::Suffix::Tab && target == anchor && ratio.is_none() {
             if self.marker_warnings.insert((group, "list_marker_zero_slot")) {
                 warn(
@@ -669,6 +736,7 @@ impl Resolver {
             self.first_marker_layouts.entry(group).or_insert(None);
             return Ok(None);
         }
+        let marker = marker.expect("supported marker layout has an output character shape");
         if tabs.iter().any(|(&pos, &num)| num && pos <= anchor)
             && self.marker_warnings.insert((group, "list_marker_tab"))
         {
@@ -680,37 +748,6 @@ impl Resolver {
                 "list_marker_tab",
                 "use_indent",
                 marker_messages::TAB,
-            )?;
-        }
-        let mut effective = base.clone();
-        if let Some((delta, style)) = mark {
-            if let Some(d) = self.style(style, StyleKind::Character, part, w)? {
-                effective.overlay(&d, true);
-            }
-            effective.overlay(direct, false);
-            effective.overlay(delta, false);
-        }
-        let body = self.char_shape(&effective)?;
-        effective.overlay(&Delta { char: marker_char, ..Default::default() }, false);
-        let marker = self.char_shape(&effective)?;
-        if marker.collapsed && self.marker_warnings.insert((group, "list_marker_script")) {
-            format_warnings(0, true, part, "numPr", w)?;
-        }
-        let marker_shape = &self.registry.char_shapes[marker.id.get()];
-        let body_shape = &self.registry.char_shapes[body.id.get()];
-        if (marker.size > body.size
-            || marker.font != body.font
-            || marker_shape.font_latin != body_shape.font_latin)
-            && self.marker_warnings.insert((group, "list_marker_line_height"))
-        {
-            warn(
-                w,
-                part,
-                "rPr",
-                Kind::ValueApproximated,
-                "list_marker_line_height",
-                "retain_body_line_height",
-                marker_messages::LINE_HEIGHT,
             )?;
         }
         let selected = if let Some(ratio) = ratio {
@@ -905,11 +942,18 @@ impl Resolver {
         part: &str,
         w: &mut Vec<DocxWarning>,
     ) -> Result<()> {
-        let key = if east {
-            c.line_fonts[1].or(c.line_fonts[0])
-        } else {
-            c.line_fonts[0].or(c.line_fonts[1])
-        };
+        self.add_font_height(height, c.size, c.line_fonts, east, part, w)
+    }
+    fn add_font_height(
+        &mut self,
+        height: &mut line_height::Height,
+        size: i32,
+        fonts: [Option<FontKey>; 2],
+        east: bool,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<()> {
+        let key = if east { fonts[1].or(fonts[0]) } else { fonts[0].or(fonts[1]) };
         let metrics = key.and_then(|key| self.definitions.fonts.metrics(key));
         if let Some(key) = key.filter(|_| metrics.is_none()) {
             if self.unknown_metrics.insert(key) {
@@ -917,8 +961,16 @@ impl Resolver {
                     "retain_spacing", format_args!("Unknown natural line metrics for '{}'; cell minimum or specified minimum uses fallback metrics", self.definitions.fonts.name(key)))?;
             }
         }
-        height.add(c.size, metrics);
+        height.add(size, metrics);
         Ok(())
+    }
+    pub(crate) fn spacing_before(paragraph: &Delta) -> Result<i32> {
+        paragraph
+            .para
+            .before
+            .unwrap_or(0)
+            .checked_add(paragraph.para.projected_marker_before)
+            .ok_or_else(|| DocxError::invalid("#format", "spacing", "numeric overflow"))
     }
     pub(crate) fn spacing_after(paragraph: &Delta) -> i32 {
         paragraph.para.after.unwrap_or(0)
@@ -946,6 +998,7 @@ impl Resolver {
         let mut derived = base.clone();
         if !first {
             derived.para.before = Some(0);
+            derived.para.projected_marker_before = 0;
             derived.para.first = Some(0);
             derived.para.num_id = Some(0);
             derived.para.num_present = Some(false);
@@ -1003,11 +1056,8 @@ impl Resolver {
         self.fonts.insert(key, id);
         Ok(id)
     }
-    fn char_shape(&mut self, d: &Delta) -> Result<CharResult> {
-        #[cfg(test)]
-        {
-            self.char_shape_calls += 1;
-        }
+    // Resolve source properties without allocating output fonts or character shapes.
+    fn char_key(&self, d: &Delta) -> (CharKey, u8, bool) {
         let c = &d.char;
         let latin = c.fonts[1].or(c.fonts[0]);
         let east = c.fonts[2];
@@ -1034,6 +1084,19 @@ impl Resolver {
             c.highlight.flatten(),
             c.vertical.unwrap_or(0),
         );
+        (key, missing, collapsed)
+    }
+    fn char_shape(&mut self, d: &Delta) -> Result<CharResult> {
+        #[cfg(test)]
+        {
+            self.char_shape_calls += 1;
+        }
+        let (key, missing, collapsed) = self.char_key(d);
+        let [family, _, _] = key.0;
+        let size = key.1;
+        let [bold, italic, strike] = key.2;
+        let latin = d.char.fonts[1].or(d.char.fonts[0]);
+        let east = d.char.fonts[2];
         let hash = self.hasher.hash_one(key);
         // Exact canonical equality verifies every variable field before allocating strings.
         if let Some((_, id)) = self
@@ -1127,7 +1190,7 @@ impl Resolver {
                     .as_i32(),
                 ))
             })?;
-        shape.space_before = unit(p.before.unwrap_or(0))?;
+        shape.space_before = unit(Self::spacing_before(d)?)?;
         shape.space_after = unit(p.after.unwrap_or(0))?;
         let (left, first) = marker_indent(&shape.list, p.left.unwrap_or(0), p.first.unwrap_or(0))?;
         shape.indent_left = unit(left)?;

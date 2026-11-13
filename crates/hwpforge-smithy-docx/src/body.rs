@@ -1265,7 +1265,7 @@ impl Body<'_> {
             self.tables.paragraph_minimum(
                 minimum_lines_height,
                 cell_gap,
-                base.para.before.unwrap_or(0),
+                Resolver::spacing_before(&base)?,
                 Resolver::spacing_after(&base),
                 self.part,
             )?;

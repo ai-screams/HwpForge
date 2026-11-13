@@ -106,6 +106,8 @@ pub(crate) struct ParaDelta {
     pub(crate) contextual: Option<bool>,
     // Projection cache only; raw line stays unchanged for inherited contexts.
     projected_line: Option<u64>,
+    // First-line marker growth survives source spacing collapse and page starts.
+    projected_marker_before: i32,
     alignment: Option<u8>,
     left: Option<i32>,
     right: Option<i32>,

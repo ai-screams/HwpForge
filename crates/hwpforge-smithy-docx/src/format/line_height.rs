@@ -48,7 +48,7 @@ pub(super) fn physical_spacing(hwp_units: f64) -> f64 {
     hwp_units * 2.0
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Height {
     ascent: f64,
     descent: f64,
@@ -104,6 +104,20 @@ impl Height {
         HwpUnit::new(height as i32)
             .map(|h| h.as_i32())
             .map_err(|e| DocxError::invalid("#format", "line", e.to_string()))
+    }
+    pub(super) fn marker_before(&self, body: &Self, p: &ParaDelta) -> Result<i32> {
+        if self.unknown || body.unknown || self.size == 0 || body.size == 0 {
+            return Ok(0);
+        }
+        // Compare unrounded Word advances. Exact spacing has equal advances;
+        // atLeast clamps the composite and body, and auto scales the difference.
+        // A numbering head uses the ordinary font advance, without the East Asian
+        // paragraph grid expansion used for body line projection.
+        let delta = (self.word_spacing(p, false) - body.word_spacing(p, false)).max(0.0);
+        let delta = units::canonical_float(delta)?;
+        HwpUnit::new(delta.round() as i32)
+            .map(|h| h.as_i32())
+            .map_err(|e| DocxError::invalid("#format", "spacing", e.to_string()))
     }
     pub(super) fn project(&self, p: &ParaDelta, east: bool) -> Result<Option<u64>> {
         if self.unknown || self.size == 0 {
