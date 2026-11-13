@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 디코드가 `header.xml`의 `compatibleDocument`에서 조판 프로필을 읽어 `Document::layout_profile()`에 싣는다. 원본이 없는 `WordCompatible` 문서에는 Word 호환 플래그 묶음을 쓴다.
+
 - Blueprint 문단에 명시한 자동 간격을 출력 paraPr의 `autoSpacing`으로 쓴다. 지정하지 않은 문단은 원본 값과 요소 부재를 보존하거나 조판 프로필 기본값을 쓴다.
 
 - 목록 anchor와 본문 거리·문자 모양을 번호 및 글머리 paraHead로 투영한다. 후속 줄이 고정 본문 시작점과 같을 때만 autoIndent를 유지하고, 그 밖에는 선택된 head의 margin으로 문단별 intent를 계산한다. autoIndent 차이도 공유 head 충돌로 보고하며 양수 intent의 표시 동작은 미측정 경고를 낸다. 공유 head 충돌은 문서 방문 순서상 첫 사용처의 head와 상대 margin 이동량을 선택하고 의미 손실로 보고하며 원본 보존 편집은 실패한다. 대표 번호 설정이 자동 내어쓰기를 끄면 배치 요청이 없는 같은 수준 문단은 둘째 줄 위치를 잃을 수 있다. 선택한 사용처의 근사 진단도 유지한다. 실폭 Right/Center는 Left로 근사한다. 오른쪽 정렬 고정 칸의 폭은 본문 간격과 번호 기본 폭 중 큰 값이다(폭 0 칸의 오른쪽 정렬 번호는 그려지지 않는다). 기본 폭보다 좁은 간격은 기본 폭으로 넓히고 표시 동작이 미측정이라 정렬 근사 진단을 낸다. Word 호환 자동 간격은 1/1이며 원본의 값과 부재를 보존한다.
+
+### Changed
+
+- 프로필을 바꾸지 않고 다시 인코드하면 원본의 호환 설정을 그대로 쓴다. 요소가 없거나 일부 플래그만 있는 원본도 그 상태로 남으므로, 기존 재인코드 결과와 출력 바이트가 달라질 수 있다.
+- 원본을 보존하는 편집(`HwpxEncoder::encode_with_base`, `from-json --base`, 스탬핑, 구조 편집)이 base와 조판 프로필이 다른 문서를 거부한다. 오류는 기존 `InvalidStructure`(`/layout_profile`) 또는 `NotRoundTripSafe`(`diff_path`가 `/layout_profile`)다. base 없이 인코드할 때 디코드한 문서의 프로필을 바꾸면 줄 조판 캐시를 쓰지 않는다.
+- `patch`·`fill`·`set-cell`이 줄 조판 캐시를 남길 때 쓰는 한 줄 폭 입증을 `Hancom` 프로필이면서 호환 설정이 한컴 표준인 문서로 제한한다. Word 호환 문서와 호환 설정이 표준과 다른 문서는 이 입증으로 캐시를 남기지 않는다.
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.1...hwpforge-smithy-hwpx-v0.20.0) - 2026-11-07
 
