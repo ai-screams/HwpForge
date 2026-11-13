@@ -528,3 +528,5 @@ v3 문단의 `style_ref`는 문서 내부 참조입니다. `styles.style_positio
 MCP from-json의 문자열 인자 안 JSON도 같은 계약입니다. 별도 MCP schema 도구는 없으며 CLI schema를 사용합니다. Python의 dict 반환 타입과 callable은 그대로이고, 그 내부 데이터 계약만 v3로 바뀝니다.
 
 v3에서 Core JSON의 `style_id`는 `style_ref`로 바뀌었으며, 교환에는 envelope를 사용하세요. `to-json --no-styles`로 내보낸 v3 문서는 non-null 참조에 필요한 styles가 없어 그대로 `from-json`에 넣으면 거절됩니다.
+
+Word 목록은 정렬, 번호 뒤 탭·공백·없음, 수준 번호 탭과 번호 전용 문자 서식을 전달합니다. 공백 폭은 측정 비율로 근사하며 번호 글꼴·크기로 본문 줄 높이를 늘리지 않습니다. 고정 칸을 넘는 번호, 첫 줄과 후속 줄의 위치 차이, 같은 번호 수준의 문단별 배치 충돌은 경고를 확인하세요. 걸침 0의 decimal 숫자·점과 Symbol 글머리는 기본 탭 설정을 적용하며, 글꼴별 폭·셀·다단 원점·가운데 정렬은 근사입니다. 오른쪽 정렬은 anchor를 탭 후보로 사용합니다. 공유 정의 충돌은 문서 첫 사용처의 head와 상대 margin 이동량을 적용하며 원본 보존 편집에서는 의미 손실로 거부됩니다.

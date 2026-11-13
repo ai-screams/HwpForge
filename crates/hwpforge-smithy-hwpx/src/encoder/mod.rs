@@ -1250,6 +1250,9 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
+        let (marker_store, marker_warnings) =
+            crate::list_marker_layout::prepare(document, style_store)?;
+        let style_store = marker_store.as_ref();
         let decoded = base.decoded();
         let base = base.bytes();
         // 공개 입구 관문을 공유: provenance 검증이 재귀 순회 전에 Core 깊이를 검사한다.
@@ -1264,7 +1267,7 @@ impl HwpxEncoder {
             // memos; this branch writes no memo (or any other package entry).
             // Validate ZIP limits also for entries the Core decoder ignores.
             crate::patch::RawPackage::read(base)?;
-            let warnings = decoded
+            let mut warnings: Vec<_> = decoded
                 .warnings
                 .iter()
                 .cloned()
@@ -1285,6 +1288,7 @@ impl HwpxEncoder {
                     _ => None,
                 })
                 .collect();
+            warnings.extend(marker_warnings);
             return Ok(EncodeOutcome { bytes: base.to_vec(), warnings });
         }
         let (prepared, mut warnings, output) = crate::layout_edit::prepare(
@@ -1295,6 +1299,7 @@ impl HwpxEncoder {
             image_store,
             options,
         )?;
+        warnings.extend(marker_warnings);
         warnings.extend(decoded.warnings.iter().cloned().filter_map(|warning| match warning {
             crate::DecodeWarning::LayoutCacheDropped { path, reason } => {
                 Some(EncodeWarning::LayoutCacheDropped {
@@ -1431,6 +1436,12 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         crate::HwpxDecoder::verify_document_source(document)?;
+        let has_marker_requests = !style_store.list_marker_layouts.is_empty();
+        let (marker_store, marker_warnings) =
+            crate::list_marker_layout::prepare(document, style_store)?;
+        let style_store = marker_store.as_ref();
+        let options =
+            if has_marker_requests { options.with_emit_layout_cache(false) } else { options };
         let options = if crate::layout_compatibility::changed(document) {
             options.with_emit_layout_cache(false)
         } else {
@@ -1560,11 +1571,13 @@ impl HwpxEncoder {
         };
         // Only now build the output header, including missing font groups.
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
+        context.warnings.extend(marker_warnings);
         let header_xml = encode_header(
             style_store,
             sec_cnt,
             begin_num,
             &crate::layout_compatibility::for_document(document),
+            document.layout_profile(),
         )?;
         // #198: a font face loses its forbidden characters (with the other
         // controls) to `clean_font_name` before serialization, so the part

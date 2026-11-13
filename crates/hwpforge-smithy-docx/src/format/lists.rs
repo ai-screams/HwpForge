@@ -3,7 +3,7 @@ use super::*;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
 use hwpforge_foundation::{BulletIndex, NumberFormatType, NumberingIndex};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum ListRef {
@@ -56,6 +56,13 @@ impl Format {
         }
     }
 }
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum Suffix {
+    #[default]
+    Tab,
+    Space,
+    Nothing,
+}
 #[derive(Default)]
 pub(super) struct Level {
     pub(super) delta: Delta,
@@ -64,10 +71,27 @@ pub(super) struct Level {
     pub(super) start_override: Option<u32>,
     pub(super) format: Format,
     pub(super) text: Option<Rc<str>>,
-    pub(super) fonts: [Option<FontKey>; 4],
+    pub(super) marker_char: CharDelta,
+    pub(super) align: Option<hwpforge_blueprint::ListMarkerAlign>,
+    pub(super) suffix: Option<Suffix>,
+    pub(super) tabs: std::collections::BTreeMap<i32, bool>,
     pub(super) restart: bool,
     pub(super) picture: bool,
     pub(super) compiled: std::cell::OnceCell<Rc<Compiled>>,
+}
+impl Level {
+    /// Only the measured source font/glyph pair qualifies, using the same font-slot selection
+    /// as glyph conversion. An ordinary Unicode bullet is not evidence for this ratio.
+    pub(super) fn measured_symbol_bullet(&self, fonts: &Fonts) -> bool {
+        matches!(self.format, Format::Bullet)
+            && self.text.as_deref() == Some("\u{f0b7}")
+            && bullet_glyph(self, fonts).0 == Some('•')
+    }
+    pub(super) fn mapped_bullet(&self) -> bool {
+        self.compiled
+            .get()
+            .is_some_and(|c| matches!(c.marker, Marker::Bullet { approximated: true, .. }))
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum GroupKey {
@@ -83,6 +107,7 @@ struct ResolvedLevel {
     start: u32,
     format: NumberFormatType,
     restart: bool,
+    current: Option<u64>,
 }
 #[derive(Clone, Copy)]
 enum Marker {
@@ -101,6 +126,7 @@ struct Group {
 pub(super) struct Lists {
     groups: HashMap<GroupKey, Group>,
     bullets: HashMap<char, usize>,
+    bullet_warnings: HashSet<(usize, &'static str)>,
     owned_marker_bytes: usize,
     #[cfg(test)]
     interpreted_bytes: usize,
@@ -137,11 +163,7 @@ impl Lists {
             else {
                 continue;
             };
-            let key = if number.has_override {
-                GroupKey::Instance(id)
-            } else {
-                GroupKey::Abstract(abstract_id)
-            };
+            let key = group_key(id, abstract_id, number.has_override);
             if let std::collections::hash_map::Entry::Vacant(entry) = lists.groups.entry(key) {
                 entry.insert(build_group(definitions, abstract_id, number));
             }
@@ -207,11 +229,7 @@ impl Lists {
             reference_lost(part, warnings)?;
             return Ok(None);
         };
-        let key = if number.has_override {
-            GroupKey::Instance(num)
-        } else {
-            GroupKey::Abstract(abstract_id)
-        };
+        let key = group_key(num, abstract_id, number.has_override);
         let group = self.groups.get_mut(&key).unwrap();
         let Some(resolved) = &group.levels[level as usize] else {
             reference_lost(part, warnings)?;
@@ -236,10 +254,34 @@ impl Lists {
                 Ok(None)
             }
             Marker::Bullet { glyph, approximated, slots } => {
-                if *slots {
-                    warn(warnings, part, "numPr", Kind::ScriptFormatCollapsed, "bullet_font_slots", "select_slot", "Bullet ascii and hAnsi fonts differ; character-specific slot priority used")?;
+                let id = glyph.map(|glyph| {
+                    *self.bullets.entry(glyph).or_insert_with(|| {
+                        let id = registry.bullets.len();
+                        registry.bullets.push(BulletDef {
+                            id: id as u32 + 1,
+                            bullet_char: glyph.to_string(),
+                            checked_char: None,
+                            use_image: false,
+                            para_head: empty_head(0),
+                        });
+                        id
+                    })
+                });
+                if *slots
+                    && id.is_none_or(|id| self.bullet_warnings.insert((id, "bullet_font_slots")))
+                {
+                    let reason = "Bullet ascii and hAnsi fonts differ; character-specific slot priority used";
+                    warn(
+                        warnings,
+                        part,
+                        "numPr",
+                        Kind::ScriptFormatCollapsed,
+                        "bullet_font_slots",
+                        "select_slot",
+                        reason,
+                    )?;
                 }
-                let Some(glyph) = glyph else {
+                let Some(id) = id else {
                     warn(
                         warnings,
                         part,
@@ -251,7 +293,7 @@ impl Lists {
                     )?;
                     return Ok(None);
                 };
-                if *approximated {
+                if *approximated && self.bullet_warnings.insert((id, "bullet_glyph")) {
                     warn(
                         warnings,
                         part,
@@ -259,20 +301,10 @@ impl Lists {
                         Kind::BulletGlyphApproximated,
                         "bullet_glyph",
                         "approximate",
-                        "Font-specific bullet mapped to a fixed Unicode glyph",
+                        "Font-specific bullet mapped to a fixed Unicode glyph using the paragraph's ordinary font",
                     )?;
                 }
-                let id = *self.bullets.entry(*glyph).or_insert_with(|| {
-                    let id = registry.bullets.len();
-                    registry.bullets.push(BulletDef {
-                        id: id as u32 + 1,
-                        bullet_char: glyph.to_string(),
-                        checked_char: None,
-                        use_image: false,
-                        para_head: empty_head(0),
-                    });
-                    id
-                });
+
                 Ok(Some(ListRef::Bullet(id, level as u8)))
             }
             Marker::Number => {
@@ -316,9 +348,23 @@ impl Lists {
                     group.numbering = Some(id);
                     id
                 };
+                let resolved = group.levels[level as usize].as_mut().unwrap();
+                resolved.current = Some(match resolved.current {
+                    Some(n) => n.checked_add(1).ok_or_else(|| {
+                        DocxError::invalid(part, "numPr", "source numbering overflow")
+                    })?,
+                    None => u64::from(resolved.start),
+                });
+                for child in group.levels.iter_mut().skip(level as usize + 1).flatten() {
+                    child.current = None;
+                }
                 Ok(Some(ListRef::Number(id, level as u8)))
             }
         }
+    }
+    pub(super) fn current(&self, defs: &Definitions, para: &ParaDelta) -> Option<u64> {
+        let (key, level) = source_group(defs, para)?;
+        self.groups.get(&key)?.levels.get(level as usize)?.as_ref()?.current
     }
     fn observe_omitted(&mut self, defs: &Definitions, para: &ParaDelta) {
         let Some(num) = para.num_id.filter(|&id| id != 0) else {
@@ -331,11 +377,7 @@ impl Lists {
             return;
         };
         let level = defs.effective_level(num, para.level.unwrap_or(0));
-        let key = if number.has_override {
-            GroupKey::Instance(num)
-        } else {
-            GroupKey::Abstract(abstract_id)
-        };
+        let key = group_key(num, abstract_id, number.has_override);
         let Some(group) = self.groups.get_mut(&key) else {
             return;
         };
@@ -395,9 +437,7 @@ fn build_group(defs: &Definitions, abstract_id: u32, number: &definitions::Numbe
     let mut numbered = false;
     for (i, target) in levels.iter_mut().enumerate() {
         let over = number.levels.get(&(i as u32));
-        let Some(source) =
-            over.filter(|l| l.defined).or_else(|| base.and_then(|ls| ls.get(&(i as u32))))
-        else {
+        let Some(source) = select_level(base.and_then(|ls| ls.get(&(i as u32))), over) else {
             continue;
         };
         let compiled =
@@ -412,6 +452,7 @@ fn build_group(defs: &Definitions, abstract_id: u32, number: &definitions::Numbe
                 _ => NumberFormatType::Digit,
             },
             restart: source.restart,
+            current: None,
         });
     }
     Group { levels, lost: 0, seen: 0, numbering: None, mixed: bullet && numbered }
@@ -450,7 +491,7 @@ fn bullet_glyph(level: &Level, fonts: &Fonts) -> (Option<char>, bool, bool) {
     if level.picture {
         return (None, false, false);
     }
-    let [ascii, hansi, _, _] = level.fonts;
+    let [ascii, hansi, _, _] = level.marker_char.fonts;
     let slots = ascii.zip(hansi).is_some_and(|(a, b)| a != b);
     let private = matches!(glyph as u32,0xe000..=0xf8ff | 0xf0000..=0xffffd | 0x100000..=0x10fffd);
     let font = if glyph.is_ascii() { ascii.or(hansi) } else { hansi.or(ascii) };
@@ -462,6 +503,10 @@ fn bullet_glyph(level: &Level, fonts: &Fonts) -> (Option<char>, bool, bool) {
         Some('•')
     } else if font.eq_ignore_ascii_case("Wingdings") && glyph == '\u{f0a7}' {
         Some('▪')
+    } else if font.eq_ignore_ascii_case("Wingdings") && glyph == '\u{f06c}' {
+        Some('●')
+    } else if font.eq_ignore_ascii_case("Wingdings") && glyph == '\u{f06e}' {
+        Some('■')
     } else if font.eq_ignore_ascii_case("Courier New") && glyph == 'o' {
         Some('◦')
     } else {
@@ -540,6 +585,30 @@ fn outline(
         )?;
     }
     Ok(Some(ListRef::Outline(level)))
+}
+
+fn source_group(defs: &Definitions, para: &ParaDelta) -> Option<(GroupKey, u32)> {
+    let num = para.num_id.filter(|&id| id != 0)?;
+    let number = defs.numbers.get(&num)?;
+    let abstract_id = number.abstract_id?;
+    Some((
+        group_key(num, abstract_id, number.has_override),
+        defs.effective_level(num, para.level.unwrap_or(0)),
+    ))
+}
+
+fn group_key(num: u32, abstract_id: u32, has_override: bool) -> GroupKey {
+    if has_override {
+        GroupKey::Instance(num)
+    } else {
+        GroupKey::Abstract(abstract_id)
+    }
+}
+pub(super) fn select_level<'a>(
+    base: Option<&'a Level>,
+    over: Option<&'a Level>,
+) -> Option<&'a Level> {
+    over.filter(|l| l.defined).or(base)
 }
 
 #[cfg(test)]

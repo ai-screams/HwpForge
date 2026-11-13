@@ -47,6 +47,10 @@ pub(crate) fn structural_length(
     units::length(value, 5, dimension.minimum())
 }
 
+pub(crate) fn default_tab_length(value: &str) -> std::result::Result<i32, &'static str> {
+    units::length(value, 5, 1)
+}
+
 const MAX_DEFINITIONS: usize = 16_384;
 const MAX_SHAPES: usize = 262_144;
 const MAX_INHERITANCE: usize = 64;
@@ -120,6 +124,9 @@ pub(crate) struct ParaDelta {
     level: Option<u32>,
     outline: Option<u32>,
     projected_list: Option<lists::ListRef>,
+    projected_marker: Option<hwpforge_blueprint::ListMarkerLayout>,
+    auto_space_de: Option<bool>,
+    auto_space_dn: Option<bool>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Delta {
@@ -128,6 +135,11 @@ pub(crate) struct Delta {
 }
 
 macro_rules! overwrite { ($a:expr, $b:expr, $($field:ident),+ $(,)?) => { $(if $b.$field.is_some() { $a.$field = $b.$field.clone(); })+ }; }
+impl ParaDelta {
+    fn overlay_indents(&mut self, other: &Self) {
+        overwrite!(self, other, left, right, first);
+    }
+}
 impl Delta {
     fn overlay(&mut self, other: &Self, toggle: bool) {
         for (a, b) in self.char.fonts.iter_mut().zip(&other.char.fonts) {
@@ -152,6 +164,8 @@ impl Delta {
             self.para,
             other.para,
             contextual,
+            auto_space_de,
+            auto_space_dn,
             alignment,
             left,
             right,

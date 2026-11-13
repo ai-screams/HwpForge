@@ -160,6 +160,7 @@ fn output_packs_both_units_and_numbers_positions() {
             1,
             None,
             crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+            hwpforge_core::LayoutProfile::Hancom,
         )
         .unwrap();
         assert!(output.contains(&format!(r#"value="{raw}" unit="HWPUNIT""#)), "{output}");
@@ -306,6 +307,7 @@ fn empty_supported_tab_case_is_authoritative() {
             1,
             None,
             crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+            hwpforge_core::LayoutProfile::Hancom,
         )
         .unwrap();
         let after = parse_header(&output).unwrap();
@@ -331,6 +333,7 @@ fn font_line_height_rust_clone_at_new_position() {
         1,
         None,
         crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+        hwpforge_core::LayoutProfile::Hancom,
     )
     .unwrap();
     let parsed = parse_header(&xml).unwrap();
@@ -350,6 +353,7 @@ fn measure_normalization_compares_encoder_payloads() {
         1,
         None,
         crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+        hwpforge_core::LayoutProfile::Hancom,
     )
     .unwrap();
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
@@ -456,6 +460,7 @@ fn tab_normalization_compares_encoder_payloads() {
         1,
         None,
         crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+        hwpforge_core::LayoutProfile::Hancom,
     )
     .unwrap();
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
@@ -510,6 +515,7 @@ fn split_tab_switches_compare_ordered_case_and_default_payloads() {
         1,
         None,
         crate::encoder::header::generated_compatibility(hwpforge_core::LayoutProfile::Hancom),
+        hwpforge_core::LayoutProfile::Hancom,
     )
     .unwrap();
     let parsed = parse_header(&xml).unwrap();

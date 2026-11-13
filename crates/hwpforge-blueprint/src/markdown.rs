@@ -375,6 +375,7 @@ pub fn apply_markdown_list_levels(
         shape.indent_left = left(level) + marker_width;
         shape.indent_first_line = HwpUnit::ZERO;
         shape.list = None;
+        shape.list_marker = None;
         shape
     };
     let mut continuation = [list_entry; LEVELS];
@@ -393,7 +394,7 @@ pub fn apply_markdown_list_levels(
             unlisted(&code_para, level),
         )?;
     }
-    let plain = ParaShape { list: None, ..list_para };
+    let plain = ParaShape { list: None, list_marker: None, ..list_para };
     let plain_fallback = named(registry, LIST_PLAIN_STYLE_NAME.into(), list_entry, plain)?;
 
     Ok(MarkdownListShapes {
@@ -618,6 +619,33 @@ mod tests {
         apply_markdown_heading_levels(&mut registry, &names)?;
         let shapes = apply_markdown_list_levels(&mut registry, &names)?;
         Ok((registry, shapes))
+    }
+
+    // 이것을 실패시키는 것: 번호 없는 continuation 또는 fallback에 marker 설정을 남기기.
+    #[test]
+    fn list_continuations_clear_marker_layout() {
+        let template = builtin_default().unwrap();
+        let mut registry = StyleRegistry::from_template(&template).unwrap();
+        let names = resolve_markdown_style_names(&template).unwrap();
+        let entry = registry.get_style(names.list_item.as_deref().unwrap()).copied().unwrap();
+        registry.para_shapes[entry.para_shape_id.get()].list_marker = Some(
+            crate::ListMarkerLayout::new(
+                crate::ListMarkerAlign::Left,
+                crate::ListTextStart::FromAnchor(HwpUnit::ZERO),
+            )
+            .unwrap(),
+        );
+        let shapes = apply_markdown_list_levels(&mut registry, &names).unwrap();
+        for entry in shapes
+            .continuation
+            .into_iter()
+            .chain(shapes.code_continuation)
+            .chain([shapes.plain_fallback])
+        {
+            let shape = &registry.para_shapes[entry.para_shape_id.get()];
+            assert!(shape.list.is_none());
+            assert!(shape.list_marker.is_none());
+        }
     }
 
     fn name_of(registry: &StyleRegistry, entry: StyleEntry) -> &str {

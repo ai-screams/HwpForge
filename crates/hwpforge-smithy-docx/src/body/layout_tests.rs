@@ -339,6 +339,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         main: true,
         root: "document",
         root_matches: true,
+        default_tab_stop: None,
         body_seen: true,
         final_section_seen: false,
         stack: vec![],

@@ -24,6 +24,14 @@ use std::{
     rc::Rc,
 };
 
+const DEFAULT_TAB_LIMITATION: &str = concat!(
+    "Default tab stop applies only to list markers; ",
+    "ordinary body tab positions are not applied",
+);
+
+const INVALID_PAGE_START_SPACING: &str =
+    "Invalid suppressSpBfAfterPgBrk boolean; forced page-start spacing retained";
+
 const MAX_PARAGRAPHS: usize = 1_000_000;
 const MAX_RUNS: usize = 4_000_000;
 
@@ -76,6 +84,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut definitions = Definitions::default();
     let mut relations = Relations::default();
     let mut valid_roots = HashMap::new();
+    let mut default_tab_stop = None;
     // Moving the relationships avoids cloning all input strings or borrowing the
     // package through a read. Shared ZIP targets are scanned only once.
     let mut relationships = std::mem::take(&mut package.relationships);
@@ -153,6 +162,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             definitions.read(&bytes, part, root, &mut package.text_budget, &mut warnings)?
         } else {
             let scanned = scan(&bytes, part, root, false, &mut package.text_budget, &mut warnings)?;
+            if relation.kind == RelationshipKind::Settings {
+                default_tab_stop = scanned.2;
+            }
             scanned.1
         };
         if !root_matches {
@@ -189,6 +201,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
         }
     }
     let mut resolver = Resolver::new(definitions, &mut warnings)?;
+    resolver.default_tab_stop = default_tab_stop.unwrap_or(3600);
     let bytes = package.read_main()?;
     let sections = scan_formatted(
         &bytes,
@@ -345,6 +358,7 @@ struct Body<'a> {
     main: bool,
     root: &'a str,
     root_matches: bool,
+    default_tab_stop: Option<i32>,
     body_seen: bool,
     final_section_seen: bool,
     stack: Vec<Frame>,
@@ -391,7 +405,7 @@ fn scan(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<(Vec<DecodedSection>, bool)> {
+) -> Result<(Vec<DecodedSection>, bool, Option<i32>)> {
     scan_inner(bytes, part, root, main, budget, warnings, None)
 }
 fn scan_formatted(
@@ -412,7 +426,7 @@ fn scan_inner(
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
     resources: Option<(&mut Resolver, &Relations)>,
-) -> Result<(Vec<DecodedSection>, bool)> {
+) -> Result<(Vec<DecodedSection>, bool, Option<i32>)> {
     let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
     let mut body = Body {
         tables: table::Tables::default(),
@@ -420,6 +434,7 @@ fn scan_inner(
         main,
         root,
         root_matches: false,
+        default_tab_stop: None,
         body_seen: false,
         final_section_seen: false,
         stack: Vec::new(),
@@ -470,7 +485,7 @@ fn scan_inner(
     if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
         body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
     }
-    Ok((body.sections, body.root_matches))
+    Ok((body.sections, body.root_matches, body.default_tab_stop))
 }
 
 impl Body<'_> {
@@ -537,7 +552,36 @@ impl Body<'_> {
         if !self.main {
             if self.root == "settings" && self.root_matches {
                 if self.stack.len() == 1 {
-                    if w && element.name == "compat" {
+                    if w && element.name == "defaultTabStop" {
+                        if self.default_tab_stop.is_some() {
+                            self.warn(
+                                Kind::UnsupportedValue,
+                                &location,
+                                || "Duplicate default tab stop; last declaration applied",
+                                "list_marker_default_tab_stop",
+                                "use_last",
+                            )?;
+                        }
+                        let value = attr(&element, "val")
+                            .and_then(|v| crate::format::default_tab_length(v).ok());
+                        if value.is_none() {
+                            self.warn(
+                                Kind::UnsupportedValue,
+                                &location,
+                                || "Invalid default tab stop; default interval applied",
+                                "list_marker_default_tab_stop",
+                                "use_default",
+                            )?;
+                        }
+                        self.default_tab_stop = Some(value.unwrap_or(3600));
+                        self.warn(
+                            Kind::DocumentSettingsOmitted,
+                            &location,
+                            || DEFAULT_TAB_LIMITATION,
+                            "list_marker_default_tab_settings",
+                            "ignore",
+                        )?;
+                    } else if w && element.name == "compat" {
                         frame.node = Node::Compatibility { omitted: false };
                     } else if w
                         && matches!(
@@ -566,10 +610,14 @@ impl Body<'_> {
                     if let Node::Compatibility { omitted } = &mut parent.node {
                         if w && element.name == "suppressSpBfAfterPgBrk" {
                             match attr(&element, "val") {
-                                None | Some("1" | "true" | "on" | "0" | "false" | "off") => {},
-                                Some(_) => self.warn(Kind::UnsupportedValue, &location,
-                                    || "Invalid suppressSpBfAfterPgBrk boolean; forced page-start spacing retained",
-                                    "document_settings", "inherit_or_default")?,
+                                None | Some("1" | "true" | "on" | "0" | "false" | "off") => {}
+                                Some(_) => self.warn(
+                                    Kind::UnsupportedValue,
+                                    &location,
+                                    || INVALID_PAGE_START_SPACING,
+                                    "document_settings",
+                                    "inherit_or_default",
+                                )?,
                             }
                         } else if !*omitted {
                             *omitted = true;

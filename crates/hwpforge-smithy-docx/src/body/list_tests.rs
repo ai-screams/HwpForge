@@ -85,7 +85,7 @@ fn numbering_groups_survive_body_and_sections() {
     assert_eq!(d.registry.numberings.iter().map(|n| n.start).collect::<Vec<_>>(), [1, 1]);
 }
 
-// 이것을 실패시키는 것: 시작값을 1로 고정, 하위 startOverride를 진행 손실로 처리, 비기본 재시작 허용.
+// 이것을 실패시키는 것: override 목록 공유, 시작값 1 고정, 하위 startOverride 손실 또는 비기본 재시작 허용.
 #[test]
 fn starts_overrides_and_partial_restarts() {
     let a = format!("{}{}", level(0, "decimal", "%1.", ""), level(1, "lowerLetter", "%2)", ""));
@@ -207,8 +207,8 @@ fn bullet_mapping_and_slot_selection() {
         ("&#xF0B8;", "Symbol", "Symbol", None, false, false),
         ("A", "Wingdings", "Wingdings", None, false, false),
         ("&#xF0A7;", "Wingdings 2", "Wingdings 2", None, false, false),
-        ("&#xF06C;", "Wingdings", "Wingdings", None, false, false),
-        ("&#xF06E;", "Wingdings", "Wingdings", None, false, false),
+        ("&#xF06C;", "Wingdings", "Wingdings", Some("●"), true, false),
+        ("&#xF06E;", "Wingdings", "Wingdings", Some("■"), true, false),
         ("ab", "Arial", "Arial", None, false, false),
         ("&#xF0B7;", "", "", None, false, false),
     ] {
@@ -876,4 +876,1141 @@ fn marker_paragraphs_fold_hanging_indent_into_left_margin() {
         })
         .collect();
     assert_eq!(got, [(1800, 0), (1800, 0), (3600, -1800), (3600, 1800), (3600, -1800)]);
+}
+
+fn marker_shape(d: &DocxDecoded, index: usize) -> &hwpforge_blueprint::style::ParaShape {
+    &d.registry.para_shapes[d.document.sections()[0].paragraphs[index].para_shape_id.get()]
+}
+fn layout_input(extra: &str, direct: &str) -> DocxDecoded {
+    read(
+        &definitions(
+            &level(
+                0,
+                "decimal",
+                "%1.",
+                &format!("<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr>{extra}"),
+            ),
+            &num(7, 1, ""),
+        ),
+        &item(7, 0, direct, "body"),
+    )
+}
+// 이것을 실패시키는 것: 내어쓰기를 접은 뒤 간격 계산 또는 수준 들여쓰기만 사용.
+#[test]
+fn word_list_hanging_becomes_anchor_and_gap() {
+    use hwpforge_blueprint::{ListMarkerAlign, ListTextStart};
+    for (direct, anchor, gap) in [
+        ("", 1800, 1800),
+        ("<w:ind w:left='960' w:hanging='480'/>", 2400, 2400),
+        ("<w:ind w:left='720' w:hanging='480'/>", 1200, 2400),
+    ] {
+        let d = layout_input("", direct);
+        let s = marker_shape(&d, 0);
+        let m = s.list_marker.unwrap();
+        assert_eq!(s.indent_left.as_i32(), anchor);
+        assert_eq!(s.indent_first_line.as_i32(), 0);
+        assert_eq!(m.align, ListMarkerAlign::Left);
+        assert_eq!(
+            m.text_start,
+            ListTextStart::FromAnchor(hwpforge_foundation::HwpUnit::new(gap).unwrap())
+        );
+        assert!(m.char_shape.is_some());
+    }
+}
+// 이것을 실패시키는 것: end를 Left로 처리하거나 center 무시, 미지원 값의 경고 생략.
+#[test]
+fn word_list_alignment_and_suffix_defaults() {
+    use hwpforge_blueprint::ListMarkerAlign::*;
+    for (value, expected, warn) in [
+        ("left", Left, false),
+        ("start", Left, false),
+        ("end", Right, false),
+        ("right", Right, false),
+        ("center", Center, false),
+        ("bad", Left, true),
+    ] {
+        let d = layout_input(&format!("<w:lvlJc w:val='{value}'/>"), "");
+        assert_eq!(marker_shape(&d, 0).list_marker.unwrap().align, expected);
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_alignment"), warn);
+    }
+}
+// 이것을 실패시키는 것: space를 비율 offset으로 바꾸거나 nothing의 명시적 0 제거.
+#[test]
+fn word_suffix_space_and_nothing() {
+    use hwpforge_blueprint::ListTextStart;
+    for (suffix, size, distance) in
+        [("space", 22, 306), ("space", 28, 389), ("space", 24, 334), ("nothing", 22, 0)]
+    {
+        let d = layout_input(
+            &format!("<w:suff w:val='{suffix}'/><w:rPr><w:sz w:val='{size}'/></w:rPr>"),
+            "",
+        );
+        assert_eq!(
+            marker_shape(&d, 0).list_marker.unwrap().text_start,
+            ListTextStart::AfterMarker(hwpforge_foundation::HwpUnit::new(distance).unwrap())
+        );
+        assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_continuation"));
+        assert_eq!(
+            d.warnings.iter().any(|w| w.loss() == "list_marker_space_width"),
+            suffix == "space"
+        );
+    }
+}
+// 이것을 실패시키는 것: L 뒤 탭을 항상 선택하거나 clear 무시.
+#[test]
+fn word_number_tab_selects_earlier_text_start() {
+    use hwpforge_blueprint::ListTextStart;
+    for (pos, gap, continuation) in [(600, 1200, true), (840, 1800, false), (360, 1800, false)] {
+        let extra=format!("<w:pPr><w:ind w:left='720' w:hanging='360'/><w:tabs><w:tab w:val='num' w:pos='{pos}'/></w:tabs></w:pPr>");
+        let d = read(
+            &definitions(&level(0, "decimal", "%1.", &extra), &num(7, 1, "")),
+            &item(7, 0, "", "body"),
+        );
+        assert_eq!(
+            marker_shape(&d, 0).list_marker.unwrap().text_start,
+            ListTextStart::FromAnchor(hwpforge_foundation::HwpUnit::new(gap).unwrap())
+        );
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_continuation"), continuation);
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_tab"), pos == 360);
+    }
+    let d=layout_input("<w:pPr><w:ind w:left='720' w:hanging='360'/><w:tabs><w:tab w:val='num' w:pos='600'/><w:tab w:val='num' w:pos='500'/></w:tabs></w:pPr>","");
+    assert_eq!(
+        marker_shape(&d, 0).list_marker.unwrap().text_start,
+        hwpforge_blueprint::ListTextStart::FromAnchor(
+            hwpforge_foundation::HwpUnit::new(700).unwrap()
+        )
+    );
+}
+// 이것을 실패시키는 것: 번호 문자 속성을 본문 Delta에 합치기.
+#[test]
+fn word_marker_rpr_does_not_change_body() {
+    let d = layout_input(
+        "<w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Arial'/><w:sz w:val='28'/><w:b/></w:rPr>",
+        "",
+    );
+    let p = &d.document.sections()[0].paragraphs[0];
+    let body = &d.registry.char_shapes[p.runs[0].char_shape_id.get()];
+    let marker =
+        &d.registry.char_shapes[marker_shape(&d, 0).list_marker.unwrap().char_shape.unwrap().get()];
+    assert_eq!(marker.size.as_i32(), 1400);
+    assert!(marker.bold);
+    assert!(!body.bold);
+    assert_ne!(marker.font, body.font);
+    assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_line_height"));
+    assert!(!d.warnings.iter().any(|w| w.loss() == "marker_format"));
+}
+// 이것을 실패시키는 것: 글꼴 조건 없이 PUA 치환 또는 Wingdings 출력 폰트 재사용.
+#[test]
+fn wingdings_circle_and_square_are_mapped() {
+    for (font, glyph, expected) in [
+        ("Wingdings", "&#xF06C;", Some("●")),
+        ("wingdings", "&#xF06E;", Some("■")),
+        ("Wingdings 2", "&#xF06C;", None),
+        ("Wingdings 2", "&#xF06E;", None),
+    ] {
+        let d = read(
+            &definitions(
+                &level(
+                    0,
+                    "bullet",
+                    glyph,
+                    &format!("<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:rFonts w:ascii='{font}' w:hAnsi='{font}'/></w:rPr>"),
+                ),
+                &num(7, 1, ""),
+            ),
+            &item(7, 0, "", "body"),
+        );
+        assert_eq!(d.registry.bullets.first().map(|b| b.bullet_char.as_str()), expected);
+        assert_eq!(count(&d, "DOCX_BULLET_GLYPH_APPROXIMATED"), u64::from(expected.is_some()));
+        assert_eq!(count(&d, "DOCX_BULLET_GLYPH_LOST"), u64::from(expected.is_none()));
+        if expected.is_some() {
+            assert!(d
+                .warnings
+                .iter()
+                .find(|w| w.code() == "DOCX_BULLET_GLYPH_APPROXIMATED")
+                .unwrap()
+                .message()
+                .contains("paragraph's ordinary font"));
+            let m = marker_shape(&d, 0).list_marker.unwrap();
+            assert_ne!(
+                d.registry.char_shapes[m.char_shape.unwrap().get()].font.to_lowercase(),
+                "wingdings"
+            );
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 수준 ind로 문단 직접 ind를 대체.
+#[test]
+fn word_list_direct_indent_overrides_level() {
+    let d = layout_input("", "<w:ind w:left='960' w:hanging='480'/>");
+    assert_eq!(marker_shape(&d, 0).indent_left.as_i32(), 2400);
+    assert_eq!(
+        marker_shape(&d, 0).list_marker.unwrap().text_start,
+        hwpforge_blueprint::ListTextStart::FromAnchor(
+            hwpforge_foundation::HwpUnit::new(2400).unwrap()
+        )
+    );
+    let extra="<w:pPr><w:ind w:left='720' w:hanging='360'/><w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs></w:pPr>";
+    let d = read(
+        &definitions(&level(0, "decimal", "%1.", extra), &num(7, 1, "")),
+        &item(7, 0, "<w:ind w:left='960' w:hanging='480'/>", "body"),
+    );
+    assert_eq!(
+        marker_shape(&d, 0).list_marker.unwrap().text_start,
+        hwpforge_blueprint::ListTextStart::FromAnchor(
+            hwpforge_foundation::HwpUnit::new(600).unwrap()
+        )
+    );
+}
+// 이것을 실패시키는 것: override clear 무시 또는 외부 namespace의 tab 수용.
+#[test]
+fn word_number_tab_override_and_clear() {
+    let base=level(0,"decimal","%1.","<w:pPr><w:ind w:left='720' w:hanging='360'/><w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs></w:pPr>");
+    for tab in [
+        "<w:tab w:val='clear' w:pos='600'/>",
+        "<w:tab w:val='clear' w:pos='600'/><x:tab xmlns:x='urn:foreign' w:val='num' w:pos='500'/>",
+        "<w:tab w:val='clear' w:pos='600'/></w:tabs><x:tabs xmlns:x='urn:foreign'><w:tab w:val='num' w:pos='500'/></x:tabs><w:tabs>",
+    ] {
+        let over = format!(
+            "<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>",
+            level(0, "decimal", "%1.", &format!("<w:pPr><w:tabs>{tab}</w:tabs></w:pPr>"))
+        );
+        let d = read(&definitions(&base, &num(7, 1, &over)), &item(7, 0, "", "body"));
+        assert_eq!(
+            marker_shape(&d, 0).list_marker.unwrap().text_start,
+            hwpforge_blueprint::ListTextStart::FromAnchor(
+                hwpforge_foundation::HwpUnit::new(1800).unwrap()
+            )
+        );
+    }
+}
+// 이것을 실패시키는 것: 겹침 위험 경고 대신 고정 슬롯 자동 확대.
+#[test]
+fn word_list_overflow_is_only_diagnosed() {
+    for (start, expected) in [(9, 0), (99, 1)] {
+        let l = level(
+            0,
+            "decimal",
+            "%1.",
+            "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:sz w:val='22'/></w:rPr>",
+        )
+        .replace("w:val='1'", &format!("w:val='{start}'"));
+        let d = read(
+            &definitions(&l, &num(7, 1, "")),
+            &format!("{}{}", item(7, 0, "", "a"), item(7, 0, "", "b")),
+        );
+        assert_eq!(
+            d.warnings
+                .iter()
+                .filter(|w| w.loss() == "list_marker_overflow")
+                .map(|w| w.count())
+                .sum::<u64>(),
+            expected
+        );
+        assert_eq!(
+            marker_shape(&d, 1).list_marker.unwrap().text_start,
+            hwpforge_blueprint::ListTextStart::FromAnchor(
+                hwpforge_foundation::HwpUnit::new(1800).unwrap()
+            )
+        );
+    }
+    let l = level(
+        0,
+        "decimal",
+        "%1.",
+        "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:sz w:val='22'/></w:rPr>",
+    );
+    let d = read(
+        &definitions(
+            &l,
+            &num(7, 1, "<w:lvlOverride w:ilvl='0'><w:startOverride w:val='99'/></w:lvlOverride>"),
+        ),
+        &format!("{}{}", item(7, 0, "", "a"), item(7, 0, "", "b")),
+    );
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "list_marker_overflow")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        1
+    );
+}
+// 이것을 실패시키는 것: 파싱 시점에 false를 즉시 경고하거나 cascade에서 true 무시.
+#[test]
+fn word_auto_spacing_false_is_diagnosed_after_cascade() {
+    for (props, expected) in [
+        ("<w:autoSpaceDE w:val='false'/><w:autoSpaceDN/>", true),
+        ("<w:autoSpaceDE w:val='false'/><w:autoSpaceDE/>", false),
+    ] {
+        let d = layout_input("", props);
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "auto_space_de"), expected);
+        assert!(!d.warnings.iter().any(|w| w.loss() == "auto_space_dn"));
+    }
+}
+
+// 이것을 실패시키는 것: 기본 수준 없는 override를 배치 해석에서 누락.
+#[test]
+fn word_marker_override_can_define_missing_level() {
+    let over = format!(
+        "<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>",
+        level(0, "decimal", "%1.", "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr>")
+    );
+    let d = read(&definitions("", &num(7, 1, &over)), &item(7, 0, "", "body"));
+    assert_eq!(
+        marker_shape(&d, 0).list_marker.unwrap().text_start,
+        hwpforge_blueprint::ListTextStart::FromAnchor(
+            hwpforge_foundation::HwpUnit::new(1800).unwrap()
+        )
+    );
+}
+// 이것을 실패시키는 것: 일반 Unicode 글머리의 명시적 일반 폰트까지 제거.
+#[test]
+fn word_unicode_bullet_retains_ordinary_marker_font() {
+    let d = read(
+        &definitions(
+            &level(0, "bullet", "•", "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Arial'/></w:rPr>"),
+            &num(7, 1, ""),
+        ),
+        &item(7, 0, "", "body"),
+    );
+    let m = marker_shape(&d, 0).list_marker.unwrap();
+    assert_eq!(d.registry.char_shapes[m.char_shape.unwrap().get()].font, "Arial");
+}
+
+// 이것을 실패시키는 것: 양수 first 무시 또는 상한 합 검사 선행.
+#[test]
+fn word_marker_indent_edges_keep_legacy_layout() {
+    let d = layout_input("", "<w:ind w:left='720' w:firstLine='100'/>");
+    assert!(marker_shape(&d, 0).list_marker.is_none());
+    assert_eq!(marker_shape(&d, 0).indent_first_line.as_i32(), 500);
+    assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_indent"));
+    let d = layout_input("", "<w:ind w:left='20000000' w:firstLine='20000000'/>");
+    assert!(marker_shape(&d, 0).list_marker.is_none());
+    assert_eq!(marker_shape(&d, 0).indent_left.as_i32(), 100_000_000);
+    assert_eq!(marker_shape(&d, 0).indent_first_line.as_i32(), 100_000_000);
+    assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_indent"));
+    let d = layout_input("<w:suff w:val='bad'/>", "");
+    assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_suffix"));
+    assert_eq!(
+        marker_shape(&d, 0).list_marker.unwrap().text_start,
+        hwpforge_blueprint::ListTextStart::FromAnchor(
+            hwpforge_foundation::HwpUnit::new(1800).unwrap()
+        )
+    );
+}
+// 이것을 실패시키는 것: 첫 본문 run의 직접 서식으로 번호 모양을 대체하거나 동일 폰트도 근사 경고.
+#[test]
+fn word_marker_character_context_ignores_first_run_format() {
+    let defs = definitions(
+        &level(
+            0,
+            "decimal",
+            "%1.",
+            "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:rFonts w:ascii='함초롬바탕' w:hAnsi='함초롬바탕'/></w:rPr>",
+        ),
+        &num(7, 1, ""),
+    );
+    let d=read(&defs,"<w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr><w:rPr><w:sz w:val='24'/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val='60'/><w:b/></w:rPr><w:t>body</w:t></w:r></w:p>");
+    let m = marker_shape(&d, 0).list_marker.unwrap();
+    let marker = &d.registry.char_shapes[m.char_shape.unwrap().get()];
+    assert_eq!(marker.size.as_i32(), 1200);
+    assert!(!marker.bold);
+    let body =
+        &d.registry.char_shapes[d.document.sections()[0].paragraphs[0].runs[0].char_shape_id.get()];
+    assert_eq!(body.size.as_i32(), 3000);
+    assert!(body.bold);
+    assert!(!d.warnings.iter().any(|w| w.loss() == "list_marker_line_height"));
+}
+// 이것을 실패시키는 것: 수준 탭 예산 또는 중복 진단 누락, 일반 tabs까지 지원으로 오인.
+#[test]
+fn word_number_tabs_are_bounded_and_diagnosed() {
+    let tabs="<w:tabs><w:tab w:val='num' w:pos='600'/><w:tab w:val='num' w:pos='600' w:extra='1'/><w:tab w:val='left' w:pos='500'/></w:tabs>";
+    let d = read(
+        &definitions(
+            &level(
+                0,
+                "decimal",
+                "%1.",
+                &format!("<w:pPr><w:ind w:left='720' w:hanging='360'/>{tabs}</w:pPr>"),
+            ),
+            &num(7, 1, ""),
+        ),
+        &item(7, 0, "<w:tabs><w:tab w:val='left' w:pos='400'/></w:tabs>", "body"),
+    );
+    assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_tab"));
+    assert!(d.warnings.iter().any(|w| w.loss() == "paragraph_effect"));
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "numbering_definition")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        2
+    );
+    let styles=format!("<w:styles xmlns:w='{W}'><w:docDefaults><w:pPrDefault><w:pPr><w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs></w:pPr></w:pPrDefault></w:docDefaults></w:styles>");
+    let d = decode_docx(&package("<w:p/>", &[("styles", "styles.xml", &styles)])).unwrap();
+    assert!(d.warnings.iter().any(|w| w.loss() == "paragraph_effect"));
+    let d = layout_input("<w:rPr><w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs></w:rPr>", "");
+    assert_eq!(
+        marker_shape(&d, 0).list_marker.unwrap().text_start,
+        hwpforge_blueprint::ListTextStart::FromAnchor(
+            hwpforge_foundation::HwpUnit::new(1800).unwrap()
+        )
+    );
+    assert!(d.warnings.iter().any(|w| w.loss() == "marker_format"));
+    let defs = definitions(
+        &level(
+            0,
+            "decimal",
+            "%1.",
+            &format!(
+                "<w:pPr><w:tabs>{}</w:tabs></w:pPr>",
+                (0..16385)
+                    .map(|pos| format!("<w:tab w:val='num' w:pos='{pos}'/>"))
+                    .collect::<String>()
+            ),
+        ),
+        &num(7, 1, ""),
+    );
+    let xml = format!("<w:numbering xmlns:w='{W}'>{defs}</w:numbering>");
+    assert!(matches!(
+        decode_docx(&package(&item(7, 0, "", "body"), &[("numbering", "numbering.xml", &xml)])),
+        Err(crate::DocxError::Limit { resource: "number tabs", .. })
+    ));
+}
+
+// 이것을 실패시키는 것: 미사용 스타일의 false를 경고하거나 뒤의 true 재정의를 무시.
+#[test]
+fn word_auto_spacing_uses_only_effective_paragraph_values() {
+    let styles=format!("<w:styles xmlns:w='{W}'><w:style w:type='paragraph' w:styleId='de'><w:pPr><w:autoSpaceDE w:val='false'/><w:autoSpaceDN/></w:pPr></w:style><w:style w:type='paragraph' w:styleId='unused'><w:pPr><w:autoSpaceDN w:val='false'/></w:pPr></w:style></w:styles>");
+    for (direct, de, dn) in [
+        ("", true, false),
+        ("<w:autoSpaceDE/>", false, false),
+        ("<w:autoSpaceDE/><w:autoSpaceDN w:val='false'/>", false, true),
+    ] {
+        let body = format!(
+            "<w:p><w:pPr><w:pStyle w:val='de'/>{direct}</w:pPr><w:r><w:t>body</w:t></w:r></w:p>"
+        );
+        let d = decode_docx(&package(&body, &[("styles", "styles.xml", &styles)])).unwrap();
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "auto_space_de"), de);
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "auto_space_dn"), dn);
+    }
+}
+
+// 이것을 실패시키는 것: override보다 기본 수준의 문자 서식·정렬·suffix 선택.
+#[test]
+fn word_marker_override_selects_its_own_character_and_alignment() {
+    use hwpforge_blueprint::{ListMarkerAlign, ListTextStart};
+    let base = level(
+        0,
+        "decimal",
+        "%1.",
+        "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:sz w:val='22'/></w:rPr>",
+    );
+    let over = format!(
+        "<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>",
+        level(
+            0,
+            "decimal",
+            "%1.",
+            "<w:lvlJc w:val='center'/><w:suff w:val='space'/><w:rPr><w:sz w:val='28'/></w:rPr>"
+        )
+    );
+    let d = read(&definitions(&base, &num(7, 1, &over)), &item(7, 0, "", "body"));
+    let marker = marker_shape(&d, 0).list_marker.unwrap();
+    assert_eq!(marker.align, ListMarkerAlign::Center);
+    assert_eq!(
+        marker.text_start,
+        ListTextStart::AfterMarker(hwpforge_foundation::HwpUnit::new(389).unwrap())
+    );
+    assert_eq!(d.registry.char_shapes[marker.char_shape.unwrap().get()].size.as_i32(), 1400);
+}
+// 이것을 실패시키는 것: 크기·일반 폰트·Latin 폰트 중 한 축의 줄 높이 근사 경고 누락.
+#[test]
+fn word_marker_line_height_warns_for_each_changed_font_context() {
+    let styles=format!("<w:styles xmlns:w='{W}'><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Arial' w:eastAsia='함초롬바탕'/><w:sz w:val='22'/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>");
+    for (props, expected) in [
+        ("", false),
+        ("<w:sz w:val='28'/>", true),
+        ("<w:rFonts w:eastAsia='맑은 고딕'/>", true),
+        ("<w:rFonts w:ascii='Courier New' w:hAnsi='Courier New'/>", true),
+    ] {
+        let defs = definitions(
+            &level(
+                0,
+                "decimal",
+                "%1.",
+                &format!(
+                    "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr>{props}</w:rPr>"
+                ),
+            ),
+            &num(7, 1, ""),
+        );
+        let numbering = format!("<w:numbering xmlns:w='{W}'>{defs}</w:numbering>");
+        let d = decode_docx(&package(
+            &item(7, 0, "", "body"),
+            &[("styles", "styles.xml", &styles), ("numbering", "numbering.xml", &numbering)],
+        ))
+        .unwrap();
+        assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_line_height"), expected);
+    }
+}
+// 이것을 실패시키는 것: 지원하지 않은 형식의 명목 폭까지 계산하거나 CENTER 슬롯을 g로 계산.
+#[test]
+fn word_marker_overflow_skips_unmeasured_formats() {
+    for (format, text, align) in [
+        ("upperRoman", "%1.", "left"),
+        ("decimal", "가%1.", "left"),
+        ("decimal", "%1.가", "left"),
+        ("decimal", "^a%1.", "left"),
+        ("decimal", "%1.^a", "left"),
+        ("decimal", "%1.", "center"),
+    ] {
+        let l=level(0,format,text,&std::format!("<w:lvlJc w:val='{align}'/><w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:sz w:val='22'/></w:rPr>")).replace("w:val='1'","w:val='99'");
+        let d = read(
+            &definitions(&l, &num(7, 1, "")),
+            &std::format!("{}{}", item(7, 0, "", "a"), item(7, 0, "", "b")),
+        );
+        assert!(
+            !d.warnings.iter().any(|w| w.loss() == "list_marker_overflow"),
+            "{format}/{text}/{align}"
+        );
+    }
+}
+// 이것을 실패시키는 것: 상위 항목을 관찰한 뒤 하위 번호의 명목 폭 카운터를 재시작하지 않음.
+#[test]
+fn word_marker_overflow_follows_source_level_restarts() {
+    let props =
+        "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:sz w:val='22'/></w:rPr>";
+    let levels = format!(
+        "{}{}",
+        level(0, "decimal", "%1.", props),
+        level(1, "decimal", "%2.", props).replace("w:val='1'", "w:val='99'")
+    );
+    let d = read(
+        &definitions(&levels, &num(7, 1, "")),
+        &format!(
+            "{}{}{}{}",
+            item(7, 1, "", "a"),
+            item(7, 1, "", "b"),
+            item(7, 0, "", "parent"),
+            item(7, 1, "", "c")
+        ),
+    );
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "list_marker_overflow")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        1
+    );
+}
+
+// 이것을 실패시키는 것: 번호 문자 기준에서 문단 끝 표시의 문자 스타일을 생략.
+#[test]
+fn word_marker_character_style_follows_paragraph_mark() {
+    let styles=format!("<w:styles xmlns:w='{W}'><w:style w:type='character' w:styleId='mark'><w:rPr><w:i/><w:sz w:val='26'/></w:rPr></w:style></w:styles>");
+    let defs = definitions(
+        &level(0, "decimal", "%1.", "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr>"),
+        &num(7, 1, ""),
+    );
+    let numbering = format!("<w:numbering xmlns:w='{W}'>{defs}</w:numbering>");
+    let body="<w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr><w:rPr><w:rStyle w:val='mark'/><w:sz w:val='24'/></w:rPr></w:pPr><w:r><w:rPr><w:b/><w:sz w:val='60'/></w:rPr><w:t>body</w:t></w:r></w:p>";
+    let d = decode_docx(&package(
+        body,
+        &[("styles", "styles.xml", &styles), ("numbering", "numbering.xml", &numbering)],
+    ))
+    .unwrap();
+    let m = marker_shape(&d, 0).list_marker.unwrap();
+    let c = &d.registry.char_shapes[m.char_shape.unwrap().get()];
+    assert!(c.italic);
+    assert!(!c.bold);
+    assert_eq!(c.size.as_i32(), 1200);
+}
+
+// 이것을 실패시키는 것: 번호 수준의 직계 pPr가 아닌 곳에서도 번호 탭을 읽음.
+#[test]
+fn word_number_tabs_require_the_level_paragraph_owner() {
+    for (nested, direct) in [
+        ("<w:numPr><w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs></w:numPr>", ""),
+        ("", "<w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs>"),
+    ] {
+        let extra = format!("<w:pPr><w:ind w:left='720' w:hanging='360'/>{nested}</w:pPr>");
+        let d = read(
+            &definitions(&level(0, "decimal", "%1.", &extra), &num(7, 1, "")),
+            &item(7, 0, direct, "body"),
+        );
+        assert_eq!(
+            marker_shape(&d, 0).list_marker.unwrap().text_start,
+            hwpforge_blueprint::ListTextStart::FromAnchor(
+                hwpforge_foundation::HwpUnit::new(1800).unwrap()
+            )
+        );
+        assert!(d.warnings.iter().any(|w| w.loss() == "paragraph_effect"));
+    }
+}
+
+// 이것을 실패시키는 것: 번호 rPr의 복합 스크립트 서식이 축소되어도 기존 진단을 생략.
+#[test]
+fn word_marker_script_format_loss_is_diagnosed() {
+    let d = layout_input("<w:rPr><w:sz w:val='22'/><w:szCs w:val='28'/></w:rPr>", "");
+    assert!(d.warnings.iter().any(|w| w.loss() == "script_format"));
+    assert!(!d.warnings.iter().any(|w| w.loss() == "marker_format"));
+}
+
+// 이것을 실패시키는 것: 미지원 종류의 탭 위치까지 숫자로 해석하여 입력을 거부.
+#[test]
+fn unsupported_number_tabs_do_not_parse_positions() {
+    for tab in ["<w:tab w:val='left'/>", "<w:tab w:val='left' w:pos='bad'/>"] {
+        let d = layout_input(&format!("<w:pPr><w:tabs>{tab}</w:tabs></w:pPr>"), "");
+        assert_eq!(
+            marker_shape(&d, 0).list_marker.unwrap().text_start,
+            hwpforge_blueprint::ListTextStart::FromAnchor(
+                hwpforge_foundation::HwpUnit::new(1800).unwrap()
+            )
+        );
+        assert!(d.warnings.iter().any(|w| w.loss() == "numbering_definition"));
+    }
+}
+
+// 이것을 실패시키는 것: 같은 출력 정의·수준에서 목록 진단 횟수를 문단 수만큼 증가.
+#[test]
+fn word_marker_diagnostics_count_each_definition_level_once() {
+    for (extra, loss) in [
+        ("<w:suff w:val='space'/>", "list_marker_space_width"),
+        ("<w:rPr><w:sz w:val='22'/><w:szCs w:val='28'/></w:rPr>", "script_format"),
+        ("<w:pPr><w:ind w:left='720' w:firstLine='100'/></w:pPr>", "list_marker_indent"),
+        ("<w:suff w:val='nothing'/>", "list_marker_continuation"),
+        ("<w:rPr><w:sz w:val='48'/></w:rPr>", "list_marker_line_height"),
+        ("<w:pPr><w:tabs><w:tab w:val='num' w:pos='100'/></w:tabs></w:pPr>", "list_marker_tab"),
+    ] {
+        let l = level(
+            0,
+            "decimal",
+            "%1.",
+            &format!("<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr>{extra}"),
+        );
+        let defs = definitions(&l, &num(7, 1, ""));
+        let body = item(7, 0, "", "body").repeat(3);
+        let d = read(&defs, &body);
+        assert_eq!(
+            d.warnings.iter().filter(|w| w.loss() == loss).map(|w| w.count()).sum::<u64>(),
+            1,
+            "{loss}"
+        );
+        assert!(d
+            .registry
+            .para_shapes
+            .iter()
+            .filter(|p| p.list_marker.is_some())
+            .all(|p| p.indent_first_line.as_i32() == 0));
+    }
+    let l = level(
+        0,
+        "decimal",
+        "%1.",
+        "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:sz w:val='22'/></w:rPr>",
+    )
+    .replace("w:val='1'", "w:val='999'");
+    let d = read(&definitions(&l, &num(7, 1, "")), &item(7, 0, "", "body").repeat(3));
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "list_marker_overflow")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        1
+    );
+    // Distinct levels must each contribute one occurrence to the existing diagnostic aggregate.
+    let levels = format!("{l}{}", level(1, "decimal", "%2.", "<w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:start w:val='999'/><w:rPr><w:sz w:val='22'/></w:rPr>"));
+    let d = read(
+        &definitions(&levels, &num(7, 1, "")),
+        &format!("{}{}", item(7, 0, "", "body").repeat(3), item(7, 1, "", "body").repeat(3)),
+    );
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "list_marker_overflow")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        2
+    );
+    let defs = format!(
+        "{}<w:abstractNum w:abstractNumId='2'>{l}</w:abstractNum>{}",
+        definitions(&l, &num(7, 1, "")),
+        num(8, 2, "")
+    );
+    let d = read(
+        &defs,
+        &format!("{}{}", item(7, 0, "", "body").repeat(3), item(8, 0, "", "body").repeat(3)),
+    );
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "list_marker_overflow")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        2
+    );
+}
+
+// 이것을 실패시키는 것: 공유 출력 글머리 head의 근사 진단을 소스·중첩 수준·문단마다 누적.
+#[test]
+fn word_bullet_diagnostics_count_each_output_head_once() {
+    for (glyph, font, expected) in [("&#xF0B7;", "Symbol", 1), ("&#xF0A7;", "Wingdings", 2)] {
+        let props = |font: &str| {
+            format!("<w:suff w:val='space'/><w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr><w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='{font}'/></w:rPr>")
+        };
+        let first = level(0, "bullet", "&#xF0B7;", &props("Symbol"));
+        let second = level(1, "bullet", glyph, &props(font));
+        let defs = format!(
+            "{}<w:abstractNum w:abstractNumId='2'>{second}</w:abstractNum>{}",
+            definitions(&first, &num(7, 1, "")),
+            num(8, 2, "")
+        );
+        let d = read(
+            &defs,
+            &format!("{}{}", item(7, 0, "", "body").repeat(3), item(8, 1, "", "body").repeat(3)),
+        );
+        assert_eq!(d.registry.bullets.len(), expected);
+        assert_eq!(count(&d, "DOCX_BULLET_GLYPH_APPROXIMATED"), expected as u64);
+        for loss in ["list_marker_space_width", "list_marker_continuation"] {
+            assert_eq!(
+                d.warnings.iter().filter(|w| w.loss() == loss).map(|w| w.count()).sum::<u64>(),
+                expected as u64,
+                "{loss}"
+            );
+        }
+        assert_eq!(
+            d.warnings
+                .iter()
+                .filter(|w| w.loss() == "bullet_font_slots")
+                .map(|w| w.count())
+                .sum::<u64>(),
+            expected as u64
+        );
+    }
+    let defs = definitions(
+        &level(0, "bullet", "•", "<w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Symbol'/></w:rPr>"),
+        &num(7, 1, ""),
+    );
+    let d = read(&defs, &item(7, 0, "", "body").repeat(3));
+    assert!(d.registry.bullets.is_empty());
+    assert_eq!(count(&d, "DOCX_BULLET_GLYPH_LOST"), 3);
+    assert_eq!(
+        d.warnings
+            .iter()
+            .filter(|w| w.loss() == "bullet_font_slots")
+            .map(|w| w.count())
+            .sum::<u64>(),
+        3
+    );
+}
+
+fn zero_read(level: &str, body: &str, settings: Option<&str>, styles: &str) -> DocxDecoded {
+    let number =
+        format!("<w:numbering xmlns:w='{W}'>{}</w:numbering>", definitions(level, &num(7, 1, "")));
+    let styles = format!("<w:styles xmlns:w='{W}'><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val='22'/></w:rPr></w:rPrDefault></w:docDefaults>{styles}</w:styles>");
+    let mut parts = vec![
+        ("numbering", "numbering.xml", number.as_str()),
+        ("styles", "styles.xml", styles.as_str()),
+    ];
+    if let Some(settings) = settings {
+        parts.push(("settings", "options/arbitrary.xml", settings));
+    }
+    decode_docx(&package(body, &parts)).unwrap()
+}
+fn zero_level(anchor: i32, indent: &str, extra: &str) -> String {
+    level(
+        0,
+        "decimal",
+        "%1.",
+        &format!("<w:pPr><w:ind w:left='{anchor}' {indent}/></w:pPr>{extra}"),
+    )
+}
+fn gap(d: &DocxDecoded, index: usize) -> i32 {
+    match marker_shape(d, index).list_marker.unwrap().text_start {
+        hwpforge_blueprint::ListTextStart::FromAnchor(g) => g.as_i32(),
+        other => panic!("{other:?}"),
+    }
+}
+fn loss_count(d: &DocxDecoded, loss: &str) -> u64 {
+    d.warnings.iter().filter(|w| w.loss() == loss).map(|w| w.count()).sum()
+}
+// 이것을 실패시키는 것: 720 하드코딩, anchor 기준 격자, ceiling 대신 floor 또는 현재 번호 대신 고정 자리수.
+#[test]
+fn word_zero_hanging_uses_default_tab_grid() {
+    for (tab, expected) in
+        [(720, [3600, 1100, 4100, 3600, 3600, 3600]), (800, [4400, 1500, 900, 4000, 4400, 4400])]
+    {
+        let settings =
+            format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='{tab}'/></w:settings>");
+        for (i, anchor) in [720, 500, 620, 0, 720, 720].into_iter().enumerate() {
+            let mut l = zero_level(anchor, "w:hanging='0'", "");
+            if i == 4 {
+                l = l.replace("<w:start w:val='1'/>", "<w:start w:val='9'/>");
+            }
+            if i == 5 {
+                l = level(0,"bullet","&#xF0B7;", "<w:pPr><w:ind w:left='720' w:hanging='0'/></w:pPr><w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Symbol'/></w:rPr>");
+            }
+            let d = zero_read(&l, &item(7, 0, "", "body").repeat(2), Some(&settings), "");
+            for n in 0..2 {
+                assert_eq!(gap(&d, n), expected[i], "tab={tab} anchor={anchor}");
+            }
+            assert_eq!(loss_count(&d, "list_marker_default_tab"), 1);
+            assert_eq!(loss_count(&d, "list_marker_continuation"), 1);
+            assert_eq!(loss_count(&d, "list_marker_zero_slot"), 0);
+            assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+            assert_eq!(
+                loss_count(&d, "list_marker_tab_boundary"),
+                u64::from(tab == 800 && anchor == 620)
+            );
+        }
+    }
+}
+// 이것을 실패시키는 것: 현재 항목의 새 탭만 검사하거나 첫 슬롯 덮어쓰기·넘침 누락·그룹 중복 경고.
+#[test]
+fn word_default_tab_group_overflow_uses_first_slot() {
+    for (tab, anchor, expected) in [(720, 500, [1100, 4700, 4700]), (800, 620, [900, 4900, 4900])] {
+        let settings =
+            format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='{tab}'/></w:settings>");
+        let l = zero_level(anchor, "w:hanging='0'", "")
+            .replace("<w:start w:val='1'/>", "<w:start w:val='9'/>");
+        let d = zero_read(&l, &item(7, 0, "", "body").repeat(3), Some(&settings), "");
+        assert_eq!([gap(&d, 0), gap(&d, 1), gap(&d, 2)], expected);
+        assert_eq!(loss_count(&d, "list_marker_default_tab"), 1);
+        assert_eq!(loss_count(&d, "list_marker_continuation"), 1);
+        assert_eq!(loss_count(&d, "list_marker_overflow"), 1);
+        let overflow: Vec<_> =
+            d.warnings.iter().filter(|w| w.loss() == "list_marker_overflow").collect();
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0].action(), "retain_slot");
+        assert_eq!(
+            overflow[0].message(),
+            "Estimated marker end exceeds the shared first-use slot; overlap is possible"
+        );
+    }
+}
+// 이것을 실패시키는 것: 가운데 번호 끝을 전체 폭으로 계산하거나 오른쪽 끝을 폭만큼 이동·경계도 넘침 판정.
+#[test]
+fn word_default_tab_group_overflow_respects_alignment() {
+    for (align, anchor, expected, overflow) in [
+        ("center", 500, [1100, 1100], 0),
+        ("center", 600, [600, 4200], 1),
+        ("right", 720, [0, 0], 0),
+    ] {
+        let l = zero_level(anchor, "w:hanging='0'", &format!("<w:lvlJc w:val='{align}'/>"))
+            .replace("<w:start w:val='1'/>", "<w:start w:val='9'/>");
+        let d = zero_read(&l, &item(7, 0, "", "body").repeat(2), None, "");
+        assert_eq!([gap(&d, 0), gap(&d, 1)], expected);
+        assert_eq!(loss_count(&d, "list_marker_overflow"), overflow, "{align} {anchor}");
+    }
+}
+// 이것을 실패시키는 것: 후속 항목의 작은 슬롯으로 첫 대표 슬롯을 덮어쓰기.
+#[test]
+fn word_default_tab_group_overflow_keeps_first_large_slot() {
+    let l = zero_level(500, "w:hanging='0'", "")
+        .replace("<w:start w:val='1'/>", "<w:start w:val='10'/>");
+    let body = format!(
+        "{}{}{}",
+        item(7, 0, "", "body"),
+        item(7, 0, "<w:rPr><w:sz w:val='2'/></w:rPr>", "body"),
+        item(7, 0, "", "body")
+    );
+    let d = zero_read(&l, &body, None, "");
+    assert_eq!([gap(&d, 0), gap(&d, 1), gap(&d, 2)], [4700, 1100, 4700]);
+    assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+}
+// 이것을 실패시키는 것: 무요청 첫 사용처를 빼고 뒤의 작은 슬롯을 대표로 선택.
+#[test]
+fn word_default_tab_group_overflow_keeps_unspecified_first() {
+    let l = zero_level(500, "w:hanging='0'", "")
+        .replace("<w:start w:val='1'/>", "<w:start w:val='8'/>");
+    let body = format!(
+        "{}{}",
+        item(7, 0, "<w:ind w:firstLine='20'/>", "body"),
+        item(7, 0, "", "body").repeat(2)
+    );
+    let d = zero_read(&l, &body, None, "");
+    assert!(marker_shape(&d, 0).list_marker.is_none());
+    assert_eq!([gap(&d, 1), gap(&d, 2)], [1100, 4700]);
+    assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+
+    let props = "<w:pPr><w:ind w:left='700' w:hanging='0'/></w:pPr><w:rPr><w:rFonts w:ascii='Symbol' w:hAnsi='Symbol'/></w:rPr>";
+    let first = level(
+        0,
+        "bullet",
+        "&#xF0B7;",
+        &props.replace("</w:pPr>", "<w:tabs><w:tab w:val='num' w:pos='700'/></w:tabs></w:pPr>"),
+    );
+    let later = level(1, "bullet", "&#xF0B7;", props);
+    let body = format!(
+        "{}{}{}",
+        item(7, 0, "", "body"),
+        item(7, 1, "<w:rPr><w:sz w:val='2'/></w:rPr>", "body"),
+        item(7, 1, "", "body")
+    );
+    let d = zero_read(&format!("{first}{later}"), &body, None, "");
+    assert_eq!(
+        lists(&d),
+        [0, 1, 1]
+            .map(|level| Some(ParagraphListRef::Bullet {
+                bullet_id: hwpforge_foundation::BulletIndex::new(0),
+                level
+            }))
+            .to_vec()
+    );
+    assert!(marker_shape(&d, 0).list_marker.is_none());
+    assert_eq!([gap(&d, 1), gap(&d, 2)], [100, 3700]);
+    assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+}
+// 이것을 실패시키는 것: 경로 하드코딩, namespace/직계 자식 검사 제거, 0 허용, 이전 선언 부활, 기본 탭과 일반 설정 진단 합치기 또는 중복 action을 use_default로 변경.
+#[test]
+fn word_default_tab_setting_is_scoped_and_validated() {
+    let l = zero_level(720, "w:hanging='0'", "");
+    let cases = [
+        (None,3600,0),
+        (Some(format!("<w:settings xmlns:w='{W}'/>")),3600,0),
+        (Some(format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='800'/></w:settings>")),4400,0),
+        (Some(format!("<w:settings xmlns:w='{W}' xmlns:x='urn:foreign'><x:defaultTabStop w:val='800'/></w:settings>")),3600,0),
+        (Some(format!("<w:settings xmlns:w='{W}' xmlns:x='urn:foreign'><w:defaultTabStop x:val='800'/></w:settings>")),3600,1),
+        (Some(format!("<w:settings xmlns:w='{W}'><w:compat><w:defaultTabStop w:val='800'/></w:compat></w:settings>")),3600,0),
+        (Some(format!("<w:wrong xmlns:w='{W}'><w:defaultTabStop w:val='800'/></w:wrong>")),3600,0),
+        (Some(format!("<x:settings xmlns:w='{W}' xmlns:x='urn:foreign'><w:defaultTabStop w:val='800'/></x:settings>")),3600,0),
+        (Some(format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='720'/><w:defaultTabStop w:val='800'/></w:settings>")),4400,1),
+        (Some(format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='800'/><w:defaultTabStop w:val='0'/></w:settings>")),3600,2),
+    ];
+    for (xml, want, warnings) in cases {
+        let d = zero_read(&l, &item(7, 0, "", "body"), xml.as_deref(), "");
+        assert_eq!(gap(&d, 0), want, "{xml:?}");
+        assert_eq!(loss_count(&d, "list_marker_default_tab_stop"), warnings, "{xml:?}");
+        for w in d.warnings.iter().filter(|w| w.loss() == "list_marker_default_tab_stop") {
+            assert_eq!(w.code(), "DOCX_UNSUPPORTED_VALUE");
+            assert_eq!(
+                w.action(),
+                if w.message().starts_with("Duplicate") { "use_last" } else { "use_default" }
+            );
+        }
+    }
+    let settings = format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='800'/><w:defaultTabStop w:val='0'/></w:settings>");
+    let d = zero_read(&l, &item(7, 0, "", "body"), Some(&settings), "");
+    let records: Vec<_> =
+        d.warnings.iter().filter(|w| w.loss() == "list_marker_default_tab_stop").collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!((records[0].action(), records[0].count()), ("use_last", 1));
+    assert_eq!((records[1].action(), records[1].count()), ("use_default", 1));
+    for value in [
+        "",
+        "w:val='0'",
+        "w:val='-1'",
+        "w:val='bad'",
+        "w:val='20000001'",
+        "w:val='999999999999999999999999999999999999999999'",
+    ] {
+        let settings =
+            format!("<w:settings xmlns:w='{W}'><w:defaultTabStop {value}/></w:settings>");
+        let d = zero_read(&l, &item(7, 0, "", "body"), Some(&settings), "");
+        assert_eq!(gap(&d, 0), 3600);
+        assert_eq!(loss_count(&d, "list_marker_default_tab_stop"), 1);
+    }
+
+    // Each setting retains its own diagnostic example regardless of visitation order.
+    for prefix in
+        ["<w:zoom w:percent='100'/>", "<w:compat><w:compatSetting w:name='x'/></w:compat>"]
+    {
+        let settings = format!(
+            "<w:settings xmlns:w='{W}'>{prefix}<w:defaultTabStop w:val='800'/></w:settings>"
+        );
+        let d = zero_read(&l, &item(7, 0, "", "body"), Some(&settings), "");
+        assert_eq!(gap(&d, 0), 4400);
+        assert_eq!(loss_count(&d, "document_settings"), 1);
+        let ordinary = d.warnings.iter().find(|w| w.loss() == "document_settings").unwrap();
+        assert_eq!(
+            ordinary.message(),
+            if prefix.starts_with("<w:zoom") {
+                "Document setting is not applied"
+            } else {
+                "Unsupported compatibility settings are not applied"
+            }
+        );
+        assert_eq!(loss_count(&d, "list_marker_default_tab_settings"), 1);
+        assert!(d
+            .warnings
+            .iter()
+            .find(|w| w.loss() == "list_marker_default_tab_settings")
+            .unwrap()
+            .message()
+            .contains("ordinary body tab positions are not applied"));
+    }
+}
+// 이것을 실패시키는 것: 원시 hanging 속성 존재만 검사.
+#[test]
+fn word_zero_hanging_equivalent_indents_agree() {
+    for indent in ["w:hanging='0'", "w:firstLine='0'", ""] {
+        let d = zero_read(&zero_level(720, indent, ""), &item(7, 0, "", "body"), None, "");
+        assert_eq!(gap(&d, 0), 3600);
+        assert_eq!(marker_shape(&d, 0).indent_first_line.as_i32(), 0);
+    }
+}
+// 이것을 실패시키는 것: 알 수 없는 문자에 0폭/1em 부여 또는 출력 글머리만으로 Symbol 판정.
+#[test]
+fn word_zero_hanging_unsupported_markers_keep_legacy_layout() {
+    for (fmt, text, font) in [
+        ("upperRoman", "%1.", "Arial"),
+        ("lowerLetter", "%1.", "Arial"),
+        ("decimal", "(%1)", "Arial"),
+        ("decimal", "%1 ", "Arial"),
+        ("bullet", "&#xF0A7;", "Wingdings"),
+        ("bullet", "&#xF06C;", "Wingdings"),
+        ("bullet", "&#xF06E;", "Wingdings"),
+        ("bullet", "o", "Courier New"),
+        ("bullet", "•", "Arial"),
+    ] {
+        let l=level(0,fmt,text,&format!("<w:pPr><w:ind w:left='720' w:hanging='0'/></w:pPr><w:rPr><w:rFonts w:ascii='{font}' w:hAnsi='{font}'/></w:rPr>"));
+        let d = zero_read(&l, &item(7, 0, "", "body").repeat(2), None, "");
+        assert!(marker_shape(&d, 0).list_marker.is_none(), "{fmt} {text}");
+        assert_eq!(loss_count(&d, "list_marker_zero_slot"), 1);
+        assert_eq!(loss_count(&d, "list_marker_default_tab"), 0);
+    }
+}
+// 이것을 실패시키는 것: 활성 번호 탭 무시 또는 clear 후에도 차단.
+#[test]
+fn word_zero_hanging_number_tabs_keep_existing_policy() {
+    let base = zero_level(720, "w:hanging='0'", "")
+        .replace("</w:pPr>", "<w:tabs><w:tab w:val='num' w:pos='720'/></w:tabs></w:pPr>");
+    let d = zero_read(&base, &item(7, 0, "", "body"), None, "");
+    assert!(marker_shape(&d, 0).list_marker.is_none());
+    assert_eq!(loss_count(&d, "list_marker_zero_slot"), 1);
+    let over = format!(
+        "<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>",
+        level(
+            0,
+            "decimal",
+            "%1.",
+            "<w:pPr><w:tabs><w:tab w:val='clear' w:pos='720'/></w:tabs></w:pPr>"
+        )
+    );
+    let d = read(&definitions(&base, &num(7, 1, &over)), &item(7, 0, "", "body"));
+    assert_eq!(gap(&d, 0), 3600);
+}
+// 이것을 실패시키는 것: 후보에서 anchor 제거 → 800에서 g=400, 또는 g=0을 None 처리.
+#[test]
+fn word_zero_hanging_right_uses_anchor_as_marker_end() {
+    for tab in [720, 800] {
+        let settings =
+            format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='{tab}'/></w:settings>");
+        let d = zero_read(
+            &zero_level(720, "w:firstLine='0'", "<w:lvlJc w:val='right'/>"),
+            &item(7, 0, "", "body"),
+            Some(&settings),
+            "",
+        );
+        assert_eq!(gap(&d, 0), 0);
+        assert_eq!(loss_count(&d, "list_marker_default_tab"), 1);
+        for loss in [
+            "list_marker_zero_slot",
+            "list_marker_continuation",
+            "list_marker_tab_boundary",
+            "list_marker_overflow",
+        ] {
+            assert_eq!(loss_count(&d, loss), 0, "{loss}");
+        }
+    }
+}
+// 이것을 실패시키는 것: 가운데 끝을 A+w로 계산.
+#[test]
+fn word_zero_hanging_center_uses_half_width() {
+    for (tab, anchor, want) in [(720, 720, 3600), (800, 720, 4400), (800, 660, 700)] {
+        let settings =
+            format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='{tab}'/></w:settings>");
+        let d = zero_read(
+            &zero_level(anchor, "w:hanging='0'", "<w:lvlJc w:val='center'/>"),
+            &item(7, 0, "", "body"),
+            Some(&settings),
+            "",
+        );
+        assert_eq!(gap(&d, 0), want);
+    }
+}
+// 이것을 실패시키는 것: exact 탭을 다음으로 이동, 경계 <100을 <=100으로 변경.
+#[test]
+fn word_default_tab_boundary_is_inclusive() {
+    for (left, want, boundary) in [("550.4", 848, 1), ("530.4", 948, 0), ("550.6", 4447, 0)] {
+        let l =
+            zero_level(0, "w:hanging='0'", "").replace("w:left='0'", &format!("w:left='{left}'"));
+        let d = zero_read(&l, &item(7, 0, "", "body"), None, "");
+        assert_eq!(gap(&d, 0), want);
+        assert_eq!(loss_count(&d, "list_marker_tab_boundary"), boundary);
+    }
+}
+// 이것을 실패시키는 것: 절대 쪽 여백을 더하거나 셀/다단 원점 근사 경고 제거.
+#[test]
+fn word_default_tab_uses_local_content_origin() {
+    let item = item(7, 0, "", "body");
+    let l = zero_level(720, "w:hanging='0'", "");
+    for body in [
+        item.clone(),
+        format!("<w:tbl><w:tr><w:tc>{item}</w:tc></w:tr></w:tbl>"),
+        format!(
+            "{item}<w:sectPr><w:pgMar w:left='2000' w:right='1000'/><w:cols w:num='2'/></w:sectPr>"
+        ),
+    ] {
+        let d = zero_read(&l, &body, None, "");
+        let mut gaps = vec![];
+        d.document.sections()[0].for_each_paragraph(|p| {
+            let shape = &d.registry.para_shapes[p.para_shape_id.get()];
+            if let Some(m) = shape.list_marker {
+                if let hwpforge_blueprint::ListTextStart::FromAnchor(g) = m.text_start {
+                    gaps.push(g.as_i32());
+                }
+            }
+        });
+        assert_eq!(gaps, [3600]);
+        let w = d.warnings.iter().find(|w| w.loss() == "list_marker_default_tab").unwrap();
+        assert!(w
+            .message()
+            .contains("cells, columns and zero-hanging center alignment are unmeasured"));
+    }
+}
+// 이것을 실패시키는 것: 첫 run으로 번호 서식 결정, mark/lvl overlay 순서 역전 또는 폭에 본문 크기 사용.
+#[test]
+fn word_marker_format_follows_paragraph_mark() {
+    for (mark, run, level_size, want, bold) in [
+        ("", "<w:b/><w:sz w:val='32'/>", "", 1100, false),
+        ("<w:b/><w:sz w:val='32'/>", "", "", 1600, true),
+        (
+            "<w:b/><w:sz w:val='32'/>",
+            "<w:sz w:val='32'/>",
+            "<w:rPr><w:sz w:val='28'/></w:rPr>",
+            1400,
+            true,
+        ),
+    ] {
+        let body=format!("<w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr><w:rPr>{mark}</w:rPr></w:pPr><w:r><w:rPr>{run}</w:rPr><w:t>body</w:t></w:r></w:p>");
+        let d = zero_read(&zero_level(490, "w:hanging='0'", level_size), &body, None, "");
+        let m = marker_shape(&d, 0).list_marker.unwrap();
+        let c = &d.registry.char_shapes[m.char_shape.unwrap().get()];
+        assert_eq!((c.size.as_i32(), c.bold), (want, bold));
+        let p = &d.document.sections()[0].paragraphs[0];
+        let c = &d.registry.char_shapes[p.runs[0].char_shape_id.get()];
+        assert_eq!(c.size.as_i32(), if run.is_empty() { 1100 } else { 1600 });
+        assert_eq!(gap(&d, 0), if want == 1600 { 4750 } else { 1150 });
+    }
+}
+// 이것을 실패시키는 것: 걸침 양수 경로까지 새 추정 폭으로 확대.
+#[test]
+fn word_hanging_overflow_keeps_fixed_slot() {
+    for (hanging, want) in [(360, 1800), (180, 900)] {
+        let l =
+            zero_level(720, &format!("w:hanging='{hanging}'"), "<w:rPr><w:sz w:val='22'/></w:rPr>")
+                .replace("<w:start w:val='1'/>", "<w:start w:val='99'/>");
+        let d = zero_read(&l, &item(7, 0, "", "body").repeat(2), None, "");
+        assert_eq!(gap(&d, 0), want);
+        assert_eq!(gap(&d, 1), want);
+        assert_eq!(loss_count(&d, "list_marker_overflow"), 1);
+        assert_eq!(loss_count(&d, "list_marker_default_tab"), 0);
+    }
 }

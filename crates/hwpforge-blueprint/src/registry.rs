@@ -180,6 +180,7 @@ impl TryFrom<StyleRegistryWire> for StyleRegistry {
         for key in registry.style_display_names.keys() {
             registry.validate_display_name_key(key)?;
         }
+        validate_marker_references(&registry)?;
         Ok(registry)
     }
 }
@@ -402,7 +403,7 @@ impl StyleRegistry {
             validate_mapping_references(md, &style_entries)?;
         }
 
-        Ok(StyleRegistry {
+        let registry = StyleRegistry {
             fonts,
             char_shapes,
             para_shapes,
@@ -413,7 +414,9 @@ impl StyleRegistry {
             style_entries,
             style_display_names: IndexMap::new(),
             border_fills: Vec::new(),
-        })
+        };
+        validate_marker_references(&registry)?;
+        Ok(registry)
     }
 
     /// Looks up a style by name.
@@ -1512,5 +1515,168 @@ mod identity_index_tests {
         let r2: StyleRegistry = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(r2, r);
         assert_eq!(r2.clone().style_display_name(id), Some("updated"));
+    }
+}
+
+fn validate_marker_references(registry: &StyleRegistry) -> BlueprintResult<()> {
+    for shape in &registry.para_shapes {
+        crate::style::validate_list_marker(
+            shape.list_marker,
+            shape.list,
+            shape.indent_first_line,
+            &registry.numberings,
+            &registry.bullets,
+        )?;
+        if shape
+            .list_marker
+            .and_then(|m| m.char_shape)
+            .is_some_and(|id| registry.char_shapes.get(id.get()).is_none())
+        {
+            return Err(FoundationError::InvalidField {
+                field: "list_marker.char_shape".into(),
+                reason: "character reference is outside the registry".into(),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod marker_reference_tests {
+    use super::*;
+    use crate::{ListMarkerAlign, ListMarkerLayout, ListTextStart};
+    use hwpforge_foundation::HwpUnit;
+    // 이것을 실패시키는 것: registry 역직렬화 또는 템플릿 완성 후 marker 참조 검증 생략.
+    #[test]
+    fn list_marker_reference_is_validated_after_mutation() {
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        let mut shape = ParaShape::default();
+        let mut marker =
+            ListMarkerLayout::new(ListMarkerAlign::Left, ListTextStart::FromAnchor(HwpUnit::ZERO))
+                .unwrap();
+        marker.char_shape = Some(CharShapeIndex::new(999));
+        shape.list_marker = Some(marker);
+        registry.para_shapes.push(shape);
+        assert!(serde_json::from_value::<StyleRegistry>(serde_json::to_value(&registry).unwrap())
+            .is_err());
+        registry.numberings.push(NumberingDef {
+            id: 1,
+            start: 1,
+            levels: vec![hwpforge_core::ParaHead {
+                level: 1,
+                start: 1,
+                num_format: hwpforge_foundation::NumberFormatType::Digit,
+                text: "^1.".into(),
+                checkable: false,
+            }],
+        });
+        registry.para_shapes[0].list = Some(hwpforge_core::ParagraphListRef::Number {
+            numbering_id: NumberingIndex::new(0),
+            level: 0,
+        });
+        assert!(serde_json::from_value::<StyleRegistry>(serde_json::to_value(&registry).unwrap())
+            .is_err());
+        let template=Template::from_yaml("meta:\n  name: marker\nstyles:\n  body:\n    char_shape:\n      font: Arial\n      size: 11pt\n    para_shape:\n      list_marker:\n        align: left\n        text_start:\n          kind: from_anchor\n          value: 0\n").unwrap();
+        assert!(StyleRegistry::from_template(&template).is_err());
+        let mut template = template;
+        template.numberings = registry.numberings.clone();
+        let para = template.styles.get_mut("body").unwrap().para_shape.as_mut().unwrap();
+        para.list =
+            Some(crate::style::PartialParagraphListRef::Number { numbering_id: 1, level: 0 });
+        para.list_marker.as_mut().unwrap().char_shape = Some(CharShapeIndex::new(999));
+        assert!(StyleRegistry::from_template(&template).is_err());
+        template
+            .styles
+            .get_mut("body")
+            .unwrap()
+            .para_shape
+            .as_mut()
+            .unwrap()
+            .list_marker
+            .as_mut()
+            .unwrap()
+            .char_shape = Some(CharShapeIndex::new(0));
+        assert!(StyleRegistry::from_template(&template).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod marker_indent_tests {
+    use super::*;
+    // 이것을 실패시키는 것: 해석 단계나 registry 검증에서 번호 배치의 첫 줄 들여쓰기 허용.
+    #[test]
+    fn marker_layout_requires_zero_first_line_indent() {
+        let yaml = r#"
+meta:
+  name: marker
+numberings:
+  - id: 1
+    start: 1
+    levels:
+      - level: 1
+        start: 1
+        num_format: Digit
+        text: '^1.'
+        checkable: false
+styles:
+  body:
+    char_shape:
+      font: Arial
+      size: 11pt
+    para_shape:
+      list:
+        kind: number
+        numbering_id: 1
+        level: 0
+      indent:
+        first_line: -10pt
+      list_marker:
+        align: left
+        text_start:
+          kind: from_anchor
+          value: 1800
+"#;
+        let template = Template::from_yaml(yaml).unwrap();
+        let partial = template.styles["body"].para_shape.as_ref().unwrap();
+        let err = partial.resolve("body", &template.numberings, &template.bullets).unwrap_err();
+        assert!(err.to_string().contains("zero first-line indentation"), "{err}");
+        assert!(StyleRegistry::from_template(&template).is_err());
+        let positive = Template::from_yaml(&yaml.replace("-10pt", "10pt")).unwrap();
+        assert!(positive.styles["body"]
+            .para_shape
+            .as_ref()
+            .unwrap()
+            .resolve("body", &positive.numberings, &positive.bullets)
+            .is_err());
+        assert!(StyleRegistry::from_template(&positive).is_err());
+        let mut valid = template.clone();
+        valid
+            .styles
+            .get_mut("body")
+            .unwrap()
+            .para_shape
+            .as_mut()
+            .unwrap()
+            .indent
+            .as_mut()
+            .unwrap()
+            .first_line = Some(hwpforge_foundation::HwpUnit::ZERO);
+        let mut registry = StyleRegistry::from_template(&valid).unwrap();
+        for shape in &mut registry.para_shapes {
+            if shape.list_marker.is_some() {
+                shape.indent_first_line = hwpforge_foundation::HwpUnit::new(-1000).unwrap();
+            }
+        }
+        let err = validate_marker_references(&registry).unwrap_err();
+        assert!(err.to_string().contains("zero first-line indentation"), "{err}");
+        assert!(serde_json::from_value::<StyleRegistry>(serde_json::to_value(&registry).unwrap())
+            .is_err());
+        for shape in &mut registry.para_shapes {
+            if shape.list_marker.is_some() {
+                shape.indent_first_line = hwpforge_foundation::HwpUnit::new(1000).unwrap();
+            }
+        }
+        assert!(validate_marker_references(&registry).is_err());
     }
 }

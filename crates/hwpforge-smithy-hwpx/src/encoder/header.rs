@@ -43,12 +43,13 @@ pub(crate) fn encode_header(
     sec_cnt: u32,
     begin_num: Option<&hwpforge_core::section::BeginNum>,
     compatibility: &str,
+    profile: hwpforge_core::LayoutProfile,
 ) -> HwpxResult<String> {
     crate::paragraph_measure::validate_measure_output(store)?;
     crate::header_references::HeaderReferences::build(store)?;
     let numbered = store.numbered_for_output();
     let store = &numbered;
-    let head = build_head(store, sec_cnt);
+    let head = build_head(store, sec_cnt, profile);
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let head_xml = quick_xml::se::to_string(&head)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
@@ -511,8 +512,12 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> HwpxResult<String
 }
 
 /// Builds a complete `HxHead` from the store data.
-fn build_head(store: &HwpxStyleStore, sec_cnt: u32) -> HxHead {
-    let ref_list = build_ref_list(store);
+fn build_head(
+    store: &HwpxStyleStore,
+    sec_cnt: u32,
+    profile: hwpforge_core::LayoutProfile,
+) -> HxHead {
+    let ref_list = build_ref_list(store, profile);
     let has_content = ref_list.fontfaces.is_some()
         || ref_list.char_properties.is_some()
         || ref_list.para_properties.is_some()
@@ -541,10 +546,10 @@ fn extract_inner_content(xml: &str) -> &str {
 // ── RefList builder ─────────────────────────────────────────────
 
 /// Builds the `HxRefList` from all store data.
-fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
+fn build_ref_list(store: &HwpxStyleStore, profile: hwpforge_core::LayoutProfile) -> HxRefList {
     let fontfaces = build_fontfaces(store);
     let char_properties = build_char_properties(store);
-    let para_properties = build_para_properties(store);
+    let para_properties = build_para_properties(store, profile);
     let styles = build_styles(store);
     HxRefList {
         fontfaces: if fontfaces.groups.is_empty() { None } else { Some(fontfaces) },
@@ -791,11 +796,28 @@ fn default_type_info() -> HxTypeInfo {
 // ── ParaPr builder ──────────────────────────────────────────────
 
 /// Builds the `HxParaProperties` list from all para shapes in the store.
-fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
+fn build_para_properties(
+    store: &HwpxStyleStore,
+    profile: hwpforge_core::LayoutProfile,
+) -> HxParaProperties {
     let items: Vec<HxParaPr> = store
         .iter_para_shapes()
         .enumerate()
-        .map(|(idx, ps)| build_para_pr(idx as u32, ps))
+        .map(|(idx, ps)| {
+            let id = idx as u32;
+            let mut para = build_para_pr(id, ps);
+            para.auto_spacing = match store.header_fidelity.auto_spacing.get(&id) {
+                Some(source) => {
+                    source.map(|[de, dn]| HxAutoSpacing { e_asian_eng: de, e_asian_num: dn })
+                }
+                None => {
+                    let enabled =
+                        u32::from(profile == hwpforge_core::LayoutProfile::WordCompatible);
+                    Some(HxAutoSpacing { e_asian_eng: enabled, e_asian_num: enabled })
+                }
+            };
+            para
+        })
         .collect();
     let item_cnt = items.len() as u32;
     HxParaProperties { item_cnt, items }
@@ -1149,7 +1171,14 @@ mod tests {
     #[test]
     fn test_encode_minimal_store() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
 
         assert!(xml.starts_with(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#));
         assert!(xml.contains("<hh:head"));
@@ -1172,7 +1201,14 @@ mod tests {
     #[test]
     fn test_encode_header_roundtrip() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
 
         // The decoder strips namespace prefixes, so we need to feed it
         // XML without them. However, the decoder's parse_header uses
@@ -1210,7 +1246,14 @@ mod tests {
         store.push_border_fill(HwpxBorderFill::default_char_background());
         store.push_border_fill(HwpxBorderFill::default_table_border());
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
 
         assert!(xml.contains(r#"<hh:fontface lang="HANGUL" fontCnt="1"><hh:font id="0""#));
         assert!(xml.contains(r#"<hh:fontface lang="LATIN" fontCnt="1"><hh:font id="0""#));
@@ -1225,7 +1268,14 @@ mod tests {
     fn test_bold_italic_presence() {
         let mut store = HwpxStyleStore::new();
         store.push_char_shape(HwpxCharShape { bold: true, italic: false, ..Default::default() });
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
 
         assert!(xml.contains("<hh:bold"), "bold element must be present");
         assert!(!xml.contains("<hh:italic"), "italic element must be absent");
@@ -1379,7 +1429,14 @@ mod tests {
             },
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains(r#"<hh:bullets itemCnt="1">"#));
         assert!(xml.contains(r#"char="""#));
         assert!(xml.contains(r#"useImage="0""#));
@@ -1428,7 +1485,14 @@ mod tests {
             },
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains(r#"char="&lt;&quot;&amp;""#));
         assert!(xml.contains(r#"A&amp;B&lt;&quot;C&quot;"#));
         assert!(xml.contains(r#"X&amp;Y&lt;&quot;Z&quot;"#));
@@ -1447,7 +1511,14 @@ mod tests {
     #[test]
     fn test_empty_store() {
         let store = HwpxStyleStore::new();
-        let xml = encode_header(&store, 0, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            0,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
 
         assert!(xml.contains("<hh:head"));
         assert!(xml.contains(r#"secCnt="0""#));
@@ -1482,7 +1553,14 @@ mod tests {
                 [5, 4, 3, 2, 7, 8, 9, 10]
             ))
         );
-        let out = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let out = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(
             out.contains(r#"<hh:font id="0" face="휴먼명조" type="HFT" isEmbedded="0"><hh:substFont face="한컴바탕" type="HFT" isEmbedded="0" binaryItemIDRef=""/><hh:typeInfo familyType="FCAT_MYUNGJO" weight="5" proportion="4" contrast="3" strokeVariation="2" armStyle="7" letterform="8" midline="9" xHeight="10"/></hh:font>"#),
             "{out}"
@@ -1491,7 +1569,14 @@ mod tests {
 
         let mut unknown = HwpxStyleStore::new();
         unknown.push_font(HwpxFont::new(0, "A", "HANGUL"));
-        let out = encode_header(&unknown, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let out = encode_header(
+            &unknown,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(
             out.contains(r#"<hh:font id="0" face="A" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="0" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/></hh:font>"#),
             "{out}"
@@ -1564,7 +1649,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
 
         // Fonts: encoder expands to 7 language groups
@@ -1607,7 +1699,14 @@ mod tests {
     #[test]
     fn test_sec_cnt_in_output() {
         let store = HwpxStyleStore::new();
-        let xml = encode_header(&store, 42, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            42,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains(r#"secCnt="42""#));
     }
 
@@ -1620,7 +1719,14 @@ mod tests {
         store.push_char_shape(HwpxCharShape { italic: true, ..Default::default() });
         store.push_char_shape(HwpxCharShape::default());
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
 
         assert_eq!(decoded.char_shape_count(), 3);
@@ -1639,7 +1745,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains("<hh:engrave/>"));
         assert!(xml.contains("<hh:subscript/>"));
         assert!(!xml.contains("<hh:emboss/>"));
@@ -1655,7 +1768,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains("<hh:emboss/>"));
         assert!(xml.contains("<hh:engrave/>"));
     }
@@ -1688,7 +1808,14 @@ mod tests {
             lock_form: 0,
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains("바탕글"));
         assert!(xml.contains("Normal"));
         assert!(xml.contains("본문"));
@@ -1712,7 +1839,14 @@ mod tests {
     #[test]
     fn test_empty_store_gets_default_style() {
         let store = HwpxStyleStore::new();
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         // 한글 requires at least the "바탕글" default style
         assert!(xml.contains("<hh:styles"), "default 바탕글 style should be injected");
         assert!(xml.contains("바탕글"), "바탕글 style name must be present");
@@ -1724,7 +1858,14 @@ mod tests {
     #[test]
     fn test_encoder_improvements_all_present() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
 
         // Gap 1: charPr ratio/spacing/relSz/offset
         assert!(xml.contains("<hh:ratio hangul=\"100\""), "charPr must have ratio");
@@ -1829,7 +1970,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains(
             r#"<hh:breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="KEEP_WORD" widowOrphan="1" keepWithNext="1" keepLines="1" pageBreakBefore="1""#
         ));
@@ -1846,7 +1994,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(
             xml.contains(r#"breakLatinWord="HYPHENATION""#),
             "encoded header should preserve HYPHENATION wire label: {xml}"
@@ -1861,7 +2016,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(
             xml.contains(r#"<hh:strikeout shape="DOUBLE_SLIM""#),
             "encoded header should preserve DOUBLE_SLIM wire label: {xml}"
@@ -1889,7 +2051,14 @@ mod tests {
             let mut store = HwpxStyleStore::new();
             store.push_char_shape(HwpxCharShape { strikeout_shape: v, ..Default::default() });
 
-            let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+            let xml = encode_header(
+                &store,
+                1,
+                None,
+                HANCOM_LAYOUT_COMPATIBILITY_XML,
+                hwpforge_core::LayoutProfile::Hancom,
+            )
+            .unwrap();
             let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
             let cs = decoded.char_shape(CharShapeIndex::new(0)).unwrap();
             assert_eq!(cs.strikeout_shape, v, "strike shape {v:?} must roundtrip");
@@ -1905,7 +2074,14 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains(
             r#"<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD""#
         ));
@@ -1914,7 +2090,14 @@ mod tests {
     #[test]
     fn encoded_header_contains_dynamic_border_fills() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         // Dynamic generation produces the same structure as the old constant
         assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
         assert!(xml.contains(r##"borderFillIDRef="2""##)); // charPr references fill id=2
@@ -2103,7 +2286,14 @@ mod tests {
         shaped.border_ignore_margin = true;
         store.push_para_shape(shaped.clone());
 
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(xml.contains(r#"<hh:align horizontal="LEFT" vertical="BASELINE"/>"#), "{xml}");
         assert!(xml.contains(r#"offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0""#), "{xml}");
         assert!(xml.contains(r#"<hh:align horizontal="LEFT" vertical="CENTER"/>"#), "{xml}");
@@ -2128,7 +2318,14 @@ mod tests {
         };
         shaped.border_offset[0] = HwpUnit::new(100).unwrap();
         store.push_para_shape(shaped);
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(crate::decoder::header::parse_header(&xml).unwrap().warnings.is_empty());
         let far = xml.replacen(r#"offsetLeft="100""#, r#"offsetLeft="100000001""#, 1);
         let warnings = crate::decoder::header::parse_header(&far).unwrap().warnings;
@@ -2166,7 +2363,14 @@ mod tests {
     fn per_language_char_scalars_are_reported_lost() {
         let mut store = HwpxStyleStore::new();
         store.push_char_shape(HwpxCharShape::default());
-        let xml = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let xml = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         assert!(crate::decoder::header::parse_header(&xml).unwrap().warnings.is_empty());
         for (element, expect) in
             [("ratio", "ratio"), ("spacing", "spacing"), ("relSz", "relSz"), ("offset", "offset")]
@@ -2226,22 +2430,35 @@ mod fidelity_tests {
                 checkable: false,
             },
         });
-        let original = encode_header(&store, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML)
-            .unwrap()
-            .replace("fontLineHeight=\"0\"", "fontLineHeight=\"1\"")
-            .replace("useInstWidth=\"1\"", "useInstWidth=\"NO\"")
-            .replace("useInstWidth=\"0\"", "useInstWidth=\"1\"")
-            .replace("useInstWidth=\"NO\"", "useInstWidth=\"0\"")
-            .replace("autoIndent=\"1\"", "autoIndent=\"0\"")
-            .replace("align=\"LEFT\"", "align=\"RIGHT\"")
-            .replace("widthAdjust=\"0\"", "widthAdjust=\"17\"")
-            .replace("textOffsetType=\"PERCENT\"", "textOffsetType=\"HWPUNIT\"")
-            .replace("textOffset=\"50\"", "textOffset=\"123\"")
-            .replace("charPrIDRef=\"4294967295\"", "charPrIDRef=\"0\"");
+        let original = encode_header(
+            &store,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap()
+        .replace("fontLineHeight=\"0\"", "fontLineHeight=\"1\"")
+        .replace("useInstWidth=\"1\"", "useInstWidth=\"NO\"")
+        .replace("useInstWidth=\"0\"", "useInstWidth=\"1\"")
+        .replace("useInstWidth=\"NO\"", "useInstWidth=\"0\"")
+        .replace("autoIndent=\"1\"", "autoIndent=\"0\"")
+        .replace("align=\"LEFT\"", "align=\"RIGHT\"")
+        .replace("widthAdjust=\"0\"", "widthAdjust=\"17\"")
+        .replace("textOffsetType=\"PERCENT\"", "textOffsetType=\"HWPUNIT\"")
+        .replace("textOffset=\"50\"", "textOffset=\"123\"")
+        .replace("charPrIDRef=\"4294967295\"", "charPrIDRef=\"0\"");
         let parsed = crate::decoder::header::parse_header(&original).unwrap().style_store;
         let json = serde_json::to_string(&parsed).unwrap();
         let decoded: HwpxStyleStore = serde_json::from_str(&json).unwrap();
-        let output = encode_header(&decoded, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap();
+        let output = encode_header(
+            &decoded,
+            1,
+            None,
+            HANCOM_LAYOUT_COMPATIBILITY_XML,
+            hwpforge_core::LayoutProfile::Hancom,
+        )
+        .unwrap();
         for attr in [
             "fontLineHeight=\"1\"",
             "useInstWidth=\"0\"",
@@ -2262,7 +2479,14 @@ mod fidelity_tests {
         let altered: HwpxStyleStore = serde_json::from_str(&altered).unwrap();
         assert_ne!(
             output,
-            encode_header(&altered, 1, None, HANCOM_LAYOUT_COMPATIBILITY_XML).unwrap()
+            encode_header(
+                &altered,
+                1,
+                None,
+                HANCOM_LAYOUT_COMPATIBILITY_XML,
+                hwpforge_core::LayoutProfile::Hancom
+            )
+            .unwrap()
         );
     }
 }

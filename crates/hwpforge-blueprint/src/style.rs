@@ -12,9 +12,9 @@
 
 use hwpforge_core::{BulletDef, NumberingDef, ParagraphListRef};
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, CharShadow, Color, EmbossType, EmphasisType,
-    EngraveType, HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowOffset, ShadowType,
-    StrikeoutShape, UnderlineShape, UnderlineType, VerticalPosition,
+    Alignment, BorderFillIndex, BreakType, CharShadow, CharShapeIndex, Color, EmbossType,
+    EmphasisType, EngraveType, HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowOffset,
+    ShadowType, StrikeoutShape, UnderlineShape, UnderlineType, VerticalPosition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -627,6 +627,93 @@ impl JsonSchema for PartialCharShadow {
     }
 }
 
+/// Alignment of a marker about the paragraph's list anchor, in left-to-right coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ListMarkerAlign {
+    /// Align the marker's left edge to the anchor.
+    Left,
+    /// Center the marker on the anchor.
+    Center,
+    /// Align the marker's right edge to the anchor.
+    Right,
+}
+
+/// First-line text position relative to a list anchor or the marker's measured end.
+/// Distances are integer HwpUnit (100 per point), in `0..=100_000_000`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ListTextStart {
+    /// Fixed distance from the alignment anchor; zero is an explicit zero slot.
+    FromAnchor(
+        #[serde(deserialize_with = "de_marker_distance")]
+        #[schemars(range(min = 0, max = 100_000_000))]
+        HwpUnit,
+    ),
+    /// Distance after the marker's measured end; continuation lines may differ.
+    /// Encoders without measured marker widths may report an alignment approximation.
+    AfterMarker(
+        #[serde(deserialize_with = "de_marker_distance")]
+        #[schemars(range(min = 0, max = 100_000_000))]
+        HwpUnit,
+    ),
+}
+fn de_marker_distance<'de, D: serde::Deserializer<'de>>(d: D) -> Result<HwpUnit, D::Error> {
+    let value = HwpUnit::deserialize(d)?;
+    validate_marker_distance(value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+fn validate_marker_distance(value: HwpUnit) -> BlueprintResult<()> {
+    if value.as_i32().is_negative() || value.as_i32() > 100_000_000 {
+        return Err(hwpforge_foundation::FoundationError::InvalidField {
+            field: "list_marker.text_start".into(),
+            reason: "distance must be in 0..=100000000 HwpUnit".into(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Explicit list-marker formatting. `indent_left` is the alignment anchor and
+/// `indent_first_line` must be zero. A partial child replaces this object atomically.
+///
+/// No layout (`None` on a paragraph) retains existing template or source formatting;
+/// either zero-distance variant is an explicit request. Shared output heads can
+/// conflict across paragraphs when an output format shares marker definitions;
+/// an encoder may choose the effective formatting of the first use in document
+/// visitation order and report semantic loss. Each original anchor is preserved
+/// with that representative's relative margin movement, rather than copied absolutely.
+/// Fixed slots do not automatically grow for overflowing numbers. Marker-only
+/// fonts and sizes do not enlarge the body's line height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct ListMarkerLayout {
+    /// Marker alignment about the anchor, rather than the ink's left edge.
+    pub align: ListMarkerAlign,
+    /// First-line text distance in HwpUnit; continuation layout is format-dependent.
+    pub text_start: ListTextStart,
+    /// Optional marker character shape in the owning registry's reference space.
+    /// `None` retains an explicit source head reference or its inherited character context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_shape: Option<CharShapeIndex>,
+}
+impl ListMarkerLayout {
+    /// Creates a layout with no marker character override.
+    ///
+    /// # Errors
+    /// Rejects distances outside `0..=100_000_000` HwpUnit. Output may still fail
+    /// if anchor movement or a centered slot's doubled distance exceeds HwpUnit's
+    /// range. Public fields are revalidated at resolution and output boundaries.
+    pub fn new(align: ListMarkerAlign, text_start: ListTextStart) -> BlueprintResult<Self> {
+        let (ListTextStart::FromAnchor(distance) | ListTextStart::AfterMarker(distance)) =
+            text_start;
+        validate_marker_distance(distance)?;
+        Ok(Self { align, text_start, char_shape: None })
+    }
+}
+
 /// Paragraph shape with all optional fields (for YAML parsing and inheritance).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
@@ -663,6 +750,9 @@ pub struct PartialParaShape {
     /// Tab definition reference (`0` = default/no explicit custom stops).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_def_id: Option<u32>,
+    /// Optional marker formatting; None preserves existing list behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_marker: Option<ListMarkerLayout>,
     /// Shared paragraph list semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list: Option<PartialParagraphListRef>,
@@ -757,6 +847,9 @@ impl PartialParaShape {
         if other.list.is_some() {
             self.list = other.list;
         }
+        if other.list_marker.is_some() {
+            self.list_marker = other.list_marker;
+        }
         if other.heading_type.is_some() {
             self.heading_type = other.heading_type;
         }
@@ -769,6 +862,9 @@ impl PartialParaShape {
         numberings: &[NumberingDef],
         bullets: &[BulletDef],
     ) -> BlueprintResult<ParaShape> {
+        let list = self.resolve_list(style_name, numberings, bullets)?;
+        let first_line = self.indent.and_then(|i| i.first_line).unwrap_or(HwpUnit::ZERO);
+        validate_list_marker(self.list_marker, list, first_line, numberings, bullets)?;
         Ok(ParaShape {
             alignment: self.alignment.unwrap_or(Alignment::Left),
             line_spacing_type: self
@@ -780,14 +876,15 @@ impl PartialParaShape {
             space_after: self.spacing.and_then(|s| s.after).unwrap_or(HwpUnit::ZERO),
             indent_left: self.indent.and_then(|i| i.left).unwrap_or(HwpUnit::ZERO),
             indent_right: self.indent.and_then(|i| i.right).unwrap_or(HwpUnit::ZERO),
-            indent_first_line: self.indent.and_then(|i| i.first_line).unwrap_or(HwpUnit::ZERO),
+            indent_first_line: first_line,
             break_type: self.break_type.unwrap_or(BreakType::None),
             keep_with_next: self.keep_with_next.unwrap_or(false),
             keep_lines_together: self.keep_lines_together.unwrap_or(false),
             widow_orphan: self.widow_orphan.unwrap_or(true), // Enabled by default in HWPX
             border_fill_id: self.border_fill_id,
             tab_def_id: self.tab_def_id.unwrap_or(0),
-            list: self.resolve_list(style_name, numberings, bullets)?,
+            list,
+            list_marker: self.list_marker,
         })
     }
 
@@ -988,9 +1085,55 @@ pub struct ParaShape {
     /// Tab definition reference (`0` = default/no explicit custom stops).
     #[serde(default)]
     pub tab_def_id: u32,
+    /// Optional marker formatting; None preserves existing list behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_marker: Option<ListMarkerLayout>,
     /// Shared paragraph list semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list: Option<ParagraphListRef>,
+}
+
+pub(crate) fn validate_list_marker(
+    marker: Option<ListMarkerLayout>,
+    list: Option<ParagraphListRef>,
+    first_line: HwpUnit,
+    numberings: &[NumberingDef],
+    bullets: &[BulletDef],
+) -> BlueprintResult<()> {
+    let Some(marker) = marker else { return Ok(()) };
+    ListMarkerLayout::new(marker.align, marker.text_start)?;
+    if first_line != HwpUnit::ZERO {
+        return Err(hwpforge_foundation::FoundationError::InvalidField {
+            field: "list_marker".into(),
+            reason: "marker layout requires zero first-line indentation".into(),
+        }
+        .into());
+    }
+    let valid = match list {
+        Some(ParagraphListRef::Number { numbering_id, level }) => {
+            level <= ParagraphListRef::MAX_LEVEL
+                && numberings
+                    .get(numbering_id.get())
+                    .is_some_and(|d| d.levels.iter().any(|h| h.level == u32::from(level) + 1))
+        }
+        Some(ParagraphListRef::Bullet { bullet_id, level }) => {
+            level <= ParagraphListRef::MAX_LEVEL
+                && bullets.get(bullet_id.get()).is_some_and(|d| !d.is_checkable())
+        }
+        Some(ParagraphListRef::CheckBullet { bullet_id, level, .. }) => {
+            level <= ParagraphListRef::MAX_LEVEL
+                && bullets.get(bullet_id.get()).is_some_and(BulletDef::is_checkable)
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(hwpforge_foundation::FoundationError::InvalidField {
+            field: "list_marker".into(),
+            reason: "marker layout requires a valid Number, Bullet or CheckBullet reference".into(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -999,6 +1142,98 @@ mod tests {
     use hwpforge_core::ParaHead;
     use hwpforge_foundation::{BulletIndex, NumberFormatType, NumberingIndex};
     use pretty_assertions::assert_eq;
+
+    // 이것을 실패시키는 것: 미설정 거부, 실제 번호 head 불일치·글머리 수준 상한·체크 의미 검증 생략.
+    #[test]
+    fn list_marker_rejects_invalid_list_kinds() {
+        let m = Some(
+            ListMarkerLayout::new(ListMarkerAlign::Left, ListTextStart::FromAnchor(HwpUnit::ZERO))
+                .unwrap(),
+        );
+        assert!(validate_list_marker(None, None, HwpUnit::ZERO, &[], &[]).is_ok());
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 1 }),
+            HwpUnit::ZERO,
+            &[test_numbering_def(1)],
+            &[]
+        )
+        .is_err());
+        let mut n = test_numbering_def(1);
+        n.levels[0].level = 11;
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 10 }),
+            HwpUnit::ZERO,
+            &[n],
+            &[]
+        )
+        .is_err());
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::Outline { level: 0 }),
+            HwpUnit::ZERO,
+            &[],
+            &[]
+        )
+        .is_err());
+        assert!(validate_list_marker(m, None, HwpUnit::ZERO, &[], &[]).is_err());
+        let mut b = test_bullet_def(1);
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 10 }),
+            HwpUnit::ZERO,
+            &[],
+            &[b.clone()]
+        )
+        .is_err());
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id: BulletIndex::new(0),
+                level: 0,
+                checked: false
+            }),
+            HwpUnit::ZERO,
+            &[],
+            &[b.clone()]
+        )
+        .is_err());
+        b.checked_char = Some("☑".into());
+        b.para_head.checkable = true;
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id: BulletIndex::new(0),
+                level: 10,
+                checked: true
+            }),
+            HwpUnit::ZERO,
+            &[],
+            &[b.clone()]
+        )
+        .is_err());
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 }),
+            HwpUnit::ZERO,
+            &[],
+            &[b.clone()]
+        )
+        .is_err());
+        assert!(validate_list_marker(
+            m,
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id: BulletIndex::new(0),
+                level: 0,
+                checked: true
+            }),
+            HwpUnit::ZERO,
+            &[],
+            &[b]
+        )
+        .is_ok());
+    }
 
     fn test_numbering_def(id: u32) -> NumberingDef {
         NumberingDef {
@@ -1447,6 +1682,7 @@ mod tests {
             border_fill_id: None,
             tab_def_id: 0,
             list: None,
+            list_marker: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
@@ -1644,5 +1880,91 @@ widow_orphan: true
         value["shadow"] = serde_yaml::Value::String("None".into());
         let back: CharShape = serde_yaml::from_value(value).unwrap();
         assert_eq!(back.shadow, CharShadow::new(ShadowType::None));
+    }
+}
+
+#[cfg(test)]
+mod list_marker_tests {
+    use super::*;
+    // 이것을 실패시키는 것: 음수 허용 또는 상한 검사 제거.
+    #[test]
+    fn list_marker_distance_bounds() {
+        for distance in [-1, 0, 100_000_000] {
+            for start in [
+                ListTextStart::FromAnchor(HwpUnit::new(distance).unwrap()),
+                ListTextStart::AfterMarker(HwpUnit::new(distance).unwrap()),
+            ] {
+                assert_eq!(
+                    ListMarkerLayout::new(ListMarkerAlign::Left, start).is_ok(),
+                    distance >= 0
+                );
+            }
+        }
+        assert!(HwpUnit::new(100_000_001).is_err());
+        assert!(serde_json::from_str::<ListTextStart>(
+            r#"{"kind":"from_anchor","value":100000001}"#
+        )
+        .is_err());
+        for kind in ["from_anchor", "after_marker"] {
+            assert!(serde_json::from_value::<ListTextStart>(
+                serde_json::json!({"kind":kind,"value":-1})
+            )
+            .is_err());
+        }
+        let partial = PartialParaShape {
+            list_marker: Some(
+                ListMarkerLayout::new(
+                    ListMarkerAlign::Left,
+                    ListTextStart::FromAnchor(HwpUnit::ZERO),
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(partial.resolve("orphan", &[], &[]).is_err());
+    }
+    // 이것을 실패시키는 것: 0을 미지정으로 정규화하거나 tagged 변형을 합치기.
+    #[test]
+    fn list_marker_serde_distinguishes_absent_and_zero() {
+        assert!(serde_json::to_value(ParaShape::default()).unwrap().get("list_marker").is_none());
+        assert_eq!(
+            serde_json::to_value(ListTextStart::FromAnchor(HwpUnit::ZERO)).unwrap(),
+            serde_json::json!({"kind":"from_anchor","value":0})
+        );
+        assert_eq!(
+            serde_json::to_value(ListTextStart::AfterMarker(HwpUnit::ZERO)).unwrap(),
+            serde_json::json!({"kind":"after_marker","value":0})
+        );
+        let marker =
+            ListMarkerLayout::new(ListMarkerAlign::Left, ListTextStart::FromAnchor(HwpUnit::ZERO))
+                .unwrap();
+        assert!(serde_json::to_value(marker).unwrap().get("char_shape").is_none());
+        assert!(serde_json::from_str::<ListTextStart>(r#"{"kind":"unknown","value":0}"#).is_err());
+    }
+    // 이것을 실패시키는 것: 자식의 char_shape=None을 부모에서 다시 상속.
+    #[test]
+    fn list_marker_partial_merge_is_atomic() {
+        let mut parent = PartialParaShape::default();
+        let mut layout = ListMarkerLayout::new(
+            ListMarkerAlign::Right,
+            ListTextStart::FromAnchor(HwpUnit::new(1800).unwrap()),
+        )
+        .unwrap();
+        layout.char_shape = Some(CharShapeIndex::new(1));
+        parent.list_marker = Some(layout);
+        parent.merge(&PartialParaShape::default());
+        assert_eq!(parent.list_marker, Some(layout));
+        let child = PartialParaShape {
+            list_marker: Some(
+                ListMarkerLayout::new(
+                    ListMarkerAlign::Left,
+                    ListTextStart::AfterMarker(HwpUnit::ZERO),
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        parent.merge(&child);
+        assert_eq!(parent.list_marker, child.list_marker);
     }
 }

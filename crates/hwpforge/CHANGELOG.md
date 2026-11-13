@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- 걸침 0인 Word 목록은 지원 decimal·Symbol 표지에 기본 탭 설정을 적용한다. 공유 정의 충돌은 문서 첫 사용처의 head와 상대 margin 이동량을 선택하고 손실을 전달하며 원본 보존 편집은 실패한다.
+
+### Added
+
+- Word 목록의 정렬·suffix·수준 번호 탭·번호 전용 문자 모양 및 Wingdings 원형·사각형을 가져온다. 공백 폭·줄 높이·칸 넘침·문단별 공유 head 충돌은 진단으로 전달하며, 의미 손실이 있는 원본 보존 편집은 실패한다.
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/v0.19.1...v0.20.0) - 2026-11-07
 
 HWPX 편집이 서명·암호화 문서를 거부하고, 내용을 바꾼 편집이 낡은 한컴 미리보기를 지우도록 바뀐 릴리스다. 자세한 내용과 업그레이드 주의는 `hwpforge-smithy-hwpx`를 따른다.

@@ -10,6 +10,10 @@ use crate::schema::header::{HxBulletParaHead, HxRefList};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct HeaderFidelity {
+    /// Paragraph-shape position -> explicit automatic spacing, or source element absence.
+    /// JSON editors that move/delete paragraph shapes must move/delete these entries too.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub auto_spacing: BTreeMap<u32, Option<[u32; 2]>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     /// One-based definition position -> head level -> metrics.
     pub numbering: BTreeMap<u32, BTreeMap<u32, HeadMetrics>>,
@@ -56,10 +60,20 @@ impl HeadMetrics {
 
 impl HeaderFidelity {
     pub fn is_empty(&self) -> bool {
-        self.numbering.is_empty() && self.bullet.is_empty()
+        self.numbering.is_empty() && self.bullet.is_empty() && self.auto_spacing.is_empty()
     }
 
     pub fn capture(&mut self, refs: &HxRefList) {
+        // Keys are paragraph-shape positions, independent of public id labels.
+        // JSON editors that move/delete paragraph shapes must move/delete these entries too.
+        if let Some(paras) = &refs.para_properties {
+            for (index, para) in paras.items.iter().enumerate() {
+                self.auto_spacing.insert(
+                    index as u32,
+                    para.auto_spacing.as_ref().map(|s| [s.e_asian_eng, s.e_asian_num]),
+                );
+            }
+        }
         // Keys are one-based definition positions, independent of public id labels.
         // JSON editors that move/delete definitions must move/delete these entries too.
         macro_rules! capture_heads {

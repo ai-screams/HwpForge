@@ -1269,7 +1269,7 @@ fn row_height_rules_keep_content_minima_and_exact_approximation() {
         ("", " w:val='0'", 1902, 0),
         (" w:hRule='exact'", " w:val='2000'", 10000, 1),
         (" w:hRule='exact'", "", 1902, 1),
-        (" w:hRule='exact'", " w:val='0'", 0, 1),
+        (" w:hRule='exact'", " w:val='0'", 1902, 1),
     ] {
         let d = decode(&format!("<w:trPr><w:trHeight{value}{rule}/></w:trPr>"));
         assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), expected, "{rule}/{value}");
@@ -1281,7 +1281,7 @@ fn row_height_rules_keep_content_minima_and_exact_approximation() {
             );
             assert_eq!(
                 d.warnings[0].message(),
-                if rule.contains("exact") && !value.is_empty() {
+                if rule.contains("exact") && value == " w:val='2000'" {
                     "Exact row height reproduced by fixing the table size; Hancom table resizing and automatic row expansion are locked; overflowing text is clipped (as in Word)"
                 } else {
                     "Missing row height value or unsupported rule; using a minimum"

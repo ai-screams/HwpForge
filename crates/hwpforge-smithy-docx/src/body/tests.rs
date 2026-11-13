@@ -653,15 +653,15 @@ fn empty_body_and_excluded_only_body_have_valid_minimal_structure() {
     }
 }
 
-// 이것을 실패시키는 것: 설정 경고 누락, trackRevisions를 손실로 집계, 중첩 설정 중복 집계.
+// 이것을 실패시키는 것: 설정 경고 누락, trackRevisions를 손실로 집계, 중첩 설정 중복 집계, 기본 탭 진단을 document_settings와 합침.
 // settings/root/namespace 범위를 넓혀 다른 part·잘못된 root·동명이종 요소를 혼동.
 #[test]
 fn document_settings_have_explicit_losses() {
-    for (children, expected) in [
-        ("<w:defaultTabStop w:val='1440'/>", 1),
-        ("<w:trackRevisions/>", 0),
-        ("<w:trackRevisions/><w:defaultTabStop w:val='1440'/>", 1),
-        ("<w:compat><w:compatSetting w:name='x'/></w:compat><x:trackRevisions xmlns:x='urn:other'/>", 2),
+    for (children, loss, expected) in [
+        ("<w:defaultTabStop w:val='1440'/>", "list_marker_default_tab_settings", 1),
+        ("<w:trackRevisions/>", "document_settings", 0),
+        ("<w:trackRevisions/><w:defaultTabStop w:val='1440'/>", "list_marker_default_tab_settings", 1),
+        ("<w:compat><w:compatSetting w:name='x'/></w:compat><x:trackRevisions xmlns:x='urn:other'/>", "document_settings", 2),
     ] {
         let settings = format!("<w:settings xmlns:w='{W}'>{children}</w:settings>");
         let d = decode_structure(&package("<w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>", &[("settings", "settings.xml", &settings)])).unwrap();
@@ -672,7 +672,7 @@ fn document_settings_have_explicit_losses() {
             assert_eq!(d.warnings.len(), 1);
             let warning = &d.warnings[0];
             assert_eq!((warning.code(), warning.loss(), warning.action(), warning.count(), warning.part()),
-                ("DOCX_DOCUMENT_SETTINGS_OMITTED", "document_settings", "ignore", expected, Some("text/settings.xml")));
+                ("DOCX_DOCUMENT_SETTINGS_OMITTED", loss, "ignore", expected, Some("text/settings.xml")));
         }
     }
     let header = format!("<w:hdr xmlns:w='{W}'><w:defaultTabStop/></w:hdr>");

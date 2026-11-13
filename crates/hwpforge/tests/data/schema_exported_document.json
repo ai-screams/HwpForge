@@ -5552,6 +5552,15 @@
         },
         "header_fidelity": {
           "$ref": "#/$defs/HeaderFidelity"
+        },
+        "list_marker_layouts": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ListMarkerLayout"
+            }
+          }
         }
       },
       "required": [
@@ -6758,6 +6767,26 @@
     "HeaderFidelity": {
       "type": "object",
       "properties": {
+        "auto_spacing": {
+          "description": "Paragraph-shape position -> explicit automatic spacing, or source element absence.\nJSON editors that move/delete paragraph shapes must move/delete these entries too.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
         "numbering": {
           "description": "One-based definition position -> head level -> metrics.",
           "type": "object",
@@ -6833,6 +6862,94 @@
         "text_offset_type",
         "text_offset",
         "char_pr_id_ref"
+      ]
+    },
+    "ListMarkerLayout": {
+      "description": "Explicit list-marker formatting. `indent_left` is the alignment anchor and\n`indent_first_line` must be zero. A partial child replaces this object atomically.\n\nNo layout (`None` on a paragraph) retains existing template or source formatting;\neither zero-distance variant is an explicit request. Shared output heads can\nconflict across paragraphs when an output format shares marker definitions;\nan encoder may choose the effective formatting of the first use in document\nvisitation order and report semantic loss. Each original anchor is preserved\nwith that representative's relative margin movement, rather than copied absolutely.\nFixed slots do not automatically grow for overflowing numbers. Marker-only\nfonts and sizes do not enlarge the body's line height.",
+      "type": "object",
+      "properties": {
+        "align": {
+          "description": "Marker alignment about the anchor, rather than the ink's left edge.",
+          "$ref": "#/$defs/ListMarkerAlign"
+        },
+        "text_start": {
+          "description": "First-line text distance in HwpUnit; continuation layout is format-dependent.",
+          "$ref": "#/$defs/ListTextStart"
+        },
+        "char_shape": {
+          "description": "Optional marker character shape in the owning registry's reference space.\n`None` retains an explicit source head reference or its inherited character context.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Index"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "align",
+        "text_start"
+      ]
+    },
+    "ListMarkerAlign": {
+      "description": "Alignment of a marker about the paragraph's list anchor, in left-to-right coordinates.",
+      "oneOf": [
+        {
+          "description": "Align the marker's left edge to the anchor.",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "Center the marker on the anchor.",
+          "type": "string",
+          "const": "center"
+        },
+        {
+          "description": "Align the marker's right edge to the anchor.",
+          "type": "string",
+          "const": "right"
+        }
+      ]
+    },
+    "ListTextStart": {
+      "description": "First-line text position relative to a list anchor or the marker's measured end.\nDistances are integer HwpUnit (100 per point), in `0..=100_000_000`.",
+      "oneOf": [
+        {
+          "description": "Fixed distance from the alignment anchor; zero is an explicit zero slot.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "from_anchor"
+            },
+            "value": {
+              "$ref": "#/$defs/HwpUnit"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "Distance after the marker's measured end; continuation lines may differ.\nEncoders without measured marker widths may report an alignment approximation.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "after_marker"
+            },
+            "value": {
+              "$ref": "#/$defs/HwpUnit"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
       ]
     }
   }

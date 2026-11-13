@@ -77,3 +77,41 @@ pub(crate) fn with_section(bytes: &[u8], xml: &str) -> Vec<u8> {
     }
     out.finish().expect("finish").into_inner()
 }
+
+pub(crate) fn fingerprint(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(14695981039346656037_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
+    })
+}
+
+/// Names every XML part whose bytes differ from the package fingerprint baseline.
+pub(crate) fn xml_part_differences(bytes: &[u8], parts: &[(&str, u64)]) -> String {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut actual = std::collections::BTreeMap::new();
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index).unwrap();
+        let name = entry.name().unwrap().to_string();
+        if name.ends_with(".xml") {
+            let mut data = vec![];
+            entry.read_to_end(&mut data).unwrap();
+            actual.insert(name, fingerprint(&data));
+        }
+    }
+    let expected_parts: std::collections::BTreeMap<_, _> = parts.iter().copied().collect();
+    let names: std::collections::BTreeSet<_> =
+        actual.keys().map(String::as_str).chain(expected_parts.keys().copied()).collect();
+    let differences: Vec<_> = names
+        .into_iter()
+        .filter(|name| expected_parts.get(*name) != actual.get(*name))
+        .map(|name| {
+            let before = expected_parts.get(name);
+            let after = actual.get(name);
+            format!("{name}: expected {before:?}, actual {after:?}")
+        })
+        .collect();
+    if differences.is_empty() {
+        "none; ZIP metadata or non-XML parts differ".into()
+    } else {
+        differences.join("; ")
+    }
+}

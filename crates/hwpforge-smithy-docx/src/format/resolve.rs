@@ -2,6 +2,7 @@ use super::*;
 use hwpforge_blueprint::{
     registry::StyleRegistry,
     style::{ParaShape, PartialCharShape},
+    ListMarkerAlign, ListMarkerLayout, ListTextStart,
 };
 use hwpforge_core::{paragraph::Paragraph, ParagraphListRef};
 use hwpforge_foundation::{
@@ -12,6 +13,37 @@ use std::{
     collections::{hash_map::RandomState, HashMap, HashSet},
     hash::BuildHasher,
 };
+
+mod marker_messages {
+    pub(super) const INDENT: &str = "List indent cannot be projected to a nonnegative marker slot";
+    pub(super) const ZERO_SLOT: &str = "Zero marker slot retains the existing list layout";
+    pub(super) const TAB: &str =
+        "Number tab at or before the anchor cannot select the first-line target";
+    pub(super) const LINE_HEIGHT: &str =
+        "Marker font or size changes can affect line height; body line height retained";
+    pub(super) const DEFAULT_TAB: &str = concat!(
+        "Default tab selected from marker alignment and measured width ratios where ",
+        "needed; ratios are reused across fonts and styles. The tab grid assumes the ",
+        "local text-area left edge; cells, columns and zero-hanging center alignment ",
+        "are unmeasured.",
+    );
+    pub(super) const TAB_BOUNDARY: &str = concat!(
+        "Estimated marker end is less than 1 pt before the selected tab; width ",
+        "approximation may select an adjacent tab.",
+    );
+    pub(super) const DEFAULT_CONTINUATION: &str = concat!(
+        "First-line target selected; Word continuation lines remain at the anchor and ",
+        "are approximated.",
+    );
+    pub(super) const SPACE_WIDTH: &str =
+        "Space advance approximated by measured ratio of marker size";
+    pub(super) const CONTINUATION: &str =
+        "First-line target selected; independent continuation position is approximated";
+    pub(super) const OVERFLOW: &str =
+        "Nominal marker width exceeds the fixed slot; overlap is possible";
+    pub(super) const SHARED_OVERFLOW: &str =
+        "Estimated marker end exceeds the shared first-use slot; overlap is possible";
+}
 
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 struct RunInput {
@@ -47,10 +79,20 @@ pub(crate) struct Resolver {
     fallback_font: FontKey,
     unknown_metrics: HashSet<FontKey>,
     paras: HashMap<u64, Vec<ParaShapeIndex>>,
+    #[cfg(test)]
+    para_comparisons: std::cell::Cell<usize>,
     fonts: HashMap<FontKey, FontIndex>,
     hasher: RandomState,
     owned_font_bytes: usize,
     lists: lists::Lists,
+    pub(crate) default_tab_stop: i32,
+    // Each marker loss below has a fixed kind, action and reason.
+    marker_warnings: HashSet<(lists::ListRef, &'static str)>,
+    // Mirror the shared head's first candidate, including an unspecified request.
+    // This follows the first-use contract documented on Blueprint
+    // `ListMarkerLayout`; it is diagnostic only and is checked for zero-hanging
+    // default-tab items, so other items sharing the head are not re-checked.
+    first_marker_layouts: HashMap<lists::ListRef, Option<ListMarkerLayout>>,
     #[cfg(test)]
     combinations_built: usize,
     #[cfg(test)]
@@ -86,10 +128,15 @@ impl Resolver {
             fallback_font,
             unknown_metrics: HashSet::new(),
             paras: HashMap::new(),
+            #[cfg(test)]
+            para_comparisons: Default::default(),
             fonts: HashMap::new(),
             hasher: RandomState::new(),
             owned_font_bytes: 0,
             lists,
+            default_tab_stop: 3600,
+            marker_warnings: HashSet::new(),
+            first_marker_layouts: HashMap::new(),
             #[cfg(test)]
             combinations_built: 0,
             #[cfg(test)]
@@ -306,6 +353,7 @@ impl Resolver {
             selection.overlay(d, false);
         }
         selection.overlay(direct, false);
+        let mut number_indent = ParaDelta::default();
         if let Some(num) = selection.para.num_id.filter(|id| *id != 0) {
             let level = self.definitions.effective_level(num, selection.para.level.unwrap_or(0));
             let number = self.definitions.numbers.get(&num);
@@ -317,13 +365,26 @@ impl Resolver {
             let over = number.and_then(|n| n.levels.get(&level));
             if let Some(d) = base {
                 apply(&mut result, &d.delta, true, part, "numPr", w)?;
+                number_indent.overlay_indents(&d.delta.para);
             }
             if let Some(d) = over {
                 apply(&mut result, &d.delta, true, part, "numPr", w)?;
+                number_indent.overlay_indents(&d.delta.para);
             }
         }
         if let Some(d) = paragraph {
             apply(&mut result, &d, true, part, "style", w)?;
+        }
+        // Word places directly numbered paragraphs using the numbering level's
+        // indents ahead of paragraph-style indents: left/hanging 440/440 and
+        // 880/440 twips yield marker anchors 0 and 440, even with style left 720.
+        // With a 72 pt page margin, measured marker/text positions are 72/94
+        // and 94/116 pt. Only w:ind fields are reapplied; firstLine/hanging
+        // share `first`.
+        // Direct pPr remains last. Style-inherited numPr is unmeasured and keeps
+        // the existing numbering-before-paragraph-style order.
+        if direct.para.num_id.is_some() {
+            result.para.overlay_indents(&number_indent);
         }
         apply(&mut result, direct, false, part, "pPr", w)?;
         Ok(result)
@@ -489,6 +550,22 @@ impl Resolver {
         }
         base.para.projected_list =
             self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
+        base.para.projected_marker = self.marker_layout(&base, direct, mark, part, w)?;
+        for (value, loss) in
+            [(base.para.auto_space_de, "auto_space_de"), (base.para.auto_space_dn, "auto_space_dn")]
+        {
+            if value == Some(false) {
+                warn(
+                    w,
+                    part,
+                    "pPr",
+                    Kind::ValueApproximated,
+                    loss,
+                    "use_profile_default",
+                    "Word-compatible output enables automatic spacing",
+                )?;
+            }
+        }
         if measure_lines {
             // A trailing empty line uses the paragraph mark, or the final effective
             // run at this boundary. Page/column breaks exclude all later fragments.
@@ -504,6 +581,328 @@ impl Resolver {
                 .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?;
         }
         Ok((base, minimum_height))
+    }
+    fn marker_layout(
+        &mut self,
+        base: &Delta,
+        direct: &Delta,
+        mark: Option<(&Delta, Option<StyleKey>)>,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<Option<ListMarkerLayout>> {
+        if !matches!(
+            base.para.projected_list,
+            Some(lists::ListRef::Number(..) | lists::ListRef::Bullet(..))
+        ) {
+            return Ok(None);
+        }
+        let group = base.para.projected_list.expect("resolved marker has its output group");
+        // One bullet definition owns the marker across all paragraph nesting levels.
+        let group = match group {
+            lists::ListRef::Bullet(id, _) => lists::ListRef::Bullet(id, 0),
+            group => group,
+        };
+        let (source, tabs) = self
+            .definitions
+            .marker_level(&base.para)
+            .expect("resolved marker has its source level");
+        let align = source.align.unwrap_or(ListMarkerAlign::Left);
+        let suffix = source.suffix.unwrap_or_default();
+        let mut marker_char = source.marker_char.clone();
+        // Symbol-font input selects the Unicode glyph; the output uses ordinary paragraph fonts.
+        if source.mapped_bullet() {
+            marker_char.fonts = [None; 4];
+        }
+        let left = base.para.left.unwrap_or(0);
+        let first = base.para.first.unwrap_or(0);
+        if first > 0 {
+            if self.marker_warnings.insert((group, "list_marker_indent")) {
+                warn(
+                    w,
+                    part,
+                    "ind",
+                    Kind::ValueApproximated,
+                    "list_marker_indent",
+                    "retain_indent",
+                    marker_messages::INDENT,
+                )?;
+            }
+            self.first_marker_layouts.entry(group).or_insert(None);
+            return Ok(None);
+        }
+        // A nonpositive first line and A < tab < left keep the target at or after A.
+        let anchor = marker_anchor(left, first)?;
+        let target = tabs
+            .iter()
+            .filter(|(pos, num)| **num && **pos > anchor && **pos < left)
+            .map(|(&pos, _)| pos)
+            .min()
+            .unwrap_or(left);
+        let default_tab =
+            first == 0 && suffix == lists::Suffix::Tab && !tabs.values().any(|&number| number);
+        let ratio = if default_tab {
+            match group {
+                lists::ListRef::Bullet(..)
+                    if source.measured_symbol_bullet(&self.definitions.fonts) =>
+                {
+                    Some(508)
+                }
+                lists::ListRef::Number(id, index) => self
+                    .lists
+                    .current(&self.definitions, &base.para)
+                    .map(|n| {
+                        measured_number_ratio(
+                            &self.registry.numberings[id].levels[usize::from(index)],
+                            index,
+                            n,
+                        )
+                    })
+                    .transpose()?
+                    .flatten(),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if suffix == lists::Suffix::Tab && target == anchor && ratio.is_none() {
+            if self.marker_warnings.insert((group, "list_marker_zero_slot")) {
+                warn(
+                    w,
+                    part,
+                    "ind",
+                    Kind::ValueApproximated,
+                    "list_marker_zero_slot",
+                    "retain_indent",
+                    marker_messages::ZERO_SLOT,
+                )?;
+            }
+            self.first_marker_layouts.entry(group).or_insert(None);
+            return Ok(None);
+        }
+        if tabs.iter().any(|(&pos, &num)| num && pos <= anchor)
+            && self.marker_warnings.insert((group, "list_marker_tab"))
+        {
+            warn(
+                w,
+                part,
+                "tab",
+                Kind::ValueApproximated,
+                "list_marker_tab",
+                "use_indent",
+                marker_messages::TAB,
+            )?;
+        }
+        let mut effective = base.clone();
+        if let Some((delta, style)) = mark {
+            if let Some(d) = self.style(style, StyleKind::Character, part, w)? {
+                effective.overlay(&d, true);
+            }
+            effective.overlay(direct, false);
+            effective.overlay(delta, false);
+        }
+        let body = self.char_shape(&effective)?;
+        effective.overlay(&Delta { char: marker_char, ..Default::default() }, false);
+        let marker = self.char_shape(&effective)?;
+        if marker.collapsed && self.marker_warnings.insert((group, "list_marker_script")) {
+            format_warnings(0, true, part, "numPr", w)?;
+        }
+        let marker_shape = &self.registry.char_shapes[marker.id.get()];
+        let body_shape = &self.registry.char_shapes[body.id.get()];
+        if (marker.size > body.size
+            || marker.font != body.font
+            || marker_shape.font_latin != body_shape.font_latin)
+            && self.marker_warnings.insert((group, "list_marker_line_height"))
+        {
+            warn(
+                w,
+                part,
+                "rPr",
+                Kind::ValueApproximated,
+                "list_marker_line_height",
+                "retain_body_line_height",
+                marker_messages::LINE_HEIGHT,
+            )?;
+        }
+        let selected = if let Some(ratio) = ratio {
+            let width = measured_marker_width(marker.size, ratio)?;
+            if let Some(Some(ListMarkerLayout {
+                align: selected_align,
+                text_start: ListTextStart::FromAnchor(selected_gap),
+                ..
+            })) = self.first_marker_layouts.get(&group)
+            {
+                let end = match selected_align {
+                    ListMarkerAlign::Left => i64::from(width) * 2,
+                    ListMarkerAlign::Center => i64::from(width),
+                    ListMarkerAlign::Right => 0,
+                    _ => return Err(marker_arithmetic()),
+                };
+                if end > i64::from(selected_gap.as_i32()) * 2
+                    && self.marker_warnings.insert((group, "list_marker_overflow"))
+                {
+                    warn(
+                        w,
+                        part,
+                        "numPr",
+                        Kind::ValueApproximated,
+                        "list_marker_overflow",
+                        "retain_slot",
+                        marker_messages::SHARED_OVERFLOW,
+                    )?;
+                }
+            }
+            let (gap, boundary) = default_tab_gap(anchor, width, self.default_tab_stop, align)?;
+            if self.marker_warnings.insert((group, "list_marker_default_tab")) {
+                warn(
+                    w,
+                    part,
+                    "numPr",
+                    Kind::ValueApproximated,
+                    "list_marker_default_tab",
+                    "use_measured_ratio",
+                    marker_messages::DEFAULT_TAB,
+                )?;
+            }
+            if boundary && self.marker_warnings.insert((group, "list_marker_tab_boundary")) {
+                warn(
+                    w,
+                    part,
+                    "numPr",
+                    Kind::ValueApproximated,
+                    "list_marker_tab_boundary",
+                    "retain_selected_tab",
+                    marker_messages::TAB_BOUNDARY,
+                )?;
+            }
+            if gap > 0 && self.marker_warnings.insert((group, "list_marker_continuation")) {
+                warn(
+                    w,
+                    part,
+                    "numPr",
+                    Kind::ValueApproximated,
+                    "list_marker_continuation",
+                    "match_first_line",
+                    marker_messages::DEFAULT_CONTINUATION,
+                )?;
+            }
+            Some(ListTextStart::FromAnchor(unit(gap)?))
+        } else {
+            None
+        };
+        let text_start = if let Some(selected) = selected {
+            selected
+        } else {
+            match suffix {
+                lists::Suffix::Space => {
+                    if self.marker_warnings.insert((group, "list_marker_space_width")) {
+                        warn(
+                            w,
+                            part,
+                            "suff",
+                            Kind::ValueApproximated,
+                            "list_marker_space_width",
+                            "use_measured_ratio",
+                            marker_messages::SPACE_WIDTH,
+                        )?;
+                    }
+                    let distance = i64::from(marker.size)
+                        .checked_mul(306)
+                        .and_then(|n| n.checked_add(550))
+                        .ok_or_else(|| DocxError::invalid(part, "suff", "space width overflow"))?
+                        / 1100;
+                    ListTextStart::AfterMarker(unit(
+                        i32::try_from(distance).map_err(|_| {
+                            DocxError::invalid(part, "suff", "space width overflow")
+                        })?,
+                    )?)
+                }
+                lists::Suffix::Nothing => ListTextStart::AfterMarker(HwpUnit::ZERO),
+                lists::Suffix::Tab => ListTextStart::FromAnchor(unit(
+                    i32::try_from(
+                        i64::from(target)
+                            .checked_sub(i64::from(anchor))
+                            .ok_or_else(|| DocxError::invalid(part, "ind", "slot overflow"))?,
+                    )
+                    .map_err(|_| DocxError::invalid(part, "ind", "slot overflow"))?,
+                )?),
+            }
+        };
+        if selected.is_none()
+            && (suffix != lists::Suffix::Tab || target < left)
+            && self.marker_warnings.insert((group, "list_marker_continuation"))
+        {
+            warn(
+                w,
+                part,
+                "numPr",
+                Kind::ValueApproximated,
+                "list_marker_continuation",
+                "match_first_line",
+                marker_messages::CONTINUATION,
+            )?;
+        }
+        if let (
+            None,
+            ListTextStart::FromAnchor(g),
+            Some(n),
+            Some(lists::ListRef::Number(id, index)),
+        ) = (
+            selected,
+            text_start,
+            self.lists.current(&self.definitions, &base.para),
+            base.para.projected_list,
+        ) {
+            let head = &self.registry.numberings[id].levels[usize::from(index)];
+            if head.num_format == hwpforge_foundation::NumberFormatType::Digit {
+                let own = format!("^{}", u32::from(index) + 1);
+                if let Some((prefix, suffix)) = head.text.split_once(&own) {
+                    if prefix.is_ascii()
+                        && suffix.is_ascii()
+                        && !prefix.contains('^')
+                        && !suffix.contains('^')
+                    {
+                        let count = u64::from(n.checked_ilog10().unwrap_or(0))
+                            + 1
+                            + u64::try_from(prefix.len() + suffix.len()).map_err(|_| {
+                                DocxError::invalid(part, "numPr", "marker length overflow")
+                            })?;
+                        let width = count
+                            .checked_mul(u64::try_from(marker.size).map_err(|_| {
+                                DocxError::invalid(part, "numPr", "negative marker size")
+                            })?)
+                            .ok_or_else(|| {
+                                DocxError::invalid(part, "numPr", "nominal marker width overflow")
+                            })?;
+                        let slot = i64::from(g.as_i32())
+                            .checked_mul(if align == ListMarkerAlign::Center { 2 } else { 1 })
+                            .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?;
+                        if width
+                            > u64::try_from(slot)
+                                .map_err(|_| DocxError::invalid(part, "numPr", "negative slot"))?
+                                .checked_mul(2)
+                                .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?
+                            && self.marker_warnings.insert((group, "list_marker_overflow"))
+                        {
+                            let reason = marker_messages::OVERFLOW;
+                            warn(
+                                w,
+                                part,
+                                "numPr",
+                                Kind::ValueApproximated,
+                                "list_marker_overflow",
+                                "retain_slot",
+                                reason,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+        let mut layout = ListMarkerLayout::new(align, text_start)
+            .map_err(|e| DocxError::invalid(part, "numPr", quote(e)))?;
+        layout.char_shape = Some(marker.id);
+        self.first_marker_layouts.entry(group).or_insert(Some(layout));
+        Ok(Some(layout))
     }
     pub(crate) fn paragraph_style(&self, style: Option<StyleKey>) -> Option<StyleKey> {
         style.or(self.default_paragraph)
@@ -562,6 +961,7 @@ impl Resolver {
             derived.para.num_present = Some(false);
             derived.para.outline = Some(9);
             derived.para.projected_list = None;
+            derived.para.projected_marker = None;
         }
         if !last {
             derived.para.after = Some(0);
@@ -709,6 +1109,7 @@ impl Resolver {
         let p = &d.para;
         let mut shape = ParaShape::default();
         shape.list = p.projected_list.map(lists::ListRef::core);
+        shape.list_marker = p.projected_marker;
         shape.alignment = match p.alignment {
             Some(1) => Alignment::Center,
             Some(2) => Alignment::Right,
@@ -737,7 +1138,7 @@ impl Resolver {
             })?;
         shape.space_before = unit(p.before.unwrap_or(0))?;
         shape.space_after = unit(p.after.unwrap_or(0))?;
-        let (left, first) = marker_indent(&shape.list, p.left.unwrap_or(0), p.first.unwrap_or(0));
+        let (left, first) = marker_indent(&shape.list, p.left.unwrap_or(0), p.first.unwrap_or(0))?;
         shape.indent_left = unit(left)?;
         shape.indent_right = unit(p.right.unwrap_or(0))?;
         shape.indent_first_line = unit(first)?;
@@ -759,10 +1160,14 @@ impl Resolver {
             shape.indent_first_line,
             shape.keep_with_next,
             shape.keep_lines_together,
-            (shape.widow_orphan, lists::ListRef::from_core(shape.list)),
+            (shape.widow_orphan, lists::ListRef::from_core(shape.list), shape.list_marker),
         ));
         if let Some(id) = self.paras.get(&hash).and_then(|bucket| {
-            bucket.iter().find(|id| self.registry.para_shapes[id.get()] == shape)
+            bucket.iter().find(|id| {
+                #[cfg(test)]
+                self.para_comparisons.set(self.para_comparisons.get() + 1);
+                self.registry.para_shapes[id.get()] == shape
+            })
         }) {
             return Ok(*id);
         }
@@ -867,13 +1272,24 @@ fn format_warnings(
 /// `left`. Hancom ignores a negative first line on a numbered or bulleted paragraph and puts the
 /// marker at the left margin, wrapping later lines after the marker. Folding the hanging amount
 /// into the left margin keeps the marker where Word draws it.
-fn marker_indent(list: &Option<ParagraphListRef>, left: i32, first: i32) -> (i32, i32) {
+fn marker_indent(list: &Option<ParagraphListRef>, left: i32, first: i32) -> Result<(i32, i32)> {
     match list {
         Some(ParagraphListRef::Number { .. } | ParagraphListRef::Bullet { .. }) if first < 0 => {
-            (left.saturating_add(first), 0)
+            Ok((marker_anchor(left, first)?, 0))
         }
-        _ => (left, first),
+        _ => Ok((left, first)),
     }
+}
+fn marker_anchor(left: i32, first: i32) -> Result<i32> {
+    Ok(unit(
+        i32::try_from(
+            i64::from(left)
+                .checked_add(i64::from(first))
+                .ok_or_else(|| DocxError::invalid("#format", "ind", "anchor overflow"))?,
+        )
+        .map_err(|_| DocxError::invalid("#format", "ind", "anchor overflow"))?,
+    )?
+    .as_i32())
 }
 fn unit(n: i32) -> Result<HwpUnit> {
     HwpUnit::new(n).map_err(|e| DocxError::invalid("#format", "length", quote(e)))
@@ -899,4 +1315,87 @@ fn reference_warning(result: CharResult, part: &str, w: &mut Vec<DocxWarning>) -
         )?;
     }
     Ok(())
+}
+
+/// Measured decimal digit/dot ratios are restricted to a single own-level token.
+/// Counts digits without allocating a string proportional to the current number.
+fn measured_number_ratio(head: &hwpforge_core::ParaHead, index: u8, n: u64) -> Result<Option<u64>> {
+    if head.num_format != hwpforge_foundation::NumberFormatType::Digit {
+        return Ok(None);
+    }
+    let token = format!("^{}", u32::from(index) + 1);
+    let Some((prefix, suffix)) = head.text.split_once(&token) else {
+        return Ok(None);
+    };
+    let mut ratio = u64::from(n.checked_ilog10().unwrap_or(0))
+        .checked_add(1)
+        .and_then(|v| v.checked_mul(606))
+        .ok_or_else(marker_arithmetic)?;
+    for c in prefix.chars().chain(suffix.chars()) {
+        let value = match c {
+            '0'..='9' => 606,
+            '.' => 242,
+            _ => return Ok(None),
+        };
+        ratio = ratio.checked_add(value).ok_or_else(marker_arithmetic)?;
+    }
+    Ok(Some(ratio))
+}
+fn marker_arithmetic() -> DocxError {
+    DocxError::invalid("#format", "numPr", "default tab marker arithmetic out of range")
+}
+/// The small digit/dot/Symbol table applies only to zero-hanging default tabs.
+/// Sum ratios first, then round half up once; these are estimates across fonts/styles.
+fn measured_marker_width(size: i32, ratio: u64) -> Result<i32> {
+    let size = u64::try_from(size).map_err(|_| marker_arithmetic())?;
+    let width =
+        size.checked_mul(ratio).and_then(|v| v.checked_add(550)).ok_or_else(marker_arithmetic)?
+            / 1100;
+    let width = i32::try_from(width).map_err(|_| marker_arithmetic())?;
+    unit(width)?;
+    Ok(width)
+}
+/// Coordinates are local to the text area's left edge (unmeasured in cells/columns).
+/// Candidates are the anchor A and the default grid, selecting the first at or beyond
+/// the marker end. Right ends at A and therefore always chooses A, with zero distance.
+/// Doubled coordinates preserve center half-units; signed ceiling includes exact tabs.
+fn default_tab_gap(
+    anchor: i32,
+    width: i32,
+    tab: i32,
+    align: ListMarkerAlign,
+) -> Result<(i32, bool)> {
+    if tab <= 0 {
+        return Err(marker_arithmetic());
+    }
+    let anchor = i64::from(anchor);
+    let end = anchor
+        .checked_mul(2)
+        .and_then(|v| {
+            v.checked_add(match align {
+                ListMarkerAlign::Left => i64::from(width).checked_mul(2)?,
+                ListMarkerAlign::Right => 0,
+                ListMarkerAlign::Center => i64::from(width),
+                _ => return None,
+            })
+        })
+        .ok_or_else(marker_arithmetic)?;
+    let tab = i64::from(tab);
+    let denominator = tab.checked_mul(2).ok_or_else(marker_arithmetic)?;
+    let k = end
+        .div_euclid(denominator)
+        .checked_add(i64::from(end.rem_euclid(denominator) != 0))
+        .ok_or_else(marker_arithmetic)?;
+    let target = if anchor.checked_mul(2).ok_or_else(marker_arithmetic)? >= end {
+        anchor
+    } else {
+        k.checked_mul(tab).ok_or_else(marker_arithmetic)?
+    };
+    unit(i32::try_from(target).map_err(|_| marker_arithmetic())?)?;
+    let gap = target.checked_sub(anchor).ok_or_else(marker_arithmetic)?;
+    let gap = i32::try_from(gap).map_err(|_| marker_arithmetic())?;
+    unit(gap)?;
+    let spare =
+        target.checked_mul(2).and_then(|v| v.checked_sub(end)).ok_or_else(marker_arithmetic)?;
+    Ok((gap, align != ListMarkerAlign::Right && (0..200).contains(&spare)))
 }

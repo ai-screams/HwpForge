@@ -7,7 +7,8 @@
 //! All fields use Foundation types (`Color`, `HwpUnit`, `Alignment`)
 //! so downstream code never touches raw XML strings.
 
-use std::collections::BTreeSet;
+use hwpforge_blueprint::ListMarkerLayout;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -1197,6 +1198,9 @@ pub struct HwpxStyleStore {
     tabs: Vec<TabDef>,
     #[serde(default, skip_serializing_if = "fidelity::HeaderFidelity::is_empty")]
     pub(crate) header_fidelity: fidelity::HeaderFidelity,
+    // Character references here are store-local, rebound once by the registry bridge.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) list_marker_layouts: BTreeMap<u32, ListMarkerLayout>,
 }
 
 #[derive(Deserialize)]
@@ -1213,6 +1217,9 @@ struct StyleStoreWire {
     tabs: Vec<TabDef>,
     #[serde(default, skip_serializing_if = "fidelity::HeaderFidelity::is_empty")]
     pub(crate) header_fidelity: fidelity::HeaderFidelity,
+    // Character references here are store-local, rebound once by the registry bridge.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) list_marker_layouts: BTreeMap<u32, ListMarkerLayout>,
 }
 
 fn serialize_positions<S: serde::Serializer>(
@@ -1236,10 +1243,12 @@ impl<'de> Deserialize<'de> for HwpxStyleStore {
             bullets: wire.bullets,
             tabs: wire.tabs,
             header_fidelity: wire.header_fidelity,
+            list_marker_layouts: wire.list_marker_layouts,
             style_positions: std::sync::Arc::new(wire.style_positions),
             style_references: Default::default(),
         };
         store.rebuild_style_references().map_err(serde::de::Error::custom)?;
+        crate::list_marker_layout::validate_requests(&store).map_err(serde::de::Error::custom)?;
         Ok(store)
     }
 }
@@ -1286,6 +1295,7 @@ impl HwpxStyleStore {
             && self.bullets == other.bullets
             && self.tabs == other.tabs
             && self.header_fidelity == other.header_fidelity
+            && self.list_marker_layouts == other.list_marker_layouts
     }
 
     pub(crate) fn inverse_style_positions(&self) -> std::sync::Arc<Vec<usize>> {
@@ -1804,6 +1814,16 @@ impl HwpxStyleStore {
         self.tabs.len()
     }
 
+    /// Looks up a numbering definition by its store-local position.
+    pub(crate) fn numbering_at(&self, index: usize) -> Option<&NumberingDef> {
+        self.numberings.get(index)
+    }
+
+    /// Looks up a bullet definition by its store-local position.
+    pub(crate) fn bullet_at(&self, index: usize) -> Option<&BulletDef> {
+        self.bullets.get(index)
+    }
+
     /// Returns an iterator over all numbering definitions in the store.
     pub fn iter_numberings(&self) -> impl Iterator<Item = &NumberingDef> {
         self.numberings.iter()
@@ -2069,6 +2089,21 @@ fn build_store_from_registry_with(
         };
         let wire_parts =
             list_ref_to_wire_parts(list, &store.numberings, &store.bullets, list_policy)?;
+        if let Some(mut layout) = ps.list_marker {
+            ListMarkerLayout::new(layout.align, layout.text_start)
+                .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
+            if let Some(id) = layout.char_shape {
+                layout.char_shape = Some(registry_shape_map_entry(
+                    &char_shape_map,
+                    id.get(),
+                    "marker character shape",
+                )?);
+            }
+            let position = u32::try_from(store.para_shape_count()).map_err(|_| {
+                HwpxError::InvalidStructure { detail: "paragraph shape position overflow".into() }
+            })?;
+            store.list_marker_layouts.insert(position, layout);
+        }
         para_shape_map.push(store.push_para_shape(HwpxParaShape {
             alignment: ps.alignment,
             margin_left: ParagraphMeasure::from_hwp_unit(ps.indent_left),
@@ -2168,6 +2203,7 @@ fn build_store_from_registry_with(
     }
     store.style_positions = std::sync::Arc::new(positions);
     store.rebuild_style_references()?;
+    crate::list_marker_layout::validate_requests(&store)?;
     Ok(RegistryStoreBuild { store, char_shape_map, para_shape_map, warnings })
 }
 

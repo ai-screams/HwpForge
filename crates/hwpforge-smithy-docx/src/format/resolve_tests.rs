@@ -1,5 +1,15 @@
 use super::*;
 
+// 이것을 실패시키는 것: anchor 범위 검사를 빼거나 넘친 합을 포화시켜 정상 좌표로 반환.
+#[test]
+fn marker_anchor_rejects_out_of_range_coordinates() {
+    assert_eq!(marker_anchor(-50_000_000, -50_000_000).unwrap(), -100_000_000);
+    assert_eq!(marker_anchor(50_000_000, 50_000_000).unwrap(), 100_000_000);
+    assert!(marker_anchor(-100_000_000, -1).is_err());
+    assert!(marker_anchor(100_000_000, 1).is_err());
+    assert!(marker_anchor(i32::MAX, i32::MAX).is_err());
+}
+
 // 이것을 실패시키는 것: 중간 반올림·절삭, 음수 반올림 방향 반전, 비유한 값 허용.
 #[test]
 fn rational_units_and_float_canonicalization() {
@@ -37,7 +47,7 @@ fn definitions(styles: &str) -> Definitions {
     d
 }
 
-// 이것을 실패시키는 것: 표 단계 생략, 종류 사이 false 뒤집기, 직접 false 덮어쓰기 생략.
+// 이것을 실패시키는 것: 표 단계 생략, 직접 번호의 스타일 들여쓰기 재덮기, 종류 사이 false 뒤집기, 직접 false 덮어쓰기 생략.
 #[test]
 fn table_context_precedes_numbering_paragraph_character_and_direct() {
     let mut d=definitions("<w:docDefaults><w:rPrDefault><w:rPr><w:b w:val='0'/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type='table' w:styleId='t'><w:rPr><w:b/></w:rPr><w:pPr><w:ind w:left='1440'/></w:pPr></w:style><w:style w:type='paragraph' w:styleId='p'><w:rPr><w:b/></w:rPr><w:pPr><w:ind w:left='360'/></w:pPr></w:style>");
@@ -67,7 +77,7 @@ fn table_context_precedes_numbering_paragraph_character_and_direct() {
             &mut warnings,
         )
         .unwrap();
-    assert_eq!(v.para.left, Some(1800));
+    assert_eq!(v.para.left, Some(3600));
     assert_eq!(v.char.toggles[0], Some(false));
     let v = r
         .context(
@@ -310,7 +320,7 @@ fn shared_identifiers_do_not_scale_with_references() {
         assert_eq!(key_bytes(&font_key), 8);
         assert_eq!(key_bytes(&r.default_paragraph.unwrap()), 8);
         // The projected marker adds one fixed-size optional discriminant.
-        assert_eq!(key_bytes(&delta), 296);
+        assert_eq!(key_bytes(&delta), 320);
         for i in 0..16 {
             let input = r.run_input(delta.clone(), None).unwrap();
             let mut p = Paragraph::new(ParaShapeIndex::new(0));
@@ -546,4 +556,88 @@ fn output_font_storage_has_an_independent_budget() {
         r.font(overflow),
         Err(DocxError::Limit { resource: "output fonts", observed: 262145, limit: 262144, .. })
     ));
+}
+
+// 이것을 실패시키는 것: 수동 해시에서 목록 배치 제외.
+#[test]
+fn paragraph_interning_includes_marker_layout() {
+    let mut r = Resolver::new(Definitions::default(), &mut vec![]).unwrap();
+    let mut s = ParaShape::default();
+    let start = ListTextStart::FromAnchor(unit(1800).unwrap());
+    for m in [
+        ListMarkerLayout::new(ListMarkerAlign::Left, start).unwrap(),
+        ListMarkerLayout::new(ListMarkerAlign::Right, start).unwrap(),
+        ListMarkerLayout::new(
+            ListMarkerAlign::Left,
+            ListTextStart::AfterMarker(unit(1800).unwrap()),
+        )
+        .unwrap(),
+        ListMarkerLayout::new(ListMarkerAlign::Left, ListTextStart::FromAnchor(unit(0).unwrap()))
+            .unwrap(),
+    ] {
+        s.list_marker = Some(m);
+        let id = r.intern_para(s.clone()).unwrap();
+        assert_eq!(r.intern_para(s.clone()).unwrap(), id);
+    }
+    let mut m = s.list_marker.unwrap();
+    m.char_shape = Some(CharShapeIndex::new(1));
+    s.list_marker = Some(m);
+    r.intern_para(s).unwrap();
+    assert_eq!(r.paras.len(), 5);
+    assert_eq!(r.para_comparisons.get(), 4);
+    assert!(r.paras.values().all(|b| b.len() == 1));
+}
+// 이것을 실패시키는 것: 분할 후속 문단에서 목록만 제거하고 배치 유지.
+#[test]
+fn word_split_clears_marker_layout() {
+    let mut d = Delta::default();
+    d.para.projected_list = Some(lists::ListRef::Number(0, 0));
+    d.para.projected_marker = Some(
+        ListMarkerLayout::new(
+            ListMarkerAlign::Left,
+            ListTextStart::FromAnchor(unit(1800).unwrap()),
+        )
+        .unwrap(),
+    );
+    assert!(Resolver::fragment_shape(&d, true, false).para.projected_marker.is_some());
+    let next = Resolver::fragment_shape(&d, false, true);
+    assert!(next.para.projected_list.is_none());
+    assert!(next.para.projected_marker.is_none());
+}
+
+// 이것을 실패시키는 것: 숫자/점 동일 폭, 문자별 선반올림, unchecked 곱셈.
+#[test]
+fn word_marker_width_uses_measured_ratios() {
+    for (size, ratio, want) in
+        [(1100, 848, 848), (1100, 1454, 1454), (1100, 508, 508), (1400, 848, 1079), (1, 1454, 1)]
+    {
+        assert_eq!(measured_marker_width(size, ratio).unwrap(), want);
+    }
+    let mut h = hwpforge_core::ParaHead {
+        level: 1,
+        start: 1,
+        num_format: hwpforge_foundation::NumberFormatType::Digit,
+        text: "^1.".into(),
+        checkable: false,
+    };
+    assert_eq!(measured_number_ratio(&h, 0, 1).unwrap(), Some(848));
+    assert_eq!(measured_number_ratio(&h, 0, 10).unwrap(), Some(1454));
+    h.text = "10.^1.2".into();
+    assert_eq!(measured_number_ratio(&h, 0, 10).unwrap(), Some(3514));
+    h.text = "^1.^1".into();
+    assert_eq!(measured_number_ratio(&h, 0, 10).unwrap(), None);
+    assert!(measured_marker_width(i32::MAX, u64::MAX).is_err());
+    assert!(measured_marker_width(2, 1_u64 << 63).is_err());
+}
+// 이것을 실패시키는 것: signed ceiling 대신 truncation 또는 목표 범위 검사 누락.
+#[test]
+fn word_default_tab_arithmetic_is_checked() {
+    assert_eq!(default_tab_gap(3000, 0, 3600, ListMarkerAlign::Left).unwrap(), (0, true));
+    assert_eq!(default_tab_gap(-4500, 848, 3600, ListMarkerAlign::Left).unwrap(), (900, true));
+    assert_eq!(default_tab_gap(3300, 849, 4000, ListMarkerAlign::Center).unwrap(), (700, false));
+    assert_eq!(default_tab_gap(2752, 848, 3600, ListMarkerAlign::Left).unwrap(), (848, true));
+    for (a, w, t) in [(100_000_000, 848, 3600), (-99_999_999, 100_000_000, 100_000_000), (0, 1, 0)]
+    {
+        assert!(default_tab_gap(a, w, t, ListMarkerAlign::Left).is_err());
+    }
 }

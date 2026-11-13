@@ -1067,6 +1067,7 @@ fn normalize_header_for_edit(
             sections.len() as u32,
             sections.first().and_then(|s| s.begin_num.as_ref()),
             &crate::layout_compatibility::for_document(&decoded.document),
+            decoded.document.layout_profile(),
         )
         .map_err(|e| StructuralEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
         use crate::encoder::package::HEADER_PART;

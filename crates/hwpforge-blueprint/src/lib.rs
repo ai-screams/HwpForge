@@ -70,3 +70,6 @@ pub use border_fill::{Border, BorderFill, BorderSide, Fill, PartialBorderFill};
 
 /// Markdown role selection and paragraph semantics.
 pub mod markdown;
+
+/// Format-neutral list marker alignment, first-line distance and character formatting.
+pub use style::{ListMarkerAlign, ListMarkerLayout, ListTextStart};

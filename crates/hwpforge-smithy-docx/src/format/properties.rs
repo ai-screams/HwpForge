@@ -346,6 +346,14 @@ pub(super) fn read_property(
                 }
                 Ok(())
             }),
+            "autoSpaceDE" => r.leaf(&["val"], |r| {
+                d.para.auto_space_de = r.boolean()?;
+                Ok(())
+            }),
+            "autoSpaceDN" => r.leaf(&["val"], |r| {
+                d.para.auto_space_dn = r.boolean()?;
+                Ok(())
+            }),
             "contextualSpacing" => r.leaf(&["val"], |r| {
                 d.para.contextual = r.boolean()?;
                 Ok(())

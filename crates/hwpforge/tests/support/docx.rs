@@ -52,6 +52,15 @@ fn build_package(body: &str, relationships: &str, defaults: bool) -> Vec<u8> {
 /// Adds numbering definitions through a real relationship and content type.
 #[allow(dead_code)]
 pub fn package_with_numbering(body: &str, numbering: &str) -> Vec<u8> {
+    package_with_numbering_and_settings(body, numbering, None)
+}
+
+#[allow(dead_code)]
+pub fn package_with_numbering_and_settings(
+    body: &str,
+    numbering: &str,
+    settings: Option<&str>,
+) -> Vec<u8> {
     use std::io::Read;
     let base = package(body);
     let mut input = zip::ZipArchive::new(Cursor::new(base)).unwrap();
@@ -62,12 +71,24 @@ pub fn package_with_numbering(body: &str, numbering: &str) -> Vec<u8> {
         file.read_to_string(&mut xml).unwrap();
         if file.name().unwrap() == "[Content_Types].xml" {
             xml = xml.replace("</Types>", "<Override PartName='/numbering.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml'/></Types>");
+            if settings.is_some() {
+                xml = xml.replace("</Types>", "<Override PartName='/options.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml'/></Types>");
+            }
         }
         output.start_file(file.name().unwrap(), zip::write::SimpleFileOptions::default()).unwrap();
         output.write_all(xml.as_bytes()).unwrap();
     }
     output.start_file("_rels/body.xml.rels", zip::write::SimpleFileOptions::default()).unwrap();
-    output.write_all(b"<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='numbering' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering' Target='numbering.xml'/></Relationships>").unwrap();
+    let settings_relation = if settings.is_some() {
+        "<Relationship Id='options' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings' Target='options.xml'/>"
+    } else {
+        ""
+    };
+    write!(output,"<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='numbering' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering' Target='numbering.xml'/>{settings_relation}</Relationships>").unwrap();
+    if let Some(value) = settings {
+        output.start_file("options.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        write!(output,"<w:settings xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:defaultTabStop w:val='{value}'/></w:settings>").unwrap();
+    }
     output.start_file("numbering.xml", zip::write::SimpleFileOptions::default()).unwrap();
     write!(output,"<w:numbering xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>{numbering}</w:numbering>").unwrap();
     output.finish().unwrap().into_inner()

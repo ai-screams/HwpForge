@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 목록 anchor와 본문 거리·문자 모양을 번호 및 글머리 paraHead로 투영한다. 공유 head 충돌은 문서 방문 순서상 첫 사용처의 head와 상대 margin 이동량을 선택하고 의미 손실로 보고하며 원본 보존 편집은 실패한다. 선택한 사용처의 근사 진단도 유지한다. 실폭 Right/Center는 Left로 근사한다. 오른쪽 정렬 고정 칸의 폭은 본문 간격과 번호 기본 폭 중 큰 값이다(폭 0 칸의 오른쪽 정렬 번호는 그려지지 않는다). 기본 폭보다 좁은 간격은 기본 폭으로 넓히고 표시 동작이 미측정이라 정렬 근사 진단을 낸다. Word 호환 자동 간격은 1/1이며 원본의 값과 부재를 보존한다.
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.1...hwpforge-smithy-hwpx-v0.20.0) - 2026-11-07
 
 HWPX 편집 경로(`patch`, `fill`, `set-cell`, `stamp`, `insert-para`, `delete-para`, `restyle`)가 문서를 더 보수적으로 다루도록 고친 릴리스다. 출력·캐시·경고의 변화와 새로 거부되는 입력은 아래와 "업그레이드 주의"에 모았다.

@@ -33,6 +33,7 @@ pub(crate) struct Definitions {
     abstract_metadata: HashMap<u32, AbstractMetadata>,
     counts: [usize; 4],
     level_count: usize,
+    tab_count: usize,
     pub(super) numbering_part: Option<Rc<str>>,
     #[cfg(test)]
     pub(super) part_copied_bytes: usize,
@@ -70,6 +71,8 @@ enum Frame {
     CellProperties,
     Properties(Owner, bool),
     NumPr(Owner),
+    NumberTabs(Owner),
+    NumberTab,
     Abstract(u32),
     Number(u32),
     Override {
@@ -84,6 +87,27 @@ enum Frame {
     Section,
 }
 impl Definitions {
+    fn marker_level_mut(&mut self, owner: Owner) -> Option<&mut super::lists::Level> {
+        match owner {
+            Owner::Abstract(id, level) => self.abstracts.get_mut(&id)?.get_mut(&level),
+            Owner::Number(id, level) => self.numbers.get_mut(&id)?.levels.get_mut(&level),
+            _ => None,
+        }
+    }
+    pub(super) fn marker_level(
+        &self,
+        para: &ParaDelta,
+    ) -> Option<(&super::lists::Level, BTreeMap<i32, bool>)> {
+        let num = para.num_id?;
+        let level = self.effective_level(num, para.level.unwrap_or(0));
+        let number = self.numbers.get(&num)?;
+        let base = self.numbering_base(number.abstract_id?).and_then(|(_, ls)| ls.get(&level));
+        let over = number.levels.get(&level);
+        let source = super::lists::select_level(base, over)?;
+        let mut tabs = base.map(|l| l.tabs.clone()).unwrap_or_default();
+        tabs.extend(over.into_iter().flat_map(|l| l.tabs.iter().map(|(&k, &v)| (k, v))));
+        Some((source, tabs))
+    }
     pub(super) fn numbering_base(
         &self,
         id: u32,
@@ -645,9 +669,95 @@ impl Definitions {
                                     self.abstract_metadata.entry(id).or_default().style_link = key;
                                     Frame::Leaf
                                 }
-                                (Frame::Level(_), "suff" | "lvlJc" | "pStyle") => {
-                                    // Alignment/suffix layout is not carried by the shared marker model.
-                                    Frame::Ignored
+                                (Frame::Level(owner), "suff" | "lvlJc") => {
+                                    let target = self.marker_level_mut(owner).unwrap();
+                                    if e.name == "lvlJc" {
+                                        use hwpforge_blueprint::ListMarkerAlign::*;
+                                        target.align = Some(match attr(&e, "val") {
+                                            None | Some("left" | "start") => Left,
+                                            Some("center") => Center,
+                                            Some("right" | "end") => Right,
+                                            _ => {
+                                                warn(
+                                                    warnings,
+                                                    part,
+                                                    "lvlJc",
+                                                    Kind::UnsupportedValue,
+                                                    "list_marker_alignment",
+                                                    "use_left",
+                                                    "Unsupported marker alignment; using left",
+                                                )?;
+                                                Left
+                                            }
+                                        });
+                                    } else {
+                                        target.suffix = Some(match attr(&e, "val") {
+                                            None | Some("tab") => super::lists::Suffix::Tab,
+                                            Some("space") => super::lists::Suffix::Space,
+                                            Some("nothing") => super::lists::Suffix::Nothing,
+                                            _ => {
+                                                warn(
+                                                    warnings,
+                                                    part,
+                                                    "suff",
+                                                    Kind::UnsupportedValue,
+                                                    "list_marker_suffix",
+                                                    "use_tab",
+                                                    "Unsupported marker suffix; using tab",
+                                                )?;
+                                                super::lists::Suffix::Tab
+                                            }
+                                        });
+                                    }
+                                    Frame::Leaf
+                                }
+                                (Frame::Level(_), "pStyle") => Frame::Ignored,
+                                (Frame::NumberTabs(owner), "tab") => {
+                                    match attr(&e, "val") {
+                                        Some("num" | "clear") => {
+                                            let pos = attr(&e, "pos").ok_or_else(|| {
+                                                DocxError::invalid(
+                                                    part,
+                                                    "tab",
+                                                    "missing tab position",
+                                                )
+                                            })?;
+                                            let pos = units::length(pos, 5, -100_000_000)
+                                                .map_err(|r| DocxError::invalid(part, "tab", r))?;
+                                            let previous = self
+                                                .marker_level_mut(owner)
+                                                .unwrap()
+                                                .tabs
+                                                .insert(pos, attr(&e, "val") == Some("num"));
+                                            self.tab_count += usize::from(previous.is_none());
+                                            limit(
+                                                part,
+                                                "tab",
+                                                "number tabs",
+                                                self.tab_count,
+                                                MAX_DEFINITIONS,
+                                            )?;
+                                            if previous.is_some() {
+                                                warn(
+                                                    warnings,
+                                                    part,
+                                                    "tab",
+                                                    Kind::ValueApproximated,
+                                                    "list_marker_tab",
+                                                    "use_last",
+                                                    "Duplicate number tab position; using last declaration",
+                                                )?;
+                                            }
+                                        }
+                                        _ => definition_warning(
+                                            &e,
+                                            part,
+                                            root,
+                                            "unsupported number tab",
+                                            warnings,
+                                        )?,
+                                    }
+                                    Frame::NumberTab
                                 }
                                 // Numbering identity/edit-history metadata, not level formatting.
                                 (Frame::Abstract(_), "nsid" | "tmpl" | "name")
@@ -673,6 +783,14 @@ impl Definitions {
                         }
                         if let Frame::Properties(owner, _) | Frame::NumPr(owner) = parent {
                             let character = matches!(parent, Frame::Properties(_, true));
+                            if w && e.name == "tabs"
+                                && matches!(parent, Frame::Properties(_, false))
+                                && self.marker_level_mut(owner).is_some()
+                            {
+                                super::container_attributes(&e, part, &e.name, warnings)?;
+                                stack.push(Frame::NumberTabs(owner));
+                                return Ok(());
+                            }
                             let mut delta = Delta::default();
                             let state = read_property(
                                 &mut delta,
@@ -695,18 +813,23 @@ impl Definitions {
                                 _ => None,
                             };
                             if let Some(marker) = marker {
-                                let mut marker_only = delta.char.clone();
-                                marker_only.fonts = [None; 4];
-                                if marker_only != CharDelta::default() {
-                                    warn(warnings, part, &e.name, Kind::FormattingOmitted, "marker_format", "omit", "Marker character effects are not represented by the shared list definition")?;
+                                if matches!(state, PropertyState::Excluded) {
+                                    warn(
+                                        warnings,
+                                        part,
+                                        &e.name,
+                                        Kind::FormattingOmitted,
+                                        "marker_format",
+                                        "omit",
+                                        "Unsupported marker character property omitted",
+                                    )?;
                                 }
-                                for (target, source) in
-                                    marker.fonts.iter_mut().zip(delta.char.fonts)
-                                {
-                                    if source.is_some() {
-                                        *target = source;
-                                    }
-                                }
+                                let mut marker_delta = Delta {
+                                    char: marker.marker_char.clone(),
+                                    ..Default::default()
+                                };
+                                marker_delta.overlay(&delta, false);
+                                marker.marker_char = marker_delta.char;
                             } else if let Some(target) = self.target(owner) {
                                 target.overlay(&delta, false);
                             }
@@ -824,6 +947,8 @@ fn definition_attributes(
             (&[], &["name", "locked", "uiPriority", "semiHidden", "unhideWhenUsed", "qFormat"])
         } // UI visibility/priority, not effective formatting.
         Frame::Metadata => (&[], &["val"]), // Style editor links/labels or numbering edit-history IDs.
+        Frame::NumberTabs(_) => (&[], &[]),
+        Frame::NumberTab => (&["val", "pos"], &[]),
         Frame::Leaf if root == "theme" => (&["typeface"], &[]),
         Frame::Leaf => (&["val"], &[]),
         Frame::Ignored
