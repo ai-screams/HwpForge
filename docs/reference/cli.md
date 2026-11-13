@@ -322,7 +322,9 @@ hwpforge fill [OPTIONS] --output <OUTPUT> <FILE>
 
 ### set-cell
 
-표 셀을 논리 격자 주소로 편집합니다. 실패 시 아무것도 쓰지 않는 admission 게이트 뒤에서 동작합니다.
+요청한 모든 칸이 본문 직속 표의 한 문단·한 텍스트 run(빈 run 포함)이고 원문 위치와 header 보존을 확인할 수 있으면 텍스트 슬롯만 바꿉니다. 문단·표 속성과 슬롯 밖 미해석 원문은 유지합니다. 실제 값이 바뀌면 기존 Preview와 연결을 제거하고 `PREVIEW_REMOVED`를 알리며, 같은 값은 원본 바이트를 반환합니다. 입력 경고는 한 번 남으며 header 수선을 뜻하지 않습니다. 한 칸이라도 이 범위 밖이거나 텍스트 치환을 지원하지 않으면 파일 전체에 기존 왕복 안전성·패키지 보존 검사와 재인코드를 적용합니다. 주소 오류와 검증 실패는 오류로 끝납니다.
+
+표 셀을 논리 격자 주소로 편집하며, batch는 전부 성공하거나 아무것도 쓰지 않습니다.
 
 ```console
 hwpforge set-cell [OPTIONS] --output <OUTPUT> <FILE>
@@ -460,7 +462,7 @@ CLI JSON의 `code`, MCP 도구 오류의 `code`, Python `HwpForgeError.code`는 
 
 전자서명·암호화 표지가 있는 문서는 편집할 수 없으며, 이 거부 오류는 decode 단계의 `DECODE_FAILED`로 보고됩니다.
 
-`INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
+`INPUT_NOT_ROUNDTRIP_SAFE`는 현재 코덱으로 무변경 왕복을 확인하지 못했다는 뜻입니다. 원문을 보존하는 `to-json --section N` → `patch`, 누름틀 `fill`, 보존 가능한 한 문단·한 Text run 칸의 `set-cell` 경로를 검토하세요. 입력 바이트의 깊이 초과는 `DECODE_FAILED`이고, Rust Draft 셀 편집의 깊이 초과는 `VALIDATION_FAILED`입니다.
 
 종료 상태는 **(명령, 코드)로** 결정합니다. 같은 명령·코드는 오류 payload나 발생 경로에 따라 달라지지 않습니다. 0은 성공이고, `validate`의 3은 디코드된 문서가 유효하지 않다는 판정입니다(Core 중첩 깊이 32 초과는 디코드 거부라 `DECODE_FAILED`입니다). 오류의 1·2만으로 원인을 구분하지 말고 `code`를 확인하세요.
 

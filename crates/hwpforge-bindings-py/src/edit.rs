@@ -5,8 +5,14 @@
 //! `delete_para`) apply a delta and retain unrelated content. When content
 //! changes in a document with existing Hancom previews, they remove Preview
 //! and report PREVIEW_REMOVED; saving again in Hancom rebuilds it. Document
-//! re-encoding, such as header normalization, is outside this guarantee. The **regenerating** edits (`set_cell`, `stamp`, `restyle`)
-//! encode the document again, and refuse to return bytes when that encode
+//! re-encoding, such as header normalization, is outside this guarantee.
+//! `set_cell` preserves source for supported direct body-table cells with one
+//! paragraph and one Text run; changed values remove existing Preview with
+//! PREVIEW_REMOVED. If any target cannot be preserved, the whole batch uses
+//! the existing admission checks and re-encoding. Address and verification
+//! errors return errors. The **regenerating** edits (`stamp`, `restyle` and
+//! `set_cell` batches requiring re-encoding) encode the document again,
+//! and refuse to return bytes when that encode
 //! reported a semantic loss — `HwpForgeError(ENCODE_SEMANTIC_LOSS)` rather
 //! than a document that quietly means something else.
 
@@ -56,6 +62,12 @@ pub(crate) fn fill<'py>(
 /// Describe a single cell with `table`, `text` and exactly one of `at`,
 /// `right_of` and `below`, **or** pass a `specs` batch. The operation rejects
 /// any mix with `INVALID_SET_CELL_ARGS`.
+///
+/// Direct body-table cells with one paragraph and one Text run (including an
+/// empty run) preserve source outside the text slot. If any cell cannot be
+/// preserved, the whole file uses existing admission and regeneration checks.
+/// Changed values remove existing Preview; equal values return original bytes.
+/// Input warnings appear once. Address and verification errors return errors.
 ///
 /// Args:
 ///     data: The HWPX package or HWP5 (.hwp) bytes.

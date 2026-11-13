@@ -7,6 +7,8 @@ mod document;
 use document::text_para as para;
 #[path = "support/package.rs"]
 mod package;
+#[path = "support/xml.rs"]
+mod xml;
 use package::section_xml_unchecked as section_xml;
 use std::io::{Cursor, Read, Write};
 
@@ -170,7 +172,28 @@ fn edit_second_table(bytes: &[u8]) -> Vec<u8> {
         target: CellTarget::At(GridCoord::new(0, 0)),
         text: "바뀐 칸".to_string(),
     };
-    HwpxCellEditor::set_cells(bytes, &[spec]).expect("set_cells").bytes
+    let output = HwpxCellEditor::set_cells(bytes, &[spec]).expect("set_cells").bytes;
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(bytes).unwrap();
+    let source = &decoded.document.sections()[0];
+    let metadata =
+        hwpforge_smithy_hwpx::HwpxPatcher::export_section_preservation(bytes, 0, source).unwrap();
+    let mut replacement = source.clone();
+    let hwpforge_core::RunContent::Table(table) = &mut replacement.paragraphs[1].runs[0].content
+    else {
+        panic!("table")
+    };
+    table.rows[0].cells[0].paragraphs[0].runs[0].content =
+        hwpforge_core::RunContent::Text("바뀐 칸".into());
+    let patched = hwpforge_smithy_hwpx::HwpxPatcher::patch_section_preserving(
+        bytes,
+        0,
+        &replacement,
+        None,
+        Some(&metadata),
+    )
+    .unwrap();
+    assert_eq!(section_xml(&output), section_xml(&patched));
+    output
 }
 
 /// The input omits `colPr`, so its line start 26 is Core
@@ -201,7 +224,8 @@ fn a_cache_the_decoder_dropped_stays_dropped() {
     assert_eq!(first_cache(&bytes), None);
     let edited = edit_second_table(&bytes);
     let xml = section_xml(&edited);
-    assert!(!xml[..xml.find("바뀐 칸").unwrap()].contains("<hp:linesegarray"));
+    // 이것을 실패시키는 것: 편집 밖 버린 캐시 원문까지 재인코드하여 없애기.
+    assert_eq!(xml::Element::parse(&xml).descendants("hp:linesegarray").len(), 1);
     assert_eq!(first_cache(&edited), None);
 }
 

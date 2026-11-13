@@ -106,8 +106,10 @@ MCP `hwpforge_from_json`이나 Markdown으로 HWPX를 재생성할 때 원본 �
 
 - `hwpforge_patch`는 문단 구조를 바꾸지 못합니다. 의미 텍스트 슬롯의 개수나 경로가 다르면 거부되며, 문단 추가·삭제는 `hwpforge_insert_para`·`hwpforge_delete_para`, 표 셀은 `hwpforge_set_cell`, 구조가 바뀐 문서 재구성은 `hwpforge_from_json`을 씁니다.
 - `hwpforge_delete_para`: 한컴 저장 HWPX에서도 검증 가능한 최상위 본문 평문·빈 문단을 삭제할 수 있습니다. 문단 번호는 입력 문서의 위치 기준입니다. 원문 보존 삭제에서는 영향을 받는 줄 조판 캐시를 지우고, 지원하는 표의 저장 높이를 0으로 만들어 한컴에서 다시 배치하도록 합니다. 기존 Preview와 관련 연결은 제거하고 `PREVIEW_REMOVED`를 알립니다. 한컴에서 다시 저장하면 미리보기가 만들어집니다. 검증할 수 없는 입력은 기존 오류로 거부하며 출력하지 않습니다.
-- `hwpforge_insert_para`·`hwpforge_set_cell`·`hwpforge_stamp`는 왕복 안전한 입력만 편집합니다. 인코더가 ZIP 엔트리를 모두 실어 보낼 수 없는 문서, 곧 한컴이 저장하며 `Preview/*`와 `META-INF/container.rdf`를 더한 문서는 거부됩니다. 이런 문서에도 `hwpforge_to_json` + `hwpforge_patch`(텍스트)와 `hwpforge_fill`(누름틀)은 쓸 수 있습니다.
+- `hwpforge_insert_para`·`hwpforge_stamp`와 보존 범위 밖 `hwpforge_set_cell`은 왕복 안전한 입력만 편집합니다. 인코더가 ZIP 엔트리를 모두 실어 보낼 수 없는 문서, 곧 한컴이 저장하며 `Preview/*`와 `META-INF/container.rdf`를 더한 문서는 거부됩니다. 이런 문서에도 `hwpforge_to_json` + `hwpforge_patch`(텍스트)와 `hwpforge_fill`(누름틀)은 쓸 수 있습니다.
 - `hwpforge_stamp`는 `hwpforge_stamp_plan`이 준 후보 객체를 그대로 복사해 `action`(`{"field":{"name":"…"}}` 또는 `"ignore"`)만 더합니다. 지침 문맥의 후보는 자동 적용되지 않습니다.
+
+요청한 모든 칸이 본문 직속 표의 한 문단·한 텍스트 run(빈 run 포함)이고 원문 위치와 header 보존을 확인할 수 있으면 텍스트 슬롯만 바꿉니다. 문단·표 속성과 슬롯 밖 미해석 원문은 유지합니다. 실제 값이 바뀌면 기존 Preview와 연결을 제거하고 `PREVIEW_REMOVED`를 알리며, 같은 값은 원본 바이트를 반환합니다. 입력 경고는 한 번 남으며 header 수선을 뜻하지 않습니다. 한 칸이라도 이 범위 밖이거나 텍스트 치환을 지원하지 않으면 파일 전체에 기존 왕복 안전성·패키지 보존 검사와 재인코드를 적용합니다. 주소 오류와 검증 실패는 오류로 끝납니다.
 
 ## 리소스
 

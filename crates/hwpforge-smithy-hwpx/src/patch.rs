@@ -36,6 +36,8 @@ pub struct HwpxPatcher;
 
 #[cfg(test)]
 thread_local! {
+    pub(crate) static PRESERVING_SPLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static FAIL_AFTER_SPLICE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     pub(crate) static PRESERVING_BRANCHES: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -603,16 +605,18 @@ impl HwpxPatcher {
                     .map(|range| (range, String::new())),
             );
         }
+        #[cfg(test)]
+        PRESERVING_SPLICES.with(|count| count.set(count.get() + 1));
         let patched_section_xml = crate::cache_flow::splice(&base_section_xml, replacements)
             .map_err(|error| PatchError::Invariant { detail: error.to_string() })?;
 
+        #[cfg(test)]
+        fail_after_splice(section_idx)?;
+
         // The text-only proof still applies, but an unnormalised header cannot
         // escape through raw ZIP copying. Reuse the ordinary output/cache planner.
-        if normalize_measures
-            || crate::header_references::HeaderReferences::build(&decoded.style_store)
-                .map_err(codec(CodecStage::Encode))?
-                .style_index(0)
-                .is_err()
+        if needs_header_reencoding(normalize_measures, &decoded.style_store)
+            .map_err(codec(CodecStage::Encode))?
         {
             #[cfg(test)]
             PRESERVING_BRANCHES.with(|branches| branches.borrow_mut().push("reencode"));
@@ -669,6 +673,32 @@ impl HwpxPatcher {
             .extend(preview.verify_final(&bytes).map_err(codec(CodecStage::Verification))?);
         Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
+}
+
+#[cfg(test)]
+fn fail_after_splice(section_idx: usize) -> Result<(), PatchError> {
+    if FAIL_AFTER_SPLICE.with(|section| {
+        if section.get() == Some(section_idx) {
+            section.set(None);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Err(codec(CodecStage::Verification)(HwpxError::InvalidStructure {
+            detail: "injected post-splice failure".into(),
+        }));
+    }
+    Ok(())
+}
+
+/// Whether text editing also requires regenerating the header.
+pub(crate) fn needs_header_reencoding(
+    normalize_measures: bool,
+    styles: &HwpxStyleStore,
+) -> crate::HwpxResult<bool> {
+    Ok(normalize_measures
+        || crate::header_references::HeaderReferences::build(styles)?.style_index(0).is_err())
 }
 
 // Proof inputs already belong to the patch operation; keep them explicit instead
@@ -837,7 +867,7 @@ pub(crate) struct SemanticTextSlot {
     pub(crate) inline: bool,
 }
 
-fn preservation_from_map<'a>(
+pub(crate) fn preservation_from_map<'a>(
     xml: &str,
     part: &str,
     section: &'a Section,

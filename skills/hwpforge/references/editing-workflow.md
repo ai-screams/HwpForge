@@ -4,13 +4,15 @@ Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it
 
 ## Which surface a 한컴-saved document accepts
 
-A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. `set-cell`, `insert-para` and `stamp` refuse such inputs at their admission checks; `from-json --base` and `restyle` rebuild them with the losses described below.
+When every requested cell is in a direct body table with one paragraph and one Text run (including an empty run), and its source location and header can be preserved, set-cell changes only its text slot. Paragraph and table properties and unmodeled source outside the slot survive. Changed values remove existing Preview and its connections with PREVIEW_REMOVED; unchanged values return the original bytes. Input diagnostics appear once and do not imply header repair. If any cell is outside this subset or the text splice is unsupported, the whole file uses the existing round-trip and package-preservation checks and re-encoding. Address errors and verification failures return errors.
+
+A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. `insert-para`, `stamp` and set-cell outside its preserving subset refuse such inputs at their admission checks; `from-json --base` and `restyle` rebuild them with the losses described below.
 
 | Surface                 | 한컴-saved document              | CLI result                                                                                                           |
 | ----------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `fill`                  | works                            | writes named 누름틀; removes an existing Preview on text changes (except document re-encoding)                       |
 | `patch`                 | works                            | text inside existing paragraphs and cells; removes an existing Preview on text changes (except document re-encoding) |
-| `set-cell`              | refused                          | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
+| `set-cell`              | supported subset                 | preserves direct body-table cells with one paragraph and one Text run; other batches keep existing checks            |
 | `insert-para`           | refused                          | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
 | `delete-para`           | verified plain/empty body subset | success, otherwise the original admission error, exit 1                                                              |
 | `stamp`                 | refused                          | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1                                                  |
@@ -23,11 +25,11 @@ Delete can also remove verified plain or empty top-level body paragraphs from Ha
 
 CONTENT_LOST reports information not represented by the input decode. Source-preserving delete succeeds only after separately proving that information survives in the output and does not affect the deletion decision; the original decode warnings remain. This applies only to some losses whose information remains in the source XML (such as per-language character values); all other CONTENT_LOST inputs retain their original refusal. Input-loss refusals for whole-document re-encoding edits remain in force.
 
-**The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, change any other text (including table cells) with `to-json --section N` → edit `content.Text` → `patch`. `from-json --base` is **never** a way around a refusal from `set-cell`, `insert-para`, `delete-para` or `stamp`. Use it only when the user explicitly asks for a structural change to that file **and** accepts that the result is a new file that loses the 한컴 package entries and the layout caches around each change, and that they must check it in 한컴.
+**The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, use `set-cell` for cells that meet the preservation conditions above, or change other text (including table cells) with `to-json --section N` → edit `content.Text` → `patch`. `from-json --base` is **never** a way around a refusal from `set-cell`, `insert-para`, `delete-para` or `stamp`. Use it only when the user explicitly asks for a structural change to that file **and** accepts that the result is a new file that loses the 한컴 package entries and the layout caches around each change, and that they must check it in 한컴.
 
 When an edit changes text in a document with an existing Hancom preview (Preview), it removes the preview and reports PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. If the input passes the edit checks and the text is unchanged, the original file is returned. Document re-encoding, such as header normalization or style rewriting, and older whole-document JSON are outside this guarantee.
 
-A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it — unless reading it loses content: text inside a field whose kind does not keep it (a bookmark span, a memo field) is dropped on reading (`CONTENT_LOST field_body`), and `set-cell`, `stamp` and `restyle` then refuse with `INPUT_NOT_ROUNDTRIP_SAFE`; `patch` still edits such a file. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
+A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it — unless reading it loses content: text inside a field whose kind does not keep it (a bookmark span, a memo field) is dropped on reading (`CONTENT_LOST field_body`), and `stamp`, `restyle` and set-cell outside its preserving subset then refuse with `INPUT_NOT_ROUNDTRIP_SAFE`; `patch` still edits such a file. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
 
 ## Two write-back modes
 
@@ -88,7 +90,7 @@ Re-export with the same hwpforge version you patch with. `style_ref` and `headin
 hwpforge patch document.hwpx --section 0 section0.json -o document.edited.hwpx --json
 ```
 
-The first positional argument supplies the original content. With an existing Preview and no document re-encoding, changed text removes `Preview/PrvText.txt`, `Preview/PrvImage.png`, and an empty `Preview/` directory if present (`package.removed`). Preview rootfile lines in `META-INF/container.xml` and matching manifest/spine connections in `Contents/content.hpf` are removed (`package.changed`); affected section XML and layout caches may also change. These are normal deltas for `fill` and `patch`; stop on other entry removals or unrelated descriptor changes. Header normalization and other document re-encoding require separate inspection.
+The first positional argument supplies the original content. With an existing Preview and no document re-encoding, changed text removes `Preview/PrvText.txt`, `Preview/PrvImage.png`, and an empty `Preview/` directory if present (`package.removed`). Preview rootfile lines in `META-INF/container.xml` and matching manifest/spine connections in `Contents/content.hpf` are removed (`package.changed`); affected section XML and layout caches may also change. These are normal deltas for `fill`, `patch` and preserving `set-cell`; stop on other entry removals or unrelated descriptor changes. Header normalization and other document re-encoding require separate inspection.
 
 ### 4b. Write back with a rebuild
 
@@ -119,7 +121,7 @@ for para in d["section"]["paragraphs"]:
 json.dump(d, open("section0.json", "w"), ensure_ascii=False)
 ```
 
-Fill table cells by logical grid address (for `patch` — the only cell route on a 한컴-saved file): the tested all-or-nothing script, which selects cells by `addr`, refuses multi-run or multi-paragraph cells and writes nothing unless every requested value lands exactly once, is Recipe B in [template-fill.md](template-fill.md).
+Fill table cells by logical grid address (for `patch`, or use `set-cell` for its supported single-Text-run subset): the tested all-or-nothing script, which selects cells by `addr`, refuses multi-run or multi-paragraph cells and writes nothing unless every requested value lands exactly once, is Recipe B in [template-fill.md](template-fill.md).
 
 Add a paragraph (full-document JSON, for `from-json --base`; on a file 한컴 did not save, `insert-para` is the byte-preserving alternative):
 

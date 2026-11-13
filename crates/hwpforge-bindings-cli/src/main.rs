@@ -324,7 +324,7 @@ enum Commands {
     /// Edit table cells by logical grid address.
     #[command(
         name = "set-cell",
-        long_about = "Edit table cells by logical grid address, all-or-nothing behind the fail-closed admission gate.\n\nAddress a cell with --table N (to-json export order) plus one of --at \"r,c\" (covered positions resolve to their merge anchor), --right-of LABEL, or --below LABEL (normalized exact match). --text \"\" clears the cell. Batch edits go through --map (JSON array of CellSpec)."
+        long_about = "Edit table cells by logical grid address, all-or-nothing. If every requested cell is in a direct body table with one paragraph and one Text run (including an empty run), and its source location and header can be preserved, only its text slot is changed; paragraph/table properties and source outside the slot are preserved. Changed values remove existing Preview and its connections with PREVIEW_REMOVED; unchanged values return the original bytes. If any cell is outside this subset or its text cannot be spliced, the whole batch uses re-encoding with the existing round-trip and package-preservation admission checks, which can refuse Hancom-saved documents. Address errors and verification failures return errors.\n\nAddress a cell with --table N (to-json export order) plus one of --at \"r,c\" (covered positions resolve to their merge anchor), --right-of LABEL, or --below LABEL (normalized exact match). --text \"\" clears the cell. Batch edits go through --map (JSON array of CellSpec)."
     )]
     SetCell {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.

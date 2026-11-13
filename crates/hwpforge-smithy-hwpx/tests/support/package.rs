@@ -77,3 +77,40 @@ pub(crate) fn with_section(bytes: &[u8], xml: &str) -> Vec<u8> {
     }
     out.finish().expect("finish").into_inner()
 }
+
+/// A valid, out-of-scope cell target for exercising the regenerating editor.
+/// The two runs reference distinct character definitions, so decoding cannot merge them.
+pub(crate) fn two_text_runs(bytes: &[u8], text_element: &str) -> Vec<u8> {
+    let header = part(bytes, "Contents/header.xml");
+    let start = header.find("<hh:charPr ").expect("charPr");
+    let end = start + header[start..].find("</hh:charPr>").unwrap() + "</hh:charPr>".len();
+    let id = header.matches("<hh:charPr ").count();
+    let old_id = super_id(&header[start..end]);
+    let shape = header[start..end]
+        .replacen(&format!("id=\"{old_id}\""), &format!("id=\"{id}\""), 1)
+        .replace("</hh:charPr>", "<hh:bold/></hh:charPr>");
+    let bytes = splice_part(
+        bytes,
+        "Contents/header.xml",
+        "</hh:charProperties>",
+        &format!("{shape}</hh:charProperties>"),
+    );
+    splice(
+        &bytes,
+        text_element,
+        &format!("<hp:t>A</hp:t></hp:run><hp:run charPrIDRef=\"{id}\"><hp:t>B</hp:t>"),
+    )
+}
+fn super_id(tag: &str) -> &str {
+    let start = tag.find(" id=\"").unwrap() + 5;
+    &tag[start..start + tag[start..].find('"').unwrap()]
+}
+
+/// Adds a reproducible auxiliary payload without changing existing ZIP entries.
+pub(crate) fn append_entry(bytes: &[u8], name: &str, payload: &[u8]) -> Vec<u8> {
+    let cursor = Cursor::new(bytes.to_vec());
+    let mut writer = zip::ZipWriter::new_append(cursor).unwrap();
+    writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+    writer.write_all(payload).unwrap();
+    writer.finish().unwrap().into_inner()
+}

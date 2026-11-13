@@ -628,7 +628,16 @@ def test_io_hierarchy_and_restoration(tmp_path, monkeypatch, table_bytes):
         doc = Document((data / fixture).read_bytes())
         calls.update(
             {
-                f"cell.{suffix}": partial(doc.set_cell, table=0, at="0,0", text="text"),
+                f"cell.{suffix}": partial(
+                    (
+                        Document(_cell_admission_input(table_bytes))
+                        if suffix == "admission"
+                        else doc
+                    ).set_cell,
+                    table=0,
+                    at="0,0",
+                    text="text",
+                ),
                 f"structural.{suffix}": partial(doc.insert_para, section=0, anchor=0, text="text"),
                 f"structural_delete.{suffix}": partial(doc.delete_para, section=0, indexes=[0]),
                 f"stamp.{suffix}": partial(doc.stamp, []),
@@ -725,3 +734,37 @@ def test_io_repr_preserves_subclass_and_os_fields():
         assert rendered.startswith(f"{cls.__name__}(")
         for name in ("errno", "strerror", "filename", "filename2", "winerror"):
             assert f"{name}={getattr(source, name)!r}" in rendered
+
+
+def _cell_admission_input(data: bytes) -> bytes:
+    # 이것을 실패시키는 것: 여러 run 칸의 기존 입력 손실 거부 제거.
+    with zipfile.ZipFile(io.BytesIO(data)) as source:
+        parts = {name: source.read(name) for name in source.namelist()}
+    header = parts["Contents/header.xml"].decode()
+    start = header.index("<hh:charPr ")
+    end = header.index("</hh:charPr>", start) + len("</hh:charPr>")
+    shape_id = header.count("<hh:charPr ")
+    original_id = header[start:end].split(' id="', 1)[1].split('"', 1)[0]
+    shape = (
+        header[start:end]
+        .replace(f'id="{original_id}"', f'id="{shape_id}"', 1)
+        .replace("</hh:charPr>", "<hh:bold/></hh:charPr>")
+    )
+    parts["Contents/header.xml"] = header.replace(
+        "</hh:charProperties>", shape + "</hh:charProperties>"
+    ).encode()
+    section = parts["Contents/section0.xml"].decode()
+    start = section.index("<hp:t>", section.index("<hp:tc "))
+    end = section.index("</hp:t>", start) + len("</hp:t>")
+    section = (
+        section[:start]
+        + f'<hp:t>A</hp:t></hp:run><hp:run charPrIDRef="{shape_id}"><hp:t>B</hp:t>'
+        + section[end:]
+    )
+    section = section.replace("</hp:t>", "</hp:t><hp:imaginary/>", 1)
+    parts["Contents/section0.xml"] = section.encode()
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as target:
+        for name, payload in parts.items():
+            target.writestr(name, payload)
+    return output.getvalue()
