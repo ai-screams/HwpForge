@@ -238,6 +238,10 @@ fn margin(part: &Part<'_>, id: usize, allowed: &[[u32; 4]]) -> HwpxResult<()> {
 // Inline body tables were checked with bounded grids, unequal widths, both height
 // policies, three alignments, merges and consecutive tables. Stored heights are
 // invalidated without calculating layout or changing cell content.
+// Cell margins of 141 on all sides were observed only with hasMargin 0, table
+// inner margins of 141 on all sides and outer margins of 283 on all sides.
+// In Hancom-saved documents, line widths in cells with hasMargin 0 followed the
+// table's inner margins.
 fn check_inline_category(part: &Part<'_>, table: usize) -> HwpxResult<()> {
     let tags = &part.tags;
     let elements = part.source.elements();
@@ -258,14 +262,16 @@ fn check_inline_category(part: &Part<'_>, table: usize) -> HwpxResult<()> {
     let position = part.one_child(table, "pos")?;
     exact(&tags[position], POSITION)?;
     exact(&tags[position], &[("treatAsChar", "1"), ("horzRelTo", "PARA")])?;
+    let inner_margin = part.one_child(table, "inMargin")?;
+    let outer_margin = part.one_child(table, "outMargin")?;
     margin(
         part,
-        part.one_child(table, "inMargin")?,
+        inner_margin,
         &[[141, 141, 141, 141], [510, 510, 141, 141], [283, 283, 283, 283]],
     )?;
     margin(
         part,
-        part.one_child(table, "outMargin")?,
+        outer_margin,
         &[
             [283, 283, 283, 283],
             [0, 0, 0, 0],
@@ -275,6 +281,18 @@ fn check_inline_category(part: &Part<'_>, table: usize) -> HwpxResult<()> {
             [283, 283, 283, 1000],
         ],
     )?;
+    let equal_cell_margins_allowed = [
+        attr(&tags[inner_margin], "left")?,
+        attr(&tags[inner_margin], "right")?,
+        attr(&tags[inner_margin], "top")?,
+        attr(&tags[inner_margin], "bottom")?,
+    ] == ["141"; 4]
+        && [
+            attr(&tags[outer_margin], "left")?,
+            attr(&tags[outer_margin], "right")?,
+            attr(&tags[outer_margin], "top")?,
+            attr(&tags[outer_margin], "bottom")?,
+        ] == ["283"; 4];
     require(elements[table].children().iter().all(|&child| {
         matches!(tags[child].name.as_str(), "sz" | "pos" | "outMargin" | "inMargin" | "tr")
     }))?;
@@ -326,7 +344,11 @@ fn check_inline_category(part: &Part<'_>, table: usize) -> HwpxResult<()> {
             number(part, size, "width", 1303, 48545)?;
             let (low, high) = if no_adjust == "0" { (282, 19637) } else { (1282, 6260) };
             number(part, size, "height", low, high)?;
-            exact(&tags[part.one_child(cell, "cellMargin")?], INNER_MARGIN)?;
+            let cell_margin = part.one_child(cell, "cellMargin")?;
+            margin(part, cell_margin, &[[510, 510, 141, 141], [141, 141, 141, 141]])?;
+            if attr(&tags[cell_margin], "left")? == "141" {
+                require(equal_cell_margins_allowed)?;
+            }
             let list = part.one_child(cell, "subList")?;
             exact(&tags[list], SUBLIST)?;
             require(matches!(attr(&tags[list], "vertAlign")?, "TOP" | "CENTER" | "BOTTOM"))?;
