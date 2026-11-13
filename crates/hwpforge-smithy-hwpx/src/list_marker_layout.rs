@@ -1,5 +1,5 @@
 //! Deferred, per-output projection of marker formatting onto shared HWPX heads.
-use crate::encoder::wire_rules::{marker_base_width, marker_metrics};
+use crate::encoder::wire_rules::{marker_base_width, marker_metrics, marker_unit};
 use crate::paragraph_measure::invalid;
 use crate::style_store::{fidelity::HeadMetrics, HwpxParaShape};
 use crate::{EncodeWarning, HwpxResult, HwpxStyleStore};
@@ -59,12 +59,12 @@ pub(crate) fn validate_requests(store: &HwpxStyleStore) -> HwpxResult<()> {
         ))?;
         store.para_list_ref(shape)?;
         target(store, shape)?;
-        if crate::paragraph_measure::parts(shape.indent) != (0, "HWPUNIT") {
-            return Err(invalid("marker layout requires zero first-line indentation"));
+        let (continuation, left_unit) = crate::paragraph_measure::parts(shape.margin_left);
+        let (first, first_unit) = crate::paragraph_measure::parts(shape.indent);
+        if left_unit != "HWPUNIT" || first_unit != "HWPUNIT" {
+            return Err(invalid("marker coordinates must use HwpUnit"));
         }
-        if crate::paragraph_measure::parts(shape.margin_left).1 != "HWPUNIT" {
-            return Err(invalid("marker anchor must use HwpUnit"));
-        }
+        marker_unit(i64::from(continuation) + i64::from(first))?;
         if let Some(id) = layout.char_shape {
             store.char_shape(id)?;
         }
@@ -103,7 +103,7 @@ struct Group {
     second: Option<(HeadMetrics, i32)>,
     count: usize,
     requested: bool,
-    margins: BTreeMap<ParaShapeIndex, (i32, &'static str)>,
+    margins: BTreeMap<ParaShapeIndex, (i32, &'static str, Option<i32>, usize)>,
     warnings: Vec<EncodeWarning>,
 }
 fn font_context(
@@ -154,7 +154,9 @@ fn font_context(
 /// with table rows/cells/paragraphs before captions, then headers, footers and page backgrounds.
 /// Every original anchor receives the first use's relative margin shift once.
 /// Only the selected candidate's approximation warnings survive, even on conflict.
+/// Positive intent is diagnosed separately after applying the selected head and shift.
 /// Uses the existing paragraph walk, which excludes run-picture captions.
+/// Unvisited requests fold to the legacy anchor and zero indent without changing heads.
 /// Outline paragraphs keep their separate outline semantics and are not counted;
 /// conflicts between ordinary-list requests and those uses are not detected here.
 pub(crate) fn prepare<'a>(
@@ -190,7 +192,9 @@ pub(crate) fn prepare<'a>(
                 let old = existing(store, key);
                 let mut pending = vec![];
                 let (metrics, shift) = if let Some(layout) = request {
-                    let (anchor, _) = crate::paragraph_measure::parts(shape.margin_left);
+                    let (continuation, _) = crate::paragraph_measure::parts(shape.margin_left);
+                    let (first, _) = crate::paragraph_measure::parts(shape.indent);
+                    let anchor = marker_unit(i64::from(continuation) + i64::from(first))?;
                     let (size, reference) = font_context(store, p, layout, &old, &mut pending)?;
                     let (base, approximate) =
                         marker_base_width(if key.0 { None } else { Some(head) }, size)?;
@@ -201,7 +205,7 @@ pub(crate) fn prepare<'a>(
                         ));
                     }
                     let (margin, metrics, approximation) =
-                        marker_metrics(layout, anchor, base, reference)?;
+                        marker_metrics(layout, anchor, continuation, base, reference)?;
                     if let Some(reason) = approximation {
                         pending.push(loss("list_marker_alignment", reason));
                     }
@@ -231,7 +235,18 @@ pub(crate) fn prepare<'a>(
                     group.second = Some((metrics, shift));
                 }
                 let (anchor, unit) = crate::paragraph_measure::parts(shape.margin_left);
-                group.margins.insert(p.para_shape_id, (anchor, unit));
+                let (anchor, continuation) = if request.is_some() {
+                    let (first, _) = crate::paragraph_measure::parts(shape.indent);
+                    (marker_unit(i64::from(anchor) + i64::from(first))?, Some(anchor))
+                } else {
+                    (anchor, None)
+                };
+                group.margins.entry(p.para_shape_id).or_insert((
+                    anchor,
+                    unit,
+                    continuation,
+                    group.count,
+                ));
                 Ok(())
             })();
             if let Err(e) = result {
@@ -268,30 +283,32 @@ pub(crate) fn prepare<'a>(
             ));
         }
         warnings.extend(group.warnings);
-        if !group.first_requested && group.shift == 0 {
-            continue;
-        }
         let m = group.first;
-        let align = match m.align.as_str() {
-            "LEFT" => Alignment::Left,
-            "RIGHT" => Alignment::Right,
-            "CENTER" => Alignment::Center,
-            _ => return Err(invalid("unsupported marker head alignment")),
-        };
-        out.set_paragraph_head_metrics(
-            if bullet { HeadingType::Bullet } else { HeadingType::Number },
-            position,
-            group.native_level,
-            align,
-            m.use_inst_width != 0,
-            m.auto_indent != 0,
-            m.width_adjust,
-            m.text_offset,
-            m.text_offset_type == "HWPUNIT",
-            m.char_pr_id_ref,
-        )?;
-        for (id, (anchor, unit)) in group.margins {
-            if group.shift == 0 {
+        if group.first_requested || group.shift != 0 {
+            let align = match m.align.as_str() {
+                "LEFT" => Alignment::Left,
+                "RIGHT" => Alignment::Right,
+                "CENTER" => Alignment::Center,
+                _ => return Err(invalid("unsupported marker head alignment")),
+            };
+            out.set_paragraph_head_metrics(
+                if bullet { HeadingType::Bullet } else { HeadingType::Number },
+                position,
+                group.native_level,
+                align,
+                m.use_inst_width != 0,
+                m.auto_indent != 0,
+                m.width_adjust,
+                m.text_offset,
+                m.text_offset_type == "HWPUNIT",
+                m.char_pr_id_ref,
+            )?;
+        }
+        let mut positive_intent_warned = false;
+        let mut margins: Vec<_> = group.margins.into_iter().collect();
+        margins.sort_by_key(|(_, (_, _, _, order))| *order);
+        for (id, (anchor, unit, continuation, _)) in margins {
+            if continuation.is_none() && group.shift == 0 {
                 continue;
             }
             if unit != "HWPUNIT" {
@@ -299,11 +316,45 @@ pub(crate) fn prepare<'a>(
             }
             let margin =
                 anchor.checked_add(group.shift).ok_or_else(|| invalid("marker margin overflow"))?;
-            out.para_shape_mut(id)?.margin_left =
+            let shape = out.para_shape_mut(id)?;
+            shape.margin_left =
                 ParagraphMeasure::from_hwp_unit(hwpforge_foundation::HwpUnit::new(margin)?);
+            if let Some(continuation) = continuation {
+                let intent = if m.auto_indent == 0 {
+                    marker_unit(i64::from(margin) - i64::from(continuation))?
+                } else {
+                    0
+                };
+                shape.indent =
+                    ParagraphMeasure::from_hwp_unit(hwpforge_foundation::HwpUnit::new(intent)?);
+                out.list_marker_layouts.remove(
+                    &u32::try_from(id.get())
+                        .map_err(|_| invalid("marker paragraph reference overflow"))?,
+                );
+                if intent > 0 && !positive_intent_warned {
+                    warnings.push(loss(
+                        "list_marker_continuation",
+                        format!(
+                            "Paragraph shape {}: M={} C={} I={}; positive intent rendering is unmeasured",
+                            id.get(), margin, continuation, intent,
+                        ),
+                    ));
+                    positive_intent_warned = true;
+                }
+            }
         }
     }
-    out.list_marker_layouts.clear();
+    for (id, _) in std::mem::take(&mut out.list_marker_layouts) {
+        let shape = out.para_shape_mut(ParaShapeIndex::new(
+            usize::try_from(id).map_err(|_| invalid("marker paragraph position overflow"))?,
+        ))?;
+        let (continuation, _) = crate::paragraph_measure::parts(shape.margin_left);
+        let (first, _) = crate::paragraph_measure::parts(shape.indent);
+        let anchor = marker_unit(i64::from(continuation) + i64::from(first))?;
+        shape.margin_left =
+            ParagraphMeasure::from_hwp_unit(hwpforge_foundation::HwpUnit::new(anchor)?);
+        shape.indent = ParagraphMeasure::from_hwp_unit(hwpforge_foundation::HwpUnit::ZERO);
+    }
     Ok((Cow::Owned(out), warnings))
 }
 
@@ -387,7 +438,7 @@ mod tests {
         p.style_ref = None;
         assert!(font_context(&s, &p, m, &old, &mut vec![]).is_err());
     }
-    // 이것을 실패시키는 것: ContentLost 새 kind를 비의미 경고로 분류.
+    // 이것을 실패시키는 것: 양수 내어쓰기의 후속 줄 손실을 의미 손실이 아닌 것으로 분류.
     #[test]
     fn marker_loss_fails_closed_in_editors() {
         for kind in [
@@ -395,6 +446,7 @@ mod tests {
             "list_marker_conflict",
             "list_marker_base_width",
             "list_marker_font_context",
+            "list_marker_continuation",
         ] {
             let mut s = HwpxStyleStore::with_default_fonts("맑은 고딕");
             s.push_char_shape(HwpxCharShape {
@@ -441,6 +493,11 @@ mod tests {
             } else {
                 Some(CharShapeIndex::new(0))
             };
+            if kind == "list_marker_continuation" {
+                m.text_start = T::AfterMarker(HwpUnit::ZERO);
+                s.para_shape_mut(ParaShapeIndex::new(0)).unwrap().indent =
+                    ParagraphMeasure::from_hwp_unit(HwpUnit::new(600).unwrap());
+            }
             s.list_marker_layouts.insert(0, m);
             let mut p = Paragraph::with_runs(
                 vec![Run::text("a", CharShapeIndex::new(0))],

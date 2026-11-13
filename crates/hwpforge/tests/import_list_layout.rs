@@ -132,9 +132,9 @@ fn imported_unsupported_zero_hanging_retains_legacy_head_metrics() {
     }
 }
 
-// 이것을 실패시키는 것: 디코더가 새 배치와 함께 접지 않은 first-line indent를 반환.
+// 이것을 실패시키는 것: 명시적 번호 배치 요청에도 들여쓰기 접기를 적용.
 #[test]
-fn decoded_marker_registry_accepts_folded_indentation() {
+fn decoded_marker_registry_preserves_continuation_indent() {
     let d = hwpforge::docx::decode_docx(&numbered("", "<w:ind w:left='960' w:hanging='480'/>"))
         .unwrap();
     let restored: hwpforge::blueprint::registry::StyleRegistry =
@@ -142,7 +142,13 @@ fn decoded_marker_registry_accepts_folded_indentation() {
     let requests: Vec<_> =
         restored.para_shapes.iter().filter(|p| p.list_marker.is_some()).collect();
     assert!(!requests.is_empty());
-    assert!(requests.iter().all(|p| p.indent_first_line.as_i32() == 0));
+    assert_eq!(
+        requests
+            .iter()
+            .map(|p| (p.indent_left.as_i32(), p.indent_first_line.as_i32()))
+            .collect::<Vec<_>>(),
+        [(3600, -1800), (4800, -2400)]
+    );
 }
 
 fn imported_head(h: &xml::Element, bullet: bool) -> &xml::Element {
@@ -189,7 +195,7 @@ fn imported_zero_hanging_uses_default_tab_grid() {
             let input = docx::package_with_numbering_and_settings(&body, &defs, Some(tab));
             let result = convert_docx(&input).unwrap();
             let h = xml::Element::parse(&package::part(&result.bytes, "Contents/header.xml"));
-            imported_metrics(&h, bullet, ["LEFT", "0", "1", widths[i], "PERCENT", "0"]);
+            imported_metrics(&h, bullet, ["LEFT", "0", "0", widths[i], "PERCENT", "0"]);
             let section = xml::Element::parse(&package::section_xml(&result.bytes));
             let paragraphs = section.descendants("hp:p");
             let reference = paragraphs[0].attr("paraPrIDRef").unwrap();
@@ -221,7 +227,7 @@ fn imported_zero_hanging_uses_default_tab_grid() {
             assert_eq!(marker_ref, body_ref);
             for (loss, want) in [
                 ("list_marker_default_tab", 1),
-                ("list_marker_continuation", 1),
+                ("list_marker_continuation", 0),
                 ("list_marker_zero_slot", 0),
                 ("list_marker_tab_boundary", u64::from(tab == "800" && anchor == 620)),
             ] {
@@ -261,7 +267,7 @@ fn imported_zero_hanging_alignment_and_marker_size() {
         for (k, v) in [
             ("align", align.to_uppercase()),
             ("useInstWidth", "0".into()),
-            ("autoIndent", "1".into()),
+            ("autoIndent", if align == "right" { "1" } else { "0" }.into()),
             ("widthAdjust", width.into()),
             ("textOffsetType", if align == "left" { "PERCENT" } else { "HWPUNIT" }.into()),
             ("textOffset", offset.into()),
@@ -311,7 +317,17 @@ fn marker_conflict_fails_closed_with_selected_wire() {
     for (id, gap) in [(first, 1800), (second, 2400)] {
         value["list_marker_layouts"][id] = serde_json::json!({"align":"left","text_start":{"kind":"from_anchor","value":gap},"char_shape":character});
     }
-    let store = serde_json::from_value(value).unwrap();
+    let mut store: hwpforge::hwpx::HwpxStyleStore = serde_json::from_value(value).unwrap();
+    for (index, continuation, first) in [(0, 3600, -1800), (1, 4800, -2400)] {
+        let id = decoded.document.sections()[0].paragraphs[index].para_shape_id;
+        let shape = store.para_shape_mut(id).unwrap();
+        shape.margin_left = hwpforge::core::ParagraphMeasure::from_hwp_unit(
+            hwpforge::foundation::HwpUnit::new(continuation).unwrap(),
+        );
+        shape.indent = hwpforge::core::ParagraphMeasure::from_hwp_unit(
+            hwpforge::foundation::HwpUnit::new(first).unwrap(),
+        );
+    }
     let document = decoded.document.clone().validate().unwrap();
     let out = hwpforge::hwpx::HwpxEncoder::encode_with_edit_base(
         &base,
@@ -369,7 +385,7 @@ fn styled_numbering(direct: bool, style_first: &str, direct_indent: &str) -> Vec
 
 fn assert_styled_numbering(
     input: &[u8],
-    anchors: [i32; 2],
+    continuations: [i32; 2],
     right: [i32; 2],
     xml_left: [&str; 2],
     xml_default: [&str; 2],
@@ -377,9 +393,9 @@ fn assert_styled_numbering(
     let decoded = hwpforge::docx::decode_docx(input).unwrap();
     for (i, p) in decoded.document.sections()[0].paragraphs.iter().enumerate() {
         let shape = &decoded.registry.para_shapes[p.para_shape_id.get()];
-        assert_eq!(shape.indent_left.as_i32(), anchors[i]);
+        assert_eq!(shape.indent_left.as_i32(), continuations[i]);
         assert_eq!(shape.indent_right.as_i32(), right[i]);
-        assert_eq!(shape.indent_first_line.as_i32(), 0);
+        assert_eq!(shape.indent_first_line.as_i32(), -2200);
         assert_eq!(
             shape.list_marker.unwrap().text_start,
             hwpforge::blueprint::ListTextStart::FromAnchor(
@@ -443,7 +459,7 @@ fn assert_styled_numbering(
 fn direct_numbering_indent_precedes_paragraph_style() {
     assert_styled_numbering(
         &styled_numbering(true, "", ""),
-        [0, 2200],
+        [2200, 4400],
         [600, 800],
         ["0", "2200"],
         ["0", "4400"],
@@ -455,7 +471,7 @@ fn direct_numbering_indent_precedes_paragraph_style() {
 fn direct_numbering_indent_keeps_direct_paragraph_priority() {
     assert_styled_numbering(
         &styled_numbering(true, "", "<w:ind w:left='1000'/>"),
-        [2800, 2800],
+        [5000, 5000],
         [600, 800],
         ["2800", "2800"],
         ["5600", "5600"],
@@ -467,7 +483,7 @@ fn direct_numbering_indent_keeps_direct_paragraph_priority() {
 fn inherited_numbering_indent_keeps_paragraph_style_priority() {
     assert_styled_numbering(
         &styled_numbering(false, "", ""),
-        [1400, 1400],
+        [3600, 3600],
         [1800, 1800],
         ["1400", "1400"],
         ["2800", "2800"],
@@ -479,9 +495,77 @@ fn inherited_numbering_indent_keeps_paragraph_style_priority() {
 fn direct_numbering_hanging_replaces_style_first_line_slot() {
     assert_styled_numbering(
         &styled_numbering(true, "w:firstLine='200'", ""),
-        [0, 2200],
+        [2200, 4400],
         [600, 800],
         ["0", "2200"],
         ["0", "4400"],
     );
+}
+
+// 이것을 실패시키는 것: 명시적 C/F를 접거나 C를 탭 목표로 대체하거나 무조건적인 후속 줄 손실 경고를 복원.
+#[test]
+fn imported_continuation_uses_final_word_left_for_suffix_tabs_and_alignments() {
+    for (align, suffix, hanging, tab, extra, c, f, auto, left, intent) in [
+        ("left", "space", 360, "720", "", 3600, -1800, "0", "1800", "-1800"),
+        ("right", "nothing", 360, "720", "", 3600, -1800, "0", "1800", "-1800"),
+        ("center", "space", 360, "720", "", 3600, -1800, "0", "1800", "-1800"),
+        (
+            "left",
+            "tab",
+            360,
+            "720",
+            "<w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs>",
+            3600,
+            -1800,
+            "0",
+            "1800",
+            "-1800",
+        ),
+        ("left", "tab", 0, "720", "", 3600, 0, "0", "3600", "0"),
+        ("left", "tab", 0, "800", "", 3600, 0, "0", "3600", "0"),
+        ("center", "tab", 0, "720", "", 3600, 0, "0", "0", "-3600"),
+        ("center", "tab", 0, "800", "", 3600, 0, "0", "-800", "-4400"),
+        ("right", "tab", 0, "800", "", 3600, 0, "1", "2500", "0"),
+        ("left", "tab", 360, "720", "", 3600, -1800, "1", "1800", "0"),
+        ("center", "tab", 360, "720", "", 3600, -1800, "1", "0", "0"),
+        ("right", "tab", 360, "720", "", 3600, -1800, "1", "0", "0"),
+    ] {
+        let defs = format!("<w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:start w:val='1'/><w:numFmt w:val='decimal'/><w:lvlText w:val='%1.'/><w:suff w:val='{suffix}'/><w:lvlJc w:val='{align}'/><w:pPr><w:ind w:left='720' w:hanging='{hanging}'/>{extra}</w:pPr><w:rPr><w:sz w:val='22'/></w:rPr></w:lvl></w:abstractNum><w:num w:numId='7'><w:abstractNumId w:val='1'/></w:num>");
+        let body = "<w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr><w:r><w:rPr><w:sz w:val='22'/></w:rPr><w:t>body</w:t></w:r></w:p>";
+        let input = docx::package_with_numbering_and_settings(body, &defs, Some(tab));
+        let decoded = hwpforge::docx::decode_docx(&input).unwrap();
+        let p = &decoded.registry.para_shapes
+            [decoded.document.sections()[0].paragraphs[0].para_shape_id.get()];
+        assert_eq!((p.indent_left.as_i32(), p.indent_first_line.as_i32()), (c, f));
+        assert!(decoded.warnings.iter().all(|w| w.loss() != "list_marker_continuation"));
+        let out = convert_docx(&input).unwrap();
+        assert!(out.warnings.iter().all(|w| !matches!(w, hwpforge::ops::OpsWarning::Encode(EncodeWarning::ContentLost { kind, .. }) if kind == "list_marker_continuation")));
+        let h = xml::Element::parse(&package::part(&out.bytes, "Contents/header.xml"));
+        let section = xml::Element::parse(&package::section_xml(&out.bytes));
+        let id = section.descendants("hp:p")[0].attr("paraPrIDRef").unwrap();
+        let p = h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some(id)).unwrap();
+        let heading = p.child("hh:heading");
+        let def = h
+            .descendants("hh:numbering")
+            .into_iter()
+            .find(|n| n.attr("id") == heading.attr("idRef"))
+            .unwrap();
+        let level = heading.attr("level").unwrap().parse::<u32>().unwrap() + 1;
+        let head = def
+            .descendants("hh:paraHead")
+            .into_iter()
+            .find(|h| h.attr("level") == Some(level.to_string().as_str()))
+            .unwrap();
+        assert_eq!(head.attr("autoIndent"), Some(auto));
+        for (branch, multiplier) in [("hp:case", 1), ("hp:default", 2)] {
+            let margin = p.child("hp:switch").child(branch).child("hh:margin");
+            for (tag, value) in [("hc:left", left), ("hc:intent", intent)] {
+                assert_eq!(
+                    margin.child(tag).attr("value").unwrap().parse::<i32>().unwrap(),
+                    value.parse::<i32>().unwrap() * multiplier
+                );
+                assert_eq!(margin.child(tag).attr("unit"), Some("HWPUNIT"));
+            }
+        }
+    }
 }

@@ -166,6 +166,7 @@ pub(crate) const MEASURED_WIDTH_ALIGNMENT: &str =
 pub(crate) fn marker_metrics(
     layout: hwpforge_blueprint::ListMarkerLayout,
     anchor: i32,
+    continuation: i32,
     base: i32,
     char_ref: u32,
 ) -> crate::HwpxResult<(i32, crate::style_store::fidelity::HeadMetrics, Option<&'static str>)> {
@@ -174,6 +175,7 @@ pub(crate) fn marker_metrics(
     let mut metrics = HeadMetrics::generated(0);
     metrics.char_pr_id_ref = char_ref;
     metrics.text_offset = 0;
+    metrics.auto_indent = 0;
     let anchor = i64::from(anchor);
     let (margin, approximation) = match layout.text_start {
         T::FromAnchor(g) => {
@@ -181,6 +183,7 @@ pub(crate) fn marker_metrics(
             marker_unit(anchor.checked_add(g).ok_or_else(|| {
                 crate::paragraph_measure::invalid("marker text position overflow")
             })?)?;
+            metrics.auto_indent = u32::from(i64::from(continuation) == anchor + g);
             let slot = if layout.align == A::Center {
                 marker_unit(g.checked_mul(2).ok_or_else(|| {
                     crate::paragraph_measure::invalid("center marker slot overflow")

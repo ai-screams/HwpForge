@@ -280,12 +280,12 @@ fn split_list_markers_only_on_first_fragment() {
                     s.keep_with_next
                 ))
                 .collect::<Vec<_>>(),
-            [(100, 0, 0, false), (0, 200, 0, true)]
+            [(100, 0, -300, false), (0, 200, 0, true)]
         );
-        // The marker fragment folds the hanging indent into its left margin; the continuation keeps it.
+        // The marker fragment retains signed first-line indentation and the continuation start.
         assert_eq!(
             shapes.iter().take(2).map(|s| s.indent_left.as_i32()).collect::<Vec<_>>(),
-            [-300, 0]
+            [0, 0]
         );
         let unique: std::collections::HashSet<_> = p.iter().map(|p| p.para_shape_id).collect();
         assert_eq!(d.registry.para_shapes.len(), unique.len());
@@ -850,9 +850,9 @@ fn emitted_ancestor_recovers_omitted_marker_descendants() {
     }
 }
 
-// 이것을 실패시키는 것: 접기를 빼기, 표식 없는 문단·개요까지 접기, 양수 첫 줄도 접기, 글머리 제외.
+// 이것을 실패시키는 것: 명시적 목록 좌표를 접거나 일반·개요·양수 `indent_first_line`의 대체 동작을 변경.
 #[test]
-fn marker_paragraphs_fold_hanging_indent_into_left_margin() {
+fn marker_paragraphs_keep_signed_indentation() {
     let defs = format!(
         "<w:abstractNum w:abstractNumId='1'>{}</w:abstractNum><w:abstractNum w:abstractNumId='2'><w:lvl w:ilvl='0'><w:numFmt w:val='bullet'/><w:lvlText w:val='•'/><w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Arial'/></w:rPr></w:lvl></w:abstractNum>{}{}",
         level(0, "decimal", "%1.", ""),
@@ -875,7 +875,7 @@ fn marker_paragraphs_fold_hanging_indent_into_left_margin() {
             (s.indent_left.as_i32(), s.indent_first_line.as_i32())
         })
         .collect();
-    assert_eq!(got, [(1800, 0), (1800, 0), (3600, -1800), (3600, 1800), (3600, -1800)]);
+    assert_eq!(got, [(3600, -1800), (3600, -1800), (3600, -1800), (3600, 1800), (3600, -1800)]);
 }
 
 fn marker_shape(d: &DocxDecoded, index: usize) -> &hwpforge_blueprint::style::ParaShape {
@@ -895,9 +895,9 @@ fn layout_input(extra: &str, direct: &str) -> DocxDecoded {
         &item(7, 0, direct, "body"),
     )
 }
-// 이것을 실패시키는 것: 내어쓰기를 접은 뒤 간격 계산 또는 수준 들여쓰기만 사용.
+// 이것을 실패시키는 것: 명시적 요청을 접거나 최종 `indent_first_line`을 버림.
 #[test]
-fn word_list_hanging_becomes_anchor_and_gap() {
+fn word_list_hanging_preserves_continuation_and_anchor() {
     use hwpforge_blueprint::{ListMarkerAlign, ListTextStart};
     for (direct, anchor, gap) in [
         ("", 1800, 1800),
@@ -907,8 +907,8 @@ fn word_list_hanging_becomes_anchor_and_gap() {
         let d = layout_input("", direct);
         let s = marker_shape(&d, 0);
         let m = s.list_marker.unwrap();
-        assert_eq!(s.indent_left.as_i32(), anchor);
-        assert_eq!(s.indent_first_line.as_i32(), 0);
+        assert_eq!(s.indent_left.as_i32(), anchor + gap);
+        assert_eq!(s.indent_first_line.as_i32(), -gap);
         assert_eq!(m.align, ListMarkerAlign::Left);
         assert_eq!(
             m.text_start,
@@ -949,7 +949,7 @@ fn word_suffix_space_and_nothing() {
             marker_shape(&d, 0).list_marker.unwrap().text_start,
             ListTextStart::AfterMarker(hwpforge_foundation::HwpUnit::new(distance).unwrap())
         );
-        assert!(d.warnings.iter().any(|w| w.loss() == "list_marker_continuation"));
+        assert!(!d.warnings.iter().any(|w| w.loss() == "list_marker_continuation"));
         assert_eq!(
             d.warnings.iter().any(|w| w.loss() == "list_marker_space_width"),
             suffix == "space"
@@ -960,7 +960,7 @@ fn word_suffix_space_and_nothing() {
 #[test]
 fn word_number_tab_selects_earlier_text_start() {
     use hwpforge_blueprint::ListTextStart;
-    for (pos, gap, continuation) in [(600, 1200, true), (840, 1800, false), (360, 1800, false)] {
+    for (pos, gap) in [(600, 1200), (840, 1800), (360, 1800)] {
         let extra=format!("<w:pPr><w:ind w:left='720' w:hanging='360'/><w:tabs><w:tab w:val='num' w:pos='{pos}'/></w:tabs></w:pPr>");
         let d = read(
             &definitions(&level(0, "decimal", "%1.", &extra), &num(7, 1, "")),
@@ -970,7 +970,7 @@ fn word_number_tab_selects_earlier_text_start() {
             marker_shape(&d, 0).list_marker.unwrap().text_start,
             ListTextStart::FromAnchor(hwpforge_foundation::HwpUnit::new(gap).unwrap())
         );
-        assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_continuation"), continuation);
+        assert!(!d.warnings.iter().any(|w| w.loss() == "list_marker_continuation"));
         assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_tab"), pos == 360);
     }
     let d=layout_input("<w:pPr><w:ind w:left='720' w:hanging='360'/><w:tabs><w:tab w:val='num' w:pos='600'/><w:tab w:val='num' w:pos='500'/></w:tabs></w:pPr>","");
@@ -1044,7 +1044,7 @@ fn wingdings_circle_and_square_are_mapped() {
 #[test]
 fn word_list_direct_indent_overrides_level() {
     let d = layout_input("", "<w:ind w:left='960' w:hanging='480'/>");
-    assert_eq!(marker_shape(&d, 0).indent_left.as_i32(), 2400);
+    assert_eq!(marker_shape(&d, 0).indent_left.as_i32(), 4800);
     assert_eq!(
         marker_shape(&d, 0).list_marker.unwrap().text_start,
         hwpforge_blueprint::ListTextStart::FromAnchor(
@@ -1495,7 +1495,6 @@ fn word_marker_diagnostics_count_each_definition_level_once() {
         ("<w:suff w:val='space'/>", "list_marker_space_width"),
         ("<w:rPr><w:sz w:val='22'/><w:szCs w:val='28'/></w:rPr>", "script_format"),
         ("<w:pPr><w:ind w:left='720' w:firstLine='100'/></w:pPr>", "list_marker_indent"),
-        ("<w:suff w:val='nothing'/>", "list_marker_continuation"),
         ("<w:rPr><w:sz w:val='48'/></w:rPr>", "list_marker_line_height"),
         ("<w:pPr><w:tabs><w:tab w:val='num' w:pos='100'/></w:tabs></w:pPr>", "list_marker_tab"),
     ] {
@@ -1518,7 +1517,7 @@ fn word_marker_diagnostics_count_each_definition_level_once() {
             .para_shapes
             .iter()
             .filter(|p| p.list_marker.is_some())
-            .all(|p| p.indent_first_line.as_i32() == 0));
+            .all(|p| p.indent_first_line.as_i32() == -1800));
     }
     let l = level(
         0,
@@ -1589,13 +1588,15 @@ fn word_bullet_diagnostics_count_each_output_head_once() {
         );
         assert_eq!(d.registry.bullets.len(), expected);
         assert_eq!(count(&d, "DOCX_BULLET_GLYPH_APPROXIMATED"), expected as u64);
-        for loss in ["list_marker_space_width", "list_marker_continuation"] {
-            assert_eq!(
-                d.warnings.iter().filter(|w| w.loss() == loss).map(|w| w.count()).sum::<u64>(),
-                expected as u64,
-                "{loss}"
-            );
-        }
+        assert_eq!(
+            d.warnings
+                .iter()
+                .filter(|w| w.loss() == "list_marker_space_width")
+                .map(|w| w.count())
+                .sum::<u64>(),
+            expected as u64,
+            "list_marker_space_width"
+        );
         assert_eq!(
             d.warnings
                 .iter()
@@ -1673,7 +1674,7 @@ fn word_zero_hanging_uses_default_tab_grid() {
                 assert_eq!(gap(&d, n), expected[i], "tab={tab} anchor={anchor}");
             }
             assert_eq!(loss_count(&d, "list_marker_default_tab"), 1);
-            assert_eq!(loss_count(&d, "list_marker_continuation"), 1);
+            assert_eq!(loss_count(&d, "list_marker_continuation"), 0);
             assert_eq!(loss_count(&d, "list_marker_zero_slot"), 0);
             assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
             assert_eq!(
@@ -1694,7 +1695,7 @@ fn word_default_tab_group_overflow_uses_first_slot() {
         let d = zero_read(&l, &item(7, 0, "", "body").repeat(3), Some(&settings), "");
         assert_eq!([gap(&d, 0), gap(&d, 1), gap(&d, 2)], expected);
         assert_eq!(loss_count(&d, "list_marker_default_tab"), 1);
-        assert_eq!(loss_count(&d, "list_marker_continuation"), 1);
+        assert_eq!(loss_count(&d, "list_marker_continuation"), 0);
         assert_eq!(loss_count(&d, "list_marker_overflow"), 1);
         let overflow: Vec<_> =
             d.warnings.iter().filter(|w| w.loss() == "list_marker_overflow").collect();

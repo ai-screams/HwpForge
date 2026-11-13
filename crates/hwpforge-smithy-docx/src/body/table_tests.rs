@@ -271,7 +271,8 @@ fn lists_continue_across_tables() {
     assert_eq!(lists.len(), 3);
     assert_eq!(lists[0], lists[1]);
     assert_eq!(lists[1], lists[2]);
-    assert_eq!((lists[0].1, lists[0].2), (1800, 0));
+    // 이것을 실패시키는 것: 중첩 표 안의 명시적 목록 좌표를 접음.
+    assert_eq!((lists[0].1, lists[0].2), (3600, -1800));
 }
 // 이것을 실패시키는 것: gridAfter 채움 누락, 빈 셀에 목록 또는 이전 문단 서식 복사.
 #[test]

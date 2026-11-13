@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 걸침 0인 Word 목록은 지원 decimal·Symbol 표지에 기본 탭 설정을 적용한다. 공유 정의 충돌은 문서 첫 사용처의 head와 상대 margin 이동량을 선택하고 손실을 전달하며 원본 보존 편집은 실패한다.
+- 걸침 0인 Word 목록은 지원 decimal·Symbol 표지에 기본 탭 설정을 적용한다. 가져오기는 최종 Word left와 signed first를 유지하고 문단별 intent로 목록 후속 줄 위치를 보존한다. 양수 intent는 미측정 경고를 전달한다. 공유 정의 충돌은 문서 첫 사용처의 head와 상대 margin 이동량을 선택하고 손실을 전달하며 원본 보존 편집은 실패한다.
 
 - DOCX 가져오기가 문단별 자동 간격(`autoSpaceDE`·`autoSpaceDN`)의 유효값을 꺼짐까지 그대로 옮긴다. 기본 스타일이 자동 간격을 끈 문서에서 한글과 숫자·영문 사이가 벌어지던 출력이 Word와 같아진다.
 

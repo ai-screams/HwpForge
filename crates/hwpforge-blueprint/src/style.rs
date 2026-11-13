@@ -53,7 +53,7 @@ pub struct Spacing {
 /// Paragraph indentation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Indent {
-    /// Left indentation.
+    /// Left indentation; the continuation start C when `list_marker` is present.
     #[serde(
         default,
         serialize_with = "ser_dim_opt",
@@ -652,7 +652,8 @@ pub enum ListTextStart {
         #[schemars(range(min = 0, max = 100_000_000))]
         HwpUnit,
     ),
-    /// Distance after the marker's measured end; continuation lines may differ.
+    /// Distance after the marker's measured end, which requires its actual width
+    /// for the first-line position. Continuation lines retain `indent_left` independently.
     /// Encoders without measured marker widths may report an alignment approximation.
     AfterMarker(
         #[serde(deserialize_with = "de_marker_distance")]
@@ -676,8 +677,9 @@ fn validate_marker_distance(value: HwpUnit) -> BlueprintResult<()> {
     Ok(())
 }
 
-/// Explicit list-marker formatting. `indent_left` is the alignment anchor and
-/// `indent_first_line` must be zero. A partial child replaces this object atomically.
+/// Explicit list-marker formatting. `indent_left` is the continuation start C;
+/// signed `indent_first_line` is F, and their sum C + F is the marker anchor A.
+/// A partial child replaces this object atomically.
 ///
 /// No layout (`None` on a paragraph) retains existing template or source formatting;
 /// either zero-distance variant is an explicit request. Shared output heads can
@@ -692,7 +694,7 @@ fn validate_marker_distance(value: HwpUnit) -> BlueprintResult<()> {
 pub struct ListMarkerLayout {
     /// Marker alignment about the anchor, rather than the ink's left edge.
     pub align: ListMarkerAlign,
-    /// First-line text distance in HwpUnit; continuation layout is format-dependent.
+    /// First-line text distance in HwpUnit; continuation starts at `indent_left`.
     pub text_start: ListTextStart,
     /// Optional marker character shape in the owning registry's reference space.
     /// `None` retains an explicit source head reference or its inherited character context.
@@ -757,7 +759,8 @@ pub struct PartialParaShape {
     /// Vertical spacing (before/after paragraph).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spacing: Option<Spacing>,
-    /// Indentation.
+    /// Indentation. With explicit marker formatting, left is the continuation
+    /// start and signed first-line indentation adds to it to locate the anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indent: Option<Indent>,
 
@@ -904,7 +907,8 @@ impl PartialParaShape {
     ) -> BlueprintResult<ParaShape> {
         let list = self.resolve_list(style_name, numberings, bullets)?;
         let first_line = self.indent.and_then(|i| i.first_line).unwrap_or(HwpUnit::ZERO);
-        validate_list_marker(self.list_marker, list, first_line, numberings, bullets)?;
+        let left = self.indent.and_then(|i| i.left).unwrap_or(HwpUnit::ZERO);
+        validate_list_marker(self.list_marker, list, left, first_line, numberings, bullets)?;
         Ok(ParaShape {
             alignment: self.alignment.unwrap_or(Alignment::Left),
             line_spacing_type: self
@@ -914,7 +918,7 @@ impl PartialParaShape {
             line_spacing_value: self.line_spacing.and_then(|ls| ls.value).unwrap_or(160.0),
             space_before: self.spacing.and_then(|s| s.before).unwrap_or(HwpUnit::ZERO),
             space_after: self.spacing.and_then(|s| s.after).unwrap_or(HwpUnit::ZERO),
-            indent_left: self.indent.and_then(|i| i.left).unwrap_or(HwpUnit::ZERO),
+            indent_left: left,
             indent_right: self.indent.and_then(|i| i.right).unwrap_or(HwpUnit::ZERO),
             indent_first_line: first_line,
             break_type: self.break_type.unwrap_or(BreakType::None),
@@ -1101,13 +1105,13 @@ pub struct ParaShape {
     /// Space after paragraph.
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub space_after: HwpUnit,
-    /// Left indentation.
+    /// Left indentation; the continuation start C when `list_marker` is present.
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub indent_left: HwpUnit,
     /// Right indentation.
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub indent_right: HwpUnit,
-    /// First-line indentation.
+    /// Signed first-line indentation F; with `list_marker`, C + F is the marker anchor.
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub indent_first_line: HwpUnit,
 
@@ -1143,16 +1147,18 @@ pub struct ParaShape {
 pub(crate) fn validate_list_marker(
     marker: Option<ListMarkerLayout>,
     list: Option<ParagraphListRef>,
+    indent_left: HwpUnit,
     first_line: HwpUnit,
     numberings: &[NumberingDef],
     bullets: &[BulletDef],
 ) -> BlueprintResult<()> {
     let Some(marker) = marker else { return Ok(()) };
     ListMarkerLayout::new(marker.align, marker.text_start)?;
-    if first_line != HwpUnit::ZERO {
+    let anchor = i64::from(indent_left.as_i32()) + i64::from(first_line.as_i32());
+    if !(-100_000_000..=100_000_000).contains(&anchor) {
         return Err(hwpforge_foundation::FoundationError::InvalidField {
             field: "list_marker".into(),
-            reason: "marker layout requires zero first-line indentation".into(),
+            reason: "marker anchor exceeds HwpUnit range".into(),
         }
         .into());
     }
@@ -1197,10 +1203,11 @@ mod tests {
             ListMarkerLayout::new(ListMarkerAlign::Left, ListTextStart::FromAnchor(HwpUnit::ZERO))
                 .unwrap(),
         );
-        assert!(validate_list_marker(None, None, HwpUnit::ZERO, &[], &[]).is_ok());
+        assert!(validate_list_marker(None, None, HwpUnit::ZERO, HwpUnit::ZERO, &[], &[]).is_ok());
         assert!(validate_list_marker(
             m,
             Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 1 }),
+            HwpUnit::ZERO,
             HwpUnit::ZERO,
             &[test_numbering_def(1)],
             &[]
@@ -1212,6 +1219,7 @@ mod tests {
             m,
             Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 10 }),
             HwpUnit::ZERO,
+            HwpUnit::ZERO,
             &[n],
             &[]
         )
@@ -1220,15 +1228,17 @@ mod tests {
             m,
             Some(ParagraphListRef::Outline { level: 0 }),
             HwpUnit::ZERO,
+            HwpUnit::ZERO,
             &[],
             &[]
         )
         .is_err());
-        assert!(validate_list_marker(m, None, HwpUnit::ZERO, &[], &[]).is_err());
+        assert!(validate_list_marker(m, None, HwpUnit::ZERO, HwpUnit::ZERO, &[], &[]).is_err());
         let mut b = test_bullet_def(1);
         assert!(validate_list_marker(
             m,
             Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 10 }),
+            HwpUnit::ZERO,
             HwpUnit::ZERO,
             &[],
             &[b.clone()]
@@ -1241,6 +1251,7 @@ mod tests {
                 level: 0,
                 checked: false
             }),
+            HwpUnit::ZERO,
             HwpUnit::ZERO,
             &[],
             &[b.clone()]
@@ -1256,6 +1267,7 @@ mod tests {
                 checked: true
             }),
             HwpUnit::ZERO,
+            HwpUnit::ZERO,
             &[],
             &[b.clone()]
         )
@@ -1263,6 +1275,7 @@ mod tests {
         assert!(validate_list_marker(
             m,
             Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 }),
+            HwpUnit::ZERO,
             HwpUnit::ZERO,
             &[],
             &[b.clone()]
@@ -1276,10 +1289,44 @@ mod tests {
                 checked: true
             }),
             HwpUnit::ZERO,
+            HwpUnit::ZERO,
             &[],
             &[b]
         )
         .is_ok());
+    }
+
+    // 이것을 실패시키는 것: 번호 정렬점 합 검증을 생략하거나 배치 미지정 문단에도 적용.
+    #[test]
+    fn marker_layout_rejects_anchor_overflow() {
+        let marker = Some(
+            ListMarkerLayout::new(ListMarkerAlign::Left, ListTextStart::AfterMarker(HwpUnit::ZERO))
+                .unwrap(),
+        );
+        let list =
+            Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 0 });
+        for (left, first, valid) in [
+            (100_000_000, 1, false),
+            (-100_000_000, -1, false),
+            (99_999_999, 1, true),
+            (-99_999_999, -1, true),
+        ] {
+            let left = HwpUnit::new(left).unwrap();
+            let first = HwpUnit::new(first).unwrap();
+            assert_eq!(
+                validate_list_marker(marker, list, left, first, &[test_numbering_def(1)], &[])
+                    .is_ok(),
+                valid
+            );
+            assert!(validate_list_marker(None, list, left, first, &[], &[]).is_ok());
+            let partial = PartialParaShape {
+                list_marker: marker,
+                list: Some(PartialParagraphListRef::Number { numbering_id: 1, level: 0 }),
+                indent: Some(Indent { left: Some(left), first_line: Some(first), right: None }),
+                ..Default::default()
+            };
+            assert_eq!(partial.resolve("body", &[test_numbering_def(1)], &[]).is_ok(), valid);
+        }
     }
 
     fn test_numbering_def(id: u32) -> NumberingDef {

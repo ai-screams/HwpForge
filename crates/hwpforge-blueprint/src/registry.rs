@@ -1523,6 +1523,7 @@ fn validate_marker_references(registry: &StyleRegistry) -> BlueprintResult<()> {
         crate::style::validate_list_marker(
             shape.list_marker,
             shape.list,
+            shape.indent_left,
             shape.indent_first_line,
             &registry.numberings,
             &registry.bullets,
@@ -1604,9 +1605,9 @@ mod marker_reference_tests {
 #[cfg(test)]
 mod marker_indent_tests {
     use super::*;
-    // 이것을 실패시키는 것: 해석 단계나 registry 검증에서 번호 배치의 첫 줄 들여쓰기 허용.
+    // 이것을 실패시키는 것: 0이 아닌 양수·음수 `indent_first_line`을 다시 거부.
     #[test]
-    fn marker_layout_requires_zero_first_line_indent() {
+    fn marker_layout_accepts_signed_first_line() {
         let yaml = r#"
 meta:
   name: marker
@@ -1637,46 +1638,40 @@ styles:
           kind: from_anchor
           value: 1800
 "#;
-        let template = Template::from_yaml(yaml).unwrap();
-        let partial = template.styles["body"].para_shape.as_ref().unwrap();
-        let err = partial.resolve("body", &template.numberings, &template.bullets).unwrap_err();
-        assert!(err.to_string().contains("zero first-line indentation"), "{err}");
-        assert!(StyleRegistry::from_template(&template).is_err());
-        let positive = Template::from_yaml(&yaml.replace("-10pt", "10pt")).unwrap();
-        assert!(positive.styles["body"]
-            .para_shape
-            .as_ref()
-            .unwrap()
-            .resolve("body", &positive.numberings, &positive.bullets)
-            .is_err());
-        assert!(StyleRegistry::from_template(&positive).is_err());
-        let mut valid = template.clone();
-        valid
-            .styles
-            .get_mut("body")
-            .unwrap()
-            .para_shape
-            .as_mut()
-            .unwrap()
-            .indent
-            .as_mut()
-            .unwrap()
-            .first_line = Some(hwpforge_foundation::HwpUnit::ZERO);
-        let mut registry = StyleRegistry::from_template(&valid).unwrap();
-        for shape in &mut registry.para_shapes {
-            if shape.list_marker.is_some() {
-                shape.indent_first_line = hwpforge_foundation::HwpUnit::new(-1000).unwrap();
+        for (text, first) in [("-10pt", -1000), ("0pt", 0), ("10pt", 1000)] {
+            let template = Template::from_yaml(&yaml.replace("-10pt", text)).unwrap();
+            let partial = template.styles["body"].para_shape.as_ref().unwrap();
+            let resolved =
+                partial.resolve("body", &template.numberings, &template.bullets).unwrap();
+            assert_eq!(resolved.indent_first_line.as_i32(), first);
+            let registry = StyleRegistry::from_template(&template).unwrap();
+            validate_marker_references(&registry).unwrap();
+            let restored: StyleRegistry =
+                serde_json::from_value(serde_json::to_value(&registry).unwrap()).unwrap();
+            assert_eq!(restored, registry);
+            // 이것을 실패시키는 것: 저장소의 번호 정렬점 검증을 생략하거나 배치 미지정 문단의 독립 길이를 제한.
+            for sign in [-1, 1] {
+                let mut overflow = registry.clone();
+                for shape in &mut overflow.para_shapes {
+                    if shape.list_marker.is_some() {
+                        shape.indent_left =
+                            hwpforge_foundation::HwpUnit::new(sign * 100_000_000).unwrap();
+                        shape.indent_first_line = hwpforge_foundation::HwpUnit::new(sign).unwrap();
+                    }
+                }
+                assert!(validate_marker_references(&overflow).is_err());
+                assert!(serde_json::from_value::<StyleRegistry>(
+                    serde_json::to_value(&overflow).unwrap()
+                )
+                .is_err());
+                for shape in &mut overflow.para_shapes {
+                    shape.list_marker = None;
+                }
+                assert!(serde_json::from_value::<StyleRegistry>(
+                    serde_json::to_value(&overflow).unwrap()
+                )
+                .is_ok());
             }
         }
-        let err = validate_marker_references(&registry).unwrap_err();
-        assert!(err.to_string().contains("zero first-line indentation"), "{err}");
-        assert!(serde_json::from_value::<StyleRegistry>(serde_json::to_value(&registry).unwrap())
-            .is_err());
-        for shape in &mut registry.para_shapes {
-            if shape.list_marker.is_some() {
-                shape.indent_first_line = hwpforge_foundation::HwpUnit::new(1000).unwrap();
-            }
-        }
-        assert!(validate_marker_references(&registry).is_err());
     }
 }

@@ -33,14 +33,8 @@ mod marker_messages {
         "Estimated marker end is less than 1 pt before the selected tab; width ",
         "approximation may select an adjacent tab.",
     );
-    pub(super) const DEFAULT_CONTINUATION: &str = concat!(
-        "First-line target selected; Word continuation lines remain at the anchor and ",
-        "are approximated.",
-    );
     pub(super) const SPACE_WIDTH: &str =
         "Space advance approximated by measured ratio of marker size";
-    pub(super) const CONTINUATION: &str =
-        "First-line target selected; independent continuation position is approximated";
     pub(super) const OVERFLOW: &str =
         "Nominal marker width exceeds the fixed slot; overlap is possible";
     pub(super) const SHARED_OVERFLOW: &str =
@@ -654,15 +648,13 @@ impl Resolver {
         let supported =
             first <= 0 && !(suffix == lists::Suffix::Tab && target == anchor && ratio.is_none());
         let (body_key, _, _) = self.char_key(&effective);
-        let body_fonts =
-            [effective.char.fonts[1].or(effective.char.fonts[0]), effective.char.fonts[2]];
+        let body_fonts = effective.char.line_fonts();
         if supported {
             self.char_shape(&effective)?;
         }
         effective.overlay(&Delta { char: marker_char, ..Default::default() }, false);
         let (marker_key, _, collapsed) = self.char_key(&effective);
-        let marker_fonts =
-            [effective.char.fonts[1].or(effective.char.fonts[0]), effective.char.fonts[2]];
+        let marker_fonts = effective.char.line_fonts();
         // Unsupported horizontal layouts still contribute to height and diagnostics,
         // but have no output character-shape reference.
         let marker = if supported { Some(self.char_shape(&effective)?) } else { None };
@@ -801,17 +793,6 @@ impl Resolver {
                     marker_messages::TAB_BOUNDARY,
                 )?;
             }
-            if gap > 0 && self.marker_warnings.insert((group, "list_marker_continuation")) {
-                warn(
-                    w,
-                    part,
-                    "numPr",
-                    Kind::ValueApproximated,
-                    "list_marker_continuation",
-                    "match_first_line",
-                    marker_messages::DEFAULT_CONTINUATION,
-                )?;
-            }
             Some(ListTextStart::FromAnchor(unit(gap)?))
         } else {
             None
@@ -854,20 +835,6 @@ impl Resolver {
                 )?),
             }
         };
-        if selected.is_none()
-            && (suffix != lists::Suffix::Tab || target < left)
-            && self.marker_warnings.insert((group, "list_marker_continuation"))
-        {
-            warn(
-                w,
-                part,
-                "numPr",
-                Kind::ValueApproximated,
-                "list_marker_continuation",
-                "match_first_line",
-                marker_messages::CONTINUATION,
-            )?;
-        }
         if let (
             None,
             ListTextStart::FromAnchor(g),
@@ -1059,8 +1026,7 @@ impl Resolver {
     // Resolve source properties without allocating output fonts or character shapes.
     fn char_key(&self, d: &Delta) -> (CharKey, u8, bool) {
         let c = &d.char;
-        let latin = c.fonts[1].or(c.fonts[0]);
-        let east = c.fonts[2];
+        let [latin, east] = c.line_fonts();
         let family = east.or(latin).unwrap_or(self.fallback_font);
         let missing = u8::from(c.size.is_none())
             | (u8::from(east.is_none() && latin.is_none()) << 1)
@@ -1095,8 +1061,7 @@ impl Resolver {
         let [family, _, _] = key.0;
         let size = key.1;
         let [bold, italic, strike] = key.2;
-        let latin = d.char.fonts[1].or(d.char.fonts[0]);
-        let east = d.char.fonts[2];
+        let [latin, east] = d.char.line_fonts();
         let hash = self.hasher.hash_one(key);
         // Exact canonical equality verifies every variable field before allocating strings.
         if let Some((_, id)) = self
@@ -1192,7 +1157,11 @@ impl Resolver {
             })?;
         shape.space_before = unit(Self::spacing_before(d)?)?;
         shape.space_after = unit(p.after.unwrap_or(0))?;
-        let (left, first) = marker_indent(&shape.list, p.left.unwrap_or(0), p.first.unwrap_or(0))?;
+        let (left, first) = if shape.list_marker.is_some() {
+            (p.left.unwrap_or(0), p.first.unwrap_or(0))
+        } else {
+            marker_indent(&shape.list, p.left.unwrap_or(0), p.first.unwrap_or(0))?
+        };
         shape.indent_left = unit(left)?;
         shape.indent_right = unit(p.right.unwrap_or(0))?;
         shape.indent_first_line = unit(first)?;
@@ -1335,10 +1304,8 @@ fn format_warnings(
     }
     Ok(())
 }
-/// Word puts a list marker at the hanging position (`left + first`, `first < 0`) and the text at
-/// `left`. Hancom ignores a negative first line on a numbered or bulleted paragraph and puts the
-/// marker at the left margin, wrapping later lines after the marker. Folding the hanging amount
-/// into the left margin keeps the marker where Word draws it.
+/// Folds unsupported list layouts to their marker anchor, retaining the legacy fallback.
+/// Explicit marker requests preserve Word's continuation and signed first-line coordinates.
 fn marker_indent(list: &Option<ParagraphListRef>, left: i32, first: i32) -> Result<(i32, i32)> {
     match list {
         Some(ParagraphListRef::Number { .. } | ParagraphListRef::Bullet { .. }) if first < 0 => {

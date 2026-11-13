@@ -101,6 +101,12 @@ pub(crate) struct CharDelta {
     highlight: Option<Option<u32>>,
     vertical: Option<u8>,
 }
+impl CharDelta {
+    // Fonts that decide line height: Latin (hAnsi, else ascii) and eastAsia.
+    fn line_fonts(&self) -> [Option<FontKey>; 2] {
+        [self.fonts[1].or(self.fonts[0]), self.fonts[2]]
+    }
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ParaDelta {
     pub(crate) contextual: Option<bool>,

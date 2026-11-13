@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 공유 목록 정의가 충돌하면 인코더가 문서 방문 순서상 첫 사용처의 유효 서식과 상대 margin 이동량을 선택하고 의미 손실을 보고할 수 있다. 미지정과 명시적 0의 구별을 유지한다.
 
-- `ListMarkerAlign`, `ListTextStart`, `ListMarkerLayout::new` 및 문단의 optional `list_marker`를 추가한다. 거리는 정수 HwpUnit이며 0과 미지정을 구별한다. 목록 서식은 객체 전체를 상속하고 참조·범위를 출력 경계에서 다시 검증한다.
+- `ListMarkerAlign`, `ListTextStart`, `ListMarkerLayout::new` 및 문단의 optional `list_marker`를 추가한다. 명시적 배치에서 `indent_left`는 후속 줄 시작 C, 부호 있는 `indent_first_line`은 F이며 번호 anchor는 C+F다. 거리는 정수 HwpUnit이며 0과 미지정을 구별한다. 목록 서식은 객체 전체를 상속하고 참조·범위를 출력 경계에서 다시 검증한다.
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.19.1...hwpforge-blueprint-v0.20.0) - 2026-11-07
 

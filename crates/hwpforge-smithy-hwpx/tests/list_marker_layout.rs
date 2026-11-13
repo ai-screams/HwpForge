@@ -34,6 +34,31 @@ fn fixture(
     bullet: Option<&str>,
     cell: bool,
 ) -> (Document<Validated>, HwpxStyleStore) {
+    let coordinates: Vec<_> = requests
+        .iter()
+        .map(|(anchor, request)| {
+            let gap = request
+                .map(|m| match m.text_start {
+                    ListTextStart::FromAnchor(g) => g.as_i32(),
+                    _ => 1800,
+                })
+                .unwrap_or(0);
+            let continuation = i64::from(*anchor) + i64::from(gap);
+            let (c, f) = if (-100_000_000..=100_000_000).contains(&continuation) {
+                (continuation as i32, -gap)
+            } else {
+                (*anchor, 0)
+            };
+            (c, f, *request)
+        })
+        .collect();
+    coordinate_fixture(&coordinates, bullet, cell)
+}
+fn coordinate_fixture(
+    requests: &[(i32, i32, Option<ListMarkerLayout>)],
+    bullet: Option<&str>,
+    cell: bool,
+) -> (Document<Validated>, HwpxStyleStore) {
     let mut registry:StyleRegistry=serde_json::from_value(serde_json::json!({"fonts":["맑은 고딕","Arial"],"char_shapes":[],"para_shapes":[],"style_entries":{}})).unwrap();
     for (font, size) in [("맑은 고딕", 1100), ("Arial", 1400)] {
         let mut c = PartialCharShape::default();
@@ -59,10 +84,11 @@ fn fixture(
         });
     }
     let mut paragraphs = vec![];
-    for (i, (anchor, request)) in requests.iter().enumerate() {
+    for (i, (continuation, first, request)) in requests.iter().enumerate() {
         let mut shape = ParaShape::default();
         shape.line_spacing_value = 160.;
-        shape.indent_left = u(*anchor);
+        shape.indent_left = u(*continuation);
+        shape.indent_first_line = u(*first);
         shape.list_marker = *request;
         shape.list = Some(if bullet.is_some() {
             ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 }
@@ -119,21 +145,20 @@ fn metrics(h: &xml::Element, bullet: bool, expected: [&str; 7]) {
         assert_eq!(node.attr(attr), Some(value), "{attr}");
     }
 }
-fn margins(h: &xml::Element, left: &str, default: &str) {
-    let p = h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some("20")).unwrap();
+fn margins(h: &xml::Element, left: &str, default: &str, intent: &str, default_intent: &str) {
+    measures_at(h, "20", [left, default], [intent, default_intent]);
+}
+fn measures_at(h: &xml::Element, id: &str, left: [&str; 2], intent: [&str; 2]) {
+    let p = h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some(id)).unwrap();
     let switch = p.child("hp:switch");
-    assert_eq!(
-        switch.child("hp:case").child("hh:margin").child("hc:left").attr("value"),
-        Some(left)
-    );
-    assert_eq!(
-        switch.child("hp:default").child("hh:margin").child("hc:left").attr("value"),
-        Some(default)
-    );
-    assert_eq!(
-        switch.child("hp:case").child("hh:margin").child("hc:intent").attr("value"),
-        Some("0")
-    );
+    // 이것을 실패시키는 것: intent 부호를 뒤집거나 기본 분기의 배율·단위를 누락.
+    for (i, branch) in ["hp:case", "hp:default"].into_iter().enumerate() {
+        let margin = switch.child(branch).child("hh:margin");
+        for (tag, value) in [("hc:left", left[i]), ("hc:intent", intent[i])] {
+            assert_eq!(margin.child(tag).attr("value"), Some(value), "{id}/{branch}/{tag}");
+            assert_eq!(margin.child(tag).attr("unit"), Some("HWPUNIT"), "{id}/{branch}/{tag}");
+        }
+    }
 }
 fn losses(out: &EncodeOutcome, kind: &str) -> usize {
     out.warnings
@@ -148,7 +173,7 @@ fn list_marker_left_fixed_wire() {
         let (d, s) = fixture(&[(1800, Some(fixed(1800)))], None, cell);
         let h = header(&encode(&d, &s));
         metrics(&h, false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-        margins(&h, "1800", "3600");
+        margins(&h, "1800", "3600", "0", "0");
     }
 }
 // 이것을 실패시키는 것: A−g 이동 누락 또는 g ≥ B에서 칸 폭을 g+B로 변경,
@@ -170,7 +195,7 @@ fn list_marker_right_fixed_wire() {
             let out = encode(&d, &s);
             let h = header(&out);
             metrics(&h, false, ["RIGHT", "0", "1", width, "HWPUNIT", offset, "7"]);
-            margins(&h, left, default);
+            margins(&h, left, default, "0", "0");
             assert_eq!(losses(&out, "list_marker_alignment"), 0);
         }
     }
@@ -188,7 +213,7 @@ fn list_marker_right_narrow_gap_keeps_anchor_and_text_offset() {
     let out = encode(&d, &s);
     let h = header(&out);
     metrics(&h, false, ["RIGHT", "0", "1", "0", "HWPUNIT", "500", "7"]);
-    margins(&h, "2500", "5000");
+    margins(&h, "2500", "5000", "0", "0");
     assert_eq!(losses(&out, "list_marker_alignment"), 1);
     assert!(out.warnings.iter().any(|w| matches!(
         w,
@@ -215,7 +240,7 @@ fn list_marker_center_fixed_wire() {
         );
         let h = header(&encode(&d, &s));
         metrics(&h, false, ["CENTER", "0", "1", "2500", "HWPUNIT", "0", "7"]);
-        margins(&h, "0", "0");
+        margins(&h, "0", "0", "0", "0");
     }
 }
 // 이것을 실패시키는 것: 명시적 d=0을 legacy offset50으로 대체.
@@ -231,8 +256,8 @@ fn list_marker_after_marker_wire() {
             false,
         );
         let h = header(&encode(&doc, &s));
-        metrics(&h, false, ["LEFT", "1", "1", "0", "HWPUNIT", wire, "7"]);
-        margins(&h, "1800", "3600");
+        metrics(&h, false, ["LEFT", "1", "0", "0", "HWPUNIT", wire, "7"]);
+        margins(&h, "1800", "3600", "-1800", "-3600");
     }
 }
 // 이것을 실패시키는 것: 미측정 정렬의 손실 경고 누락.
@@ -245,7 +270,7 @@ fn list_marker_unmeasured_alignment_warns() {
             false,
         );
         let out = encode(&d, &s);
-        metrics(&header(&out), false, ["LEFT", "1", "1", "0", "HWPUNIT", "306", "7"]);
+        metrics(&header(&out), false, ["LEFT", "1", "0", "0", "HWPUNIT", "306", "7"]);
         assert_eq!(losses(&out, "list_marker_alignment"), 1);
     }
 }
@@ -307,7 +332,7 @@ fn list_marker_conflict_keeps_first_use() {
     );
     let out = encode(&d, &s);
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-    margins(&header(&out), "1800", "3600");
+    margins(&header(&out), "1800", "3600", "0", "0");
     assert_eq!(losses(&out, "list_marker_conflict"), 1);
     let reason = out
         .warnings
@@ -483,7 +508,7 @@ fn list_marker_projection_is_repeatable() {
         EncodeOptions::default(),
     )
     .unwrap();
-    margins(&header(&edited), "0", "0");
+    margins(&header(&edited), "0", "0", "0", "0");
 }
 // 이것을 실패시키는 것: 요청 map의 JSON 왕복 손실 또는 충돌에서 선택한 첫 head로 투영하지 않음.
 #[test]
@@ -665,6 +690,46 @@ fn unused_marker_shapes_do_not_create_conflicts() {
     assert_eq!(losses(&encode(&d, &s), "list_marker_conflict"), 0);
 }
 
+// 이것을 실패시키는 것: 미방문 요청의 좌표 접기·intent 초기화 누락,
+// 방문한 요청까지 재투영하거나 미방문 요청으로 공유 번호 설정·원본 저장소를 변경.
+#[test]
+fn unvisited_marker_requests_fold_only_output_coordinates() {
+    for visited in [true, false] {
+        let request = layout(ListMarkerAlign::Left, ListTextStart::AfterMarker(u(306)), Some(0));
+        let (d, mut s) = coordinate_fixture(
+            &[(5400, -1800, Some(request)), (4200, 600, Some(fixed(2400)))],
+            None,
+            false,
+        );
+        let mut d: Document<hwpforge_core::Draft> =
+            serde_json::from_value(serde_json::to_value(d).unwrap()).unwrap();
+        d.sections_mut()[0].paragraphs.truncate(1);
+        if !visited {
+            let plain = s.push_para_shape(HwpxParaShape::default());
+            d.sections_mut()[0].paragraphs[0].para_shape_id = plain;
+        }
+        let d = d.validate().unwrap();
+        let original = serde_json::to_vec(&s).unwrap();
+        let out = encode(&d, &s);
+        let h = header(&out);
+        measures_at(&h, "21", ["4800", "9600"], ["0", "0"]);
+        if visited {
+            measures_at(&h, "20", ["3600", "7200"], ["-1800", "-3600"]);
+            metrics(&h, false, ["LEFT", "1", "0", "0", "HWPUNIT", "306", "7"]);
+        } else {
+            measures_at(&h, "20", ["3600", "7200"], ["0", "0"]);
+            let mut value = serde_json::to_value(&s).unwrap();
+            value["list_marker_layouts"] = serde_json::json!({});
+            let raw: HwpxStyleStore = serde_json::from_value(value).unwrap();
+            let raw_header = header(&encode(&d, &raw));
+            assert_eq!(head(&h, false).attributes, head(&raw_header, false).attributes);
+        }
+        assert_eq!(losses(&out, "list_marker_conflict"), 0);
+        assert_eq!(serde_json::to_vec(&s).unwrap(), original);
+        assert_eq!(encode(&d, &s).bytes, out.bytes);
+    }
+}
+
 // 이것을 실패시키는 것: 중첩 표 사용처를 빼거나 첫 head 대신 기존 head로 복귀.
 #[test]
 fn list_marker_conflict_includes_nested_table_uses() {
@@ -684,7 +749,7 @@ fn list_marker_conflict_includes_nested_table_uses() {
     ));
     let out = encode(&d.validate().unwrap(), &s);
     assert_eq!(losses(&out, "list_marker_conflict"), 1);
-    margins(&header(&out), "1800", "3600");
+    margins(&header(&out), "1800", "3600", "0", "0");
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     margin_at(&header(&out), "21", "2400", "4800");
 }
@@ -736,16 +801,26 @@ fn list_marker_font_context_follows_effective_references() {
         );
     }
 }
-// 이것을 실패시키는 것: 잘못된 좌표 단위·문자 크기·수준을 미설정 값처럼 허용.
+// 이것을 실패시키는 것: 변경 가능한 출력 좌표와 참조를 다시 검증하지 않고 생성 시 검증을 신뢰.
 #[test]
 fn list_marker_output_boundary_revalidates_mutable_shapes() {
-    for bad in ["indent", "unit", "size", "level"] {
+    for bad in ["indent_unit", "unit", "anchor_high", "anchor_low", "size", "level", "reference"] {
         let (d, mut s) = fixture(&[(1800, Some(fixed(1800)))], None, false);
         match bad {
-            "indent" => {
+            "indent_unit" => {
                 s.para_shape_mut(ParaShapeIndex::new(20)).unwrap().indent =
-                    hwpforge_core::ParagraphMeasure::from_hwp_unit(u(1))
+                    hwpforge_core::ParagraphMeasure::from_char_count(
+                        hwpforge_core::CharCount::from_ticks(1),
+                    )
             }
+            "anchor_high" | "anchor_low" => {
+                let sign = if bad == "anchor_high" { 1 } else { -1 };
+                let shape = s.para_shape_mut(ParaShapeIndex::new(20)).unwrap();
+                shape.margin_left =
+                    hwpforge_core::ParagraphMeasure::from_hwp_unit(u(sign * 100_000_000));
+                shape.indent = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(sign));
+            }
+            "reference" => s.para_shape_mut(ParaShapeIndex::new(20)).unwrap().heading_id_ref = 999,
             "unit" => {
                 s.para_shape_mut(ParaShapeIndex::new(20)).unwrap().margin_left =
                     hwpforge_core::ParagraphMeasure::from_char_count(
@@ -827,7 +902,7 @@ fn list_marker_unspecified_matching_head_compares_shift() {
     let out = encode(&d, &s);
     assert_eq!(losses(&out, "list_marker_conflict"), 1);
     let h = header(&out);
-    margins(&h, "0", "0");
+    margins(&h, "0", "0", "0", "0");
     let p = h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some("21")).unwrap();
     let sw = p.child("hp:switch");
     assert_eq!(sw.child("hp:case").child("hh:margin").child("hc:left").attr("value"), Some("0"));
@@ -846,7 +921,10 @@ fn marker_warnings_survive_unchanged_and_changed_edit_bases() {
         let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&base.bytes).unwrap();
         let mut value = serde_json::to_value(&decoded.style_store).unwrap();
         value["list_marker_layouts"] = serde_json::json!({"20":{"align":"right","text_start":{"kind":"after_marker","value":306},"char_shape":7}});
-        let store: HwpxStyleStore = serde_json::from_value(value).unwrap();
+        let mut store: HwpxStyleStore = serde_json::from_value(value).unwrap();
+        let shape = store.para_shape_mut(ParaShapeIndex::new(20)).unwrap();
+        shape.margin_left = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(3600));
+        shape.indent = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(-1800));
         let out = HwpxEncoder::encode_with_base(
             &base.bytes,
             &decoded.document.validate().unwrap(),
@@ -985,9 +1063,9 @@ fn marker_approximations_survive_selected_conflict() {
         assert_eq!(losses(&out, kind), 1, "{kind}");
     }
     assert_eq!(losses(&out, "list_marker_conflict"), 1);
-    metrics(&header(&out), false, ["LEFT", "1", "1", "0", "HWPUNIT", "306", "4294967295"]);
-    margin_at(&header(&out), "20", "1800", "3600");
-    margin_at(&header(&out), "21", "1800", "3600");
+    metrics(&header(&out), false, ["LEFT", "1", "0", "0", "HWPUNIT", "306", "4294967295"]);
+    measures_at(&header(&out), "20", ["1800", "3600"], ["-1800", "-3600"]);
+    measures_at(&header(&out), "21", ["1800", "3600"], ["-1800", "-3600"]);
 }
 
 // 이것을 실패시키는 것: 요청 없는 문단의 깨진 번호 수준도 새 요청과 함께 거부.
@@ -1319,7 +1397,12 @@ fn list_marker_first_use_changes_invalidate_cache() {
     assert!(decoded.document.sections()[0].paragraphs.iter().all(|p| p.layout_cache.is_some()));
     let mut value = serde_json::to_value(&decoded.style_store).unwrap();
     value["list_marker_layouts"] = serde_json::json!({"20":{"align":"right","text_start":{"kind":"from_anchor","value":1800},"char_shape":7},"21":{"align":"right","text_start":{"kind":"from_anchor","value":2400},"char_shape":7}});
-    let store = serde_json::from_value(value).unwrap();
+    let mut store: HwpxStyleStore = serde_json::from_value(value).unwrap();
+    for (id, c, f) in [(20, 3600, -1800), (21, 4800, -2400)] {
+        let shape = store.para_shape_mut(ParaShapeIndex::new(id)).unwrap();
+        shape.margin_left = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(c));
+        shape.indent = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(f));
+    }
     let doc = decoded.document.validate().unwrap();
     for out in [
         HwpxEncoder::encode_with_diagnostics(
@@ -1345,5 +1428,402 @@ fn list_marker_first_use_changes_invalidate_cache() {
         assert!(xml::Element::parse(&package::section_xml(&out.bytes))
             .descendants("hp:linesegarray")
             .is_empty());
+    }
+}
+
+fn linked_shape<'a>(out: &EncodeOutcome, h: &'a xml::Element, index: usize) -> &'a xml::Element {
+    let section = xml::Element::parse(&package::part(&out.bytes, "Contents/section0.xml"));
+    let id = section.descendants("hp:p")[index].attr("paraPrIDRef").unwrap();
+    h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some(id)).unwrap()
+}
+fn linked_head<'a>(h: &'a xml::Element, shape: &xml::Element) -> &'a xml::Element {
+    let heading = shape.child("hh:heading");
+    let bullet = heading.attr("type") == Some("BULLET");
+    let tag = if bullet { "hh:bullet" } else { "hh:numbering" };
+    let def =
+        h.descendants(tag).into_iter().find(|d| d.attr("id") == heading.attr("idRef")).unwrap();
+    let level = if bullet { 0 } else { heading.attr("level").unwrap().parse::<u32>().unwrap() + 1 };
+    def.descendants("hh:paraHead")
+        .into_iter()
+        .find(|p| p.attr("level") == Some(level.to_string().as_str()))
+        .unwrap()
+}
+fn continuation_case(
+    c: i32,
+    f: i32,
+    request: ListMarkerLayout,
+    wire: [&str; 7],
+    left: [&str; 2],
+    intent: [&str; 2],
+    stable: bool,
+) {
+    let (d, s) = coordinate_fixture(&[(c, f, Some(request))], None, false);
+    let out = encode(&d, &s);
+    let h = header(&out);
+    let shape = linked_shape(&out, &h, 0);
+    let linked = linked_head(&h, shape);
+    assert!(std::ptr::eq(linked, head(&h, false)));
+    metrics(&h, false, wire);
+    measures_at(&h, shape.attr("id").unwrap(), left, intent);
+    assert_eq!(
+        losses(&out, "list_marker_continuation"),
+        usize::from(c < left[0].parse::<i32>().unwrap())
+    );
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
+    if stable {
+        // The comparison package uses literal legacy wire values, without deferred projection.
+        let mut value = serde_json::to_value(&s).unwrap();
+        value["list_marker_layouts"] = serde_json::json!({});
+        let mut legacy: HwpxStyleStore = serde_json::from_value(value).unwrap();
+        let p = legacy.para_shape_mut(ParaShapeIndex::new(20)).unwrap();
+        p.margin_left = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(left[0].parse().unwrap()));
+        p.indent = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(0));
+        let align = match wire[0] {
+            "LEFT" => hwpforge_foundation::Alignment::Left,
+            "CENTER" => hwpforge_foundation::Alignment::Center,
+            "RIGHT" => hwpforge_foundation::Alignment::Right,
+            _ => unreachable!(),
+        };
+        legacy
+            .set_paragraph_head_metrics(
+                hwpforge_foundation::HeadingType::Number,
+                2,
+                1,
+                align,
+                false,
+                true,
+                wire[3].parse().unwrap(),
+                wire[5].parse().unwrap(),
+                wire[4] == "HWPUNIT",
+                7,
+            )
+            .unwrap();
+        assert_eq!(out.bytes, encode(&d, &legacy).bytes);
+    }
+}
+macro_rules! continuation_case {
+    ($name:ident, $c:expr, $f:expr, $align:ident, $kind:ident, $distance:expr, $wire:expr, $left:expr, $intent:expr, $stable:expr) => {
+        #[test]
+        fn $name() {
+            continuation_case(
+                $c,
+                $f,
+                layout(ListMarkerAlign::$align, ListTextStart::$kind(u($distance)), Some(0)),
+                $wire,
+                $left,
+                $intent,
+                $stable,
+            );
+        }
+    };
+}
+// 이것을 실패시키는 것: C를 A로 쓰거나 최종 margin 기준 intent를 F로 대체.
+continuation_case!(
+    continuation_unfold_coordinates,
+    5400,
+    -1800,
+    Left,
+    AfterMarker,
+    306,
+    ["LEFT", "1", "0", "0", "HWPUNIT", "306", "7"],
+    ["3600", "7200"],
+    ["-1800", "-3600"],
+    false
+);
+// 이것을 실패시키는 것: 실폭 기준 간격에서 autoIndent를 다시 켬.
+continuation_case!(
+    continuation_after_space,
+    3600,
+    -1800,
+    Left,
+    AfterMarker,
+    306,
+    ["LEFT", "1", "0", "0", "HWPUNIT", "306", "7"],
+    ["1800", "3600"],
+    ["-1800", "-3600"],
+    false
+);
+// 이것을 실패시키는 것: 명시적 거리 0을 미지정으로 취급.
+continuation_case!(
+    continuation_after_nothing,
+    3600,
+    -1800,
+    Left,
+    AfterMarker,
+    0,
+    ["LEFT", "1", "0", "0", "HWPUNIT", "0", "7"],
+    ["1800", "3600"],
+    ["-1800", "-3600"],
+    false
+);
+// 이것을 실패시키는 것: C를 선택된 탭 위치 3000으로 대체.
+continuation_case!(
+    continuation_number_tab_before_left,
+    3600,
+    -1800,
+    Left,
+    FromAnchor,
+    1200,
+    ["LEFT", "0", "0", "100", "PERCENT", "0", "7"],
+    ["1800", "3600"],
+    ["-1800", "-3600"],
+    false
+);
+// 이것을 실패시키는 것: F가 0이면 autoIndent를 항상 켬.
+continuation_case!(
+    continuation_zero_hanging_default_tab,
+    3600,
+    0,
+    Left,
+    FromAnchor,
+    3600,
+    ["LEFT", "0", "0", "2500", "PERCENT", "0", "7"],
+    ["3600", "7200"],
+    ["0", "0"],
+    false
+);
+// 이것을 실패시키는 것: 기본 탭 간격을 720트윕으로 고정.
+continuation_case!(
+    continuation_zero_hanging_tab800,
+    3600,
+    0,
+    Left,
+    FromAnchor,
+    4400,
+    ["LEFT", "0", "0", "3300", "PERCENT", "0", "7"],
+    ["3600", "7200"],
+    ["0", "0"],
+    false
+);
+// 이것을 실패시키는 것: 선택된 margin 대신 A에서 intent를 계산.
+continuation_case!(
+    continuation_zero_hanging_center,
+    3600,
+    0,
+    Center,
+    FromAnchor,
+    3600,
+    ["CENTER", "0", "0", "6100", "HWPUNIT", "0", "7"],
+    ["0", "0"],
+    ["-3600", "-7200"],
+    false
+);
+// 이것을 실패시키는 것: 음수 margin을 0으로 제한.
+continuation_case!(
+    continuation_zero_hanging_center_tab800,
+    3600,
+    0,
+    Center,
+    FromAnchor,
+    4400,
+    ["CENTER", "0", "0", "7700", "HWPUNIT", "0", "7"],
+    ["-800", "-1600"],
+    ["-4400", "-8800"],
+    false
+);
+// 이것을 실패시키는 것: C가 A+g와 같아도 autoIndent를 끔.
+continuation_case!(
+    continuation_equal_text_left,
+    3600,
+    -1800,
+    Left,
+    FromAnchor,
+    1800,
+    ["LEFT", "0", "1", "700", "PERCENT", "0", "7"],
+    ["1800", "3600"],
+    ["0", "0"],
+    true
+);
+// 이것을 실패시키는 것: C가 A+g와 같아도 autoIndent를 끔.
+continuation_case!(
+    continuation_equal_text_center,
+    3600,
+    -1800,
+    Center,
+    FromAnchor,
+    1800,
+    ["CENTER", "0", "1", "2500", "HWPUNIT", "0", "7"],
+    ["0", "0"],
+    ["0", "0"],
+    true
+);
+// 이것을 실패시키는 것: C가 A+g와 같아도 autoIndent를 끔.
+continuation_case!(
+    continuation_equal_text_right,
+    3600,
+    -1800,
+    Right,
+    FromAnchor,
+    1800,
+    ["RIGHT", "0", "1", "700", "HWPUNIT", "1800", "7"],
+    ["0", "0"],
+    ["0", "0"],
+    true
+);
+// 이것을 실패시키는 것: C=T일 때 autoIndent를 끄거나 간격과 기본 폭 중 큰 값 선택을 제거.
+continuation_case!(
+    continuation_zero_hanging_right_is_stable,
+    3600,
+    0,
+    Right,
+    FromAnchor,
+    0,
+    ["RIGHT", "0", "1", "0", "HWPUNIT", "0", "7"],
+    ["2500", "5000"],
+    ["0", "0"],
+    true
+);
+// 이것을 실패시키는 것: 양수 intent를 제한하거나 미측정 표시 경고를 누락.
+continuation_case!(
+    continuation_positive_intent_warns,
+    1800,
+    600,
+    Left,
+    AfterMarker,
+    0,
+    ["LEFT", "1", "0", "0", "HWPUNIT", "0", "7"],
+    ["2400", "4800"],
+    ["600", "1200"],
+    false
+);
+
+fn continuation_group(
+    requests: &[(i32, i32, Option<ListMarkerLayout>)],
+    wire: [&str; 7],
+    margins: &[([&str; 2], [&str; 2])],
+    conflicts: usize,
+) {
+    let (d, s) = coordinate_fixture(requests, None, false);
+    let out = encode(&d, &s);
+    let h = header(&out);
+    metrics(&h, false, wire);
+    for (index, (left, intent)) in margins.iter().enumerate() {
+        let shape = linked_shape(&out, &h, index);
+        assert!(std::ptr::eq(linked_head(&h, shape), head(&h, false)));
+        measures_at(&h, shape.attr("id").unwrap(), *left, *intent);
+    }
+    assert_eq!(losses(&out, "list_marker_conflict"), conflicts);
+    assert_eq!(losses(&out, "list_marker_continuation"), 0);
+}
+// 이것을 실패시키는 것: 문단별 intent를 공유 번호 설정의 충돌 키에 포함.
+#[test]
+fn continuation_intents_do_not_conflict() {
+    continuation_group(
+        &[(3600, -1800, Some(fixed(1200))), (4200, -2400, Some(fixed(1200)))],
+        ["LEFT", "0", "0", "100", "PERCENT", "0", "7"],
+        &[(["1800", "3600"], ["-1800", "-3600"]), (["1800", "3600"], ["-2400", "-4800"])],
+        0,
+    );
+}
+// 이것을 실패시키는 것: 번호 설정 비교에서 autoIndent를 제외.
+#[test]
+fn continuation_auto_indent_conflicts() {
+    continuation_group(
+        &[(3600, -1800, Some(fixed(1200))), (3000, -1200, Some(fixed(1200)))],
+        ["LEFT", "0", "0", "100", "PERCENT", "0", "7"],
+        &[(["1800", "3600"], ["-1800", "-3600"]), (["1800", "3600"], ["-1200", "-2400"])],
+        1,
+    );
+}
+// 이것을 실패시키는 것: 첫 사용처 대신 autoIndent가 꺼진 첫 설정을 선택.
+#[test]
+fn continuation_auto_indent_conflicts_reversed() {
+    continuation_group(
+        &[(3000, -1200, Some(fixed(1200))), (3600, -1800, Some(fixed(1200)))],
+        ["LEFT", "0", "1", "100", "PERCENT", "0", "7"],
+        &[(["1800", "3600"], ["0", "0"]), (["1800", "3600"], ["0", "0"])],
+        1,
+    );
+}
+// 이것을 실패시키는 것: 선택된 이동량 대신 각 후보의 이동량으로 intent를 계산.
+#[test]
+fn continuation_uses_selected_margin_shift() {
+    let right = |g| Some(layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(g)), Some(0)));
+    continuation_group(
+        &[(3600, -1800, right(1200)), (4800, -2400, right(1800))],
+        ["RIGHT", "0", "0", "100", "HWPUNIT", "1200", "7"],
+        &[(["600", "1200"], ["-3000", "-6000"]), (["1200", "2400"], ["-3600", "-7200"])],
+        1,
+    );
+}
+// 이것을 실패시키는 것: 선택된 번호 설정 대신 후보의 autoIndent 값을 사용.
+#[test]
+fn continuation_right_zero_slot_shared_auto_zero() {
+    let right = Some(layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(0)), Some(0)));
+    continuation_group(
+        &[(4200, -600, right), (3600, 0, right)],
+        ["RIGHT", "0", "0", "0", "HWPUNIT", "0", "7"],
+        &[(["2500", "5000"], ["-1700", "-3400"]), (["2500", "5000"], ["-1100", "-2200"])],
+        1,
+    );
+}
+// 이것을 실패시키는 것: 미지정 첫 사용처의 이동량이 0이면 그룹 전체를 건너뜀.
+#[test]
+fn continuation_unspecified_first_still_projects_requests() {
+    continuation_group(
+        &[(900, 123, None), (3600, -1800, Some(fixed(1200)))],
+        ["LEFT", "1", "1", "0", "PERCENT", "50", "4294967295"],
+        &[(["900", "1800"], ["123", "246"]), (["1800", "3600"], ["0", "0"])],
+        1,
+    );
+}
+
+// 이것을 실패시키는 것: 버린 후보에서 경고하거나 최종 출력 손실을 버림·중복 보고하거나 저장소 순서를 사용.
+#[test]
+fn continuation_warning_follows_final_projection_once_in_visit_order() {
+    let after = Some(layout(ListMarkerAlign::Left, ListTextStart::AfterMarker(u(0)), Some(0)));
+    let right = |g| Some(layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(g)), Some(0)));
+    let (d, s) = coordinate_fixture(&[(3600, -1800, right(1200)), (1800, 600, after)], None, false);
+    assert_eq!(losses(&encode(&d, &s), "list_marker_continuation"), 0);
+    let (d, s) = coordinate_fixture(
+        &[(3600, -1800, after), (1800, 600, right(1200)), (1200, 800, right(1200))],
+        None,
+        false,
+    );
+    let original = serde_json::to_value(&s).unwrap();
+    let mut draft: Document<hwpforge_core::Draft> =
+        serde_json::from_value(serde_json::to_value(d).unwrap()).unwrap();
+    draft.sections_mut()[0].paragraphs.swap(1, 2);
+    let repeated = draft.sections()[0].paragraphs[1].clone();
+    draft.sections_mut()[0].paragraphs.push(repeated);
+    let d = draft.validate().unwrap();
+    let out = encode(&d, &s);
+    assert_eq!(losses(&out, "list_marker_continuation"), 1);
+    let reason = out
+        .warnings
+        .iter()
+        .find_map(|w| match w {
+            EncodeWarning::ContentLost { kind, reason, .. }
+                if kind == "list_marker_continuation" =>
+            {
+                Some(reason.as_str())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        reason,
+        "Paragraph shape 22: M=2000 C=1200 I=800; positive intent rendering is unmeasured"
+    );
+    let h = header(&out);
+    measures_at(&h, "21", ["2400", "4800"], ["600", "1200"]);
+    measures_at(&h, "22", ["2000", "4000"], ["800", "1600"]);
+    assert_eq!(out.bytes, encode(&d, &s).bytes);
+    assert_eq!(serde_json::to_value(&s).unwrap(), original);
+}
+
+// 이것을 실패시키는 것: autoIndent 선택에서 좌표 차이 1을 허용.
+#[test]
+fn continuation_equality_requires_exact_coordinates() {
+    for (c, f, intent) in [(3601, -1801, ["-1801", "-3602"]), (3599, -1799, ["-1799", "-3598"])] {
+        continuation_case(
+            c,
+            f,
+            fixed(1800),
+            ["LEFT", "0", "0", "700", "PERCENT", "0", "7"],
+            ["1800", "3600"],
+            intent,
+            false,
+        );
     }
 }

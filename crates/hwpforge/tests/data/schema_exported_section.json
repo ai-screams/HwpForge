@@ -6773,7 +6773,7 @@
       ]
     },
     "ListMarkerLayout": {
-      "description": "Explicit list-marker formatting. `indent_left` is the alignment anchor and\n`indent_first_line` must be zero. A partial child replaces this object atomically.\n\nNo layout (`None` on a paragraph) retains existing template or source formatting;\neither zero-distance variant is an explicit request. Shared output heads can\nconflict across paragraphs when an output format shares marker definitions;\nan encoder may choose the effective formatting of the first use in document\nvisitation order and report semantic loss. Each original anchor is preserved\nwith that representative's relative margin movement, rather than copied absolutely.\nFixed slots do not automatically grow for overflowing numbers. Marker-only\nfonts and sizes do not enlarge the body's line height.",
+      "description": "Explicit list-marker formatting. `indent_left` is the continuation start C;\nsigned `indent_first_line` is F, and their sum C + F is the marker anchor A.\nA partial child replaces this object atomically.\n\nNo layout (`None` on a paragraph) retains existing template or source formatting;\neither zero-distance variant is an explicit request. Shared output heads can\nconflict across paragraphs when an output format shares marker definitions;\nan encoder may choose the effective formatting of the first use in document\nvisitation order and report semantic loss. Each original anchor is preserved\nwith that representative's relative margin movement, rather than copied absolutely.\nFixed slots do not automatically grow for overflowing numbers. Marker-only\nfonts and sizes do not enlarge the body's line height.",
       "type": "object",
       "properties": {
         "align": {
@@ -6781,7 +6781,7 @@
           "$ref": "#/$defs/ListMarkerAlign"
         },
         "text_start": {
-          "description": "First-line text distance in HwpUnit; continuation layout is format-dependent.",
+          "description": "First-line text distance in HwpUnit; continuation starts at `indent_left`.",
           "$ref": "#/$defs/ListTextStart"
         },
         "char_shape": {
@@ -6842,7 +6842,7 @@
           ]
         },
         {
-          "description": "Distance after the marker's measured end; continuation lines may differ.\nEncoders without measured marker widths may report an alignment approximation.",
+          "description": "Distance after the marker's measured end, which requires its actual width\nfor the first-line position. Continuation lines retain `indent_left` independently.\nEncoders without measured marker widths may report an alignment approximation.",
           "type": "object",
           "properties": {
             "kind": {
