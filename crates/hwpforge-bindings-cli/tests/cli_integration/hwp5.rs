@@ -866,4 +866,33 @@ mod input_editing {
             assert_ne!(std::fs::read(&input).unwrap(), std::fs::read(&converted).unwrap());
         }
     }
+
+    // 이것을 실패시키는 것: 없는 라벨을 첫 칸으로 보내 주소 오류를 우회하기.
+    #[test]
+    fn set_cell_conversion_acceptance_keeps_address_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (input, _, _) = prepare(dir.path(), true);
+        let output = dir.path().join("missing-label.hwpx");
+        for accept in [false, true] {
+            let mut args = vec![
+                "set-cell",
+                path(&input),
+                "--table",
+                "0",
+                "--right-of",
+                "없는 라벨",
+                "--text",
+                "값",
+                "-o",
+                path(&output),
+            ];
+            if accept {
+                args.push("--accept-conversion-loss");
+            }
+            let (exit, value) = cli(&args);
+            assert_ne!(exit, 0);
+            assert_eq!(value["code"], "CELL_NOT_FOUND");
+            assert!(!output.exists());
+        }
+    }
 }

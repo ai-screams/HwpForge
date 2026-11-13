@@ -284,8 +284,8 @@ const TABLE: &[Row] = &[
     row!(SetCell, CellHasNonTextContent, 1, ops),
     row!(SetCell, CellTargetDuplicate, 1),
     row!(SetCell, CellTargetConflict, 1, ops),
-    row!(SetCell, InputNotRoundtripSafe, 1, ops),
-    row!(SetCell, InputEntriesNotCarried, 1, UNCARRIED_ENTRIES_HINT),
+    row!(SetCell, InputNotRoundtripSafe, 1, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 한컴 저장 문서의 보존 가능한 본문 직속 표의 한 문단·한 Text run 칸은 지원합니다. 그 밖의 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요."),
+    row!(SetCell, InputEntriesNotCarried, 1, "이 요청은 원문 보존으로 처리할 수 없어(대상 칸의 꼴, 문서 머리글 사정 등) 전체 재인코드 경로를 사용했지만, 그 경로가 이 문서의 일부 ZIP 부속 엔트리를 다시 쓰지 못해 거부합니다. 한컴 저장 문서의 보존 가능한 본문 직속 표의 한 문단·한 Text run 칸은 지원합니다. 그 밖의 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요."),
     row!(SetCell, UpstreamUnmapped, 1),
 
     row!(StampPlan, DecodeFailed, 2, ops),

@@ -278,8 +278,10 @@ pub enum DecodeWarning {
     /// 근사됐다.
     ///
     /// 디코드는 계속되지만, 이 결과를 다시 인코드하면 손실이 굳는다. 그래서
-    /// 입력을 재인코드해 돌려주는 편집기(stamp·set-cell·restyle)는 이 경고가
-    /// 있는 입력을 거부한다 ([`DecodeWarning::is_content_loss`]). 원문 보존 삭제는
+    /// 입력을 재인코드해 돌려주는 편집기(stamp·restyle 및 보존 범위 밖
+    /// set-cell 요청)는 이 경고가 있는 입력을 거부한다
+    /// ([`DecodeWarning::is_content_loss`]). 보존 가능한 본문 직속 표의 한 문단·한
+    /// Text run 칸은 원문 보존 set-cell로 편집할 수 있다. 원문 보존 삭제는
     /// 출력 원문 보존과 판정 안전성을 별도로 입증한 경우 성공하며, 입력 decode
     /// 손실을 알리는 이 경고의 순서와 횟수는 그대로 유지한다.
     ContentLost {

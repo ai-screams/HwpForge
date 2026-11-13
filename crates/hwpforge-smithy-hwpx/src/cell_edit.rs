@@ -21,7 +21,7 @@
 //! - **Empty string is a legitimate clear** — `fill`'s empty-value rejection
 //!   guards the ClickHere hint-fallback sentinel; cells carry no such
 //!   overload.
-//! - Replacement style is inherited from the first text-bearing
+//! - For Core replacement and cells requiring regeneration, style is inherited from the first text-bearing
 //!   paragraph/run pair of the target cell (single source; the text-only
 //!   admission plus Core validation guarantee such a pair exists).
 //! - Batch preflight is file-level all-or-nothing, and rejects duplicate
@@ -29,6 +29,7 @@
 //!   replacement would destroy a nested table another spec targets).
 
 mod line_keep;
+mod preserving;
 
 use std::collections::{HashMap, HashSet};
 
@@ -460,9 +461,13 @@ fn apply_resolved(document: &mut Document<Draft>, resolved: Vec<ResolvedEdit>) -
         }
     });
 
+    outcome_for(&resolved)
+}
+
+fn outcome_for(resolved: &[ResolvedEdit]) -> SetCellOutcome {
     SetCellOutcome {
         cells: resolved
-            .into_iter()
+            .iter()
             .map(|edit| SetCellResult {
                 table: edit.table,
                 requested: edit.requested,
@@ -576,7 +581,7 @@ fn path_starts_with(path: &[PathSeg], prefix: &[PathSeg]) -> bool {
 /// Result of a bytes-level [`HwpxCellEditor::set_cells`] run.
 ///
 /// 의미 손상 인코드 경고(번호 머리/titleMark 생략 등)는 결과에 실리는 대신
-/// [`CellEditError::Codec`] 으로 **fail-closed** 된다 (stamper 와 동일 계약).
+/// [`CellEditError::SemanticLoss`] 으로 **fail-closed** 된다 (stamper 와 동일 계약).
 #[derive(Debug)]
 pub struct CellEditResult {
     /// The edited HWPX package.
@@ -585,21 +590,23 @@ pub struct CellEditResult {
     pub outcome: SetCellOutcome,
 }
 
-/// Bytes-level cell-edit facade (admission-gated, like `HwpxStamper`).
+/// Bytes-level cell editing with original XML preservation for supported text cells.
 #[derive(Debug)]
 pub struct HwpxCellEditor;
 
 impl HwpxCellEditor {
     /// Edits table cells in an HWPX package, all-or-nothing.
     ///
-    /// Pipeline: admission gate (no-op round-trip + ZIP closed-world) →
-    /// [`apply_set_cells`] → validate → encode. Every failure is
-    /// fail-closed: no bytes are produced.
+    /// A batch of direct body-table cells with one paragraph and one Text run
+    /// (including an empty run) preserves the original XML outside its text
+    /// slots. Paragraph and table properties survive. Changed text removes
+    /// existing Preview and its connections; equal text returns the original.
+    /// If any cell cannot be preserved, the entire batch uses the existing
+    /// round-trip admission, regeneration and layout-cache carry checks.
+    /// Address and verification errors produce no output.
     ///
-    /// Supported single-line text cells retain their caches when the measured
-    /// width bound fits and the source layout properties permit it. Other edits
-    /// invalidate the changed paragraph, its host chain, and later paragraphs
-    /// in those flows.
+    /// The text patch determines which affected layout caches to invalidate.
+    /// A proven one-line edit can retain its cache and the later flow caches.
     ///
     /// # Errors
     ///
@@ -621,28 +628,19 @@ impl HwpxCellEditor {
     ///
     /// # What the decode warnings mean
     ///
-    /// They come from the admission gate's read of `base` — the decode whose
-    /// document this edit mutates, so it is the one that says what the codec
-    /// could not carry across the regeneration. The gate also re-decodes its
-    /// own no-op encode; that package is a discarded verification artefact,
-    /// so its diagnostics are not reported as if they described the result.
+    /// They describe the first read of the input, once and in original order.
+    /// Preserved input warnings can describe unmodeled source that survives
+    /// unchanged. A header-repair diagnostic does not mean a preserved header
+    /// was rewritten. Repeated internal reads do not add duplicate warnings.
     ///
     /// # What the encode warnings mean
     ///
-    /// Semantic-loss warnings never appear here — they are the fail-closed
-    /// path and produce [`CellEditError::SemanticLoss`] with no bytes. What
-    /// is returned is the remainder, which describes the regenerated package
-    /// without claiming its meaning changed.
-    ///
-    /// The warnings come from the encode that produced the bytes, and they
-    /// are reported **before** the layout-cache carry step runs. A
-    /// [`EncodeWarning::LayoutCacheDropped`]
-    /// therefore means "this encode did not emit that cache", not "the
-    /// output lacks it": the layout-carry step may put an untouched
-    /// paragraph's original cache back afterwards. Reporting the
-    /// encode verbatim is deliberate — filtering would require proving which
-    /// paths the carry restored, and a dropped-then-restored cache is still
-    /// worth telling the caller about.
+    /// Text-cleanup diagnostics precede the successful edit's non-semantic
+    /// diagnostics, including one Preview-removal warning when applicable.
+    /// Semantic loss produces [`CellEditError::SemanticLoss`] with no bytes.
+    /// With regeneration, encoder cache-drop diagnostics precede cache carry
+    /// and do not prove that the final output lacks the cache. Planned cache
+    /// removal by a preserving text edit does not synthesize such a warning.
     ///
     /// Ahead of the encoder's warnings come the ones for the texts
     /// themselves: each text has the characters XML 1.0 cannot represent
@@ -670,112 +668,128 @@ impl HwpxCellEditor {
         package
             .ensure_editable()
             .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Decode, &e)))?;
-        let e0 = encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission)
-            .map_err(map_admission_error)?;
-        let d1 = HwpxDecoder::decode(&e0)
-            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
-        admission_compare(&d0, &d1).map_err(map_admission_error)?;
-        check_zip_carry(base, &e0).map_err(map_admission_error)?;
-        // After the older checks, so an input they already refused keeps
-        // their error code.
-        reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
-
-        for spec in specs {
-            d0.require_source_table(spec.table)
-                .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?;
-        }
-        // Each text is cleaned once, before the edit, so the cell holds the
-        // cleaned text and the encoder's part scan finds nothing left of it to
-        // report. The warning names the anchor the edit resolved to, which is
-        // known only after the edit.
-        let table_sections: Vec<usize> =
-            tables_in_document(&d0.document).iter().map(|e| e.section).collect();
-        let (specs, removed): (Vec<CellSpec>, Vec<usize>) = specs
-            .iter()
-            .map(|spec| {
-                let (text, count) = crate::wire_xml::clean_edit_text(&spec.text);
-                (CellSpec { text, ..spec.clone() }, count)
-            })
-            .unzip();
-        let resolved = resolve_edits(&d0.document, &specs)?;
-        let mut candidates = line_keep::candidates(&d0, &package, &resolved);
-        let HwpxDocument {
-            source_maps: _,
-            source_basis: _,
-            mut document,
-            style_store,
-            image_store,
-            warnings: decode_warnings,
-        } = d0;
-        let outcome = apply_resolved(&mut document, resolved);
-        line_keep::restore_caches(&mut document, &candidates);
-        let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
-        for (cell, count) in outcome.cells.iter().zip(removed) {
-            if count > 0 {
-                encode_warnings.push(EncodeWarning::XmlForbiddenCharsRemoved {
-                    part: package
-                        .section_path(table_sections[cell.table])
-                        .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?,
-                    location: format!(
-                        "table {} cell ({}, {})",
-                        cell.table, cell.anchor.row, cell.anchor.col
-                    ),
-                    count,
-                });
+        if let Some(plan) = preserving::plan(&d0, &package, specs)? {
+            if let Some(result) = preserving::apply(base, &d0, &package, plan)? {
+                return Ok(result);
             }
         }
-        let probe_document = (!candidates.is_empty()).then(|| document.clone());
-        let validated = document
-            .validate()
-            .map_err(|e| CellEditError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
-        let encode_outcome = HwpxEncoder::encode_with_diagnostics(
-            &validated,
-            &style_store,
-            &image_store,
-            crate::EncodeOptions::default(),
-        )
-        .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        // 의미 손상 fail-closed — 편집기가 알고 있는 의미
-        // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다. 손상
-        // 집합의 정의는 `EncodeWarning::is_semantic_loss` 하나뿐이다 —
-        // stamper 의 `encode_fail_closed` 도 같은 메서드를 호출한다.
-        // typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
-        // 뭉개져 호출자가 어떤 경고였는지 알 수 없었다).
-        // the non-semantic half is no longer discarded — it is
-        // what `set_cells_with_diagnostics` hands back on success. The
-        // split is shared with the stamper (`split_successful_encode`), so
-        // the two editors cannot drift apart.
-        let (bytes, others) = crate::encoder::split_successful_encode(encode_outcome)
-            .map_err(|(warnings, others)| CellEditError::SemanticLoss { warnings, others })?;
-        encode_warnings.extend(others);
-        // Untouched paragraphs keep Hancom's line-layout cache so the
-        // renderer does not reflow (and repaginate) the whole document.
-        let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
-            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
-        line_keep::cancel_dropped(&source, &mut candidates);
-        let probe = probe_document
-            .map(|document| line_keep::probe(document, &style_store, &image_store, &candidates))
-            .transpose()
-            .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?
-            .flatten();
-        let (bytes, dropped) = crate::layout_carry::carry_line_segs(
-            base,
-            &e0,
-            &bytes,
-            probe.as_deref().unwrap_or(&bytes),
-            &source,
-        )
-        .map_err(CellEditError::Codec)?;
-        encode_warnings.extend(dropped);
-        package
-            .verify_reencoded_output(base, &bytes, validated.sections())
-            .map_err(CellEditError::Codec)?;
-        Ok(crate::diagnostics::WithCodecWarnings::new(
-            CellEditResult { bytes, outcome },
-            decode_warnings,
-            encode_warnings,
-        ))
+        set_cells_reencoded(base, specs, d0, package)
     }
+}
+
+fn set_cells_reencoded(
+    base: &[u8],
+    specs: &[CellSpec],
+    d0: HwpxDocument,
+    package: crate::patch::RawPackage,
+) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
+    #[cfg(test)]
+    preserving::CELL_REENCODE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    let e0 =
+        encode_hwpx(&d0, crate::stamp::EncodePurpose::Admission).map_err(map_admission_error)?;
+    let d1 = HwpxDecoder::decode(&e0)
+        .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Admission, &e)))?;
+    admission_compare(&d0, &d1).map_err(map_admission_error)?;
+    check_zip_carry(base, &e0).map_err(map_admission_error)?;
+    // After the older checks, so an input they already refused keeps
+    // their error code.
+    reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
+
+    for spec in specs {
+        d0.require_source_table(spec.table)
+            .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?;
+    }
+    // Each text is cleaned once, before the edit, so the cell holds the
+    // cleaned text and the encoder's part scan finds nothing left of it to
+    // report. The warning names the anchor the edit resolved to, which is
+    // known only after the edit.
+    let table_sections: Vec<usize> =
+        tables_in_document(&d0.document).iter().map(|e| e.section).collect();
+    let (specs, removed): (Vec<CellSpec>, Vec<usize>) = specs
+        .iter()
+        .map(|spec| {
+            let (text, count) = crate::wire_xml::clean_edit_text(&spec.text);
+            (CellSpec { text, ..spec.clone() }, count)
+        })
+        .unzip();
+    let resolved = resolve_edits(&d0.document, &specs)?;
+    let mut candidates = line_keep::candidates(&d0, &package, &resolved);
+    let HwpxDocument {
+        source_maps: _,
+        source_basis: _,
+        mut document,
+        style_store,
+        image_store,
+        warnings: decode_warnings,
+    } = d0;
+    let outcome = apply_resolved(&mut document, resolved);
+    line_keep::restore_caches(&mut document, &candidates);
+    let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
+    for (cell, count) in outcome.cells.iter().zip(removed) {
+        if count > 0 {
+            encode_warnings.push(EncodeWarning::XmlForbiddenCharsRemoved {
+                part: package
+                    .section_path(table_sections[cell.table])
+                    .map_err(|e| CellEditError::Invariant { detail: e.to_string() })?,
+                location: format!(
+                    "table {} cell ({}, {})",
+                    cell.table, cell.anchor.row, cell.anchor.col
+                ),
+                count,
+            });
+        }
+    }
+    let probe_document = (!candidates.is_empty()).then(|| document.clone());
+    let validated = document
+        .validate()
+        .map_err(|e| CellEditError::Codec(CodecFailure::core(CodecStage::Validation, &e)))?;
+    let encode_outcome = HwpxEncoder::encode_with_diagnostics(
+        &validated,
+        &style_store,
+        &image_store,
+        crate::EncodeOptions::default(),
+    )
+    .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
+    // 의미 손상 fail-closed — 편집기가 알고 있는 의미
+    // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다. 손상
+    // 집합의 정의는 `EncodeWarning::is_semantic_loss` 하나뿐이다 —
+    // stamper 의 `encode_fail_closed` 도 같은 메서드를 호출한다.
+    // typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
+    // 뭉개져 호출자가 어떤 경고였는지 알 수 없었다).
+    // the non-semantic half is no longer discarded — it is
+    // what `set_cells_with_diagnostics` hands back on success. The
+    // split is shared with the stamper (`split_successful_encode`), so
+    // the two editors cannot drift apart.
+    let (bytes, others) = crate::encoder::split_successful_encode(encode_outcome)
+        .map_err(|(warnings, others)| CellEditError::SemanticLoss { warnings, others })?;
+    encode_warnings.extend(others);
+    // Untouched paragraphs keep Hancom's line-layout cache so the
+    // renderer does not reflow (and repaginate) the whole document.
+    let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
+        .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?;
+    line_keep::cancel_dropped(&source, &mut candidates);
+    let probe = probe_document
+        .map(|document| line_keep::probe(document, &style_store, &image_store, &candidates))
+        .transpose()
+        .map_err(|e| CellEditError::Codec(CodecFailure::hwpx(CodecStage::Encode, &e)))?
+        .flatten();
+    let (bytes, dropped) = crate::layout_carry::carry_line_segs(
+        base,
+        &e0,
+        &bytes,
+        probe.as_deref().unwrap_or(&bytes),
+        &source,
+    )
+    .map_err(CellEditError::Codec)?;
+    encode_warnings.extend(dropped);
+    package
+        .verify_reencoded_output(base, &bytes, validated.sections())
+        .map_err(CellEditError::Codec)?;
+    Ok(crate::diagnostics::WithCodecWarnings::new(
+        CellEditResult { bytes, outcome },
+        decode_warnings,
+        encode_warnings,
+    ))
 }
 
 fn map_admission_error(error: StamperError) -> CellEditError {
@@ -796,6 +810,10 @@ fn map_admission_error(error: StamperError) -> CellEditError {
         other => CellEditError::Invariant { detail: other.to_string() },
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/package.rs"]
+pub(crate) mod test_package;
 
 #[cfg(test)]
 mod tests {

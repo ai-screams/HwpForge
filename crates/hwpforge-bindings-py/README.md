@@ -129,10 +129,18 @@ Constructors and accessors beside these: `Document.open(path)` (bounded at 100 M
 `INPUT_TOO_LARGE` beyond it), `Document.from_bytes(data)` (no bound — the caller already holds
 the bytes), `to_bytes()`, `save(path)`, and `len()` / `==` / `hash()` over the bytes.
 
-`set_cell`, `insert_para` and `stamp` re-encode the whole package, so they
-refuse a document Hancom saved with `INPUT_ENTRIES_NOT_CARRIED` or
-`INPUT_NOT_ROUNDTRIP_SAFE` rather than drop the entries it carries. `fill` and `patch` work on
-such a document. `delete_para` also supports verified plain or empty top-level body
+When every requested `set_cell` target is in a direct body table with one paragraph
+and one Text run (including an empty run), and its source location and header can be
+preserved, only its text slot is changed. Paragraph/table properties and source outside
+the slot are preserved. Changed values remove existing Preview and its connections with
+`PREVIEW_REMOVED`; unchanged values return the original bytes. If any cell is outside
+this subset or its text cannot be spliced, the whole batch uses re-encoding with the
+existing round-trip and package-preservation admission checks. Address errors and
+verification failures return errors.
+
+`insert_para`, `stamp` and `set_cell` batches requiring re-encoding can refuse
+Hancom-saved documents with `INPUT_ENTRIES_NOT_CARRIED` or `INPUT_NOT_ROUNDTRIP_SAFE`
+rather than drop their package entries. `fill` and `patch` work on such a document. `delete_para` also supports verified plain or empty top-level body
 paragraphs in Hancom-saved HWPX, using input indexes. Its source-preserving path keeps
 surviving paragraph IDs and unrelated payloads, removes affected line caches, zeroes
 supported affected table heights, and removes Preview and its connections with

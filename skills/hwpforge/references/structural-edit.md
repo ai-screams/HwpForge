@@ -1,10 +1,12 @@
 # Grid and Paragraph Edits (`set-cell`, `insert-para`, `delete-para`)
 
-These surfaces edit cells and top-level paragraphs without a JSON round-trip while keeping unrelated content. Paragraph edits splice XML and invalidate affected layout caches; cell edits re-encode. `insert-para` and `set-cell` require round-trip-safe inputs and refuse Hancom-saved documents (`INPUT_NOT_ROUNDTRIP_SAFE` or `INPUT_ENTRIES_NOT_CARRIED`, exit 1). Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. For other text changes use `fill` or `to-json --section N` → `patch` ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; `set-cell` refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — text inside a bookmark span or a memo field), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
+These surfaces edit cells and top-level paragraphs without a JSON round-trip while keeping unrelated content. Paragraph edits splice XML and invalidate affected layout caches; supported single-paragraph, single-Text-run direct body-table cell edits preserve source; other cell batches re-encode. `insert-para` and set-cell outside its preserving subset require round-trip-safe inputs and can refuse Hancom-saved documents (`INPUT_NOT_ROUNDTRIP_SAFE` or `INPUT_ENTRIES_NOT_CARRIED`, exit 1). Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. For other text changes use `fill` or `to-json --section N` → `patch` ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; set-cell outside its preserving subset refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — text inside a bookmark span or a memo field), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
 
 CONTENT_LOST reports information not represented by the input decode. Source-preserving delete succeeds only after separately proving that information survives in the output and does not affect the deletion decision; the original decode warnings remain. This applies only to some losses whose information remains in the source XML (such as per-language character values); all other CONTENT_LOST inputs retain their original refusal. Input-loss refusals for whole-document re-encoding edits remain in force.
 
 ## `set-cell` — table cells by grid address
+
+When every requested cell is in a direct body table with one paragraph and one Text run (including an empty run), and its source location and header can be preserved, set-cell changes only its text slot. Paragraph and table properties and unmodeled source outside the slot survive. Changed values remove existing Preview and its connections with PREVIEW_REMOVED; unchanged values return the original bytes. Input diagnostics appear once and do not imply header repair. If any cell is outside this subset or the text splice is unsupported, the whole file uses the existing round-trip and package-preservation checks and re-encoding. Address errors and verification failures return errors.
 
 A cell containing one paragraph on one line can keep its line-layout cache after a short replacement. Character effects (such as bold, italic or shadow), kerning, emphasis marks and font-space settings exclude a cell from cache preservation. Character width, spacing, relative size and position settings must be present and match across all script groups; missing source evidence or unproven text width also drops the cache.
 
@@ -18,12 +20,12 @@ hwpforge set-cell form.hwpx --map cells.json -o out.hwpx                   # bat
 
 `cells.json` is an array of `{"table":0,"at":{"row":1,"col":2},"text":"…"}`. `--table` is the ordinal from `outline` (document order, 0-based).
 
-| Behaviour          | Detail                                                                                                      |
-| ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Covered coordinate | resolves to its merge anchor; the result reports `requested`, `anchor`, `resolution: "covered_to_anchor"`   |
-| Labels             | NFC + whitespace-normalized exact match; more than one match → `CELL_LABEL_AMBIGUOUS` (use `--at`)          |
-| Refused cells      | a cell holding a table, image or control → `CELL_HAS_NON_TEXT_CONTENT`; outside the grid → `CELL_NOT_FOUND` |
-| Diff               | `cells` entries; `package.changed` lists `Contents/header.xml` and the section XML — both normal            |
+| Behaviour          | Detail                                                                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| Covered coordinate | resolves to its merge anchor; the result reports `requested`, `anchor`, `resolution: "covered_to_anchor"`                     |
+| Labels             | NFC + whitespace-normalized exact match; more than one match → `CELL_LABEL_AMBIGUOUS` (use `--at`)                            |
+| Refused cells      | a cell holding a table, image or control → `CELL_HAS_NON_TEXT_CONTENT`; outside the grid → `CELL_NOT_FOUND`                   |
+| Diff               | `cells` entries; preserved edits change section XML and existing Preview connections; regeneration can also change header XML |
 
 ## `insert-para` — add top-level paragraphs
 

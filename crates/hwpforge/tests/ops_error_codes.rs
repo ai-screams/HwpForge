@@ -1,4 +1,8 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod cell_package;
+#[path = "support/document.rs"]
+mod document;
 use hwpforge::hwpx::{
     CodecFailure, CodecStage, FillError, HwpxDecoder, HwpxError, HwpxErrorCode, HwpxPatcher,
     PatchError, SectionWorkflowError,
@@ -185,7 +189,18 @@ fn editor_rust_cases() -> Vec<(&'static str, OpsError)> {
             (
                 ids[0],
                 ops::edit::set_cell(
-                    bytes,
+                    &if ids[0] == "cell.admission" {
+                        cell_package::splice(
+                            &cell_package::two_text_runs(
+                                &document::editable(),
+                                "<hp:t>성명</hp:t>",
+                            ),
+                            "</hp:t>",
+                            "</hp:t><hp:imaginary/>",
+                        )
+                    } else {
+                        bytes.to_vec()
+                    },
                     &ops::edit::SetCellOptions::default()
                         .with_table(0)
                         .with_at("0,0")

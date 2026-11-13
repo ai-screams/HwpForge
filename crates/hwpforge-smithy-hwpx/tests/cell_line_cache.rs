@@ -118,9 +118,9 @@ fn original_layout_attributes_must_all_be_explicitly_supported() {
     }
 }
 
-/// 이것을 실패시키는 것: probe를 원본 문서로 만들거나 pageBreak 차이를 비교에서 지우기.
+/// 이것을 실패시키는 것: 보존 가능한 칸을 재인코드로 보내 문단 속성을 초기화하기.
 #[test]
-fn nontext_paragraph_change_still_invalidates_the_host_and_tail() {
+fn paragraph_properties_survive_text_replacement() {
     let base = fixture(40000);
     let section = package::section_xml(&base);
     let pos = section.find(">가</hp:t>").unwrap();
@@ -130,7 +130,11 @@ fn nontext_paragraph_change_still_invalidates_the_host_and_tail() {
     let tag = section[start..end].replace("pageBreak=\"0\"", "pageBreak=\"1\"");
     section.replace_range(start..end, &tag);
     let base = package::with_section(&base, &section);
-    assert_eq!(caches(&edit(&base, "힣")).len(), 2);
+    let output = edit(&base, "힣");
+    assert_eq!(caches(&output), caches(&base));
+    let tree = xml::Element::parse(&package::section_xml(&output));
+    assert_eq!(tree.find("hp:tc").find("hp:p").attr("pageBreak"), Some("1"));
+    assert_patch_matches(&base, "힣", &output);
 }
 
 /// 이것을 실패시키는 것: 첫 paraPr 대신 id=0 정의를 선택하기.
@@ -658,9 +662,97 @@ fn per_language_loss_still_rejects_public_cell_edits() {
         "latin=\"100\"",
         "latin=\"99\"",
     );
+    let output = edit(&base, "힣");
+    assert_eq!(
+        package::part(&output, "Contents/header.xml"),
+        package::part(&base, "Contents/header.xml")
+    );
+    assert_patch_matches(&base, "힣", &output);
+    let fallback = package::two_text_runs(&base, "<hp:t>가</hp:t>");
     let result = HwpxCellEditor::set_cells(
-        &base,
+        &fallback,
         &[CellSpec { table: 0, target: CellTarget::At(GridCoord::new(0, 0)), text: "힣".into() }],
     );
     assert!(result.unwrap_err().to_string().contains("char_shape_per_language"));
+}
+
+fn assert_patch_matches(base: &[u8], text: &str, output: &[u8]) {
+    use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxPatcher};
+    let decoded = HwpxDecoder::decode(base).unwrap();
+    let section = &decoded.document.sections()[0];
+    let preservation = HwpxPatcher::export_section_preservation(base, 0, section).unwrap();
+    let mut replacement = section.clone();
+    let hwpforge_core::RunContent::Table(table) = &mut replacement.paragraphs[1].runs[0].content
+    else {
+        panic!("table")
+    };
+    table.rows[0].cells[0].paragraphs[0].runs[0].content =
+        hwpforge_core::RunContent::Text(text.into());
+    let patched =
+        HwpxPatcher::patch_section_preserving(base, 0, &replacement, None, Some(&preservation))
+            .unwrap();
+    assert_eq!(package_digest(output), package_digest(&patched));
+}
+
+// 이것을 실패시키는 것: 파일 전체 fallback에서 증명한 직접 칸의 캐시 복원을 생략하기.
+#[test]
+fn reencoded_batch_keeps_proven_direct_cells() {
+    for proof_second in [false, true] {
+        for (width, expected) in [(1050, 5), (1049, 2)] {
+            let base = fixture(width);
+            let mut decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&base).unwrap();
+            let proof = decoded.document.sections()[0].clone();
+            let mut outside = proof.clone();
+            outside.for_each_paragraph_mut(|p| p.layout_cache = None);
+            let hwpforge_core::RunContent::Table(table) =
+                &mut outside.paragraphs[1].runs[0].content
+            else {
+                panic!("table")
+            };
+            table.rows[0].cells[0].paragraphs[0]
+                .runs
+                .push(Run::text("추가", CharShapeIndex::new(1)));
+            let mut second_shape = hwpforge_smithy_hwpx::HwpxCharShape::default();
+            second_shape.bold = true;
+            decoded.style_store.push_char_shape(second_shape);
+            let mut document = Document::new();
+            if proof_second {
+                document.add_section(outside);
+                document.add_section(proof);
+            } else {
+                document.add_section(proof);
+                document.add_section(outside);
+            }
+            let base = HwpxEncoder::encode_with_options(
+                &document.validate().unwrap(),
+                &decoded.style_store,
+                &decoded.image_store,
+                hwpforge_smithy_hwpx::EncodeOptions::default().with_emit_layout_cache(true),
+            )
+            .unwrap();
+            for cell in [0, 1] {
+                let edits = [
+                    CellSpec {
+                        table: usize::from(proof_second),
+                        target: CellTarget::At(GridCoord::new(0, cell)),
+                        text: "힣".into(),
+                    },
+                    CellSpec {
+                        table: usize::from(!proof_second),
+                        target: CellTarget::At(GridCoord::new(0, 0)),
+                        text: "다른값".into(),
+                    },
+                ];
+                let output = HwpxCellEditor::set_cells(&base, &edits).unwrap();
+                let path = format!("Contents/section{}.xml", usize::from(proof_second));
+                let original = package::with_section(&base, &package::part(&base, &path));
+                let actual =
+                    package::with_section(&output.bytes, &package::part(&output.bytes, &path));
+                assert_eq!(caches(&actual).len(), expected);
+                if expected == 5 {
+                    assert_eq!(caches(&actual), caches(&original));
+                }
+            }
+        }
+    }
 }

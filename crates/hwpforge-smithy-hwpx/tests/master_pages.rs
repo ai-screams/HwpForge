@@ -14,8 +14,8 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{
-    CellEditError, CellSpec, CellTarget, DecodeWarning, HwpxCellEditor, HwpxDecoder, HwpxDocument,
-    HwpxEncoder, HwpxError,
+    CellSpec, CellTarget, DecodeWarning, HwpxCellEditor, HwpxDecoder, HwpxDocument, HwpxEncoder,
+    HwpxError,
 };
 
 fn cell_spec() -> Vec<CellSpec> {
@@ -102,7 +102,7 @@ fn an_empty_master_page_paragraph_keeps_its_run_through_reencode() {
 // 이것을 실패시키는 것: 미지 `type` 의 ContentLost 방출을 지우기 — 경고만으로는
 // set-cell 이 입력을 받아들이고 그 바탕쪽을 모든 쪽에 적용되게 다시 쓴다.
 #[test]
-fn an_unknown_master_page_type_is_content_lost_and_set_cell_refuses_it() {
+fn an_unknown_master_page_type_is_reported_and_preserved() {
     let input = with_master(
         &package("x", 1),
         0,
@@ -123,10 +123,13 @@ fn an_unknown_master_page_type_is_content_lost_and_set_cell_refuses_it() {
         )]
     );
 
-    let err = HwpxCellEditor::set_cells(&input, &cell_spec()).expect_err("must refuse");
-    assert!(
-        matches!(&err, CellEditError::NotRoundTripSafe { component, .. } if component.contains("CONTENT_LOST")),
-        "{err:?}"
+    // 이것을 실패시키는 것: 보존 가능한 칸에도 입력 손실 거부를 적용하기.
+    let output = HwpxCellEditor::set_cells_with_diagnostics(&input, &cell_spec()).unwrap();
+    assert_eq!(output.decode_warnings, doc.warnings);
+    encoding::assert_cell_patch(&input, &output.value.bytes, 0, 1, "홍길동");
+    assert_eq!(
+        part(&output.value.bytes, "Contents/masterpage0.xml"),
+        part(&input, "Contents/masterpage0.xml")
     );
 }
 

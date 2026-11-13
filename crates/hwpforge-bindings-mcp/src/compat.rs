@@ -131,8 +131,8 @@ const TABLE: &[Row] = &[
     row!(StampPlan, DecodeFailed, "Check that the file is valid HWPX."),
     row!(InsertPara, DecodeFailed, "Check that the file is valid HWPX."),
     row!(DeletePara, DecodeFailed, "Check that the file is valid HWPX."),
-    row!(SetCell, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
-    row!(SetCell, InputEntriesNotCarried, "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
+    row!(SetCell, InputNotRoundtripSafe, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 한컴 저장 문서의 보존 가능한 본문 직속 표의 한 문단·한 Text run 칸은 지원합니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
+    row!(SetCell, InputEntriesNotCarried, "이 요청은 원문 보존으로 처리할 수 없어(대상 칸의 꼴, 문서 머리글 사정 등) 전체 재인코드 경로를 사용했지만, 그 경로가 이 문서의 일부 ZIP 부속 엔트리를 다시 쓰지 못해 거부합니다. 한컴 저장 문서의 보존 가능한 본문 직속 표의 한 문단·한 Text run 칸은 지원합니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
     row!(SetCell, UpstreamUnmapped, "Report this as a bug."),
 
     row!(InsertPara, InsertTextRequired, "Use `text` for a single paragraph or `texts` for a contiguous block."),
@@ -463,9 +463,29 @@ mod tests {
         ] {
             let input = data.join(fixture);
             let file = input.to_str().unwrap();
+            // 이것을 실패시키는 것: 범위 밖 칸의 입력 손실 admission 거부 제거.
+            let cell_input = if ids[0] == "cell.admission" {
+                let bytes = super::cell_package::two_text_runs(
+                    &super::cell_document::editable(),
+                    "<hp:t>성명</hp:t>",
+                );
+                let bytes =
+                    super::cell_package::splice(&bytes, "</hp:t>", "</hp:t><hp:imaginary/>");
+                let path = out.with_file_name("cell-input.hwpx");
+                std::fs::write(&path, bytes).unwrap();
+                path
+            } else {
+                input.clone()
+            };
             check(
                 ids[0],
-                set_cell::run_set_cell(file, std::slice::from_ref(&spec), output).err().unwrap(),
+                set_cell::run_set_cell(
+                    cell_input.to_str().unwrap(),
+                    std::slice::from_ref(&spec),
+                    output,
+                )
+                .err()
+                .unwrap(),
             );
             check(
                 ids[1],
@@ -1037,3 +1057,10 @@ mod tests {
         assert_eq!(linked, baseline_ids, "baseline links must name consumed cases");
     }
 }
+
+#[cfg(test)]
+#[path = "../../hwpforge/tests/support/document.rs"]
+mod cell_document;
+#[cfg(test)]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+pub(crate) mod cell_package;
