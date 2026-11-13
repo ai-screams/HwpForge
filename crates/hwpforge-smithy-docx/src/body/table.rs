@@ -98,11 +98,11 @@ impl Tables {
         part: &str,
     ) -> Result<()> {
         if let Some(cell) = self.stack.last_mut().and_then(|t| t.cell.as_mut()) {
-            // Each source paragraph contributes its forced-line heights in the first
-            // page/column fragment. Width-dependent wrapping is not counted, so
-            // the counted lines cannot exceed Word's actual line count (a lower bound).
-            // The resolved first before and collapsed internal gaps contribute no more
-            // than Word's corresponding spacing.
+            // Height includes each source paragraph's forced lines in its first
+            // page/column fragment and its first-line marker growth once.
+            // Width-dependent wrapping is not counted (a line-count lower bound).
+            // Before is source spacing, counted only for the first paragraph;
+            // collapsed internal gaps supply the remaining source spacing.
             cell.content_minimum = cell
                 .content_minimum
                 .checked_add(height)

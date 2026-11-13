@@ -260,24 +260,57 @@ fn marker_height_smaller_extrema_add_nothing() {
 #[test]
 fn marker_height_increases_cell_minimum() {
     for (marker, expected) in [(22, "1902"), (28, "2301")] {
-        let bytes = package::splice_part(
-            &input(marker, "맑은 고딕", "", &[22]),
-            "body.xml",
-            "<w:body>",
-            "<w:body><w:tbl><w:tblPr><w:tblCellMar><w:top w:w='0'/><w:bottom w:w='0'/></w:tblCellMar></w:tblPr><w:tr><w:tc>",
-        );
-        let bytes = package::splice_part(
-            &bytes,
-            "body.xml",
-            "</w:body>",
-            "</w:tc></w:tr></w:tbl></w:body>",
-        );
-        let out = convert_docx(&bytes).unwrap();
-        let section = xml::Element::parse(&package::section_xml(&out.bytes));
-        assert_eq!(section.find("hp:tc").child("hp:cellSz").attr("height"), Some(expected));
+        check_cell_minimum(&input(marker, "맑은 고딕", "", &[22]), "", "", expected);
     }
     // 자연 높이 1902에 단일 줄 번호 증가분 399를 한 번 더한 최소 높이 2301.
 }
+
+fn check_cell_minimum(bytes: &[u8], before: &str, after: &str, expected: &str) {
+    let bytes = package::splice_part(
+        bytes,
+        "body.xml",
+        "<w:body>",
+        &format!("<w:body><w:tbl><w:tblPr><w:tblCellMar><w:top w:w='0'/><w:bottom w:w='0'/></w:tblCellMar></w:tblPr><w:tr><w:tc>{before}"),
+    );
+    let bytes = package::splice_part(
+        &bytes,
+        "body.xml",
+        "</w:body>",
+        &format!("{after}</w:tc></w:tr></w:tbl></w:body>"),
+    );
+    let out = convert_docx(&bytes).unwrap();
+    let section = xml::Element::parse(&package::section_xml(&out.bytes));
+    assert_eq!(section.find("hp:tc").child("hp:cellSz").attr("height"), Some(expected));
+}
+
+// 이것을 실패시키는 것: 번호의 첫 줄 증가분을 셀의 첫 문단에만 더하기.
+#[test]
+fn marker_height_counts_once_per_list_paragraph_in_cell() {
+    for (marker, expected) in [(22, "3804"), (28, "4602")] {
+        check_cell_minimum(&input(marker, "맑은 고딕", "", &[22, 22]), "", "", expected);
+    }
+}
+
+// 이것을 실패시키는 것: 목록이 아닌 문단에도 번호의 첫 줄 증가분 더하기.
+#[test]
+fn marker_height_in_cell_follows_each_paragraph_kind() {
+    let plain = "<w:p><w:pPr><w:rPr><w:rFonts w:ascii='맑은 고딕' w:hAnsi='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:hAnsi='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>본문 body</w:t></w:r></w:p>";
+    let bytes = input(28, "맑은 고딕", "", &[22]);
+    check_cell_minimum(&bytes, "", plain, "4203");
+    check_cell_minimum(&bytes, plain, "", "4203");
+}
+
+// 이것을 실패시키는 것: 둘째 문단의 증가분을 문단 사이 간격과 큰 쪽으로 합치기.
+#[test]
+fn marker_height_in_cell_keeps_source_before_once() {
+    check_cell_minimum(
+        &input(28, "맑은 고딕", "<w:spacing w:before='120'/>", &[22, 22]),
+        "",
+        "",
+        "5802",
+    );
+}
+
 // 이것을 실패시키는 것: 미지원 배치의 번호 글자 모양 등록 또는 높이·스크립트 진단 생략.
 #[test]
 fn unsupported_marker_layout_measures_without_registering_shape() {

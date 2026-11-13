@@ -113,6 +113,7 @@ pub(crate) struct ParaDelta {
     // Projection cache only; raw line stays unchanged for inherited contexts.
     projected_line: Option<u64>,
     // First-line marker growth survives source spacing collapse and page starts.
+    // Counted once per source paragraph in the cell minimum.
     projected_marker_before: i32,
     alignment: Option<u8>,
     left: Option<i32>,

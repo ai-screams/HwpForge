@@ -563,6 +563,7 @@ impl Resolver {
             }
             minimum_height = minimum_height
                 .checked_add(line_height.word_line(&base.para, line_east)?)
+                .and_then(|h| h.checked_add(base.para.projected_marker_before))
                 .filter(|h| *h <= HwpUnit::MAX_VALUE)
                 .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?;
         }
@@ -931,13 +932,8 @@ impl Resolver {
         height.add(size, metrics);
         Ok(())
     }
-    pub(crate) fn spacing_before(paragraph: &Delta) -> Result<i32> {
-        paragraph
-            .para
-            .before
-            .unwrap_or(0)
-            .checked_add(paragraph.para.projected_marker_before)
-            .ok_or_else(|| DocxError::invalid("#format", "spacing", "numeric overflow"))
+    pub(crate) fn spacing_before(paragraph: &Delta) -> i32 {
+        paragraph.para.before.unwrap_or(0)
     }
     pub(crate) fn spacing_after(paragraph: &Delta) -> i32 {
         paragraph.para.after.unwrap_or(0)
@@ -1155,7 +1151,11 @@ impl Resolver {
                     .as_i32(),
                 ))
             })?;
-        shape.space_before = unit(Self::spacing_before(d)?)?;
+        shape.space_before = unit(
+            Self::spacing_before(d)
+                .checked_add(p.projected_marker_before)
+                .ok_or_else(|| DocxError::invalid("#format", "spacing", "numeric overflow"))?,
+        )?;
         shape.space_after = unit(p.after.unwrap_or(0))?;
         let (left, first) = if shape.list_marker.is_some() {
             (p.left.unwrap_or(0), p.first.unwrap_or(0))
