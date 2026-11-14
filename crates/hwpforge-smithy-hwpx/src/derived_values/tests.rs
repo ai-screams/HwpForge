@@ -428,7 +428,7 @@ fn page_format_and_footer_are_checked_separately() {
         .is_err());
     }
 }
-// 이것을 실패시키는 것: CROSSREF R을 번호/내용/위아래/다른 대상/원격 컨테이너로 확대, 삭제 책갈피 승인.
+// 이것을 실패시키는 것: 표시 글자 없는 쪽 참조에서 대상 생존·종류·경로·Command 검사 생략.
 // 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 허용 복원.
 #[test]
 fn bookmark_page_reference_requires_a_surviving_target() {
@@ -455,6 +455,18 @@ fn bookmark_page_reference_requires_a_surviving_target() {
         &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(1)] }]
     )
     .is_err());
+    // Without displayed text the flow rule does not apply, so the target checks decide.
+    let hidden = good.replace("<hp:t>3</hp:t>", "<hp:t></hp:t>");
+    check_derived_values(
+        &facts(std::slice::from_ref(&hidden)),
+        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
+    )
+    .unwrap();
+    assert!(check_derived_values(
+        &facts(std::slice::from_ref(&hidden)),
+        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(1)] }]
+    )
+    .is_err());
     for changed in [
         good.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_NUMBER"),
         good.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_CONTENTS"),
@@ -474,6 +486,31 @@ fn bookmark_page_reference_requires_a_surviving_target() {
             &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }]
         )
         .is_err());
+    }
+    for (label, changed) in [
+        ("number", hidden.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_NUMBER")),
+        ("contents", hidden.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_CONTENTS")),
+        ("updown", hidden.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_UPDOWN")),
+        ("outline", hidden.replace("TARGET_BOOKMARK", "TARGET_OUTLINE")),
+        ("missing", hidden.replace("?mark;", "?missing;")),
+        ("other", hidden.replace("?mark;6;0;0;0;", "?other;0;0;0;0;")),
+        ("path", hidden.replace("'RefPath'>?mark;<", "'RefPath'>mark<")),
+        (
+            "duplicate",
+            hidden.replace(
+                "<hp:ctrl><hp:bookmark name='mark'/></hp:ctrl>",
+                "<hp:ctrl><hp:bookmark name='mark'/></hp:ctrl><hp:ctrl><hp:bookmark name='mark'/></hp:ctrl>",
+            ),
+        ),
+    ] {
+        assert!(
+            check_derived_values(
+                &facts(&[changed]),
+                &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
+            )
+            .is_err(),
+            "{label}"
+        );
     }
 }
 
@@ -813,13 +850,16 @@ fn cross_reference_command_agrees_with_typed_parameters() {
     ));
     let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
     assert!(check_derived_values(&facts(std::slice::from_ref(&good)), &edit).is_err());
+    // Without displayed text the flow rule does not apply, so the command check decides.
+    let hidden = good.replace("<hp:t>3</hp:t>", "<hp:t></hp:t>");
+    check_derived_values(&facts(std::slice::from_ref(&hidden)), &edit).unwrap();
     for command in ["?mark;0;0;0;0;", "?mark;6;1;0;0;", "?mark;6;2;0;0;"] {
-        assert!(check_derived_values(&facts(&[good.replace("?mark;6;0;0;0;", command)]), &edit)
+        assert!(check_derived_values(&facts(&[hidden.replace("?mark;6;0;0;0;", command)]), &edit)
             .is_err());
     }
 }
 
-// 이것을 실패시키는 것: 머리말/꼬리말/바탕쪽/각주/미주/메모 책갈피에 본문 page 참조 R을 전용.
+// 이것을 실패시키는 것: 흐름 변경 때 머리말/꼬리말/바탕쪽/각주/미주/메모 책갈피를 가리키는 쪽 참조 표시 허용.
 #[test]
 fn page_reference_targets_require_observed_body_flows() {
     let params = [
@@ -953,7 +993,7 @@ fn source_address_lookups_scale_with_elements_and_requests() {
     assert!(small > 0 && large > small && large < small * 3, "{small} -> {large}");
 }
 
-// 이것을 실패시키는 것: autoNum이 없는 PAGE 참조에서 재시작 변경 검사 생략.
+// Delete always changes the flow, so a displayed page reference is refused with or without a restart.
 // 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 허용 복원.
 #[test]
 fn page_cross_reference_refuses_restart_removal() {
