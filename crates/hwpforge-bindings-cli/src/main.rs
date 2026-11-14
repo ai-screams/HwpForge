@@ -241,7 +241,7 @@ enum Commands {
 
     /// Insert a new paragraph relative to an anchor (structural edit).
     #[command(
-        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, keeping unrelated content. Admission-approved deletion updates affected layout caches.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, keeping unrelated content and updating affected layout caches.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     InsertPara {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.
