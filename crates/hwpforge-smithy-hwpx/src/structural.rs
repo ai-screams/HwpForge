@@ -388,6 +388,12 @@ fn delete_admitted(
     ids: ParagraphIds,
 ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
     if ids == ParagraphIds::Preserve {
+        // 이것을 실패시키는 것: 여러 대상의 원문 보존 삭제를 허용.
+        if targets.len() != 1 {
+            return Err(verification_error(crate::HwpxError::InvalidStructure {
+                detail: "source-preserving deletion requires one paragraph".into(),
+            }));
+        }
         edit_checkpoint!("input-loss");
         preserved_loss::check_candidates(base, &package, &d0).map_err(verification_error)?;
         edit_checkpoint!("header");
@@ -524,11 +530,12 @@ fn delete_admitted(
         section_changes.push(change);
     }
     if ids == ParagraphIds::Preserve {
-        // 이것을 실패시키는 것: 여러 대상의 원문 보존 삭제를 허용.
-        if targets.len() != 1 {
-            return Err(verification_error(crate::HwpxError::InvalidStructure {
-                detail: "source-preserving deletion requires one paragraph".into(),
-            }));
+        // The layout scan reads only the original XML, so it runs before the costlier
+        // derived-value collection.
+        edit_checkpoint!("delete-layout");
+        for change in &section_changes {
+            // 이것을 실패시키는 것: 원문 배치 증명 생략 또는 일반 삭제에도 적용.
+            delete_layout::check(&package, &change.original)?;
         }
         use crate::derived_values::{DerivedEdit, DerivedFacts};
         edit_checkpoint!("derived-collect");
@@ -558,10 +565,7 @@ fn delete_admitted(
         edit_checkpoint!("derived-heading");
         // 이것을 실패시키는 것: 삭제 문단의 직접/스타일 heading 검사 생략.
         effects.check_deleted_plain_headings(&d0).map_err(verification_error)?;
-        edit_checkpoint!("delete-layout");
         for change in &section_changes {
-            // 이것을 실패시키는 것: 원문 배치 증명 생략 또는 일반 삭제에도 적용.
-            delete_layout::check(&package, &change.original)?;
             apply_section_change(
                 &mut package,
                 &mut changes,

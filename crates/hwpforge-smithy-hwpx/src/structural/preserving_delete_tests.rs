@@ -361,7 +361,7 @@ fn every_preserving_failure_restores_the_original_error() {
 }
 
 // 이것을 실패시키는 것: facts 중복 수집, check/height 순서 역전, admission 성공에 새 gate 적용.
-// 이것을 실패시키는 것: delete-layout 체크포인트 제거 또는 heading/layout 순서 변경.
+// 이것을 실패시키는 것: delete-layout 체크포인트 제거 또는 배치 검사를 파생 값 수집 뒤로 이동.
 #[test]
 fn collection_and_policy_are_scoped_to_preserving_delete() {
     failures(&[]);
@@ -385,13 +385,17 @@ fn collection_and_policy_are_scoped_to_preserving_delete() {
         v.iter().position(|s| *s == "derived-check").unwrap()
             < v.iter().position(|s| *s == "derived-heading").unwrap()
     );
-    // 이것을 실패시키는 것: heading/layout 검사 순서를 바꾸거나 splice 뒤로 이동.
+    // 이것을 실패시키는 것: 원문만 읽는 배치 검사를 파생 값 수집 뒤나 splice 뒤로 이동.
     assert!(
-        v.iter().position(|s| *s == "derived-heading").unwrap()
+        v.iter().position(|s| *s == "plain-source").unwrap()
             < v.iter().position(|s| *s == "delete-layout").unwrap()
     );
     assert!(
         v.iter().position(|s| *s == "delete-layout").unwrap()
+            < v.iter().position(|s| *s == "derived-collect").unwrap()
+    );
+    assert!(
+        v.iter().position(|s| *s == "derived-heading").unwrap()
             < v.iter().position(|s| *s == "splice").unwrap()
     );
     failures(&[]);
@@ -661,10 +665,13 @@ fn multiple_sections_and_targets_keep_original_id_spellings() {
         vec![TARGET, ParagraphLocator { section: 0, index: 3 }],
         vec![TARGET, ParagraphLocator { section: 1, index: 1 }],
     ] {
+        failures(&[]);
         assert_eq!(
             HwpxStructuralEditor::delete_paragraphs(&base, &targets).unwrap_err(),
             original_error(&base)
         );
+        // 이것을 실패시키는 것: 한 문단 검사를 원문 보존 검사들 뒤로 이동.
+        assert!(!visits().contains(&"input-loss"));
     }
     let result = HwpxStructuralEditor::delete_paragraphs(
         &base,
