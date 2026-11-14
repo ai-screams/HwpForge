@@ -13,8 +13,10 @@ const HP: &str = "http://www.hancom.co.kr/hwpml/2011/paragraph";
 const HC: &str = "http://www.hancom.co.kr/hwpml/2011/core";
 const HS: &str = "http://www.hancom.co.kr/hwpml/2011/section";
 const MASTER: &str = "http://www.hancom.co.kr/hwpml/2011/master-page";
-const OBJECTS: &str =
-    "tbl pic rect line ellipse arc polygon curve connectLine container equation chart";
+/// Saved parts declare their namespaces once on the root (fewer than 20 in observed
+/// Hancom output). Element prefixes are resolved against every active declaration, so
+/// an unbounded count would make the scan quadratic in the input size.
+const MAX_NAMESPACE_DECLARATIONS: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Namespace {
@@ -33,8 +35,68 @@ struct Frame {
     positions: usize,
     as_char: Option<String>,
 }
-fn contains(names: &str, name: &str) -> bool {
-    names.split_ascii_whitespace().any(|n| n == name)
+/// Objects whose wrapping is read from `textWrap` and `hp:pos`. This is narrower than
+/// `cache_flow::object_element` on purpose: text art, OLE, video and form controls are
+/// decoded, but their placement here has not been checked against Hancom, so a document
+/// holding them keeps its original admission error.
+fn is_object(name: &str) -> bool {
+    matches!(
+        name,
+        "tbl"
+            | "pic"
+            | "rect"
+            | "line"
+            | "ellipse"
+            | "arc"
+            | "polygon"
+            | "curve"
+            | "connectLine"
+            | "container"
+            | "equation"
+            | "chart"
+    )
+}
+/// Children allowed in a slot where wrapping objects can appear, besides the objects.
+/// `None` means the parent is not such a slot.
+fn slot_child(parent: &str, name: &str) -> Option<bool> {
+    let allowed = match parent {
+        "run" | "case" | "default" => {
+            matches!(name, "secPr" | "t" | "ctrl" | "switch" | "titleMark" | "dutmal" | "compose")
+        }
+        "ctrl" => matches!(
+            name,
+            "colPr"
+                | "header"
+                | "footer"
+                | "pageNum"
+                | "footNote"
+                | "endNote"
+                | "bookmark"
+                | "indexmark"
+                | "fieldBegin"
+                | "fieldEnd"
+                | "autoNum"
+                | "newNum"
+                | "pageHiding"
+        ),
+        "container" => matches!(
+            name,
+            "offset"
+                | "orgSz"
+                | "curSz"
+                | "renderingInfo"
+                | "pos"
+                | "sz"
+                | "flip"
+                | "rotationInfo"
+                | "outMargin"
+                | "shapeComment"
+                | "caption"
+                | "parameterset"
+        ),
+        _ => return None,
+    };
+    Some(allowed)
 }
 fn invalid() -> StructuralEditError {
     verification_error(crate::HwpxError::InvalidStructure {
@@ -86,7 +148,7 @@ fn check_xml(xml: &str, master: bool) -> Result<(), StructuralEditError> {
     let mut reader = NsReader::from_str(input.as_str());
     let mut stack = Vec::<Frame>::new();
     let mut roots = 0;
-    let (mut sections, mut pages) = (0, 0);
+    let (mut sections, mut pages, mut declarations) = (0, 0, 0);
     loop {
         let event = reader.read_event().map_err(|_| invalid())?;
         crate::work::tick();
@@ -106,24 +168,18 @@ fn check_xml(xml: &str, master: bool) -> Result<(), StructuralEditError> {
                     _ => Namespace::Other,
                 };
                 let name = e.local_name().as_ref().to_owned();
-                let object = ns == Namespace::Paragraph && contains(OBJECTS, &name);
+                let object = ns == Namespace::Paragraph && is_object(&name);
                 if let Some(parent) = stack.last() {
                     // 이것을 실패시키는 것: 정적 하위 요소에 다른 이름공간 승인.
                     require(matches!(ns, Namespace::Paragraph | Namespace::Core))?;
                     // Wrapping objects occur in runs (including alternative branches),
                     // containers, or controls. Static descendants need no name inventory.
                     if parent.ns == Namespace::Paragraph {
-                        let extra = match parent.name.as_str() {
-                            "run" | "case" | "default" => Some("secPr t ctrl switch titleMark dutmal compose"),
-                            "ctrl" => Some("colPr header footer pageNum footNote endNote bookmark indexmark fieldBegin fieldEnd autoNum newNum pageHiding"),
-                            "container" => Some("offset orgSz curSz renderingInfo pos sz flip rotationInfo outMargin shapeComment caption parameterset"),
-                            _ => None,
-                        };
-                        if let Some(extra) = extra {
+                        if let Some(listed) = slot_child(&parent.name, &name) {
                             // 이것을 실패시키는 것: ctrl/run/container/대안 분기의 자식 목록 검사 생략.
                             require(
                                 ns == Namespace::Paragraph
-                                    && (contains(extra, &name) || parent.name != "ctrl" && object),
+                                    && (listed || parent.name != "ctrl" && object),
                             )?;
                         }
                     }
@@ -148,7 +204,13 @@ fn check_xml(xml: &str, master: bool) -> Result<(), StructuralEditError> {
                     let a = a.map_err(|_| invalid())?;
                     let value =
                         a.normalized_value(XmlVersion::Explicit1_0).map_err(|_| invalid())?;
-                    match a.key.as_ref() {
+                    let key = a.key.as_ref();
+                    if key == "xmlns" || key.starts_with("xmlns:") {
+                        declarations += 1;
+                        // 이것을 실패시키는 것: 이름공간 선언 수 상한 생략 또는 상한을 실제 문서보다 낮춤.
+                        require(declarations <= MAX_NAMESPACE_DECLARATIONS)?;
+                    }
+                    match key {
                         "textWrap" => frame.wrap = Some(value.into_owned()),
                         "treatAsChar" => as_char = Some(value.into_owned()),
                         "colCount" => columns = Some(value.into_owned()),
@@ -181,6 +243,8 @@ fn check_xml(xml: &str, master: bool) -> Result<(), StructuralEditError> {
                 if empty {
                     close(frame)?;
                 } else {
+                    // 이것을 실패시키는 것: 요소 깊이 상한 생략(디코더와 같은 상한).
+                    require(stack.len() < crate::decoder::XML_RECURSION_LIMIT)?;
                     stack.push(frame);
                 }
             }

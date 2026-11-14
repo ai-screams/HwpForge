@@ -297,6 +297,29 @@ fn layout_parser_requires_explicit_valid_evidence() {
     assert!(delete_layout::check(&package, &normalized).is_ok());
 }
 
+// 이것을 실패시키는 것: 이름공간 선언 수 상한 생략·조정, 요소 깊이 상한 생략·조정.
+#[test]
+fn layout_parser_bounds_declarations_and_depth() {
+    let base = carry_base();
+    let package = RawPackage::read(&base).unwrap();
+    let original = xml(&base);
+    let existing = original.matches(" xmlns").count();
+    let declare = |total: usize| {
+        let extra: String = (existing..total).map(|i| format!(" xmlns:x{i}='urn:x{i}'")).collect();
+        original.replacen("<hs:sec", &format!("<hs:sec{extra}"), 1)
+    };
+    assert!(delete_layout::check(&package, &declare(64)).is_ok());
+    assert!(delete_layout::check(&package, &declare(65)).is_err());
+    // The section root and a paragraph sit above the nested chain.
+    let nest = |depth: usize| {
+        let chain = format!("{}{}", "<hp:x>".repeat(depth - 2), "</hp:x>".repeat(depth - 2));
+        original.replacen("</hs:sec>", &format!("<hp:p>{chain}</hp:p></hs:sec>"), 1)
+    };
+    let limit = crate::decoder::XML_RECURSION_LIMIT;
+    assert!(delete_layout::check(&package, &nest(limit)).is_ok());
+    assert!(delete_layout::check(&package, &nest(limit + 1)).is_err());
+}
+
 // 이것을 실패시키는 것: 삭제와 무관한 정적 정의에 전역 요소 이름 목록 적용, 쪽 번호의 pos 속성을 개체 위치로 오인.
 #[test]
 fn static_definitions_survive_source_deletion() {
