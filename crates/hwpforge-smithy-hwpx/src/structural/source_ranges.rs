@@ -1,7 +1,7 @@
 //! Check that the planned replacements were applied exactly, including untouched gaps.
 //! The replacement plan is shared with the writer, not independently derived here.
 //! `self_verify` and the existing structural tests check the plan's correctness.
-use super::{structural_replacements, verification_error, HwpxDocument, StructuralEditError};
+use super::{paragraph_replacements, verification_error, HwpxDocument, StructuralEditError};
 use hwpforge_core::zip_package::{open_package, Package};
 use std::ops::Range;
 
@@ -10,7 +10,7 @@ thread_local! {
     static XML_READS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-// The writer and final verifier share the approved ID and height policy.
+// The writer and final verifier share the approved ID policy.
 pub(super) struct SectionChange {
     pub ids: super::ParagraphIds,
     pub section: usize,
@@ -18,7 +18,6 @@ pub(super) struct SectionChange {
     pub original: String,
     pub deleted: Vec<usize>,
     pub inserted: Option<(usize, usize, String)>,
-    pub heights: Vec<crate::derived_values::HeightInvalidation>,
 }
 
 pub(super) fn verify_output(
@@ -63,15 +62,7 @@ impl SectionChange {
         map: &crate::decoder::source_map::SourceMap,
     ) -> Result<Vec<(Range<usize>, String)>, StructuralEditError> {
         let inserted = self.inserted.as_ref().map(|(at, count, text)| (*at, *count, text.as_str()));
-        structural_replacements(
-            self.section,
-            &self.original,
-            map,
-            &self.deleted,
-            inserted,
-            &self.heights,
-            self.ids,
-        )
+        paragraph_replacements(map, &self.deleted, inserted, self.ids)
     }
 }
 

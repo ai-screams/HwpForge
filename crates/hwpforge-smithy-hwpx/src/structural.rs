@@ -20,6 +20,7 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use serde_json::Value;
 
+mod delete_layout;
 mod delete_source;
 mod paragraph_refs;
 mod preserved_loss;
@@ -516,7 +517,6 @@ fn delete_admitted(
             deleted: indices,
             inserted: None,
             ids,
-            heights: Vec::new(),
         };
         if ids == ParagraphIds::Reindex {
             apply_section_change(&mut package, &mut changes, &change, map)?;
@@ -524,6 +524,12 @@ fn delete_admitted(
         section_changes.push(change);
     }
     if ids == ParagraphIds::Preserve {
+        // 이것을 실패시키는 것: 여러 대상의 원문 보존 삭제를 허용.
+        if targets.len() != 1 {
+            return Err(verification_error(crate::HwpxError::InvalidStructure {
+                detail: "source-preserving deletion requires one paragraph".into(),
+            }));
+        }
         use crate::derived_values::{DerivedEdit, DerivedFacts};
         edit_checkpoint!("derived-collect");
         let facts = DerivedFacts::collect(&package, &d0).map_err(verification_error)?;
@@ -549,11 +555,13 @@ fn delete_admitted(
         preserved_loss::check_locations(&d0, &effects).map_err(verification_error)?;
         edit_checkpoint!("derived-check");
         effects.check_derived_values().map_err(verification_error)?;
-        edit_checkpoint!("derived-heights");
-        let heights = effects.collect_height_invalidations().map_err(verification_error)?;
-        for change in &mut section_changes {
-            change.heights =
-                heights.iter().filter(|h| h.section == change.section).cloned().collect();
+        edit_checkpoint!("derived-heading");
+        // 이것을 실패시키는 것: 삭제 문단의 직접/스타일 heading 검사 생략.
+        effects.check_deleted_plain_headings(&d0).map_err(verification_error)?;
+        edit_checkpoint!("delete-layout");
+        for change in &section_changes {
+            // 이것을 실패시키는 것: 원문 배치 증명 생략 또는 일반 삭제에도 적용.
+            delete_layout::check(&package, &change.original)?;
             apply_section_change(
                 &mut package,
                 &mut changes,
@@ -584,7 +592,11 @@ pub struct HwpxStructuralEditor;
 
 impl HwpxStructuralEditor {
     /// Deletes top-level paragraphs, all-or-nothing, retaining unrelated content.
-    /// Affected caches and derived Preview may be removed.
+    /// Admission-approved deletion removes affected caches and reindexes IDs.
+    /// Source-preserving deletion accepts one paragraph per request and removes
+    /// only that paragraph, retaining surviving line caches, table heights, IDs
+    /// and unrelated parts. Preview is removed. Documents whose line widths may
+    /// depend on position retain their original admission error.
     ///
     /// Pipeline: input admission gate → per-target rejection scan
     /// (reference / hard-break) → declared-delta build + `validate()` →
@@ -639,8 +651,10 @@ impl HwpxStructuralEditor {
     /// Deletes paragraphs while retaining decode and encode diagnostics.
     /// Empty requests return the original bytes. If only the semantic comparison or ZIP
     /// carry gate fails, verified plain/empty body paragraphs can be deleted from
-    /// the original source. Surviving IDs and unrelated part payloads are retained;
-    /// affected caches, supported table heights and Preview are invalidated.
+    /// the original source, one paragraph per request. Only the target paragraph is
+    /// removed; surviving line caches, table heights, IDs and unrelated parts remain
+    /// unchanged. Preview is removed. Documents whose line widths may depend on
+    /// position retain their original admission error.
     /// Any failure in that path returns the original admission error.
     ///
     /// # Errors
@@ -991,8 +1005,6 @@ impl HwpxStructuralEditor {
             original: xml,
             deleted: Vec::new(),
             inserted: Some((insert_index, texts.len(), new_para_bytes)),
-            // 공개 삽입은 높이 치환을 하지 않는다. `Vec::new()` 는 heap 을 요청하지 않는다.
-            heights: Vec::new(),
             ids: ParagraphIds::Reindex,
         };
         let out = crate::cache_flow::splice(&change.original, change.replacements(map)?)
@@ -1109,27 +1121,10 @@ fn splice_paragraphs(
         original: xml.into(),
         deleted: deleted.into(),
         inserted: inserted.map(|(at, count, text)| (at, count, text.into())),
-        heights: Vec::new(),
         ids: ParagraphIds::Reindex,
     };
     let edits = change.replacements(map)?;
     crate::cache_flow::splice(xml, edits).map_err(verification_error)
-}
-
-/// The writer and final source verifier consume the same approved original deltas.
-fn structural_replacements(
-    section: usize,
-    xml: &str,
-    map: &crate::decoder::source_map::SourceMap,
-    deleted: &[usize],
-    inserted: Option<(usize, usize, &str)>,
-    heights: &[crate::derived_values::HeightInvalidation],
-    ids: ParagraphIds,
-) -> Result<Vec<(std::ops::Range<usize>, String)>, StructuralEditError> {
-    let mut edits = paragraph_replacements(map, deleted, inserted, ids)?;
-    crate::derived_values::append_height_replacements(xml, map, section, heights, &mut edits)
-        .map_err(verification_error)?;
-    Ok(edits)
 }
 
 fn verification_error(error: crate::HwpxError) -> StructuralEditError {
@@ -1153,7 +1148,8 @@ fn paragraph_replacements(
             // 이것을 실패시키는 것: 삭제 부모 안 ID/캐시 치환을 남기기.
             continue;
         }
-        if index >= first {
+        // 이것을 실패시키는 것: 보존 삭제에도 생존 문단 캐시 제거 적용.
+        if ids == ParagraphIds::Reindex && index >= first {
             let caches = map.cache_flow.paragraph_caches(p.outer.start).ok_or_else(|| {
                 StructuralEditError::Invariant {
                     detail: "paragraph missing from cache flow".into(),
