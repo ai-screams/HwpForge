@@ -141,11 +141,11 @@ verification failures return errors.
 `insert_para`, `stamp` and `set_cell` batches requiring re-encoding can refuse
 Hancom-saved documents with `INPUT_ENTRIES_NOT_CARRIED` or `INPUT_NOT_ROUNDTRIP_SAFE`
 rather than drop their package entries. `fill` and `patch` work on such a document. `delete_para` also supports verified plain or empty top-level body
-paragraphs in Hancom-saved HWPX, using input indexes. Its source-preserving path keeps
-surviving paragraph IDs and unrelated payloads, removes affected line caches, zeroes
-supported affected table heights, and removes Preview and its connections with
-`PREVIEW_REMOVED`. Hancom lays out the document again when it is opened.
-Saving it again in Hancom rebuilds Preview.
+paragraphs in Hancom-saved HWPX, using input indexes. Its source-preserving path accepts
+one paragraph per request and removes only that paragraph, keeping surviving line caches,
+table heights, paragraph IDs and unrelated payloads. It removes Preview and its
+connections with `PREVIEW_REMOVED`; saving it again in Hancom rebuilds Preview.
+Documents whose line widths may depend on position return the original admission error.
 An unverifiable deletion returns the original admission error and no bytes.
 
 ### Module functions

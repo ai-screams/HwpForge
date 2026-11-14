@@ -215,7 +215,7 @@ enum Commands {
 
     /// Delete top-level paragraphs (structural edit).
     #[command(
-        long_about = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content and updating affected layout caches.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. On the source-preserving path, it removes affected line caches, sets supported affected table heights to zero for Hancom to lay out again, and removes Preview and its connections with PREVIEW_REMOVED. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. Verify with `diff base out`."
+        long_about = "Delete top-level body paragraphs by index, all-or-nothing, keeping unrelated content. Admission-approved deletion updates affected layout caches.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Delete can also remove verified plain or empty top-level body paragraphs from Hancom-saved HWPX. Indexes refer to positions in the input. The source-preserving path accepts one paragraph per request and removes only that paragraph, preserving surviving line caches, table heights, IDs and unrelated part payloads. It removes Preview and its connections with PREVIEW_REMOVED. Documents whose line widths may depend on position retain their original admission error. Saving again in Hancom rebuilds the preview. Unverifiable inputs retain their original admission error and produce no output. Verify with `diff base out`."
     )]
     DeletePara {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.
@@ -241,7 +241,7 @@ enum Commands {
 
     /// Insert a new paragraph relative to an anchor (structural edit).
     #[command(
-        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, keeping unrelated content and updating affected layout caches.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, keeping unrelated content. Admission-approved deletion updates affected layout caches.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     InsertPara {
         /// Allow semantic loss from HWP5 conversion; editing admission still applies.

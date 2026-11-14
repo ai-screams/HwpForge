@@ -596,13 +596,13 @@ class Document:
         """Return a new document with paragraphs removed; the receiver is unchanged.
 
         Verified plain or empty top-level body paragraphs can also be deleted
-        from Hancom-saved HWPX. Indexes address positions in the input. On the
-        source-preserving path, surviving paragraph IDs and unrelated payloads
-        are retained; affected line caches are removed and supported affected
-        table heights become zero for Hancom to lay out again. Preview and its
-        connections are removed with ``PREVIEW_REMOVED``; saving again in Hancom
-        rebuilds it. An unverifiable deletion returns its original admission
-        error and no bytes.
+        from Hancom-saved HWPX. Indexes address positions in the input. The
+        source-preserving path accepts one paragraph per request and removes
+        only that paragraph; surviving line caches, table heights, paragraph IDs
+        and unrelated payloads are retained. Preview and its connections are
+        removed with ``PREVIEW_REMOVED``; saving again in Hancom rebuilds it.
+        Documents whose line widths may depend on position, and any other
+        unverifiable deletion, return the original admission error and no bytes.
 
         HWP5 (.hwp) input is converted first; results are HWPX.
         Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
