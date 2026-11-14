@@ -178,8 +178,9 @@ pub(crate) fn insert_para<'py>(
 ///
 /// Deletes verified plain or empty body paragraphs from Hancom-saved HWPX too.
 /// Indexes address positions in the input. On the source-preserving path,
-/// affected line caches are removed;
-/// supported affected table heights become zero for Hancom to lay out again.
+/// one paragraph is accepted per request. Only the target paragraph is removed;
+/// surviving line caches, table heights, IDs and unrelated parts are preserved.
+/// Documents whose line widths may depend on position retain the admission error.
 /// Preview and its connections are removed with PREVIEW_REMOVED. Saving again
 /// in Hancom rebuilds the preview. An unverifiable edit returns its original
 /// admission error and no bytes.
