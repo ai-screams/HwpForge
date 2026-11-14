@@ -15,8 +15,6 @@ const HS: &str = "http://www.hancom.co.kr/hwpml/2011/section";
 const MASTER: &str = "http://www.hancom.co.kr/hwpml/2011/master-page";
 const OBJECTS: &str =
     "tbl pic rect line ellipse arc polygon curve connectLine container equation chart";
-const KNOWN_HP: &str = "autoNum autoNumFormat ax1 ax2 bookmark caption case cellAddr cellMargin cellSpan cellSz cellzone cellzoneList center charPr col colLine colPr compose controlPoints ctrl curSz default drawText dutmal effects end1 end2 endNote endNotePr endPoint endPt fieldBegin fieldEnd flip floatParam footNote footNotePr footer fwSpace grid header hyphen imgClip imgDim imgRect inMargin indexmark integerParam label lineBreak lineNumberShape lineShape lineseg linesegarray listParam mainText margin markpenBegin markpenEnd masterPage metaTag nbSpace newNum noteLine noteSpacing numbering offset orgSz outMargin p pageBorderFill pageHiding pageNum pagePr parameters parameterset placement point pos presentation pt renderingInfo rotationInfo run script secPr shadow shapeComment softEdge start1 start2 startNum startPoint startPt stringParam subList subText switch sz t tab tc textMargin titleMark tr visibility";
-const KNOWN_HC: &str = "ax1 ax2 center color end1 end2 endPt extent fillBrush gradation img intent left next prev pt pt0 pt1 pt2 pt3 right rotMatrix scaMatrix start1 start2 startPt transMatrix winBrush";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Namespace {
@@ -110,12 +108,10 @@ fn check_xml(xml: &str, master: bool) -> Result<(), StructuralEditError> {
                 let name = e.local_name().as_ref().to_owned();
                 let object = ns == Namespace::Paragraph && contains(OBJECTS, &name);
                 if let Some(parent) = stack.last() {
-                    // 이것을 실패시키는 것: 미지 hp 요소 또는 다른 이름공간의 같은 이름 승인.
-                    require(
-                        object
-                            || ns == Namespace::Paragraph && contains(KNOWN_HP, &name)
-                            || ns == Namespace::Core && contains(KNOWN_HC, &name),
-                    )?;
+                    // 이것을 실패시키는 것: 정적 하위 요소에 다른 이름공간 승인.
+                    require(matches!(ns, Namespace::Paragraph | Namespace::Core))?;
+                    // Wrapping objects occur in runs (including alternative branches),
+                    // containers, or controls. Static descendants need no name inventory.
                     if parent.ns == Namespace::Paragraph {
                         let extra = match parent.name.as_str() {
                             "run" | "case" | "default" => Some("secPr t ctrl switch titleMark dutmal compose"),
@@ -160,15 +156,15 @@ fn check_xml(xml: &str, master: bool) -> Result<(), StructuralEditError> {
                         _ => {}
                     }
                 }
+                if frame.name == "pos" {
+                    let parent = stack.last_mut().ok_or_else(invalid)?;
+                    // 이것을 실패시키는 것: 다른 자리의 미지 개체 또는 다른 이름공간의 pos 승인.
+                    require(ns == Namespace::Paragraph && parent.object)?;
+                    parent.positions += 1;
+                    parent.as_char = as_char;
+                }
                 if ns == Namespace::Paragraph {
                     match frame.name.as_str() {
-                        "pos" => {
-                            let parent = stack.last_mut().ok_or_else(invalid)?;
-                            // 이것을 실패시키는 것: 개체가 아닌 부모의 pos 승인.
-                            require(parent.object)?;
-                            parent.positions += 1;
-                            parent.as_char = as_char;
-                        }
                         "colPr" => {
                             // 이것을 실패시키는 것: 다단 또는 colCount 누락 승인.
                             require(columns.as_deref() == Some("1"))?;

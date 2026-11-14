@@ -1400,7 +1400,7 @@ fn all_drawn_extent_sites_preserve_surviving_objects() {
 }
 
 // 이것을 실패시키는 것: 같은 group_child_picture kind를 회전·뒤집기까지 허용하거나 appearance 근거 누락.
-// 이것을 실패시키는 것: 미지 glow 요소의 배치 검사 생략.
+// 이것을 실패시키는 것: 정적 glow 효과의 이름만으로 보존 삭제 거부.
 #[test]
 fn group_picture_appearance_and_transform_have_different_causes() {
     for pic in [
@@ -1411,19 +1411,8 @@ fn group_picture_appearance_and_transform_have_different_causes() {
         let base = body_object(&carry_base(), "남음", &object("container", 1000, 1000, "1", &pic));
         assert_cause(&base, "group_child_picture");
         let retried = body_object(&carry_base(), "남음", &group(&pic.replace("1000", "800")));
-        if pic.contains("<hp:glow") {
-            assert_eq!(
-                HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap_err(),
-                original_error(&base)
-            );
-            assert_eq!(
-                HwpxStructuralEditor::delete_paragraphs(&retried, &[TARGET]).unwrap_err(),
-                original_error(&retried)
-            );
-        } else {
-            succeeds(&base);
-            succeeds(&retried);
-        }
+        succeeds(&base);
+        succeeds(&retried);
     }
     for transform in [
         matrix("1").replace(

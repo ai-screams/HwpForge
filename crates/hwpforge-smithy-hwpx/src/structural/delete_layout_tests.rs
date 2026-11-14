@@ -144,9 +144,12 @@ fn layout_rejections_return_original_admission_error() {
         ("</hs:sec>", "<hp:p><hp:run><hp:secPr textDirection='HORIZONTAL'/></hp:run></hp:p></hs:sec>"),
         ("</hs:sec>", "<hp:p><hp:run><hp:secPr textDirection='HORIZONTAL'><hp:pagePr/></hp:secPr></hp:run></hp:p></hs:sec>"),
     ] { refuse(&replace(&base, SECTION, from, to)); }
-    for content in ["<hp:p><hp:unknown/></hp:p>", "<hp:p><x:tbl xmlns:x='urn:other'/></hp:p>"] {
-        refuse(&replace(&base, SECTION, "</hs:sec>", &format!("{content}</hs:sec>")));
-    }
+    refuse(&replace(
+        &base,
+        SECTION,
+        "</hs:sec>",
+        "<hp:p><x:tbl xmlns:x='urn:other'/></hp:p></hs:sec>",
+    ));
     let master = "<wrong xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph'/>";
     refuse(&extra(&base, "Contents/masterpage0.xml", master.as_bytes()));
 }
@@ -292,4 +295,68 @@ fn layout_parser_requires_explicit_valid_evidence() {
     assert!(delete_layout::check(&package, &alias).is_ok());
     let normalized = original.replace("colCount=\"1\"", "colCount=\"&#49;\"");
     assert!(delete_layout::check(&package, &normalized).is_ok());
+}
+
+// 이것을 실패시키는 것: 삭제와 무관한 정적 정의에 전역 요소 이름 목록 적용, 쪽 번호의 pos 속성을 개체 위치로 오인.
+#[test]
+fn static_definitions_survive_source_deletion() {
+    let base = extra(
+        &carry_base(),
+        "BinData/pattern.png",
+        include_bytes!("../../../../tests/fixtures/images/main-charactor.png"),
+    );
+    let base = replace(
+        &base,
+        "Contents/content.hpf",
+        "</opf:manifest>",
+        r#"<opf:item id="pattern" href="BinData/pattern.png" media-type="image/png" isEmbeded="1"/></opf:manifest>"#,
+    );
+    let static_content = format!(
+        "{}<hp:ctrl><hp:pageNum pos='BOTTOM_CENTER' formatType='DIGIT' sideChar='-'/></hp:ctrl><hp:ctrl><hp:indexmark><hp:firstKey>primary</hp:firstKey><hp:secondKey>secondary</hp:secondKey></hp:indexmark></hp:ctrl><hp:ctrl><hp:fieldBegin id='73' type='HYPERLINK'><hp:parameters><hp:stringParam name='Command'>https://example.com;1;0;0;</hp:stringParam><hp:booleanParam name='enabled'>true</hp:booleanParam></hp:parameters></hp:fieldBegin></hp:ctrl><hp:t>link</hp:t><hp:ctrl><hp:fieldEnd beginIDRef='73'/></hp:ctrl>",
+        losses::object("curve", 1000, 1000, "1", "<hp:lineShape color='#000000' width='33' style='SOLID'/><hp:seg type='CURVE' x1='0' y1='0' x2='1000' y2='1000'/><hc:fillBrush><hc:imgBrush mode='TOTAL'><hc:img binaryItemIDRef='pattern' effect='REAL_PIC' bright='0' contrast='0' alpha='0'/></hc:imgBrush></hc:fillBrush><hp:effects><hp:glow/></hp:effects>")
+    );
+    let base = replace(&base, SECTION, "<hp:t>남음</hp:t>", &static_content);
+    let raw = xml(&base);
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    exact_delete(&base, &raw[decoded.source_maps[0].paragraphs[1].outer.clone()], 1);
+}
+
+// 이것을 실패시키는 것: run과 대안 분기의 닫힌 자식 목록 검사 생략.
+#[test]
+fn unknown_run_children_are_rejected() {
+    let base = carry_base();
+    for child in [
+        "<hp:unknown/>",
+        "<hp:switch><hp:case><hp:unknown/></hp:case></hp:switch>",
+        "<hp:switch><hp:default><hp:unknown/></hp:default></hp:switch>",
+    ] {
+        refuse(&replace(&base, SECTION, "</hp:run>", &format!("{child}</hp:run>")));
+    }
+}
+
+// 이것을 실패시키는 것: textWrap 속성이나 hp:pos 요소를 가진 미지 요소 승인, pos 요소 이름공간 검사 생략.
+#[test]
+fn unknown_positioned_descendants_are_rejected() {
+    let base = carry_base();
+    for child in [
+        "<hp:unknown><hp:pos treatAsChar='1'/></hp:unknown>",
+        "<x:rect xmlns:x='urn:other' textWrap='TOP_AND_BOTTOM'><hp:pos treatAsChar='1'/></x:rect>",
+        "<hp:unknown textWrap='TOP_AND_BOTTOM'/>",
+        "<hp:rect textWrap='TOP_AND_BOTTOM'><hc:pos treatAsChar='1'/></hp:rect>",
+        "<hp:rect textWrap='TOP_AND_BOTTOM'><x:pos xmlns:x='urn:other' treatAsChar='1'/></hp:rect>",
+    ] {
+        refuse(&replace(&base, SECTION, "</hp:t>", &format!("{child}</hp:t>")));
+    }
+}
+
+// 이것을 실패시키는 것: container의 닫힌 자식 목록 검사 생략.
+#[test]
+fn unknown_container_children_are_rejected() {
+    let base = carry_base();
+    refuse(&replace(
+        &base,
+        SECTION,
+        "</hp:run>",
+        "<hp:container textWrap='TOP_AND_BOTTOM'><hp:unknown/></hp:container></hp:run>",
+    ));
 }
