@@ -1085,7 +1085,7 @@ fn word_number_tab_override_and_clear() {
         );
     }
 }
-// 이것을 실패시키는 것: 겹침 위험 경고 대신 고정 슬롯 자동 확대.
+// 이것을 실패시키는 것: 미측정 문맥에도 측정 불확실 경고를 추가.
 #[test]
 fn word_list_overflow_is_only_diagnosed() {
     for (start, expected) in [(9, 0), (99, 1)] {
@@ -1369,7 +1369,7 @@ fn word_marker_line_height_warns_for_each_changed_font_context() {
         assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_line_height"), expected);
     }
 }
-// 이것을 실패시키는 것: 지원하지 않은 형식의 명목 폭까지 계산하거나 CENTER 슬롯을 g로 계산.
+// 이것을 실패시키는 것: 측정 밖의 표식에 무조건 넘침 경고를 추가.
 #[test]
 fn word_marker_overflow_skips_unmeasured_formats() {
     for (format, text, align) in [
@@ -1391,7 +1391,7 @@ fn word_marker_overflow_skips_unmeasured_formats() {
         );
     }
 }
-// 이것을 실패시키는 것: 상위 항목을 관찰한 뒤 하위 번호의 명목 폭 카운터를 재시작하지 않음.
+// 이것을 실패시키는 것: 명목 폭이 맞는 미측정 상위 수준에 새 넘침 경고를 추가.
 #[test]
 fn word_marker_overflow_follows_source_level_restarts() {
     let props =
@@ -2025,5 +2025,110 @@ fn word_hanging_overflow_keeps_fixed_slot() {
         assert_eq!(gap(&d, 1), want);
         assert_eq!(loss_count(&d, "list_marker_overflow"), 1);
         assert_eq!(loss_count(&d, "list_marker_default_tab"), 0);
+    }
+}
+
+fn measured_level(start: u32, hanging: i32, props: &str) -> String {
+    zero_level(720, &format!("w:hanging='{hanging}'"), &format!("<w:rPr><w:rFonts w:ascii='Malgun Gothic' w:hAnsi='Malgun Gothic'/><w:sz w:val='22'/>{props}</w:rPr>"))
+        .replace("<w:start w:val='1'/>", &format!("<w:start w:val='{start}'/>"))
+}
+// 이것을 실패시키는 것: 양수 걸침 칸을 모든 항목에서 1800으로 고정.
+#[test]
+fn decimal_overflow_advances_to_the_next_default_tab() {
+    let d = zero_read(&measured_level(99, 360, ""), &item(7, 0, "", "body").repeat(3), None, "");
+    assert_eq!([gap(&d, 0), gap(&d, 1), gap(&d, 2)], [1800, 5400, 5400]);
+    assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+    assert_eq!(loss_count(&d, "list_marker_default_tab"), 0);
+    for i in 0..3 {
+        let p = marker_shape(&d, i);
+        assert_eq!((p.indent_left.as_i32(), p.indent_first_line.as_i32()), (3600, -1800));
+    }
+}
+// 이것을 실패시키는 것: 측정 폭 대신 문자 수×0.5em 명목 폭으로 판정.
+#[test]
+fn single_digit_marker_fits_a_nine_point_slot() {
+    let d = zero_read(&measured_level(1, 180, ""), &item(7, 0, "", "body"), None, "");
+    assert_eq!(gap(&d, 0), 900);
+    assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+}
+// 이것을 실패시키는 것: 굵기·기울임·Latin 글꼴·수직 위치·축약 문맥을 무시하거나 크기를 1100으로 고정.
+#[test]
+fn unmeasured_styles_keep_the_slot_and_size_scales_width() {
+    for (props, want, overflow) in [
+        ("<w:b/>", 1800, 1),
+        ("<w:i/>", 1800, 1),
+        ("<w:rFonts w:ascii='Arial' w:hAnsi='Arial' w:eastAsia='맑은 고딕'/>", 1800, 1),
+        ("<w:vertAlign w:val='superscript'/>", 1800, 1),
+        ("<w:szCs w:val='28'/>", 1800, 1),
+        ("<w:sz w:val='32'/>", 5400, 0),
+    ] {
+        let d = zero_read(
+            &measured_level(100, 360, props),
+            &item(7, 0, "", "body").repeat(2),
+            None,
+            "",
+        );
+        assert_eq!([gap(&d, 0), gap(&d, 1)], [want, want], "{props}");
+        assert_eq!(loss_count(&d, "list_marker_overflow"), overflow, "{props}");
+    }
+}
+// 이것을 실패시키는 것: 새 판정을 정렬·접미·명시 번호 탭 조건 밖에 적용.
+#[test]
+fn other_marker_alignments_and_suffixes_keep_existing_layouts() {
+    use hwpforge_blueprint::ListTextStart;
+    for (extra, expected) in [
+        (
+            "<w:lvlJc w:val='right'/>",
+            ListTextStart::FromAnchor(hwpforge_foundation::HwpUnit::new(1800).unwrap()),
+        ),
+        (
+            "<w:lvlJc w:val='center'/>",
+            ListTextStart::FromAnchor(hwpforge_foundation::HwpUnit::new(1800).unwrap()),
+        ),
+        (
+            "<w:suff w:val='space'/>",
+            ListTextStart::AfterMarker(hwpforge_foundation::HwpUnit::new(306).unwrap()),
+        ),
+        (
+            "<w:suff w:val='nothing'/>",
+            ListTextStart::AfterMarker(hwpforge_foundation::HwpUnit::ZERO),
+        ),
+        (
+            "<w:pPr><w:tabs><w:tab w:val='num' w:pos='600'/></w:tabs></w:pPr>",
+            ListTextStart::FromAnchor(hwpforge_foundation::HwpUnit::new(1200).unwrap()),
+        ),
+    ] {
+        let l = measured_level(100, 360, "").replace("</w:lvl>", &format!("{extra}</w:lvl>"));
+        let d = zero_read(&l, &item(7, 0, "", "body"), None, "");
+        assert_eq!(marker_shape(&d, 0).list_marker.unwrap().text_start, expected, "{extra}");
+        assert_eq!(
+            loss_count(&d, "list_marker_overflow"),
+            u64::from(extra.contains("right") || extra.contains("w:tab "))
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 본문 첫 run을 번호 글꼴로 쓰거나 미해결 크기를 측정 가능하다고 간주.
+#[test]
+fn measured_width_uses_effective_latin_marker_context() {
+    for (source, mark, gap_expected) in [
+        ("", "<w:rFonts w:ascii='Malgun Gothic' w:hAnsi='Malgun Gothic'/><w:sz w:val='22'/>", 5400),
+        (
+            "<w:rFonts w:ascii='Arial' w:hAnsi='Arial'/>",
+            "<w:rFonts w:ascii='Malgun Gothic' w:hAnsi='Malgun Gothic'/><w:sz w:val='22'/>",
+            1800,
+        ),
+        ("", "<w:sz w:val='22'/>", 1800),
+        ("<w:rFonts w:ascii='Malgun Gothic' w:hAnsi='Malgun Gothic'/>", "", 1800),
+    ] {
+        let l = zero_level(720, "w:hanging='360'", &format!("<w:rPr>{source}</w:rPr>"))
+            .replace("<w:start w:val='1'/>", "<w:start w:val='100'/>");
+        let body = item(7, 0, &format!("<w:rPr>{mark}</w:rPr>"), "body").replace(
+            "<w:r>",
+            "<w:r><w:rPr><w:rFonts w:ascii='Arial' w:hAnsi='Arial'/><w:sz w:val='22'/></w:rPr>",
+        );
+        let d = read(&definitions(&l, &num(7, 1, "")), &body);
+        assert_eq!(gap(&d, 0), gap_expected, "{source}/{mark}");
+        assert_eq!(loss_count(&d, "list_marker_overflow"), u64::from(gap_expected == 1800));
     }
 }

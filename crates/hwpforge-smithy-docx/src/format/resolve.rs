@@ -798,7 +798,7 @@ impl Resolver {
         } else {
             None
         };
-        let text_start = if let Some(selected) = selected {
+        let mut text_start = if let Some(selected) = selected {
             selected
         } else {
             match suffix {
@@ -836,58 +836,125 @@ impl Resolver {
                 )?),
             }
         };
-        if let (
-            None,
-            ListTextStart::FromAnchor(g),
-            Some(n),
-            Some(lists::ListRef::Number(id, index)),
-        ) = (
-            selected,
-            text_start,
-            self.lists.current(&self.definitions, &base.para),
-            base.para.projected_list,
-        ) {
-            let head = &self.registry.numberings[id].levels[usize::from(index)];
-            if head.num_format == hwpforge_foundation::NumberFormatType::Digit {
-                let own = format!("^{}", u32::from(index) + 1);
-                if let Some((prefix, suffix)) = head.text.split_once(&own) {
-                    if prefix.is_ascii()
-                        && suffix.is_ascii()
-                        && !prefix.contains('^')
-                        && !suffix.contains('^')
-                    {
-                        let count = u64::from(n.checked_ilog10().unwrap_or(0))
-                            + 1
-                            + u64::try_from(prefix.len() + suffix.len()).map_err(|_| {
-                                DocxError::invalid(part, "numPr", "marker length overflow")
-                            })?;
-                        let width = count
-                            .checked_mul(u64::try_from(marker.size).map_err(|_| {
-                                DocxError::invalid(part, "numPr", "negative marker size")
-                            })?)
-                            .ok_or_else(|| {
-                                DocxError::invalid(part, "numPr", "nominal marker width overflow")
-                            })?;
-                        let slot = i64::from(g.as_i32())
-                            .checked_mul(if align == ListMarkerAlign::Center { 2 } else { 1 })
-                            .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?;
-                        if width
-                            > u64::try_from(slot)
-                                .map_err(|_| DocxError::invalid(part, "numPr", "negative slot"))?
-                                .checked_mul(2)
-                                .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?
-                            && self.marker_warnings.insert((group, "list_marker_overflow"))
-                        {
-                            let reason = marker_messages::OVERFLOW;
-                            warn(
+        let mut handled_hanging = false;
+        // 이것을 실패시키는 것: 새 측정 판정을 정렬·접미·명시 번호 탭 조건 밖에 적용.
+        // FromAnchor is the Tab suffix here; first < 0 and no numbering tabs imply a positive slot.
+        if let ListTextStart::FromAnchor(g) = text_start {
+            if first < 0 && align == ListMarkerAlign::Left && !tabs.values().any(|&number| number) {
+                let ratio = if self.measured_decimal_style(&effective, collapsed) {
+                    match group {
+                        lists::ListRef::Number(id, index) => self
+                            .lists
+                            .current(&self.definitions, &base.para)
+                            .map(|n| {
+                                measured_number_ratio(
+                                    &self.registry.numberings[id].levels[usize::from(index)],
+                                    index,
+                                    n,
+                                )
+                            })
+                            .transpose()?
+                            .flatten(),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if ratio.is_some() {
+                    handled_hanging = true;
+                    match hanging_tab_decision(
+                        anchor,
+                        g.as_i32(),
+                        marker.size,
+                        ratio,
+                        self.default_tab_stop,
+                    )? {
+                        MeasuredTabDecision::Keep => {}
+                        MeasuredTabDecision::Advance(gap) => {
+                            text_start = ListTextStart::FromAnchor(unit(gap)?)
+                        }
+                        MeasuredTabDecision::Uncertain => {
+                            if self.marker_warnings.insert((group, "list_marker_overflow")) {
+                                warn(
                                 w,
                                 part,
                                 "numPr",
                                 Kind::ValueApproximated,
                                 "list_marker_overflow",
                                 "retain_slot",
-                                reason,
+                                "Marker width is uncertain in the fixed slot; overlap is possible",
                             )?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 이것을 실패시키는 것: 측정으로 해결한 넘침을 명목 폭 검사에서 다시 경고.
+        if !handled_hanging {
+            if let (
+                None,
+                ListTextStart::FromAnchor(g),
+                Some(n),
+                Some(lists::ListRef::Number(id, index)),
+            ) = (
+                selected,
+                text_start,
+                self.lists.current(&self.definitions, &base.para),
+                base.para.projected_list,
+            ) {
+                let head = &self.registry.numberings[id].levels[usize::from(index)];
+                if head.num_format == hwpforge_foundation::NumberFormatType::Digit {
+                    let own = format!("^{}", u32::from(index) + 1);
+                    if let Some((prefix, suffix)) = head.text.split_once(&own) {
+                        if prefix.is_ascii()
+                            && suffix.is_ascii()
+                            && !prefix.contains('^')
+                            && !suffix.contains('^')
+                        {
+                            let count = u64::from(n.checked_ilog10().unwrap_or(0))
+                                + 1
+                                + u64::try_from(prefix.len() + suffix.len()).map_err(|_| {
+                                    DocxError::invalid(part, "numPr", "marker length overflow")
+                                })?;
+                            let width = count
+                                .checked_mul(u64::try_from(marker.size).map_err(|_| {
+                                    DocxError::invalid(part, "numPr", "negative marker size")
+                                })?)
+                                .ok_or_else(|| {
+                                    DocxError::invalid(
+                                        part,
+                                        "numPr",
+                                        "nominal marker width overflow",
+                                    )
+                                })?;
+                            let slot = i64::from(g.as_i32())
+                                .checked_mul(if align == ListMarkerAlign::Center { 2 } else { 1 })
+                                .ok_or_else(|| {
+                                    DocxError::invalid(part, "numPr", "slot overflow")
+                                })?;
+                            if width
+                                > u64::try_from(slot)
+                                    .map_err(|_| {
+                                        DocxError::invalid(part, "numPr", "negative slot")
+                                    })?
+                                    .checked_mul(2)
+                                    .ok_or_else(|| {
+                                        DocxError::invalid(part, "numPr", "slot overflow")
+                                    })?
+                                && self.marker_warnings.insert((group, "list_marker_overflow"))
+                            {
+                                let reason = marker_messages::OVERFLOW;
+                                warn(
+                                    w,
+                                    part,
+                                    "numPr",
+                                    Kind::ValueApproximated,
+                                    "list_marker_overflow",
+                                    "retain_slot",
+                                    reason,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -898,6 +965,17 @@ impl Resolver {
         layout.char_shape = Some(marker.id);
         self.first_marker_layouts.entry(group).or_insert(Some(layout));
         Ok(Some(layout))
+    }
+    // 이것을 실패시키는 것: East Asian 글꼴만 보거나 굵기·기울임·수직 위치·축약 문맥을 허용.
+    fn measured_decimal_style(&self, effective: &Delta, collapsed: bool) -> bool {
+        let c = &effective.char;
+        c.line_fonts()[0].is_some_and(|font| {
+            matches!(self.definitions.fonts.name(font), "맑은 고딕" | "Malgun Gothic")
+        }) && c.size.is_some_and(|size| size > 0)
+            && !c.toggles[0].unwrap_or(false)
+            && !c.toggles[1].unwrap_or(false)
+            && c.vertical.unwrap_or(0) == 0
+            && !collapsed
     }
     pub(crate) fn paragraph_style(&self, style: Option<StyleKey>) -> Option<StyleKey> {
         style.or(self.default_paragraph)
@@ -1361,6 +1439,9 @@ fn measured_number_ratio(head: &hwpforge_core::ParaHead, index: u8, n: u64) -> R
     let Some((prefix, suffix)) = head.text.split_once(&token) else {
         return Ok(None);
     };
+    if index == 0 && suffix.starts_with('0') {
+        return Ok(None);
+    }
     let mut ratio = u64::from(n.checked_ilog10().unwrap_or(0))
         .checked_add(1)
         .and_then(|v| v.checked_mul(606))
@@ -1432,4 +1513,48 @@ fn default_tab_gap(
     let spare =
         target.checked_mul(2).and_then(|v| v.checked_sub(end)).ok_or_else(marker_arithmetic)?;
     Ok((gap, align != ListMarkerAlign::Right && (0..200).contains(&spare)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeasuredTabDecision {
+    Keep,
+    Advance(i32),
+    Uncertain,
+}
+fn hanging_tab_decision(
+    anchor: i32,
+    gap: i32,
+    size: i32,
+    ratio: Option<u64>,
+    tab: i32,
+) -> Result<MeasuredTabDecision> {
+    let Some(ratio) = ratio else {
+        return Ok(MeasuredTabDecision::Uncertain);
+    };
+    let width = i64::from(measured_marker_width(size, ratio)?);
+    let delta = i64::from(size)
+        .checked_mul(5)
+        .and_then(|v| v.checked_add(1099))
+        .ok_or_else(marker_arithmetic)?
+        / 1100;
+    let gap = i64::from(gap);
+    // 이것을 실패시키는 것: 오차 띠를 없애거나 경계의 <= / >=를 바꿈.
+    if width <= gap.checked_sub(delta).ok_or_else(marker_arithmetic)? {
+        Ok(MeasuredTabDecision::Keep)
+    } else if width >= gap.checked_add(delta).ok_or_else(marker_arithmetic)? {
+        let (next, boundary) = default_tab_gap(
+            anchor,
+            i32::try_from(width).map_err(|_| marker_arithmetic())?,
+            tab,
+            ListMarkerAlign::Left,
+        )?;
+        // 이것을 실패시키는 것: 다음 탭 경계 위험을 확정 이동으로 취급.
+        Ok(if boundary {
+            MeasuredTabDecision::Uncertain
+        } else {
+            MeasuredTabDecision::Advance(next)
+        })
+    } else {
+        Ok(MeasuredTabDecision::Uncertain)
+    }
 }

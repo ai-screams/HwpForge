@@ -735,3 +735,65 @@ fn docx_auto_spacing_uses_existing_cascade_order() {
         );
     }
 }
+
+// 이것을 실패시키는 것: 오차 띠의 경계 비교를 바꾸거나 δ를 0으로 설정.
+#[test]
+fn measured_tab_decision_respects_the_error_band() {
+    use MeasuredTabDecision::{Advance, Keep, Uncertain};
+    let decisions = [853, 852, 848, 844, 843]
+        .map(|slot| hanging_tab_decision(1800, slot, 1100, Some(848), 3600).unwrap());
+    assert_eq!(decisions, [Keep, Uncertain, Uncertain, Uncertain, Advance(1800)]);
+    assert_eq!(hanging_tab_decision(1800, 1800, 1100, Some(2060), 3600).unwrap(), Advance(5400));
+    assert_eq!(hanging_tab_decision(1800, 900, 1100, Some(848), 3600).unwrap(), Keep);
+    assert_eq!(hanging_tab_decision(1800, 1800, 1100, None, 3600).unwrap(), Uncertain);
+    // A marker near the next grid line is still uncertain even when it clearly overflows its old slot.
+    assert_eq!(hanging_tab_decision(2752, 500, 1100, Some(848), 3600).unwrap(), Uncertain);
+}
+// 이것을 실패시키는 것: 크기를 1100으로 고정하거나 measured_marker_width의 checked 산술을 우회.
+#[test]
+fn hanging_measurement_scales_and_checks_arithmetic() {
+    assert_eq!(measured_marker_width(1600, 2060).unwrap(), 2996);
+    assert_eq!(
+        hanging_tab_decision(1800, 1800, 1600, Some(2060), 3600).unwrap(),
+        MeasuredTabDecision::Advance(5400)
+    );
+    assert_eq!(
+        hanging_tab_decision(1800, 2400, 1600, Some(2060), 3600).unwrap(),
+        MeasuredTabDecision::Advance(5400)
+    );
+    use MeasuredTabDecision::{Advance, Keep, Uncertain};
+    assert_eq!(
+        [3004, 3003, 2989, 2988]
+            .map(|gap| hanging_tab_decision(1800, gap, 1600, Some(2060), 3600).unwrap()),
+        [Keep, Uncertain, Uncertain, Advance(5400)]
+    );
+    assert!(hanging_tab_decision(1800, 1800, i32::MAX, Some(u64::MAX), 3600).is_err());
+}
+
+// 이것을 실패시키는 것: 미해결 또는 0인 크기를 측정 가능한 보통체 문맥으로 인정.
+#[test]
+fn measured_decimal_style_requires_a_resolved_positive_size() {
+    let d = definitions("<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii='Malgun Gothic' w:hAnsi='Malgun Gothic'/><w:sz w:val='22'/></w:rPr></w:rPrDefault></w:docDefaults>");
+    let r = Resolver::new(d, false, &mut vec![]).unwrap();
+    let mut effective = r.definitions.defaults.clone();
+    assert!(r.measured_decimal_style(&effective, false));
+    for size in [None, Some(0)] {
+        effective.char.size = size;
+        assert!(!r.measured_decimal_style(&effective, false));
+    }
+}
+
+// 이것을 실패시키는 것: ^1이 ^10에 접두 일치하거나 숫자 리터럴 접미를 거부.
+#[test]
+fn measured_decimal_ratio_matches_whole_level_tokens() {
+    let head = |text: &str| hwpforge_core::ParaHead {
+        level: 1,
+        start: 1,
+        num_format: hwpforge_foundation::NumberFormatType::Digit,
+        text: text.into(),
+        checkable: false,
+    };
+    assert_eq!(measured_number_ratio(&head("^10."), 0, 99).unwrap(), None);
+    assert_eq!(measured_number_ratio(&head("^10."), 9, 99).unwrap(), Some(1454));
+    assert_eq!(measured_number_ratio(&head("^19."), 0, 99).unwrap(), Some(2060));
+}
