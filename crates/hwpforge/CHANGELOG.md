@@ -9,13 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 변환 결과에 목록 출력 정의 분리 경고 `LIST_NUMBERING_SPLIT`을 전달합니다. 이 경고만으로 의미 손실 거부가 발생하지 않습니다.
+
 - 문서 JSON과 스키마에 선택 필드 `layout_profile`(`hancom`·`word_compatible`)을 추가한다. 기본값 `hancom`은 생략되어 기존 JSON은 그대로이고, DOCX 가져오기 결과는 `word_compatible`이다. `--base`를 준 편집에서 JSON의 프로필이 base와 다르면 거부한다.
 
-- 걸침 0인 Word 목록은 지원 decimal·Symbol 표지에 기본 탭 설정을 적용한다. 가져오기는 최종 Word left와 signed first를 유지하고 문단별 intent로 목록 후속 줄 위치를 보존한다. 양수 intent는 미측정 경고를 전달한다. 공유 정의 충돌은 문서 첫 사용처의 head와 상대 margin 이동량을 선택하고 손실을 전달하며 원본 보존 편집은 실패한다.
+- 걸침 0인 Word 목록은 지원 decimal·Symbol 표지에 기본 탭 설정을 적용한다. 가져오기는 최종 Word left와 signed first를 유지하고 문단별 intent로 목록 후속 줄 위치를 보존한다. 양수 intent는 미측정 경고를 전달한다. 새 HWPX 생성은 정확히 보존할 수 있는 head 차이를 정의 분리로 표현한다. 원본 보존 편집과 미지원 입력의 공유 정의 충돌은 첫 사용처의 head와 상대 margin 이동을 선택하고 의미 손실을 전달한다.
 
 - DOCX 가져오기가 문단별 자동 간격(`autoSpaceDE`·`autoSpaceDN`)의 유효값을 꺼짐까지 그대로 옮긴다. 기본 스타일이 자동 간격을 끈 문서에서 한글과 숫자·영문 사이가 벌어지던 출력이 Word와 같아진다.
 
-- Word 목록의 정렬·suffix·수준 번호 탭·번호 전용 문자 모양 및 Wingdings 원형·사각형을 가져온다. 공백 폭·줄 높이·칸 넘침·문단별 공유 head 충돌은 진단으로 전달하며, 의미 손실이 있는 원본 보존 편집은 실패한다.
+- Word 목록의 정렬·suffix·수준 번호 탭·번호 전용 문자 모양 및 Wingdings 원형·사각형을 가져온다. 공백 폭·줄 높이·불확실한 칸 넘침·미지원 공유 head 충돌은 진단으로 전달하며, 의미 손실이 있는 원본 보존 편집은 실패한다.
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/v0.19.1...v0.20.0) - 2026-11-07
 

@@ -60,6 +60,8 @@ hwpforge fill form.hwp --set name=홍길동 -o form.filled.hwpx --json
 
 글꼴 분류 정보(`style.font.type_info`)와 메모 모양 정의(`header.memo_shape_definition`)의 생략은 정책상 비손실이며 경고는 남습니다. 시각적으로 차이가 없다는 보장은 아닙니다. 조판 캐시 생략도 의미 손실 거부 대상이 아닙니다. 개요 번호 모양 참조(`section.outlineShapeIDRef`), 변경 추적 정의, 중첩 구역 설정, 언어별 장평, 자동 간격과 미분류 경고는 손실로 취급합니다.
 
+새 HWPX 생성과 DOCX 변환의 `LIST_NUMBERING_SPLIT`은 항목별 번호·글머리표 표현을 보존하기 위해 출력 정의를 나눴다는 경고입니다. 현재 번호와 표현은 보존되며 의미 손실 거부 대상이 아니므로 성공 출력에도 나타납니다. 번호 목록의 나뉜 구간은 시작값이 고정되어 앞 구간의 편집이 뒤 구간 번호에 자동 반영되지 않습니다. 편집 뒤 번호를 확인하십시오. 원본 보존 base 인코드는 이 분리를 적용하지 않으며 표현 충돌을 기존 `CONTENT_LOST`로 보고합니다.
+
 ### 변환 메타데이터
 
 `HWP5_CONVERSION_LOSS`의 JSON `details.warnings`는 거부된 경고만 담으며, 각 항목은 `stage`, `code`, `message`와 선택적인 `location`을 갖습니다. 성공 JSON은 기존 `warnings`의 형과 내용을 유지하고, HWP5 입력일 때만 별도 `conversion: {source_format: "hwp5", warnings: [...]}`를 더합니다. 변환 경고가 없어도 `conversion.warnings`는 빈 배열입니다.
