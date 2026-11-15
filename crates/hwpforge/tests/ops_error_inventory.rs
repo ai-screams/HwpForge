@@ -359,6 +359,8 @@ const WARNING_MAPPING: Table = &[
     (
         "EncodeWarning",
         &[
+            // 이것을 실패시키는 것: 분리 경고의 전용 코드 매핑 제거.
+            ("ListNumberingSplit", "LIST_NUMBERING_SPLIT"),
             ("PreviewRemoved", "PREVIEW_REMOVED"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
@@ -882,6 +884,15 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
     all.insert(
         "EncodeWarning",
         vec![
+            // 이것을 실패시키는 것: 분리 경고 표본 제거.
+            (
+                "ListNumberingSplit",
+                OpsWarning::Encode(EncodeWarning::ListNumberingSplit {
+                    kind: hwpforge_foundation::HeadingType::Number,
+                    definition_id: 1,
+                    additional_definitions: 1,
+                }),
+            ),
             (
                 "PreviewRemoved",
                 OpsWarning::Encode(EncodeWarning::PreviewRemoved {
@@ -1634,4 +1645,24 @@ fn public_ops_codes_have_contract_coverage() {
         .filter(|code| !covered.contains(*code))
         .collect();
     assert!(missing.is_empty(), "public codes without contract coverage: {missing:?}");
+}
+
+// 이것을 실패시키는 것: ops에서 코드 OTHER 치환·경고 제거·의미 손실 true 분류.
+#[test]
+fn list_split_warning_allows_encoded_bytes() {
+    let warning = EncodeWarning::ListNumberingSplit {
+        kind: hwpforge_foundation::HeadingType::Number,
+        definition_id: 1,
+        additional_definitions: 1,
+    };
+    let (bytes, warnings) = hwpforge::ops::take_bytes_fail_closed(hwpforge::hwpx::EncodeOutcome {
+        bytes: vec![1, 2, 3],
+        warnings: vec![warning],
+    })
+    .unwrap();
+    assert_eq!(bytes, [1, 2, 3]);
+    assert_eq!(warnings.len(), 1);
+    let info = warnings[0].info();
+    assert_eq!(info.code, "LIST_NUMBERING_SPLIT");
+    assert_eq!(info.message, "Contents/header.xml numbering[1]: list definition split: 1 additional definition(s); later edits do not propagate across segments");
 }

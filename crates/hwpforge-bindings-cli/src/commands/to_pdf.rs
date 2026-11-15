@@ -217,6 +217,21 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    // 이것을 실패시키는 것: 경고의 안정 코드·문구·위치 전달을 OTHER 또는 빈 값으로 변경.
+    #[test]
+    fn list_split_warning_keeps_code_and_message() {
+        let dto = warning_dto(&ConvertOpsWarning::Convert(ConvertWarning::HwpxEncode(
+            EncodeWarning::ListNumberingSplit {
+                kind: hwpforge_foundation::HeadingType::Number,
+                definition_id: 1,
+                additional_definitions: 1,
+            },
+        )));
+        assert_eq!(dto.code, "LIST_NUMBERING_SPLIT");
+        assert_eq!(dto.message, "list definition split: 1 additional definition(s); later edits do not propagate across segments");
+        assert_eq!(dto.location.as_deref(), Some("Contents/header.xml numbering[1]"));
+    }
+
     use hwpforge_convert::ConvertWarning;
     use hwpforge_smithy_hwp5::Hwp5Warning;
     use hwpforge_smithy_hwpx::{DecodeWarning, EncodeWarning, ParagraphPath, PathSeg};

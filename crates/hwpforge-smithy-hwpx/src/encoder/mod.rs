@@ -409,6 +409,17 @@ use self::section::encode_section_with_note_counters;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
+    /// Output definitions were split to preserve per-item marker presentation.
+    /// Current values and presentation are preserved. Later segments use fixed
+    /// starts, so editing an earlier segment does not renumber later segments.
+    ListNumberingSplit {
+        /// List kind. The encoder only emits `Number` or `Bullet`.
+        kind: hwpforge_foundation::HeadingType,
+        /// One-based position of the original output definition.
+        definition_id: u32,
+        /// Number of output definitions added beyond the original.
+        additional_definitions: usize,
+    },
     /// Derived preview data was removed after an effective raw edit.
     PreviewRemoved {
         /// Actual removed package paths, sorted and unique.
@@ -601,7 +612,8 @@ impl EncodeWarning {
             | Self::ContentLost { .. }
             | Self::PackageIdConflict { .. }
             | Self::ImageReferenceUnresolved { .. } => true,
-            Self::PreviewRemoved { .. }
+            Self::ListNumberingSplit { .. }
+            | Self::PreviewRemoved { .. }
             | Self::UnclosedFieldBoundary { .. }
             | Self::LayoutCacheDropped { .. }
             | Self::XmlForbiddenCharsRemoved { .. }
@@ -628,6 +640,7 @@ impl EncodeWarning {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::ListNumberingSplit { .. } => "LIST_NUMBERING_SPLIT",
             Self::PreviewRemoved { .. } => "PREVIEW_REMOVED",
             Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
@@ -675,6 +688,7 @@ impl EncodeWarning {
             | Self::ContentLost { part, .. }
             | Self::ImageReferenceUnresolved { part, .. } => Some(part),
             Self::PackageIdConflict { .. } => Some(CONTENT_HPF_PART),
+            Self::ListNumberingSplit { .. } => Some(HEADER_PART),
         }
     }
 
@@ -697,6 +711,14 @@ impl EncodeWarning {
     #[must_use]
     pub fn location(&self) -> Option<String> {
         match self {
+            Self::ListNumberingSplit { kind, definition_id, .. } => Some(format!(
+                "Contents/header.xml {}[{definition_id}]",
+                if *kind == hwpforge_foundation::HeadingType::Bullet {
+                    "bullet"
+                } else {
+                    "numbering"
+                }
+            )),
             Self::PreviewRemoved { .. } => None,
             Self::LayoutCacheDropped { path, .. }
             | Self::NoteHeadSkipped { path, .. }
@@ -733,6 +755,9 @@ impl EncodeWarning {
     #[must_use]
     pub fn message(&self) -> String {
         match self {
+            Self::ListNumberingSplit { additional_definitions, .. } => format!(
+                "list definition split: {additional_definitions} additional definition(s); later edits do not propagate across segments"
+            ),
             Self::PreviewRemoved { parts } => {
                 format!("removed preview parts after editing: {}", parts.join(", "))
             }
@@ -809,6 +834,9 @@ pub(crate) fn split_successful_encode(
 impl std::fmt::Display for EncodeWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ListNumberingSplit { .. } => {
+                write!(f, "{}: {}", self.location().expect("list location"), self.message())
+            }
             Self::PreviewRemoved { .. } => f.write_str(&self.message()),
             Self::LayoutCacheDropped { path, reason } => {
                 write!(f, "layout cache dropped at {path}: {reason}")
@@ -851,6 +879,21 @@ impl std::fmt::Display for EncodeWarning {
 mod is_semantic_loss_tests {
     use super::EncodeWarning;
     use crate::decoder::{ParagraphPath, PathSeg};
+
+    // 이것을 실패시키는 것: 분리 경고 코드·위치·문구를 바꾸거나 의미 손실로 분류.
+    #[test]
+    fn list_split_warning_keeps_code_and_message() {
+        let samples = crate::decoder::warning_samples::encode();
+        let warning = samples.iter().find(|w| w.code() == "LIST_NUMBERING_SPLIT").unwrap();
+        assert!(!warning.is_semantic_loss());
+        assert_eq!(warning.part(), Some("Contents/header.xml"));
+        assert_eq!(warning.location().as_deref(), Some("Contents/header.xml numbering[1]"));
+        assert_eq!(warning.message(), "list definition split: 1 additional definition(s); later edits do not propagate across segments");
+        assert_eq!(
+            warning.to_string(),
+            format!("Contents/header.xml numbering[1]: {}", warning.message())
+        );
+    }
 
     fn path() -> ParagraphPath {
         ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(3)])
@@ -914,6 +957,7 @@ mod is_semantic_loss_tests {
                 "CONTENT_LOST",
                 "IMAGE_REFERENCE_UNRESOLVED",
                 "LAYOUT_CACHE_DROPPED",
+                "LIST_NUMBERING_SPLIT",
                 "NOTE_HEAD_SKIPPED",
                 "NOTE_RESTART_IGNORED",
                 "OBJECT_ID_CONFLICT",
@@ -991,6 +1035,7 @@ mod is_semantic_loss_tests {
                     EncodeWarning::ImageReferenceUnresolved { reference, .. } => reference.clone(),
                     EncodeWarning::ObjectIdConflict { id, .. } => id.to_string(),
                     EncodeWarning::PreviewRemoved { parts } => parts.join(", "),
+                    EncodeWarning::ListNumberingSplit { .. } => "list definition split".into(),
                 })
                 .collect::<Vec<_>>()
         };

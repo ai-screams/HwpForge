@@ -543,6 +543,11 @@ pub mod warning_samples {
     pub fn encode() -> Vec<EncodeWarning> {
         let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
         let samples = vec![
+            EncodeWarning::ListNumberingSplit {
+                kind: hwpforge_foundation::HeadingType::Number,
+                definition_id: 1,
+                additional_definitions: 1,
+            },
             EncodeWarning::PreviewRemoved { parts: vec!["Preview/PrvText.txt".into()] },
             EncodeWarning::UnclosedFieldBoundary {
                 part: "Contents/section0.xml".into(),
@@ -581,7 +586,8 @@ pub mod warning_samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
             // 그때 위 표본에도 하나를 더한다.
             match sample {
-                EncodeWarning::UnclosedFieldBoundary { .. }
+                EncodeWarning::ListNumberingSplit { .. }
+                | EncodeWarning::UnclosedFieldBoundary { .. }
                 | EncodeWarning::LayoutCacheDropped { .. }
                 | EncodeWarning::NoteHeadSkipped { .. }
                 | EncodeWarning::TitleMarkSkipped { .. }

@@ -99,6 +99,7 @@ const AUDITED: &[Audited] = &[
         file: "crates/hwpforge-smithy-hwpx/src/encoder/mod.rs",
         enum_name: "EncodeWarning",
         table: &[
+            ("ListNumberingSplit", "LIST_NUMBERING_SPLIT"),
             ("PreviewRemoved", "PREVIEW_REMOVED"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),

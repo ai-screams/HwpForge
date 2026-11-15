@@ -202,6 +202,17 @@ fn encode_warning_line(w: &EncodeWarning) -> String {
 
 #[cfg(test)]
 mod tests {
+    // 이것을 실패시키는 것: 경고의 안정 코드·문구·위치 전달을 OTHER 또는 빈 값으로 변경.
+    #[test]
+    fn list_split_warning_keeps_code_and_message() {
+        let line = encode_warning_line(&EncodeWarning::ListNumberingSplit {
+            kind: hwpforge_foundation::HeadingType::Number,
+            definition_id: 1,
+            additional_definitions: 1,
+        });
+        assert_eq!(line, "LIST_NUMBERING_SPLIT at Contents/header.xml numbering[1]: list definition split: 1 additional definition(s); later edits do not propagate across segments");
+    }
+
     use super::*;
     use hwpforge_smithy_hwpx::{ParagraphPath, PathSeg};
 

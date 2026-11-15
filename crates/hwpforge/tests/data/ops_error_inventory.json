@@ -1103,6 +1103,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "ListNumberingSplit",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "PreviewRemoved",
           "shape": "struct",
           "cfg": [],

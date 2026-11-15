@@ -739,3 +739,18 @@ fn a_location_is_prefixed_into_the_message_not_dropped() {
     .info();
     assert!(!info.message.starts_with(": "), "{}", info.message);
 }
+
+// 이것을 실패시키는 것: convert에서 접근자 대신 OTHER로 치환하거나 의미 손실로 분류.
+#[test]
+fn list_split_warning_keeps_code_and_message() {
+    let warning = ConvertWarning::HwpxEncode(EncodeWarning::ListNumberingSplit {
+        kind: hwpforge_foundation::HeadingType::Number,
+        definition_id: 1,
+        additional_definitions: 1,
+    });
+    assert!(!warning.is_semantic_loss());
+    let parts = ConvertOpsWarning::Convert(warning).parts();
+    assert_eq!(parts.code, "LIST_NUMBERING_SPLIT");
+    assert_eq!(parts.message, "list definition split: 1 additional definition(s); later edits do not propagate across segments");
+    assert_eq!(parts.location.as_deref(), Some("Contents/header.xml numbering[1]"));
+}
