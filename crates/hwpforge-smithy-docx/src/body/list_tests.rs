@@ -1085,6 +1085,7 @@ fn word_number_tab_override_and_clear() {
         );
     }
 }
+// 이것을 실패시키는 것: 겹침 위험 경고 대신 고정 슬롯 자동 확대.
 // 이것을 실패시키는 것: 미측정 문맥에도 측정 불확실 경고를 추가.
 #[test]
 fn word_list_overflow_is_only_diagnosed() {
@@ -1369,6 +1370,7 @@ fn word_marker_line_height_warns_for_each_changed_font_context() {
         assert_eq!(d.warnings.iter().any(|w| w.loss() == "list_marker_line_height"), expected);
     }
 }
+// 이것을 실패시키는 것: 지원하지 않은 형식의 명목 폭까지 계산하거나 CENTER 슬롯을 g로 계산.
 // 이것을 실패시키는 것: 측정 밖의 표식에 무조건 넘침 경고를 추가.
 #[test]
 fn word_marker_overflow_skips_unmeasured_formats() {
@@ -1391,6 +1393,7 @@ fn word_marker_overflow_skips_unmeasured_formats() {
         );
     }
 }
+// 이것을 실패시키는 것: 상위 항목을 관찰한 뒤 하위 번호의 명목 폭 카운터를 재시작하지 않음.
 // 이것을 실패시키는 것: 명목 폭이 맞는 미측정 상위 수준에 새 넘침 경고를 추가.
 #[test]
 fn word_marker_overflow_follows_source_level_restarts() {
