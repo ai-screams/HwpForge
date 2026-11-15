@@ -591,6 +591,91 @@ fn invalid_bullet_heads_use_projection_only_when_heads_differ() {
     }
 }
 
+fn store_with_deep_paragraph(bullet: bool, heading_level: u32) -> HwpxStyleStore {
+    let mut s = store();
+    if bullet {
+        s.push_bullet(BulletDef {
+            id: 1,
+            bullet_char: "•".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: ParaHead {
+                start: 1,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: "".into(),
+                checkable: false,
+            },
+        });
+        for id in [0, 1] {
+            s.para_shape_mut(ParaShapeIndex::new(id)).unwrap().heading_type = HeadingType::Bullet;
+        }
+    } else {
+        // A numbering paragraph is a list use only when its own head exists.
+        let mut d = s.numbering_at(0).unwrap().clone();
+        d.levels.push(ParaHead {
+            start: 1,
+            level: heading_level + 1,
+            num_format: NumberFormatType::Digit,
+            text: "literal".into(),
+            checkable: false,
+        });
+        let mut value = serde_json::to_value(&s).unwrap();
+        value["numberings"][0] = serde_json::to_value(d).unwrap();
+        s = serde_json::from_value(value).unwrap();
+    }
+    // A request on an out-of-range paragraph level is rejected up front, so the deep
+    // paragraph shares the definition without one. The stored head already equals the
+    // first shape's request; the deep bullet paragraph then matches it exactly.
+    let first = paragraph_requirement(&s, &paragraph(0)).unwrap().unwrap();
+    set_head(&mut s, bullet, 1, first.key.level, first.metrics).unwrap();
+    let mut deep = s.para_shape(ParaShapeIndex::new(0)).unwrap().clone();
+    deep.heading_level = heading_level;
+    let id = s.push_para_shape(deep);
+    assert_eq!(id.get(), 4);
+    s
+}
+
+// 이것을 실패시키는 것: 방출 문단의 수준 검사를 빼고 선택된 head 수준만 검사(글머리표가 정의를 나눔).
+// 이것을 실패시키는 것: 문단 수준 상한을 10까지 허용.
+// 이것을 실패시키는 것: 방출하지 않은 문단의 범위 밖 수준으로 정의를 근사 처리.
+#[test]
+fn emitted_paragraph_levels_outside_the_range_keep_the_first_use_projection() {
+    // (emitted, different layouts, split warnings, conflict warnings)
+    let cases =
+        [(true, true, 0, 1), (true, false, 0, 0), (false, true, 1, 0), (false, false, 0, 0)];
+    for bullet in [false, true] {
+        for heading_level in [10, 11] {
+            for (emitted, different, splits, conflicts) in cases {
+                let mut s = store_with_deep_paragraph(bullet, heading_level);
+                if !different {
+                    s.list_marker_layouts.insert(1, s.list_marker_layouts[&0]);
+                }
+                let mut l = ListLedger::new(&s).unwrap().unwrap();
+                let mut p = if emitted {
+                    record(&mut l, &[0, 1, 4])
+                } else {
+                    let p = record(&mut l, &[0, 1]);
+                    // Recorded, but its paragraph never reaches the section XML.
+                    assert_eq!(l.record(&paragraph(4), &[]).unwrap(), Some(2));
+                    p
+                };
+                let (_, warnings) = l.finish(&mut p).unwrap();
+                let case = format!("bullet={bullet} level={heading_level} emitted={emitted} different={different}: {warnings:?}");
+                assert_eq!(
+                    warnings
+                        .iter()
+                        .filter(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. }))
+                        .count(),
+                    splits,
+                    "{case}"
+                );
+                assert_eq!(warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost{kind,..} if kind == "list_marker_conflict")).count(), conflicts, "{case}");
+            }
+        }
+    }
+}
+
 // 이것을 실패시키는 것: 양수 intent 진단을 정의 전체에서 한 번으로 접거나 경로마다 다르게 집계.
 // 이것을 실패시키는 것: 무요청·0 intent에도 후속 줄 경고를 생성.
 #[test]

@@ -310,10 +310,14 @@ impl ListLedger {
         let mut assignments = Vec::new();
         let mut values = BTreeMap::new();
         for &id in ids {
-            let r = &self.uses[id].requirement;
-            // Range-check only levels that emitted paragraphs use; an emitted level
-            // outside 1..=10 keeps the first-use projection.
-            if level_index(r.native_level).is_none() {
+            let u = &self.uses[id];
+            let r = &u.requirement;
+            // Each emitted use must have a paragraph level in 0..=9 and select a head
+            // level in 1..=10; otherwise the definition keeps the first-use projection.
+            // A bullet head does not carry the paragraph level, so both are read here.
+            if self.source.para_shape(u.original)?.heading_level >= 10
+                || level_index(r.native_level).is_none()
+            {
                 return Ok(Err(ApproximationReason::InvalidLevel));
             }
             let level = if key.bullet {
