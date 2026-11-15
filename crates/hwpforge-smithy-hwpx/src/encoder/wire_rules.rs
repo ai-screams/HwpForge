@@ -162,14 +162,14 @@ pub(crate) const MEASURED_WIDTH_ALIGNMENT: &str =
 /// slot does not draw its marker. The right edge stays at A and text at A + g.
 /// A gap with 0 < g < B is widened to B; how that slot renders is unmeasured.
 ///
-/// The third value names the approximation, if any, for the caller's loss report.
+/// The second value names the approximation, if any, for the caller's loss report.
 pub(crate) fn marker_metrics(
     layout: hwpforge_blueprint::ListMarkerLayout,
     anchor: i32,
     continuation: i32,
     base: i32,
     char_ref: u32,
-) -> crate::HwpxResult<(i32, crate::style_store::fidelity::HeadMetrics, Option<&'static str>)> {
+) -> crate::HwpxResult<(crate::style_store::fidelity::HeadMetrics, Option<&'static str>)> {
     use crate::style_store::fidelity::HeadMetrics;
     use hwpforge_blueprint::{ListMarkerAlign as A, ListTextStart as T};
     let mut metrics = HeadMetrics::generated(0);
@@ -177,7 +177,7 @@ pub(crate) fn marker_metrics(
     metrics.text_offset = 0;
     metrics.auto_indent = 0;
     let anchor = i64::from(anchor);
-    let (margin, approximation) = match layout.text_start {
+    let approximation = match layout.text_start {
         T::FromAnchor(g) => {
             let g = i64::from(g.as_i32());
             marker_unit(anchor.checked_add(g).ok_or_else(|| {
@@ -201,7 +201,7 @@ pub(crate) fn marker_metrics(
                 A::Left => {
                     metrics.align = "LEFT".into();
                     metrics.text_offset_type = "PERCENT".into();
-                    (anchor, None)
+                    None
                 }
                 A::Right | A::Center => {
                     metrics.align =
@@ -209,15 +209,8 @@ pub(crate) fn marker_metrics(
                     metrics.text_offset_type = "HWPUNIT".into();
                     metrics.text_offset =
                         if layout.align == A::Right { marker_unit(g)? } else { 0 };
-                    (
-                        anchor
-                            .checked_sub(if layout.align == A::Right { i64::from(slot) } else { g })
-                            .ok_or_else(|| {
-                                crate::paragraph_measure::invalid("marker anchor overflow")
-                            })?,
-                        (layout.align == A::Right && g > 0 && g < i64::from(base))
-                            .then_some(NARROW_RIGHT_SLOT),
-                    )
+                    (layout.align == A::Right && g > 0 && g < i64::from(base))
+                        .then_some(NARROW_RIGHT_SLOT)
                 }
                 _ => return Err(crate::paragraph_measure::invalid("unsupported marker alignment")),
             }
@@ -226,11 +219,11 @@ pub(crate) fn marker_metrics(
             metrics.use_inst_width = 1;
             metrics.text_offset_type = "HWPUNIT".into();
             metrics.text_offset = d.as_i32();
-            (anchor, (layout.align != A::Left).then_some(MEASURED_WIDTH_ALIGNMENT))
+            (layout.align != A::Left).then_some(MEASURED_WIDTH_ALIGNMENT)
         }
         _ => return Err(crate::paragraph_measure::invalid("unsupported marker text start")),
     };
-    Ok((marker_unit(margin)?, metrics, approximation))
+    Ok((metrics, approximation))
 }
 
 #[cfg(test)]

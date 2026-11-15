@@ -149,6 +149,130 @@ fn font_context(
     };
     Ok((size, reference))
 }
+/// Placement keeps the original coordinates until the effective head is known.
+#[derive(Clone, Debug)]
+pub(crate) enum MarkerPlacement {
+    Unrequested,
+    FixedLeft,
+    FixedRight,
+    FixedCenter { gap: i32 },
+    AfterMarker,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MarkerCoordinates {
+    pub margin: i32,
+    pub margin_unit: &'static str,
+    pub indent: i32,
+    pub indent_unit: &'static str,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct MarkerRequirement {
+    pub key: Key,
+    pub native_level: u32,
+    pub requested: bool,
+    pub metrics: HeadMetrics,
+    pub anchor: i32,
+    pub continuation: i32,
+    pub original: MarkerCoordinates,
+    pub base: i32,
+    pub placement: MarkerPlacement,
+    pub warnings: Vec<EncodeWarning>,
+}
+/// Calculates each paragraph's marker contract for both encoder entry points.
+pub(crate) fn paragraph_requirement(
+    store: &HwpxStyleStore,
+    paragraph: &Paragraph,
+) -> HwpxResult<Option<MarkerRequirement>> {
+    let shape = store.para_shape(paragraph.para_shape_id)?;
+    if !matches!(shape.heading_type, HeadingType::Number | HeadingType::Bullet) {
+        return Ok(None);
+    }
+    let request = store
+        .list_marker_layouts
+        .get(
+            &u32::try_from(paragraph.para_shape_id.get())
+                .map_err(|_| invalid("marker paragraph reference overflow"))?,
+        )
+        .copied();
+    let (key, head) = match target(store, shape) {
+        Ok(target) => target,
+        Err(_) if request.is_none() => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let (continuation, margin_unit) = crate::paragraph_measure::parts(shape.margin_left);
+    let (first, indent_unit) = crate::paragraph_measure::parts(shape.indent);
+    let original =
+        MarkerCoordinates { margin: continuation, margin_unit, indent: first, indent_unit };
+    let old = existing(store, key);
+    let mut requirement = MarkerRequirement {
+        key,
+        native_level: head.level,
+        requested: request.is_some(),
+        metrics: old.clone(),
+        anchor: continuation,
+        continuation,
+        original,
+        base: 0,
+        placement: MarkerPlacement::Unrequested,
+        warnings: vec![],
+    };
+    if let Some(layout) = request {
+        use hwpforge_blueprint::{ListMarkerAlign as A, ListTextStart as T};
+        requirement.anchor = marker_unit(i64::from(continuation) + i64::from(first))?;
+        let (size, reference) =
+            font_context(store, paragraph, layout, &old, &mut requirement.warnings)?;
+        let (base, approximate) = marker_base_width(if key.0 { None } else { Some(head) }, size)?;
+        requirement.base = base;
+        if approximate {
+            requirement.warnings.push(loss(
+                "list_marker_base_width",
+                "Unmeasured numbering format uses one em for the nominal base width",
+            ));
+        }
+        let (metrics, approximation) =
+            marker_metrics(layout, requirement.anchor, continuation, base, reference)?;
+        requirement.metrics = metrics;
+        if let Some(reason) = approximation {
+            requirement.warnings.push(loss("list_marker_alignment", reason));
+        }
+        requirement.placement = match (layout.text_start, layout.align) {
+            (T::AfterMarker(_), _) => MarkerPlacement::AfterMarker,
+            (T::FromAnchor(_), A::Left) => MarkerPlacement::FixedLeft,
+            (T::FromAnchor(_), A::Right) => MarkerPlacement::FixedRight,
+            (T::FromAnchor(gap), A::Center) => MarkerPlacement::FixedCenter { gap: gap.as_i32() },
+            _ => return Err(invalid("unsupported marker placement")),
+        };
+    }
+    Ok(Some(requirement))
+}
+/// Resolves coordinates only after head allocation and any width expansion.
+pub(crate) fn final_coordinates(
+    requirement: &MarkerRequirement,
+    effective_head: &HeadMetrics,
+) -> HwpxResult<MarkerCoordinates> {
+    let margin = match requirement.placement {
+        MarkerPlacement::Unrequested => return Ok(requirement.original.clone()),
+        MarkerPlacement::FixedLeft | MarkerPlacement::AfterMarker => requirement.anchor,
+        MarkerPlacement::FixedRight => marker_unit(
+            i64::from(requirement.anchor)
+                - i64::from(requirement.base)
+                - i64::from(effective_head.width_adjust),
+        )?,
+        MarkerPlacement::FixedCenter { gap } => {
+            marker_unit(i64::from(requirement.anchor) - i64::from(gap))?
+        }
+    };
+    // Validate HwpUnit bounds when storing the selected paragraph measures.
+    // The legacy path may discard this candidate's indent before that point.
+    let indent = if effective_head.auto_indent == 0 {
+        margin
+            .checked_sub(requirement.continuation)
+            .ok_or_else(|| invalid("marker indent overflow"))?
+    } else {
+        0
+    };
+    Ok(MarkerCoordinates { margin, margin_unit: "HWPUNIT", indent, indent_unit: "HWPUNIT" })
+}
 /// Projects the first effective use of each shared head, including an unspecified request.
 /// Sections follow storage order; each paragraph is visited before run descendants,
 /// with table rows/cells/paragraphs before captions, then headers, footers and page backgrounds.
@@ -173,74 +297,44 @@ pub(crate) fn prepare<'a>(
     for section in document.sections() {
         section.for_each_paragraph(|p| {
             let result = (|| -> HwpxResult<()> {
-                let shape = store.para_shape(p.para_shape_id)?;
-                if !matches!(shape.heading_type, HeadingType::Number | HeadingType::Bullet) {
+                let Some(requirement) = paragraph_requirement(store, p)? else {
                     return Ok(());
-                }
-                let request = store
-                    .list_marker_layouts
-                    .get(
-                        &u32::try_from(p.para_shape_id.get())
-                            .map_err(|_| invalid("marker paragraph reference overflow"))?,
-                    )
-                    .copied();
-                let (key, head) = match target(store, shape) {
-                    Ok(target) => target,
-                    Err(_) if request.is_none() => return Ok(()),
-                    Err(error) => return Err(error),
                 };
-                let old = existing(store, key);
-                let mut pending = vec![];
-                let (metrics, shift) = if let Some(layout) = request {
-                    let (continuation, _) = crate::paragraph_measure::parts(shape.margin_left);
-                    let (first, _) = crate::paragraph_measure::parts(shape.indent);
-                    let anchor = marker_unit(i64::from(continuation) + i64::from(first))?;
-                    let (size, reference) = font_context(store, p, layout, &old, &mut pending)?;
-                    let (base, approximate) =
-                        marker_base_width(if key.0 { None } else { Some(head) }, size)?;
-                    if approximate {
-                        pending.push(loss(
-                            "list_marker_base_width",
-                            "Unmeasured numbering format uses one em for the nominal base width",
-                        ));
-                    }
-                    let (margin, metrics, approximation) =
-                        marker_metrics(layout, anchor, continuation, base, reference)?;
-                    if let Some(reason) = approximation {
-                        pending.push(loss("list_marker_alignment", reason));
-                    }
-                    (
-                        metrics,
-                        margin
-                            .checked_sub(anchor)
-                            .ok_or_else(|| invalid("marker margin shift overflow"))?,
-                    )
-                } else {
-                    (old, 0)
-                };
+                let MarkerRequirement {
+                    key,
+                    native_level,
+                    requested,
+                    metrics,
+                    warnings: pending,
+                    ..
+                } = &requirement;
+                let key = *key;
+                let metrics = metrics.clone();
+                let requested = *requested;
+                let coordinates = final_coordinates(&requirement, &metrics)?;
+                let shift = coordinates
+                    .margin
+                    .checked_sub(requirement.anchor)
+                    .ok_or_else(|| invalid("marker margin shift overflow"))?;
                 let group = groups.entry(key).or_insert_with(|| Group {
                     first: metrics.clone(),
-                    first_requested: request.is_some(),
-                    native_level: head.level,
+                    first_requested: requested,
+                    native_level: *native_level,
                     shift,
                     second: None,
                     count: 0,
                     requested: false,
                     margins: BTreeMap::new(),
-                    warnings: pending,
+                    warnings: pending.clone(),
                 });
                 group.count += 1;
-                group.requested |= request.is_some();
+                group.requested |= requested;
                 if (metrics != group.first || shift != group.shift) && group.second.is_none() {
                     group.second = Some((metrics, shift));
                 }
-                let (anchor, unit) = crate::paragraph_measure::parts(shape.margin_left);
-                let (anchor, continuation) = if request.is_some() {
-                    let (first, _) = crate::paragraph_measure::parts(shape.indent);
-                    (marker_unit(i64::from(anchor) + i64::from(first))?, Some(anchor))
-                } else {
-                    (anchor, None)
-                };
+                let anchor = requirement.anchor;
+                let unit = requirement.original.margin_unit;
+                let continuation = requested.then_some(requirement.continuation);
                 group.margins.entry(p.para_shape_id).or_insert((
                     anchor,
                     unit,
@@ -365,6 +459,94 @@ mod tests {
     use hwpforge_blueprint::{ListMarkerAlign as A, ListTextStart as T};
     use hwpforge_core::{ImageStore, NumberingDef, PageSettings, ParaHead, Run, Section};
     use hwpforge_foundation::{HwpUnit, NumberFormatType};
+    // 이것을 실패시키는 것: 확정 head 대신 요구 head의 폭으로 RIGHT 여백을 계산.
+    // 이것을 실패시키는 것: autoIndent가 켜진 head에도 M−C를 indent로 적용.
+    #[test]
+    fn right_coordinates_use_the_effective_head_width() {
+        let mut store = HwpxStyleStore::with_default_fonts("맑은 고딕");
+        store.push_char_shape(HwpxCharShape {
+            height: HwpUnit::new(1100).unwrap(),
+            ..Default::default()
+        });
+        store.push_numbering(NumberingDef {
+            id: 1,
+            start: 99,
+            levels: vec![ParaHead {
+                level: 1,
+                start: 99,
+                num_format: NumberFormatType::Digit,
+                text: "^1.".into(),
+                checkable: false,
+            }],
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Number,
+            heading_id_ref: 1,
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(3600).unwrap()),
+            indent: ParagraphMeasure::from_hwp_unit(HwpUnit::new(-1800).unwrap()),
+            ..Default::default()
+        });
+        let mut layout =
+            ListMarkerLayout::new(A::Right, T::FromAnchor(HwpUnit::new(1800).unwrap())).unwrap();
+        layout.char_shape = Some(CharShapeIndex::new(0));
+        store.list_marker_layouts.insert(0, layout);
+        let paragraph = Paragraph::new(ParaShapeIndex::new(0));
+        let requirement = paragraph_requirement(&store, &paragraph).unwrap().unwrap();
+        let mut effective = requirement.metrics.clone();
+        effective.width_adjust = 960;
+        let coordinates = final_coordinates(&requirement, &effective).unwrap();
+        assert_eq!(coordinates.margin, -260);
+        assert_eq!(coordinates.indent, 0);
+    }
+    // 이것을 실패시키는 것: 선택하지 않은 head의 indent까지 HwpUnit 범위로 검증.
+    #[test]
+    fn legacy_selection_does_not_validate_an_unselected_indent() {
+        let mut store = HwpxStyleStore::with_default_fonts("맑은 고딕");
+        store.push_char_shape(HwpxCharShape {
+            height: HwpUnit::new(1100).unwrap(),
+            ..Default::default()
+        });
+        store.push_numbering(NumberingDef {
+            id: 1,
+            start: 1,
+            levels: vec![ParaHead {
+                level: 1,
+                start: 1,
+                num_format: NumberFormatType::Digit,
+                text: "^1.".into(),
+                checkable: false,
+            }],
+        });
+        for (index, continuation, first, align, gap) in
+            [(0, 0, 0, A::Left, 0), (1, 100_000_000, -100_000_000, A::Right, 1800)]
+        {
+            store.push_para_shape(HwpxParaShape {
+                heading_type: HeadingType::Number,
+                heading_id_ref: 1,
+                margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(continuation).unwrap()),
+                indent: ParagraphMeasure::from_hwp_unit(HwpUnit::new(first).unwrap()),
+                ..Default::default()
+            });
+            let mut layout =
+                ListMarkerLayout::new(align, T::FromAnchor(HwpUnit::new(gap).unwrap())).unwrap();
+            layout.char_shape = Some(CharShapeIndex::new(0));
+            store.list_marker_layouts.insert(index, layout);
+        }
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(
+            (0..2)
+                .map(|id| {
+                    Paragraph::with_runs(
+                        vec![Run::text("body", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(id),
+                    )
+                })
+                .collect(),
+            PageSettings::a4(),
+        ));
+        let document = document.validate().unwrap();
+        assert!(prepare(&document, &store).is_ok());
+    }
     // 이것을 실패시키는 것: 빈 fidelity를 JSON에 빈 객체로 직렬화.
     #[test]
     fn empty_header_fidelity_preserves_store_json_bytes() {
