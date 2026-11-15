@@ -625,7 +625,6 @@ fn script_final_payload_corruption_refused() {
             deleted: vec![1],
             inserted: None,
             ids: ParagraphIds::Preserve,
-            heights: vec![],
         };
         assert!(
             finish_edit(
@@ -688,27 +687,35 @@ fn script_preview_removal_is_bounded() {
 }
 
 // 이것을 실패시키는 것: script 근거가 표 높이/줄 캐시 범위 gate를 우회.
+// 이것을 실패시키는 것: 생존 캐시 제거 복원.
 #[test]
 fn script_tables_and_caches_remain_scoped() {
     let base = scripts(&table_base(), "<opf:itemref idref='aux-h'/>");
     let out = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap();
     let source = xml(&out);
-    assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 1);
-    assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 1);
-    assert_eq!(source.matches(CACHE).count(), 3);
+    assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 2);
+    assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 0);
+    assert_eq!(source.matches(CACHE).count(), 5);
     let mut package = RawPackage::read(&base).unwrap();
     package.replace_text_entry(
         "Contents/section0.xml",
         xml(&base).replace("treatAsChar=\"0\"", "treatAsChar=\"1\""),
     );
     let bad = package.write().unwrap();
+    let out = HwpxStructuralEditor::delete_paragraphs(&bad, &[TARGET]).unwrap();
     assert_eq!(
-        HwpxStructuralEditor::delete_paragraphs(&bad, &[TARGET]).unwrap_err(),
-        original_error(&bad)
+        xml(&out),
+        xml(&bad).replacen(
+            &xml(&bad)
+                [HwpxDecoder::decode(&bad).unwrap().source_maps[0].paragraphs[1].outer.clone()],
+            "",
+            1
+        )
     );
 }
 
 // 이것을 실패시키는 것: preserving 내부 실패 노출 또는 no-op에 admission 적용.
+// 이것을 실패시키는 것: delete-layout 체크포인트 제거.
 #[test]
 fn script_original_admission_error_and_noop() {
     let base = script_input();
@@ -720,7 +727,8 @@ fn script_original_admission_error_and_noop() {
     for gate in [
         "header",
         "plain-source",
-        "derived-heights",
+        "derived-heading",
+        "delete-layout",
         "package-final",
         "source-final",
         "preview-final",
@@ -1032,7 +1040,7 @@ fn script_other_editors_and_reencode_unchanged() {
     assert!(successes.into_iter().all(|count| count >= 1));
 }
 
-// 이것을 실패시키는 것: 허용 PAGE 삭제를 거부로 변경하거나 높이 검사 실패를 승인.
+// 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 번호 또는 쪽 참조 허용 복원.
 #[test]
 fn script_derived_inputs_stay_the_same() {
     let number = |kind| {
@@ -1042,11 +1050,10 @@ fn script_derived_inputs_stay_the_same() {
     enum Expect {
         Allow,
         RejectDerived,
-        RejectHeight,
     }
     let mut cases = vec![
-        (number("PAGE"), Expect::Allow),
-        (number("TOTAL_PAGE"), Expect::Allow),
+        (number("PAGE"), Expect::RejectDerived),
+        (number("TOTAL_PAGE"), Expect::RejectDerived),
         (number("UNKNOWN"), Expect::RejectDerived),
         (number("PAGE").replace("type='DIGIT'", "type='UNKNOWN'"), Expect::RejectDerived),
         (format!("<hp:ctrl><hp:footer><hp:subList><hp:p><hp:run>{}</hp:run></hp:p></hp:subList></hp:footer></hp:ctrl>", number("TOTAL_PAGE")), Expect::RejectDerived),
@@ -1055,7 +1062,7 @@ fn script_derived_inputs_stay_the_same() {
         cases.push((format!("<hp:footNotePr><hp:numbering type='{policy}'/></hp:footNotePr><hp:ctrl><hp:footNote number='1'><hp:subList><hp:p><hp:run><hp:t>각주</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl>"), Expect::RejectDerived));
     }
     for (kind, expect) in [
-        ("OBJECT_TYPE_PAGE", Expect::Allow),
+        ("OBJECT_TYPE_PAGE", Expect::RejectDerived),
         ("OBJECT_TYPE_NUMBER", Expect::RejectDerived),
         ("OBJECT_TYPE_CONTENTS", Expect::RejectDerived),
     ] {
@@ -1079,7 +1086,7 @@ fn script_derived_inputs_stay_the_same() {
     cases.push((
         "unsupported inline table height".into(),
         unsupported_table.write().unwrap(),
-        Expect::RejectHeight,
+        Expect::Allow,
     ));
     for (content, base, expect) in cases {
         // Both inputs must exercise preserving deletion, where the derived gates apply.
@@ -1097,16 +1104,11 @@ fn script_derived_inputs_stay_the_same() {
                 .unwrap();
             (
                 effects.check_derived_values().map_err(|e| e.to_string()),
-                effects.collect_height_invalidations().map_err(|e| e.to_string()),
+                super::delete_layout::check(&p, &xml(input)).map_err(|e| e.to_string()),
             )
         };
         let expected = decision(&base);
-        let expected_checks = match expect {
-            Expect::Allow => (true, true),
-            Expect::RejectDerived => (false, true),
-            Expect::RejectHeight => (true, false),
-        };
-        assert_eq!((expected.0.is_ok(), expected.1.is_ok()), expected_checks, "{content}");
+        assert_eq!(expected.0.is_ok(), matches!(expect, Expect::Allow), "{content}");
         let assert_delete = |input: &[u8]| {
             let result = HwpxStructuralEditor::delete_paragraphs(input, &[TARGET]);
             match expect {
@@ -1117,12 +1119,12 @@ fn script_derived_inputs_stay_the_same() {
                     let mut expected_document = before.document;
                     expected_document.sections_mut()[0].paragraphs.remove(TARGET.index);
                     let mut actual_document = HwpxDecoder::decode(&output).unwrap().document;
-                    // Successful deletion invalidates stored heights and paragraph line caches.
+                    // Compare semantic content independently of retained layout metadata.
                     expected_document.strip_layout_caches();
                     actual_document.strip_layout_caches();
                     assert_eq!(actual_document, expected_document, "{content}");
                 }
-                Expect::RejectDerived | Expect::RejectHeight => {
+                Expect::RejectDerived => {
                     let error = match result {
                         Err(error) => error,
                         Ok(_) => panic!("{content}: expected refused deletion"),
@@ -1244,6 +1246,7 @@ fn succeeds(base: &[u8]) {
 }
 
 // 이것을 실패시키는 것: header scalar를 body paragraph0 손실로 취급하거나 전역 거부 유지.
+// 이것을 실패시키는 것: 구역/쪽 설정이 없는 입력의 배치 검사 생략.
 #[test]
 fn scalar_header_survives_with_original_warning() {
     let base = scalar(&carry_base());
@@ -1257,16 +1260,13 @@ fn scalar_header_survives_with_original_warning() {
     let first = &source[d.source_maps[0].paragraphs[0].outer.clone()];
     let plain = r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>첫 문단</hp:t></hp:run></hp:p>"#;
     let base = replace(&base, SECTION, first, plain);
-    let before = HwpxDecoder::decode(&base).unwrap();
-    let out = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(
-        &base,
-        &[ParagraphLocator { section: 0, index: 0 }],
-    )
-    .unwrap();
-    assert_eq!(out.decode_warnings, before.warnings);
     assert_eq!(
-        RawPackage::read(&out.value).unwrap().read_entry(HEADER).unwrap(),
-        RawPackage::read(&base).unwrap().read_entry(HEADER).unwrap()
+        HwpxStructuralEditor::delete_paragraphs(
+            &base,
+            &[ParagraphLocator { section: 0, index: 0 }]
+        )
+        .unwrap_err(),
+        original_error(&base)
     );
 }
 
@@ -1345,7 +1345,7 @@ fn matrix(scale: &str) -> String {
         r#"<hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{scale}" e2="0" e3="0" e4="0" e5="{scale}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo>"#
     )
 }
-fn object(tag: &str, org: i32, shown: i32, scale: &str, tail: &str) -> String {
+pub(super) fn object(tag: &str, org: i32, shown: i32, scale: &str, tail: &str) -> String {
     format!(
         r#"<hp:{tag} id="9" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="7"><hp:offset x="0" y="0"/><hp:orgSz width="{org}" height="{org}"/><hp:curSz width="{shown}" height="{shown}"/>{}<hp:sz width="{shown}" widthRelTo="ABSOLUTE" height="{shown}" heightRelTo="ABSOLUTE" protect="0"/>{tail}</hp:{tag}>"#,
         matrix(scale)
@@ -1354,7 +1354,7 @@ fn object(tag: &str, org: i32, shown: i32, scale: &str, tail: &str) -> String {
 fn shape() -> String {
     object("rect", 1000, 1000, "2", "")
 }
-fn picture(scale: &str, tail: &str) -> String {
+pub(super) fn picture(scale: &str, tail: &str) -> String {
     object(
         "pic",
         1000,
@@ -1400,6 +1400,7 @@ fn all_drawn_extent_sites_preserve_surviving_objects() {
 }
 
 // 이것을 실패시키는 것: 같은 group_child_picture kind를 회전·뒤집기까지 허용하거나 appearance 근거 누락.
+// 이것을 실패시키는 것: 정적 glow 효과의 이름만으로 보존 삭제 거부.
 #[test]
 fn group_picture_appearance_and_transform_have_different_causes() {
     for pic in [
@@ -1409,8 +1410,8 @@ fn group_picture_appearance_and_transform_have_different_causes() {
     ] {
         let base = body_object(&carry_base(), "남음", &object("container", 1000, 1000, "1", &pic));
         assert_cause(&base, "group_child_picture");
-        succeeds(&base);
         let retried = body_object(&carry_base(), "남음", &group(&pic.replace("1000", "800")));
+        succeeds(&base);
         succeeds(&retried);
     }
     for transform in [
@@ -1799,7 +1800,6 @@ fn final_checks_detect_corruption_hidden_by_the_same_decode_loss() {
                 deleted: vec![1],
                 inserted: None,
                 ids: ParagraphIds::Preserve,
-                heights: vec![],
             };
             assert!(
                 finish_edit(
@@ -2185,7 +2185,7 @@ fn outline_check(
     let effects = facts.effects(&edits)?;
     preserved_loss::check_locations(&decoded, &effects)
 }
-fn outline_change_heading(
+pub(super) fn outline_change_heading(
     base: &[u8],
     inherited: bool,
     kind: &str,
@@ -2237,7 +2237,7 @@ fn outline_change_heading(
     result.write().unwrap()
 }
 
-// 이것을 실패시키는 것: 개요 근거 없는 scalar 입력에도 heading 제한을 적용하거나 결과/오류를 훼손.
+// 이것을 실패시키는 것: 개요 근거 없는 입력의 삭제 heading 검사 호출 제거.
 fn outline_legacy_heading_control(base: &[u8]) {
     use crate::decoder::preserved_loss::LossCause;
     let input = scalar(base);
@@ -2247,17 +2247,11 @@ fn outline_legacy_heading_control(base: &[u8]) {
     assert_eq!(losses[0].cause, LossCause::PerLanguageScalar);
     let targets = [ParagraphLocator { section: 0, index: 1 }];
     outline_check(&input, &targets, |_| {}).unwrap();
-    // The pre-outline implementation succeeds for all six paired inputs.
-    // Compare every output byte and warning, not only the result variant.
-    let out =
-        HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&input, &targets).unwrap();
-    assert_eq!(out.decode_warnings, decoded.warnings);
-    assert!(out.encode_warnings.is_empty());
-    let mut expected = RawPackage::read(&input).unwrap();
-    let mut section = expected.read_text_entry("Contents/section0.xml").unwrap();
-    section.replace_range(decoded.source_maps[0].paragraphs[1].outer.clone(), "");
-    expected.replace_text_entry("Contents/section0.xml", section);
-    assert_eq!(out.value, expected.write().unwrap());
+    assert_eq!(
+        HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&input, &targets)
+            .unwrap_err(),
+        original_error(&input)
+    );
 }
 
 // 이것을 실패시키는 것: 직접 heading/Core heading 검사 제거.
@@ -2397,6 +2391,7 @@ fn outline_style_reference_is_not_position() {
 }
 
 // 이것을 실패시키는 것: 첫 문단만 검사 또는 any(NONE)으로 배치 승인.
+// 이것을 실패시키는 것: 단일 대상 삭제 거부.
 #[test]
 fn outline_all_deleted_paragraphs_checked() {
     let base = replace(
@@ -2410,8 +2405,8 @@ fn outline_all_deleted_paragraphs_checked() {
         ParagraphLocator { section: 0, index: 2 },
         ParagraphLocator { section: 1, index: 1 },
     ];
-    HwpxStructuralEditor::delete_paragraphs(&base, &targets).unwrap();
     for target in targets {
+        HwpxStructuralEditor::delete_paragraphs(&base, &[target]).unwrap();
         let changed = outline_change_heading(&base, false, "NUMBER", 0, 1);
         let heading = HwpxDecoder::decode(&changed).unwrap().document.sections()[0].paragraphs[1]
             .para_shape_id
@@ -2431,7 +2426,7 @@ fn outline_all_deleted_paragraphs_checked() {
             &part,
             format!("{}{}{}", &source[..span.start], paragraph, &source[span.end..]),
         );
-        outline_refused(&package.write().unwrap(), &targets);
+        outline_refused(&package.write().unwrap(), &[target]);
         assert!(outline_check(&base, &targets, |d| d.document.sections_mut()[target.section]
             .paragraphs[target.index]
             .heading_level = Some(1))
@@ -2742,7 +2737,6 @@ fn outline_final_payload_corruption_refused() {
             deleted: vec![1],
             inserted: None,
             ids: ParagraphIds::Preserve,
-            heights: vec![],
         };
         assert!(
             finish_edit(
@@ -2809,6 +2803,7 @@ fn outline_preview_removal_is_bounded() {
 }
 
 // 이것을 실패시키는 것: 최종 보존/Preview 검증 또는 원래 admission 오류 복원 생략.
+// 이것을 실패시키는 것: delete-layout 체크포인트 제거.
 #[test]
 fn outline_original_admission_error_and_noop() {
     let base =
@@ -2821,7 +2816,8 @@ fn outline_original_admission_error_and_noop() {
     for gate in [
         "header",
         "plain-source",
-        "derived-heights",
+        "derived-heading",
+        "delete-layout",
         "package-final",
         "source-final",
         "preview-final",
@@ -2909,6 +2905,7 @@ fn outline_masterpage_and_header_have_no_evidence() {
 }
 
 // 이것을 실패시키는 것: 번호/표 높이/줄 cache gate 우회.
+// 이것을 실패시키는 것: 생존 캐시 제거 복원.
 #[test]
 fn outline_tables_and_caches_stay_scoped() {
     let base = outline_input();
@@ -2918,11 +2915,7 @@ fn outline_tables_and_caches_stay_scoped() {
     for kind in ["PAGE", "TOTAL_PAGE"] {
         let good =
             replace(&base, "Contents/section0.xml", "<hp:t>0 survive</hp:t>", &auto(kind, "DIGIT"));
-        HwpxStructuralEditor::delete_paragraphs(
-            &good,
-            &[ParagraphLocator { section: 0, index: 1 }],
-        )
-        .unwrap();
+        outline_refused(&good, &[ParagraphLocator { section: 0, index: 1 }]);
         let bad = replace(
             &base,
             "Contents/section0.xml",
@@ -2945,16 +2938,17 @@ fn outline_tables_and_caches_stay_scoped() {
     )
     .unwrap();
     let source = xml(&output);
-    assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 1);
-    assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 1);
-    assert_eq!(source.matches("<hp:linesegarray>").count(), 3);
+    assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 2);
+    assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 0);
+    assert_eq!(source.matches("<hp:linesegarray>").count(), 5);
     let mut bad = RawPackage::read(&table).unwrap();
     bad.replace_text_entry(
         "Contents/section0.xml",
         xml(&table).replace("treatAsChar=\"0\"", "treatAsChar=\"1\""),
     );
     let bad = bad.write().unwrap();
-    outline_refused(&bad, &[ParagraphLocator { section: 0, index: 1 }]);
+    HwpxStructuralEditor::delete_paragraphs(&bad, &[ParagraphLocator { section: 0, index: 1 }])
+        .unwrap();
 }
 
 // 이것을 실패시키는 것: outline 입력군에서 stamp/patch/fill/insert 성공 결과의 payload 한 바이트 변경 또는 경고 삭제.
@@ -3113,6 +3107,7 @@ fn outline_other_editors_and_reencode_unchanged() {
 
 // 이것을 실패시키는 것: 개요 손실 근거마다 전체 source map을 다시 순회.
 // 삭제 문단/InlineStyle 손실 축과 개요 손실 구역 축을 각각 두 배로 늘린다.
+// 이것을 실패시키는 것: 개요 검사 배치 계수 증가 제거.
 #[test]
 fn outline_work_is_bounded() {
     let measure = |n: usize, outline_sections: usize| {
@@ -3159,16 +3154,10 @@ fn outline_work_is_bounded() {
         crate::derived_values::COLLECTIONS.with(|c| c.set(0));
         crate::work::WORK.with(|w| w.set(0));
         crate::derived_values::OUTLINE_BATCHES.with(|c| c.set(0));
-        let output = HwpxStructuralEditor::delete_paragraphs(&base, &targets).unwrap();
+        outline_check(&base, &targets, |_| {}).unwrap();
         assert_eq!(crate::derived_values::OUTLINE_BATCHES.with(std::cell::Cell::get), 1);
         let work = crate::work::WORK.with(std::cell::Cell::get);
         assert_eq!(crate::derived_values::COLLECTIONS.with(std::cell::Cell::get), 1);
-        let decoded = HwpxDecoder::decode(&output).unwrap();
-        assert_eq!(decoded.document.sections()[0].paragraphs.len(), n + 3);
-        assert_eq!(
-            decoded.warnings.iter().filter(|w| w.is_content_loss()).count(),
-            n + outline_sections
-        );
         work
     };
     for (small, large) in
@@ -3611,6 +3600,7 @@ fn single_section_other_losses_stay_scoped() {
 }
 
 // 이것을 실패시키는 것: 보존 삭제 내부 오류를 원래 admission 오류로 복원하는 경계 제거.
+// 이것을 실패시키는 것: delete-layout 체크포인트 제거.
 #[test]
 fn single_section_failure_keeps_admission_error() {
     let base = section_no(&carry_base());
@@ -3622,7 +3612,8 @@ fn single_section_failure_keeps_admission_error() {
     for gate in [
         "header",
         "plain-source",
-        "derived-heights",
+        "derived-heading",
+        "delete-layout",
         "package-final",
         "source-final",
         "preview-final",
@@ -3798,13 +3789,13 @@ fn single_section_other_editors_and_reencode_unchanged() {
 }
 
 // 이것을 실패시키는 것: 흐름 변화 중 Unknown 각주·미주 정책을 허용.
+// 이것을 실패시키는 것: 본문 쪽 번호 허용 또는 생존 캐시 제거 복원.
 #[test]
 fn single_section_linear_controls_keep_derived_and_bytes() {
     #[derive(Clone, Copy, Debug)]
     enum Expect {
         Allow,
         Derived,
-        Height,
         Source,
     }
     let number = |kind| {
@@ -3812,8 +3803,8 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
     };
     let mut cases = vec![];
     for (label, content, expect) in [
-        ("body PAGE", number("PAGE"), Expect::Allow),
-        ("body TOTAL_PAGE", number("TOTAL_PAGE"), Expect::Allow),
+        ("body PAGE", number("PAGE"), Expect::Derived),
+        ("body TOTAL_PAGE", number("TOTAL_PAGE"), Expect::Derived),
         ("unknown number", number("UNKNOWN"), Expect::Derived),
         ("unknown format", number("PAGE").replace("type='DIGIT'", "type='UNKNOWN'"), Expect::Derived),
         ("footer total", format!("<hp:ctrl><hp:footer><hp:subList><hp:p><hp:run>{}</hp:run></hp:p></hp:subList></hp:footer></hp:ctrl>", number("TOTAL_PAGE")), Expect::Derived),
@@ -3865,7 +3856,7 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
         }
     }
     for (kind, expect) in [
-        ("OBJECT_TYPE_PAGE", Expect::Allow),
+        ("OBJECT_TYPE_PAGE", Expect::Derived),
         ("OBJECT_TYPE_NUMBER", Expect::Derived),
         ("OBJECT_TYPE_CONTENTS", Expect::Derived),
     ] {
@@ -3885,7 +3876,7 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
         "Contents/section0.xml",
         source.replace("treatAsChar=\"0\"", "treatAsChar=\"1\""),
     );
-    cases.push(("unsupported table".into(), unsupported.write().unwrap(), Expect::Height, true));
+    cases.push(("unsupported table".into(), unsupported.write().unwrap(), Expect::Allow, true));
     cases.push((
         "unsafe deleted source".into(),
         replace_raw(&carry_base(), "Contents/section0.xml", "<hp:t>가", "<!--unknown--><hp:t>가"),
@@ -3909,11 +3900,7 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
                 !matches!(expect, Expect::Derived),
                 "{label}"
             );
-            assert_eq!(
-                effects.collect_height_invalidations().is_ok(),
-                !matches!(expect, Expect::Height),
-                "{label}"
-            );
+            assert!(super::delete_layout::check(&p, &xml(&input)).is_ok(), "{label}");
             let result = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(
                 &input,
                 &[ParagraphLocator { section: 0, index: 1 }],
@@ -3937,20 +3924,16 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
                         std::str::from_utf8(after.read_entry("Contents/section0.xml").unwrap())
                             .unwrap();
                     if table {
-                        assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 1);
-                        assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 1);
-                        assert_eq!(source.matches(CACHE).count(), 3);
+                        assert_eq!(source.matches("height=\"321\" heightRelTo=").count(), 2);
+                        assert_eq!(source.matches("height=\"0\" heightRelTo=").count(), 0);
+                        assert_eq!(source.matches(CACHE).count(), 5);
                         for index in [0, 2, 3] {
                             let before_span = &d.source_maps[0].paragraphs[index].outer;
                             let before_source =
                                 std::str::from_utf8(p.read_entry("Contents/section0.xml").unwrap())
                                     .unwrap();
                             let before_paragraph = &before_source[before_span.clone()];
-                            if index == 0 {
-                                assert!(source.contains(before_paragraph));
-                            } else {
-                                assert!(!source.contains(before_paragraph));
-                            }
+                            assert!(source.contains(before_paragraph));
                         }
                     } else {
                         let original =
@@ -3963,7 +3946,7 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
                         );
                     }
                 }
-                Expect::Derived | Expect::Height | Expect::Source => {
+                Expect::Derived | Expect::Source => {
                     let actual = result.unwrap_err();
                     let expected = original_error(&input);
                     assert_eq!(actual, expected, "{label}");
@@ -4047,7 +4030,6 @@ fn single_section_linear_controls_keep_derived_and_bytes() {
                     deleted: vec![1],
                     inserted: None,
                     ids: ParagraphIds::Preserve,
-                    heights: vec![],
                 };
                 assert!(
                     finish_edit(

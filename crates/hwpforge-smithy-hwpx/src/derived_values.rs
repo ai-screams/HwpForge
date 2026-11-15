@@ -1,4 +1,4 @@
-//! Stored result freshness and table-height invalidations in original coordinates.
+//! Stored result freshness in original coordinates.
 //! Deliberately private: callers must first establish field/reference and admission safety.
 use crate::cache_flow::{source_start, ParagraphFlow};
 use crate::line_keep::{NamespaceBindings, Tag};
@@ -34,12 +34,6 @@ pub(crate) enum DerivedEdit<'a> {
         proven: &'a [bool],
         slots: &'a [(Range<usize>, String)],
     },
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HeightInvalidation {
-    pub(crate) section: usize,
-    pub(crate) table_start: usize,
-    pub(crate) value: Range<usize>,
 }
 
 fn invalid() -> HwpxError {
@@ -429,22 +423,6 @@ impl<'a> Part<'a> {
         names.reverse();
         Ok(names)
     }
-    fn body_bookmark_target(&self, id: usize) -> HwpxResult<()> {
-        require(self.section.is_some())?;
-        let mut at = id;
-        while at != 0 {
-            let element = &self.source.elements()[at];
-            let tag = &self.tags[at];
-            let independent = matches!(
-                element.name(),
-                "header" | "footer" | "masterPage" | "footNote" | "endNote" | "memo"
-            ) || element.name() == "fieldBegin"
-                && tag.attrs.get("type").is_some_and(|kind| kind == "MEMO");
-            require(!independent && tag.name == element.name())?;
-            at = element.parent();
-        }
-        Ok(())
-    }
     fn one_child(&self, id: usize, name: &str) -> HwpxResult<usize> {
         let matches: Vec<_> = self.source.elements()[id]
             .children()
@@ -556,7 +534,6 @@ fn field_flow(elements: &[XmlElement], mut id: usize) -> usize {
 }
 
 mod table_ledger;
-mod table_profiles;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -766,6 +743,7 @@ pub(crate) struct DerivedEffects<'facts, 'source> {
 }
 
 struct AffectedTables {
+    #[cfg(test)]
     by_table: Vec<bool>,
     // Sorted starts with prefix maximum ends also cover nested table ranges.
     starts_and_max_ends: Vec<(usize, usize)>,
@@ -787,7 +765,11 @@ impl AffectedTables {
             max_end = max_end.max(*end);
             *end = max_end;
         }
-        Self { by_table, starts_and_max_ends }
+        Self {
+            #[cfg(test)]
+            by_table,
+            starts_and_max_ends,
+        }
     }
 
     fn overlaps(&self, span: &Range<usize>) -> bool {
@@ -831,7 +813,7 @@ impl DerivedEffects<'_, '_> {
     ) -> HwpxResult<()> {
         #[cfg(test)]
         OUTLINE_BATCHES.with(|count| count.set(count.get() + 1));
-        use crate::decoder::source_map::{original_opening, section_property_origin};
+        use crate::decoder::source_map::section_property_origin;
         use sha2::Digest;
         let parts: HashMap<_, _> = self
             .facts
@@ -874,6 +856,20 @@ impl DerivedEffects<'_, '_> {
                     == 1,
             )?;
         }
+        self.check_deleted_plain_headings(decoded)
+    }
+
+    pub(crate) fn check_deleted_plain_headings(
+        &self,
+        decoded: &crate::HwpxDocument,
+    ) -> HwpxResult<()> {
+        use crate::decoder::source_map::original_opening;
+        let parts: HashMap<_, _> = self
+            .facts
+            .parts
+            .iter()
+            .filter_map(|part| part.section.map(|section| (section, part)))
+            .collect();
         // Match original body paragraph ranges to Core indices once per edited section.
         for (&section, effect) in &self.effects {
             let part = parts.get(&section).ok_or_else(invalid)?;
@@ -1011,10 +1007,11 @@ impl DerivedEffects<'_, '_> {
 fn page_r(part: &Part<'_>, id: usize, kind: &str) -> HwpxResult<()> {
     require(part.section.is_some())?;
     let path = part.body_path(id)?;
-    let body = path == ["sec", "p", "run", "ctrl", "autoNum"];
     let footer =
         path == ["sec", "p", "run", "ctrl", "footer", "subList", "p", "run", "ctrl", "autoNum"];
-    require(body || kind == "PAGE" && footer)?;
+    // A move to another page can change digit count while the line cache survives.
+    // 이것을 실패시키는 것: 흐름 변경 때 본문 PAGE/TOTAL_PAGE 표시 허용.
+    require(kind == "PAGE" && footer)?;
     let format = part.one_child(id, "autoNumFormat")?;
     exact(
         &part.tags[format],
@@ -1098,7 +1095,7 @@ fn field_unchanged(
             }
             Ok(())
         }
-        "CROSSREF" => crossref_unchanged(changes, part, id, f),
+        "CROSSREF" => crossref_unchanged(changes, f),
         _ => Err(invalid()),
     }
 }
@@ -1145,12 +1142,7 @@ fn local_sum(params: &BTreeMap<String, String>) -> HwpxResult<bool> {
     }
     Ok(cell(a) && cell(b))
 }
-fn crossref_unchanged(
-    changes: &DerivedEffects<'_, '_>,
-    part: &Part<'_>,
-    id: usize,
-    f: &Field,
-) -> HwpxResult<()> {
+fn crossref_unchanged(changes: &DerivedEffects<'_, '_>, f: &Field) -> HwpxResult<()> {
     let facts = changes.facts;
     let effects = &changes.effects;
     use hwpforge_core::control::RefTarget;
@@ -1216,12 +1208,9 @@ fn crossref_unchanged(
             if !changes.flow {
                 return Ok(());
             }
-            require(part.section.is_some())?;
-            target_part.body_bookmark_target(target_id)?;
-            require(
-                matches!(kind, RefType::Bookmark)
-                    && part.body_path(id)? == ["sec", "p", "run", "ctrl", "fieldBegin"],
-            )
+            // A page move can change the displayed digit count in a cached body line.
+            // 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 표시 허용.
+            Err(invalid())
         }
         "OBJECT_TYPE_NUMBER" => {
             let number_kind = match kind {
@@ -1247,148 +1236,6 @@ fn crossref_unchanged(
         }
         _ => Err(invalid()),
     }
-}
-
-impl DerivedEffects<'_, '_> {
-    pub(crate) fn collect_height_invalidations(&self) -> HwpxResult<Vec<HeightInvalidation>> {
-        #[cfg(test)]
-        DECISIONS.with(|d| d.borrow_mut().push("heights"));
-        let facts = self.facts;
-        let effects = &self.effects;
-        let mut heights = Vec::new();
-        for (&section, effect) in effects {
-            let part = facts.section(section)?;
-            let affected = &self.affected_tables[&section].by_table;
-            for (table, record) in part.tables.tables.iter().enumerate() {
-                let survives = effect.survives(&record.outer)?;
-                if survives && affected[table] {
-                    if let Some(height) = height_for_table(part, table)? {
-                        heights.push(height);
-                    }
-                }
-            }
-        }
-        Ok(heights)
-    }
-}
-
-fn height_for_table(part: &Part<'_>, table: usize) -> HwpxResult<Option<HeightInvalidation>> {
-    let record = part.tables.tables.get(table).ok_or_else(invalid)?;
-    require(record.parent.is_none() && record.boundary == 0)?;
-    let id = part.element_at(record.outer.start)?;
-    require(part.body_path(id)? == ["sec", "p", "run", "tbl"])?;
-    require(table_profiles::matches(part, id))?;
-    let sz = part.one_child(id, "sz")?;
-    let elements = part.source.elements();
-    let start = source_start(&part.xml, &elements[sz]).ok_or_else(invalid)?;
-    let mut height = None;
-    for a in start.attributes() {
-        let a = a.map_err(|_| invalid())?;
-        if a.key.as_ref() == "height" {
-            let number = a
-                .normalized_value(quick_xml::XmlVersion::Explicit1_0)
-                .map_err(|_| invalid())?
-                .parse::<u32>()
-                .map_err(|_| invalid())?;
-            let std::borrow::Cow::Borrowed(raw) = a.value else {
-                return Err(invalid());
-            };
-            let offset = (raw.as_ptr() as usize)
-                .checked_sub(part.xml.as_ptr() as usize)
-                .ok_or_else(invalid)?;
-            let range = offset..offset.checked_add(raw.len()).ok_or_else(invalid)?;
-            require(
-                range.start >= elements[sz].outer().start
-                    && range.end <= elements[sz].outer().end
-                    && part.xml.get(range.clone()) == Some(raw),
-            )?;
-            require(height.replace((number, range)).is_none())?;
-        }
-    }
-    let Some((number, value)) = height else {
-        return Ok(None);
-    };
-    if number == 0 {
-        return Ok(None);
-    }
-    Ok(Some(HeightInvalidation {
-        section: part.section.ok_or_else(invalid)?,
-        table_start: elements[id].outer().start,
-        value,
-    }))
-}
-
-/// Revalidate independently supplied authorizations before adding them to either plan.
-pub(crate) fn append_height_replacements(
-    xml: &str,
-    map: &crate::decoder::source_map::SourceMap,
-    section: usize,
-    heights: &[HeightInvalidation],
-    edits: &mut Vec<(Range<usize>, String)>,
-) -> HwpxResult<()> {
-    if heights.is_empty() {
-        return Ok(());
-    }
-    let source = XmlSource::read(xml).map_err(|_| invalid())?.1;
-    require(*source.digest() == map.source_digest)?;
-    let by_start: HashMap<_, _> = source
-        .elements()
-        .iter()
-        .enumerate()
-        .skip(1)
-        .map(|(id, e)| {
-            crate::work::tick();
-            (e.outer().start, id)
-        })
-        .collect();
-    let ledger = table_ledger::TableLedger::from_source(&source, &map.cache_flow)?;
-    let tables: HashMap<_, _> = ledger
-        .tables
-        .iter()
-        .map(|t| {
-            crate::work::tick();
-            (t.outer.start, &t.outer)
-        })
-        .collect();
-    for height in heights {
-        crate::work::tick();
-        require(height.section == section)?;
-        let outer = tables.get(&height.table_start).ok_or_else(invalid)?;
-        let id = by_start.get(&height.table_start).ok_or_else(invalid)?;
-        let table = &source.elements()[*id];
-        require(table.name() == "tbl" && table.outer() == **outer)?;
-        let sizes: Vec<_> = table
-            .children()
-            .iter()
-            .map(|&i| &source.elements()[i])
-            .filter(|e| e.name() == "sz")
-            .collect();
-        require(sizes.len() == 1)?;
-        let start = source_start(xml, sizes[0]).ok_or_else(invalid)?;
-        let mut matched = false;
-        for a in start.attributes() {
-            let a = a.map_err(|_| invalid())?;
-            if a.key.as_ref() == "height" {
-                let normalized = a
-                    .normalized_value(quick_xml::XmlVersion::Explicit1_0)
-                    .map_err(|_| invalid())?;
-                let std::borrow::Cow::Borrowed(raw) = a.value else {
-                    return Err(invalid());
-                };
-                let offset = (raw.as_ptr() as usize)
-                    .checked_sub(xml.as_ptr() as usize)
-                    .ok_or_else(invalid)?;
-                require(
-                    height.value == (offset..offset + raw.len())
-                        && normalized.parse::<u32>().is_ok_and(|n| n > 0),
-                )?;
-                matched = true;
-            }
-        }
-        require(matched)?;
-        edits.push((height.value.clone(), "0".into()));
-    }
-    Ok(())
 }
 
 fn check_outline_plain_heading(
