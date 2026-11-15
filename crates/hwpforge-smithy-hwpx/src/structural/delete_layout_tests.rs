@@ -152,6 +152,10 @@ fn layout_rejections_return_original_admission_error() {
     ));
     let master = "<wrong xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph'/>";
     refuse(&extra(&base, "Contents/masterpage0.xml", master.as_bytes()));
+    // 이것을 실패시키는 것: 배치 검사를 파생 값 수집 뒤로 이동(체크포인트 위치와 무관).
+    crate::derived_values::COLLECTIONS.with(|c| c.set(0));
+    refuse(&replace(&base, SECTION, "colCount=\"1\"", "colCount=\"2\""));
+    assert_eq!(crate::derived_values::COLLECTIONS.with(|c| c.get()), 0);
 }
 
 // 이것을 실패시키는 것: pos 없는 개체를 인라인으로 취급, 표만 검사, 삭제 뒤만 검사 또는 배치 검사 생략.
@@ -297,7 +301,7 @@ fn layout_parser_requires_explicit_valid_evidence() {
     assert!(delete_layout::check(&package, &normalized).is_ok());
 }
 
-// 이것을 실패시키는 것: 이름공간 선언 수 상한 생략·조정, 요소 깊이 상한 생략·조정.
+// 이것을 실패시키는 것: 이름공간 선언 수 상한 생략·조정, 열린 요소 스택 상한 생략·조정 또는 빈 요소까지 스택 상한 적용.
 #[test]
 fn layout_parser_bounds_declarations_and_depth() {
     let base = carry_base();
@@ -318,6 +322,9 @@ fn layout_parser_bounds_declarations_and_depth() {
     let limit = crate::decoder::XML_RECURSION_LIMIT;
     assert!(delete_layout::check(&package, &nest(limit)).is_ok());
     assert!(delete_layout::check(&package, &nest(limit + 1)).is_err());
+    // The bound is on open frames: an empty element below a full stack is never pushed.
+    let leaf = nest(limit).replacen("</hp:x>", "<hp:x/></hp:x>", 1);
+    assert!(delete_layout::check(&package, &leaf).is_ok());
 }
 
 // 이것을 실패시키는 것: 삭제와 무관한 정적 정의에 전역 요소 이름 목록 적용, 쪽 번호의 pos 속성을 개체 위치로 오인.
