@@ -639,6 +639,7 @@ fn store_with_deep_paragraph(bullet: bool, heading_level: u32) -> HwpxStyleStore
 // 이것을 실패시키는 것: 방출 문단의 수준 검사를 빼고 선택된 head 수준만 검사(글머리표가 정의를 나눔).
 // 이것을 실패시키는 것: 문단 수준 상한을 10까지 허용.
 // 이것을 실패시키는 것: 방출하지 않은 문단의 범위 밖 수준으로 정의를 근사 처리.
+// 이것을 실패시키는 것: 충돌 사유에 head 범위만 적고 문단 범위를 빼기.
 #[test]
 fn emitted_paragraph_levels_outside_the_range_keep_the_first_use_projection() {
     // (emitted, different layouts, split warnings, conflict warnings)
@@ -670,7 +671,23 @@ fn emitted_paragraph_levels_outside_the_range_keep_the_first_use_projection() {
                     splits,
                     "{case}"
                 );
-                assert_eq!(warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost{kind,..} if kind == "list_marker_conflict")).count(), conflicts, "{case}");
+                let reasons: Vec<_> = warnings
+                    .iter()
+                    .filter_map(|w| match w {
+                        EncodeWarning::ContentLost { kind, reason, .. }
+                            if kind == "list_marker_conflict" =>
+                        {
+                            Some(reason)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(reasons.len(), conflicts, "{case}");
+                // The reason names the paragraph range, not only the head range.
+                assert!(
+                    reasons.iter().all(|r| r.contains("paragraph level is outside 0..=9")),
+                    "{case}"
+                );
             }
         }
     }

@@ -84,7 +84,9 @@ impl ApproximationReason {
         match self {
             Self::Unsupported => "unsupported paragraph placement",
             Self::SharedCaption => "table caption and cells share a definition",
-            Self::InvalidLevel => "definition or paragraph level is outside 1..=10",
+            Self::InvalidLevel => {
+                "paragraph level is outside 0..=9 or head level is outside 1..=10"
+            }
             Self::SkippedLevel => "a parent level is unused since reset",
             Self::DeepStart => "a new segment would begin below the second level",
             Self::ZeroStart => "definition contains a zero start",
