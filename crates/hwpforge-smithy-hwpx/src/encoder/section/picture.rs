@@ -182,7 +182,11 @@ pub(crate) fn build_picture(
         caption: img
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, bw, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, bw, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         line_shape: None,
         effects: None,

@@ -205,6 +205,7 @@ pub(crate) struct SectionEncodeResult {
 /// One context per document, shared by every body and nested encoder.
 /// Part/path scopes change; asset collections and allocators never reset.
 pub(crate) struct DocumentEncodeContext {
+    pub(super) list_ledger: Option<super::list_numbering::ListLedger>,
     pub(crate) references: Option<crate::header_references::HeaderReferences>,
     pub(crate) charts: Vec<(String, String)>,
     pub(crate) embedded_oles: Vec<(String, Vec<u8>)>,
@@ -229,6 +230,23 @@ pub(crate) struct DocumentEncodeContext {
 }
 
 impl DocumentEncodeContext {
+    pub(super) fn with_list_scope<T>(
+        &mut self,
+        scope: super::list_numbering::ListScope,
+        f: impl FnOnce(&mut Self) -> HwpxResult<T>,
+    ) -> HwpxResult<T> {
+        if let Some(ledger) = &mut self.list_ledger {
+            ledger.push_scope(scope);
+        }
+        let result = f(self);
+        if let Some(ledger) = &mut self.list_ledger {
+            ledger.pop_scope();
+        }
+        result
+    }
+    fn next_list_table(&mut self) -> usize {
+        self.list_ledger.as_mut().map_or(0, |l| l.next_table())
+    }
     fn output_id(&self, kind: &str, index: usize) -> HwpxResult<u32> {
         self.references.as_ref().map_or_else(|| Ok(index as u32), |r| r.output_ids(kind, index))
     }
@@ -236,6 +254,7 @@ impl DocumentEncodeContext {
     pub(crate) fn new(section_index: usize) -> Self {
         Self {
             references: None,
+            list_ledger: None,
             charts: Vec::new(),
             embedded_oles: Vec::new(),
             images: Vec::new(),
@@ -1150,6 +1169,11 @@ fn build_paragraph(
     }
 
     Ok(HxParagraph {
+        list_marker: if let Some(ledger) = &mut sink.list_ledger {
+            ledger.record(para, &sink.path)?
+        } else {
+            None
+        },
         origin: super::origins::record(&sink.path),
         source_origin: 0,
         id: format!("{para_idx}"),

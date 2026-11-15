@@ -12,6 +12,7 @@
 pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod header_tabs;
+mod list_numbering;
 mod origins;
 pub use origins::EmittedOrigins;
 mod object_ids;
@@ -1482,9 +1483,6 @@ impl HwpxEncoder {
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         crate::HwpxDecoder::verify_document_source(document)?;
         let has_marker_requests = !style_store.list_marker_layouts.is_empty();
-        let (marker_store, marker_warnings) =
-            crate::list_marker_layout::prepare(document, style_store)?;
-        let style_store = marker_store.as_ref();
         let options =
             if has_marker_requests { options.with_emit_layout_cache(false) } else { options };
         let options = if crate::layout_compatibility::changed(document) {
@@ -1502,6 +1500,7 @@ impl HwpxEncoder {
         crate::header_references::HeaderReferences::validate_body_borders(document, border_ids)?;
         let mut context = section::DocumentEncodeContext::for_document(document, image_store);
         context.references = Some(references);
+        context.list_ledger = list_numbering::ListLedger::new(style_store)?;
         // Core already follows the decoder's manifest-resolved spine order.
         // Number output parts from that order; never reconstruct original filenames.
         let sections = document.sections();
@@ -1551,6 +1550,17 @@ impl HwpxEncoder {
             }
             section_results.push(result);
         }
+        let marker_output;
+        let style_store = if let Some(ledger) = context.list_ledger.take() {
+            let (output, warnings) = ledger.finish(&mut section_results)?;
+            marker_output = output;
+            context.warnings.extend(warnings);
+            &marker_output
+        } else {
+            style_store
+        };
+        let output_references = crate::header_references::HeaderReferences::build(style_store)?;
+        output_references.validate(style_store, true)?;
         // The single output-supplementation boundary: header references, body
         // borders/zones, and every emitted body ID have now been resolved using
         // the ORIGINAL tables, with only the font-only new-document char/para 0
@@ -1616,7 +1626,6 @@ impl HwpxEncoder {
         };
         // Only now build the output header, including missing font groups.
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
-        context.warnings.extend(marker_warnings);
         let header_xml = encode_header(
             style_store,
             sec_cnt,

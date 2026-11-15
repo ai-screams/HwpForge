@@ -60,6 +60,13 @@ fn default_table_repeat_header() -> u32 {
 /// `<hp:p id="..." paraPrIDRef="3" styleIDRef="0" ...>`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxParagraph {
+    #[serde(
+        rename = "@hwpforgeList",
+        default,
+        skip_deserializing,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) list_marker: Option<usize>,
     #[serde(rename = "@hwpforgeOrigin", default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<usize>,
     // Decoder source identity is independent of the encoder layout origin.

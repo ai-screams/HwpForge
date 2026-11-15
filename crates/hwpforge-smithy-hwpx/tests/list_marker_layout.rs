@@ -322,9 +322,9 @@ fn list_marker_bullet_uses_shared_projection() {
         metrics(&header(&encode(&d, &s)), true, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     }
 }
-// 이것을 실패시키는 것: 충돌을 마지막 요청으로 덮어쓰기.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_conflict_keeps_first_use() {
+fn list_marker_changes_split_in_use_order() {
     let (d, s) = fixture(
         &[(1800, Some(fixed(1800))), (2400, Some(fixed(2400))), (3000, Some(fixed(3000)))],
         None,
@@ -333,21 +333,12 @@ fn list_marker_conflict_keeps_first_use() {
     let out = encode(&d, &s);
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     margins(&header(&out), "1800", "3600", "0", "0");
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
-    let reason = out
-        .warnings
-        .iter()
-        .find_map(|w| match w {
-            EncodeWarning::ContentLost { kind, reason, .. } if kind == "list_marker_conflict" => {
-                Some(reason)
-            }
-            _ => None,
-        })
-        .unwrap();
-    assert!(reason.contains("align=LEFT useInstWidth=0 autoIndent=1 widthAdjust=1300 textOffsetType=PERCENT textOffset=0 charPrIDRef=7"));
-    assert!(reason.contains("margin shift 0"));
-    assert!(reason.contains("first use head and relative margin shift applied"));
-    assert!(reason.contains("3 uses"));
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
+    assert_eq!(header(&out).descendants("hh:numbering").len(), 4);
+    assert!(matches!(
+        out.warnings.iter().find(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })),
+        Some(EncodeWarning::ListNumberingSplit { additional_definitions: 2, .. })
+    ));
     margin_at(&header(&out), "21", "2400", "4800");
     let mut reversed: Document<hwpforge_core::Draft> =
         serde_json::from_value(serde_json::to_value(&d).unwrap()).unwrap();
@@ -358,9 +349,9 @@ fn list_marker_conflict_keeps_first_use() {
         ["LEFT", "0", "1", "1300", "PERCENT", "0", "7"],
     );
 }
-// 이것을 실패시키는 것: char/align 비교 누락, anchor까지 충돌 키에 포함 또는 첫 head를 기존값으로 복귀.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_conflict_compares_complete_metrics() {
+fn list_marker_splits_compare_complete_metrics() {
     let m = fixed(1800);
     for other in [
         layout(ListMarkerAlign::Left, m.text_start, Some(1)),
@@ -368,7 +359,7 @@ fn list_marker_conflict_compares_complete_metrics() {
     ] {
         let (d, s) = fixture(&[(1800, Some(m)), (1800, Some(other))], None, false);
         let out = encode(&d, &s);
-        assert_eq!(losses(&out, "list_marker_conflict"), 1);
+        assert_eq!(losses(&out, "list_marker_conflict"), 0);
         metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
         margin_at(&header(&out), "20", "1800", "3600");
     }
@@ -411,24 +402,24 @@ fn list_marker_conflict_compares_complete_metrics() {
         )
         .unwrap();
         let out = encode(&d, &s);
-        assert_eq!(losses(&out, "list_marker_conflict"), 1);
+        assert_eq!(losses(&out, "list_marker_conflict"), 0);
         metrics(&header(&out), false, ["RIGHT", "0", "1", "700", "HWPUNIT", "1800", "7"]);
         margin_at(&header(&out), "20", "0", "0");
     }
     let (d, s) = fixture(&[(1800, Some(m)), (2400, Some(m))], None, false);
     assert_eq!(losses(&encode(&d, &s), "list_marker_conflict"), 0);
 }
-// 이것을 실패시키는 것: None 사용처를 집계에서 제외하거나 선택한 첫 head를 기존값으로 복귀.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_unspecified_use_participates() {
     let (d, s) = fixture(&[(1800, Some(fixed(1800))), (1800, None)], None, false);
     let out = encode(&d, &s);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     margin_at(&header(&out), "20", "1800", "3600");
     margin_at(&header(&out), "21", "1800", "3600");
 }
-// 이것을 실패시키는 것: 무요청 첫 head를 setter에 다시 넣어 원본 scalar를 정규화하거나 margin을 이동.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_unspecified_first_preserves_original_scalars() {
     for bullet in [None, Some("●")] {
@@ -445,7 +436,7 @@ fn list_marker_unspecified_first_preserves_original_scalars() {
         });
         let store = serde_json::from_value(value.clone()).unwrap();
         let out = encode(&d, &store);
-        assert_eq!(losses(&out, "list_marker_conflict"), 1);
+        assert_eq!(losses(&out, "list_marker_conflict"), 0);
         let h = header(&out);
         self::metrics(&h, bullet.is_some(), ["LEFT", "2", "1", "17", "PERCENT", "37", "7"]);
         margin_at(&h, "20", "1800", "3600");
@@ -453,14 +444,14 @@ fn list_marker_unspecified_first_preserves_original_scalars() {
         assert_eq!(serde_json::to_value(&store).unwrap(), value);
     }
 }
-// 이것을 실패시키는 것: 글머리 문단 수준별 가상 head 생성 또는 충돌에서 기존 head로 복귀.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_shared_bullet_head_conflicts() {
+fn list_marker_shared_bullet_head_splits() {
     let (d, mut s) =
         fixture(&[(1800, Some(fixed(1800))), (1800, Some(fixed(2400)))], Some("●"), false);
     s.para_shape_mut(ParaShapeIndex::new(21)).unwrap().heading_level = 1;
     let out = encode(&d, &s);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     metrics(&header(&out), true, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     margin_at(&header(&out), "20", "1800", "3600");
     margin_at(&header(&out), "21", "1800", "3600");
@@ -510,13 +501,13 @@ fn list_marker_projection_is_repeatable() {
     .unwrap();
     margins(&header(&edited), "0", "0", "0", "0");
 }
-// 이것을 실패시키는 것: 요청 map의 JSON 왕복 손실 또는 충돌에서 선택한 첫 head로 투영하지 않음.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_request_survives_store_json() {
     let (d, s) = fixture(&[(1800, Some(fixed(1800))), (1800, Some(fixed(2400)))], None, false);
     let s: HwpxStyleStore = serde_json::from_value(serde_json::to_value(s).unwrap()).unwrap();
     let out = encode(&d, &s);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     margin_at(&header(&out), "20", "1800", "3600");
     margin_at(&header(&out), "21", "1800", "3600");
@@ -730,9 +721,9 @@ fn unvisited_marker_requests_fold_only_output_coordinates() {
     }
 }
 
-// 이것을 실패시키는 것: 중첩 표 사용처를 빼거나 첫 head 대신 기존 head로 복귀.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_conflict_includes_nested_table_uses() {
+fn list_marker_splits_include_nested_table_uses() {
     let (d, mut s) = fixture(&[(1800, Some(fixed(1800))), (2400, Some(fixed(2400)))], None, false);
     let mut plain = s.para_shape(ParaShapeIndex::new(20)).unwrap().clone();
     plain.heading_type = hwpforge_foundation::HeadingType::None;
@@ -748,7 +739,7 @@ fn list_marker_conflict_includes_nested_table_uses() {
         PageSettings::a4(),
     ));
     let out = encode(&d.validate().unwrap(), &s);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     margins(&header(&out), "1800", "3600", "0", "0");
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
     margin_at(&header(&out), "21", "2400", "4800");
@@ -872,7 +863,7 @@ fn list_marker_unrequested_groups_keep_raw_fidelity() {
     assert_eq!(head.attr("widthAdjust"), Some("-17"));
     assert_eq!(head.attr("autoIndent"), Some("0"));
 }
-// 이것을 실패시키는 것: head가 같아도 미설정 사용처의 이동 0을 충돌 비교에서 제외.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_unspecified_matching_head_compares_shift() {
     let (d, mut s) = fixture(
@@ -900,13 +891,16 @@ fn list_marker_unspecified_matching_head_compares_shift() {
     )
     .unwrap();
     let out = encode(&d, &s);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     let h = header(&out);
     margins(&h, "0", "0", "0", "0");
     let p = h.descendants("hh:paraPr").into_iter().find(|p| p.attr("id") == Some("21")).unwrap();
     let sw = p.child("hp:switch");
-    assert_eq!(sw.child("hp:case").child("hh:margin").child("hc:left").attr("value"), Some("0"));
-    assert_eq!(sw.child("hp:default").child("hh:margin").child("hc:left").attr("value"), Some("0"));
+    assert_eq!(sw.child("hp:case").child("hh:margin").child("hc:left").attr("value"), Some("1800"));
+    assert_eq!(
+        sw.child("hp:default").child("hh:margin").child("hc:left").attr("value"),
+        Some("3600")
+    );
 }
 
 // 이것을 실패시키는 것: 원본 그대로 반환하는 분기 또는 재인코드 분기에서 준비 경고 폐기.
@@ -1036,9 +1030,9 @@ fn numbered_marker_requests_select_the_referenced_head() {
     assert_eq!(first.attr("charPrIDRef"), Some("4294967295"));
 }
 
-// 이것을 실패시키는 것: 같은 head의 문단마다 근사 경고를 내거나 충돌에서 선택 후보 경고 제거.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn marker_approximations_survive_selected_conflict() {
+fn marker_approximations_survive_preserved_segments() {
     let m = layout(ListMarkerAlign::Right, ListTextStart::AfterMarker(u(306)), None);
     let (d, mut s) = fixture(&[(1800, Some(m)); 3], None, false);
     // Roman format and mixed body runs exercise all three approximation kinds.
@@ -1062,7 +1056,7 @@ fn marker_approximations_survive_selected_conflict() {
     for kind in ["list_marker_alignment", "list_marker_base_width", "list_marker_font_context"] {
         assert_eq!(losses(&out, kind), 1, "{kind}");
     }
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     metrics(&header(&out), false, ["LEFT", "1", "0", "0", "HWPUNIT", "306", "4294967295"]);
     measures_at(&header(&out), "20", ["1800", "3600"], ["-1800", "-3600"]);
     measures_at(&header(&out), "21", ["1800", "3600"], ["-1800", "-3600"]);
@@ -1092,27 +1086,27 @@ fn margin_at(h: &xml::Element, id: &str, left: &str, default: &str) {
         assert_eq!(margin.child("hc:intent").attr("value"), Some("0"));
     }
 }
-// 이것을 실패시키는 것: 뒤 항목에 자신의 −g 적용 또는 첫 절대 margin 복사.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_conflict_reuses_first_margin_shift() {
+fn list_marker_segments_keep_their_margin_shifts() {
     let right = |g| layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(g)), Some(0));
     let (d, s) = fixture(&[(1800, Some(right(1800))), (2400, Some(right(2400)))], None, false);
     let out = encode(&d, &s);
     let h = header(&out);
     metrics(&h, false, ["RIGHT", "0", "1", "700", "HWPUNIT", "1800", "7"]);
     margin_at(&h, "20", "0", "0");
-    margin_at(&h, "21", "600", "1200");
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    margin_at(&h, "21", "0", "0");
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
     // Repeated uses of one shape must not accumulate the chosen shift.
     let mut draft: Document<hwpforge_core::Draft> =
         serde_json::from_value(serde_json::to_value(&d).unwrap()).unwrap();
     let p = draft.sections()[0].paragraphs[1].clone();
     draft.sections_mut()[0].paragraphs.push(p);
-    margin_at(&header(&encode(&draft.validate().unwrap(), &s)), "21", "600", "1200");
+    margin_at(&header(&encode(&draft.validate().unwrap(), &s)), "21", "0", "0");
 }
-// 이것을 실패시키는 것: head 일곱 속성만 비교하고 상대 margin 이동량 제외.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_conflict_compares_margin_shift() {
+fn list_marker_segments_compare_margin_shifts() {
     let center = |g| layout(ListMarkerAlign::Center, ListTextStart::FromAnchor(u(g)), None);
     let (d, mut s) =
         fixture(&[(1800, Some(center(1000))), (2400, Some(center(1200)))], None, false);
@@ -1124,10 +1118,10 @@ fn list_marker_conflict_compares_margin_shift() {
     let h = header(&out);
     metrics(&h, false, ["CENTER", "0", "1", "900", "HWPUNIT", "0", "4294967295"]);
     margin_at(&h, "20", "800", "1600");
-    margin_at(&h, "21", "1400", "2800");
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    margin_at(&h, "21", "1200", "2400");
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
 }
-// 이것을 실패시키는 것: None 사용처 제외 또는 첫 요청만 선택.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_unspecified_first_use_is_effective_candidate() {
     for unspecified_first in [true, false] {
@@ -1151,15 +1145,15 @@ fn list_marker_unspecified_first_use_is_effective_candidate() {
         );
         if unspecified_first {
             margin_at(&h, "20", "1800", "3600");
-            margin_at(&h, "21", "2400", "4800");
+            margin_at(&h, "21", "600", "1200");
         } else {
             margin_at(&h, "20", "0", "0");
-            margin_at(&h, "21", "600", "1200");
+            margin_at(&h, "21", "2400", "4800");
         }
-        assert_eq!(losses(&out, "list_marker_conflict"), 1);
+        assert_eq!(losses(&out, "list_marker_conflict"), 0);
     }
 }
-// 이것을 실패시키는 것: 등록 ID 순 선택 또는 표 자손을 다음 본문 뒤에 방문.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_first_use_follows_document_walk() {
     let (d, mut s) = fixture(
@@ -1205,7 +1199,7 @@ fn list_marker_first_use_follows_document_walk() {
     assert_eq!(visited, ["first-body", "cell", "later-body", "header", "next-section"]);
     let out = encode(&document.validate().unwrap(), &s);
     metrics(&self::header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
 
     // With no list on the owner, the nested cell precedes the following body request.
     let nested =
@@ -1217,9 +1211,9 @@ fn list_marker_first_use_follows_document_walk() {
     document.add_section(Section::with_paragraphs(vec![holder, ps[0].clone()], PageSettings::a4()));
     let out = encode(&document.validate().unwrap(), &s);
     metrics(&self::header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
 }
-// 이것을 실패시키는 것: 탈락 후보의 근사 경고까지 합침.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn marker_approximations_ignore_unselected_candidates() {
     let exact = fixed(1800);
@@ -1227,12 +1221,12 @@ fn marker_approximations_ignore_unselected_candidates() {
     let (d, s) = fixture(&[(1800, Some(exact)), (2400, Some(approximate))], None, false);
     let out = encode(&d, &s);
     metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-    assert_eq!(losses(&out, "list_marker_alignment"), 0);
-    assert_eq!(losses(&out, "list_marker_conflict"), 1);
+    assert_eq!(losses(&out, "list_marker_alignment"), 1);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
 }
-// 이것을 실패시키는 것: 사용처마다 경고, 정의 복제, bullet 수준별 가상 그룹 생성.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn list_marker_conflict_preserves_group_identity() {
+fn list_marker_splits_preserve_group_identity() {
     for bullet in [None, Some("●")] {
         let (d, mut s) = fixture(
             &[(1800, Some(fixed(1800))), (2400, Some(fixed(2400))), (3000, Some(fixed(3000)))],
@@ -1246,9 +1240,9 @@ fn list_marker_conflict_preserves_group_identity() {
         let out = encode(&d, &s);
         let h = header(&out);
         metrics(&h, bullet.is_some(), ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-        assert_eq!(losses(&out, "list_marker_conflict"), 1);
-        assert_eq!(h.descendants("hh:numbering").len(), 2);
-        assert_eq!(h.descendants("hh:bullet").len(), usize::from(bullet.is_some()));
+        assert_eq!(losses(&out, "list_marker_conflict"), 0);
+        assert_eq!(h.descendants("hh:numbering").len(), if bullet.is_some() { 2 } else { 4 });
+        assert_eq!(h.descendants("hh:bullet").len(), if bullet.is_some() { 3 } else { 0 });
         assert_eq!(serde_json::to_value(&s).unwrap(), original);
         let section = xml::Element::parse(&package::section_xml(&out.bytes));
         assert_eq!(
@@ -1275,11 +1269,11 @@ fn list_marker_conflict_preserves_group_identity() {
             let mut p = draft.sections()[0].paragraphs[2].clone();
             p.para_shape_id = ParaShapeIndex::new(23);
             draft.sections_mut()[0].paragraphs.push(p);
-            assert_eq!(losses(&encode(&draft.validate().unwrap(), &s), "list_marker_conflict"), 2);
+            assert_eq!(losses(&encode(&draft.validate().unwrap(), &s), "list_marker_conflict"), 0);
         }
     }
 }
-// 이것을 실패시키는 것: 충돌을 기존값으로 복귀, 원본 store 변경, 중복 이동 또는 JSON 왕복에서 선택/경고 손실.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_first_use_projection_is_repeatable() {
     let right = |g| layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(g)), Some(0));
@@ -1296,8 +1290,8 @@ fn list_marker_first_use_projection_is_repeatable() {
     assert_eq!(serde_json::to_value(&s).unwrap(), original);
     let h = header(&a);
     metrics(&h, false, ["RIGHT", "0", "1", "700", "HWPUNIT", "1800", "7"]);
-    margin_at(&h, "21", "600", "1200");
-    assert_eq!(losses(&a, "list_marker_conflict"), 1);
+    margin_at(&h, "21", "0", "0");
+    assert_eq!(losses(&a, "list_marker_conflict"), 0);
     assert!(hwpforge_smithy_hwpx::HwpxEncoder::encode_with_base(
         &a.bytes,
         &d,
@@ -1307,7 +1301,7 @@ fn list_marker_first_use_projection_is_repeatable() {
     )
     .is_ok());
 }
-// 이것을 실패시키는 것: 뒤의 무요청 margin에 단위 환산/포화 허용.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_first_shift_checks_unrequested_margins() {
     let right = layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(1800)), Some(0));
@@ -1320,7 +1314,13 @@ fn list_marker_first_shift_checks_unrequested_margins() {
         } else {
             hwpforge_core::ParagraphMeasure::from_hwp_unit(u(-100_000_000))
         };
-        assert!(HwpxEncoder::encode(&d, &s, &ImageStore::new()).is_err(), "{bad}");
+        let out = encode(&d, &s);
+        let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&out.bytes).unwrap();
+        assert_eq!(
+            decoded.style_store.para_shape(ParaShapeIndex::new(21)).unwrap().margin_left,
+            s.para_shape(ParaShapeIndex::new(21)).unwrap().margin_left,
+            "{bad}"
+        );
     }
 }
 // 이것을 실패시키는 것: 기본 탭 g를 고정 head 기본폭으로 사용하거나 margin을 이동.
@@ -1383,7 +1383,7 @@ fn word_zero_hanging_aligned_tab_wire() {
     }
 }
 
-// 이것을 실패시키는 것: 충돌을 원래 head/margin으로 돌려 선택값과 캐시 무효화를 누락.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn list_marker_first_use_changes_invalidate_cache() {
     let (d, s) = fixture(&[(1800, None), (2400, None)], None, false);
@@ -1404,7 +1404,7 @@ fn list_marker_first_use_changes_invalidate_cache() {
         shape.indent = hwpforge_core::ParagraphMeasure::from_hwp_unit(u(f));
     }
     let doc = decoded.document.validate().unwrap();
-    for out in [
+    for (is_base, out) in [
         HwpxEncoder::encode_with_diagnostics(
             &doc,
             &store,
@@ -1420,11 +1420,19 @@ fn list_marker_first_use_changes_invalidate_cache() {
             EncodeOptions::default(),
         )
         .unwrap(),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let h = header(&out);
         metrics(&h, false, ["RIGHT", "0", "1", "700", "HWPUNIT", "1800", "7"]);
-        margin_at(&h, "21", "600", "1200");
-        assert_eq!(losses(&out, "list_marker_conflict"), 1);
+        margin_at(
+            &h,
+            "21",
+            if is_base == 1 { "600" } else { "0" },
+            if is_base == 1 { "1200" } else { "0" },
+        );
+        assert_eq!(losses(&out, "list_marker_conflict"), is_base);
         assert!(xml::Element::parse(&package::section_xml(&out.bytes))
             .descendants("hp:linesegarray")
             .is_empty());
@@ -1691,7 +1699,7 @@ fn continuation_group(
     requests: &[(i32, i32, Option<ListMarkerLayout>)],
     wire: [&str; 7],
     margins: &[([&str; 2], [&str; 2])],
-    conflicts: usize,
+    additional_definitions: usize,
 ) {
     let (d, s) = coordinate_fixture(requests, None, false);
     let out = encode(&d, &s);
@@ -1699,10 +1707,14 @@ fn continuation_group(
     metrics(&h, false, wire);
     for (index, (left, intent)) in margins.iter().enumerate() {
         let shape = linked_shape(&out, &h, index);
-        assert!(std::ptr::eq(linked_head(&h, shape), head(&h, false)));
+        assert_eq!(
+            std::ptr::eq(linked_head(&h, shape), head(&h, false)),
+            additional_definitions == 0 || index == 0
+        );
         measures_at(&h, shape.attr("id").unwrap(), *left, *intent);
     }
-    assert_eq!(losses(&out, "list_marker_conflict"), conflicts);
+    assert_eq!(losses(&out, "list_marker_conflict"), 0);
+    assert_eq!(h.descendants("hh:numbering").len(), 2 + additional_definitions);
     assert_eq!(losses(&out, "list_marker_continuation"), 0);
 }
 // 이것을 실패시키는 것: 문단별 intent를 공유 번호 설정의 충돌 키에 포함.
@@ -1715,66 +1727,66 @@ fn continuation_intents_do_not_conflict() {
         0,
     );
 }
-// 이것을 실패시키는 것: 번호 설정 비교에서 autoIndent를 제외.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn continuation_auto_indent_conflicts() {
+fn continuation_auto_indent_splits() {
     continuation_group(
         &[(3600, -1800, Some(fixed(1200))), (3000, -1200, Some(fixed(1200)))],
         ["LEFT", "0", "0", "100", "PERCENT", "0", "7"],
-        &[(["1800", "3600"], ["-1800", "-3600"]), (["1800", "3600"], ["-1200", "-2400"])],
+        &[(["1800", "3600"], ["-1800", "-3600"]), (["1800", "3600"], ["0", "0"])],
         1,
     );
 }
-// 이것을 실패시키는 것: 첫 사용처 대신 autoIndent가 꺼진 첫 설정을 선택.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
-fn continuation_auto_indent_conflicts_reversed() {
+fn continuation_auto_indent_splits_reversed() {
     continuation_group(
         &[(3000, -1200, Some(fixed(1200))), (3600, -1800, Some(fixed(1200)))],
         ["LEFT", "0", "1", "100", "PERCENT", "0", "7"],
-        &[(["1800", "3600"], ["0", "0"]), (["1800", "3600"], ["0", "0"])],
+        &[(["1800", "3600"], ["0", "0"]), (["1800", "3600"], ["-1800", "-3600"])],
         1,
     );
 }
-// 이것을 실패시키는 것: 선택된 이동량 대신 각 후보의 이동량으로 intent를 계산.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn continuation_uses_selected_margin_shift() {
     let right = |g| Some(layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(g)), Some(0)));
     continuation_group(
         &[(3600, -1800, right(1200)), (4800, -2400, right(1800))],
         ["RIGHT", "0", "0", "100", "HWPUNIT", "1200", "7"],
-        &[(["600", "1200"], ["-3000", "-6000"]), (["1200", "2400"], ["-3600", "-7200"])],
+        &[(["600", "1200"], ["-3000", "-6000"]), (["600", "1200"], ["-4200", "-8400"])],
         1,
     );
 }
-// 이것을 실패시키는 것: 선택된 번호 설정 대신 후보의 autoIndent 값을 사용.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn continuation_right_zero_slot_shared_auto_zero() {
     let right = Some(layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(0)), Some(0)));
     continuation_group(
         &[(4200, -600, right), (3600, 0, right)],
         ["RIGHT", "0", "0", "0", "HWPUNIT", "0", "7"],
-        &[(["2500", "5000"], ["-1700", "-3400"]), (["2500", "5000"], ["-1100", "-2200"])],
+        &[(["2500", "5000"], ["-1700", "-3400"]), (["2500", "5000"], ["0", "0"])],
         1,
     );
 }
-// 이것을 실패시키는 것: 미지정 첫 사용처의 이동량이 0이면 그룹 전체를 건너뜀.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn continuation_unspecified_first_still_projects_requests() {
     continuation_group(
         &[(900, 123, None), (3600, -1800, Some(fixed(1200)))],
         ["LEFT", "1", "1", "0", "PERCENT", "50", "4294967295"],
-        &[(["900", "1800"], ["123", "246"]), (["1800", "3600"], ["0", "0"])],
+        &[(["900", "1800"], ["123", "246"]), (["1800", "3600"], ["-1800", "-3600"])],
         1,
     );
 }
 
-// 이것을 실패시키는 것: 버린 후보에서 경고하거나 최종 출력 손실을 버림·중복 보고하거나 저장소 순서를 사용.
+// 이것을 실패시키는 것: 지원 정의를 첫 head·첫 상대 이동 근사로 강제.
 #[test]
 fn continuation_warning_follows_final_projection_once_in_visit_order() {
     let after = Some(layout(ListMarkerAlign::Left, ListTextStart::AfterMarker(u(0)), Some(0)));
     let right = |g| Some(layout(ListMarkerAlign::Right, ListTextStart::FromAnchor(u(g)), Some(0)));
     let (d, s) = coordinate_fixture(&[(3600, -1800, right(1200)), (1800, 600, after)], None, false);
-    assert_eq!(losses(&encode(&d, &s), "list_marker_continuation"), 0);
+    assert_eq!(losses(&encode(&d, &s), "list_marker_continuation"), 1);
     let (d, s) = coordinate_fixture(
         &[(3600, -1800, after), (1800, 600, right(1200)), (1200, 800, right(1200))],
         None,
@@ -1788,26 +1800,10 @@ fn continuation_warning_follows_final_projection_once_in_visit_order() {
     draft.sections_mut()[0].paragraphs.push(repeated);
     let d = draft.validate().unwrap();
     let out = encode(&d, &s);
-    assert_eq!(losses(&out, "list_marker_continuation"), 1);
-    let reason = out
-        .warnings
-        .iter()
-        .find_map(|w| match w {
-            EncodeWarning::ContentLost { kind, reason, .. }
-                if kind == "list_marker_continuation" =>
-            {
-                Some(reason.as_str())
-            }
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(
-        reason,
-        "Paragraph shape 22: M=2000 C=1200 I=800; positive intent rendering is unmeasured"
-    );
+    assert_eq!(losses(&out, "list_marker_continuation"), 0);
     let h = header(&out);
-    measures_at(&h, "21", ["2400", "4800"], ["600", "1200"]);
-    measures_at(&h, "22", ["2000", "4000"], ["800", "1600"]);
+    measures_at(&h, "21", ["1200", "2400"], ["-600", "-1200"]);
+    measures_at(&h, "22", ["800", "1600"], ["-400", "-800"]);
     assert_eq!(out.bytes, encode(&d, &s).bytes);
     assert_eq!(serde_json::to_value(&s).unwrap(), original);
 }

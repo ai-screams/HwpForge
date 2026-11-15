@@ -9,8 +9,16 @@ use hwpforge_foundation::{Alignment, CharShapeIndex, HeadingType, ParaShapeIndex
 use std::{borrow::Cow, collections::BTreeMap};
 
 // Bullet kind, one-based definition position, and the emitted head level.
-type Key = (bool, u32, u32);
-fn target<'a>(store: &'a HwpxStyleStore, shape: &HwpxParaShape) -> HwpxResult<(Key, &'a ParaHead)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MarkerKey {
+    pub bullet: bool,
+    pub position: u32,
+    pub level: u32,
+}
+fn target<'a>(
+    store: &'a HwpxStyleStore,
+    shape: &HwpxParaShape,
+) -> HwpxResult<(MarkerKey, &'a ParaHead)> {
     let position = shape.heading_id_ref;
     let index = usize::try_from(
         position.checked_sub(1).ok_or_else(|| invalid("marker definition position is zero"))?,
@@ -30,7 +38,7 @@ fn target<'a>(store: &'a HwpxStyleStore, shape: &HwpxParaShape) -> HwpxResult<(K
                 .iter()
                 .find(|h| h.level == level)
                 .ok_or_else(|| invalid("missing marker numbering level"))?;
-            Ok(((false, position, head.level), head))
+            Ok((MarkerKey { bullet: false, position, level: head.level }, head))
         }
         HeadingType::Bullet => {
             let def = store
@@ -38,12 +46,15 @@ fn target<'a>(store: &'a HwpxStyleStore, shape: &HwpxParaShape) -> HwpxResult<(K
                 .ok_or_else(|| invalid("missing marker bullet definition"))?;
             let wire = crate::list_bridge::bullet_def_to_hwpx(def);
             let level = wire.para_heads[0].level;
-            Ok(((true, position, level), &def.para_head))
+            Ok((MarkerKey { bullet: true, position, level }, &def.para_head))
         }
         _ => Err(invalid("marker layout requires Number, Bullet or CheckBullet semantics")),
     }
 }
-fn existing(store: &HwpxStyleStore, (bullet, position, level): Key) -> HeadMetrics {
+fn existing(
+    store: &HwpxStyleStore,
+    MarkerKey { bullet, position, level }: MarkerKey,
+) -> HeadMetrics {
     let map = if bullet { &store.header_fidelity.bullet } else { &store.header_fidelity.numbering };
     map.get(&position)
         .and_then(|ls| ls.get(&level))
@@ -112,7 +123,7 @@ fn font_context(
     layout: ListMarkerLayout,
     old: &HeadMetrics,
     warnings: &mut Vec<EncodeWarning>,
-) -> HwpxResult<(i32, u32)> {
+) -> HwpxResult<(i32, u32, bool)> {
     let explicit = match layout.char_shape {
         Some(id) => Some(id),
         None if old.char_pr_id_ref != u32::MAX => Some(CharShapeIndex::new(
@@ -147,7 +158,18 @@ fn font_context(
         }
         None => old.char_pr_id_ref,
     };
-    Ok((size, reference))
+    let latin = store.iter_fonts().filter(|f| f.lang == "LATIN").nth(context.font_ref.latin.get());
+    let measured = latin
+        .is_some_and(|f| matches!(f.face_name.as_str(), "맑은 고딕" | "Malgun Gothic"))
+        && !context.bold
+        && !context.italic
+        && context.vertical_position == hwpforge_foundation::VerticalPosition::Normal
+        && context.ratio == 100
+        && context.spacing == 0
+        && context.rel_sz == 100
+        && (explicit.is_some()
+            || p.runs.iter().all(|r| store.char_shape(r.char_shape_id).ok() == Some(context)));
+    Ok((size, reference, measured))
 }
 /// Placement keeps the original coordinates until the effective head is known.
 #[derive(Clone, Debug)]
@@ -167,7 +189,7 @@ pub(crate) struct MarkerCoordinates {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct MarkerRequirement {
-    pub key: Key,
+    pub key: MarkerKey,
     pub native_level: u32,
     pub requested: bool,
     pub metrics: HeadMetrics,
@@ -175,6 +197,7 @@ pub(crate) struct MarkerRequirement {
     pub continuation: i32,
     pub original: MarkerCoordinates,
     pub base: i32,
+    pub measured_size: Option<i32>,
     pub placement: MarkerPlacement,
     pub warnings: Vec<EncodeWarning>,
 }
@@ -213,16 +236,19 @@ pub(crate) fn paragraph_requirement(
         continuation,
         original,
         base: 0,
+        measured_size: None,
         placement: MarkerPlacement::Unrequested,
         warnings: vec![],
     };
     if let Some(layout) = request {
         use hwpforge_blueprint::{ListMarkerAlign as A, ListTextStart as T};
         requirement.anchor = marker_unit(i64::from(continuation) + i64::from(first))?;
-        let (size, reference) =
+        let (size, reference, measured) =
             font_context(store, paragraph, layout, &old, &mut requirement.warnings)?;
-        let (base, approximate) = marker_base_width(if key.0 { None } else { Some(head) }, size)?;
+        let (base, approximate) =
+            marker_base_width(if key.bullet { None } else { Some(head) }, size)?;
         requirement.base = base;
+        requirement.measured_size = measured.then_some(size);
         if approximate {
             requirement.warnings.push(loss(
                 "list_marker_base_width",
@@ -291,59 +317,13 @@ pub(crate) fn prepare<'a>(
         return Ok((Cow::Borrowed(store), Vec::new()));
     }
     validate_requests(store)?;
-    let mut groups: BTreeMap<Key, Group> = BTreeMap::new();
-    let mut warnings = vec![];
+    let mut requirements = Vec::new();
     let mut error = None;
     for section in document.sections() {
-        section.for_each_paragraph(|p| {
-            let result = (|| -> HwpxResult<()> {
-                let Some(requirement) = paragraph_requirement(store, p)? else {
-                    return Ok(());
-                };
-                let MarkerRequirement {
-                    key,
-                    native_level,
-                    requested,
-                    metrics,
-                    warnings: pending,
-                    ..
-                } = &requirement;
-                let key = *key;
-                let metrics = metrics.clone();
-                let requested = *requested;
-                let coordinates = final_coordinates(&requirement, &metrics)?;
-                let shift = coordinates
-                    .margin
-                    .checked_sub(requirement.anchor)
-                    .ok_or_else(|| invalid("marker margin shift overflow"))?;
-                let group = groups.entry(key).or_insert_with(|| Group {
-                    first: metrics.clone(),
-                    first_requested: requested,
-                    native_level: *native_level,
-                    shift,
-                    second: None,
-                    count: 0,
-                    requested: false,
-                    margins: BTreeMap::new(),
-                    warnings: pending.clone(),
-                });
-                group.count += 1;
-                group.requested |= requested;
-                if (metrics != group.first || shift != group.shift) && group.second.is_none() {
-                    group.second = Some((metrics, shift));
-                }
-                let anchor = requirement.anchor;
-                let unit = requirement.original.margin_unit;
-                let continuation = requested.then_some(requirement.continuation);
-                group.margins.entry(p.para_shape_id).or_insert((
-                    anchor,
-                    unit,
-                    continuation,
-                    group.count,
-                ));
-                Ok(())
-            })();
-            if let Err(e) = result {
+        section.for_each_paragraph(|p| match paragraph_requirement(store, p) {
+            Ok(Some(r)) => requirements.push((p.para_shape_id, r)),
+            Ok(None) => {}
+            Err(e) => {
                 error.get_or_insert(e);
             }
         });
@@ -352,15 +332,61 @@ pub(crate) fn prepare<'a>(
         return Err(e);
     }
     let mut out = store.clone();
-    for ((bullet, position, level), group) in groups {
+    let warnings = project_first_uses(&mut out, requirements.iter().map(|(id, r)| (*id, r)), None)?;
+    fold_requests(&mut out)?;
+    Ok((Cow::Owned(out), warnings))
+}
+
+/// Applies the shared first-use policy in both the base and approximation paths.
+pub(crate) fn project_first_uses<'a>(
+    out: &mut HwpxStyleStore,
+    requirements: impl IntoIterator<Item = (ParaShapeIndex, &'a MarkerRequirement)>,
+    approximation: Option<&str>,
+) -> HwpxResult<Vec<EncodeWarning>> {
+    let mut groups: BTreeMap<MarkerKey, Group> = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for (id, requirement) in requirements {
+        let MarkerRequirement { key, native_level, requested, metrics, warnings: pending, .. } =
+            requirement;
+        let key = *key;
+        let metrics = metrics.clone();
+        let requested = *requested;
+        let coordinates = final_coordinates(requirement, &metrics)?;
+        let shift = coordinates
+            .margin
+            .checked_sub(requirement.anchor)
+            .ok_or_else(|| invalid("marker margin shift overflow"))?;
+        let group = groups.entry(key).or_insert_with(|| Group {
+            first: metrics.clone(),
+            first_requested: requested,
+            native_level: *native_level,
+            shift,
+            second: None,
+            count: 0,
+            requested: false,
+            margins: BTreeMap::new(),
+            warnings: pending.clone(),
+        });
+        group.count += 1;
+        group.requested |= requested;
+        if (metrics != group.first || shift != group.shift) && group.second.is_none() {
+            group.second = Some((metrics, shift));
+        }
+        let anchor = requirement.anchor;
+        let unit = requirement.original.margin_unit;
+        let continuation = requested.then_some(requirement.continuation);
+        group.margins.entry(id).or_insert((anchor, unit, continuation, group.count));
+    }
+    let definition = groups.keys().next().copied();
+    let count: usize = groups.values().map(|g| g.count).sum();
+    let mut conflicts = Vec::new();
+    for (MarkerKey { bullet, position, level }, group) in groups {
         if !group.requested {
             continue;
         }
         if let Some((other, shift)) = group.second {
             let definition = if bullet { "bullet" } else { "numbering" };
-            warnings.push(loss(
-                "list_marker_conflict",
-                format!(
+            conflicts.push(format!(
                     concat!(
                         "{} definition position {}, head level {}: {} margin shift {} versus {} margin shift {}; ",
                         "{} uses; first use head and relative margin shift applied",
@@ -373,8 +399,12 @@ pub(crate) fn prepare<'a>(
                     wire_metrics(&other),
                     shift,
                     group.count,
-                ),
-            ));
+                ));
+        }
+        if approximation.is_none() {
+            for reason in conflicts.drain(..) {
+                warnings.push(loss("list_marker_conflict", reason));
+            }
         }
         warnings.extend(group.warnings);
         let m = group.first;
@@ -438,6 +468,17 @@ pub(crate) fn prepare<'a>(
             }
         }
     }
+
+    if let (Some(reason), Some(key)) = (approximation, definition) {
+        warnings.push(loss("list_marker_conflict", format!(
+            "{} definition position {}: {reason}; {}; {count} uses; first use head and relative margin shift applied",
+            if key.bullet { "bullet" } else { "numbering" }, key.position, conflicts.join("; ")
+        )));
+    }
+    Ok(warnings)
+}
+/// Folds requests which were not consumed by an emitted paragraph.
+pub(crate) fn fold_requests(out: &mut HwpxStyleStore) -> HwpxResult<()> {
     for (id, _) in std::mem::take(&mut out.list_marker_layouts) {
         let shape = out.para_shape_mut(ParaShapeIndex::new(
             usize::try_from(id).map_err(|_| invalid("marker paragraph position overflow"))?,
@@ -449,7 +490,7 @@ pub(crate) fn prepare<'a>(
             ParagraphMeasure::from_hwp_unit(hwpforge_foundation::HwpUnit::new(anchor)?);
         shape.indent = ParagraphMeasure::from_hwp_unit(hwpforge_foundation::HwpUnit::ZERO);
     }
-    Ok((Cow::Owned(out), warnings))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -614,9 +655,11 @@ mod tests {
         p.style_ref = Some(hwpforge_foundation::StyleRef::new(0));
         let m = ListMarkerLayout::new(A::Left, T::FromAnchor(HwpUnit::ZERO)).unwrap();
         let old = HeadMetrics::generated(1);
-        assert_eq!(font_context(&s, &p, m, &old, &mut vec![]).unwrap(), (1100, u32::MAX));
+        let (size, reference, _) = font_context(&s, &p, m, &old, &mut vec![]).unwrap();
+        assert_eq!((size, reference), (1100, u32::MAX));
         p.end_char_shape = None;
-        assert_eq!(font_context(&s, &p, m, &old, &mut vec![]).unwrap(), (1400, u32::MAX));
+        let (size, reference, _) = font_context(&s, &p, m, &old, &mut vec![]).unwrap();
+        assert_eq!((size, reference), (1400, u32::MAX));
         p.style_ref = None;
         assert!(font_context(&s, &p, m, &old, &mut vec![]).is_err());
     }
@@ -704,6 +747,15 @@ mod tests {
                 EncodeOptions::default(),
             )
             .unwrap();
+            if kind == "list_marker_conflict" {
+                // 이것을 실패시키는 것: 정확 보존 가능한 head 차이에도 첫 사용처 충돌 유지.
+                assert!(out
+                    .warnings
+                    .iter()
+                    .any(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })));
+                assert!(crate::encoder::split_successful_encode(out).is_ok());
+                continue;
+            }
             assert!(
                 out.warnings
                     .iter()

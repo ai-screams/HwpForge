@@ -41,7 +41,6 @@ fn marker_loss_fails_closed_in_editors() {
         package::splice_part(&ordinary, "numbering.xml", "w:val='decimal'", "w:val='upperRoman'");
     for (input, kind) in [
         (numbered("<w:suff w:val='space'/><w:lvlJc w:val='right'/>", ""), "list_marker_alignment"),
-        (numbered("", "<w:ind w:left='960' w:hanging='480'/>"), "list_marker_conflict"),
         (roman, "list_marker_base_width"),
     ] {
         let result = convert_docx(&input).unwrap();
@@ -58,6 +57,18 @@ fn marker_loss_fails_closed_in_editors() {
             .any(|w| matches!(w,EncodeWarning::ContentLost{kind:k,..} if k==kind)));
         assert!(take_bytes_fail_closed(EncodeOutcome { bytes: result.bytes, warnings }).is_err());
     }
+    // 이것을 실패시키는 것: 정확 보존 가능한 표현 차이도 첫 head로 투영.
+    let result = convert_docx(&numbered("", "<w:ind w:left='960' w:hanging='480'/>")).unwrap();
+    let warnings: Vec<_> = result
+        .warnings
+        .into_iter()
+        .filter_map(|w| match w {
+            hwpforge::ops::OpsWarning::Encode(w) => Some(w),
+            _ => None,
+        })
+        .collect();
+    assert!(warnings.iter().any(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })));
+    assert!(take_bytes_fail_closed(EncodeOutcome { bytes: result.bytes, warnings }).is_ok());
     let bytes = convert_docx(&ordinary).unwrap().bytes;
     let mut decoded = hwpforge::hwpx::HwpxDecoder::decode(&bytes).unwrap();
     let id = decoded.document.sections()[0].paragraphs[0].para_shape_id.get();
@@ -301,9 +312,9 @@ fn imported_zero_hanging_alignment_and_marker_size() {
     }
 }
 
-// 이것을 실패시키는 것: 충돌 경고를 버리거나 unchanged edit-base의 조기 반환에서 누락.
+// 이것을 실패시키는 것: 가져오기에서 서로 다른 head를 같은 정의에 투영.
 #[test]
-fn marker_conflict_fails_closed_with_selected_wire() {
+fn imported_segments_keep_independent_heads_with_edit_base() {
     let result = convert_docx(&numbered("", "<w:ind w:left='960' w:hanging='480'/>")).unwrap();
     let h = xml::Element::parse(&package::part(&result.bytes, "Contents/header.xml"));
     imported_metrics(&h, false, ["LEFT", "0", "1", "700", "PERCENT", "0"]);
@@ -345,14 +356,14 @@ fn marker_conflict_fails_closed_with_selected_wire() {
                 |w| matches!(w,EncodeWarning::ContentLost{kind,..} if kind=="list_marker_conflict")
             )
             .count(),
-        1
+        0
     );
     imported_metrics(
         &xml::Element::parse(&package::part(&out.bytes, "Contents/header.xml")),
         false,
         ["LEFT", "0", "1", "700", "PERCENT", "0"],
     );
-    assert!(take_bytes_fail_closed(out).is_err());
+    assert!(take_bytes_fail_closed(out).is_ok());
 }
 
 fn styled_numbering(direct: bool, style_first: &str, direct_indent: &str) -> Vec<u8> {

@@ -513,13 +513,21 @@ pub(crate) fn encode_textbox_to_rect(
     const MARGIN: i32 = 283;
 
     sink.enter(PathSeg::TextBox);
-    let sub_list_result = encode_paragraphs_to_sublist_with_align(
-        paragraphs,
-        &text_vertical_align.to_string(),
-        hyperlink_entries,
-        options,
-        sink,
-    );
+    let mut encode = |sink: &mut super::section::DocumentEncodeContext| {
+        encode_paragraphs_to_sublist_with_align(
+            paragraphs,
+            &text_vertical_align.to_string(),
+            hyperlink_entries,
+            options,
+            sink,
+        )
+    };
+    let sub_list_result = if as_group_child || placement.as_ref().is_some_and(|p| !p.treat_as_char)
+    {
+        sink.with_list_scope(super::list_numbering::ListScope::Unsupported, encode)
+    } else {
+        encode(sink)
+    };
     sink.leave();
     let sub_list = sub_list_result?;
     let plan = shape_frame_plan(ctrl, as_group_child)?;
@@ -564,7 +572,11 @@ pub(crate) fn encode_textbox_to_rect(
         out_margin: Some(object_out_margin(placement.as_ref())),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, width_hwp, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
 
         draw_text: Some(HxDrawText {
@@ -653,7 +665,11 @@ pub(crate) fn encode_rect_to_hx(
         out_margin: Some(object_out_margin(placement.as_ref())),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, width_hwp, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         // Pure rect: no embedded text content.
         draw_text: None,
@@ -721,7 +737,11 @@ pub(crate) fn encode_line_to_hx(
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, w, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         // The points as the plan stores them: in the original box.
         // 이것을 실패시키는 것: Core 점을 그대로 쓰기(fallback 한 극단 비율 선이
@@ -789,13 +809,16 @@ pub(crate) fn encode_ellipse_to_hx(
         None
     } else {
         sink.enter(PathSeg::TextBox);
-        let sub_list_result = encode_paragraphs_to_sublist_with_align(
-            paragraphs,
-            &text_vertical_align.to_string(),
-            hyperlink_entries,
-            options,
-            sink,
-        );
+        let sub_list_result =
+            sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                encode_paragraphs_to_sublist_with_align(
+                    paragraphs,
+                    &text_vertical_align.to_string(),
+                    hyperlink_entries,
+                    options,
+                    sink,
+                )
+            });
         sink.leave();
         let sub_list = sub_list_result?;
         Some(HxDrawText {
@@ -843,7 +866,11 @@ pub(crate) fn encode_ellipse_to_hx(
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, w, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         draw_text,
         center: Some(HxPoint { x: plan.points()[0].x, y: plan.points()[0].y }),
@@ -900,13 +927,16 @@ pub(crate) fn encode_polygon_to_hx(
         None
     } else {
         sink.enter(PathSeg::TextBox);
-        let sub_list_result = encode_paragraphs_to_sublist_with_align(
-            paragraphs,
-            &text_vertical_align.to_string(),
-            hyperlink_entries,
-            options,
-            sink,
-        );
+        let sub_list_result =
+            sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                encode_paragraphs_to_sublist_with_align(
+                    paragraphs,
+                    &text_vertical_align.to_string(),
+                    hyperlink_entries,
+                    options,
+                    sink,
+                )
+            });
         sink.leave();
         let sub_list = sub_list_result?;
         Some(HxDrawText {
@@ -952,7 +982,11 @@ pub(crate) fn encode_polygon_to_hx(
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, w, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         draw_text,
         points,
@@ -1054,7 +1088,11 @@ pub(crate) fn encode_arc_to_hx(
         shape_comment: Some(HxShapeComment { text: "호입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, w, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         draw_text: None,
         center: Some(HxPoint { x: arc[0].x, y: arc[0].y }),
@@ -1162,7 +1200,11 @@ pub(crate) fn encode_curve_to_hx(
         shape_comment: Some(HxShapeComment { text: "곡선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, w, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
         points: vec![], // KS X 6101: coordinates are in <hp:seg> elements, not <hc:pt>
         segments,
@@ -1269,7 +1311,11 @@ pub(crate) fn encode_connect_line_to_hx(
         shape_comment: Some(HxShapeComment { text: "연결선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, hyperlink_entries, options, sink))
+            .map(|c| {
+                sink.with_list_scope(super::list_numbering::ListScope::Unsupported, |sink| {
+                    build_hx_caption(c, w, hyperlink_entries, options, sink)
+                })
+            })
             .transpose()?,
     })
 }

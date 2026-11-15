@@ -41,24 +41,30 @@ pub(super) fn build_table(
     // diagnostic records go here.
     let caption_at = super::super::object_ids::mark();
     let header_rows = table.header_row_count();
-    let rows = table
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(row_idx, row)| {
-            build_table_row(
-                row,
-                row_idx as u32,
-                row_idx < header_rows,
-                &cell_addrs[row_idx],
-                table_border_fill_id,
-                table.in_margin,
-                hyperlink_entries,
-                options,
-                sink,
-            )
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
+    let list_table = sink.next_list_table();
+    let rows = sink.with_list_scope(
+        super::super::list_numbering::ListScope::TableCells(list_table),
+        |sink| {
+            table
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(row_idx, row)| {
+                    build_table_row(
+                        row,
+                        row_idx as u32,
+                        row_idx < header_rows,
+                        &cell_addrs[row_idx],
+                        table_border_fill_id,
+                        table.in_margin,
+                        hyperlink_entries,
+                        options,
+                        sink,
+                    )
+                })
+                .collect::<HwpxResult<Vec<_>>>()
+        },
+    )?;
 
     let table_width = table.width.map(|w| w.as_i32()).unwrap_or_else(|| {
         table
@@ -78,7 +84,12 @@ pub(super) fn build_table(
     let caption = table
         .caption
         .as_ref()
-        .map(|c| build_hx_caption(c, table_width, hyperlink_entries, options, sink))
+        .map(|c| {
+            sink.with_list_scope(
+                super::super::list_numbering::ListScope::TableCaption(list_table),
+                |sink| build_hx_caption(c, table_width, hyperlink_entries, options, sink),
+            )
+        })
         .transpose()?;
     // 이것을 실패시키는 것: 이 이동 삭제(캡션 수식과 셀 각주의 id 충돌 경고가
     // "footnote, equation" 으로, `shared_core_id_is_kept_and_reported`).

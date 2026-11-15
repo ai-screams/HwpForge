@@ -15,7 +15,7 @@ pub(crate) enum Content {
 
 /// Small parsed tree for wire assertions: exact qualified names, decoded
 /// attribute values (absence stays None), ordered children, and text.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Element {
     pub name: String,
     pub attributes: std::collections::BTreeMap<String, String>,
