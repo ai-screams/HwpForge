@@ -44,7 +44,6 @@ struct ListUse {
 pub(super) struct ListLedger {
     source: HwpxStyleStore,
     targets: BTreeSet<DefinitionKey>,
-    invalid_levels: BTreeSet<DefinitionKey>,
     uses: Vec<ListUse>,
     scopes: Vec<ListScope>,
     table_sequence: usize,
@@ -148,40 +147,9 @@ impl ListLedger {
                 });
             }
         }
-        // 이것을 실패시키는 것: 사용하지 않는 잘못된 head 수준도 배정 배열까지 통과시킴.
-        let mut invalid_levels: BTreeSet<_> = targets
-            .iter()
-            .copied()
-            .filter(|key| {
-                if key.bullet {
-                    source
-                        .bullet_at(key.position as usize - 1)
-                        .is_some_and(|d| !(1..=10).contains(&d.para_head.level))
-                } else {
-                    source
-                        .numbering_at(key.position as usize - 1)
-                        .is_some_and(|d| d.levels.iter().any(|h| !(1..=10).contains(&h.level)))
-                }
-            })
-            .collect();
-        // 이것을 실패시키는 것: 정상 head만 보고 문단의 범위 밖 수준을 놓침.
-        for shape in source.iter_para_shapes() {
-            if matches!(shape.heading_type, HeadingType::Number | HeadingType::Bullet)
-                && shape.heading_level >= 10
-            {
-                let key = DefinitionKey {
-                    bullet: shape.heading_type == HeadingType::Bullet,
-                    position: shape.heading_id_ref,
-                };
-                if targets.contains(&key) {
-                    invalid_levels.insert(key);
-                }
-            }
-        }
         Ok(Some(Self {
             source: source.clone(),
             targets,
-            invalid_levels,
             uses: Vec::new(),
             scopes: Vec::new(),
             table_sequence: 0,
@@ -270,9 +238,6 @@ impl ListLedger {
     }
     fn reasons(&self, key: DefinitionKey, ids: &[usize]) -> BTreeSet<ApproximationReason> {
         let mut reasons = BTreeSet::new();
-        if self.invalid_levels.contains(&key) {
-            reasons.insert(ApproximationReason::InvalidLevel);
-        }
         let mut cells = BTreeSet::new();
         let mut captions = BTreeSet::new();
         let mut state = CounterState::new(self.starts(key));
@@ -317,9 +282,6 @@ impl ListLedger {
         key: DefinitionKey,
         ids: &[usize],
     ) -> HwpxResult<Result<DefinitionPlan, ApproximationReason>> {
-        if self.invalid_levels.contains(&key) {
-            return Ok(Err(ApproximationReason::InvalidLevel));
-        }
         let bytes = if key.bullet {
             self.source
                 .bullet_at(key.position as usize - 1)
@@ -349,6 +311,11 @@ impl ListLedger {
         let mut values = BTreeMap::new();
         for &id in ids {
             let r = &self.uses[id].requirement;
+            // Range-check only levels that emitted paragraphs use; an emitted level
+            // outside 1..=10 keeps the first-use projection.
+            if level_index(r.native_level).is_none() {
+                return Ok(Err(ApproximationReason::InvalidLevel));
+            }
             let level = if key.bullet {
                 0
             } else {
@@ -555,7 +522,6 @@ impl ListLedger {
         let mut warnings = Vec::new();
         let mut references = BTreeMap::new();
         let mut expected = Vec::new();
-        let mut approximate = Vec::new();
         let mut used_shapes = BTreeSet::new();
         for PlannedDefinition { key, reasons, plan } in plans {
             let ids = &groups[&key];
@@ -583,8 +549,9 @@ impl ListLedger {
                             .ok_or_else(|| invalid("missing numbering definition"))?
                             .clone();
                         for h in &mut d.levels {
-                            h.start = segment.starts[level_index(h.level)
-                                .ok_or_else(|| invalid("invalid list head level"))?];
+                            if let Some(level) = level_index(h.level) {
+                                h.start = segment.starts[level];
+                            }
                         }
                         d.start = segment.starts[0];
                         out.push_numbering(d);
@@ -609,7 +576,6 @@ impl ListLedger {
                 let mut first = BTreeMap::new();
                 let mut shapes = BTreeMap::new();
                 let mut diagnosed = BTreeSet::new();
-                let mut positive_intent_warned = false;
                 for ((Assignment { use_id: id, segment }, c), k) in
                     plan.assignments.iter().zip(&plan.coordinates).zip(&plan.shape_keys)
                 {
@@ -653,9 +619,18 @@ impl ListLedger {
                             }
                         }
                     }
-                    if c.indent > 0 && u.requirement.requested && !positive_intent_warned {
-                        warnings.push(EncodeWarning::ContentLost { part: "Contents/header.xml".into(), path: crate::ParagraphPath(Vec::new()), kind: "list_marker_continuation".into(), reason: format!("Paragraph shape {}: M={} C={} I={}; positive intent rendering is unmeasured", original.get(), c.margin, u.requirement.continuation, c.indent) });
-                        positive_intent_warned = true;
+                    if let Some(warning) = crate::list_marker_layout::continuation_warning(
+                        original,
+                        c.margin,
+                        u.requirement.continuation,
+                        c.indent,
+                        u.requirement.requested,
+                    ) {
+                        if diagnosed
+                            .insert((u.requirement.key.level, "list_marker_continuation".into()))
+                        {
+                            warnings.push(warning);
+                        }
                     }
                 }
                 if definitions.len() > 1 {
@@ -666,13 +641,16 @@ impl ListLedger {
                     });
                 }
             } else {
-                approximate.push(key);
                 let reason = reasons.iter().map(|r| r.message()).collect::<Vec<_>>().join("; ");
-                warnings.extend(crate::list_marker_layout::project_first_uses(
-                    &mut out,
-                    ids.iter().map(|&id| (self.uses[id].original, &self.uses[id].requirement)),
-                    Some(&reason),
-                )?);
+                let (definition_warnings, has_conflicts) =
+                    crate::list_marker_layout::project_first_uses(
+                        &mut out,
+                        ids.iter().map(|&id| (self.uses[id].original, &self.uses[id].requirement)),
+                        Some(&reason),
+                    )?;
+                // Validate the local bundle before appending; never rescan earlier definitions.
+                validate_approximations(has_conflicts, &definition_warnings)?;
+                warnings.extend(definition_warnings);
                 for &id in ids {
                     references.insert(id, self.uses[id].original.get() as u32);
                 }
@@ -683,7 +661,6 @@ impl ListLedger {
         }
         crate::list_marker_layout::fold_requests(&mut out)?;
         validate(&out, &self.uses, &expected)?;
-        validate_approximations(&approximate, &warnings)?;
         let mut e = edits.into_iter();
         for part in parts {
             part.xml = rewrite(&part.xml, e.next().expect("section edits"), &references)?;
@@ -763,19 +740,12 @@ fn conflict(key: DefinitionKey, reason: String) -> EncodeWarning {
         ),
     }
 }
-fn validate_approximations(keys: &[DefinitionKey], warnings: &[EncodeWarning]) -> HwpxResult<()> {
-    for &key in keys {
-        let prefix = format!(
-            "{} definition position {}:",
-            if key.bullet { "bullet" } else { "numbering" },
-            key.position
-        );
-        let count = warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost { kind, reason, .. } if kind == "list_marker_conflict" && reason.starts_with(&prefix))).count();
-        if count != 1 {
-            return Err(invalid(
-                "approximate list definition must have exactly one conflict warning",
-            ));
-        }
+fn validate_approximations(has_conflicts: bool, warnings: &[EncodeWarning]) -> HwpxResult<()> {
+    let count = warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost { kind, .. } if kind == "list_marker_conflict")).count();
+    if count != usize::from(has_conflicts) {
+        return Err(invalid(
+            "approximate list conflict warning count does not match head differences",
+        ));
     }
     Ok(())
 }

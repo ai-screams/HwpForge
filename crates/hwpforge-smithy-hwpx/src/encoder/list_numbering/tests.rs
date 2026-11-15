@@ -294,11 +294,23 @@ fn residual_marker_attributes_are_rejected() {
 // 이것을 실패시키는 것: 근사 충돌 경고 누락·중복을 허용.
 #[test]
 fn approximate_warning_counts_are_validated() {
-    let keys = [DefinitionKey { bullet: false, position: 1 }];
-    let w = conflict(keys[0], "unsupported paragraph placement".into());
-    validate_approximations(&keys, std::slice::from_ref(&w)).unwrap();
-    assert!(validate_approximations(&keys, &[]).is_err());
-    assert!(validate_approximations(&keys, &[w.clone(), w]).is_err());
+    let key = DefinitionKey { bullet: false, position: 1 };
+    let w = conflict(key, "unsupported paragraph placement".into());
+    validate_approximations(true, std::slice::from_ref(&w)).unwrap();
+    validate_approximations(false, &[]).unwrap();
+    assert!(validate_approximations(false, std::slice::from_ref(&w)).is_err());
+    assert!(validate_approximations(true, &[]).is_err());
+    assert!(validate_approximations(true, &[w.clone(), w]).is_err());
+}
+
+// 이것을 실패시키는 것: 뒤 정의를 검사할 때 앞 정의의 충돌 경고까지 함께 셈.
+#[test]
+fn approximation_warning_validation_is_local_to_each_definition() {
+    let mut l = ListLedger::new(&store()).unwrap().unwrap();
+    l.push_scope(ListScope::Unsupported);
+    let mut p = record(&mut l, &[0, 1, 2, 3]);
+    let (_, warnings) = l.finish(&mut p).unwrap();
+    assert_eq!(warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost{kind,..} if kind == "list_marker_conflict")).count(), 2);
 }
 
 // 이것을 실패시키는 것: 장부 쪽에서 빈 문단의 끝 표시보다 style을 먼저 선택.
@@ -388,7 +400,7 @@ fn identical_unsupported_uses_are_exact_and_keep_projected_bytes() {
         let (out, warnings) = l.finish(&mut p).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(serde_json::to_value(out).unwrap(), serde_json::to_value(expected).unwrap());
-        assert_eq!(p[0].xml, "<hs:sec><hp:p paraPrIDRef=\"0\"/><hp:p paraPrIDRef=\"0\"/></hs:sec>");
+        assert_two_paragraphs_use_shape_zero(&p[0].xml);
     }
 }
 // 이것을 실패시키는 것: 방출 안 된 요청 때문에 무요청 미지원 사용처에 거짓 충돌.
@@ -417,41 +429,255 @@ fn unused_zero_start_level_does_not_approximate_identical_uses() {
     assert!(w.is_empty());
     assert_eq!(out.numbering_at(0).unwrap().levels[1].start, 0);
 }
-// 이것을 실패시키는 것: head 수준 0·11을 검사하지 않고 start 배열로 인덱싱.
-#[test]
-fn invalid_head_levels_use_first_projection_without_panicking() {
-    for level in [0, 11] {
-        let mut value = serde_json::to_value(store()).unwrap();
-        value["numberings"][0]["levels"].as_array_mut().unwrap().push(serde_json::json!({"level":level,"start":1,"num_format":"Digit","text":"^1.","checkable":false}));
-        let s = serde_json::from_value(value).unwrap();
-        let mut l = ListLedger::new(&s).unwrap().unwrap();
-        assert!(l.invalid_levels.contains(&DefinitionKey { bullet: false, position: 1 }));
-        let mut p = record(&mut l, &[0, 1]);
-        let (out, w) = l.finish(&mut p).unwrap();
-        assert_eq!(out.numbering_count(), 2);
-        assert!(w.iter().any(|w| matches!(w, EncodeWarning::ContentLost { kind, reason, .. } if kind == "list_marker_conflict" && reason.contains("outside 1..=10"))));
+/// Both emitted paragraphs keep the original shape and no private marker attribute.
+// 이것을 실패시키는 것: 표지 속성을 지운 자리에 다른 속성을 남김.
+fn assert_two_paragraphs_use_shape_zero(section_xml: &str) {
+    let section = xml::Element::parse(section_xml);
+    assert_eq!(section.name, "hs:sec");
+    assert_eq!(section.child_names(), ["hp:p", "hp:p"]);
+    for paragraph in &section.children {
+        assert_eq!(
+            paragraph.attributes,
+            BTreeMap::from([("paraPrIDRef".to_string(), "0".to_string())])
+        );
+        assert!(paragraph.children.is_empty());
     }
 }
-// 이것을 실패시키는 것: 무요청 heading_level 11의 카운터 배열을 접근.
+fn encoded_header(store: &HwpxStyleStore) -> String {
+    super::super::header::encode_header(store, 1, None, "", hwpforge_core::LayoutProfile::default())
+        .unwrap()
+}
+
+// 이것을 실패시키는 것: 쓰이지 않는 head·문단 수준만으로 같은 head에 근사 경고를 추가.
 #[test]
-fn invalid_paragraph_level_uses_first_projection_without_panicking() {
+fn unused_invalid_levels_preserve_identical_heads_and_bytes() {
+    for unused_shape in [false, true] {
+        let mut value = serde_json::to_value(store()).unwrap();
+        if unused_shape {
+            value["para_shapes"][1]["heading_level"] = 11.into();
+            value["list_marker_layouts"].as_object_mut().unwrap().remove("1");
+        } else {
+            value["numberings"][0]["levels"].as_array_mut().unwrap().push(serde_json::json!({"level":11,"start":1,"num_format":"Digit","text":"^1.","checkable":false}));
+        }
+        let s = serde_json::from_value(value).unwrap();
+        let r = paragraph_requirement(&s, &paragraph(0)).unwrap().unwrap();
+        let mut expected = s.clone();
+        crate::list_marker_layout::project_first_uses(
+            &mut expected,
+            [(ParaShapeIndex::new(0), &r)],
+            None,
+        )
+        .unwrap();
+        crate::list_marker_layout::fold_requests(&mut expected).unwrap();
+        let mut l = ListLedger::new(&s).unwrap().unwrap();
+        // A paragraph whose shape has an out-of-range level and no marker request is
+        // not recorded, so it cannot make the definition approximate.
+        if unused_shape {
+            l.record(&paragraph(1), &[]).unwrap();
+        }
+        let mut p = record(&mut l, &[0, 0]);
+        let first = l.uses.len() - 2;
+        assert!(!l
+            .reasons(DefinitionKey { bullet: false, position: 1 }, &[first, first + 1])
+            .contains(&ApproximationReason::InvalidLevel));
+        let (out, warnings) = l.finish(&mut p).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(encoded_header(&out), encoded_header(&expected));
+        assert_two_paragraphs_use_shape_zero(&p[0].xml);
+    }
+}
+
+// 이것을 실패시키는 것: 쓰이지 않는 head 수준을 사본 start 배열로 인덱싱하거나 분리를 막음.
+#[test]
+fn unused_invalid_heads_preserve_or_split_without_panicking() {
+    for level in [0, 11] {
+        for different in [false, true] {
+            let mut value = serde_json::to_value(store()).unwrap();
+            value["numberings"][0]["levels"].as_array_mut().unwrap().push(serde_json::json!({"level":level,"start":7,"num_format":"Digit","text":"literal","checkable":false}));
+            if !different {
+                value["list_marker_layouts"]["1"] = value["list_marker_layouts"]["0"].clone();
+            }
+            let s = serde_json::from_value(value).unwrap();
+            let mut l = ListLedger::new(&s).unwrap().unwrap();
+            let mut p = record(&mut l, &[0, 1]);
+            let (out, w) = l.finish(&mut p).unwrap();
+            assert_eq!(out.numbering_count(), 2 + usize::from(different));
+            assert_eq!(out.numbering_at(0).unwrap().levels[1].start, 7);
+            if different {
+                assert_eq!(out.numbering_at(2).unwrap().levels[1].start, 7);
+            }
+            assert_eq!(
+                w.iter().filter(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })).count(),
+                usize::from(different)
+            );
+            assert!(!w.iter().any(|w| matches!(w, EncodeWarning::ContentLost{kind,..} if kind == "list_marker_conflict")));
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 방출한 범위 밖 수준을 배열로 접근하거나 같은 head에도 충돌을 생성.
+#[test]
+fn emitted_invalid_levels_warn_only_for_different_heads_without_panicking() {
+    for different in [false, true] {
+        let mut value = serde_json::to_value(store()).unwrap();
+        value["numberings"][0]["levels"].as_array_mut().unwrap().push(serde_json::json!({"level":12,"start":1,"num_format":"Digit","text":"literal","checkable":false}));
+        if !different {
+            value["list_marker_layouts"]["1"] = value["list_marker_layouts"]["0"].clone();
+        }
+        let mut unused = value["para_shapes"][1].clone();
+        unused["heading_level"] = 11.into();
+        value["para_shapes"].as_array_mut().unwrap().push(unused);
+        let s: HwpxStyleStore = serde_json::from_value(value).unwrap();
+        let mut l = ListLedger::new(&s).unwrap().unwrap();
+        let mut p = record(&mut l, &[0, 1, 4]);
+        let (_, warnings) = l.finish(&mut p).unwrap();
+        let conflicts: Vec<_> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                EncodeWarning::ContentLost { kind, reason, .. }
+                    if kind == "list_marker_conflict" =>
+                {
+                    Some(reason)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(conflicts.len(), usize::from(different));
+        if different {
+            assert!(conflicts[0].contains("outside 1..=10"));
+        }
+        assert!(!warnings.iter().any(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })));
+    }
+}
+
+// 이것을 실패시키는 것: 글머리표의 wire 수준만 검사해 범위 밖 native head를 정확 배정으로 승인.
+#[test]
+fn invalid_bullet_heads_use_projection_only_when_heads_differ() {
+    for level in [0, 11] {
+        for different in [false, true] {
+            let mut s = store();
+            s.push_bullet(BulletDef {
+                id: 1,
+                bullet_char: "•".into(),
+                checked_char: None,
+                use_image: false,
+                para_head: ParaHead {
+                    start: 1,
+                    level,
+                    num_format: NumberFormatType::Digit,
+                    text: "".into(),
+                    checkable: false,
+                },
+            });
+            for id in [0, 1] {
+                s.para_shape_mut(ParaShapeIndex::new(id)).unwrap().heading_type =
+                    HeadingType::Bullet;
+            }
+            if !different {
+                s.list_marker_layouts.insert(1, s.list_marker_layouts[&0]);
+            }
+            let mut l = ListLedger::new(&s).unwrap().unwrap();
+            let mut p = record(&mut l, &[0, 1]);
+            assert!(matches!(
+                l.plan(DefinitionKey { bullet: true, position: 1 }, &[0, 1]).unwrap(),
+                Err(ApproximationReason::InvalidLevel)
+            ));
+            let (_, warnings) = l.finish(&mut p).unwrap();
+            assert_eq!(warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost{kind,..} if kind == "list_marker_conflict")).count(), usize::from(different));
+            assert!(!warnings
+                .iter()
+                .any(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })));
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 양수 intent 진단을 정의 전체에서 한 번으로 접거나 경로마다 다르게 집계.
+// 이것을 실패시키는 것: 무요청·0 intent에도 후속 줄 경고를 생성.
+#[test]
+fn positive_intent_is_diagnosed_once_per_level_in_both_paths() {
+    assert!(crate::list_marker_layout::continuation_warning(
+        ParaShapeIndex::new(0),
+        4100,
+        3600,
+        0,
+        true
+    )
+    .is_none());
+    assert!(crate::list_marker_layout::continuation_warning(
+        ParaShapeIndex::new(0),
+        4100,
+        3600,
+        500,
+        false
+    )
+    .is_none());
     let mut value = serde_json::to_value(store()).unwrap();
-    value["para_shapes"][1]["heading_level"] = 11.into();
-    value["list_marker_layouts"].as_object_mut().unwrap().remove("1");
-    // Keep the head valid here so the paragraph-level check has independent coverage.
-    let valid_heads = serde_json::from_value(value.clone()).unwrap();
-    assert!(ListLedger::new(&valid_heads)
-        .unwrap()
-        .unwrap()
-        .invalid_levels
-        .contains(&DefinitionKey { bullet: false, position: 1 }));
-    value["numberings"][0]["levels"].as_array_mut().unwrap().push(serde_json::json!({"level":12,"start":1,"num_format":"Digit","text":"^1.","checkable":false}));
-    let s = serde_json::from_value(value).unwrap();
+    value["numberings"][0]["levels"].as_array_mut().unwrap().push(serde_json::json!({"level":2,"start":1,"num_format":"Digit","text":"^2.","checkable":false}));
+    value["para_shapes"][1]["heading_level"] = 1.into();
+    for id in [0, 1] {
+        value["para_shapes"][id]["indent"]["value"] = 500.into();
+    }
+    value["list_marker_layouts"]["1"] = value["list_marker_layouts"]["0"].clone();
+    let s: HwpxStyleStore = serde_json::from_value(value).unwrap();
+    let requirements: Vec<_> = [0, 1, 0, 1]
+        .into_iter()
+        .map(|id| {
+            (ParaShapeIndex::new(id), paragraph_requirement(&s, &paragraph(id)).unwrap().unwrap())
+        })
+        .collect();
+    let (base_warnings, _) = crate::list_marker_layout::project_first_uses(
+        &mut s.clone(),
+        requirements.iter().map(|(id, r)| (*id, r)),
+        None,
+    )
+    .unwrap();
     let mut l = ListLedger::new(&s).unwrap().unwrap();
-    assert!(l.invalid_levels.contains(&DefinitionKey { bullet: false, position: 1 }));
-    let mut p = record(&mut l, &[0, 1]);
-    let (_, w) = l.finish(&mut p).unwrap();
-    assert!(w.iter().any(|w| matches!(w, EncodeWarning::ContentLost { reason, .. } if reason.contains("outside 1..=10"))));
+    let mut p = record(&mut l, &[0, 1, 0, 1]);
+    let (_, split_warnings) = l.finish(&mut p).unwrap();
+    let (approximate_warnings, _) = crate::list_marker_layout::project_first_uses(
+        &mut s.clone(),
+        requirements.iter().map(|(id, r)| (*id, r)),
+        Some("unsupported paragraph placement"),
+    )
+    .unwrap();
+    // Each used level reports its own positive intent, so two levels give two warnings.
+    for warnings in [base_warnings, split_warnings, approximate_warnings] {
+        assert_eq!(warnings.iter().filter(|w| matches!(w, EncodeWarning::ContentLost{kind,..} if kind == "list_marker_continuation")).count(), 2);
+    }
+}
+
+// 이것을 실패시키는 것: 빈 근사 사유를 구분자 사이에 넣거나 head 비교 없이 근사 경고를 생성.
+#[test]
+fn approximation_messages_contain_only_nonempty_details() {
+    let s = store();
+    for reason in ["", "unsupported paragraph placement"] {
+        for different in [false, true] {
+            let requirements: Vec<_> = [0, usize::from(different)]
+                .into_iter()
+                .map(|id| {
+                    (
+                        ParaShapeIndex::new(id),
+                        paragraph_requirement(&s, &paragraph(id)).unwrap().unwrap(),
+                    )
+                })
+                .collect();
+            let (warnings, has_conflicts) = crate::list_marker_layout::project_first_uses(
+                &mut s.clone(),
+                requirements.iter().map(|(id, r)| (*id, r)),
+                Some(reason),
+            )
+            .unwrap();
+            assert_eq!(has_conflicts, different);
+            assert_eq!(warnings.len(), usize::from(different));
+            for warning in warnings {
+                if let EncodeWarning::ContentLost { reason, .. } = warning {
+                    assert!(!reason.contains("; ;"), "{reason}");
+                    assert!(!reason.contains(": ;"), "{reason}");
+                    assert!(reason.contains("versus"), "{reason}");
+                }
+            }
+        }
+    }
 }
 // 이것을 실패시키는 것: 근사 투영에서 양수 intent 경고나 두 head·이동·사용 수를 제거.
 #[test]

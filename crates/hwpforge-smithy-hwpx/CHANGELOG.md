@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Blueprint 문단에 명시한 자동 간격을 출력 paraPr의 `autoSpacing`으로 쓴다. 지정하지 않은 문단은 원본 값과 요소 부재를 보존하거나 조판 프로필 기본값을 쓴다.
 
-- 목록 anchor와 본문 거리·문자 모양을 번호 및 글머리 paraHead로 투영합니다. 새 생성은 정확히 보존할 수 있는 head 차이를 정의 분리로 표현하고 문단별 여백을 유지합니다. 원본 보존 편집과 미지원 자리·수준 전이·상한 초과 정의는 첫 사용처의 head와 상대 margin 이동을 유지하며 `list_marker_conflict` 의미 손실을 보고합니다. 양수 intent, 실폭 Right/Center의 Left 근사 등 미측정 배치 진단은 유지합니다. Word 호환 자동 간격은 1/1이며 원본의 값과 요소 부재를 보존합니다.
+- 목록 anchor와 본문 거리·문자 모양을 번호 및 글머리 paraHead로 투영합니다. 새 생성은 정확히 보존할 수 있는 head 차이를 정의 분리로 표현하고 문단별 여백을 유지합니다. 원본 보존 편집과 미지원 자리·수준 전이·상한 초과 정의는 첫 사용처의 head와 상대 margin 이동을 유지하며 head나 상대 margin 이동이 실제로 다를 때만 `list_marker_conflict` 의미 손실을 보고합니다. 양수 intent, 실폭 Right/Center의 Left 근사 등 미측정 배치 진단은 유지합니다. Word 호환 자동 간격은 1/1이며 원본의 값과 요소 부재를 보존합니다.
 
 ### Changed
 

@@ -332,7 +332,8 @@ pub(crate) fn prepare<'a>(
         return Err(e);
     }
     let mut out = store.clone();
-    let warnings = project_first_uses(&mut out, requirements.iter().map(|(id, r)| (*id, r)), None)?;
+    let (warnings, _) =
+        project_first_uses(&mut out, requirements.iter().map(|(id, r)| (*id, r)), None)?;
     fold_requests(&mut out)?;
     Ok((Cow::Owned(out), warnings))
 }
@@ -342,7 +343,7 @@ pub(crate) fn project_first_uses<'a>(
     out: &mut HwpxStyleStore,
     requirements: impl IntoIterator<Item = (ParaShapeIndex, &'a MarkerRequirement)>,
     approximation: Option<&str>,
-) -> HwpxResult<Vec<EncodeWarning>> {
+) -> HwpxResult<(Vec<EncodeWarning>, bool)> {
     let mut groups: BTreeMap<MarkerKey, Group> = BTreeMap::new();
     let mut warnings = Vec::new();
     for (id, requirement) in requirements {
@@ -386,7 +387,7 @@ pub(crate) fn project_first_uses<'a>(
         }
         if let Some((other, shift)) = group.second {
             let definition = if bullet { "bullet" } else { "numbering" };
-            conflicts.push(format!(
+            let reason = format!(
                     concat!(
                         "{} definition position {}, head level {}: {} margin shift {} versus {} margin shift {}; ",
                         "{} uses; first use head and relative margin shift applied",
@@ -399,12 +400,11 @@ pub(crate) fn project_first_uses<'a>(
                     wire_metrics(&other),
                     shift,
                     group.count,
-                ));
-        }
-        if approximation.is_none() {
-            for reason in conflicts.drain(..) {
-                warnings.push(loss("list_marker_conflict", reason));
+                );
+            if approximation.is_none() {
+                warnings.push(loss("list_marker_conflict", reason.clone()));
             }
+            conflicts.push(reason);
         }
         warnings.extend(group.warnings);
         let m = group.first;
@@ -428,7 +428,7 @@ pub(crate) fn project_first_uses<'a>(
                 m.char_pr_id_ref,
             )?;
         }
-        let mut positive_intent_warned = false;
+        let mut diagnosed = std::collections::BTreeSet::new();
         let mut margins: Vec<_> = group.margins.into_iter().collect();
         margins.sort_by_key(|(_, (_, _, _, order))| *order);
         for (id, (anchor, unit, continuation, _)) in margins {
@@ -455,28 +455,55 @@ pub(crate) fn project_first_uses<'a>(
                     &u32::try_from(id.get())
                         .map_err(|_| invalid("marker paragraph reference overflow"))?,
                 );
-                if intent > 0 && !positive_intent_warned {
-                    warnings.push(loss(
-                        "list_marker_continuation",
-                        format!(
-                            "Paragraph shape {}: M={} C={} I={}; positive intent rendering is unmeasured",
-                            id.get(), margin, continuation, intent,
-                        ),
-                    ));
-                    positive_intent_warned = true;
+                if let Some(warning) = continuation_warning(id, margin, continuation, intent, true)
+                {
+                    if diagnosed.insert((level, "list_marker_continuation")) {
+                        warnings.push(warning);
+                    }
                 }
             }
         }
     }
 
-    if let (Some(reason), Some(key)) = (approximation, definition) {
-        warnings.push(loss("list_marker_conflict", format!(
-            "{} definition position {}: {reason}; {}; {count} uses; first use head and relative margin shift applied",
-            if key.bullet { "bullet" } else { "numbering" }, key.position, conflicts.join("; ")
-        )));
+    let has_conflicts = !conflicts.is_empty();
+    // Approximation selects a policy; only actual projected differences justify a loss warning.
+    if has_conflicts {
+        if let (Some(reason), Some(key)) = (approximation, definition) {
+            let mut details = Vec::new();
+            if !reason.is_empty() {
+                details.push(reason.to_owned());
+            }
+            details.extend(conflicts);
+            warnings.push(loss("list_marker_conflict", format!(
+                "{} definition position {}: {}; {count} uses; first use head and relative margin shift applied",
+                if key.bullet { "bullet" } else { "numbering" }, key.position, details.join("; ")
+            )));
+        }
     }
-    Ok(warnings)
+    Ok((warnings, has_conflicts))
 }
+
+pub(crate) fn continuation_warning(
+    id: ParaShapeIndex,
+    margin: i32,
+    continuation: i32,
+    intent: i32,
+    requested: bool,
+) -> Option<EncodeWarning> {
+    (intent > 0 && requested).then(|| {
+        loss(
+            "list_marker_continuation",
+            format!(
+                "Paragraph shape {}: M={} C={} I={}; positive intent rendering is unmeasured",
+                id.get(),
+                margin,
+                continuation,
+                intent
+            ),
+        )
+    })
+}
+
 /// Folds requests which were not consumed by an emitted paragraph.
 pub(crate) fn fold_requests(out: &mut HwpxStyleStore) -> HwpxResult<()> {
     for (id, _) in std::mem::take(&mut out.list_marker_layouts) {
