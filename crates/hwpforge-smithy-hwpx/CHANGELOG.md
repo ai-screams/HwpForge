@@ -9,44 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.0...hwpforge-smithy-hwpx-v0.20.1) - 2026-11-16
 
+한컴오피스가 저장한 HWPX의 `delete-para`와 `set-cell`을 원문 XML을 그대로 두는 방식으로 열고, 줄 조판 캐시를 남기는 범위를 바로잡은 릴리스다. 새로 거부되는 입력과 달라지는 출력은 "업그레이드 주의"에 모았다.
+
 ### Added
 
-- *(hwpx)* [#143] keep surviving line caches and table heights in source-preserving deletes ([#355](https://github.com/ai-screams/HwpForge/pull/355))
-
-- *(hwpx)* [#337] edit cells of Hancom-saved documents in place with set-cell ([#354](https://github.com/ai-screams/HwpForge/pull/354))
-
-- *(hwpx)* [#143] keep source-preserving deletes open for inline tables whose cells use equal 141 margins ([#353](https://github.com/ai-screams/HwpForge/pull/353))
-
-- *(hwpx)* [#143] keep source-preserving deletes open when the only section is marked nonlinear ([#351](https://github.com/ai-screams/HwpForge/pull/351))
-
-- *(hwpx)* [#143] keep source-preserving deletes open when another section selects an outline numbering ([#350](https://github.com/ai-screams/HwpForge/pull/350))
-
-- *(hwpx)* [#143] keep source-preserving deletes open when Hancom script items reorder the package spine ([#349](https://github.com/ai-screams/HwpForge/pull/349))
-
-- *(hwpx)* [#143] admit inline body tables in Hancom-confirmed ranges for source-preserving deletes ([#346](https://github.com/ai-screams/HwpForge/pull/346))
-
-- *(hwpx)* [#143] keep source-preserving deletes open when decode losses stay in the original XML ([#345](https://github.com/ai-screams/HwpForge/pull/345))
-
-- *(hwpx)* [#143] delete verified plain paragraphs from Hancom-saved HWPX ([#343](https://github.com/ai-screams/HwpForge/pull/343))
-
-- *(hwpx)* [#143] check derived values and table heights that structural edits leave behind ([#341](https://github.com/ai-screams/HwpForge/pull/341))
-
+- `delete-para`가 한컴이 저장한 HWPX를 지운다. 문서를 다시 인코드하면 원본과 같아지는지 보는 admission 검사의 비교나 ZIP 항목 이월 단계에서 떨어진 삭제 요청은 이제 한 번 더 원문 보존 삭제로 처리한다. 원본 section XML에서 지울 문단의 바이트만 잘라 내고, 남는 문단의 줄 조판 캐시·표 저장 높이·문단 id와 `header.xml`을 포함한 나머지 항목은 원문 그대로 둔다. 미리보기가 있으면 지우고 `PREVIEW_REMOVED` 경고를 낸다. 검증하지 못하는 요청은 처음 받은 admission 오류 그대로 거부하고 출력을 만들지 않는다. 새 공개 API, 오류, 경고는 없다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#343](https://github.com/ai-screams/HwpForge/pull/343), [#355](https://github.com/ai-screams/HwpForge/pull/355))
+- 원문 보존 삭제가 받는 요청은 한 번에 문단 하나이고, 그 문단은 section 바로 아래의 평문 또는 빈 문단이다. 지울 문단 안에는 문단·run·글자·줄 캐시 요소만 있어야 하고 속성도 해석할 수 있는 것만 허용한다. 표, 그림, 각주, 필드, 책갈피, 모르는 요소·속성, 다른 namespace가 섞인 문단과 개요·번호·글머리표 문단(직접 지정한 문단 모양과 스타일의 문단 모양 모두 해당)은 거부한다. 문단 id를 가리키는 참조가 있는 문서도 이전처럼 거부한다. `header.xml`의 문단·탭 정의를 다시 써야 하는 문서도 거부한다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#343](https://github.com/ai-screams/HwpForge/pull/343), [#355](https://github.com/ai-screams/HwpForge/pull/355))
+- 입력을 읽을 때 `CONTENT_LOST` 손실이 나온 한컴 문서도, 손실이 원문 XML에 그대로 남고 삭제 판정에 쓰이지 않음을 증명할 수 있는 종류에서는 삭제를 허용한다. 글자 모양의 언어별 장평·자간·상대 크기·위치 값, 도형·그림의 그리기 크기, 묶음 그림의 테두리·효과(회전·뒤집기는 계속 거부), 인라인 글자 스타일, 읽기 순서 손실(header의 `linear="no"`, 한컴이 spine에 넣는 `Scripts/headerScripts.js`·`Scripts/sourceScripts.js` 항목, section이 하나뿐인 문서의 그 section `linear="no"`), 손실이 있는 구역을 편집하지 않고 지울 문단이 모두 평문일 때 다른 구역이 고른 개요 번호 모양(`outlineShapeIDRef` 2 이상)이다. 경고마다 원인이 정확히 하나 대응해야 하고, 그 밖의 손실이 하나라도 있으면 거부한다. 성공한 삭제는 입력 디코드 경고를 원래 순서와 횟수 그대로 돌려준다. 공개 decode 결과와 경고는 바뀌지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#345](https://github.com/ai-screams/HwpForge/pull/345), [#349](https://github.com/ai-screams/HwpForge/pull/349), [#350](https://github.com/ai-screams/HwpForge/pull/350), [#351](https://github.com/ai-screams/HwpForge/pull/351))
+- 지운 문단 뒤에서 낡을 수 있는 저장값은 삭제마다 판정한다. 남는 줄의 폭이 문단의 세로 위치에 따라 달라질 수 있는 문서는 거부한다. 해당하는 경우는 옆으로 글이 흐르는 개체(`textWrap`이 `SQUARE`·`TIGHT`·`THROUGH`이고 `hp:pos`가 정확히 하나이며 `treatAsChar`가 `1`인 개체는 제외), 배치를 확인할 수 없는 개체(감싸기 개체가 올 수 있는 자리의 모르는 요소, `hp:pos`가 둘 이상, 감싸기 값이 없거나 알 수 없음, 글맵시·OLE·동영상·양식 컨트롤), 다단과 세로쓰기 구역 본문, `secPr`·`pagePr`가 정확히 하나가 아닌 구역이다. 쪽 번호 표시(`PAGE`, `TOTAL_PAGE`)와 표시 글자가 있는 쪽 번호 상호 참조도 거부하고, 등록된 구역의 꼬리말에 직접 있는 `PAGE` 중 기존 형식 검사와 쪽 번호 재시작 검사를 통과하는 것만 허용한다. 머리말의 `PAGE`, 꼬리말의 `TOTAL_PAGE`, 꼬리말 표 칸 안의 `PAGE`는 거부한다. 한 part에 namespace 선언이 64개를 넘거나 열린 요소가 디코더의 재귀 상한보다 깊어도 거부한다. 표 모양은 거부 사유가 아니다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#341](https://github.com/ai-screams/HwpForge/pull/341), [#355](https://github.com/ai-screams/HwpForge/pull/355))
+- 위 거부 조건을 모두 지나 성공한 삭제는 출력이 원본 section XML에서 대상 문단 바이트만 뺀 것이다. 그 밖의 변화는 `META-INF/container.xml`의 미리보기 줄과 미리보기 항목 제거뿐이다. macOS 한컴오피스에서 같은 문단을 직접 지운 결과와 쪽마다 PDF로 대조했을 때, 확인한 문서에서는 손대지 않은 문단의 줄 나눔이 같았다. Windows 한컴오피스의 표시와 확인하지 않은 문서의 모든 조판 조합은 확인하지 않았다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#355](https://github.com/ai-screams/HwpForge/pull/355))
+- `set-cell`이 한컴이 저장한 HWPX의 표 칸을 원문 XML 그대로 고친다. 요청한 칸이 모두 본문에 바로 놓인 표의 한 문단·한 Text run 칸(빈 run 포함)이면 그 run의 글자만 바꾸고, 문단·표 속성과 모델이 담지 않는 원문은 그대로 둔다. 같은 편집을 `to-json --section`과 `patch`로 한 결과와 바이트까지 같다. 값이 실제로 바뀌면 기존 미리보기를 지우고 `PREVIEW_REMOVED`를 내며, 입력 디코드 경고와 함께 성공한다. 칸 하나라도 범위 밖(여러 문단·여러 run·중첩 표·머리말·각주·글상자 안 표 등)이거나 `header.xml`을 다시 써야 하는 문서이면 요청 전체를 기존 재인코드 경로로 처리하고 그 경로의 거부 규칙을 따른다. 공개 시그니처와 요청·결과 JSON은 바뀌지 않는다 ([#337](https://github.com/ai-screams/HwpForge/issues/337), [#354](https://github.com/ai-screams/HwpForge/pull/354))
 
 ### Changed
 
-- *(hwpx)* [#143] split the large preserving-delete files and functions ([#356](https://github.com/ai-screams/HwpForge/pull/356))
+- 원문 보존 삭제 코드의 큰 파일과 함수를 나눴다. 구조 편집기·원문 보존 셀 편집·보존 손실 검사의 인라인 시험을 별도 파일로 옮기고, 삭제 범위의 허용 규칙과 파생 값 읽기를 이름 있는 단계 함수로 뽑았다. 동작·출력·공개 API는 바뀌지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#356](https://github.com/ai-screams/HwpForge/pull/356))
 
-- *(hwpx)* [#280] keep repeated shape and note wire values in one place ([#334](https://github.com/ai-screams/HwpForge/pull/334))
-
+- 도형 행렬 계수, 정수 회전각, 글맵시 점, 채우기 표기, 각주·미주 구조 같은 HWPX wire 값을 인코더 안의 한 곳으로 모았다. 레포 예제가 만드는 HWPX 바이트는 바뀌지 않고 공개 API도 바뀌지 않는다 ([#280](https://github.com/ai-screams/HwpForge/issues/280), [#334](https://github.com/ai-screams/HwpForge/pull/334))
 
 ### Fixed
 
-- *(hwpx)* [#338] keep line caches for proven one-line edits in nested body table cells ([#352](https://github.com/ai-screams/HwpForge/pull/352))
+- 구역 순서(`content.hpf` spine)가 파일 이름 순서와 다른 HWPX를 `set-cell`이나 `stamp`로 고칠 때, 편집하지 않은 구역의 줄 조판 캐시가 사라지던 문제를 고쳤다. 캐시를 옮길 때 원본 구역을 출력 파일 이름으로 찾던 것을 읽기 순서의 같은 번호 구역으로 찾는다. 구역 순서와 파일 이름 순서가 같은 문서의 동작은 바뀌지 않는다. 출력 구역에 대응하는 원본 구역이 없으면 같은 이름의 원본 캐시를 대신 쓰지 않고 캐시 운반을 건너뛴다 ([#340](https://github.com/ai-screams/HwpForge/issues/340), [#342](https://github.com/ai-screams/HwpForge/pull/342))
+- 한 줄 편집으로 줄 조판 캐시를 남기는 판정이 글꼴을 보지 않고 글자 폭을 추정하던 문제를 고쳤다. `set-cell`·`fill`·보존 `patch`는 원본 `hh:font`의 이름과 형식이 정확히 `맑은 고딕`/`TTF` 또는 `돋움체`/`TTF`이고, 글자 모양의 일곱 언어 슬롯이 모두 그 같은 글꼴을 가리키며, 그 글꼴에 대체 글꼴(`substFont`)이나 내장(`isEmbedded`) 표시가 없을 때만 한 줄 판정을 통과시킨다. 나머지는 캐시를 지우는 기존 경로로 가고 편집 결과, 글자, 경고, 실패 계약은 바뀌지 않는다. 글꼴 검사를 건너뛰던 보존 `patch`·`fill` 경로도 막았다. 보장 범위는 측정한 글꼴 기준이며 런타임에 글꼴 파일을 읽지 않는다 ([#339](https://github.com/ai-screams/HwpForge/issues/339), [#344](https://github.com/ai-screams/HwpForge/pull/344))
+- `fill`과 보존 `patch`가 편집 전후 모두 한 줄임이 입증된 문단의 줄 조판 캐시를 남기는 범위를 본문 표 안의 한 단계 중첩 표 칸까지 넓혔다. 기존의 한 줄 입증, 글꼴·글자 모양 검사, 구역 검사는 그대로 통과해야 한다. 글상자·각주·미주·머리말·꼬리말 안의 표와 세 단계 이상의 중첩은 전처럼 캐시를 지운다 ([#338](https://github.com/ai-screams/HwpForge/issues/338), [#352](https://github.com/ai-screams/HwpForge/pull/352))
 
-- *(hwpx)* [#339] keep one-line caches only for measured fonts ([#344](https://github.com/ai-screams/HwpForge/pull/344))
+### 업그레이드 주의
 
-- *(hwpx)* [#340] keep line caches of sections whose reading order differs from file names ([#342](https://github.com/ai-screams/HwpForge/pull/342))
-
+- 한컴이 저장한 HWPX의 `delete-para`가 위 조건에서 성공한다. 이전 버전이 거부하던 요청이 열리는 변화이고, 0.20.0에서 성공하던 삭제(admission을 통과하는 문서)의 출력은 바이트까지 같다. 한컴 저장 문서의 `insert-para`는 전처럼 거부한다.
+- 원문 보존 삭제는 미리보기를 지우고 `PREVIEW_REMOVED`를 낸다. 한컴에서 다시 저장하면 미리보기가 새로 만들어진다.
+- 원문 보존 삭제로 처리되지 않는 삭제(위 거부 조건)는 admission 오류가 이전과 같다.
+- 한컴이 저장한 문서에서 주소가 틀린 `set-cell`은 전에는 `INPUT_NOT_ROUNDTRIP_SAFE` 등으로 거부했고, 이제 `CELL_NOT_FOUND`(후보 라벨 포함) 같은 주소 오류를 돌려준다.
+- `set-cell`이 원문 보존으로 처리되는 요청은 칸 문단의 속성이 원본대로 남는다. 범위 밖 칸과 함께 요청하면 전처럼 새 문단으로 초기화한다.
+- `set-cell`·`fill`·보존 `patch`는 허용 글꼴(`맑은 고딕`·`돋움체` TTF) 밖의 글꼴을 쓰는 문단을 한 줄 편집한 뒤 줄 조판 캐시를 남기지 않는다. 한컴이 그 문단을 다시 조판한다. 이전에는 고정 가중치 추정이 통과하면 남았다.
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.19.1...hwpforge-smithy-hwpx-v0.20.0) - 2026-11-07
 
