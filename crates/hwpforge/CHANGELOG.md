@@ -13,13 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `ops::delete_para`가 한컴이 저장한 HWPX의 평문·빈 문단을 지운다. 일반 경로의 admission에서 떨어진 요청을 원문 보존 삭제로 한 번 더 처리하고, 검증하지 못하면 처음의 admission 오류를 그대로 돌려준다. 성공한 삭제는 `PREVIEW_REMOVED`와 입력 디코드 경고(`CONTENT_LOST` 포함)를 돌려준다. 새 공개 API, 오류, 경고는 없다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#343](https://github.com/ai-screams/HwpForge/pull/343), [#345](https://github.com/ai-screams/HwpForge/pull/345))
-- `ops::set_cell`이 한컴이 저장한 HWPX의 본문 직속 표의 한 문단·한 Text run 칸을 원문 보존으로 고친다. 입력 디코드는 한 번만 보고하고, 경고는 글자 정리, 편집 진단, 값이 바뀌었을 때의 `PREVIEW_REMOVED` 하나 순서다. 칸 하나라도 범위 밖이면 요청 전체가 기존 admission과 재인코드 경로를 탄다. 공개 시그니처와 요청·결과 JSON은 바뀌지 않는다 ([#337](https://github.com/ai-screams/HwpForge/issues/337), [#354](https://github.com/ai-screams/HwpForge/pull/354))
+- `ops::delete_para`가 한컴이 저장한 HWPX의 평문·빈 문단을 지운다. 일반 경로의 admission에서 떨어진 요청을 원문 보존 삭제로 한 번 더 처리하고, 검증하지 못하면 처음의 admission 오류를 그대로 돌려준다. 성공한 삭제는 입력 디코드 경고(`CONTENT_LOST` 포함)를 돌려주고, 기존 미리보기가 있었으면 `PREVIEW_REMOVED`도 낸다. 새 공개 API, 오류, 경고는 없다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#343](https://github.com/ai-screams/HwpForge/pull/343), [#345](https://github.com/ai-screams/HwpForge/pull/345))
+- `ops::set_cell`이 한컴이 저장한 HWPX의 본문 직속 표의 한 문단·한 Text run 칸을 원문 보존으로 고친다. 입력 디코드는 한 번만 보고하고, 경고는 글자 정리, 편집 진단, 값이 바뀌었고 기존 미리보기가 있을 때의 `PREVIEW_REMOVED` 하나 순서다. 정리 뒤 값이 같으면 원본을 그대로 돌려준다. 칸 하나라도 범위 밖이거나 원문 위치·치환을 검증하지 못하면 요청 전체가 기존 admission과 재인코드 경로를 탄다. 공개 시그니처와 요청·결과 JSON은 바뀌지 않는다 ([#337](https://github.com/ai-screams/HwpForge/issues/337), [#354](https://github.com/ai-screams/HwpForge/pull/354))
 
 ### 업그레이드 주의
 
 - 한컴 저장 문서에서 `set_cell`의 주소 오류(없는 라벨, 표 번호 등)는 admission보다 먼저 돌려주므로, 전에 `INPUT_NOT_ROUNDTRIP_SAFE`로 나오던 요청이 `CELL_NOT_FOUND` 등으로 바뀐다.
-- `set_cell`·`delete_para`가 성공할 때 미리보기가 있는 문서는 출력에서 미리보기가 빠지고 `PREVIEW_REMOVED` 경고가 나온다.
+- 미리보기가 있는 문서에서 `delete_para`가 성공하거나 `set_cell`이 값을 실제로 바꾸면 출력에서 미리보기가 빠지고 `PREVIEW_REMOVED` 경고가 나온다.
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/v0.19.1...v0.20.0) - 2026-11-07
 

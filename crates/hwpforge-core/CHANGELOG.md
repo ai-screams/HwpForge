@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `XmlSource::digest`가 원문 XML의 SHA-256(원문을 토큰으로 나눌 때 이미 계산한 값)을 돌려준다. 편집 판정이 읽은 원문이 디코드할 때 기록한 원문과 같은 바이트인지 대조하는 데 쓴다. `XmlSource`는 section마다 32바이트 digest 하나를 더 가진다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#341](https://github.com/ai-screams/HwpForge/pull/341))
+- `XmlSource::digest`가 원문 XML의 SHA-256(원문을 토큰으로 나눌 때 이미 계산한 값)을 돌려준다. 편집 판정이 읽은 원문이 디코드할 때 기록한 원문과 같은 바이트인지 대조하는 데 쓴다. ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#341](https://github.com/ai-screams/HwpForge/pull/341))
 
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.19.1...hwpforge-core-v0.20.0) - 2026-11-07
 
