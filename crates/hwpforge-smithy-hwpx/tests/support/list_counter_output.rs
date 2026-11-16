@@ -1,6 +1,9 @@
 //! Evaluate emitted numbering using parsed XML; expected observations stay in the input tables.
 use super::{package, xml};
 pub fn rendered(bytes: &[u8]) -> Vec<String> {
+    rendered_items(bytes).into_iter().map(|(_, value)| value).collect()
+}
+pub fn rendered_items(bytes: &[u8]) -> Vec<(String, String)> {
     use std::collections::BTreeMap;
     let h = xml::Element::parse(&package::part(bytes, "Contents/header.xml"));
     let archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -86,7 +89,15 @@ pub fn rendered(bytes: &[u8]) -> Vec<String> {
                 };
                 text = text.replace(&format!("^{}", i + 1), &number);
             }
-            output.push(text);
+            let own_text = p
+                .children
+                .iter()
+                .filter(|r| r.name == "hp:run")
+                .flat_map(|r| &r.children)
+                .filter(|t| t.name == "hp:t")
+                .map(|t| t.text.as_str())
+                .collect();
+            output.push((own_text, text));
         }
     }
     output
