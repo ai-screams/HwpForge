@@ -841,8 +841,8 @@ fn list_marker_base_width_rounds_half_up() {
         serde_json::to_value(NumberFormatType::RomanCapital).unwrap();
     let s: HwpxStyleStore = serde_json::from_value(value).unwrap();
     let out = encode(&d, &s);
-    metrics(&header(&out), false, ["LEFT", "0", "1", "700", "PERCENT", "0", "7"]);
-    assert_eq!(losses(&out, "list_marker_base_width"), 1);
+    metrics(&header(&out), false, ["LEFT", "0", "1", "-400", "PERCENT", "0", "7"]);
+    assert_eq!(losses(&out, "list_marker_base_width"), 0);
 }
 
 // 이것을 실패시키는 것: 요청이 없는 별도 정의까지 새 metrics writer로 정규화.
@@ -1035,7 +1035,7 @@ fn numbered_marker_requests_select_the_referenced_head() {
 fn marker_approximations_survive_preserved_segments() {
     let m = layout(ListMarkerAlign::Right, ListTextStart::AfterMarker(u(306)), None);
     let (d, mut s) = fixture(&[(1800, Some(m)); 3], None, false);
-    // Roman format and mixed body runs exercise all three approximation kinds.
+    // Mixed body runs retain alignment and font-context approximations.
     let mut value = serde_json::to_value(&s).unwrap();
     value["numberings"][1]["levels"][0]["num_format"] = "RomanCapital".into();
     s = serde_json::from_value(value).unwrap();
@@ -1046,16 +1046,18 @@ fn marker_approximations_survive_preserved_segments() {
     }
     let d = draft.validate().unwrap();
     let out = encode(&d, &s);
-    for kind in ["list_marker_alignment", "list_marker_base_width", "list_marker_font_context"] {
+    for kind in ["list_marker_alignment", "list_marker_font_context"] {
         assert_eq!(losses(&out, kind), 1, "{kind}");
     }
+    assert_eq!(losses(&out, "list_marker_base_width"), 0);
     let mut value = serde_json::to_value(&s).unwrap();
     value["list_marker_layouts"]["21"]["text_start"]["value"] = 400.into();
     let s = serde_json::from_value(value).unwrap();
     let out = encode(&d, &s);
-    for kind in ["list_marker_alignment", "list_marker_base_width", "list_marker_font_context"] {
+    for kind in ["list_marker_alignment", "list_marker_font_context"] {
         assert_eq!(losses(&out, kind), 1, "{kind}");
     }
+    assert_eq!(losses(&out, "list_marker_base_width"), 0);
     assert_eq!(losses(&out, "list_marker_conflict"), 0);
     metrics(&header(&out), false, ["LEFT", "1", "0", "0", "HWPUNIT", "306", "4294967295"]);
     measures_at(&header(&out), "20", ["1800", "3600"], ["-1800", "-3600"]);

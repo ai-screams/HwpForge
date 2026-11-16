@@ -245,8 +245,15 @@ pub(crate) fn paragraph_requirement(
         requirement.anchor = marker_unit(i64::from(continuation) + i64::from(first))?;
         let (size, reference, measured) =
             font_context(store, paragraph, layout, &old, &mut requirement.warnings)?;
-        let (base, approximate) =
-            marker_base_width(if key.bullet { None } else { Some(head) }, size)?;
+        let number = if key.bullet {
+            None
+        } else {
+            Some((
+                store.numbering_at(key.position as usize - 1).expect("validated numbering target"),
+                head,
+            ))
+        };
+        let (base, approximate) = marker_base_width(number, size)?;
         requirement.base = base;
         requirement.measured_size = measured.then_some(size);
         if approximate {
@@ -716,7 +723,7 @@ mod tests {
                     level: 1,
                     start: 1,
                     num_format: if kind == "list_marker_base_width" {
-                        NumberFormatType::RomanCapital
+                        NumberFormatType::CircledLatinSmall
                     } else {
                         NumberFormatType::Digit
                     },

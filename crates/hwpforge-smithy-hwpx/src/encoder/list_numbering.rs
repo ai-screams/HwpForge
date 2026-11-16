@@ -8,6 +8,7 @@ use crate::list_marker_layout::{
 use crate::paragraph_measure::invalid;
 use crate::style_store::fidelity::HeadMetrics;
 use crate::{EncodeWarning, HwpxResult, HwpxStyleStore};
+pub(super) use counter::tokens;
 use counter::CounterState;
 use hwpforge_core::{BulletDef, NumberingDef, Paragraph, ParagraphMeasure};
 use hwpforge_foundation::{HeadingType, HwpUnit, NumberFormatType, ParaShapeIndex};

@@ -39,9 +39,20 @@ fn marker_loss_fails_closed_in_editors() {
     let ordinary = numbered("", "");
     let roman =
         package::splice_part(&ordinary, "numbering.xml", "w:val='decimal'", "w:val='upperRoman'");
+    // 이것을 실패시키는 것: 측정된 로마 번호에 명목 폭 손실을 계속 보고.
+    let result = convert_docx(&roman).unwrap();
+    let warnings: Vec<_> = result.warnings.into_iter().filter_map(|w| match w {
+        hwpforge::ops::OpsWarning::Encode(w)
+            if matches!(&w, EncodeWarning::ContentLost { kind, .. } if kind == "list_marker_base_width") => Some(w),
+        _ => None,
+    }).collect();
+    assert!(warnings.is_empty());
+    assert!(take_bytes_fail_closed(EncodeOutcome { bytes: result.bytes, warnings }).is_ok());
+    let unmeasured =
+        package::splice_part(&ordinary, "numbering.xml", "w:val='%1.'", "w:val='제%1.'");
     for (input, kind) in [
         (numbered("<w:suff w:val='space'/><w:lvlJc w:val='right'/>", ""), "list_marker_alignment"),
-        (roman, "list_marker_base_width"),
+        (unmeasured, "list_marker_base_width"),
     ] {
         let result = convert_docx(&input).unwrap();
         let warnings: Vec<_> = result

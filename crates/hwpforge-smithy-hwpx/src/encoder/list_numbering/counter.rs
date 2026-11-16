@@ -32,7 +32,7 @@ impl CounterState {
         Ok(())
     }
     pub fn references(&self, text: &str) -> Vec<(usize, u64)> {
-        tokens(text).into_iter().map(|i| (i, self.values[i])).collect()
+        tokens(text).into_iter().map(|(i, _)| (i, self.values[i])).collect()
     }
     pub fn segment_starts(&self, level: usize) -> Option<[u32; 10]> {
         let mut starts = self.starts;
@@ -44,19 +44,20 @@ impl CounterState {
         Some(starts)
     }
 }
-pub(super) fn tokens(text: &str) -> Vec<usize> {
+pub(in crate::encoder) fn tokens(text: &str) -> Vec<(usize, std::ops::Range<usize>)> {
     let b = text.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i + 1 < b.len() {
         if b[i] == b'^' && (b'1'..=b'9').contains(&b[i + 1]) {
+            let start = i;
             let mut n = usize::from(b[i + 1] - b'0');
             i += 2;
             if n == 1 && b.get(i) == Some(&b'0') {
                 n = 10;
                 i += 1;
             }
-            out.push(n - 1);
+            out.push((n - 1, start..i));
         } else {
             i += 1;
         }

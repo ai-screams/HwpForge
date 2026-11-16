@@ -1,5 +1,5 @@
 //! Shared encoder output spellings and fixed control tags.
-use hwpforge_core::ParaHead;
+use hwpforge_core::{NumberingDef, ParaHead};
 use hwpforge_foundation::{DropCapStyle, NumberFormatType};
 
 /// One-based numbering-table position used by section outline references.
@@ -126,22 +126,54 @@ pub(crate) fn win_brush_attributes(
 /// The measured nominal format width, rounded half up in HwpUnit.
 /// Unknown number formats deliberately use one em and require a diagnostic.
 pub(crate) fn marker_base_width(
-    head: Option<&ParaHead>,
+    number: Option<(&NumberingDef, &ParaHead)>,
     size: i32,
 ) -> crate::HwpxResult<(i32, bool)> {
-    let (percent, approximate) = match head {
-        None => (100, false),
-        Some(head) => match list_text_offset(head) {
-            Some(offset) => (200 - offset, false),
-            None => (100, true),
+    let (half_cells, approximate) = match number {
+        None => (2, false),
+        Some((definition, head)) => match nominal_half_cells(definition, head) {
+            Some(cells) => (cells, false),
+            None => (2, true),
         },
     };
     let width = i64::from(size)
-        .checked_mul(i64::from(percent))
-        .and_then(|n| n.checked_add(50))
+        .checked_mul(half_cells)
+        .and_then(|n| n.checked_add(1))
         .ok_or_else(|| crate::paragraph_measure::invalid("marker base width overflow"))?
-        / 100;
+        / 2;
     Ok((marker_unit(width)?, approximate))
+}
+
+fn nominal_half_cells(definition: &NumberingDef, head: &ParaHead) -> Option<i64> {
+    // 이것을 실패시키는 것: 미측정 문자나 소비되지 않은 ^를 ASCII 폭으로 승인.
+    let literal =
+        |text: &str| text.bytes().all(|c| c.is_ascii() && c != b'^').then_some(text.len() as i64);
+    let mut cells = 0;
+    let mut end = 0;
+    for (index, range) in super::list_numbering::tokens(&head.text) {
+        cells += literal(&head.text[end..range.start])?;
+        let level = index as u32 + 1;
+        // 이것을 실패시키는 것: 현재 head보다 깊은 참조도 측정된 것으로 처리.
+        if level > head.level {
+            return None;
+        }
+        // 이것을 실패시키는 것: 벡터 위치로 형식을 조회하거나 없는 수준을 십진으로 합성.
+        let reference = definition.levels.iter().find(|h| h.level == level)?;
+        cells += match reference.num_format {
+            NumberFormatType::Digit
+            | NumberFormatType::LatinCapital
+            | NumberFormatType::LatinSmall => 1,
+            NumberFormatType::HangulSyllable
+            | NumberFormatType::RomanCapital
+            | NumberFormatType::RomanSmall
+            | NumberFormatType::CircledDigit
+            | NumberFormatType::CircledHangulSyllable => 2,
+            _ => return None,
+        };
+        end = range.end;
+    }
+    // 한컴 명목 폭은 네 칸을 넘어도 선형이며 현재 번호 값과 무관하다.
+    Some(cells + literal(&head.text[end..])?)
 }
 pub(crate) fn marker_unit(value: i64) -> crate::HwpxResult<i32> {
     let value = i32::try_from(value)
@@ -303,5 +335,130 @@ mod tests {
     #[test]
     fn series_name_format() {
         assert_eq!(series_name_xml("A&B"), "<c:tx><c:v>A&amp;B</c:v></c:tx>");
+    }
+}
+
+#[cfg(test)]
+mod nominal_tests {
+    use super::*;
+    use hwpforge_core::NumberingDef;
+    use NumberFormatType::*;
+
+    fn definition(formats: &[NumberFormatType], text: &str) -> NumberingDef {
+        let mut levels: Vec<_> = formats
+            .iter()
+            .enumerate()
+            .map(|(i, &num_format)| ParaHead {
+                level: i as u32 + 1,
+                start: 1,
+                num_format,
+                text: format!("^{}.", i + 1),
+                checkable: false,
+            })
+            .collect();
+        levels.last_mut().unwrap().text = text.into();
+        NumberingDef { id: 1, start: 1, levels }
+    }
+    fn width(def: &NumberingDef, level: u32, size: i32) -> (i32, bool) {
+        let head = def.levels.iter().find(|h| h.level == level).unwrap();
+        marker_base_width(Some((def, head)), size).unwrap()
+    }
+    // 이것을 실패시키는 것: 로마·라틴·한글·원문자 명목 칸 수를 바꾸거나 자기 형식만 사용.
+    #[test]
+    fn nominal_marker_widths_match_measured_formats() {
+        for (formats, text, small, large) in [
+            (vec![Digit], "^1.", 1000, 2000),
+            (vec![HangulSyllable], "^1.", 1500, 3000),
+            (vec![RomanCapital], "^1.", 1500, 3000),
+            (vec![RomanSmall], "^1.", 1500, 3000),
+            (vec![LatinCapital], "^1.", 1000, 2000),
+            (vec![LatinSmall], "^1.", 1000, 2000),
+            (vec![LatinSmall], "^1)", 1000, 2000),
+            (vec![RomanSmall], "(^1)", 2000, 4000),
+            (vec![RomanCapital, Digit], "^1.^2", 2000, 4000),
+            (vec![LatinCapital, Digit], "^1.^2", 1500, 3000),
+            (vec![Digit, Digit], "^1.^2", 1500, 3000),
+            (vec![Digit, Digit], "^1.^2.", 2000, 4000),
+            (vec![Digit, Digit, Digit], "^1.^2.^3.", 3000, 6000),
+            (vec![CircledDigit], "^1", 1000, 2000),
+            (vec![CircledHangulSyllable], "^1", 1000, 2000),
+        ] {
+            let def = definition(&formats, text);
+            assert_eq!(
+                width(&def, formats.len() as u32, 1000),
+                (small, false),
+                "{formats:?} {text}"
+            );
+            assert_eq!(
+                width(&def, formats.len() as u32, 2000),
+                (large, false),
+                "{formats:?} {text}"
+            );
+        }
+    }
+    // 이것을 실패시키는 것: 시작값의 자릿수를 명목 폭에 곱함.
+    #[test]
+    fn nominal_width_does_not_depend_on_counter_value() {
+        for format in [RomanCapital, LatinCapital, LatinSmall] {
+            let mut def = definition(&[format], "^1.");
+            let expected = match format {
+                RomanCapital => 1500,
+                _ => 1000,
+            };
+            for start in [1, 8, 23] {
+                def.levels[0].start = start;
+                assert_eq!(width(&def, 1, 1000), (expected, false));
+            }
+        }
+    }
+    // 이것을 실패시키는 것: head.level 대신 벡터 위치로 참조 형식을 조회.
+    #[test]
+    fn nominal_width_resolves_referenced_level_formats() {
+        let mut def = definition(&[RomanCapital, Digit], "^1.^2");
+        def.levels.reverse();
+        assert_eq!(width(&def, 2, 1000), (2000, false));
+        def.levels[0].text = "^1.".into();
+        assert_eq!(width(&def, 2, 1000), (1500, false));
+    }
+    // 이것을 실패시키는 것: 명목 폭에도 반각 네 칸 상한 적용.
+    #[test]
+    fn nominal_width_remains_linear_beyond_four_cells() {
+        let def = definition(&[Digit, Digit, Digit], "^1.^2.^3.");
+        assert_eq!(width(&def, 3, 1000), (3000, false));
+        assert_eq!(width(&def, 3, 2000), (6000, false));
+    }
+    // 이것을 실패시키는 것: 미측정 형식·비ASCII·깨진 참조·미래 참조를 측정값으로 승인.
+    #[test]
+    fn nominal_width_preserves_unmeasured_fallbacks() {
+        for (format, text) in [
+            (CircledLatinSmall, "^1."),
+            (HanjaDigit, "^1."),
+            (Digit, "제^1"),
+            (Digit, "^x."),
+            (Digit, "^2."),
+        ] {
+            assert_eq!(width(&definition(&[format], text), 1, 1100), (1100, true));
+        }
+        let mut def = definition(&[Digit, Digit], "^1.^2");
+        def.levels.remove(0);
+        assert_eq!(width(&def, 2, 1100), (1100, true));
+        let mut def = definition(&[Digit, Digit], "^2.");
+        def.levels[0].text = "^2.".into();
+        assert_eq!(width(&def, 1, 1100), (1100, true));
+    }
+    // 이것을 실패시키는 것: ^10을 ^1과 0으로 읽거나 ^:를 같은 토큰으로 처리.
+    #[test]
+    fn nominal_width_uses_counter_token_boundaries() {
+        let def = definition(&[Digit; 10], "^10.");
+        assert_eq!(width(&def, 10, 1100), (1100, false));
+        let def = definition(&[Digit; 10], "^:.");
+        assert_eq!(width(&def, 10, 1100), (1100, true));
+        assert_eq!(def.levels[9].text, "^:.");
+    }
+    // 이것을 실패시키는 것: 리터럴 ASCII 명목 폭을 무조건 1em로 대체.
+    #[test]
+    fn literal_markers_have_nominal_ascii_width() {
+        assert_eq!(width(&definition(&[Digit], "(0)."), 1, 1100), (2200, false));
+        assert_eq!(width(&definition(&[Digit], "0."), 1, 1100), (1100, false));
     }
 }
