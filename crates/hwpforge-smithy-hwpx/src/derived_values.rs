@@ -211,19 +211,6 @@ impl<'a> DerivedFacts<'a> {
         let p = map.paragraphs.get(index).ok_or_else(invalid)?;
         part.ordinal_at(p.outer.start, true)
     }
-    #[allow(dead_code, reason = "insert retains its existing admission contract")]
-    pub(crate) fn insertion_boundary(
-        &self,
-        section: usize,
-        index: usize,
-    ) -> HwpxResult<FlowBoundary> {
-        let part = self.section(section)?;
-        let map = part.map.ok_or_else(invalid)?;
-        if index == map.paragraphs.len() {
-            return Ok(FlowBoundary::EndOfBody);
-        }
-        Ok(FlowBoundary::Before(self.body_ordinal(section, index)?))
-    }
 }
 
 impl<'a> Part<'a> {

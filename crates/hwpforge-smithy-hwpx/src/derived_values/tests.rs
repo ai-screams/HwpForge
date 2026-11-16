@@ -943,7 +943,7 @@ fn page_recalculation_requires_registered_section_parts() {
 }
 
 // Synthetic XML with independently stated observed values; no saved application bytes.
-pub(crate) fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> String {
+fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> String {
     let rows = if merged { 3 } else { 2 };
     let horizontal = if merged { "PARA" } else { "COLUMN" };
     let mut xml = format!("<hp:tbl id='7' zOrder='0' numberingType='TABLE' textWrap='TOP_AND_BOTTOM' textFlow='BOTH_SIDES' lock='0' dropcapstyle='None' pageBreak='CELL' repeatHeader='1' rowCnt='{rows}' colCnt='3' cellSpacing='0' noAdjust='{no_adjust}'><hp:sz width='48189' widthRelTo='ABSOLUTE' height='10000' heightRelTo='ABSOLUTE' protect='0'/><hp:pos treatAsChar='1' affectLSpacing='0' flowWithText='1' allowOverlap='0' holdAnchorAndSO='0' vertRelTo='PARA' horzRelTo='{horizontal}' vertAlign='TOP' horzAlign='LEFT' vertOffset='0' horzOffset='0'/><hp:outMargin left='283' right='283' top='283' bottom='1000'/><hp:inMargin left='510' right='510' top='141' bottom='141'/>");
