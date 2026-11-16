@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- 원문 보존 삭제 코드의 큰 파일과 함수를 나눴다. 구조 편집기·원문 보존 셀 편집·보존 손실 검사의 인라인 시험을 별도 파일로 옮기고, 삭제 범위의 허용 규칙과 파생 값 읽기를 이름 있는 단계 함수로 뽑았다. 동작·출력·공개 API는 바뀌지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#356](https://github.com/ai-screams/HwpForge/pull/356))
+- 원문 보존 삭제 코드의 큰 파일과 함수를 나눴다. 구조 편집기·원문 보존 셀 편집의 인라인 시험을 별도 파일로 옮기고 보존 손실 시험 파일을 주제별로 나눴으며, 삭제 범위의 허용 규칙과 파생 값 읽기를 이름 있는 단계 함수로 뽑았다. 동작·출력·공개 API는 바뀌지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#356](https://github.com/ai-screams/HwpForge/pull/356))
 
 - 도형 행렬 계수, 정수 회전각, 글맵시 점, 채우기 표기, 각주·미주 구조 같은 HWPX wire 값을 인코더 안의 한 곳으로 모았다. 레포 예제가 만드는 HWPX 바이트는 바뀌지 않고 공개 API도 바뀌지 않는다 ([#280](https://github.com/ai-screams/HwpForge/issues/280), [#334](https://github.com/ai-screams/HwpForge/pull/334))
 
