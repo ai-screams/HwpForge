@@ -2161,7 +2161,7 @@ fn read_word_counter_case(case: &word_counter_cases::Case) -> DocxDecoded {
     ))
     .unwrap()
 }
-fn displayed_core_numbers(decoded: &DocxDecoded) -> Vec<String> {
+pub(super) fn displayed_core_numbers(decoded: &DocxDecoded) -> Vec<String> {
     use std::collections::BTreeMap;
     let mut counters: BTreeMap<usize, ([u32; 10], [bool; 10])> = BTreeMap::new();
     lists(decoded)

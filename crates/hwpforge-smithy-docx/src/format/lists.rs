@@ -154,7 +154,7 @@ pub(super) enum ObservedList {
 pub(super) struct NumberRequest {
     key: u32,
     num: u32,
-    level: usize,
+    pub(super) level: usize,
     values: [u64; 10],
     seeds: [u32; 10],
 }
@@ -221,6 +221,7 @@ impl Lists {
         }
         Ok(lists)
     }
+    #[cfg(test)]
     pub(super) fn resolve(
         &mut self,
         definitions: &Definitions,

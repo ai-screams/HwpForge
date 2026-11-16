@@ -14,6 +14,10 @@ use std::{
     hash::BuildHasher,
 };
 
+#[path = "lists/pending.rs"]
+mod pending;
+use pending::{MarkerDiagnostic, MarkerGroup, PendingNumber};
+
 mod marker_messages {
     pub(super) const INDENT: &str = "List indent cannot be projected to a nonnegative marker slot";
     pub(super) const ZERO_SLOT: &str = "Zero marker slot retains the existing list layout";
@@ -37,6 +41,8 @@ mod marker_messages {
         "Space advance approximated by measured ratio of marker size";
     pub(super) const OVERFLOW: &str =
         "Nominal marker width exceeds the fixed slot; overlap is possible";
+    pub(super) const UNCERTAIN_OVERFLOW: &str =
+        "Marker width is uncertain in the fixed slot; overlap is possible";
     pub(super) const SHARED_OVERFLOW: &str =
         "Estimated marker end exceeds the shared first-use slot; overlap is possible";
 }
@@ -83,6 +89,9 @@ pub(crate) struct Resolver {
     hasher: RandomState,
     owned_font_bytes: usize,
     lists: lists::Lists,
+    pending_numbers: Vec<PendingNumber>,
+    pending_shapes: Vec<(Delta, Option<usize>)>,
+    warning_serial: usize,
     pub(crate) default_tab_stop: i32,
     // Each marker loss below has a fixed kind, action and reason.
     marker_warnings: HashSet<(lists::ListRef, &'static str)>,
@@ -134,6 +143,9 @@ impl Resolver {
             hasher: RandomState::new(),
             owned_font_bytes: 0,
             lists,
+            pending_numbers: vec![],
+            pending_shapes: vec![],
+            warning_serial: 0,
             default_tab_stop: 3600,
             marker_warnings: HashSet::new(),
             first_marker_layouts: HashMap::new(),
@@ -398,7 +410,7 @@ impl Resolver {
         mark: Option<(&Delta, Option<StyleKey>)>,
         part: &str,
         w: &mut Vec<DocxWarning>,
-    ) -> Result<(Delta, i32)> {
+    ) -> Result<(Delta, i32, Option<usize>)> {
         let (p, diagnose, fragment_end) = paragraph;
         let measure_lines = fragment_end.is_some();
         let fragment_end = fragment_end.unwrap_or(0);
@@ -549,9 +561,20 @@ impl Resolver {
             warn(w, part, "pPr", Kind::ValueApproximated, "mixed_font_line_height",
                 "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
         }
-        base.para.projected_list =
-            self.lists.resolve(&self.definitions, &mut self.registry, &base.para, part, w)?;
-        base.para.projected_marker = self.marker_layout(&mut base, direct, mark, part, w)?;
+        let observed =
+            self.lists.observe(&self.definitions, &mut self.registry, &base.para, part, w)?;
+        let mut number = None;
+        match observed {
+            Some(lists::ObservedList::Ready(list)) => base.para.projected_list = Some(list),
+            Some(lists::ObservedList::Number(request)) => {
+                number = Some(self.pending_numbers.len());
+                let position = self.warning_position(w);
+                self.pending_numbers.push(PendingNumber::new(request, position));
+            }
+            None => {}
+        }
+        base.para.projected_marker =
+            self.marker_layout(&mut base, direct, mark, number, part, w)?;
         if measure_lines {
             // A trailing empty line uses the paragraph mark, or the final effective
             // run at this boundary. Page/column breaks exclude all later fragments.
@@ -567,27 +590,30 @@ impl Resolver {
                 .filter(|h| *h <= HwpUnit::MAX_VALUE)
                 .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?;
         }
-        Ok((base, minimum_height))
+        Ok((base, minimum_height, number))
     }
     fn marker_layout(
         &mut self,
         base: &mut Delta,
         direct: &Delta,
         mark: Option<(&Delta, Option<StyleKey>)>,
+        number: Option<usize>,
         part: &str,
         w: &mut Vec<DocxWarning>,
     ) -> Result<Option<ListMarkerLayout>> {
-        if !matches!(
-            base.para.projected_list,
-            Some(lists::ListRef::Number(..) | lists::ListRef::Bullet(..))
-        ) {
-            return Ok(None);
-        }
-        let group = base.para.projected_list.expect("resolved marker has its output group");
-        // One bullet definition owns the marker across all paragraph nesting levels.
-        let group = match group {
-            lists::ListRef::Bullet(id, _) => lists::ListRef::Bullet(id, 0),
-            group => group,
+        let group = if let Some(id) = number {
+            MarkerGroup::Pending(id, self.pending_numbers[id].level())
+        } else {
+            match base.para.projected_list {
+                Some(lists::ListRef::Number(id, level)) => {
+                    MarkerGroup::Ready(lists::ListRef::Number(id, level))
+                }
+                // A bullet owns its marker across all paragraph nesting levels.
+                Some(lists::ListRef::Bullet(id, _)) => {
+                    MarkerGroup::Ready(lists::ListRef::Bullet(id, 0))
+                }
+                _ => return Ok(None),
+            }
         };
         let (source, tabs) = self
             .definitions
@@ -618,12 +644,13 @@ impl Resolver {
             first == 0 && suffix == lists::Suffix::Tab && !tabs.values().any(|&number| number);
         let ratio = if default_tab {
             match group {
-                lists::ListRef::Bullet(..)
+                MarkerGroup::Ready(lists::ListRef::Bullet(..))
                     if source.measured_symbol_bullet(&self.definitions.fonts) =>
                 {
                     Some(508)
                 }
-                lists::ListRef::Number(_, index) => self
+                MarkerGroup::Ready(lists::ListRef::Number(_, index))
+                | MarkerGroup::Pending(_, index) => self
                     .lists
                     .current(&self.definitions, &base.para)
                     .map(|n| {
@@ -666,8 +693,8 @@ impl Resolver {
         // Unsupported horizontal layouts still contribute to height and diagnostics,
         // but have no output character-shape reference.
         let marker = if supported { Some(self.char_shape(&effective)?) } else { None };
-        if collapsed && self.marker_warnings.insert((group, "list_marker_script")) {
-            format_warnings(0, true, part, "numPr", w)?;
+        if collapsed {
+            self.emit_marker(group, MarkerDiagnostic::Script, part, w)?;
         }
         let mut body_height = line_height::Height::default();
         if base.para.line.is_none() || base.para.line_rule != Some(1) {
@@ -686,120 +713,34 @@ impl Resolver {
         }
         let before = composite_height.marker_before(&body_height, &base.para)?;
         base.para.projected_marker_before = before;
-        if (before > 0
+        if before > 0
             || marker_key.1 > body_key.1
             || marker_key.0[0] != body_key.0[0]
-            || marker_key.0[1] != body_key.0[1])
-            && self.marker_warnings.insert((group, "list_marker_line_height"))
+            || marker_key.0[1] != body_key.0[1]
         {
-            warn(
-                w,
-                part,
-                "rPr",
-                Kind::ValueApproximated,
-                "list_marker_line_height",
-                if before > 0 { "approximate_space_before" } else { "retain_body_line_height" },
-                if before > 0 {
-                    marker_messages::LINE_HEIGHT_BEFORE
-                } else {
-                    marker_messages::LINE_HEIGHT
-                },
-            )?;
+            self.emit_marker(group, MarkerDiagnostic::LineHeight { before: before > 0 }, part, w)?;
         }
         if first > 0 {
-            if self.marker_warnings.insert((group, "list_marker_indent")) {
-                warn(
-                    w,
-                    part,
-                    "ind",
-                    Kind::ValueApproximated,
-                    "list_marker_indent",
-                    "retain_indent",
-                    marker_messages::INDENT,
-                )?;
-            }
-            self.first_marker_layouts.entry(group).or_insert(None);
+            self.emit_marker(group, MarkerDiagnostic::Indent, part, w)?;
+            self.note_marker_layout(group, None);
             return Ok(None);
         }
         if suffix == lists::Suffix::Tab && target == anchor && ratio.is_none() {
-            if self.marker_warnings.insert((group, "list_marker_zero_slot")) {
-                warn(
-                    w,
-                    part,
-                    "ind",
-                    Kind::ValueApproximated,
-                    "list_marker_zero_slot",
-                    "retain_indent",
-                    marker_messages::ZERO_SLOT,
-                )?;
-            }
-            self.first_marker_layouts.entry(group).or_insert(None);
+            self.emit_marker(group, MarkerDiagnostic::ZeroSlot, part, w)?;
+            self.note_marker_layout(group, None);
             return Ok(None);
         }
         let marker = marker.expect("supported marker layout has an output character shape");
-        if tabs.iter().any(|(&pos, &num)| num && pos <= anchor)
-            && self.marker_warnings.insert((group, "list_marker_tab"))
-        {
-            warn(
-                w,
-                part,
-                "tab",
-                Kind::ValueApproximated,
-                "list_marker_tab",
-                "use_indent",
-                marker_messages::TAB,
-            )?;
+        if tabs.iter().any(|(&pos, &num)| num && pos <= anchor) {
+            self.emit_marker(group, MarkerDiagnostic::Tab, part, w)?;
         }
         let selected = if let Some(ratio) = ratio {
             let width = measured_marker_width(marker.size, ratio)?;
-            if let Some(Some(ListMarkerLayout {
-                align: selected_align,
-                text_start: ListTextStart::FromAnchor(selected_gap),
-                ..
-            })) = self.first_marker_layouts.get(&group)
-            {
-                let end = match selected_align {
-                    ListMarkerAlign::Left => i64::from(width) * 2,
-                    ListMarkerAlign::Center => i64::from(width),
-                    ListMarkerAlign::Right => 0,
-                    _ => return Err(marker_arithmetic()),
-                };
-                if end > i64::from(selected_gap.as_i32()) * 2
-                    && self.marker_warnings.insert((group, "list_marker_overflow"))
-                {
-                    warn(
-                        w,
-                        part,
-                        "numPr",
-                        Kind::ValueApproximated,
-                        "list_marker_overflow",
-                        "retain_slot",
-                        marker_messages::SHARED_OVERFLOW,
-                    )?;
-                }
-            }
+            self.shared_marker_overflow(group, width, part, w)?;
             let (gap, boundary) = default_tab_gap(anchor, width, self.default_tab_stop, align)?;
-            if self.marker_warnings.insert((group, "list_marker_default_tab")) {
-                warn(
-                    w,
-                    part,
-                    "numPr",
-                    Kind::ValueApproximated,
-                    "list_marker_default_tab",
-                    "use_measured_ratio",
-                    marker_messages::DEFAULT_TAB,
-                )?;
-            }
-            if boundary && self.marker_warnings.insert((group, "list_marker_tab_boundary")) {
-                warn(
-                    w,
-                    part,
-                    "numPr",
-                    Kind::ValueApproximated,
-                    "list_marker_tab_boundary",
-                    "retain_selected_tab",
-                    marker_messages::TAB_BOUNDARY,
-                )?;
+            self.emit_marker(group, MarkerDiagnostic::DefaultTab, part, w)?;
+            if boundary {
+                self.emit_marker(group, MarkerDiagnostic::TabBoundary, part, w)?;
             }
             Some(ListTextStart::FromAnchor(unit(gap)?))
         } else {
@@ -810,17 +751,7 @@ impl Resolver {
         } else {
             match suffix {
                 lists::Suffix::Space => {
-                    if self.marker_warnings.insert((group, "list_marker_space_width")) {
-                        warn(
-                            w,
-                            part,
-                            "suff",
-                            Kind::ValueApproximated,
-                            "list_marker_space_width",
-                            "use_measured_ratio",
-                            marker_messages::SPACE_WIDTH,
-                        )?;
-                    }
+                    self.emit_marker(group, MarkerDiagnostic::SpaceWidth, part, w)?;
                     let distance = i64::from(marker.size)
                         .checked_mul(306)
                         .and_then(|n| n.checked_add(550))
@@ -843,7 +774,9 @@ impl Resolver {
                 )?),
             }
         };
-        let widths = if let lists::ListRef::Number(_, index) = group {
+        let widths = if let MarkerGroup::Ready(lists::ListRef::Number(_, index))
+        | MarkerGroup::Pending(_, index) = group
+        {
             Some(decimal_template_widths(&number_text, index, |reference| {
                 self.lists
                     .current_reference(&self.definitions, &base.para, reference)
@@ -894,8 +827,9 @@ impl Resolver {
         if let ListTextStart::FromAnchor(g) = text_start {
             uncertain |=
                 widths.as_ref().is_some_and(|widths| widths.count.is_none() && widths.compound);
-            let mut message = uncertain
-                .then_some("Marker width is uncertain in the fixed slot; overlap is possible");
+            // The diagnostic carries the choice; its wording is selected only when emitted.
+            // 이것을 실패시키는 것: 불확실 여부를 늘 false 로 두거나 명목 폭 초과를 불확실로 표시.
+            let mut overflow = uncertain.then_some(MarkerDiagnostic::Overflow { uncertain: true });
             // Reuse source counter digits only when measured selection has not settled the slot.
             // 이것을 실패시키는 것: 이미 판정한 번호를 명목 폭 검사에서 다시 경고.
             if !handled_hanging && selected.is_none() {
@@ -916,28 +850,18 @@ impl Resolver {
                             .checked_mul(2)
                             .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?
                     {
-                        message = Some(marker_messages::OVERFLOW);
+                        overflow = Some(MarkerDiagnostic::Overflow { uncertain: false });
                     }
                 }
             }
-            if let Some(message) = message {
-                if self.marker_warnings.insert((group, "list_marker_overflow")) {
-                    warn(
-                        w,
-                        part,
-                        "numPr",
-                        Kind::ValueApproximated,
-                        "list_marker_overflow",
-                        "retain_slot",
-                        message,
-                    )?;
-                }
+            if let Some(diagnostic) = overflow {
+                self.emit_marker(group, diagnostic, part, w)?;
             }
         }
         let mut layout = ListMarkerLayout::new(align, text_start)
             .map_err(|e| DocxError::invalid(part, "numPr", quote(e)))?;
         layout.char_shape = Some(marker.id);
-        self.first_marker_layouts.entry(group).or_insert(Some(layout));
+        self.note_marker_layout(group, Some(layout));
         Ok(Some(layout))
     }
     // Bold uses the ordinary width as a lower bound; Keep needs a nominal check.

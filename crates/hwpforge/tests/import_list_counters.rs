@@ -357,6 +357,40 @@ fn imported_unmeasured_compounds_warn_and_retain_the_slot() {
     assert_eq!(warning.action(), "retain_slot");
     assert_eq!(items(&result.bytes)[0].width, -1500);
 }
+fn overflow_message(input: &[u8]) -> String {
+    let result = convert_docx(input).unwrap();
+    assert_eq!(docx_loss(&result.warnings, "list_marker_overflow"), 1);
+    result
+        .warnings
+        .iter()
+        .find_map(|warning| match warning {
+            OpsWarning::Docx(w) if w.loss() == "list_marker_overflow" => Some(w.message()),
+            _ => None,
+        })
+        .unwrap()
+}
+// 이것을 실패시키는 것: 폭 미확인과 명목 폭 초과의 문구를 서로 바꾸거나 하나로 통일.
+#[test]
+fn imported_overflow_warnings_name_uncertain_and_nominal_causes() {
+    let mut source = case("deep_first_use_preserves_nonunit_starts");
+    source.definitions = source.definitions.replacen("w:val='decimal'", "w:val='upperRoman'", 1);
+    source.uses = vec![(7, 2)];
+    assert_eq!(
+        overflow_message(&list_counter_inputs::word_case(&source)),
+        "Marker width is uncertain in the fixed slot; overlap is possible"
+    );
+    let input = list_counter_inputs::marker_slot(
+        true,
+        false,
+        &marker_style("Times New Roman", false, 22),
+        1800,
+        1800,
+    );
+    assert_eq!(
+        overflow_message(&input),
+        "Nominal marker width exceeds the fixed slot; overlap is possible"
+    );
+}
 // 이것을 실패시키는 것: 로마 상위 값에 따라 폭 미확인 경고를 생략.
 #[test]
 fn imported_roman_compounds_warn_independently_of_counter_values() {

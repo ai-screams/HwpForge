@@ -60,7 +60,7 @@ struct Source {
 struct Saved {
     paragraphs: Vec<Paragraph>,
     origins: Vec<Origin>,
-    pending_shapes: Vec<(usize, Delta)>,
+    pending_shapes: Vec<(usize, Delta, Option<usize>)>,
     pending_tables: Vec<(usize, WidthPlan)>,
     layout_known: bool,
 }
@@ -529,12 +529,12 @@ impl Body<'_> {
         self.diagnose_runs.clear();
         self.run_diagnosed = false;
         self.boundary_input = None;
-        self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
+        self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(usize::MAX)));
         self.ensure_fragment_run(at)?;
         self.finish_paragraph(measure_first)?;
-        let (index, delta) = self.pending_shapes.pop().unwrap();
+        let (index, delta, number) = self.pending_shapes.pop().unwrap();
         self.paragraphs[index].para_shape_id =
-            self.resolver.as_mut().unwrap().para_shape(&delta)?;
+            self.resolver.as_mut().unwrap().defer_shape(delta, number);
         self.paragraphs[index].style_ref = None;
         Ok(())
     }

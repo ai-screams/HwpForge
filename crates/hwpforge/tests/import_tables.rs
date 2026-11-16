@@ -44,9 +44,9 @@ fn imported_grid_has_literal_coordinates_and_border_definitions() {
         assert_eq!(fill.child(side).attr("type"), Some("NONE"));
     }
 }
-// 이것을 실패시키는 것: 셀 목록 누락/새 그룹 생성, 표 보유 문단에 표식 복제.
+// 이것을 실패시키는 것: 품은 문단과 칸을 한 정의로 합치거나 칸 사이 정의 공유를 제거.
 #[test]
-fn cell_numbers_and_following_body_share_one_sequence() {
+fn cell_numbers_share_a_definition_separate_from_the_host() {
     let defs="<w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:start w:val='1'/><w:numFmt w:val='decimal'/><w:lvlText w:val='%1.'/></w:lvl></w:abstractNum><w:num w:numId='7'><w:abstractNumId w:val='1'/></w:num>";
     let item = |text| {
         format!("<w:p><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>")
@@ -60,12 +60,12 @@ fn cell_numbers_and_following_body_share_one_sequence() {
     let host = &section.children[0];
     let mut paragraphs = host.find("hp:tbl").descendants("hp:p");
     paragraphs.push(host);
-    for p in paragraphs {
+    for (p, expected_id) in paragraphs.into_iter().zip(["3", "3", "2"]) {
         let id = p.attr("paraPrIDRef").unwrap();
         let shape = shapes.iter().find(|s| s.attr("id") == Some(id)).unwrap();
         let heading = shape.child("hh:heading");
         if heading.attr("type") == Some("NUMBER") {
-            assert_eq!(heading.attr("idRef"), Some("2"));
+            assert_eq!(heading.attr("idRef"), Some(expected_id));
             assert_eq!(heading.attr("level"), Some("0"));
             numbered.push(
                 p.children
@@ -81,12 +81,14 @@ fn cell_numbers_and_following_body_share_one_sequence() {
     assert_eq!(numbered, ["A", "B", "C"]);
     let definitions = header.descendants("hh:numbering");
     let sequence = definitions.iter().find(|n| n.attr("id") == Some("2")).unwrap();
-    assert_eq!(sequence.attr("start"), Some("1"));
+    assert_eq!(sequence.attr("start"), Some("3"));
+    let cells = definitions.iter().find(|n| n.attr("id") == Some("3")).unwrap();
+    assert_eq!(cells.attr("start"), Some("1"));
     assert_eq!(sequence.children[0].text, "^1.");
-    // The built-in definition plus exactly one imported numbering definition.
+    // The reserved outline, the host segment, and the shared cell segment.
     assert_eq!(
         definitions.iter().map(|n| n.attr("id")).collect::<Vec<_>>(),
-        [Some("1"), Some("2")]
+        [Some("1"), Some("2"), Some("3")]
     );
 }
 

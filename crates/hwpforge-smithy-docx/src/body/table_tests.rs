@@ -254,9 +254,9 @@ fn cell_layout_keeps_content_and_fragments() {
         assert!(d.warnings.iter().any(|w| w.loss() == loss));
     }
 }
-// 이것을 실패시키는 것: 표 경계에서 번호 상태를 초기화하거나 셀 내어쓰기 별도 경로 사용.
+// 이것을 실패시키는 것: 표를 품은 문단과 칸을 다시 한 정의로 합치거나 셀 내어쓰기 별도 경로 사용.
 #[test]
-fn lists_continue_across_tables() {
+fn table_host_and_cells_keep_values_with_separate_definitions() {
     let numbering=format!("<w:numbering xmlns:w='{W}'><w:abstractNum w:abstractNumId='1'><w:lvl w:ilvl='0'><w:start w:val='1'/><w:numFmt w:val='decimal'/><w:lvlText w:val='%1.'/><w:pPr><w:ind w:left='720' w:hanging='360'/></w:pPr></w:lvl></w:abstractNum><w:num w:numId='7'><w:abstractNumId w:val='1'/></w:num></w:numbering>");
     let p="<w:p><w:pPr><w:numPr><w:ilvl w:val='0'/><w:numId w:val='7'/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>";
     let body = format!("{}{}", small_table("", &format!("<w:tc>{p}{p}</w:tc>")), p);
@@ -269,10 +269,22 @@ fn lists_continue_across_tables() {
         }
     });
     assert_eq!(lists.len(), 3);
-    assert_eq!(lists[0], lists[1]);
+    assert_ne!(lists[0].0, lists[1].0);
     assert_eq!(lists[1], lists[2]);
     // 이것을 실패시키는 것: 중첩 표 안의 명시적 목록 좌표를 접음.
-    assert_eq!((lists[0].1, lists[0].2), (3600, -1800));
+    for (_, left, first) in &lists {
+        assert_eq!((*left, *first), (3600, -1800));
+    }
+    let starts: Vec<_> = lists
+        .iter()
+        .map(|(list, _, _)| {
+            let hwpforge_core::ParagraphListRef::Number { numbering_id, level } = list else {
+                panic!("expected numbered paragraph");
+            };
+            d.registry.numberings[numbering_id.get()].levels[usize::from(*level)].start
+        })
+        .collect();
+    assert_eq!(starts, [3, 1, 1]);
 }
 // 이것을 실패시키는 것: gridAfter 채움 누락, 빈 셀에 목록 또는 이전 문단 서식 복사.
 #[test]

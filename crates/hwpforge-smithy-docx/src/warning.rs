@@ -61,7 +61,7 @@ macro_rules! warnings {
                     format!("{reason} (total {} occurrences; first example only; subsequent locations omitted)", self.count())
                 }
             }
-            fn count_mut(&mut self) -> &mut u64 {
+            pub(crate) fn count_mut(&mut self) -> &mut u64 {
                 match self { $(Self::$variant { count, .. } => count),+ }
             }
         }
@@ -115,6 +115,9 @@ warnings! {
     ValueApproximated => ("DOCX_VALUE_APPROXIMATED", "An unsupported value used the reported replacement."),
 }
 
+/// Error text for a merged warning count that no longer fits in `u64`.
+pub(crate) const COUNT_OVERFLOW: &str = "warning count overflow (u64)";
+
 pub(crate) fn record<'a, L: std::fmt::Display, R: std::fmt::Display>(
     warnings: &mut Vec<DocxWarning>,
     kind: Kind,
@@ -128,7 +131,7 @@ pub(crate) fn record<'a, L: std::fmt::Display, R: std::fmt::Display>(
             DocxError::invalid(
                 first.part().unwrap_or("#unknown"),
                 first.location().unwrap_or("#unknown"),
-                "warning count overflow (u64)",
+                COUNT_OVERFLOW,
             )
         })?;
     } else {

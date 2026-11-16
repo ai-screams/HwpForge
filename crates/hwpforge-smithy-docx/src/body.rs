@@ -205,13 +205,18 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut resolver = Resolver::new(definitions, balance_space_width, &mut warnings)?;
     resolver.default_tab_stop = default_tab_stop.unwrap_or(3600);
     let bytes = package.read_main()?;
-    let sections = scan_formatted(
+    let mut sections = scan_formatted(
         &bytes,
         &main,
         &mut package.text_budget,
         &mut warnings,
         &mut resolver,
         &relations,
+    )?;
+    resolver.finalize_numbering(
+        &mut sections.iter_mut().map(|s| &mut s.core).collect::<Vec<_>>(),
+        &main,
+        &mut warnings,
     )?;
     let registry = resolver.registry;
     let mut document = Document::new();
@@ -351,7 +356,7 @@ struct TrailingBreak {
     base: Delta,
     first: bool,
     mark: Option<hwpforge_foundation::CharShapeIndex>,
-    split_at: (Location, usize),
+    split_at: (Location, usize, usize),
 }
 
 struct Body<'a> {
@@ -372,11 +377,11 @@ struct Body<'a> {
     breaks: Vec<(usize, Break)>,
     // The last fragment and a movable empty tail await their boundary. A later
     // section also holds its first shape until the trailing section type is known.
-    pending_shapes: Vec<(usize, Delta)>,
+    pending_shapes: Vec<(usize, Delta, Option<usize>)>,
     trailing_break: Option<TrailingBreak>,
     spacing_neighbor: Option<(Option<StyleKey>, bool)>,
     section_layout_known: bool,
-    split_at: Option<(Location, usize)>,
+    split_at: Option<(Location, usize, usize)>,
     boundary_input: Option<(hwpforge_foundation::CharShapeIndex, bool)>,
     source_paragraphs: usize,
     paragraph_top_level: bool,
@@ -809,7 +814,7 @@ impl Body<'_> {
                     self.mark = None;
                     self.mark_style = None;
                     self.paragraph_style = None;
-                    let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
+                    let mut paragraph = Paragraph::new(ParaShapeIndex::new(usize::MAX));
                     paragraph.page_break = moved_break;
                     self.paragraph = Some(paragraph);
                     frame.node = Node::Paragraph;
@@ -1169,13 +1174,14 @@ impl Body<'_> {
         self.run_diagnosed = true;
         Ok(())
     }
-    fn warn_split(&mut self, at: &(Location, usize)) -> Result<()> {
+    fn warn_split(&mut self, at: &(Location, usize, usize)) -> Result<()> {
         let count = self.warnings.len();
         self.warn(Kind::ParagraphSplitApproximated, &at.0, || "Paragraph split; list grouping, indentation, keep and paragraph-end effects are approximated", "paragraph_split", "split")?;
         // Classification waits for the final fragment count; retain source order.
         if self.warnings.len() > count {
             let warning = self.warnings.pop().unwrap();
             self.warnings.insert(at.1, warning);
+            self.resolver.as_mut().unwrap().insert_warning_at(at.1, at.2);
         }
         Ok(())
     }
@@ -1198,15 +1204,15 @@ impl Body<'_> {
     fn finalize_shapes(&mut self, keep: usize) -> Result<()> {
         let ready = self.pending_shapes.len().saturating_sub(keep);
         let pending: Vec<_> = self.pending_shapes.drain(..ready).collect();
-        for (index, delta) in pending {
+        for (index, delta, number) in pending {
             if index == 0 && !self.sections.is_empty() && !self.section_layout_known {
-                self.pending_shapes.insert(0, (index, delta));
+                self.pending_shapes.insert(0, (index, delta, number));
                 continue;
             }
             // The only output paragraph shape assignment: all restoration,
             // fragment derivation and boundary spacing edits precede this point.
             self.paragraphs[index].para_shape_id =
-                self.resolver.as_mut().unwrap().para_shape(&delta)?;
+                self.resolver.as_mut().unwrap().defer_shape(delta, number);
         }
         Ok(())
     }
@@ -1221,7 +1227,7 @@ impl Body<'_> {
         }
         let fragment_end = (measure_first && self.tables.measures_paragraph())
             .then(|| self.breaks.first().map_or(paragraph.runs.len(), |b| b.0));
-        let (mut base, minimum_lines_height) = self
+        let (mut base, minimum_lines_height, number) = self
             .resolver
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing resolver"))?
@@ -1247,12 +1253,12 @@ impl Body<'_> {
         if paragraph.page_break || leading_break {
             base.para.before = Some(0);
             if self.spacing_neighbor.is_some() {
-                if let Some((_, previous)) = self.pending_shapes.last() {
+                if let Some((_, previous, _)) = self.pending_shapes.last() {
                     cell_gap = Resolver::spacing_after(previous);
                 }
             }
         } else if let Some((previous_style, previous_contextual)) = self.spacing_neighbor {
-            if let Some((_, previous)) = self.pending_shapes.last_mut() {
+            if let Some((_, previous, _)) = self.pending_shapes.last_mut() {
                 let same_style = previous_style == style;
                 cell_gap = Resolver::spacing_boundary(
                     previous,
@@ -1325,7 +1331,12 @@ impl Body<'_> {
                 fragment,
                 cause,
             });
-            self.pending_shapes.push((self.paragraphs.len(), shape));
+            // Only the first fragment owns the source numbering request.
+            self.pending_shapes.push((
+                self.paragraphs.len(),
+                shape,
+                if fragment == 0 { number } else { None },
+            ));
             self.paragraphs.push(p);
             self.finalize_shapes(if trailing { 2 } else { 1 })?;
         }
@@ -1405,7 +1416,11 @@ impl Body<'_> {
             }
         }
         if self.breaks.is_empty() {
-            self.split_at = Some((at.clone(), self.warnings.len()));
+            self.split_at = Some((
+                at.clone(),
+                self.warnings.len(),
+                self.resolver.as_ref().unwrap().warning_serial(),
+            ));
         }
         if self.tables.inside() {
             layout::warn(
@@ -1468,7 +1483,7 @@ impl Body<'_> {
             self.diagnose_runs.clear();
             self.run_diagnosed = false;
             self.boundary_input = None;
-            self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
+            self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(usize::MAX)));
             self.ensure_fragment_run(&at)?;
             self.finish_paragraph(true)?;
         }
@@ -1478,7 +1493,8 @@ impl Body<'_> {
             }
         }
         if !self.sections.is_empty() && starts_page {
-            if let Some((_, delta)) = self.pending_shapes.iter_mut().find(|(index, _)| *index == 0)
+            if let Some((_, delta, _)) =
+                self.pending_shapes.iter_mut().find(|(index, _, _)| *index == 0)
             {
                 delta.para.before = Some(0);
             }
@@ -1700,6 +1716,9 @@ mod word_layout_tests;
 
 #[cfg(test)]
 mod list_tests;
+
+#[cfg(test)]
+mod list_table_tests;
 
 #[cfg(test)]
 mod table_tests;
