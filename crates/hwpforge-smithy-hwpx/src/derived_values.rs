@@ -2,6 +2,7 @@
 //! Deliberately private: callers must first establish field/reference and admission safety.
 use crate::cache_flow::{source_start, ParagraphFlow};
 use crate::line_keep::{NamespaceBindings, Tag};
+use crate::wire_xml::{PARAGRAPH_NS, SECTION_NS};
 use crate::{HwpxError, HwpxResult};
 use hwpforge_core::source_xml::{XmlElement, XmlSource};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -452,7 +453,7 @@ fn safe_negative(xml: &str) -> bool {
             _ => return false,
         }
     }
-    let bound = scope.values().any(|v| v.as_ref() == "http://www.hancom.co.kr/hwpml/2011/section");
+    let bound = scope.values().any(|v| v.as_ref() == SECTION_NS);
     root.name == "sec"
         && bound
         && !xml.contains("<!")
@@ -476,11 +477,11 @@ fn safe_negative(xml: &str) -> bool {
 }
 fn namespace(name: &str) -> &str {
     if name == "sec" {
-        "http://www.hancom.co.kr/hwpml/2011/section"
+        SECTION_NS
     } else if matches!(name, "numCache" | "strCache") {
         "http://schemas.openxmlformats.org/drawingml/2006/chart"
     } else {
-        "http://www.hancom.co.kr/hwpml/2011/paragraph"
+        PARAGRAPH_NS
     }
 }
 fn candidate(name: &str) -> bool {

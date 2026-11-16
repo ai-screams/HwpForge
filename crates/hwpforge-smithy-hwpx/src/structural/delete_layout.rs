@@ -13,9 +13,9 @@ use quick_xml::{
     NsReader, XmlVersion,
 };
 
-const HP: &str = "http://www.hancom.co.kr/hwpml/2011/paragraph";
+const HP: &str = crate::wire_xml::PARAGRAPH_NS;
 const HC: &str = "http://www.hancom.co.kr/hwpml/2011/core";
-const HS: &str = "http://www.hancom.co.kr/hwpml/2011/section";
+const HS: &str = crate::wire_xml::SECTION_NS;
 const MASTER: &str = "http://www.hancom.co.kr/hwpml/2011/master-page";
 /// Saved parts declare their namespaces once on the root (fewer than 20 in observed
 /// Hancom output). Element prefixes are resolved against every active declaration, so
