@@ -209,8 +209,8 @@ fn literal_zero_does_not_advance_the_active_segment() {
             )
             .unwrap();
     }
-    let group = &lists.groups[&1];
-    assert_eq!(group.counter.values[0], 0);
+    let group = &lists.groups[&1].output;
+    assert_eq!(lists.groups[&1].counter.values[0], 0);
     assert_eq!(group.active.as_ref().unwrap().counter.values[0], 1);
     assert_eq!(group.active.as_ref().unwrap().id, 0);
     assert_eq!(registry.numberings[1].levels[0].text, "0");
@@ -408,7 +408,7 @@ fn counter_arithmetic_keeps_checked_boundaries() {
     assert!(state.advance_word(0, None, &[None; 10], "body").is_err());
     assert!(state.advance_core(0, "body").is_err());
     state.values[0] = u64::from(u32::MAX) + 1;
-    assert!(state.segment_starts(0, [None; 10], "body").is_err());
+    assert!(counter::CounterState::segment_starts(state.values, state.starts, 0, "body").is_err());
 }
 // 이것을 실패시키는 것: 출력 카운터의 암묵 상위 소비나 하위 재시작을 Word 규칙과 함께 변경.
 #[test]
@@ -510,7 +510,7 @@ fn budget_fallback_still_reuses_cached_literals() {
             &mut warnings,
         )
         .unwrap();
-    assert!(lists.groups[&1].stopped);
+    assert!(lists.groups[&1].output.stopped);
     assert_eq!(
         lists
             .resolve(
@@ -652,4 +652,40 @@ fn repeated_own_marker_token_is_rejected() {
     assert!(template("%1.%1", 0).is_none());
     assert!(template("%1.%2.%2", 1).is_none());
     assert_eq!(template("%1.%2", 1), Some(("^1.^2".into(), 3)));
+}
+
+// 이것을 실패시키는 것: 배정할 때 현재 원본 값이나 이미 소비한 하위 override를 다시 조회.
+#[test]
+fn observed_numbering_keeps_values_and_pending_child_starts() {
+    let mut defs = materialization_fixture(0, 1, 2);
+    defs.numbers
+        .get_mut(&1)
+        .unwrap()
+        .levels
+        .insert(1, Level { start_override: Some(5), ..Default::default() });
+    let mut lists = Lists::new(&defs).unwrap();
+    let mut registry = StyleRegistry::with_fonts(vec![]);
+    let mut warnings = vec![];
+    let mut requests = vec![];
+    for level in [0, 1, 0] {
+        let observed = lists
+            .observe(
+                &defs,
+                &mut registry,
+                &ParaDelta { num_id: Some(1), level: Some(level), ..Default::default() },
+                "body",
+                &mut warnings,
+            )
+            .unwrap();
+        let Some(ObservedList::Number(request)) = observed else { panic!("number request") };
+        requests.push(request);
+    }
+    assert!(registry.numberings.is_empty());
+    for request in &requests {
+        lists.assign_numbering(&mut registry, request, "body", &mut warnings).unwrap();
+    }
+    assert_eq!(registry.numberings.len(), 1);
+    assert_eq!(registry.numberings[0].levels[0].start, 1);
+    assert_eq!(registry.numberings[0].levels[1].start, 5);
+    assert_eq!(lists.groups[&1].output.active.as_ref().unwrap().counter.values[..2], [2, 5]);
 }

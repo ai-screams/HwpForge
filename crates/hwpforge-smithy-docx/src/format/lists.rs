@@ -137,11 +137,26 @@ struct Group {
     restarts: [Option<u32>; 10],
     lost: u16,
     seen: u16,
+    output: OutputGroup,
+}
+#[derive(Default)]
+struct OutputGroup {
     first: Option<usize>,
     active: Option<OutputSegment>,
     literals: HashMap<(usize, Rc<str>), usize>,
     stopped: bool,
     reserved: bool,
+}
+pub(super) enum ObservedList {
+    Ready(ListRef),
+    Number(NumberRequest),
+}
+pub(super) struct NumberRequest {
+    key: u32,
+    num: u32,
+    level: usize,
+    values: [u64; 10],
+    seeds: [u32; 10],
 }
 #[derive(Default)]
 pub(super) struct Lists {
@@ -192,14 +207,14 @@ impl Lists {
             let instance = build_instance(definitions, abstract_id, number);
             let group =
                 lists.groups.entry(key).or_insert_with(|| build_group(definitions, abstract_id));
-            if !group.reserved
+            if !group.output.reserved
                 && instance
                     .levels
                     .iter()
                     .flatten()
                     .any(|l| matches!(l.compiled.marker, Marker::Number))
             {
-                group.reserved = true;
+                group.output.reserved = true;
                 lists.unemitted_groups += 1;
             }
             lists.instances.insert(id, instance);
@@ -214,6 +229,23 @@ impl Lists {
         part: &str,
         warnings: &mut Vec<DocxWarning>,
     ) -> Result<Option<ListRef>> {
+        let observed = self.observe(definitions, registry, para, part, warnings)?;
+        match observed {
+            Some(ObservedList::Number(request)) => {
+                self.assign_numbering(registry, &request, part, warnings)
+            }
+            Some(ObservedList::Ready(list)) => Ok(Some(list)),
+            None => Ok(None),
+        }
+    }
+    pub(super) fn observe(
+        &mut self,
+        definitions: &Definitions,
+        registry: &mut StyleRegistry,
+        para: &ParaDelta,
+        part: &str,
+        warnings: &mut Vec<DocxWarning>,
+    ) -> Result<Option<ObservedList>> {
         // 이것을 실패시키는 것: 원본 문단을 생략 경로에서 다시 소비하거나 암묵 상위가 override를 소비.
         if let Some((key, level)) = source_group(definitions, para) {
             if let Some(group) = self.groups.get_mut(&key).filter(|_| level < 10) {
@@ -234,7 +266,7 @@ impl Lists {
         let marker = self.resolve_marker(definitions, registry, para, part, warnings)?;
         // Every omitted source number can advance its own sequence and restart
         // already-seen descendants, regardless of why its marker was omitted.
-        if matches!(marker, None | Some(ListRef::Outline(_))) {
+        if matches!(marker, None | Some(ObservedList::Ready(ListRef::Outline(_)))) {
             self.observe_omitted(definitions, para);
         }
         Ok(marker)
@@ -246,9 +278,10 @@ impl Lists {
         para: &ParaDelta,
         part: &str,
         warnings: &mut Vec<DocxWarning>,
-    ) -> Result<Option<ListRef>> {
+    ) -> Result<Option<ObservedList>> {
         if let Some(level) = para.outline.filter(|&l| l < 9) {
-            return outline(level as u8, para.num_id.is_some_and(|id| id != 0), part, warnings);
+            return outline(level as u8, para.num_id.is_some_and(|id| id != 0), part, warnings)
+                .map(|list| list.map(ObservedList::Ready));
         }
         let Some(num) = para.num_id else {
             if para.num_present == Some(true) {
@@ -356,7 +389,7 @@ impl Lists {
                     )?;
                 }
 
-                Ok(Some(ListRef::Bullet(id, level as u8)))
+                Ok(Some(ObservedList::Ready(ListRef::Bullet(id, level as u8))))
             }
             Marker::Number => {
                 // 이것을 실패시키는 것: 누락·비번호 참조를 십진 형식으로 합성.
@@ -368,31 +401,38 @@ impl Lists {
                     return Ok(None);
                 }
                 group.lost &= (bit << 1) - 1;
-                self.assign_numbering(definitions, registry, num, level as usize, part, warnings)
+                let seeds = std::array::from_fn(|i| {
+                    if self.overrides_used.contains(&(num, i)) {
+                        group.counter.starts[i]
+                    } else {
+                        number
+                            .levels
+                            .get(&(i as u32))
+                            .and_then(|l| l.start_override)
+                            .unwrap_or(group.counter.starts[i])
+                    }
+                });
+                Ok(Some(ObservedList::Number(NumberRequest {
+                    key,
+                    num,
+                    level: level as usize,
+                    values: group.counter.values,
+                    seeds,
+                })))
             }
         }
     }
-    fn assign_numbering(
+    pub(super) fn assign_numbering(
         &mut self,
-        defs: &Definitions,
         registry: &mut StyleRegistry,
-        num: u32,
-        level: usize,
+        request: &NumberRequest,
         part: &str,
         warnings: &mut Vec<DocxWarning>,
     ) -> Result<Option<ListRef>> {
-        let number = &defs.numbers[&num];
-        let key = number.abstract_id.unwrap();
+        let NumberRequest { key, num, level, values, seeds } = *request;
         let instance = &self.instances[&num];
         let source = instance.levels[level].as_ref().unwrap();
-        let pending = std::array::from_fn(|i| {
-            if self.overrides_used.contains(&(num, i)) {
-                None
-            } else {
-                number.levels.get(&(i as u32)).and_then(|l| l.start_override)
-            }
-        });
-        let group = self.groups.get_mut(&key).unwrap();
+        let group = &mut self.groups.get_mut(&key).unwrap().output;
         // 참조 수준은 현재 문단의 legal 여부로만 정규화한다.
         let formats = std::array::from_fn(|i| {
             instance.levels[i].as_ref().map_or(NumberFormatType::Digit, |l| {
@@ -405,7 +445,7 @@ impl Lists {
             })
         });
         let token = format!("^{}", level + 1);
-        let literal_zero = group.counter.values[level] == 0
+        let literal_zero = values[level] == 0
             && formats[level] == NumberFormatType::Digit
             && source.compiled.references == 1 << level
             && source.compiled.text.matches(&token).count() == 1;
@@ -414,9 +454,7 @@ impl Lists {
             if let Some(&id) = group.literals.get(&(level, source.compiled.text.clone())) {
                 return Ok(Some(ListRef::Number(id, level as u8)));
             }
-        } else if (0..10)
-            .any(|i| source.compiled.references & (1 << i) != 0 && group.counter.values[i] == 0)
-        {
+        } else if (0..10).any(|i| source.compiled.references & (1 << i) != 0 && values[i] == 0) {
             approximation(
                 warnings,
                 part,
@@ -428,10 +466,9 @@ impl Lists {
             let mut next = active.counter.clone();
             next.advance_core(level, part)?;
             (active.texts[level] == source.compiled.text)
-                && (0..10).filter(|&i| source.compiled.references & (1 << i) != 0).all(|i| {
-                    active.formats[i] == formats[i]
-                        && next.values[i] == group.counter.values[i].max(1)
-                })
+                && (0..10)
+                    .filter(|&i| source.compiled.references & (1 << i) != 0)
+                    .all(|i| active.formats[i] == formats[i] && next.values[i] == values[i].max(1))
         } else {
             false
         };
@@ -440,7 +477,7 @@ impl Lists {
             let can_allocate = group.first.is_none()
                 || registry.numberings.len() + self.unemitted_groups < MAX_DEFINITIONS;
             if can_allocate {
-                let starts = group.counter.segment_starts(level, pending, part)?;
+                let starts = CounterState::segment_starts(values, seeds, level, part)?;
                 let mut texts: [Rc<str>; 10] = std::array::from_fn(|i| {
                     instance.levels[i]
                         .as_ref()
@@ -652,11 +689,7 @@ fn build_group(defs: &Definitions, abstract_id: u32) -> Group {
         restarts,
         lost: 0,
         seen: 0,
-        first: None,
-        active: None,
-        literals: HashMap::new(),
-        stopped: false,
-        reserved: false,
+        output: OutputGroup::default(),
     }
 }
 fn approximation(

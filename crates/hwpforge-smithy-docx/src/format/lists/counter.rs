@@ -68,19 +68,19 @@ impl CounterState {
         Ok(())
     }
     pub fn segment_starts(
-        &self,
+        values: [u64; 10],
+        seeds: [u32; 10],
         level: usize,
-        pending: [Option<u32>; 10],
         part: &str,
     ) -> Result<[u32; 10]> {
         let mut starts = [1; 10];
         for (i, start) in starts.iter_mut().enumerate() {
             // 이것을 실패시키는 것: 현재 상위를 다음 값으로 설정하거나 대기 하위 override를 버림.
             *start = if i <= level {
-                u32::try_from(self.values[i])
+                u32::try_from(values[i])
                     .map_err(|_| DocxError::invalid(part, "numPr", "numbering start exceeds u32"))?
             } else {
-                pending[i].unwrap_or(self.starts[i])
+                seeds[i]
             }
             .max(1);
         }
