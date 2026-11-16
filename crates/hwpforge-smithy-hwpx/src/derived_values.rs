@@ -267,90 +267,14 @@ impl<'a> Part<'a> {
             .collect();
         // Only decoder-validated sections with a bound root and no local-name
         // clues can avoid semantic collection. Unverified/aliased/rebound parts parse.
-        if map.is_some() && safe_negative(&xml) {
-            let tags = vec![Tag::default(); source.elements().len()];
-            return Ok(Self {
-                section,
-                xml,
-                source,
-                by_start,
-                flow,
-                tables,
-                tags,
-                note_policies: [NotePolicy::Unknown; 2],
-                fields: BTreeMap::new(),
-                map,
-                text_spans,
-            });
-        }
-        let elements = source.elements();
-        let mut tags = vec![Tag::default(); elements.len()];
-        let empty_bindings = Rc::new(NamespaceBindings::new());
-        let mut bindings = vec![empty_bindings; elements.len()];
-        for (id, e) in elements.iter().enumerate().skip(1) {
-            let outer = e.outer();
-            let end = e.inner().map_or(outer.end, |r| r.start);
-            let fragment = xml.get(outer.start..end).ok_or_else(invalid)?;
-            let start = source_start(&xml, e).ok_or_else(invalid)?;
-            let declares = start.attributes().try_fold(false, |declares, a| {
-                let a = a.map_err(|_| invalid())?;
-                Ok::<_, HwpxError>(
-                    declares || a.key.as_ref() == "xmlns" || a.key.as_ref().starts_with("xmlns:"),
-                )
-            })?;
-            let (mut tag, scope) = if declares {
-                let (tag, scope) = Tag::opening_with_bindings(fragment, &bindings[e.parent()])
-                    .ok_or_else(invalid)?;
-                (tag, Rc::new(scope))
-            } else {
-                (
-                    Tag::opening(fragment, &bindings[e.parent()]).ok_or_else(invalid)?,
-                    bindings[e.parent()].clone(),
-                )
-            };
-            let (prefix, _) =
-                e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
-            tag.name = if scope.get(prefix).map(AsRef::as_ref) == Some(namespace(e.name())) {
-                e.name().into()
-            } else {
-                format!("{{foreign}}{}", e.name())
-            };
-            tags[id] = tag;
-            bindings[id] = scope;
-            crate::work::tick();
-        }
-        let mut values = BTreeMap::new();
-        crate::structural::xml_values::scan_fields(&xml, |start, kind, params| {
-            require(values.insert(start, (kind.to_owned(), params.clone())).is_none())
-        })?;
-        let mut fields = BTreeMap::new();
-        let mut open: HashMap<(usize, String), usize> = HashMap::new();
-        let mut seen_fields = BTreeSet::new();
-        for (id, e) in elements.iter().enumerate().skip(1) {
-            if candidate(e.name()) {
-                // Namespace-less fragments and foreign lookalikes are never R evidence.
-                let (prefix, _) =
-                    e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
-                let uri = bindings[id].get(prefix).map(AsRef::as_ref);
-                require(uri == Some(namespace(e.name())))?;
-            }
-            if e.name() == "fieldBegin" {
-                let (kind, params) = values.remove(&e.outer().start).ok_or_else(invalid)?;
-                let key = (field_flow(elements, id), attr(&tags[id], "id")?.to_owned());
-                require(seen_fields.insert(key.clone()))?;
-                require(open.insert(key, id).is_none())?;
-                fields.insert(id, Field { kind, params, end: 0, display: false });
-            } else if e.name() == "fieldEnd" {
-                let key = (field_flow(elements, id), attr(&tags[id], "beginIDRef")?.to_owned());
-                let begin = open.remove(&key).ok_or_else(invalid)?;
-                let f = fields.get_mut(&begin).ok_or_else(invalid)?;
-                f.end = id;
-                f.display = elements[begin + 1..id]
-                    .iter()
-                    .any(|t| t.name() == "t" && t.inner().is_some_and(|r| !xml[r].is_empty()));
-            }
-        }
-        require(open.is_empty() && values.is_empty())?;
+        let negative = map.is_some() && safe_negative(&xml);
+        let (tags, fields) = if negative {
+            (vec![Tag::default(); source.elements().len()], BTreeMap::new())
+        } else {
+            let (tags, bindings) = resolve_tags(&xml, &source)?;
+            let fields = pair_fields(&xml, source.elements(), &tags, &bindings)?;
+            (tags, fields)
+        };
         let mut part = Self {
             section,
             xml,
@@ -364,7 +288,9 @@ impl<'a> Part<'a> {
             text_spans,
             note_policies: [NotePolicy::Unknown; 2],
         };
-        part.note_policies = part.collect_note_policies();
+        if !negative {
+            part.note_policies = part.collect_note_policies();
+        }
         Ok(part)
     }
     // Each part owns one policy per note kind; all stored number representations reuse it.
@@ -435,6 +361,87 @@ impl<'a> Part<'a> {
         require(self.tags[matches[0]].name == name)?;
         Ok(matches[0])
     }
+}
+fn resolve_tags(
+    xml: &str,
+    source: &XmlSource,
+) -> HwpxResult<(Vec<Tag>, Vec<Rc<NamespaceBindings>>)> {
+    let elements = source.elements();
+    let mut tags = vec![Tag::default(); elements.len()];
+    let empty_bindings = Rc::new(NamespaceBindings::new());
+    let mut bindings = vec![empty_bindings; elements.len()];
+    for (id, e) in elements.iter().enumerate().skip(1) {
+        let outer = e.outer();
+        let end = e.inner().map_or(outer.end, |r| r.start);
+        let fragment = xml.get(outer.start..end).ok_or_else(invalid)?;
+        let start = source_start(xml, e).ok_or_else(invalid)?;
+        let declares = start.attributes().try_fold(false, |declares, a| {
+            let a = a.map_err(|_| invalid())?;
+            Ok::<_, HwpxError>(
+                declares || a.key.as_ref() == "xmlns" || a.key.as_ref().starts_with("xmlns:"),
+            )
+        })?;
+        let (mut tag, scope) = if declares {
+            let (tag, scope) =
+                Tag::opening_with_bindings(fragment, &bindings[e.parent()]).ok_or_else(invalid)?;
+            (tag, Rc::new(scope))
+        } else {
+            (
+                Tag::opening(fragment, &bindings[e.parent()]).ok_or_else(invalid)?,
+                bindings[e.parent()].clone(),
+            )
+        };
+        let (prefix, _) = e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
+        tag.name = if scope.get(prefix).map(AsRef::as_ref) == Some(namespace(e.name())) {
+            e.name().into()
+        } else {
+            format!("{{foreign}}{}", e.name())
+        };
+        tags[id] = tag;
+        bindings[id] = scope;
+        crate::work::tick();
+    }
+    Ok((tags, bindings))
+}
+fn pair_fields(
+    xml: &str,
+    elements: &[XmlElement],
+    tags: &[Tag],
+    bindings: &[Rc<NamespaceBindings>],
+) -> HwpxResult<BTreeMap<usize, Field>> {
+    let mut values = BTreeMap::new();
+    crate::structural::xml_values::scan_fields(xml, |start, kind, params| {
+        require(values.insert(start, (kind.to_owned(), params.clone())).is_none())
+    })?;
+    let mut fields = BTreeMap::new();
+    let mut open: HashMap<(usize, String), usize> = HashMap::new();
+    let mut seen_fields = BTreeSet::new();
+    for (id, e) in elements.iter().enumerate().skip(1) {
+        if candidate(e.name()) {
+            // Namespace-less fragments and foreign lookalikes are never R evidence.
+            let (prefix, _) =
+                e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
+            let uri = bindings[id].get(prefix).map(AsRef::as_ref);
+            require(uri == Some(namespace(e.name())))?;
+        }
+        if e.name() == "fieldBegin" {
+            let (kind, params) = values.remove(&e.outer().start).ok_or_else(invalid)?;
+            let key = (field_flow(elements, id), attr(&tags[id], "id")?.to_owned());
+            require(seen_fields.insert(key.clone()))?;
+            require(open.insert(key, id).is_none())?;
+            fields.insert(id, Field { kind, params, end: 0, display: false });
+        } else if e.name() == "fieldEnd" {
+            let key = (field_flow(elements, id), attr(&tags[id], "beginIDRef")?.to_owned());
+            let begin = open.remove(&key).ok_or_else(invalid)?;
+            let f = fields.get_mut(&begin).ok_or_else(invalid)?;
+            f.end = id;
+            f.display = elements[begin + 1..id]
+                .iter()
+                .any(|t| t.name() == "t" && t.inner().is_some_and(|r| !xml[r].is_empty()));
+        }
+    }
+    require(open.is_empty() && values.is_empty())?;
+    Ok(fields)
 }
 fn safe_negative(xml: &str) -> bool {
     let Some((root, scope)) = Tag::opening_with_bindings(xml, &Default::default()) else {
