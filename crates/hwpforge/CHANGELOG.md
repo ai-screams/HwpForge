@@ -31,6 +31,8 @@ HWPX 편집이 서명·암호화 문서를 거부하고, 내용을 바꾼 편집
 
 ### Fixed
 
+- DOCX 변환에서 표 주변과 표 칸 안의 번호 값을 보존하고, 고정 시작 구간으로 나눈 경우 번호 정의 분리 진단을 전달한다. 같은 구간 내부의 자동 번호는 유지되지만 구간을 넘는 편집은 뒤 시작값에 자동 반영되지 않는다.
+
 - 서명·암호화 표지가 있는 패키지는 편집 진입점과 `restyle`, `from-json --base`가 거부한다(빈 구조 편집 요청은 원본 반환) ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#330](https://github.com/ai-screams/HwpForge/pull/330))
 - 구조 편집이 끊기는 참조와 문단 id 참조를 거부한다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#331](https://github.com/ai-screams/HwpForge/pull/331))
 - 편집이 선언한 패키지 항목만 바꿨는지 검사한다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#318](https://github.com/ai-screams/HwpForge/pull/318))

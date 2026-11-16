@@ -68,7 +68,7 @@ print(rebuilt.report["paragraphs"], [w["code"] for w in rebuilt.report["warnings
 - 원본 호환 플래그 보존은 base 포함 경로를 사용합니다. base 없이 WordCompatible JSON을 복원하면 원본의 빈·부분 플래그가 생성용 35개 묶음으로 바뀝니다. base 포함 편집에서는 JSON 모드가 base와 다르면 거부하며, Word base에 모드가 누락된 JSON도 거부합니다.
 - 새 HWPX 생성이나 DOCX 변환은 항목별 번호·글머리표 표현을 보존하려고 출력 정의를 나눌 수 있습니다. `result.report["warnings"]`의 `LIST_NUMBERING_SPLIT`은 현재 번호와 표현이 보존된 성공 결과에도 나타납니다. 번호 목록의 나뉜 구간은 시작값이 고정되므로 앞 구간을 편집한 뒤 뒤 구간 번호를 확인하십시오. `base`를 사용하는 원본 보존 편집은 분리를 적용하지 않으며, 표현 충돌은 기존 의미 손실 정책을 따릅니다.
 
-  `result.report["warnings"]`의 `LIST_NUMBERING_SPLIT`은 HWPX 출력 단계의 표현 분리이고, `DOCX_VALUE_APPROXIMATED`의 `context.loss="list_numbering_split"`은 Word 목록을 가져오는 단계의 번호 정의 분리입니다. 법률식 번호를 보존하는 데 필요한 경우 번호 정의를 나누며, 나뉜 구간의 시작값은 고정됩니다. 앞 구간 편집이 뒤 구간에 자동 반영되지 않으므로 편집 뒤 번호를 확인하십시오.
+  `result.report["warnings"]`의 `LIST_NUMBERING_SPLIT`은 HWPX 출력 단계의 표현 분리이고, `DOCX_VALUE_APPROXIMATED`의 `context.loss="list_numbering_split"`은 Word 목록을 가져오는 단계의 번호 정의 분리입니다. 법률식 번호나 표 주변의 번호 값을 보존하는 데 필요한 경우 번호 정의를 나누며, 나뉜 구간의 시작값은 고정됩니다. 같은 구간 안에서는 항목을 삽입·삭제하면 뒤 번호가 진행하지만, 표 앞이나 칸 구간의 편집이 다른 구간의 시작값에 자동 반영되지는 않습니다. 편집 뒤 번호를 확인하십시오. 수정한 원본 DOCX를 다시 가져오면 원본 순서에서 번호 값을 새로 계산합니다.
 
 - base 모드 불일치는 거부합니다. 그 밖의 생성은 fail-closed가 아닙니다: 의미가 손실돼도 거부하지 않고 `warnings`에 실어 돌려줍니다. 위 예제는 내용을 바꾸지 않아 `base` 바이트가 그대로 돌아오므로 경고가 없습니다. 내용을 바꾸면 줄 조판 캐시를 잃은 문단마다 `LAYOUT_CACHE_DROPPED`가 나옵니다(한컴에서 다시 저장하면 복원). `base`가 없으면 캐시를 싣지 않습니다.
 - 내용이 바뀌면 한컴 저장 문서의 `Preview/*`·`container.rdf` 엔트리는 `base`를 줘도 승계되지 않습니다(경고 없음). 텍스트만 바꿀 거라면 `export_section` → `patch`로 관련 없는 내용을 유지할 수 있습니다. 기존 한컴 미리보기가 있던 문서에서 내용을 실제로 바꾸면 미리보기와 그 연결 정보가 제거되고 `PREVIEW_REMOVED`가 나옵니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.

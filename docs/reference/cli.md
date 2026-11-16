@@ -62,7 +62,7 @@ hwpforge fill form.hwp --set name=홍길동 -o form.filled.hwpx --json
 
 새 HWPX 생성과 DOCX 변환의 `LIST_NUMBERING_SPLIT`은 항목별 번호·글머리표 표현을 보존하기 위해 출력 정의를 나눴다는 경고입니다. 현재 번호와 표현은 보존되며 의미 손실 거부 대상이 아니므로 성공 출력에도 나타납니다. 번호 목록의 나뉜 구간은 시작값이 고정되어 앞 구간의 편집이 뒤 구간 번호에 자동 반영되지 않습니다. 편집 뒤 번호를 확인하십시오. 원본 보존 base 인코드는 이 분리를 적용하지 않으며 표현 충돌을 기존 `CONTENT_LOST`로 보고합니다.
 
-`LIST_NUMBERING_SPLIT`은 HWPX 출력 단계의 표현 분리이고, `DOCX_VALUE_APPROXIMATED`의 `context.loss="list_numbering_split"`은 Word 목록을 가져오는 단계의 번호 정의 분리입니다. 법률식 번호를 보존하는 데 필요한 경우 번호 정의를 나누며, 나뉜 구간의 시작값은 고정됩니다. 앞 구간 편집이 뒤 구간에 자동 반영되지 않으므로 편집 뒤 번호를 확인하십시오.
+`LIST_NUMBERING_SPLIT`은 HWPX 출력 단계의 표현 분리이고, `DOCX_VALUE_APPROXIMATED`의 `context.loss="list_numbering_split"`은 Word 목록을 가져오는 단계의 번호 정의 분리입니다. 법률식 번호나 표 주변의 번호 값을 보존하는 데 필요한 경우 번호 정의를 나누며, 나뉜 구간의 시작값은 고정됩니다. 같은 구간 안에서는 항목을 삽입·삭제하면 뒤 번호가 진행하지만, 표 앞이나 칸 구간의 편집이 다른 구간의 시작값에 자동 반영되지는 않습니다. 편집 뒤 번호를 확인하십시오. 수정한 원본 DOCX를 다시 가져오면 원본 순서에서 번호 값을 새로 계산합니다.
 
 ### 변환 메타데이터
 

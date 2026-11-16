@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 표 앞뒤와 표 칸 안에 이어지는 Word 번호 목록의 값을 보존한다. 표를 품은 문단과 칸의 출력 순서에 맞춰 필요한 번호 정의를 나누고 `list_numbering_split`으로 알린다. 나뉜 구간의 시작값은 고정되므로 앞 구간의 항목 삽입·삭제가 뒤 구간에 자동 전파되지 않는다.
+
 - Word 목록의 공유 카운터, 수준별 첫 시작값 덮어쓰기와 재시작을 보존한다. 십진 자기 번호의 생략되거나 0인 시작값은 고정 리터럴 표식으로 가져오며, 필요한 경우 시작값이 고정된 번호 정의로 나누고 `DOCX_VALUE_APPROXIMATED`의 `list_numbering_split`으로 알린다.
 - 상위 수준을 참조하는 복합 번호와 법률식 번호를 보존한다. 법률식 번호는 참조 형식을 십진으로 바꾼 정의 사본을 사용한다. 정의 상한으로 추가 분리가 불가능하면 활성 정의를 유지하고 남는 값·형식 차이를 `list_numbering_budget`으로 알린다. 필요한 사본을 얻지 못한 법률식 문단이 원래 참조 형식으로 나갈 때만 `list_number_legal`도 알린다. 복합·비십진 번호의 0값 근사는 `list_number_zero`로 알린다.
 - `list_numbering_budget`은 추가 분리가 중지된 그룹당 한 번 기록한다. 경고 횟수로 영향 문단 수를 알 수는 없다.
