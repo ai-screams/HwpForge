@@ -368,14 +368,14 @@ fn unrequested_unsupported_uses_prevent_splitting() {
         diagnostics(&o, 0, 1);
     }
 }
-// 이것을 실패시키는 것: 마지막 재시작 이전의 부모 사용을 건너뜀 검사에 재사용하거나 깊은 구간을 허용.
+// 이것을 실패시키는 것: 건너뜀·깊은 시작 차단을 복원하거나 후보 값 비교를 제거.
 #[test]
-fn skipped_levels_and_deep_segment_starts_remain_approximate() {
-    for (levels, chars, conflict) in [
-        (&[0, 1, 0, 1][..], &[0, 0, 1, 1][..], 0),
-        (&[0, 1, 0, 2, 1][..], &[0, 0, 0, 1, 1][..], 1),
-        (&[0, 1, 2, 2][..], &[0, 0, 0, 1][..], 1),
-        (&[1, 1, 0, 1][..], &[0, 1, 0, 1][..], 0),
+fn skipped_levels_and_deep_starts_preserve_values() {
+    for (levels, chars, definitions) in [
+        (&[0, 1, 0, 1][..], &[0, 0, 1, 1][..], 2),
+        (&[0, 1, 0, 2, 1][..], &[0, 0, 0, 1, 1][..], 2),
+        (&[0, 1, 2, 2][..], &[0, 0, 0, 1][..], 2),
+        (&[1, 1, 0, 1][..], &[0, 1, 0, 1][..], 3),
     ] {
         let items = levels
             .iter()
@@ -385,10 +385,13 @@ fn skipped_levels_and_deep_segment_starts_remain_approximate() {
             .collect::<Vec<_>>();
         let (d, s) = fixture(&items, &["^1.", "^1.^2", "^3."], &[1, 1, 1]);
         let o = encode(&d, &s);
-        diagnostics(&o, usize::from(conflict == 0), conflict);
-        if conflict > 0 {
-            assert_eq!(header(&o).descendants("hh:numbering").len(), 1);
-        }
+        diagnostics(&o, 1, 0);
+        assert_eq!(header(&o).descendants("hh:numbering").len(), definitions);
+        assert!(matches!(
+            o.warnings.iter().find(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })),
+            Some(EncodeWarning::ListNumberingSplit { additional_definitions, .. })
+                if *additional_definitions == definitions - 1
+        ));
     }
 }
 fn coordinates(o: &EncodeOutcome) -> Vec<(i32, i32)> {
@@ -1112,4 +1115,65 @@ fn unused_approximation_reasons_keep_baseline_parts_and_warnings() {
             assert_eq!(package::part(&actual.bytes, part), package::part(&baseline.bytes, part));
         }
     }
+}
+
+// 이것을 실패시키는 것: 깊은 사용의 상위를 다음 값으로 씨앗 설정하거나 중간 used를 누락.
+#[test]
+fn deep_counter_outputs_match_literal_observations() {
+    for name in [
+        "skipped_middle_level_is_consumed",
+        "compound_deep_level_uses_implicit_ancestors",
+        "deep_first_item_consumes_all_ancestors",
+    ] {
+        let case = list_counter_cases::CASES.iter().find(|c| c.name == name).unwrap();
+        let def = &case.definitions[0];
+        let items: Vec<_> = case
+            .uses
+            .iter()
+            .enumerate()
+            .map(|(i, &(_, level))| (i, level as u32, Some(i % 2)))
+            .collect();
+        let (d, s) = fixture(&items, def.texts, def.starts);
+        let s = edit_store(&s, |v| {
+            for (i, format) in def.formats.iter().enumerate() {
+                v["numberings"][0]["levels"][i]["num_format"] = (*format).into();
+            }
+        });
+        let out = encode(&d, &s);
+        assert_eq!(rendered(&out), case.expected.unwrap(), "{name}");
+        assert_eq!(
+            out.warnings
+                .iter()
+                .filter(|w| matches!(w,
+                    EncodeWarning::ContentLost { kind, .. } if kind == "list_marker_conflict"
+                ))
+                .count(),
+            0
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 깊은 사본의 상위 현재 값 또는 현재 수준 씨앗을 1로 초기화.
+// 이 단언은 정의의 구조 계약이며 한컴 표시 문자열 실측을 대신하지 않는다.
+#[test]
+fn deep_style_splits_keep_nonunit_counter_seeds() {
+    let (doc, store) = fixture(
+        &[(0, 0, Some(0)), (1, 1, Some(0)), (2, 2, Some(0)), (3, 2, Some(1))],
+        &["^1.", "^2.", "^1.^2.^3"],
+        &[2, 3, 4],
+    );
+    let out = encode(&doc, &store);
+    let h = header(&out);
+    let definitions = h.descendants("hh:numbering");
+    assert_eq!(definitions.len(), 2);
+    assert_eq!(
+        definitions[1]
+            .descendants("hh:paraHead")
+            .iter()
+            .map(|head| head.attr("start").unwrap())
+            .collect::<Vec<_>>(),
+        ["2", "3", "5"]
+    );
+    assert_eq!(assignments(&out).0, [1, 1, 1, 2]);
+    diagnostics(&out, 1, 0);
 }

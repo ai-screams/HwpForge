@@ -118,25 +118,38 @@ pub const CASES: &[Case] = &[
         uses: &[(1, 0), (1, 0), (1, 0)],
         expected: Some(&["99.", "100.", "101."]),
     },
+    // 이것을 실패시키는 것: 건너뛴 중간 수준의 used를 설정하지 않음.
     Case {
-        name: "skipped parent is unconfirmed",
+        name: "skipped_middle_level_is_consumed",
         definitions: &[Definition {
             starts: &[1, 1, 1],
-            texts: &["^1.", "^2.", "^3."],
-            formats: &["Digit", "Digit", "Digit"],
+            texts: &["^1.", "^2.", "^3)"],
+            formats: &["Digit", "HangulSyllable", "Digit"],
         }],
-        uses: &[(1, 0), (1, 2)],
-        expected: None,
+        uses: &[(1, 0), (1, 1), (1, 0), (1, 2), (1, 1)],
+        expected: Some(&["1.", "가.", "2.", "1)", "나."]),
     },
+    // 이것을 실패시키는 것: 암묵 상위를 다음 값으로 설정.
     Case {
-        name: "deep segment start is unconfirmed",
+        name: "compound_deep_level_uses_implicit_ancestors",
         definitions: &[Definition {
             starts: &[1, 1, 1],
-            texts: &["^1.", "^2.", "^3."],
+            texts: &["^1.", "^2.", "^1.^2.^3"],
             formats: &["Digit", "Digit", "Digit"],
         }],
-        uses: &[(1, 0), (1, 1), (1, 2), (1, 2)],
-        expected: None,
+        uses: &[(1, 0), (1, 2), (1, 1), (1, 2)],
+        expected: Some(&["1.", "1.1.1", "2.", "1.2.1"]),
+    },
+    // 이것을 실패시키는 것: 첫 깊은 수준의 상위 초기화를 생략.
+    Case {
+        name: "deep_first_item_consumes_all_ancestors",
+        definitions: &[Definition {
+            starts: &[1, 1, 1],
+            texts: &["^1.", "^2.", "^1.^2.^3"],
+            formats: &["Digit", "Digit", "Digit"],
+        }],
+        uses: &[(1, 2), (1, 0), (1, 1)],
+        expected: Some(&["1.1.1", "2.", "1."]),
     },
     Case {
         name: "shared caption and cell is unconfirmed",

@@ -848,3 +848,52 @@ fn assigned_heads_use_setter_validation_and_normalization() {
     assert!(set_head(&mut s, false, 1, 1, invalid_metrics).is_err());
     assert!(set_head(&mut s, false, 99, 1, HeadMetrics::generated(1)).is_err());
 }
+
+// 이것을 실패시키는 것: 깊은 수준 허용과 함께 미지원 자리·0 시작·공유 캡션·예산 보호를 제거.
+#[test]
+fn deep_splits_keep_other_approximation_guards() {
+    for reason in [
+        ApproximationReason::Unsupported,
+        ApproximationReason::ZeroStart,
+        ApproximationReason::SharedCaption,
+        ApproximationReason::Budget,
+    ] {
+        let mut s = store();
+        let mut def = s.numbering_at(0).unwrap().clone();
+        def.levels = (1..=3)
+            .map(|level| ParaHead {
+                level,
+                start: 1,
+                text: format!("^{level}."),
+                num_format: NumberFormatType::Digit,
+                checkable: false,
+            })
+            .collect();
+        if reason == ApproximationReason::ZeroStart {
+            def.levels[0].start = 0;
+        }
+        let mut value = serde_json::to_value(&s).unwrap();
+        value["numberings"][0] = serde_json::to_value(def).unwrap();
+        s = serde_json::from_value(value).unwrap();
+        for id in [0, 1] {
+            s.para_shape_mut(ParaShapeIndex::new(id)).unwrap().heading_level = 2;
+        }
+        let mut ledger = ListLedger::new(&s).unwrap().unwrap();
+        let mut parts = record(&mut ledger, &[0, 1]);
+        match reason {
+            ApproximationReason::Unsupported => ledger.uses[0].unsupported = true,
+            ApproximationReason::SharedCaption => {
+                ledger.uses[0].caption = Some(0);
+                ledger.uses[1].cells.push(0);
+            }
+            ApproximationReason::Budget => ledger.budget.definitions = 0,
+            _ => {}
+        }
+        let (out, warnings) = ledger.finish(&mut parts).unwrap();
+        assert_eq!(out.numbering_count(), 2, "{reason:?}");
+        assert_eq!(warnings.iter().filter(|w| matches!(w,
+            EncodeWarning::ContentLost { kind, reason: message, .. } if kind == "list_marker_conflict" && message.contains(reason.message())
+        )).count(), 1, "{reason:?}");
+        assert!(!warnings.iter().any(|w| matches!(w, EncodeWarning::ListNumberingSplit { .. })));
+    }
+}

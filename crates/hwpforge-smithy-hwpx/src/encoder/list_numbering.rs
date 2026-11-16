@@ -73,9 +73,7 @@ impl SplitBudget {
 enum ApproximationReason {
     Unsupported,
     SharedCaption,
-    SkippedLevel,
     InvalidLevel,
-    DeepStart,
     ZeroStart,
     Budget,
 }
@@ -87,8 +85,6 @@ impl ApproximationReason {
             Self::InvalidLevel => {
                 "paragraph level is outside 0..=9 or head level is outside 1..=10"
             }
-            Self::SkippedLevel => "a parent level is unused since reset",
-            Self::DeepStart => "a new segment would begin below the second level",
             Self::ZeroStart => "definition contains a zero start",
             Self::Budget => "split budget or start range exceeded",
         }
@@ -242,7 +238,6 @@ impl ListLedger {
         let mut reasons = BTreeSet::new();
         let mut cells = BTreeSet::new();
         let mut captions = BTreeSet::new();
-        let mut state = CounterState::new(self.starts(key));
         if !key.bullet
             && self
                 .source
@@ -261,17 +256,10 @@ impl ListLedger {
                 captions.insert(t);
             }
             if !key.bullet {
-                let Some(level) = level_index(u.requirement.key.level) else {
+                let Some(_level) = level_index(u.requirement.key.level) else {
                     reasons.insert(ApproximationReason::InvalidLevel);
                     continue;
                 };
-                // 이것을 실패시키는 것: 건너뛴 상위 수준을 정확한 재시작으로 승인.
-                if level >= 2 && !state.used[level - 1] {
-                    reasons.insert(ApproximationReason::SkippedLevel);
-                }
-                if level < 10 {
-                    let _ = state.advance(level);
-                }
             }
         }
         if !cells.is_disjoint(&captions) {
@@ -364,10 +352,6 @@ impl ListLedger {
                 && candidate.heads.get(&r.key.level).is_none_or(|m| m == &r.metrics)
                 && (key.bullet || next.references(text) == logical.references(text));
             if !compatible {
-                // 이것을 실패시키는 것: 세 번째 수준 아래에서 새 구간을 허용.
-                if level >= 2 {
-                    return Ok(Err(ApproximationReason::DeepStart));
-                }
                 let Some(starts) = logical.segment_starts(level) else {
                     return Ok(Err(ApproximationReason::Budget));
                 };
