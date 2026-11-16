@@ -62,6 +62,8 @@ hwpforge fill form.hwp --set name=홍길동 -o form.filled.hwpx --json
 
 새 HWPX 생성과 DOCX 변환의 `LIST_NUMBERING_SPLIT`은 항목별 번호·글머리표 표현을 보존하기 위해 출력 정의를 나눴다는 경고입니다. 현재 번호와 표현은 보존되며 의미 손실 거부 대상이 아니므로 성공 출력에도 나타납니다. 번호 목록의 나뉜 구간은 시작값이 고정되어 앞 구간의 편집이 뒤 구간 번호에 자동 반영되지 않습니다. 편집 뒤 번호를 확인하십시오. 원본 보존 base 인코드는 이 분리를 적용하지 않으며 표현 충돌을 기존 `CONTENT_LOST`로 보고합니다.
 
+`LIST_NUMBERING_SPLIT`은 HWPX 출력 단계의 표현 분리이고, `DOCX_VALUE_APPROXIMATED`의 `context.loss="list_numbering_split"`은 Word 목록을 가져오는 단계의 번호 정의 분리입니다. 법률식 번호를 보존하는 데 필요한 경우 번호 정의를 나누며, 나뉜 구간의 시작값은 고정됩니다. 앞 구간 편집이 뒤 구간에 자동 반영되지 않으므로 편집 뒤 번호를 확인하십시오.
+
 ### 변환 메타데이터
 
 `HWP5_CONVERSION_LOSS`의 JSON `details.warnings`는 거부된 경고만 담으며, 각 항목은 `stage`, `code`, `message`와 선택적인 `location`을 갖습니다. 성공 JSON은 기존 `warnings`의 형과 내용을 유지하고, HWP5 입력일 때만 별도 `conversion: {source_format: "hwp5", warnings: [...]}`를 더합니다. 변환 경고가 없어도 `conversion.warnings`는 빈 배열입니다.
@@ -532,3 +534,5 @@ MCP from-json의 문자열 인자 안 JSON도 같은 계약입니다. 별도 MCP
 v3에서 Core JSON의 `style_id`는 `style_ref`로 바뀌었으며, 교환에는 envelope를 사용하세요. `to-json --no-styles`로 내보낸 v3 문서는 non-null 참조에 필요한 styles가 없어 그대로 `from-json`에 넣으면 거절됩니다.
 
 Word 목록은 정렬, 번호 뒤 탭·공백·없음, 수준 번호 탭과 번호 전용 문자 서식을 전달합니다. 공백 폭은 측정 비율로 근사합니다. 번호 글꼴·크기 때문에 Word의 첫 줄이 높아지면 그 차이를 문단 앞 간격으로 근사하고 본문 줄 높이는 바꾸지 않습니다(`list_marker_line_height` 경고). 후속 줄 위치는 Word의 왼쪽 들여쓰기로 보존합니다. 후속 줄이 번호 칸의 왼쪽 끝보다 왼쪽이면 표시 동작이 미측정이라 `list_marker_continuation` 손실 경고를 냅니다. 고정 칸을 넘는 번호와 같은 번호 수준의 문단별 배치 충돌도 경고를 확인하세요. 걸침 0의 decimal 숫자·점과 Symbol 글머리는 기본 탭 설정을 적용하며, 글꼴별 폭·셀·다단 원점·가운데 정렬은 근사입니다. 오른쪽 정렬은 anchor를 탭 후보로 사용합니다. 새 HWPX 생성은 보존 가능한 head 차이를 정의 분리로 표현합니다. 원본 보존 편집과 나눌 수 없는 정의는 문서 첫 사용처의 head와 상대 margin 이동량을 적용하며, head나 상대 margin 이동이 실제로 다를 때만 `list_marker_conflict` 의미 손실을 보고합니다. 의미 손실이 있는 원본 보존 편집은 거부됩니다.
+
+`--json convert-docx` 결과의 `warnings`에서 `code="DOCX_VALUE_APPROXIMATED"`인 항목의 `context.loss`를 확인하십시오. `list_numbering_budget`은 정의 상한 때문에 남는 값·형식 차이, `list_number_legal`은 사본을 얻지 못한 법률식 문단이 원래 참조 형식으로 나가는 경우, `list_number_zero`는 복합·비십진 번호의 0값 근사를 알립니다. 상한에서도 기존 정의는 유지합니다. `list_numbering_budget`은 그룹당 한 번 기록하므로 경고 횟수로 영향 문단 수를 알 수는 없습니다.

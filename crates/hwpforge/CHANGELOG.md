@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DOCX 변환에서 공유 번호 카운터와 복합·법률식 표식을 보존하고, 번호 정의 분리와 남은 번호 근사 진단을 변환 결과에 전달한다.
+
 - 변환 결과에 목록 출력 정의 분리 경고 `LIST_NUMBERING_SPLIT`을 전달합니다. 이 경고만으로 의미 손실 거부가 발생하지 않습니다.
 
 - 문서 JSON과 스키마에 선택 필드 `layout_profile`(`hancom`·`word_compatible`)을 추가한다. 기본값 `hancom`은 생략되어 기존 JSON은 그대로이고, DOCX 가져오기 결과는 `word_compatible`이다. `--base`를 준 편집에서 JSON의 프로필이 base와 다르면 거부한다.

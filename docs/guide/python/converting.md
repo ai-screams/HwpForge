@@ -67,6 +67,9 @@ print(rebuilt.report["paragraphs"], [w["code"] for w in rebuilt.report["warnings
 - `from_json`은 그 JSON을 **다시 인코드**해 새 문서를 만듭니다. `base`를 주면 이미지 바이너리와, 바뀌지 않은 문단의 줄 조판 캐시를 그 문서에서 가져옵니다. `base` 없이 이미지가 있는 문서를 재구성하면 이미지가 빠집니다. 스타일은 `base`에서 오지 않습니다. 값이 있는 `style_ref`가 하나라도 있으면 JSON의 `styles`가 필요해서 `styles=False`로 내보낸 JSON은 `base`를 줘도 거부됩니다. 모든 `style_ref`가 `null`이면 기본 프리셋으로 재구성합니다.
 - 원본 호환 플래그 보존은 base 포함 경로를 사용합니다. base 없이 WordCompatible JSON을 복원하면 원본의 빈·부분 플래그가 생성용 35개 묶음으로 바뀝니다. base 포함 편집에서는 JSON 모드가 base와 다르면 거부하며, Word base에 모드가 누락된 JSON도 거부합니다.
 - 새 HWPX 생성이나 DOCX 변환은 항목별 번호·글머리표 표현을 보존하려고 출력 정의를 나눌 수 있습니다. `result.report["warnings"]`의 `LIST_NUMBERING_SPLIT`은 현재 번호와 표현이 보존된 성공 결과에도 나타납니다. 번호 목록의 나뉜 구간은 시작값이 고정되므로 앞 구간을 편집한 뒤 뒤 구간 번호를 확인하십시오. `base`를 사용하는 원본 보존 편집은 분리를 적용하지 않으며, 표현 충돌은 기존 의미 손실 정책을 따릅니다.
+
+  `result.report["warnings"]`의 `LIST_NUMBERING_SPLIT`은 HWPX 출력 단계의 표현 분리이고, `DOCX_VALUE_APPROXIMATED`의 `context.loss="list_numbering_split"`은 Word 목록을 가져오는 단계의 번호 정의 분리입니다. 법률식 번호를 보존하는 데 필요한 경우 번호 정의를 나누며, 나뉜 구간의 시작값은 고정됩니다. 앞 구간 편집이 뒤 구간에 자동 반영되지 않으므로 편집 뒤 번호를 확인하십시오.
+
 - base 모드 불일치는 거부합니다. 그 밖의 생성은 fail-closed가 아닙니다: 의미가 손실돼도 거부하지 않고 `warnings`에 실어 돌려줍니다. 위 예제는 내용을 바꾸지 않아 `base` 바이트가 그대로 돌아오므로 경고가 없습니다. 내용을 바꾸면 줄 조판 캐시를 잃은 문단마다 `LAYOUT_CACHE_DROPPED`가 나옵니다(한컴에서 다시 저장하면 복원). `base`가 없으면 캐시를 싣지 않습니다.
 - 내용이 바뀌면 한컴 저장 문서의 `Preview/*`·`container.rdf` 엔트리는 `base`를 줘도 승계되지 않습니다(경고 없음). 텍스트만 바꿀 거라면 `export_section` → `patch`로 관련 없는 내용을 유지할 수 있습니다. 기존 한컴 미리보기가 있던 문서에서 내용을 실제로 바꾸면 미리보기와 그 연결 정보가 제거되고 `PREVIEW_REMOVED`가 나옵니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.
 - JSON이 문서가 아니면 `JSON_PARSE_FAILED`. 스키마는 `hwpforge.schema(kind="exported-document")`.
@@ -137,3 +140,5 @@ print(schema["title"], list(schema["properties"])[:4])
 스타일 참조는 `style_ref`와 `styles.style_positions`를 함께 보존하세요. styles 없는 독립 import에서 non-null 참조는 오류입니다. 명시 v2 입력은 위치 의미로 v3에 이행합니다.
 
 Word 목록은 정렬, 번호 뒤 탭·공백·없음, 수준 번호 탭과 번호 전용 문자 서식을 전달합니다. 공백 폭은 측정 비율로 근사합니다. 번호 글꼴·크기 때문에 Word의 첫 줄이 높아지면 그 차이를 문단 앞 간격으로 근사하고 본문 줄 높이는 바꾸지 않습니다(`list_marker_line_height` 경고). 후속 줄 위치는 Word의 왼쪽 들여쓰기로 보존합니다. 후속 줄이 번호 칸의 왼쪽 끝보다 왼쪽이면 표시 동작이 미측정이라 `list_marker_continuation` 손실 경고를 냅니다. 고정 칸을 넘는 번호와 같은 번호 수준의 문단별 배치 충돌도 경고를 확인하세요. 걸침 0의 decimal 숫자·점과 Symbol 글머리는 기본 탭 설정을 적용하며, 글꼴별 폭·셀·다단 원점·가운데 정렬은 근사입니다. 오른쪽 정렬은 anchor를 탭 후보로 사용합니다. 새 HWPX 생성은 보존 가능한 head 차이를 정의 분리로 표현합니다. 원본 보존 편집과 나눌 수 없는 정의는 문서 첫 사용처의 head와 상대 margin 이동량을 적용하며, head나 상대 margin 이동이 실제로 다를 때만 `list_marker_conflict` 의미 손실을 보고합니다. 의미 손실이 있는 원본 보존 편집은 거부됩니다.
+
+정의 상한으로 추가 분리를 못 하면 기존 활성 정의를 유지하고 남는 값·형식 차이를 `list_numbering_budget`으로 알립니다. 필요한 사본을 얻지 못한 법률식 문단이 원래 참조 형식으로 나갈 때는 `list_number_legal`도 알립니다. 복합·비십진 번호의 0값 근사는 `list_number_zero`로 알립니다. `list_numbering_budget`은 그룹당 한 번 기록하므로 경고 횟수로 영향 문단 수를 알 수는 없습니다.
