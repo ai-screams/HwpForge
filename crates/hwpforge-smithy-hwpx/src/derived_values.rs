@@ -851,6 +851,8 @@ impl DerivedEffects<'_, '_> {
                     == 1,
             )?;
         }
+        // Intentional second heading check: outline-loss acceptance stays sound on its own,
+        // even though every preserving delete runs the same check again afterwards.
         self.check_deleted_plain_headings(decoded)
     }
 

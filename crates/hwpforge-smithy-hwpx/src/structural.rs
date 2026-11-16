@@ -564,6 +564,7 @@ fn delete_admitted(
         effects.check_derived_values().map_err(verification_error)?;
         edit_checkpoint!("derived-heading");
         // 이것을 실패시키는 것: 삭제 문단의 직접/스타일 heading 검사 생략.
+        // Runs for every preserving delete; outline-loss acceptance also runs it on purpose.
         effects.check_deleted_plain_headings(&d0).map_err(verification_error)?;
         for change in &section_changes {
             apply_section_change(
