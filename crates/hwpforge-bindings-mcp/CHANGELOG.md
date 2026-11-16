@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.20.0...hwpforge-bindings-mcp-v0.20.1) - 2026-11-16
+
+### Changed
+
+- `hwpforge_delete_para`가 한컴이 저장한 HWPX의 평문·빈 문단을 지운다. 성공하면 입력 디코드 경고를 돌려주고 기존 미리보기가 있었으면 `PREVIEW_REMOVED`도 내며, 검증하지 못하는 요청은 이전과 같은 오류로 거부한다. 지운 문단 뒤의 줄 조판 캐시와 표 높이는 원문 그대로 둔다. 도구 설명을 기존 admission을 요구하는 `insert-para`·`stamp`, 보존 범위 밖 `set-cell` 요청과 따로 쓰도록 고쳤다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#343](https://github.com/ai-screams/HwpForge/pull/343), [#345](https://github.com/ai-screams/HwpForge/pull/345), [#355](https://github.com/ai-screams/HwpForge/pull/355))
+- `hwpforge_set_cell`이 한컴이 저장한 HWPX의 본문 직속 표의 한 문단·한 Text run 칸을 원문 보존으로 고친다. 값이 실제로 바뀌고 기존 미리보기가 있으면 `PREVIEW_REMOVED`를 낸다. 한컴 저장 문서에서 주소가 틀리면 `INPUT_NOT_ROUNDTRIP_SAFE` 대신 `CELL_NOT_FOUND` 같은 주소 오류가 나온다. `INPUT_NOT_ROUNDTRIP_SAFE`·`INPUT_ENTRIES_NOT_CARRIED`의 안내 문구를 새 동작에 맞게 고쳤다 ([#337](https://github.com/ai-screams/HwpForge/issues/337), [#354](https://github.com/ai-screams/HwpForge/pull/354))
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.19.1...hwpforge-bindings-mcp-v0.20.0) - 2026-11-07
 
 ### Changed
