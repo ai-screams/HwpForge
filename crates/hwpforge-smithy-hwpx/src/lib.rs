@@ -55,7 +55,7 @@ mod color;
 pub mod decoder;
 pub mod default_styles;
 mod depth;
-// Original-source deletion shares this stored-value and height decision.
+// Original-source deletion checks here the stored values its edit could leave stale.
 mod derived_values;
 pub mod diagnostics;
 mod diff;

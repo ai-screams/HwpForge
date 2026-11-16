@@ -360,7 +360,7 @@ fn every_preserving_failure_restores_the_original_error() {
     failures(&[]);
 }
 
-// 이것을 실패시키는 것: facts 중복 수집, check/height 순서 역전, admission 성공에 새 gate 적용.
+// 이것을 실패시키는 것: facts 중복 수집, admission 성공에 새 gate 적용.
 // 이것을 실패시키는 것: delete-layout 체크포인트 제거 또는 배치 검사를 파생 값 수집 뒤로 이동.
 #[test]
 fn collection_and_policy_are_scoped_to_preserving_delete() {
@@ -961,7 +961,6 @@ fn batch_plain_source_work_scales_with_paragraphs_and_deletions() {
 #[path = "preserved_loss_tests.rs"]
 mod losses;
 
-// 이것을 실패시키는 것: 칸 여백 허용 목록에서 사방 141 튜플을 제거해 공개 삭제를 거부.
 // 이것을 실패시키는 것: 생존 줄 캐시 제거 또는 표 높이 0 치환 복원.
 #[test]
 fn equal_cell_margins_delete_preserves_source_bytes() {

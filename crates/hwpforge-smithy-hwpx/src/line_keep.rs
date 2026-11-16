@@ -174,9 +174,9 @@ impl Tag {
 
 fn namespace(name: &str) -> &'static str {
     match name {
-        "sec" => "http://www.hancom.co.kr/hwpml/2011/section",
+        "sec" => crate::wire_xml::SECTION_NS,
         "p" | "run" | "secPr" | "grid" | "subList" | "tc" | "tr" | "tbl" | "switch" | "case"
-        | "default" => "http://www.hancom.co.kr/hwpml/2011/paragraph",
+        | "default" => crate::wire_xml::PARAGRAPH_NS,
         "intent" | "left" | "right" | "prev" | "next" => "http://www.hancom.co.kr/hwpml/2011/core",
         _ => "http://www.hancom.co.kr/hwpml/2011/head",
     }
