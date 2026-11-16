@@ -1,5 +1,7 @@
 //! Source list instances; lifetime is the document, independent of spacing boundaries.
 use super::*;
+mod counter;
+use counter::CounterState;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
 use hwpforge_foundation::{BulletIndex, NumberFormatType, NumberingIndex};
@@ -75,11 +77,14 @@ pub(super) struct Level {
     pub(super) align: Option<hwpforge_blueprint::ListMarkerAlign>,
     pub(super) suffix: Option<Suffix>,
     pub(super) tabs: std::collections::BTreeMap<i32, bool>,
-    pub(super) restart: bool,
+    pub(super) restart: Option<u32>,
     pub(super) picture: bool,
     pub(super) compiled: std::cell::OnceCell<Rc<Compiled>>,
 }
 impl Level {
+    pub(super) fn compiled_text(&self) -> Rc<str> {
+        self.compiled.get().expect("compiled source level").text.clone()
+    }
     /// Only the measured source font/glyph pair qualifies, using the same font-slot selection
     /// as glyph conversion. An ordinary Unicode bullet is not evidence for this ratio.
     pub(super) fn measured_symbol_bullet(&self, fonts: &Fonts) -> bool {
@@ -93,21 +98,14 @@ impl Level {
             .is_some_and(|c| matches!(c.marker, Marker::Bullet { approximated: true, .. }))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum GroupKey {
-    Abstract(u32),
-    Instance(u32),
-}
 pub(super) struct Compiled {
     text: Rc<str>,
     marker: Marker,
+    references: u16,
 }
 struct ResolvedLevel {
     compiled: Rc<Compiled>,
-    start: u32,
     format: NumberFormatType,
-    restart: bool,
-    current: Option<u64>,
 }
 #[derive(Clone, Copy)]
 enum Marker {
@@ -115,16 +113,33 @@ enum Marker {
     Bullet { glyph: Option<char>, approximated: bool, slots: bool },
     Lost,
 }
-struct Group {
+struct Instance {
     levels: [Option<ResolvedLevel>; 10],
+    mixed: bool,
+}
+struct OutputSegment {
+    id: usize,
+    counter: CounterState,
+    texts: [Rc<str>; 10],
+    formats: [NumberFormatType; 10],
+}
+struct Group {
+    counter: CounterState,
+    restarts: [Option<u32>; 10],
     lost: u16,
     seen: u16,
-    numbering: Option<usize>,
-    mixed: bool,
+    first: Option<usize>,
+    active: Option<OutputSegment>,
+    literals: HashMap<(usize, Rc<str>), usize>,
+    stopped: bool,
+    reserved: bool,
 }
 #[derive(Default)]
 pub(super) struct Lists {
-    groups: HashMap<GroupKey, Group>,
+    groups: HashMap<u32, Group>,
+    instances: HashMap<u32, Instance>,
+    overrides_used: HashSet<(u32, usize)>,
+    unemitted_groups: usize,
     bullets: HashMap<char, usize>,
     bullet_warnings: HashSet<(usize, &'static str)>,
     owned_marker_bytes: usize,
@@ -163,10 +178,21 @@ impl Lists {
             else {
                 continue;
             };
-            let key = group_key(id, abstract_id, number.has_override);
-            if let std::collections::hash_map::Entry::Vacant(entry) = lists.groups.entry(key) {
-                entry.insert(build_group(definitions, abstract_id, number));
+            let key = abstract_id;
+            let instance = build_instance(definitions, abstract_id, number);
+            let group =
+                lists.groups.entry(key).or_insert_with(|| build_group(definitions, abstract_id));
+            if !group.reserved
+                && instance
+                    .levels
+                    .iter()
+                    .flatten()
+                    .any(|l| matches!(l.compiled.marker, Marker::Number))
+            {
+                group.reserved = true;
+                lists.unemitted_groups += 1;
             }
+            lists.instances.insert(id, instance);
         }
         Ok(lists)
     }
@@ -178,6 +204,23 @@ impl Lists {
         part: &str,
         warnings: &mut Vec<DocxWarning>,
     ) -> Result<Option<ListRef>> {
+        // 이것을 실패시키는 것: 원본 문단을 생략 경로에서 다시 소비하거나 암묵 상위가 override를 소비.
+        if let Some((key, level)) = source_group(definitions, para) {
+            if let Some(group) = self.groups.get_mut(&key).filter(|_| level < 10) {
+                let num = para.num_id.unwrap();
+                let reset = self
+                    .overrides_used
+                    .insert((num, level as usize))
+                    .then(|| {
+                        definitions.numbers[&num].levels.get(&level).and_then(|l| l.start_override)
+                    })
+                    .flatten();
+                group.counter.advance_word(level as usize, reset, &group.restarts, part)?;
+                if reset.is_some() {
+                    group.lost &= (1 << level) - 1;
+                }
+            }
+        }
         let marker = self.resolve_marker(definitions, registry, para, part, warnings)?;
         // Every omitted source number can advance its own sequence and restart
         // already-seen descendants, regardless of why its marker was omitted.
@@ -229,22 +272,20 @@ impl Lists {
             reference_lost(part, warnings)?;
             return Ok(None);
         };
-        let key = group_key(num, abstract_id, number.has_override);
+        let key = abstract_id;
         let group = self.groups.get_mut(&key).unwrap();
-        let Some(resolved) = &group.levels[level as usize] else {
+        let instance = &self.instances[&num];
+        let Some(resolved) = &instance.levels[level as usize] else {
             reference_lost(part, warnings)?;
             return Ok(None);
         };
         let bit = 1 << level;
         group.seen |= bit;
-        if resolved.restart {
-            group.lost |= bit;
-        }
         if group.lost & bit != 0 {
             numbering_lost(part, warnings, "numbering_sequence")?;
             return Ok(None);
         }
-        if group.mixed {
+        if instance.mixed {
             numbering_lost(part, warnings, "numbering_format")?;
             return Ok(None);
         }
@@ -308,63 +349,162 @@ impl Lists {
                 Ok(Some(ListRef::Bullet(id, level as u8)))
             }
             Marker::Number => {
-                // Only an emitted ancestor resets the output sequence below it.
                 group.lost &= (bit << 1) - 1;
-                let start = group.levels[0].as_ref().or(Some(resolved)).map_or(1, |l| l.start);
-                let id = if let Some(id) = group.numbering {
-                    id
-                } else {
-                    let id = registry.numberings.len();
-                    limit(part, "numPr", "output numbering definitions", id + 1, MAX_DEFINITIONS)?;
-                    let additional = group
-                        .levels
-                        .iter()
-                        .flatten()
-                        .filter(|l| matches!(l.compiled.marker, Marker::Number))
-                        .map(|l| l.compiled.text.len())
-                        .sum::<usize>();
-                    let observed = self.owned_marker_bytes.saturating_add(additional);
-                    // Reserve the entire group before allocating any owned marker.
-                    limit(part, "numPr", "materialized marker bytes", observed, 64 * 1024 * 1024)?;
-                    self.owned_marker_bytes = observed;
-
-                    let levels = group
-                        .levels
-                        .iter()
-                        .enumerate()
-                        .map(|(i, l)| {
-                            l.as_ref()
-                                .filter(|l| matches!(l.compiled.marker, Marker::Number))
-                                .map(|l| ParaHead {
-                                    start: l.start,
-                                    num_format: l.format,
-                                    text: l.compiled.text.to_string(),
-                                    ..empty_head(i)
-                                })
-                                .unwrap_or_else(|| empty_head(i))
-                        })
-                        .collect();
-                    registry.numberings.push(NumberingDef { id: id as u32 + 1, start, levels });
-                    group.numbering = Some(id);
-                    id
-                };
-                let resolved = group.levels[level as usize].as_mut().unwrap();
-                resolved.current = Some(match resolved.current {
-                    Some(n) => n.checked_add(1).ok_or_else(|| {
-                        DocxError::invalid(part, "numPr", "source numbering overflow")
-                    })?,
-                    None => u64::from(resolved.start),
-                });
-                for child in group.levels.iter_mut().skip(level as usize + 1).flatten() {
-                    child.current = None;
-                }
-                Ok(Some(ListRef::Number(id, level as u8)))
+                self.assign_numbering(definitions, registry, num, level as usize, part, warnings)
             }
         }
     }
+    fn assign_numbering(
+        &mut self,
+        defs: &Definitions,
+        registry: &mut StyleRegistry,
+        num: u32,
+        level: usize,
+        part: &str,
+        warnings: &mut Vec<DocxWarning>,
+    ) -> Result<Option<ListRef>> {
+        let number = &defs.numbers[&num];
+        let key = number.abstract_id.unwrap();
+        let instance = &self.instances[&num];
+        let source = instance.levels[level].as_ref().unwrap();
+        let pending = std::array::from_fn(|i| {
+            if self.overrides_used.contains(&(num, i)) {
+                None
+            } else {
+                number.levels.get(&(i as u32)).and_then(|l| l.start_override)
+            }
+        });
+        let group = self.groups.get_mut(&key).unwrap();
+        let token = format!("^{}", level + 1);
+        let literal_zero = group.counter.values[level] == 0
+            && source.format == NumberFormatType::Digit
+            && source.compiled.references == 1 << level
+            && source.compiled.text.matches(&token).count() == 1;
+        // 이것을 실패시키는 것: 리터럴 재사용에 다시 정의·텍스트 예산을 청구.
+        if literal_zero {
+            if let Some(&id) = group.literals.get(&(level, source.compiled.text.clone())) {
+                return Ok(Some(ListRef::Number(id, level as u8)));
+            }
+        } else if (0..10)
+            .any(|i| source.compiled.references & (1 << i) != 0 && group.counter.values[i] == 0)
+        {
+            approximation(
+                warnings,
+                part,
+                "list_number_zero",
+                "Zero-valued compound or non-decimal numbering uses positive output counters",
+            )?;
+        }
+        let formats = std::array::from_fn(|i| {
+            instance.levels[i].as_ref().map_or(NumberFormatType::Digit, |l| l.format)
+        });
+        let compatible = if let Some(active) = &group.active {
+            let mut next = active.counter.clone();
+            next.advance_core(level, part)?;
+            (active.texts[level] == source.compiled.text)
+                && (0..10).filter(|&i| source.compiled.references & (1 << i) != 0).all(|i| {
+                    active.formats[i] == formats[i]
+                        && next.values[i] == group.counter.values[i].max(1)
+                })
+        } else {
+            false
+        };
+        // 이것을 실패시키는 것: 리터럴 0보다 정상 후보의 값 비교를 먼저 적용.
+        if literal_zero || !compatible {
+            let can_allocate = group.first.is_none()
+                || registry.numberings.len() + self.unemitted_groups < MAX_DEFINITIONS;
+            if can_allocate {
+                let starts = group.counter.segment_starts(level, pending, part)?;
+                let mut texts: [Rc<str>; 10] = std::array::from_fn(|i| {
+                    instance.levels[i]
+                        .as_ref()
+                        .filter(|l| matches!(l.compiled.marker, Marker::Number))
+                        .map_or_else(|| Rc::from(""), |l| l.compiled.text.clone())
+                });
+                let mut additional = texts.iter().map(|t| t.len()).sum::<usize>();
+                if literal_zero {
+                    additional = additional - token.len() + 1;
+                }
+                let owned = self.owned_marker_bytes.saturating_add(additional);
+                // 이것을 실패시키는 것: 정의의 문자열을 복사한 뒤에만 64MiB 상한 검사.
+                limit(part, "numPr", "materialized marker bytes", owned, 64 * 1024 * 1024)?;
+                limit(
+                    part,
+                    "numPr",
+                    "output numbering definitions",
+                    registry.numberings.len() + 1,
+                    MAX_DEFINITIONS,
+                )?;
+                if literal_zero {
+                    texts[level] = Rc::from(source.compiled.text.replacen(&token, "0", 1));
+                }
+                let id = registry.numberings.len();
+                let levels = (0..10)
+                    .map(|i| ParaHead {
+                        start: starts[i],
+                        num_format: formats[i],
+                        text: texts[i].to_string(),
+                        ..empty_head(i)
+                    })
+                    .collect();
+                registry.numberings.push(NumberingDef {
+                    id: id as u32 + 1,
+                    start: starts[0],
+                    levels,
+                });
+                self.owned_marker_bytes = owned;
+                if group.first.is_some() {
+                    approximation(warnings, part, "list_numbering_split", "List numbering uses separate definitions with fixed starts; later edits do not propagate across segments")?;
+                } else {
+                    group.first = Some(id);
+                    self.unemitted_groups -= usize::from(group.reserved);
+                }
+                if literal_zero {
+                    group.literals.insert((level, source.compiled.text.clone()), id);
+                    return Ok(Some(ListRef::Number(id, level as u8)));
+                }
+                group.active =
+                    Some(OutputSegment { id, counter: CounterState::new(starts), texts, formats });
+            } else if !group.stopped {
+                group.stopped = true;
+                approximation(warnings, part, "list_numbering_budget", "The numbering definition limit prevents further splits; remaining numbering is approximated")?;
+            }
+        }
+        // 이것을 실패시키는 것: 상한에서 기존 정의의 형식·텍스트·시작값을 사후 변경.
+        let id = if let Some(active) = &mut group.active {
+            active.counter.advance_core(level, part)?;
+            active.id
+        } else {
+            group.first.expect("first definition space is reserved")
+        };
+        Ok(Some(ListRef::Number(id, level as u8)))
+    }
     pub(super) fn current(&self, defs: &Definitions, para: &ParaDelta) -> Option<u64> {
         let (key, level) = source_group(defs, para)?;
-        self.groups.get(&key)?.levels.get(level as usize)?.as_ref()?.current
+        let counter = &self.groups.get(&key)?.counter;
+        counter.used.get(level as usize).copied().filter(|used| *used)?;
+        Some(counter.values[level as usize])
+    }
+    /// Read original source formats and current counter values.
+    pub(super) fn current_reference(
+        &self,
+        defs: &Definitions,
+        para: &ParaDelta,
+        index: u8,
+    ) -> Option<(NumberFormatType, u64)> {
+        let (key, level) = source_group(defs, para)?;
+        let instance = self.instances.get(&para.num_id?)?;
+        let source = instance.levels.get(level as usize)?.as_ref()?;
+        if source.compiled.references & (1 << index) == 0 {
+            return None;
+        }
+        let referenced = instance.levels.get(usize::from(index))?.as_ref()?;
+        let counter = &self.groups.get(&key)?.counter;
+        if !counter.used[usize::from(index)] {
+            return None;
+        }
+        let format = referenced.format;
+        Some((format, counter.values[usize::from(index)]))
     }
     fn observe_omitted(&mut self, defs: &Definitions, para: &ParaDelta) {
         let Some(num) = para.num_id.filter(|&id| id != 0) else {
@@ -377,11 +517,11 @@ impl Lists {
             return;
         };
         let level = defs.effective_level(num, para.level.unwrap_or(0));
-        let key = group_key(num, abstract_id, number.has_override);
+        let key = abstract_id;
         let Some(group) = self.groups.get_mut(&key) else {
             return;
         };
-        let Some(resolved) = group.levels.get(level as usize) else {
+        let Some(resolved) = self.instances[&num].levels.get(level as usize) else {
             return;
         };
         // A missing/unsupported number still consumes source progression. Known
@@ -427,10 +567,10 @@ fn compile(
         }
         Format::Unsupported => Marker::Lost,
     };
-    let _ = source.compiled.set(Rc::new(Compiled { text, marker }));
+    let _ = source.compiled.set(Rc::new(Compiled { text, marker, references: 1 << index }));
     Ok(())
 }
-fn build_group(defs: &Definitions, abstract_id: u32, number: &definitions::Number) -> Group {
+fn build_instance(defs: &Definitions, abstract_id: u32, number: &definitions::Number) -> Instance {
     let base = defs.numbering_base(abstract_id).map(|(_, levels)| levels);
     let mut levels: [Option<ResolvedLevel>; 10] = Default::default();
     let mut bullet = false;
@@ -446,16 +586,41 @@ fn build_group(defs: &Definitions, abstract_id: u32, number: &definitions::Numbe
         numbered |= !matches!(source.format, Format::Bullet);
         *target = Some(ResolvedLevel {
             compiled,
-            start: over.and_then(|l| l.start_override).or(source.start).unwrap_or(1),
             format: match source.format {
                 Format::Number(format) => format,
                 _ => NumberFormatType::Digit,
             },
-            restart: source.restart,
-            current: None,
         });
     }
-    Group { levels, lost: 0, seen: 0, numbering: None, mixed: bullet && numbered }
+    Instance { levels, mixed: bullet && numbered }
+}
+
+fn build_group(defs: &Definitions, abstract_id: u32) -> Group {
+    let base = defs.numbering_base(abstract_id).map(|(_, levels)| levels);
+    let starts = std::array::from_fn(|i| {
+        base.and_then(|ls| ls.get(&(i as u32))).and_then(|l| l.start).unwrap_or(0)
+    });
+    let restarts =
+        std::array::from_fn(|i| base.and_then(|ls| ls.get(&(i as u32))).and_then(|l| l.restart));
+    Group {
+        counter: CounterState::new(starts),
+        restarts,
+        lost: 0,
+        seen: 0,
+        first: None,
+        active: None,
+        literals: HashMap::new(),
+        stopped: false,
+        reserved: false,
+    }
+}
+fn approximation(
+    warnings: &mut Vec<DocxWarning>,
+    part: &str,
+    loss: &'static str,
+    reason: &'static str,
+) -> Result<()> {
+    warn(warnings, part, "numPr", Kind::ValueApproximated, loss, "approximate", reason)
 }
 
 fn empty_head(index: usize) -> ParaHead {
@@ -587,23 +752,13 @@ fn outline(
     Ok(Some(ListRef::Outline(level)))
 }
 
-fn source_group(defs: &Definitions, para: &ParaDelta) -> Option<(GroupKey, u32)> {
+fn source_group(defs: &Definitions, para: &ParaDelta) -> Option<(u32, u32)> {
     let num = para.num_id.filter(|&id| id != 0)?;
     let number = defs.numbers.get(&num)?;
     let abstract_id = number.abstract_id?;
-    Some((
-        group_key(num, abstract_id, number.has_override),
-        defs.effective_level(num, para.level.unwrap_or(0)),
-    ))
+    Some((abstract_id, defs.effective_level(num, para.level.unwrap_or(0))))
 }
 
-fn group_key(num: u32, abstract_id: u32, has_override: bool) -> GroupKey {
-    if has_override {
-        GroupKey::Instance(num)
-    } else {
-        GroupKey::Abstract(abstract_id)
-    }
-}
 pub(super) fn select_level<'a>(
     base: Option<&'a Level>,
     over: Option<&'a Level>,

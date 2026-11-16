@@ -620,12 +620,36 @@ fn word_marker_width_uses_measured_ratios() {
         text: "^1.".into(),
         checkable: false,
     };
-    assert_eq!(measured_number_ratio(&h, 0, 1).unwrap(), Some(848));
-    assert_eq!(measured_number_ratio(&h, 0, 10).unwrap(), Some(1454));
+    assert_eq!(
+        measured_template_ratio(&h.text, 0, |i| (i == 0
+            && h.num_format == hwpforge_foundation::NumberFormatType::Digit)
+            .then_some(1))
+        .unwrap(),
+        Some(848)
+    );
+    assert_eq!(
+        measured_template_ratio(&h.text, 0, |i| (i == 0
+            && h.num_format == hwpforge_foundation::NumberFormatType::Digit)
+            .then_some(10))
+        .unwrap(),
+        Some(1454)
+    );
     h.text = "10.^1.2".into();
-    assert_eq!(measured_number_ratio(&h, 0, 10).unwrap(), Some(3514));
+    assert_eq!(
+        measured_template_ratio(&h.text, 0, |i| (i == 0
+            && h.num_format == hwpforge_foundation::NumberFormatType::Digit)
+            .then_some(10))
+        .unwrap(),
+        Some(3514)
+    );
     h.text = "^1.^1".into();
-    assert_eq!(measured_number_ratio(&h, 0, 10).unwrap(), None);
+    assert_eq!(
+        measured_template_ratio(&h.text, 0, |i| (i == 0
+            && h.num_format == hwpforge_foundation::NumberFormatType::Digit)
+            .then_some(10))
+        .unwrap(),
+        None
+    );
     assert!(measured_marker_width(i32::MAX, u64::MAX).is_err());
     assert!(measured_marker_width(2, 1_u64 << 63).is_err());
 }
@@ -712,7 +736,6 @@ fn docx_auto_spacing_uses_existing_cascade_order() {
                         ..Default::default()
                     },
                 )]),
-                ..Default::default()
             },
         );
         let mut r = Resolver::new(d, false, &mut vec![]).unwrap();
@@ -786,14 +809,35 @@ fn measured_decimal_style_requires_a_resolved_positive_size() {
 // 이것을 실패시키는 것: ^1이 ^10에 접두 일치하거나 숫자 리터럴 접미를 거부.
 #[test]
 fn measured_decimal_ratio_matches_whole_level_tokens() {
-    let head = |text: &str| hwpforge_core::ParaHead {
-        level: 1,
-        start: 1,
-        num_format: hwpforge_foundation::NumberFormatType::Digit,
-        text: text.into(),
-        checkable: false,
-    };
-    assert_eq!(measured_number_ratio(&head("^10."), 0, 99).unwrap(), None);
-    assert_eq!(measured_number_ratio(&head("^10."), 9, 99).unwrap(), Some(1454));
-    assert_eq!(measured_number_ratio(&head("^19."), 0, 99).unwrap(), Some(2060));
+    assert_eq!(measured_template_ratio("^10.", 0, |i| (i == 0).then_some(99)).unwrap(), None);
+    assert_eq!(measured_template_ratio("^10.", 9, |i| (i == 9).then_some(99)).unwrap(), Some(1454));
+    assert_eq!(measured_template_ratio("^19.", 0, |i| (i == 0).then_some(99)).unwrap(), Some(2060));
+}
+
+// 이것을 실패시키는 것: 상위 참조 반복을 거부하거나 실제 참조 값의 자릿수를 한 번만 합산.
+#[test]
+fn measured_compound_ratio_counts_each_ancestor_reference() {
+    assert_eq!(
+        measured_template_ratio("^1.^1.^2", 1, |i| [Some(1234), Some(2)]
+            .get(usize::from(i))
+            .copied()
+            .flatten())
+        .unwrap(),
+        Some(5938),
+    );
+}
+
+// 이것을 실패시키는 것: 명목 경로에서 참조 자릿수를 1로 고정하거나 문장부호를 누락.
+#[test]
+fn nominal_compound_counts_share_source_digits_with_measured_ratios() {
+    let widths = decimal_template_widths("^1.^1.^2", 1, |i| {
+        [Some(1234), Some(2)].get(usize::from(i)).copied().flatten()
+    })
+    .unwrap();
+    assert_eq!(widths.count, Some(11));
+    assert_eq!(widths.ratio, Some(5938));
+    assert!(widths.compound);
+    let widths = decimal_template_widths("(^1)", 0, |_| Some(99)).unwrap();
+    assert_eq!(widths.count, Some(4));
+    assert_eq!(widths.ratio, None);
 }

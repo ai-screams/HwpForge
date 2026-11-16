@@ -85,7 +85,7 @@ fn numbering_groups_survive_body_and_sections() {
     assert_eq!(d.registry.numberings.iter().map(|n| n.start).collect::<Vec<_>>(), [1, 1]);
 }
 
-// 이것을 실패시키는 것: override 목록 공유, 시작값 1 고정, 하위 startOverride 손실 또는 비기본 재시작 허용.
+// 이것을 실패시키는 것: 첫 override 무시, 시작값 1 고정, 하위 startOverride 손실 또는 restart 0 생략.
 #[test]
 fn starts_overrides_and_partial_restarts() {
     let a = format!("{}{}", level(0, "decimal", "%1.", ""), level(1, "lowerLetter", "%2)", ""));
@@ -126,15 +126,9 @@ fn starts_overrides_and_partial_restarts() {
             assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 0);
             continue;
         }
-        assert_eq!(lists(&d), [number(0, 0), None, None, number(0, 0)]);
-        assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 2);
-        assert_eq!(
-            d.warnings
-                .iter()
-                .find(|w| w.code() == "DOCX_LIST_NUMBERING_LOST")
-                .map(|w| (w.loss(), w.action())),
-            Some(("numbering_sequence", "omit"))
-        );
+        assert_eq!(lists(&d), [number(0, 0), number(0, 1), number(0, 1), number(0, 0)]);
+        assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 0);
+        assert!(!d.warnings.iter().any(|w| w.loss() == "numbering_sequence"));
     }
     let over =
         format!("<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>", level(0, "upperRoman", "(%1)", ""));
@@ -457,19 +451,19 @@ fn outline_preserves_content_and_style() {
     assert_eq!(d.registry.para_shapes[style.para_shape_id.get()].list, None);
 }
 
-// 이것을 실패시키는 것: 유효 수준 최댓값 제외, 시작 0을 1로 바꾸기, 고정 % 문자 제거, 보충 사용자 영역 허용.
+// 이것을 실패시키는 것: 유효 수준 최댓값 제외, 리터럴 0 대신 start 0 기록, 고정 % 문자 제거, 보충 사용자 영역 허용.
 #[test]
 fn marker_boundary_values_remain_explicit() {
     let defs = definitions(&level(9, "decimal", "%10 50%", "<w:start w:val='0'/>"), &num(7, 1, ""));
     let d = read(&defs, &item(7, 9, "", "A"));
     assert_eq!(lists(&d), [number(0, 9)]);
-    assert_eq!(d.registry.numberings[0].start, 0);
+    assert_eq!(d.registry.numberings[0].start, 1);
     assert_eq!(
         (
             d.registry.numberings[0].levels[9].start,
             d.registry.numberings[0].levels[9].text.as_str()
         ),
-        (0, "^10 50%")
+        (1, "0 50%")
     );
     for (glyph, font) in [
         ("&#xF0000;", "Arial"),
@@ -591,15 +585,8 @@ fn explicit_default_restart_keeps_markers() {
             &defs,
             &format!("{}{}{}", item(7, 0, "", "A"), item(7, 1, "", "B"), item(7, 1, "", "C")),
         );
-        assert_eq!(
-            lists(&d),
-            if value == 1 {
-                vec![number(0, 0), number(0, 1), number(0, 1)]
-            } else {
-                vec![number(0, 0), None, None]
-            }
-        );
-        assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), if value == 1 { 0 } else { 2 });
+        assert_eq!(lists(&d), [number(0, 0), number(0, 1), number(0, 1)]);
+        assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 0);
     }
 }
 
@@ -841,12 +828,21 @@ fn emitted_ancestor_recovers_omitted_marker_descendants() {
                 item(7, 2, "", "E")
             ),
         );
-        assert_eq!(lists(&d), [number(0, 2), None, None, number(0, 0), number(0, 2)]);
-        assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 2);
-        assert_eq!(
-            d.warnings.iter().find(|w| w.code() == "DOCX_LIST_NUMBERING_LOST").unwrap().loss(),
-            loss
-        );
+        if extra.is_empty() {
+            assert_eq!(lists(&d), [number(0, 2), None, None, number(0, 0), number(0, 2)]);
+            assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 2);
+            assert_eq!(
+                d.warnings.iter().find(|w| w.code() == "DOCX_LIST_NUMBERING_LOST").unwrap().loss(),
+                loss
+            );
+        } else {
+            assert_eq!(
+                lists(&d),
+                [number(0, 2), number(0, 1), number(0, 2), number(0, 0), number(0, 2)]
+            );
+            assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 0);
+            assert!(!d.warnings.iter().any(|w| w.loss() == "numbering_sequence"));
+        }
     }
 }
 
@@ -2058,7 +2054,7 @@ fn single_digit_marker_fits_a_nine_point_slot() {
 #[test]
 fn unmeasured_styles_keep_the_slot_and_size_scales_width() {
     for (props, want, overflow) in [
-        ("<w:b/>", 1800, 1),
+        ("<w:b/>", 5400, 0),
         ("<w:i/>", 1800, 1),
         ("<w:rFonts w:ascii='Arial' w:hAnsi='Arial' w:eastAsia='맑은 고딕'/>", 1800, 1),
         ("<w:vertAlign w:val='superscript'/>", 1800, 1),
@@ -2134,4 +2130,429 @@ fn measured_width_uses_effective_latin_marker_context() {
         assert_eq!(gap(&d, 0), gap_expected, "{source}/{mark}");
         assert_eq!(loss_count(&d, "list_marker_overflow"), u64::from(gap_expected == 1800));
     }
+}
+
+// 같은 입력 표를 독립 시험 모듈에서 각각 포함한다.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/word_counter_cases.rs"]
+mod word_counter_cases;
+fn read_word_counter_case(case: &word_counter_cases::Case) -> DocxDecoded {
+    let body: String = case.uses.iter().map(|&(num, level)| item(num, level, "", "body")).collect();
+    if case.styles.is_empty() {
+        return read(&case.definitions, &body);
+    }
+    let numbering = format!("<w:numbering xmlns:w='{W}'>{}</w:numbering>", case.definitions);
+    let styles = format!("<w:styles xmlns:w='{W}'>{}</w:styles>", case.styles);
+    decode_docx(&package(
+        &body,
+        &[("numbering", "numbering.xml", &numbering), ("styles", "styles.xml", &styles)],
+    ))
+    .unwrap()
+}
+fn displayed_core_numbers(decoded: &DocxDecoded) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut counters: BTreeMap<usize, ([u32; 10], [bool; 10])> = BTreeMap::new();
+    lists(decoded)
+        .into_iter()
+        .map(|reference| {
+            assert!(matches!(reference, Some(ParagraphListRef::Number { .. })), "missing number");
+            let Some(ParagraphListRef::Number { numbering_id, level }) = reference else {
+                unreachable!();
+            };
+            let def = &decoded.registry.numberings[numbering_id.get()];
+            let (values, used) =
+                counters.entry(numbering_id.get()).or_insert(([0; 10], [false; 10]));
+            for i in 0..=usize::from(level) {
+                if !used[i] {
+                    values[i] =
+                        def.levels.iter().find(|h| h.level as usize == i + 1).unwrap().start.max(1);
+                    used[i] = true;
+                } else if i == usize::from(level) {
+                    values[i] += 1;
+                }
+            }
+            used[usize::from(level) + 1..].fill(false);
+            let mut text =
+                def.levels.iter().find(|h| h.level == u32::from(level) + 1).unwrap().text.clone();
+            for i in (0..10).rev() {
+                let format =
+                    def.levels.iter().find(|h| h.level as usize == i + 1).unwrap().num_format;
+                let value = match format {
+                    NumberFormatType::RomanCapital => [
+                        "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI",
+                        "XII", "XIII",
+                    ][values[i] as usize]
+                        .into(),
+                    NumberFormatType::RomanSmall => [
+                        "", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi",
+                        "xii", "xiii",
+                    ][values[i] as usize]
+                        .into(),
+                    NumberFormatType::LatinSmall => {
+                        if values[i] == 0 {
+                            String::new()
+                        } else {
+                            char::from(b'a' + values[i] as u8 - 1).to_string()
+                        }
+                    }
+                    NumberFormatType::LatinCapital => {
+                        if values[i] == 0 {
+                            String::new()
+                        } else {
+                            char::from(b'A' + values[i] as u8 - 1).to_string()
+                        }
+                    }
+                    _ => values[i].to_string(),
+                };
+                text = text.replace(&format!("^{}", i + 1), &value);
+            }
+            text
+        })
+        .collect()
+}
+fn assert_word_counter_case(name: &str) {
+    let case = word_counter_cases::counter_cases().into_iter().find(|c| c.name == name).unwrap();
+    let decoded = read_word_counter_case(&case);
+    assert_eq!(displayed_core_numbers(&decoded), case.expected, "{name}");
+    assert!(decoded
+        .registry
+        .numberings
+        .iter()
+        .all(|n| n.start > 0 && n.levels.iter().all(|h| h.start > 0)));
+    assert_eq!(count(&decoded, "DOCX_LIST_NUMBERING_LOST"), 0);
+}
+
+// 이것을 실패시키는 것: 생략 start를 1로 설정.
+#[test]
+fn omitted_start_uses_a_literal_zero() {
+    assert_word_counter_case("omitted_start_uses_a_literal_zero");
+}
+
+// 이것을 실패시키는 것: 명시적 0을 Core start로 직접 기록.
+#[test]
+fn explicit_zero_uses_a_literal_zero() {
+    assert_word_counter_case("explicit_zero_uses_a_literal_zero");
+}
+
+// 이것을 실패시키는 것: num마다 공유 카운터를 초기화.
+#[test]
+fn instances_share_the_abstract_counter() {
+    assert_word_counter_case("instances_share_the_abstract_counter");
+}
+
+// 이것을 실패시키는 것: 첫 override를 무시.
+#[test]
+fn first_override_resets_the_shared_counter() {
+    assert_word_counter_case("first_override_resets_the_shared_counter");
+}
+
+// 이것을 실패시키는 것: 서식 override가 카운터를 초기화.
+#[test]
+fn format_only_overrides_keep_progression() {
+    assert_word_counter_case("format_only_overrides_keep_progression");
+}
+
+// 이것을 실패시키는 것: override lvl start로 공유 시작값을 변경.
+#[test]
+fn overridden_level_start_does_not_reset() {
+    assert_word_counter_case("overridden_level_start_does_not_reset");
+}
+
+// 이것을 실패시키는 것: 부모 뒤 하위 used를 유지.
+#[test]
+fn default_restart_resets_children() {
+    assert_word_counter_case("default_restart_resets_children");
+}
+
+// 이것을 실패시키는 것: restart 0을 기본 재시작으로 처리.
+#[test]
+fn zero_restart_preserves_child_progression() {
+    assert_word_counter_case("zero_restart_preserves_child_progression");
+}
+
+// 이것을 실패시키는 것: 양수 재시작을 bool로 축약.
+#[test]
+fn restart_threshold_uses_its_value() {
+    assert_word_counter_case("restart_threshold_uses_its_value");
+}
+
+// 이것을 실패시키는 것: override를 매번 적용.
+#[test]
+fn override_then_return_uses_shared_progression() {
+    assert_word_counter_case("override_then_return_uses_shared_progression");
+}
+
+// 이것을 실패시키는 것: 공유 값 대신 num별 옛 값을 사용.
+#[test]
+fn nonunit_override_then_return_uses_shared_progression() {
+    assert_word_counter_case("nonunit_override_then_return_uses_shared_progression");
+}
+
+// 이것을 실패시키는 것: 그룹당 override를 한 번만 소비.
+#[test]
+fn each_instance_consumes_its_override_once() {
+    assert_word_counter_case("each_instance_consumes_its_override_once");
+}
+
+// 이것을 실패시키는 것: override를 하위 재시작값으로 보관.
+#[test]
+fn child_override_expires_after_parent_restart() {
+    assert_word_counter_case("child_override_expires_after_parent_restart");
+}
+
+// 이것을 실패시키는 것: 깊은 사용에서 상위 override를 소비.
+#[test]
+fn deeper_use_does_not_consume_parent_override() {
+    assert_word_counter_case("deeper_use_does_not_consume_parent_override");
+}
+
+// 이것을 실패시키는 것: 하위 사용에서 최상위 override를 소비.
+#[test]
+fn child_use_does_not_consume_top_override() {
+    assert_word_counter_case("child_use_does_not_consume_top_override");
+}
+
+// 이것을 실패시키는 것: 명시적 하위 재등장에서 override를 재적용.
+#[test]
+fn explicit_child_use_consumes_its_override() {
+    assert_word_counter_case("explicit_child_use_consumes_its_override");
+}
+
+// 이것을 실패시키는 것: 암묵 중간 수준 used를 설정하지 않음.
+#[test]
+fn skipped_middle_level_is_consumed() {
+    assert_word_counter_case("skipped_middle_level_is_consumed");
+}
+
+// 이것을 실패시키는 것: 연속 번호를 재시작.
+#[test]
+fn ordinary_counter_control() {
+    assert_word_counter_case("ordinary_counter_control");
+}
+
+// 이것을 실패시키는 것: 첫 num에 서식과 값을 고정.
+#[test]
+fn format_override_can_be_the_first_instance() {
+    assert_word_counter_case("format_override_can_be_the_first_instance");
+}
+
+// 이것을 실패시키는 것: 다른 abstract가 등장하면 값을 초기화.
+#[test]
+fn interleaved_lists_keep_independent_counters() {
+    assert_word_counter_case("interleaved_lists_keep_independent_counters");
+}
+
+// 이것을 실패시키는 것: 연결 대상 abstract로 카운터를 병합.
+#[test]
+fn linked_abstracts_keep_separate_counters() {
+    assert_word_counter_case("linked_abstracts_keep_separate_counters");
+}
+
+// 이것을 실패시키는 것: 연결된 두 원본 카운터를 공유.
+#[test]
+fn linked_counter_order_is_independent() {
+    assert_word_counter_case("linked_counter_order_is_independent");
+}
+
+// 이것을 실패시키는 것: 첫 연결 정의로 그룹을 병합.
+#[test]
+fn linked_counter_reverse_order_is_independent() {
+    assert_word_counter_case("linked_counter_reverse_order_is_independent");
+}
+
+// 이것을 실패시키는 것: 출력 리터럴 head에서 토큰을 찾아 첫 기본 탭 요청을 잃음.
+#[test]
+fn literal_zero_keeps_default_tab_measurement() {
+    for start in ["", "<w:start w:val='0'/>"] {
+        let l = zero_level(720, "w:hanging='0'", "").replace("<w:start w:val='1'/>", start);
+        let settings =
+            format!("<w:settings xmlns:w='{W}'><w:defaultTabStop w:val='720'/></w:settings>");
+        let d = zero_read(&l, &item(7, 0, "", "body"), Some(&settings), "");
+        assert_eq!(d.registry.numberings[0].levels[0].text, "0.");
+        assert!(marker_shape(&d, 0).list_marker.is_some());
+        assert_eq!(gap(&d, 0), 3600);
+        assert_eq!(loss_count(&d, "list_marker_zero_slot"), 0);
+    }
+}
+// 이것을 실패시키는 것: 리터럴 0의 걸침 요청을 생략하거나 원본 폭 측정을 출력 글로 대체.
+#[test]
+fn literal_zero_preserves_hanging_layout() {
+    for start in ["", "<w:start w:val='0'/>"] {
+        let l = zero_level(720, "w:hanging='360'", "").replace("<w:start w:val='1'/>", start);
+        let d = zero_read(&l, &item(7, 0, "", "body"), None, "");
+        assert_eq!(marker_shape(&d, 0).indent_first_line.as_i32(), -1800);
+        assert!(marker_shape(&d, 0).list_marker.is_some());
+        assert_eq!(gap(&d, 0), 1800);
+        assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
+        // 측정 폭이 슬롯을 넘으면 기존 기본 탭 산술을 그대로 적용한다.
+        let narrow = zero_level(
+            720,
+            "w:hanging='90'",
+            "<w:rPr><w:rFonts w:ascii='Malgun Gothic' w:hAnsi='Malgun Gothic'/></w:rPr>",
+        )
+        .replace("<w:start w:val='1'/>", start);
+        let d = zero_read(&narrow, &item(7, 0, "", "body"), None, "");
+        assert_eq!(gap(&d, 0), 4050);
+    }
+}
+// 이것을 실패시키는 것: 같은 그룹·수준·글의 리터럴을 문단마다 새로 만들거나 재사용에도 split을 집계.
+#[test]
+fn literal_zero_definitions_are_reused() {
+    let defs = definitions(
+        &level(0, "decimal", "%1.", ""),
+        &format!(
+            "{}{}{}",
+            num(7, 1, ""),
+            num(8, 1, &word_counter_cases::reset(0, 0)),
+            num(9, 1, &word_counter_cases::reset(0, 0))
+        ),
+    );
+    let d = read(
+        &defs,
+        &format!(
+            "{}{}{}{}{}",
+            item(7, 0, "", "a"),
+            item(8, 0, "", "b"),
+            item(7, 0, "", "c"),
+            item(9, 0, "", "d"),
+            item(7, 0, "", "e")
+        ),
+    );
+    assert_eq!(lists(&d), [number(0, 0), number(1, 0), number(2, 0), number(1, 0), number(3, 0)]);
+    assert_eq!(d.registry.numberings.len(), 4);
+    assert_eq!(loss_count(&d, "list_numbering_split"), 3);
+    assert_eq!(d.registry.numberings[1].levels[0].text, "0.");
+}
+// 이것을 실패시키는 것: 현재 텍스트·형식 차이를 무시하거나 과거 정의로 복귀.
+#[test]
+fn format_changes_open_new_numbering_segments() {
+    for (format, text, wire, expected_format) in [
+        ("upperRoman", "%1.", "^1.", NumberFormatType::RomanCapital),
+        ("decimal", "(%1)", "(^1)", NumberFormatType::Digit),
+    ] {
+        let over =
+            format!("<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>", level(0, format, text, ""));
+        let defs = definitions(
+            &level(0, "decimal", "%1.", ""),
+            &format!("{}{}", num(7, 1, ""), num(8, 1, &over)),
+        );
+        let d = read(
+            &defs,
+            &format!("{}{}{}", item(7, 0, "", "a"), item(8, 0, "", "b"), item(7, 0, "", "c")),
+        );
+        assert_eq!(lists(&d), [number(0, 0), number(1, 0), number(2, 0)]);
+        assert_eq!(
+            d.registry.numberings.iter().map(|n| n.levels[0].start).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            d.registry.numberings.iter().map(|n| n.levels[0].text.as_str()).collect::<Vec<_>>(),
+            ["^1.", wire, "^1."]
+        );
+        assert_eq!(d.registry.numberings[1].levels[0].num_format, expected_format);
+    }
+}
+// 이것을 실패시키는 것: 번호 굵기를 Core 정의 표현 비교에 포함.
+#[test]
+fn marker_style_changes_do_not_split_core_numbering() {
+    let case = word_counter_cases::counter_cases()
+        .into_iter()
+        .find(|c| c.name == "format_only_overrides_keep_progression")
+        .unwrap();
+    let d = read_word_counter_case(&case);
+    assert_eq!(d.registry.numberings.len(), 1);
+    assert_eq!(loss_count(&d, "list_numbering_split"), 0);
+}
+// 이것을 실패시키는 것: abstract 공유 손실을 절대값 override로 복구하지 않거나 현재 개요를 정상 번호로 출력.
+#[test]
+fn absolute_override_recovers_shared_lost_state() {
+    let defs = definitions(
+        &level(0, "decimal", "%1.", ""),
+        &format!("{}{}", num(7, 1, ""), num(8, 1, &word_counter_cases::reset(0, 5))),
+    );
+    let d = read(
+        &defs,
+        &format!(
+            "{}{}{}",
+            item(7, 0, "<w:outlineLvl w:val='0'/>", "heading"),
+            item(7, 0, "", "lost"),
+            item(8, 0, "", "reset")
+        ),
+    );
+    assert_eq!(lists(&d), [Some(ParagraphListRef::Outline { level: 0 }), None, number(0, 0)]);
+    assert_eq!(d.registry.numberings[0].levels[0].start, 5);
+    let d = read(
+        &defs,
+        &format!(
+            "{}{}",
+            item(8, 0, "<w:outlineLvl w:val='0'/>", "heading"),
+            item(7, 0, "", "lost")
+        ),
+    );
+    assert_eq!(lists(&d), [Some(ParagraphListRef::Outline { level: 0 }), None]);
+}
+// 이것을 실패시키는 것: 혼합 여부를 첫 num의 결과로 abstract에 고정.
+#[test]
+fn mixed_numbering_is_checked_per_instance() {
+    let base = format!("{}{}", level(0, "decimal", "%1.", ""), level(1, "bullet", "•", ""));
+    let over = format!(
+        "{}<w:lvlOverride w:ilvl='1'>{}</w:lvlOverride>",
+        word_counter_cases::reset(0, 1),
+        level(1, "decimal", "%2.", "")
+    );
+    let d = read(
+        &definitions(&base, &format!("{}{}", num(7, 1, ""), num(8, 1, &over))),
+        &format!(
+            "{}{}{}",
+            item(7, 0, "", "mixed"),
+            item(8, 0, "", "number"),
+            item(7, 0, "", "mixed")
+        ),
+    );
+    assert_eq!(lists(&d), [None, number(0, 0), None]);
+}
+// 이것을 실패시키는 것: 깊은 씨앗에서 대기 override를 버리거나 재시작 뒤에도 다시 적용.
+#[test]
+fn pending_child_override_seeds_the_first_segment() {
+    let defs = definitions(
+        &format!("{}{}", level(0, "decimal", "%1.", ""), level(1, "decimal", "%2.", "")),
+        &num(7, 1, &word_counter_cases::reset(1, 5)),
+    );
+    let body: String = [0, 1, 1, 0, 1].into_iter().map(|l| item(7, l, "", "body")).collect();
+    let d = read(&defs, &body);
+    assert_eq!(lists(&d), [number(0, 0), number(0, 1), number(0, 1), number(0, 0), number(1, 1)]);
+    assert_eq!(d.registry.numberings[0].levels[1].start, 5);
+    assert_eq!(d.registry.numberings[1].levels[1].start, 1);
+    assert_eq!(loss_count(&d, "list_numbering_split"), 1);
+}
+// 이것을 실패시키는 것: 자기 수준 이상 restart를 재시작 중지나 손실로 처리.
+#[test]
+fn invalid_restart_reference_is_ignored() {
+    for restart in [2, 3] {
+        let defs = definitions(
+            &format!(
+                "{}{}",
+                level(0, "decimal", "%1.", ""),
+                level(1, "decimal", "%2.", &format!("<w:lvlRestart w:val='{restart}'/>"))
+            ),
+            &num(7, 1, ""),
+        );
+        let body: String = [0, 1, 0, 1].into_iter().map(|l| item(7, l, "", "body")).collect();
+        let d = read(&defs, &body);
+        assert_eq!(lists(&d), [number(0, 0), number(0, 1), number(0, 0), number(0, 1)]);
+        assert_eq!(loss_count(&d, "numbering_sequence"), 0);
+        assert_eq!(loss_count(&d, "list_numbering_split"), 0);
+    }
+}
+
+// 이것을 실패시키는 것: 비십진 0을 진단 없이 양수로 바꾸거나 Core start 0을 기록.
+#[test]
+fn nondecimal_zero_is_diagnosed_with_positive_starts() {
+    let d = read(
+        &definitions(&level(0, "upperRoman", "%1.", "<w:start w:val='0'/>"), &num(7, 1, "")),
+        &item(7, 0, "", "body"),
+    );
+    assert_eq!(d.registry.numberings[0].levels[0].num_format, NumberFormatType::RomanCapital);
+    assert_eq!(d.registry.numberings[0].levels[0].start, 1);
+    assert_eq!(loss_count(&d, "list_number_zero"), 1);
 }

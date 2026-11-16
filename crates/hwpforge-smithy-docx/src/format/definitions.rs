@@ -11,7 +11,6 @@ use std::{
 #[derive(Default)]
 pub(super) struct Number {
     pub(super) abstract_id: Option<u32>,
-    pub(super) has_override: bool,
     pub(super) levels: BTreeMap<u32, super::lists::Level>,
 }
 #[derive(Default)]
@@ -589,7 +588,6 @@ impl Definitions {
                                     if let Some(f) = stack.last_mut() {
                                         *f = Frame::Override { num, level, has_level: true };
                                     }
-                                    self.numbers.get_mut(&num).unwrap().has_override = true;
                                     self.numbers
                                         .get_mut(&num)
                                         .unwrap()
@@ -626,13 +624,7 @@ impl Definitions {
                                     match e.name.as_str() {
                                         "start" => target.start = Some(integer(&e, "val", part)?),
                                         "lvlRestart" => {
-                                            let index = match owner {
-                                                Owner::Abstract(_, level)
-                                                | Owner::Number(_, level) => level,
-                                                _ => unreachable!(),
-                                            };
-                                            let value = integer(&e, "val", part)?;
-                                            target.restart = value != index;
+                                            target.restart = Some(integer(&e, "val", part)?);
                                         }
                                         "lvlPicBulletId" => {
                                             integer(&e, "val", part)?;
@@ -647,7 +639,6 @@ impl Definitions {
                                     Frame::Leaf
                                 }
                                 (Frame::Override { num, level, .. }, "startOverride") => {
-                                    self.numbers.get_mut(&num).unwrap().has_override = true;
                                     self.numbers
                                         .get_mut(&num)
                                         .unwrap()

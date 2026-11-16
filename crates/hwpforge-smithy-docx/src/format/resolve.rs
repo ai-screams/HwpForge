@@ -593,6 +593,8 @@ impl Resolver {
             .definitions
             .marker_level(&base.para)
             .expect("resolved marker has its source level");
+        let number_format = source.format;
+        let number_text = source.compiled_text();
         let align = source.align.unwrap_or(ListMarkerAlign::Left);
         let suffix = source.suffix.unwrap_or_default();
         let mut marker_char = source.marker_char.clone();
@@ -621,15 +623,20 @@ impl Resolver {
                 {
                     Some(508)
                 }
-                lists::ListRef::Number(id, index) => self
+                lists::ListRef::Number(_, index) => self
                     .lists
                     .current(&self.definitions, &base.para)
                     .map(|n| {
-                        measured_number_ratio(
-                            &self.registry.numberings[id].levels[usize::from(index)],
-                            index,
-                            n,
-                        )
+                        measured_template_ratio(&number_text, index, |reference| {
+                            (reference == index
+                                && matches!(
+                                    number_format,
+                                    lists::Format::Number(
+                                        hwpforge_foundation::NumberFormatType::Digit
+                                    )
+                                ))
+                            .then_some(n)
+                        })
                     })
                     .transpose()?
                     .flatten(),
@@ -836,127 +843,94 @@ impl Resolver {
                 )?),
             }
         };
+        let widths = if let lists::ListRef::Number(_, index) = group {
+            Some(decimal_template_widths(&number_text, index, |reference| {
+                self.lists
+                    .current_reference(&self.definitions, &base.para, reference)
+                    .filter(|(format, _)| *format == hwpforge_foundation::NumberFormatType::Digit)
+                    .map(|(_, value)| value)
+            })?)
+        } else {
+            None
+        };
         let mut handled_hanging = false;
-        // 이것을 실패시키는 것: 새 측정 판정을 정렬·접미·명시 번호 탭 조건 밖에 적용.
-        // FromAnchor is the Tab suffix here; first < 0 and no numbering tabs imply a positive slot.
+        let mut uncertain = false;
+        // 이것을 실패시키는 것: 측정 판정을 정렬·접미·명시 번호 탭 조건 밖에 적용.
+        // FromAnchor is the Tab suffix here; hanging without numbering tabs has a positive slot.
         if let ListTextStart::FromAnchor(g) = text_start {
             if first < 0 && align == ListMarkerAlign::Left && !tabs.values().any(|&number| number) {
-                let ratio = if self.measured_decimal_style(&effective, collapsed) {
-                    match group {
-                        lists::ListRef::Number(id, index) => self
-                            .lists
-                            .current(&self.definitions, &base.para)
-                            .map(|n| {
-                                measured_number_ratio(
-                                    &self.registry.numberings[id].levels[usize::from(index)],
-                                    index,
-                                    n,
-                                )
-                            })
-                            .transpose()?
-                            .flatten(),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                if ratio.is_some() {
-                    handled_hanging = true;
-                    match hanging_tab_decision(
-                        anchor,
-                        g.as_i32(),
-                        marker.size,
-                        ratio,
-                        self.default_tab_stop,
-                    )? {
-                        MeasuredTabDecision::Keep => {}
-                        MeasuredTabDecision::Advance(gap) => {
-                            text_start = ListTextStart::FromAnchor(unit(gap)?)
-                        }
-                        MeasuredTabDecision::Uncertain => {
-                            if self.marker_warnings.insert((group, "list_marker_overflow")) {
-                                warn(
-                                w,
-                                part,
-                                "numPr",
-                                Kind::ValueApproximated,
-                                "list_marker_overflow",
-                                "retain_slot",
-                                "Marker width is uncertain in the fixed slot; overlap is possible",
-                            )?;
+                if let Some(widths) = &widths {
+                    let ratio = self
+                        .measured_decimal_style(&effective, collapsed)
+                        .then_some(widths.ratio)
+                        .flatten();
+                    if ratio.is_some() {
+                        let decision = hanging_tab_decision(
+                            anchor,
+                            g.as_i32(),
+                            marker.size,
+                            ratio,
+                            self.default_tab_stop,
+                        )?;
+                        // Ordinary widths are lower bounds for bold markers. A fitting
+                        // lower bound still needs the nominal upper-bound check below.
+                        handled_hanging = !(effective.char.toggles[0].unwrap_or(false)
+                            && decision == MeasuredTabDecision::Keep);
+                        if handled_hanging {
+                            match decision {
+                                MeasuredTabDecision::Keep => {}
+                                MeasuredTabDecision::Advance(gap) => {
+                                    text_start = ListTextStart::FromAnchor(unit(gap)?)
+                                }
+                                MeasuredTabDecision::Uncertain => uncertain = true,
                             }
                         }
                     }
                 }
             }
         }
-        // 이것을 실패시키는 것: 측정으로 해결한 넘침을 명목 폭 검사에서 다시 경고.
-        if !handled_hanging {
-            if let (
-                None,
-                ListTextStart::FromAnchor(g),
-                Some(n),
-                Some(lists::ListRef::Number(id, index)),
-            ) = (
-                selected,
-                text_start,
-                self.lists.current(&self.definitions, &base.para),
-                base.para.projected_list,
-            ) {
-                let head = &self.registry.numberings[id].levels[usize::from(index)];
-                if head.num_format == hwpforge_foundation::NumberFormatType::Digit {
-                    let own = format!("^{}", u32::from(index) + 1);
-                    if let Some((prefix, suffix)) = head.text.split_once(&own) {
-                        if prefix.is_ascii()
-                            && suffix.is_ascii()
-                            && !prefix.contains('^')
-                            && !suffix.contains('^')
-                        {
-                            let count = u64::from(n.checked_ilog10().unwrap_or(0))
-                                + 1
-                                + u64::try_from(prefix.len() + suffix.len()).map_err(|_| {
-                                    DocxError::invalid(part, "numPr", "marker length overflow")
-                                })?;
-                            let width = count
-                                .checked_mul(u64::try_from(marker.size).map_err(|_| {
-                                    DocxError::invalid(part, "numPr", "negative marker size")
-                                })?)
-                                .ok_or_else(|| {
-                                    DocxError::invalid(
-                                        part,
-                                        "numPr",
-                                        "nominal marker width overflow",
-                                    )
-                                })?;
-                            let slot = i64::from(g.as_i32())
-                                .checked_mul(if align == ListMarkerAlign::Center { 2 } else { 1 })
-                                .ok_or_else(|| {
-                                    DocxError::invalid(part, "numPr", "slot overflow")
-                                })?;
-                            if width
-                                > u64::try_from(slot)
-                                    .map_err(|_| {
-                                        DocxError::invalid(part, "numPr", "negative slot")
-                                    })?
-                                    .checked_mul(2)
-                                    .ok_or_else(|| {
-                                        DocxError::invalid(part, "numPr", "slot overflow")
-                                    })?
-                                && self.marker_warnings.insert((group, "list_marker_overflow"))
-                            {
-                                let reason = marker_messages::OVERFLOW;
-                                warn(
-                                    w,
-                                    part,
-                                    "numPr",
-                                    Kind::ValueApproximated,
-                                    "list_marker_overflow",
-                                    "retain_slot",
-                                    reason,
-                                )?;
-                            }
-                        }
+        // Diagnose every fixed slot independently of eligibility for measured tab selection.
+        // 이것을 실패시키는 것: 정렬·명시 번호 탭 때문에 비십진 복합의 미확인 경고 누락.
+        if let ListTextStart::FromAnchor(g) = text_start {
+            uncertain |=
+                widths.as_ref().is_some_and(|widths| widths.count.is_none() && widths.compound);
+            let mut message = uncertain
+                .then_some("Marker width is uncertain in the fixed slot; overlap is possible");
+            // Reuse source counter digits only when measured selection has not settled the slot.
+            // 이것을 실패시키는 것: 이미 판정한 번호를 명목 폭 검사에서 다시 경고.
+            if !handled_hanging && selected.is_none() {
+                if let Some(count) = widths.and_then(|widths| widths.count) {
+                    let width = count
+                        .checked_mul(u64::try_from(marker.size).map_err(|_| {
+                            DocxError::invalid(part, "numPr", "negative marker size")
+                        })?)
+                        .ok_or_else(|| {
+                            DocxError::invalid(part, "numPr", "nominal marker width overflow")
+                        })?;
+                    let slot = i64::from(g.as_i32())
+                        .checked_mul(if align == ListMarkerAlign::Center { 2 } else { 1 })
+                        .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?;
+                    if width
+                        > u64::try_from(slot)
+                            .map_err(|_| DocxError::invalid(part, "numPr", "negative slot"))?
+                            .checked_mul(2)
+                            .ok_or_else(|| DocxError::invalid(part, "numPr", "slot overflow"))?
+                    {
+                        message = Some(marker_messages::OVERFLOW);
                     }
+                }
+            }
+            if let Some(message) = message {
+                if self.marker_warnings.insert((group, "list_marker_overflow")) {
+                    warn(
+                        w,
+                        part,
+                        "numPr",
+                        Kind::ValueApproximated,
+                        "list_marker_overflow",
+                        "retain_slot",
+                        message,
+                    )?;
                 }
             }
         }
@@ -966,13 +940,13 @@ impl Resolver {
         self.first_marker_layouts.entry(group).or_insert(Some(layout));
         Ok(Some(layout))
     }
-    // 이것을 실패시키는 것: East Asian 글꼴만 보거나 굵기·기울임·수직 위치·축약 문맥을 허용.
+    // Bold uses the ordinary width as a lower bound; Keep needs a nominal check.
+    // 이것을 실패시키는 것: East Asian 글꼴만 보거나 기울임·수직 위치·축약 문맥을 허용.
     fn measured_decimal_style(&self, effective: &Delta, collapsed: bool) -> bool {
         let c = &effective.char;
         c.line_fonts()[0].is_some_and(|font| {
             matches!(self.definitions.fonts.name(font), "맑은 고딕" | "Malgun Gothic")
         }) && c.size.is_some_and(|size| size > 0)
-            && !c.toggles[0].unwrap_or(false)
             && !c.toggles[1].unwrap_or(false)
             && c.vertical.unwrap_or(0) == 0
             && !collapsed
@@ -1429,38 +1403,80 @@ fn reference_warning(result: CharResult, part: &str, w: &mut Vec<DocxWarning>) -
     Ok(())
 }
 
-/// Measured decimal digit/dot ratios are restricted to a single own-level token.
-/// Counts digits without allocating a string proportional to the current number.
-fn measured_number_ratio(head: &hwpforge_core::ParaHead, index: u8, n: u64) -> Result<Option<u64>> {
-    if head.num_format != hwpforge_foundation::NumberFormatType::Digit {
-        return Ok(None);
-    }
-    let token = format!("^{}", u32::from(index) + 1);
-    let Some((prefix, suffix)) = head.text.split_once(&token) else {
-        return Ok(None);
-    };
-    if index == 0 && suffix.starts_with('0') {
-        return Ok(None);
-    }
-    let mut ratio = u64::from(n.checked_ilog10().unwrap_or(0))
-        .checked_add(1)
-        .and_then(|v| v.checked_mul(606))
-        .ok_or_else(marker_arithmetic)?;
-    for c in prefix.chars().chain(suffix.chars()) {
-        let value = match c {
-            '0'..='9' => 606,
-            '.' => 242,
-            _ => return Ok(None),
+struct TemplateWidths {
+    count: Option<u64>,
+    ratio: Option<u64>,
+    compound: bool,
+}
+
+/// Count source decimal digits and ASCII literals once for both width checks.
+/// Only digits and dots have measured ratios; other ASCII literals retain nominal bounds.
+fn decimal_template_widths(
+    text: &str,
+    own: u8,
+    mut decimal_value: impl FnMut(u8) -> Option<u64>,
+) -> Result<TemplateWidths> {
+    let mut chars = text.chars().peekable();
+    let mut count = 0u64;
+    let mut ratio = 0u64;
+    let mut nominal = true;
+    let mut measured = true;
+    let mut references = 0u16;
+    while let Some(c) = chars.next() {
+        let (length, width) = match c {
+            '^' => {
+                let Some(digit @ '1'..='9') = chars.next() else {
+                    nominal = false;
+                    continue;
+                };
+                let index = if digit == '1' && chars.peek() == Some(&'0') {
+                    chars.next();
+                    9
+                } else {
+                    digit as u8 - b'1'
+                };
+                if index == own && references & (1 << index) != 0 {
+                    nominal = false;
+                }
+                references |= 1 << index;
+                let Some(n) = decimal_value(index) else {
+                    nominal = false;
+                    continue;
+                };
+                let digits = u64::from(n.checked_ilog10().unwrap_or(0)) + 1;
+                (digits, digits.checked_mul(606).ok_or_else(marker_arithmetic)?)
+            }
+            '0'..='9' => (1, 606),
+            '.' => (1, 242),
+            _ => {
+                nominal &= c.is_ascii();
+                measured = false;
+                (1, 0)
+            }
         };
-        ratio = ratio.checked_add(value).ok_or_else(marker_arithmetic)?;
+        count = count.checked_add(length).ok_or_else(marker_arithmetic)?;
+        ratio = ratio.checked_add(width).ok_or_else(marker_arithmetic)?;
     }
-    Ok(Some(ratio))
+    nominal &= references & (1 << own) != 0;
+    Ok(TemplateWidths {
+        count: nominal.then_some(count),
+        ratio: (nominal && measured).then_some(ratio),
+        compound: references.count_ones() > 1,
+    })
+}
+
+fn measured_template_ratio(
+    text: &str,
+    own: u8,
+    decimal_value: impl FnMut(u8) -> Option<u64>,
+) -> Result<Option<u64>> {
+    Ok(decimal_template_widths(text, own, decimal_value)?.ratio)
 }
 fn marker_arithmetic() -> DocxError {
     DocxError::invalid("#format", "numPr", "default tab marker arithmetic out of range")
 }
-/// The small digit/dot/Symbol table applies only to zero-hanging default tabs.
-/// Sum ratios first, then round half up once; these are estimates across fonts/styles.
+/// Scale the measured ordinary digit/dot ratios, or Symbol ratio for default tabs.
+/// Sum ratios first, then round half up once; ordinary widths are lower bounds for bold.
 fn measured_marker_width(size: i32, ratio: u64) -> Result<i32> {
     let size = u64::try_from(size).map_err(|_| marker_arithmetic())?;
     let width =
