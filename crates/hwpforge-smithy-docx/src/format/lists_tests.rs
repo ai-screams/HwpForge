@@ -525,3 +525,131 @@ fn budget_fallback_still_reuses_cached_literals() {
     );
     assert_eq!(registry.numberings.len(), 16_384);
 }
+fn legal_definitions() -> Definitions {
+    let mut defs = materialization_fixture(0, 2, 2);
+    let parent = defs.abstracts.get_mut(&1).unwrap().get_mut(&0).unwrap();
+    parent.format = Format::Number(NumberFormatType::RomanCapital);
+    parent.text = Some(Rc::from("%1."));
+    let child = defs.abstracts.get_mut(&1).unwrap().get_mut(&1).unwrap();
+    child.text = Some(Rc::from("%1.%2"));
+    child.legal = true;
+    defs.numbers.get_mut(&1).unwrap().levels.clear();
+    defs
+}
+fn budget_resolve(
+    lists: &mut Lists,
+    defs: &Definitions,
+    registry: &mut StyleRegistry,
+    warnings: &mut Vec<DocxWarning>,
+    num: u32,
+    level: u32,
+    part: &str,
+) -> Option<ListRef> {
+    lists
+        .resolve(
+            defs,
+            registry,
+            &ParaDelta { num_id: Some(num), level: Some(level), ..Default::default() },
+            part,
+            warnings,
+        )
+        .unwrap()
+}
+fn warning_count(warnings: &[DocxWarning], loss: &str) -> u64 {
+    warnings.iter().filter(|w| w.loss() == loss).map(|w| w.count()).sum()
+}
+// 이것을 실패시키는 것: 상한에서 로마 활성 정의 변경 또는 실제 legal fallback 경고 누락.
+#[test]
+fn legal_budget_fallback_keeps_original_active_definition() {
+    let defs = legal_definitions();
+    let mut lists = Lists::new(&defs).unwrap();
+    let mut registry = StyleRegistry::with_fonts(vec![]);
+    let mut warnings = vec![];
+    assert_eq!(
+        budget_resolve(&mut lists, &defs, &mut registry, &mut warnings, 1, 0, "parent"),
+        Some(ListRef::Number(0, 0))
+    );
+    let original = registry.numberings[0].clone();
+    registry.numberings.resize(16_384, original.clone());
+    for part in ["first-fallback", "later-fallback"] {
+        assert_eq!(
+            budget_resolve(&mut lists, &defs, &mut registry, &mut warnings, 1, 1, part),
+            Some(ListRef::Number(0, 1))
+        );
+    }
+    assert_eq!(registry.numberings[0], original);
+    assert_eq!(registry.numberings.len(), 16_384);
+    assert_eq!(warning_count(&warnings, "list_numbering_budget"), 1);
+    assert_eq!(warning_count(&warnings, "list_number_legal"), 1);
+    assert_eq!(
+        warnings.iter().find(|w| w.loss() == "list_number_legal").unwrap().part(),
+        Some("first-fallback")
+    );
+}
+// 이것을 실패시키는 것: 상한에서 십진 사본을 로마로 사후 변경하거나 과거 legal 문단에 소급 경고.
+#[test]
+fn budget_fallback_does_not_rewrite_decimal_copies() {
+    for parent_first in [false, true] {
+        let defs = legal_definitions();
+        let mut lists = Lists::new(&defs).unwrap();
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        let mut warnings = vec![];
+        if parent_first {
+            budget_resolve(&mut lists, &defs, &mut registry, &mut warnings, 1, 0, "parent");
+        }
+        let reference =
+            budget_resolve(&mut lists, &defs, &mut registry, &mut warnings, 1, 1, "child");
+        let id = usize::from(parent_first);
+        assert_eq!(reference, Some(ListRef::Number(id, 1)));
+        let original = registry.numberings.clone();
+        registry.numberings.resize(16_384, original[0].clone());
+        assert_eq!(
+            budget_resolve(
+                &mut lists,
+                &defs,
+                &mut registry,
+                &mut warnings,
+                1,
+                0,
+                "returning-parent"
+            ),
+            Some(ListRef::Number(id, 0))
+        );
+        assert_eq!(&registry.numberings[..original.len()], original.as_slice());
+        assert_eq!(registry.numberings[id].levels[0].num_format, NumberFormatType::Digit);
+        assert_eq!(warning_count(&warnings, "list_numbering_budget"), 1);
+        assert_eq!(warning_count(&warnings, "list_number_legal"), 0);
+    }
+}
+// 이것을 실패시키는 것: 십진 형식이 유지된 값 근사만으로 legal 경고 발생.
+#[test]
+fn legal_value_budget_fallback_keeps_decimal_format() {
+    let mut defs = legal_definitions();
+    defs.numbers
+        .get_mut(&2)
+        .unwrap()
+        .levels
+        .insert(1, Level { start_override: Some(5), ..Default::default() });
+    let mut lists = Lists::new(&defs).unwrap();
+    let mut registry = StyleRegistry::with_fonts(vec![]);
+    let mut warnings = vec![];
+    budget_resolve(&mut lists, &defs, &mut registry, &mut warnings, 1, 1, "first-child");
+    let original = registry.numberings[0].clone();
+    registry.numberings.resize(16_384, original.clone());
+    assert_eq!(
+        budget_resolve(&mut lists, &defs, &mut registry, &mut warnings, 2, 1, "reset-child"),
+        Some(ListRef::Number(0, 1))
+    );
+    assert_eq!(registry.numberings[0], original);
+    assert_eq!(registry.numberings[0].levels[0].num_format, NumberFormatType::Digit);
+    assert_eq!(warning_count(&warnings, "list_numbering_budget"), 1);
+    assert_eq!(warning_count(&warnings, "list_number_legal"), 0);
+}
+
+// 이것을 실패시키는 것: 표시 근거가 없는 자기 수준 토큰 반복을 수용.
+#[test]
+fn repeated_own_marker_token_is_rejected() {
+    assert!(template("%1.%1", 0).is_none());
+    assert!(template("%1.%2.%2", 1).is_none());
+    assert_eq!(template("%1.%2", 1), Some(("^1.^2".into(), 3)));
+}

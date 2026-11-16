@@ -78,10 +78,17 @@ pub(super) struct Level {
     pub(super) suffix: Option<Suffix>,
     pub(super) tabs: std::collections::BTreeMap<i32, bool>,
     pub(super) restart: Option<u32>,
+    pub(super) legal: bool,
     pub(super) picture: bool,
     pub(super) compiled: std::cell::OnceCell<Rc<Compiled>>,
 }
 impl Level {
+    pub(super) fn own_format(&self) -> Format {
+        match self.format {
+            Format::Number(_) if self.legal => Format::Number(NumberFormatType::Digit),
+            format => format,
+        }
+    }
     pub(super) fn compiled_text(&self) -> Rc<str> {
         self.compiled.get().expect("compiled source level").text.clone()
     }
@@ -106,6 +113,8 @@ pub(super) struct Compiled {
 struct ResolvedLevel {
     compiled: Rc<Compiled>,
     format: NumberFormatType,
+    numbered: bool,
+    legal: bool,
 }
 #[derive(Clone, Copy)]
 enum Marker {
@@ -139,6 +148,7 @@ pub(super) struct Lists {
     groups: HashMap<u32, Group>,
     instances: HashMap<u32, Instance>,
     overrides_used: HashSet<(u32, usize)>,
+    legal_warnings: HashSet<(u32, usize)>,
     unemitted_groups: usize,
     bullets: HashMap<char, usize>,
     bullet_warnings: HashSet<(usize, &'static str)>,
@@ -349,6 +359,14 @@ impl Lists {
                 Ok(Some(ListRef::Bullet(id, level as u8)))
             }
             Marker::Number => {
+                // 이것을 실패시키는 것: 누락·비번호 참조를 십진 형식으로 합성.
+                if (0..10).any(|i| {
+                    resolved.compiled.references & (1 << i) != 0
+                        && !instance.levels[i].as_ref().is_some_and(|l| l.numbered)
+                }) {
+                    numbering_lost(part, warnings, "numbering_format")?;
+                    return Ok(None);
+                }
                 group.lost &= (bit << 1) - 1;
                 self.assign_numbering(definitions, registry, num, level as usize, part, warnings)
             }
@@ -375,9 +393,20 @@ impl Lists {
             }
         });
         let group = self.groups.get_mut(&key).unwrap();
+        // 참조 수준은 현재 문단의 legal 여부로만 정규화한다.
+        let formats = std::array::from_fn(|i| {
+            instance.levels[i].as_ref().map_or(NumberFormatType::Digit, |l| {
+                let referenced = source.compiled.references & (1 << i) != 0;
+                if (referenced && source.legal) || (!referenced && l.legal) {
+                    NumberFormatType::Digit
+                } else {
+                    l.format
+                }
+            })
+        });
         let token = format!("^{}", level + 1);
         let literal_zero = group.counter.values[level] == 0
-            && source.format == NumberFormatType::Digit
+            && formats[level] == NumberFormatType::Digit
             && source.compiled.references == 1 << level
             && source.compiled.text.matches(&token).count() == 1;
         // 이것을 실패시키는 것: 리터럴 재사용에 다시 정의·텍스트 예산을 청구.
@@ -395,9 +424,6 @@ impl Lists {
                 "Zero-valued compound or non-decimal numbering uses positive output counters",
             )?;
         }
-        let formats = std::array::from_fn(|i| {
-            instance.levels[i].as_ref().map_or(NumberFormatType::Digit, |l| l.format)
-        });
         let compatible = if let Some(active) = &group.active {
             let mut next = active.counter.clone();
             next.advance_core(level, part)?;
@@ -477,6 +503,21 @@ impl Lists {
         } else {
             group.first.expect("first definition space is reserved")
         };
+        // 과거 문단이나 값 차이만으로 legal 근사를 소급하지 않는다.
+        if source.legal
+            && (0..10).any(|i| {
+                source.compiled.references & (1 << i) != 0
+                    && registry.numberings[id].levels[i].num_format != NumberFormatType::Digit
+            })
+            && self.legal_warnings.insert((num, level))
+        {
+            approximation(
+                warnings,
+                part,
+                "list_number_legal",
+                "The numbering limit retains non-decimal reference formats in a legal marker",
+            )?;
+        }
         Ok(Some(ListRef::Number(id, level as u8)))
     }
     pub(super) fn current(&self, defs: &Definitions, para: &ParaDelta) -> Option<u64> {
@@ -485,7 +526,7 @@ impl Lists {
         counter.used.get(level as usize).copied().filter(|used| *used)?;
         Some(counter.values[level as usize])
     }
-    /// Read original source formats and current counter values.
+    /// Source formats follow the current paragraph's legal flag, including ancestor references.
     pub(super) fn current_reference(
         &self,
         defs: &Definitions,
@@ -503,7 +544,7 @@ impl Lists {
         if !counter.used[usize::from(index)] {
             return None;
         }
-        let format = referenced.format;
+        let format = if source.legal { NumberFormatType::Digit } else { referenced.format };
         Some((format, counter.values[usize::from(index)]))
     }
     fn observe_omitted(&mut self, defs: &Definitions, para: &ParaDelta) {
@@ -550,16 +591,18 @@ fn compile(
     limit(part, "numPr", "interpreted marker bytes", total, 64 * 1024 * 1024)?;
     *bytes = total;
     let mut text = Rc::from("");
+    let mut references = 0;
     let marker = match source.format {
         Format::Bullet => {
             let (glyph, approximated, slots) = bullet_glyph(source, fonts);
             Marker::Bullet { glyph, approximated, slots }
         }
         Format::Number(_) => {
-            if let Some((prefix, suffix)) =
+            if let Some((converted, refs)) =
                 source.text.as_deref().and_then(|text| template(text, index))
             {
-                text = Rc::from(format!("{prefix}^{}{suffix}", index + 1));
+                text = Rc::from(converted);
+                references = refs;
                 Marker::Number
             } else {
                 Marker::Lost
@@ -567,7 +610,7 @@ fn compile(
         }
         Format::Unsupported => Marker::Lost,
     };
-    let _ = source.compiled.set(Rc::new(Compiled { text, marker, references: 1 << index }));
+    let _ = source.compiled.set(Rc::new(Compiled { text, marker, references }));
     Ok(())
 }
 fn build_instance(defs: &Definitions, abstract_id: u32, number: &definitions::Number) -> Instance {
@@ -586,6 +629,8 @@ fn build_instance(defs: &Definitions, abstract_id: u32, number: &definitions::Nu
         numbered |= !matches!(source.format, Format::Bullet);
         *target = Some(ResolvedLevel {
             compiled,
+            numbered: matches!(source.format, Format::Number(_)),
+            legal: source.legal,
             format: match source.format {
                 Format::Number(format) => format,
                 _ => NumberFormatType::Digit,
@@ -632,21 +677,45 @@ fn empty_head(index: usize) -> ParaHead {
         checkable: false,
     }
 }
-fn template(text: &str, index: usize) -> Option<(&str, &str)> {
-    let token = format!("%{}", index + 1);
-    let (prefix, suffix) = text.split_once(&token)?;
-    let placeholder = |text: &str| {
-        text.as_bytes()
-            .windows(2)
-            .any(|pair| matches!(pair[0], b'%' | b'^') && pair[1].is_ascii_digit())
-    };
-    if placeholder(prefix)
-        || placeholder(suffix)
-        || suffix.starts_with(|c: char| c.is_ascii_digit())
-    {
+fn template(text: &str, index: usize) -> Option<(String, u16)> {
+    let bytes = text.as_bytes();
+    let mut converted = String::with_capacity(text.len());
+    let mut references = 0;
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        // 원문 caret 번호는 출력 토큰으로 해석될 수 있으므로 거부한다.
+        if bytes[i] == b'^' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+            return None;
+        }
+        if bytes[i] == b'%' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+            let begin = i;
+            i += 1;
+            let mut n = 0usize;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                n = n.saturating_mul(10).saturating_add(usize::from(bytes[i] - b'0'));
+                i += 1;
+            }
+            if n > index + 1
+                || bytes[begin + 1] == b'0'
+                || (n == index + 1 && references & (1 << index) != 0)
+            {
+                return None;
+            }
+            converted.push_str(&text[start..begin]);
+            converted.push('^');
+            converted.push_str(&text[begin + 1..i]);
+            references |= 1 << (n - 1);
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    if references & (1 << index) == 0 {
         return None;
     }
-    Some((prefix, suffix))
+    converted.push_str(&text[start..]);
+    Some((converted, references))
 }
 fn bullet_glyph(level: &Level, fonts: &Fonts) -> (Option<char>, bool, bool) {
     let mut chars = level.text.as_deref().unwrap_or("").chars();

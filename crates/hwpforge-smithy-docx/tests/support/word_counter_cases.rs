@@ -6,6 +6,7 @@ pub struct Case {
     pub uses: Vec<(u32, u32)>,
     pub expected: &'static [&'static str],
     pub styles: &'static str,
+    pub marker_bold: Option<usize>,
 }
 pub fn level(index: u32, start: Option<u32>, format: &str, text: &str, extra: &str) -> String {
     let start = start.map_or_else(String::new, |n| format!("<w:start w:val='{n}'/>"));
@@ -34,6 +35,7 @@ fn case(
         uses: uses.to_vec(),
         expected,
         styles: "",
+        marker_bold: None,
     }
 }
 pub fn counter_cases() -> Vec<Case> {
@@ -258,8 +260,134 @@ pub fn counter_cases() -> Vec<Case> {
             &["1.", "2.", "1.", "2.", "3.", "3."][..],
         ),
     ] {
-        cases.push(Case { name, definitions: format!("{}{}{}{}",definition(1,&decimal),definition(2,"<w:numStyleLink w:val='linked'/>"),num(7,1,""),num(8,2,"")), uses:uses.to_vec(),expected,
+        cases.push(Case { name, marker_bold:None, definitions: format!("{}{}{}{}",definition(1,&decimal),definition(2,"<w:numStyleLink w:val='linked'/>"),num(7,1,""),num(8,2,"")), uses:uses.to_vec(),expected,
             styles:"<w:style w:type='numbering' w:styleId='linked'><w:pPr><w:numPr><w:numId w:val='7'/></w:numPr></w:pPr></w:style>" });
     }
+    cases.extend(compound_cases());
+    let styled = cases
+        .iter_mut()
+        .find(|c| c.name == "deep_marker_style_split_preserves_nonunit_starts")
+        .unwrap();
+    styled.marker_bold = Some(3);
+    styled.definitions = styled.definitions.replace(
+        "<w:lvl w:ilvl='2'>",
+        "<w:lvl w:ilvl='2'><w:pPr><w:ind w:left='1440' w:hanging='360'/></w:pPr>",
+    );
     cases
+}
+
+fn compound_cases() -> Vec<Case> {
+    vec![
+        // 이것을 실패시키는 것: 참조 상위 형식 비교 누락.
+        case(
+            "legal_markers_use_decimal_reference_segments",
+            &(level(0, Some(1), "upperRoman", "%1.", "")
+                + &level(1, Some(1), "decimal", "%1.%2", "<w:isLgl/>")),
+            "",
+            "",
+            &[(7, 0), (7, 1), (7, 1)],
+            &["I.", "1.1", "1.2"],
+        ),
+        // 이것을 실패시키는 것: 참조 형식을 현재 십진 형식으로 치환.
+        case(
+            "compound_markers_keep_roman_ancestors",
+            &(level(0, Some(1), "upperRoman", "%1.", "")
+                + &level(1, Some(1), "decimal", "%1.%2", "")),
+            "",
+            "",
+            &[(7, 0), (7, 1), (7, 1)],
+            &["I.", "I.1", "I.2"],
+        ),
+        // 이것을 실패시키는 것: 암묵 상위 사용 누락.
+        case(
+            "child_first_consumes_its_parent_once",
+            &(level(0, Some(1), "decimal", "%1.", "") + &level(1, Some(1), "decimal", "%1.%2", "")),
+            "",
+            "",
+            &[(7, 1), (7, 1), (7, 0), (7, 1)],
+            &["1.1", "1.2", "2.", "2.1"],
+        ),
+        // 이것을 실패시키는 것: 암묵 상위 또는 하위 재시작 누락.
+        case(
+            "compound_deep_level_uses_implicit_ancestors",
+            &(level(0, Some(1), "decimal", "%1.", "")
+                + &level(1, Some(1), "decimal", "%2.", "")
+                + &level(2, Some(1), "decimal", "%1.%2.%3", "")),
+            "",
+            "",
+            &[(7, 0), (7, 2), (7, 1), (7, 2)],
+            &["1.", "1.1.1", "2.", "1.2.1"],
+        ),
+        // 이것을 실패시키는 것: 상위 씨앗을 다음 값으로 설정.
+        case(
+            "deep_first_item_consumes_all_ancestors",
+            &(level(0, Some(1), "decimal", "%1.", "")
+                + &level(1, Some(1), "decimal", "%2.", "")
+                + &level(2, Some(1), "decimal", "%1.%2.%3", "")),
+            "",
+            "",
+            &[(7, 2), (7, 0), (7, 1)],
+            &["1.1.1", "2.", "1."],
+        ),
+        // 이것을 실패시키는 것: 재등장 상위의 형식 복원 누락.
+        case(
+            "legal_markers_preserve_returning_parent_values",
+            &(level(0, Some(1), "upperRoman", "%1.", "")
+                + &level(1, Some(1), "decimal", "%1.%2", "<w:isLgl/>")),
+            "",
+            "",
+            &[(7, 0), (7, 1), (7, 1), (7, 0), (7, 1)],
+            &["I.", "1.1", "1.2", "II.", "2.1"],
+        ),
+        // 이것을 실패시키는 것: 자기 수준 legal 십진 정규화 누락.
+        case(
+            "legal_own_level_matches_word_display",
+            &(level(0, Some(1), "upperRoman", "%1.", "<w:isLgl/>")),
+            "",
+            "",
+            &[(7, 0), (7, 0), (7, 0)],
+            &["1.", "2.", "3."],
+        ),
+        // 이것을 실패시키는 것: legal 정규화를 일반 로마에도 적용.
+        case(
+            "nonlegal_roman_control_matches_word_display",
+            &(level(0, Some(1), "upperRoman", "%1.", "")),
+            "",
+            "",
+            &[(7, 0), (7, 0), (7, 0)],
+            &["I.", "II.", "III."],
+        ),
+        // 이것을 실패시키는 것: 암묵 상위 시작값을 1로 변경.
+        case(
+            "deep_first_use_preserves_nonunit_starts",
+            &(level(0, Some(2), "decimal", "%1.", "")
+                + &level(1, Some(3), "decimal", "%2.", "")
+                + &level(2, Some(4), "decimal", "%1.%2.%3", "")),
+            "",
+            "",
+            &[(7, 2), (7, 0), (7, 1), (7, 2)],
+            &["2.3.4", "3.", "3.", "3.3.4"],
+        ),
+        // 이것을 실패시키는 것: 깊은 현재 수준 값 증가 누락.
+        case(
+            "deep_marker_style_split_preserves_nonunit_starts",
+            &(level(0, Some(2), "decimal", "%1.", "")
+                + &level(1, Some(3), "decimal", "%2.", "")
+                + &level(2, Some(4), "decimal", "%1.%2.%3", "")),
+            "",
+            "",
+            &[(7, 0), (7, 1), (7, 2), (7, 2)],
+            &["2.", "3.", "2.3.4", "2.3.5"],
+        ),
+        // 이것을 실패시키는 것: 참조 형식을 상위 자체 legal 형식으로 치환.
+        case(
+            "nonlegal_children_of_legal_parents_match_word_display",
+            &(level(0, Some(1), "upperRoman", "%1.", "<w:isLgl/>")
+                + &level(1, Some(1), "decimal", "%1.%2", "")),
+            "",
+            "",
+            &[(7, 0), (7, 1), (7, 1), (7, 0), (7, 1)],
+            &["1.", "I.1", "I.2", "2.", "II.1"],
+        ),
+    ]
 }

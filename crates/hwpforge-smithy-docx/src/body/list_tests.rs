@@ -2050,7 +2050,7 @@ fn single_digit_marker_fits_a_nine_point_slot() {
     assert_eq!(gap(&d, 0), 900);
     assert_eq!(loss_count(&d, "list_marker_overflow"), 0);
 }
-// 이것을 실패시키는 것: 굵기·기울임·Latin 글꼴·수직 위치·축약 문맥을 무시하거나 크기를 1100으로 고정.
+// 이것을 실패시키는 것: 굵은 하한의 확정 넘침을 막거나 미측정 문맥을 허용하거나 크기를 1100으로 고정.
 #[test]
 fn unmeasured_styles_keep_the_slot_and_size_scales_width() {
     for (props, want, overflow) in [
@@ -2137,7 +2137,19 @@ fn measured_width_uses_effective_latin_marker_context() {
 #[path = "../../tests/support/word_counter_cases.rs"]
 mod word_counter_cases;
 fn read_word_counter_case(case: &word_counter_cases::Case) -> DocxDecoded {
-    let body: String = case.uses.iter().map(|&(num, level)| item(num, level, "", "body")).collect();
+    let body: String = case
+        .uses
+        .iter()
+        .enumerate()
+        .map(|(i, &(num, level))| {
+            item(
+                num,
+                level,
+                if case.marker_bold == Some(i) { "<w:rPr><w:b/></w:rPr>" } else { "" },
+                "body",
+            )
+        })
+        .collect();
     if case.styles.is_empty() {
         return read(&case.definitions, &body);
     }
@@ -2555,4 +2567,316 @@ fn nondecimal_zero_is_diagnosed_with_positive_starts() {
     assert_eq!(d.registry.numberings[0].levels[0].num_format, NumberFormatType::RomanCapital);
     assert_eq!(d.registry.numberings[0].levels[0].start, 1);
     assert_eq!(loss_count(&d, "list_number_zero"), 1);
+}
+
+// 이것을 실패시키는 것: 참조 상위 형식 비교 누락.
+#[test]
+fn legal_markers_use_decimal_reference_segments() {
+    assert_word_counter_case("legal_markers_use_decimal_reference_segments");
+}
+
+// 이것을 실패시키는 것: 참조 형식을 현재 십진 형식으로 치환.
+#[test]
+fn compound_markers_keep_roman_ancestors() {
+    assert_word_counter_case("compound_markers_keep_roman_ancestors");
+}
+
+// 이것을 실패시키는 것: 암묵 상위 사용 누락.
+#[test]
+fn child_first_consumes_its_parent_once() {
+    assert_word_counter_case("child_first_consumes_its_parent_once");
+}
+
+// 이것을 실패시키는 것: 암묵 상위 또는 하위 재시작 누락.
+#[test]
+fn compound_deep_level_uses_implicit_ancestors() {
+    assert_word_counter_case("compound_deep_level_uses_implicit_ancestors");
+}
+
+// 이것을 실패시키는 것: 상위 씨앗을 다음 값으로 설정.
+#[test]
+fn deep_first_item_consumes_all_ancestors() {
+    assert_word_counter_case("deep_first_item_consumes_all_ancestors");
+}
+
+// 이것을 실패시키는 것: 재등장 상위의 형식 복원 누락.
+#[test]
+fn legal_markers_preserve_returning_parent_values() {
+    assert_word_counter_case("legal_markers_preserve_returning_parent_values");
+}
+
+// 이것을 실패시키는 것: 자기 수준 legal 십진 정규화 누락.
+#[test]
+fn legal_own_level_matches_word_display() {
+    assert_word_counter_case("legal_own_level_matches_word_display");
+}
+
+// 이것을 실패시키는 것: legal 정규화를 일반 로마에도 적용.
+#[test]
+fn nonlegal_roman_control_matches_word_display() {
+    assert_word_counter_case("nonlegal_roman_control_matches_word_display");
+}
+
+// 이것을 실패시키는 것: 암묵 상위 시작값을 1로 변경.
+#[test]
+fn deep_first_use_preserves_nonunit_starts() {
+    assert_word_counter_case("deep_first_use_preserves_nonunit_starts");
+}
+
+// 이것을 실패시키는 것: 깊은 현재 수준 값 증가 누락.
+#[test]
+fn deep_marker_style_split_preserves_nonunit_starts() {
+    assert_word_counter_case("deep_marker_style_split_preserves_nonunit_starts");
+    let case = word_counter_cases::counter_cases()
+        .into_iter()
+        .find(|c| c.name == "deep_marker_style_split_preserves_nonunit_starts")
+        .unwrap();
+    let d = read_word_counter_case(&case);
+    assert!(marker_shape(&d, 3).list_marker.is_some());
+    assert!(marker_shape(&d, 3).list_marker.unwrap().char_shape.is_some());
+    let marker = marker_shape(&d, 3).list_marker.unwrap().char_shape.unwrap();
+    assert!(d.registry.char_shapes[marker.get()].bold);
+}
+
+// 이것을 실패시키는 것: 참조 형식을 상위 자체 legal 형식으로 치환.
+#[test]
+fn nonlegal_children_of_legal_parents_match_word_display() {
+    assert_word_counter_case("nonlegal_children_of_legal_parents_match_word_display");
+}
+// 이것을 실패시키는 것: legal 속성의 false·잘못된 값·제외된 자식을 true로 처리.
+#[test]
+fn legal_flag_uses_existing_boolean_rules() {
+    for (flag, format, bad) in [
+        ("", NumberFormatType::RomanCapital, 0),
+        ("<w:isLgl/>", NumberFormatType::Digit, 0),
+        ("<w:isLgl w:val='true'/>", NumberFormatType::Digit, 0),
+        ("<w:isLgl w:val='false'/>", NumberFormatType::RomanCapital, 0),
+        ("<w:isLgl w:val='bogus'/>", NumberFormatType::RomanCapital, 1),
+        ("<w:pPr><w:isLgl/></w:pPr>", NumberFormatType::RomanCapital, 0),
+    ] {
+        let defs = definitions(&level(0, "upperRoman", "%1.", flag), &num(7, 1, ""));
+        let d = read(&defs, &item(7, 0, "", "body").repeat(3));
+        assert_eq!(d.registry.numberings[0].levels[0].num_format, format);
+        assert_eq!(loss_count(&d, "list_number_legal"), 0);
+        assert_eq!(
+            d.warnings
+                .iter()
+                .filter(|w| w.location() == Some("isLgl") && w.code() == "DOCX_UNSUPPORTED_VALUE")
+                .count(),
+            bad
+        );
+    }
+}
+// 이것을 실패시키는 것: 자기 수준 legal에서 원래 로마 정의를 먼저 생성.
+#[test]
+fn legal_own_format_does_not_add_a_segment() {
+    let case = word_counter_cases::counter_cases()
+        .into_iter()
+        .find(|c| c.name == "legal_own_level_matches_word_display")
+        .unwrap();
+    let d = read_word_counter_case(&case);
+    assert_eq!(d.registry.numberings.len(), 1);
+    assert_eq!(d.registry.numberings[0].levels[0].num_format, NumberFormatType::Digit);
+    assert_eq!(loss_count(&d, "list_numbering_split"), 0);
+    assert_eq!(loss_count(&d, "list_number_legal"), 0);
+}
+// 이것을 실패시키는 것: 새 정의에 비교한 ROMAN 대신 상위 자체 legal의 DIGIT을 기록.
+#[test]
+fn new_segments_reuse_the_compared_reference_formats() {
+    let case = word_counter_cases::counter_cases()
+        .into_iter()
+        .find(|c| c.name == "nonlegal_children_of_legal_parents_match_word_display")
+        .unwrap();
+    let d = read_word_counter_case(&case);
+    assert_eq!(
+        lists(&d),
+        vec![number(0, 0), number(1, 1), number(1, 1), number(2, 0), number(3, 1)]
+    );
+    assert_eq!(d.registry.numberings.len(), 4);
+    assert_eq!(loss_count(&d, "list_numbering_split"), 3);
+    assert_eq!(loss_count(&d, "list_number_legal"), 0);
+    assert_eq!(
+        d.registry.numberings.iter().map(|n| n.levels[0].num_format).collect::<Vec<_>>(),
+        vec![
+            NumberFormatType::Digit,
+            NumberFormatType::RomanCapital,
+            NumberFormatType::Digit,
+            NumberFormatType::RomanCapital
+        ]
+    );
+}
+// 이것을 실패시키는 것: DIGIT 사본을 일반 로마 상위에 재사용.
+#[test]
+fn legal_ancestors_reopen_original_format_segments() {
+    let case = word_counter_cases::counter_cases()
+        .into_iter()
+        .find(|c| c.name == "legal_markers_preserve_returning_parent_values")
+        .unwrap();
+    let d = read_word_counter_case(&case);
+    assert_eq!(displayed_core_numbers(&d), ["I.", "1.1", "1.2", "II.", "2.1"]);
+    assert_eq!(
+        lists(&d),
+        vec![number(0, 0), number(1, 1), number(1, 1), number(2, 0), number(3, 1)]
+    );
+    assert_eq!(d.registry.numberings.len(), 4);
+    assert_eq!(loss_count(&d, "list_numbering_split"), 3);
+    assert_eq!(loss_count(&d, "list_number_legal"), 0);
+    assert_eq!(
+        d.registry
+            .numberings
+            .iter()
+            .map(|n| (n.levels[0].start, n.levels[1].start))
+            .collect::<Vec<_>>(),
+        vec![(1, 1), (1, 1), (2, 1), (2, 1)]
+    );
+}
+// 이것을 실패시키는 것: 참조한 상위의 num별 형식 override 차이를 무시.
+#[test]
+fn ancestor_format_overrides_split_compound_markers() {
+    let defs = definitions(
+        &format!("{}{}", level(0, "upperRoman", "%1.", ""), level(1, "decimal", "%1.%2", "")),
+        &format!(
+            "{}{}",
+            num(7, 1, ""),
+            num(
+                8,
+                1,
+                &format!(
+                    "<w:lvlOverride w:ilvl='0'>{}</w:lvlOverride>",
+                    level(0, "upperLetter", "%1.", "")
+                )
+            )
+        ),
+    );
+    let d = read(
+        &defs,
+        &format!("{}{}{}", item(7, 1, "", "body"), item(8, 1, "", "body"), item(7, 1, "", "body")),
+    );
+    assert_eq!(lists(&d), vec![number(0, 1), number(1, 1), number(2, 1)]);
+    assert_eq!(
+        d.registry.numberings.iter().map(|n| n.levels[0].num_format).collect::<Vec<_>>(),
+        vec![
+            NumberFormatType::RomanCapital,
+            NumberFormatType::LatinCapital,
+            NumberFormatType::RomanCapital
+        ]
+    );
+    assert_eq!(loss_count(&d, "list_numbering_split"), 2);
+}
+// 이것을 실패시키는 것: 0 상위 참조의 근사를 진단하지 않거나 start 0을 기록.
+#[test]
+fn zero_ancestor_is_diagnosed_without_core_zero_starts() {
+    let defs = definitions(
+        &format!(
+            "{}{}",
+            level(0, "decimal", "%1.", "").replace("w:val='1'/><w:numFmt", "w:val='0'/><w:numFmt"),
+            level(1, "decimal", "%1.%2", "")
+        ),
+        &num(7, 1, ""),
+    );
+    let d = read(&defs, &format!("{}{}", item(7, 1, "", "body"), item(7, 0, "", "body")));
+    assert_eq!(loss_count(&d, "list_number_zero"), 1);
+    assert!(d.registry.numberings.iter().flat_map(|n| &n.levels).all(|h| h.start > 0));
+    assert_eq!(d.registry.numberings[0].levels[0].start, 1);
+}
+// 이것을 실패시키는 것: 미래·누락·비번호 참조를 합성하거나 숫자 토큰을 접두만 소비.
+#[test]
+fn compound_tokens_reject_unavailable_levels() {
+    for (parent, text) in [
+        (
+            format!("{}{}", level(0, "decimal", "%1.", ""), level(2, "decimal", "%3.", "")),
+            "%1.%2.%3",
+        ),
+        (String::new(), "%1.%2"),
+        (level(0, "bullet", "•", ""), "%1.%2"),
+        (level(0, "unsupported", "%1.", ""), "%1.%2"),
+        (level(0, "decimal", "%1.", ""), "^1.%2"),
+        (level(0, "decimal", "%1.", ""), "%1.%20"),
+        (level(0, "decimal", "%1.", ""), "%1.%02"),
+        (level(0, "decimal", "%1.", ""), "%1"),
+    ] {
+        let d = read(
+            &definitions(&format!("{parent}{}", level(1, "decimal", text, "")), &num(7, 1, "")),
+            &item(7, 1, "", "body"),
+        );
+        assert_eq!(lists(&d), vec![None], "{text}");
+        assert_eq!(count(&d, "DOCX_LIST_NUMBERING_LOST"), 1);
+    }
+    let d = read(
+        &definitions(&level(9, "decimal", "%10 50%", ""), &num(7, 1, "")),
+        &item(7, 9, "", "body"),
+    );
+    assert_eq!(d.registry.numberings[0].levels[9].text, "^10 50%");
+}
+// 이것을 실패시키는 것: 현재 글이 참조하지 않는 수준의 자체 legal 정규화를 누락.
+#[test]
+fn unreferenced_levels_keep_their_own_legal_format() {
+    let defs = definitions(
+        &format!(
+            "{}{}",
+            level(0, "decimal", "%1.", ""),
+            level(1, "upperRoman", "%2.", "<w:isLgl/>")
+        ),
+        &num(7, 1, ""),
+    );
+    let d = read(&defs, &item(7, 0, "", "body"));
+    assert_eq!(d.registry.numberings[0].levels[1].num_format, NumberFormatType::Digit);
+}
+// 이것을 실패시키는 것: 독립 목록 대조군 사이에 카운터를 공유.
+#[test]
+fn supplemental_counter_controls() {
+    let mut defs = String::new();
+    let mut body = String::new();
+    for id in 1..=3 {
+        defs.push_str(&word_counter_cases::definition(id, &level(0, "decimal", "%1.", "")));
+        defs.push_str(&num(id, id, ""));
+        body.push_str(&item(id, 0, "", "body").repeat(3));
+    }
+    assert_eq!(
+        displayed_core_numbers(&read(&defs, &body)),
+        ["1.", "2.", "3.", "1.", "2.", "3.", "1.", "2.", "3."]
+    );
+}
+// 이것을 실패시키는 것: 복합 번호의 상위 또는 자기 수준 0을 단일 리터럴 표식으로 잘못 처리.
+#[test]
+fn compound_zero_uses_positive_counter_approximation() {
+    for (levels, index, wire) in [
+        (
+            format!(
+                "{}{}",
+                level(0, "decimal", "%1.", "")
+                    .replace("w:val='1'/><w:numFmt", "w:val='0'/><w:numFmt"),
+                level(1, "decimal", "%1.%2", "")
+            ),
+            1,
+            "^1.^2",
+        ),
+        (
+            format!(
+                "{}{}",
+                level(0, "decimal", "%1.", ""),
+                level(1, "decimal", "%1.%2", "")
+                    .replace("w:val='1'/><w:numFmt", "w:val='0'/><w:numFmt")
+            ),
+            1,
+            "^1.^2",
+        ),
+    ] {
+        let d = read(&definitions(&levels, &num(7, 1, "")), &item(7, index, "", "body"));
+        assert_eq!(loss_count(&d, "list_number_zero"), 1);
+        assert_eq!(d.registry.numberings[0].levels[index as usize].text, wire);
+        assert_eq!(d.registry.numberings[0].levels[index as usize].start, 1);
+    }
+}
+// 이것을 실패시키는 것: legal 자기 번호의 폭 측정에서 원래 로마 형식을 사용.
+#[test]
+fn legal_literal_zero_keeps_source_measurement() {
+    let l = zero_level(720, "w:hanging='0'", "<w:isLgl/>")
+        .replace("w:val='decimal'", "w:val='upperRoman'")
+        .replace("<w:start w:val='1'/>", "<w:start w:val='0'/>");
+    let d = zero_read(&l, &item(7, 0, "", "body"), None, "");
+    assert_eq!(d.registry.numberings[0].levels[0].text, "0.");
+    assert!(marker_shape(&d, 0).list_marker.is_some());
+    assert_eq!(gap(&d, 0), 3600);
+    assert_eq!(loss_count(&d, "list_number_zero"), 0);
 }

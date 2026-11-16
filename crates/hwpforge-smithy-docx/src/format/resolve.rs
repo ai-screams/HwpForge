@@ -593,7 +593,7 @@ impl Resolver {
             .definitions
             .marker_level(&base.para)
             .expect("resolved marker has its source level");
-        let number_format = source.format;
+        let number_format = source.own_format();
         let number_text = source.compiled_text();
         let align = source.align.unwrap_or(ListMarkerAlign::Left);
         let suffix = source.suffix.unwrap_or_default();

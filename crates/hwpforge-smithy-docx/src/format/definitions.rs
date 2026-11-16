@@ -602,7 +602,7 @@ impl Definitions {
                                 }
                                 (
                                     Frame::Level(owner),
-                                    "start" | "numFmt" | "lvlText" | "lvlRestart"
+                                    "start" | "numFmt" | "lvlText" | "lvlRestart" | "isLgl"
                                     | "lvlPicBulletId",
                                 ) => {
                                     let target = match owner {
@@ -623,6 +623,17 @@ impl Definitions {
                                     };
                                     match e.name.as_str() {
                                         "start" => target.start = Some(integer(&e, "val", part)?),
+                                        "isLgl" => {
+                                            target.legal = properties::boolean(
+                                                &e,
+                                                "val",
+                                                Some(true),
+                                                part,
+                                                "isLgl",
+                                                warnings,
+                                            )?
+                                            .unwrap_or(false);
+                                        }
                                         "lvlRestart" => {
                                             target.restart = Some(integer(&e, "val", part)?);
                                         }
