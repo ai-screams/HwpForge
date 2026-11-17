@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Word 목록의 정렬·suffix·수준 번호 탭·번호 전용 문자 모양 및 Wingdings 원형·사각형을 가져온다. 공백 폭·줄 높이·불확실한 칸 넘침·미지원 공유 head 충돌은 진단으로 전달하며, 의미 손실이 있는 원본 보존 편집은 실패한다.
 
+### Fixed
+
+- DOCX 변환에서 표 주변과 표 칸 안의 번호 값을 보존하고, 고정 시작 구간으로 나눈 경우 번호 정의 분리 진단을 전달한다. 같은 구간 내부의 자동 번호는 유지되지만 구간을 넘는 편집은 뒤 시작값에 자동 반영되지 않는다.
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/v0.20.0...v0.20.1) - 2026-11-16
 
 한컴오피스가 저장한 HWPX에서 `delete_para`와 `set_cell`이 열리는 릴리스다. 조건과 거부 규칙은 `hwpforge-smithy-hwpx`를 따른다.
@@ -44,8 +48,6 @@ HWPX 편집이 서명·암호화 문서를 거부하고, 내용을 바꾼 편집
 - 문서 전체를 다시 인코드하지 않는 `patch`·`fill`이 미리보기가 있는 문서의 내용을 바꾸면 미리보기를 지우고 `PREVIEW_REMOVED` 경고를 낸다. ops delete는 decode, encode, 구조 편집 경고를 이 순서로 합친다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#333](https://github.com/ai-screams/HwpForge/pull/333))
 
 ### Fixed
-
-- DOCX 변환에서 표 주변과 표 칸 안의 번호 값을 보존하고, 고정 시작 구간으로 나눈 경우 번호 정의 분리 진단을 전달한다. 같은 구간 내부의 자동 번호는 유지되지만 구간을 넘는 편집은 뒤 시작값에 자동 반영되지 않는다.
 
 - 서명·암호화 표지가 있는 패키지는 편집 진입점과 `restyle`, `from-json --base`가 거부한다(빈 구조 편집 요청은 원본 반환) ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#330](https://github.com/ai-screams/HwpForge/pull/330))
 - 구조 편집이 끊기는 참조와 문단 id 참조를 거부한다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#331](https://github.com/ai-screams/HwpForge/pull/331))
