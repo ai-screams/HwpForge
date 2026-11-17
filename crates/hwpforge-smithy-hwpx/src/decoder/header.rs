@@ -34,6 +34,8 @@ use hwpforge_core::ParagraphMeasure;
 #[derive(Debug)]
 pub struct HeaderParseResult {
     pub(crate) requires_header_normalization: bool,
+    /// Whether the original header prevents source-preserving paragraph deletion.
+    pub(crate) blocks_preserving_delete: bool,
     /// Style information parsed from `header.xml`.
     pub style_store: HwpxStyleStore,
     /// Starting auto-numbering values from `<hh:beginNum>`, if present.
@@ -134,11 +136,14 @@ pub(crate) fn parse_header_with_losses(
         warn_definition_order(&kind, mismatches, &mut warnings);
     }
     let mut normalize_measures = false;
+    let mut blocks_preserving_delete = false;
     if let Some(ref_list) = &mut head.ref_list {
         let renumbered = normalize_definition_ids(ref_list, &mut warnings);
         populate_store_from_ref_list(&mut store, ref_list, &mut warnings)?;
         store.header_fidelity.capture(ref_list);
-        normalize_measures = renumbered || requires_header_normalization(ref_list, &store);
+        let difference = compare_header_measures(ref_list, &store);
+        normalize_measures = renumbered || difference != HeaderMeasureDifference::None;
+        blocks_preserving_delete = renumbered || difference == HeaderMeasureDifference::Other;
         warnings.extend(per_language_scalar_losses(ref_list, xml, warnings.len(), &mut losses));
         warnings.extend(border_offset_losses(ref_list));
         warnings.extend(char_shadow_losses(ref_list));
@@ -156,6 +161,7 @@ pub(crate) fn parse_header_with_losses(
             track_change_count,
             track_change_author_count,
             requires_header_normalization: normalize_measures,
+            blocks_preserving_delete,
         },
         losses,
     ))
@@ -266,51 +272,74 @@ fn warn_definition_order(
     }
 }
 
+/// Payload differences relevant to header rewriting and source-preserving deletion.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderMeasureDifference {
+    None,
+    LegacyOnly,
+    Other,
+}
+
 /// Compare the parsed measure payloads with the ordinary encoder's payloads.
-/// Diagnostics are deliberately not an input: the decision rests on the payloads,
-/// so it holds whether or not a form was reported. Output-invalid
-/// values (e.g. odd physical line spacing) remain readable; save preflight rejects them.
-fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bool {
+/// `None` means all selected measure payloads match the encoder's payloads.
+/// `LegacyOnly` means differences consist solely of these accepted forms:
+///
+/// - Direct paragraph margin and line spacing, with neither measure in a switch.
+/// - Direct tab items without a switch.
+/// - A CHAR default tab unit where source default, expected default, and case positions are all zero.
+///
+/// `Other` includes output validation failures, since no valid encoder payload can be compared.
+/// All remaining payload differences are `Other`, since their equivalence is unverified.
+/// Diagnostics are not an input: classification depends only on the payloads.
+fn compare_header_measures(refs: &HxRefList, store: &HwpxStyleStore) -> HeaderMeasureDifference {
     if crate::paragraph_measure::validate_measure_output(store).is_err() {
-        return true;
+        return HeaderMeasureDifference::Other;
     }
+    let mut difference = HeaderMeasureDifference::None;
     if let Some(paras) = &refs.para_properties {
         for (raw, shape) in paras.items.iter().zip(store.iter_para_shapes()) {
+            let margin_branch = select_measure_branch(raw, false).expect("decoded margin branch");
+            let line_branch = select_measure_branch(raw, true).expect("decoded spacing branch");
+            // Unrelated switches are harmless when both measures are direct.
+            if raw.margin.is_some()
+                && raw.line_spacing.is_some()
+                && margin_branch.is_none()
+                && line_branch.is_none()
+            {
+                difference = HeaderMeasureDifference::LegacyOnly;
+                continue;
+            }
             let expected = crate::encoder::header::build_margin_switch(shape);
             // Ignore switches for unrelated paragraph properties. Margin and
             // spacing may occupy separate switches; compare their payloads.
             let case = &expected.cases[0];
             let default = expected.default.as_ref().unwrap();
-            let margin_matches = select_measure_branch(raw, false)
-                .expect("decoded margin branch")
-                .is_some_and(|(sw, supported)| {
-                    supported
-                        && sw
-                            .cases
-                            .iter()
-                            .find(|c| c.required_namespace == MEASURE_NAMESPACE)
-                            .unwrap()
-                            .margin
-                            == case.margin
-                        && sw.default.as_ref().and_then(|d| d.margin.as_ref())
-                            == default.margin.as_ref()
-                });
-            let line_matches = select_measure_branch(raw, true)
-                .expect("decoded spacing branch")
-                .is_some_and(|(sw, supported)| {
-                    supported
-                        && sw
-                            .cases
-                            .iter()
-                            .find(|c| c.required_namespace == MEASURE_NAMESPACE)
-                            .unwrap()
-                            .line_spacing
-                            == case.line_spacing
-                        && sw.default.as_ref().and_then(|d| d.line_spacing.as_ref())
-                            == default.line_spacing.as_ref()
-                });
+            let margin_matches = margin_branch.is_some_and(|(sw, supported)| {
+                supported
+                    && sw
+                        .cases
+                        .iter()
+                        .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                        .unwrap()
+                        .margin
+                        == case.margin
+                    && sw.default.as_ref().and_then(|d| d.margin.as_ref())
+                        == default.margin.as_ref()
+            });
+            let line_matches = line_branch.is_some_and(|(sw, supported)| {
+                supported
+                    && sw
+                        .cases
+                        .iter()
+                        .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                        .unwrap()
+                        .line_spacing
+                        == case.line_spacing
+                    && sw.default.as_ref().and_then(|d| d.line_spacing.as_ref())
+                        == default.line_spacing.as_ref()
+            });
             if !margin_matches || !line_matches {
-                return true;
+                return HeaderMeasureDifference::Other;
             }
         }
     }
@@ -318,8 +347,13 @@ fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bo
         for (raw, tab) in tabs.items.iter().zip(store.iter_tabs()) {
             if tab.stops.is_empty() {
                 if !raw.switches.is_empty() {
-                    return true;
+                    return HeaderMeasureDifference::Other;
                 }
+                continue;
+            }
+            // Direct packed tab items are already decoded without a switch.
+            if raw.switches.is_empty() && !raw.items.is_empty() {
+                difference = HeaderMeasureDifference::LegacyOnly;
                 continue;
             }
             let items = |default| {
@@ -357,11 +391,32 @@ fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bo
                     .flat_map(|sw| &sw.default.as_ref().unwrap().items)
                     .eq(&expected.default.as_ref().unwrap().items)
             {
-                return true;
+                // CHAR and packed default units coincide only at a shared zero position.
+                let zero_default_unit = raw.switches.len() == 1
+                    && raw.switches[0].cases.len() == 1
+                    && raw.switches[0].cases[0] == expected.cases[0]
+                    && raw.switches[0].default.as_ref().is_some_and(|default| {
+                        let expected = &expected.default.as_ref().unwrap().items;
+                        default.items.len() == expected.len()
+                            && default.items.iter().zip(expected).all(|(raw, expected)| {
+                                // The case already equals the expected case, so an expected
+                                // packed default of 0 means the case position is 0 HWPUNIT too.
+                                raw == expected
+                                    || (raw.pos == 0
+                                        && expected.pos == 0
+                                        && raw.unit == "CHAR"
+                                        && raw.tab_type == expected.tab_type
+                                        && raw.leader == expected.leader)
+                            })
+                    });
+                if !zero_default_unit {
+                    return HeaderMeasureDifference::Other;
+                }
+                difference = HeaderMeasureDifference::LegacyOnly;
             }
         }
     }
-    false
+    difference
 }
 
 /// A `paraPr` border offset outside the HWPUNIT range: the style store

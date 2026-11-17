@@ -397,7 +397,7 @@ fn delete_admitted(
         edit_checkpoint!("input-loss");
         preserved_loss::check_candidates(base, &package, &d0).map_err(verification_error)?;
         edit_checkpoint!("header");
-        if d0.requires_header_normalization() {
+        if d0.header_blocks_preserving_delete() {
             return Err(StructuralEditError::Invariant {
                 detail: "header normalization required".into(),
             });

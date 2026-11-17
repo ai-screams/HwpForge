@@ -175,6 +175,12 @@ impl HwpxDocument {
         self.source_basis.as_ref().is_none_or(|basis| basis.requires_header_normalization)
     }
 
+    /// Whether the original header prevents source-preserving paragraph deletion.
+    /// Without a decoder-owned source basis, deletion remains blocked.
+    pub(crate) fn header_blocks_preserving_delete(&self) -> bool {
+        self.source_basis.as_ref().is_none_or(|basis| basis.blocks_preserving_delete)
+    }
+
     /// Decoder-owned original locations for a section's Core nodes.
     pub fn source_map(&self, section: usize) -> Option<&source_map::SourceMap> {
         self.source_maps.get(section)
@@ -762,6 +768,7 @@ pub(crate) struct SourceBasis {
     pub(crate) losses: Vec<preserved_loss::LossEvidence>,
     // Header-read fact belongs to the original package, not editable JSON styles.
     requires_header_normalization: bool,
+    blocks_preserving_delete: bool,
     package: std::sync::Arc<[u8]>,
     origins: std::collections::HashMap<
         hwpforge_core::node_path::CorePath,
@@ -1140,6 +1147,7 @@ impl HwpxDecoder {
         let source_basis = std::sync::Arc::new(SourceBasis {
             losses,
             requires_header_normalization: header_result.requires_header_normalization,
+            blocks_preserving_delete: header_result.blocks_preserving_delete,
             package,
             origins: origins.into_iter().map(|origin| (origin.path().clone(), origin)).collect(),
         });
@@ -1554,6 +1562,7 @@ mod tests {
                 package,
                 origins: basis.origins.clone(),
                 requires_header_normalization: basis.requires_header_normalization,
+                blocks_preserving_delete: basis.blocks_preserving_delete,
             });
             base.source_basis = Some(stale.clone());
             let mut submitted = base.document.clone();
