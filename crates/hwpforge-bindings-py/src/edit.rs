@@ -181,6 +181,9 @@ pub(crate) fn insert_para<'py>(
 /// one paragraph is accepted per request. Only the target paragraph is removed;
 /// surviving line caches, table heights, IDs and unrelated parts are preserved.
 /// Documents whose line widths may depend on position retain the admission error.
+/// A header that differs only by older Hancom direct paragraph-measure or tab
+/// definitions does not block this path; the header stays byte-for-byte, and
+/// decoding may still report PARAGRAPH_MEASURE_NORMALIZED.
 /// Preview and its connections are removed with PREVIEW_REMOVED. Saving again
 /// in Hancom rebuilds the preview. An unverifiable edit returns its original
 /// admission error and no bytes.

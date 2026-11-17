@@ -603,6 +603,9 @@ class Document:
         removed with ``PREVIEW_REMOVED``; saving again in Hancom rebuilds it.
         Documents whose line widths may depend on position, and any other
         unverifiable deletion, return the original admission error and no bytes.
+        A header that differs only by older Hancom direct paragraph-measure or
+        tab definitions does not block deletion; the header stays byte-for-byte,
+        and decoding may still report PARAGRAPH_MEASURE_NORMALIZED.
 
         HWP5 (.hwp) input is converted first; results are HWPX.
         Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.

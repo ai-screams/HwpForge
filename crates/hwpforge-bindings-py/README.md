@@ -146,6 +146,9 @@ one paragraph per request and removes only that paragraph, keeping surviving lin
 table heights, paragraph IDs and unrelated payloads. It removes Preview and its
 connections with `PREVIEW_REMOVED`; saving it again in Hancom rebuilds Preview.
 Documents whose line widths may depend on position return the original admission error.
+A header that differs only by older Hancom direct paragraph-measure or tab definitions
+does not block this path; the header stays byte-for-byte, and decoding may still report
+`PARAGRAPH_MEASURE_NORMALIZED`.
 An unverifiable deletion returns the original admission error and no bytes.
 
 ### Module functions

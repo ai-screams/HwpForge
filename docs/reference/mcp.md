@@ -105,7 +105,7 @@ MCP `hwpforge_from_json`이나 Markdown으로 HWPX를 재생성할 때 원본 �
 편집 도구의 동작 규칙은 [CLI 레퍼런스](./cli.md)의 대응하는 명령(예: `hwpforge_insert_para`는 `insert-para`)과 같습니다. 주의할 점은 다음과 같습니다.
 
 - `hwpforge_patch`는 문단 구조를 바꾸지 못합니다. 의미 텍스트 슬롯의 개수나 경로가 다르면 거부되며, 문단 추가·삭제는 `hwpforge_insert_para`·`hwpforge_delete_para`, 표 셀은 `hwpforge_set_cell`, 구조가 바뀐 문서 재구성은 `hwpforge_from_json`을 씁니다.
-- `hwpforge_delete_para`: 한컴 저장 HWPX에서도 검증 가능한 최상위 본문 평문·빈 문단을 삭제할 수 있습니다. 문단 번호는 입력 문서의 위치 기준입니다. 원문 보존 경로는 한 요청에 한 문단을 받아 대상 문단만 제거하며, 생존 문단의 줄 조판 캐시·표 높이·ID와 관련 없는 부속 데이터를 유지합니다. 위치에 따라 줄 폭이 바뀔 수 있는 문서는 원래 admission 오류로 거부합니다. 기존 Preview와 관련 연결은 제거하고 `PREVIEW_REMOVED`를 알립니다. 한컴에서 다시 저장하면 미리보기가 만들어집니다. 검증할 수 없는 입력은 기존 오류로 거부하며 출력하지 않습니다.
+- `hwpforge_delete_para`: 한컴 저장 HWPX에서도 검증 가능한 최상위 본문 평문·빈 문단을 삭제할 수 있습니다. 문단 번호는 입력 문서의 위치 기준입니다. 원문 보존 경로는 한 요청에 한 문단을 받아 대상 문단만 제거하며, 생존 문단의 줄 조판 캐시·표 높이·ID와 관련 없는 부속 데이터를 유지합니다. 위치에 따라 줄 폭이 바뀔 수 있는 문서는 원래 admission 오류로 거부합니다. header가 옛 한컴의 직접 문단 치수·탭 정의 꼴로만 다른 문서도 이 경로로 지울 수 있습니다. header는 바이트 그대로 남고, 입력을 읽을 때 생긴 `PARAGRAPH_MEASURE_NORMALIZED` 경고는 그대로 보고될 수 있습니다. 기존 Preview와 관련 연결은 제거하고 `PREVIEW_REMOVED`를 알립니다. 한컴에서 다시 저장하면 미리보기가 만들어집니다. 검증할 수 없는 입력은 기존 오류로 거부하며 출력하지 않습니다.
 - `hwpforge_insert_para`·`hwpforge_stamp`와 보존 범위 밖 `hwpforge_set_cell`은 왕복 안전한 입력만 편집합니다. 인코더가 ZIP 엔트리를 모두 실어 보낼 수 없는 문서, 곧 한컴이 저장하며 `Preview/*`와 `META-INF/container.rdf`를 더한 문서는 거부됩니다. 이런 문서에도 `hwpforge_to_json` + `hwpforge_patch`(텍스트)와 `hwpforge_fill`(누름틀)은 쓸 수 있습니다.
 - `hwpforge_stamp`는 `hwpforge_stamp_plan`이 준 후보 객체를 그대로 복사해 `action`(`{"field":{"name":"…"}}` 또는 `"ignore"`)만 더합니다. 지침 문맥의 후보는 자동 적용되지 않습니다.
 

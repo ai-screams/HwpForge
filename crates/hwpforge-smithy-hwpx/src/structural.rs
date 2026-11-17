@@ -602,6 +602,9 @@ impl HwpxStructuralEditor {
     /// only that paragraph, retaining surviving line caches, table heights, IDs
     /// and unrelated parts. Preview is removed. Documents whose line widths may
     /// depend on position retain their original admission error.
+    /// A header that differs only by older Hancom direct paragraph-measure or tab
+    /// definitions does not block this path; the header stays byte-for-byte, and
+    /// decoding may still report `PARAGRAPH_MEASURE_NORMALIZED`.
     ///
     /// Pipeline: input admission gate → per-target rejection scan
     /// (reference / hard-break) → declared-delta build + `validate()` →
@@ -660,6 +663,9 @@ impl HwpxStructuralEditor {
     /// removed; surviving line caches, table heights, IDs and unrelated parts remain
     /// unchanged. Preview is removed. Documents whose line widths may depend on
     /// position retain their original admission error.
+    /// A header that differs only by older Hancom direct paragraph-measure or tab
+    /// definitions does not block this path; the header stays byte-for-byte, and
+    /// decoding may still report `PARAGRAPH_MEASURE_NORMALIZED`.
     /// Any failure in that path returns the original admission error.
     ///
     /// # Errors
