@@ -8,6 +8,9 @@ pub(crate) enum LossCause {
     GroupPictureAppearance,
     InlineStyle,
     HeaderOnlyNonlinearOrder,
+    ScriptAuxiliaryOrder,
+    SingleSectionNonlinearOrder,
+    SectionOutlineSelection,
 }
 impl LossCause {
     pub(crate) fn kind(self) -> &'static str {
@@ -15,8 +18,11 @@ impl LossCause {
             Self::PerLanguageScalar => "char_shape_per_language",
             Self::DrawnExtentOnly => "shape_drawn_extent",
             Self::GroupPictureAppearance => "group_child_picture",
+            Self::SectionOutlineSelection => "secPr.outlineShapeIDRef",
             Self::InlineStyle => "t.charStyleIDRef",
-            Self::HeaderOnlyNonlinearOrder => "package_reading_order",
+            Self::HeaderOnlyNonlinearOrder
+            | Self::ScriptAuxiliaryOrder
+            | Self::SingleSectionNonlinearOrder => "package_reading_order",
         }
     }
 }
@@ -24,6 +30,7 @@ impl LossCause {
 pub(crate) enum LossLocation {
     Header { definition: u32, digest: [u8; 32] },
     Body { part: String, span: Range<usize>, digest: [u8; 32] },
+    SectionProperty { part: String, span: Range<usize>, digest: [u8; 32] },
     Package { sections: Vec<String> },
 }
 #[derive(Debug, Clone)]

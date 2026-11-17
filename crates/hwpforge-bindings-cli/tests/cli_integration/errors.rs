@@ -260,12 +260,25 @@ fn editors_share_decode_and_admission_fixtures() {
     ] {
         let input = data.join(fixture);
         let file = input.to_str().unwrap();
+        // 이것을 실패시키는 것: 범위 밖 칸의 입력 손실 admission 거부 제거.
+        let cell_input = if ids[0] == "cell.admission" {
+            let bytes =
+                cell_package::two_text_runs(&cell_document::editable(), "<hp:t>성명</hp:t>");
+            let bytes = cell_package::splice(&bytes, "</hp:t>", "</hp:t><hp:imaginary/>");
+            let path = dir.join("cell-input.hwpx");
+            std::fs::write(&path, bytes).unwrap();
+            path
+        } else {
+            input.clone()
+        };
+        let cell_file = cell_input.to_str().unwrap();
         let output = out.to_str().unwrap();
         for (id, args) in [
             (
                 ids[0],
                 vec![
-                    "set-cell", file, "--table", "0", "--at", "0,0", "--text", "text", "-o", output,
+                    "set-cell", cell_file, "--table", "0", "--at", "0,0", "--text", "text", "-o",
+                    output,
                 ],
             ),
             (
@@ -345,3 +358,10 @@ fn hwp5_with_hwpx_extension_reports_conversion_hint() {
     assert_eq!(error["hint"], serde_json::Value::Null);
     assert_eq!(std::fs::read(input).unwrap(), original);
 }
+
+#[cfg(test)]
+#[path = "../../../hwpforge/tests/support/document.rs"]
+pub(super) mod cell_document;
+#[cfg(test)]
+#[path = "../../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+pub(super) mod cell_package;

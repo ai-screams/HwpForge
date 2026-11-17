@@ -1,4 +1,8 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod cell_package;
 
 #[path = "support/document.rs"]
 mod document;
@@ -69,9 +73,17 @@ fn a_lost_field_body_is_refused_by_the_editors() {
             "cached={cached}: {:?}",
             decoded.warnings
         );
+        // 이것을 실패시키는 것: 보존 가능한 칸에 재인코드 admission을 적용하기.
+        let output = cell(&lost).unwrap();
+        cell_encoding::assert_cell_patch(&lost, &output.bytes, 0, 1, "쇠부리");
+        assert!(output.warnings.iter().any(|w| w.info().code == "CONTENT_LOST"));
+        let original_run = |bytes: &[u8]| {
+            let xml = cell_package::section_xml(bytes);
+            xml.rsplit_once("<hp:run ").unwrap().1.split_once("</hp:run>").unwrap().0.to_owned()
+        };
+        assert_eq!(original_run(&output.bytes), original_run(&lost));
         for (surface, err) in [
             ("restyle", restyle(&lost, &opts).map(|_| ()).unwrap_err()),
-            ("set-cell", cell(&lost).map(|_| ()).unwrap_err()),
             ("stamp", stamp_all(&lost).map(|_| ()).unwrap_err()),
         ] {
             assert_eq!(

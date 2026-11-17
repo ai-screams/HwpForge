@@ -523,7 +523,8 @@ struct NamespaceWork {
     binding_probes: usize,
 }
 
-const PARAGRAPH_NS: &str = "http://www.hancom.co.kr/hwpml/2011/paragraph";
+pub(crate) const PARAGRAPH_NS: &str = "http://www.hancom.co.kr/hwpml/2011/paragraph";
+pub(crate) const SECTION_NS: &str = "http://www.hancom.co.kr/hwpml/2011/section";
 
 impl NamespaceWork {
     fn classify(&mut self, uri: &str) -> Result<bool, quick_xml::Error> {

@@ -2,8 +2,9 @@
 //!
 //! 셀은 표 서수(to-json export 순서) + 좌표(`at`, 피병합 좌표는 앵커로
 //! resolve) 또는 라벨 상대(`right_of`/`below`, 정규화 exact match)로
-//! 지정한다. stamp 와 동일한 fail-closed admission 게이트 뒤에서
-//! all-or-nothing 으로 적용된다. 빈 문자열은 정당한 clear.
+//! 지정한다. 본문 직속 표의 한 문단·한 Text run 칸은 원문을 보존한다.
+//! 하나라도 보존할 수 없으면 파일 전체에 기존 왕복 안전성 검사와 재인코드를
+//! 적용한다. 값이 바뀌면 기존 Preview를 제거한다. 빈 문자열은 정당한 clear.
 
 use serde::Serialize;
 
@@ -23,14 +24,14 @@ pub struct SetCellData {
     pub cells: Vec<SetCellResult>,
     /// Size of the output file in bytes.
     pub size_bytes: u64,
-    /// What the admission decode reported, then the successful encode's
+    /// What the input decode reported once, then the successful edit's
     /// non-semantic warnings (`ops::SetCellOutput::warnings`). Omitted when
     /// empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
 
-/// Apply a batch of cell edits behind the admission gate.
+/// Apply a batch of cell edits, preserving original XML for supported text cells.
 pub fn run_set_cell(
     file_path: &str,
     specs: &[CellSpec],
@@ -73,6 +74,7 @@ pub fn run_set_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compat::cell_package;
     use hwpforge_core::table::grid::GridCoord;
     use hwpforge_smithy_hwpx::CellTarget;
 
@@ -207,5 +209,27 @@ mod tests {
         let err = run_set_cell(&input, &[], &output).unwrap_err();
         assert_eq!(err.code, "INVALID_SET_CELL_MAP");
         assert!(!std::path::Path::new(&output).exists(), "no output on rejection");
+    }
+
+    // 이것을 실패시키는 것: MCP가 보존 편집의 Preview 경고를 버리기.
+    #[test]
+    fn set_cell_reports_preview_removal() {
+        let tmp = temp_dir("preview");
+        let input = label_form_hwpx(tmp.path());
+        let output = tmp.path().join("edited.hwpx");
+        let bytes = cell_package::append_entry(
+            &std::fs::read(&input).unwrap(),
+            "Preview/PrvText.txt",
+            b"old",
+        );
+        std::fs::write(&input, bytes).unwrap();
+        let data = run_set_cell(
+            &input,
+            &[spec(0, CellTarget::At(GridCoord::new(0, 1)), "새값")],
+            output.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(data.warnings.iter().filter(|w| w.code == "PREVIEW_REMOVED").count(), 1);
+        assert!(output.exists());
     }
 }

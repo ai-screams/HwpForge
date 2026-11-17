@@ -523,11 +523,19 @@ class Document:
         `below`, or pass `specs` for several. The two forms are mutually
         exclusive.
 
-        This re-encodes the whole package, so it refuses a document whose
-        entries the encoder would not carry — a document Hancom saved keeps
-        `Preview/*` and `META-INF/container.rdf`, and those are dropped by a
-        re-encode. Use [`patch`][hwpforge.Document.patch] to change such a
-        document's cell text instead.
+        If every requested cell is in a direct body table with one paragraph
+        and one Text run (including an empty run), and its source location and
+        header can be preserved, only its text slot is changed. Paragraph/table
+        properties and source outside the slot are preserved. Changed values
+        remove existing Preview and its connections with ``PREVIEW_REMOVED``;
+        unchanged values return the original bytes.
+
+        If any cell is outside this subset or its text cannot be spliced, the
+        whole batch uses re-encoding with the existing round-trip and package
+        preservation admission checks. These can refuse Hancom-saved documents
+        carrying `Preview/*` or `META-INF/container.rdf`. Use
+        [`patch`][hwpforge.Document.patch] for other cell text edits.
+        Address errors and verification failures return errors.
 
         HWP5 (.hwp) input is converted first; results are HWPX.
         Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.
@@ -548,9 +556,9 @@ class Document:
 
         Raises:
             HwpForgeError: If the target is missing, ambiguous, or names a cell
-                that does not exist, or if the document carries package entries
-                a re-encode would not keep (``INPUT_ENTRIES_NOT_CARRIED``,
-                ``INPUT_NOT_ROUNDTRIP_SAFE``).
+                that does not exist, if verification fails, or if the whole
+                batch requires re-encoding and fails admission
+                (``INPUT_ENTRIES_NOT_CARRIED``, ``INPUT_NOT_ROUNDTRIP_SAFE``).
         """
         data, report = _hwpforge.set_cell(
             self._data,
@@ -588,13 +596,13 @@ class Document:
         """Return a new document with paragraphs removed; the receiver is unchanged.
 
         Verified plain or empty top-level body paragraphs can also be deleted
-        from Hancom-saved HWPX. Indexes address positions in the input. On the
-        source-preserving path, surviving paragraph IDs and unrelated payloads
-        are retained; affected line caches are removed and supported affected
-        table heights become zero for Hancom to lay out again. Preview and its
-        connections are removed with ``PREVIEW_REMOVED``; saving again in Hancom
-        rebuilds it. An unverifiable deletion returns its original admission
-        error and no bytes.
+        from Hancom-saved HWPX. Indexes address positions in the input. The
+        source-preserving path accepts one paragraph per request and removes
+        only that paragraph; surviving line caches, table heights, paragraph IDs
+        and unrelated payloads are retained. Preview and its connections are
+        removed with ``PREVIEW_REMOVED``; saving again in Hancom rebuilds it.
+        Documents whose line widths may depend on position, and any other
+        unverifiable deletion, return the original admission error and no bytes.
 
         HWP5 (.hwp) input is converted first; results are HWPX.
         Semantic conversion loss raises ``HWP5_CONVERSION_LOSS`` unless accepted.

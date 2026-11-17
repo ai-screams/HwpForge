@@ -1,5 +1,150 @@
 use super::*;
 
+// Read raw payloads so XML declaration normalization cannot weaken byte checks.
+fn replace_raw(base: &[u8], part: &str, from: &str, to: &str) -> Vec<u8> {
+    let mut package = RawPackage::read(base).unwrap();
+    let source = std::str::from_utf8(package.read_entry(part).unwrap()).unwrap();
+    let start = source.find(from).unwrap_or_else(|| panic!("missing {from}"));
+    assert_eq!(source.matches(from).count(), 1, "ambiguous replacement {from}");
+    let changed = source.replacen(from, to, 1);
+    assert_eq!(&changed[..start], &source[..start]);
+    assert_eq!(&changed[start + to.len()..], &source[start + from.len()..]);
+    package.replace_text_entry(part, changed);
+    package.write().unwrap()
+}
+
+fn section_no(base: &[u8]) -> Vec<u8> {
+    replace_raw(
+        base,
+        "Contents/content.hpf",
+        "idref=\"section0\" linear=\"yes\"",
+        "idref=\"section0\" linear=\"no\"",
+    )
+}
+
+fn script_seed() -> Vec<u8> {
+    let mut doc = Document::new();
+    for label in ["첫", "둘"] {
+        doc.add_section(Section::with_paragraphs(
+            ["시작", "삭제", "생존"].map(|text| paragraph(&format!("{label} {text}"))).to_vec(),
+            PageSettings::a4(),
+        ));
+    }
+    let base = crate::HwpxEncoder::encode(
+        &doc.validate().unwrap(),
+        &crate::style_store_for_preset("default").unwrap(),
+        &ImageStore::new(),
+    )
+    .unwrap();
+    let mut p = RawPackage::read(&base).unwrap();
+    let content = p
+        .read_text_entry("Contents/content.hpf")
+        .unwrap()
+        .replace("\"section0\"", "\"body-a\"")
+        .replace("\"section1\"", "\"body-b\"");
+    p.replace_text_entry("Contents/content.hpf", content);
+    p.write().unwrap()
+}
+
+fn scripts(base: &[u8], refs: &str) -> Vec<u8> {
+    let base = extra(
+        &extra(base, "Scripts/headerScripts.js", b"/\0/\0h\0"),
+        "Scripts/sourceScripts.js",
+        b"/\0/\0s\0",
+    );
+    let base = replace(&base, "Contents/content.hpf", "</opf:manifest>",
+        "<opf:item id='aux-h' href='Scripts/headerScripts.js' media-type='application/x-javascript ;charset=utf-16'/><opf:item id='aux-s' href='Scripts/sourceScripts.js' media-type='application/x-javascript ;charset=utf-16'/></opf:manifest>");
+    replace(&base, "Contents/content.hpf", "<opf:spine>", &format!("<opf:spine>{refs}"))
+}
+
+fn assert_editor_result<T, M, E>(
+    (api, expected_success, successes): (&str, bool, &mut usize),
+    input: &[u8],
+    control_input: &[u8],
+    actual: Result<crate::diagnostics::WithCodecWarnings<T>, E>,
+    control: Result<crate::diagnostics::WithCodecWarnings<T>, E>,
+    normalize: impl Fn(&str, &[u8]) -> Vec<u8>,
+    view: impl for<'a> Fn(&'a T, &[u8]) -> (&'a [u8], M),
+) where
+    T: std::fmt::Debug,
+    M: std::fmt::Debug + PartialEq,
+    E: std::fmt::Debug + std::fmt::Display,
+{
+    assert_eq!(actual.is_ok(), expected_success, "{api}: expected actual success");
+    assert_eq!(control.is_ok(), expected_success, "{api}: expected control success");
+    match (actual, control) {
+        (Ok(actual), Ok(control)) => {
+            // The input package warning is intentional; each editor must retain it exactly.
+            assert_eq!(
+                actual.decode_warnings,
+                HwpxDecoder::decode(input).unwrap().warnings,
+                "{api}: input decode warnings"
+            );
+            assert_eq!(
+                control.decode_warnings,
+                HwpxDecoder::decode(control_input).unwrap().warnings,
+                "{api}: control decode warnings"
+            );
+            assert_eq!(actual.encode_warnings, control.encode_warnings, "{api}: encode warnings");
+            let (actual_bytes, actual_metadata) = view(&actual.value, input);
+            let (control_bytes, control_metadata) = view(&control.value, control_input);
+            assert_eq!(actual_metadata, control_metadata, "{api}: result metadata");
+            let actual_package = RawPackage::read(actual_bytes).unwrap();
+            let control_package = RawPackage::read(control_bytes).unwrap();
+            assert_eq!(
+                actual_package.entry_paths().collect::<Vec<_>>(),
+                control_package.entry_paths().collect::<Vec<_>>(),
+                "{api}: entries"
+            );
+            for path in actual_package.entry_paths() {
+                let actual_entry = actual_package.read_entry(path).unwrap();
+                let control_entry = control_package.read_entry(path).unwrap();
+                assert_eq!(normalize(path, actual_entry), control_entry, "{api}: {path}");
+                if matches!(path, "Scripts/headerScripts.js" | "Scripts/sourceScripts.js") {
+                    assert_eq!(
+                        actual_entry,
+                        RawPackage::read(input).unwrap().read_entry(path).unwrap(),
+                        "{api}: {path} preservation"
+                    );
+                    assert_eq!(
+                        control_entry,
+                        RawPackage::read(control_input).unwrap().read_entry(path).unwrap(),
+                        "{api}: {path} control preservation"
+                    );
+                }
+            }
+            *successes += 1;
+        }
+        (Err(actual), Err(control)) => {
+            assert_eq!(std::mem::discriminant(&actual), std::mem::discriminant(&control), "{api}");
+            assert_eq!(actual.to_string(), control.to_string(), "{api}");
+            assert_eq!(format!("{actual:?}"), format!("{control:?}"), "{api}: error fields");
+        }
+        (actual, control) => panic!("{api}: script={actual:?}, control={control:?}"),
+    }
+}
+
+fn editor_control(seed: &[u8], label: &str) -> Vec<u8> {
+    let decoded = HwpxDecoder::decode(seed).unwrap();
+    let mut doc = decoded.document;
+    doc.sections_mut()[0].paragraphs.push(Paragraph::with_runs(
+        vec![Run::control(
+            hwpforge_core::Control::Field {
+                field_type: hwpforge_foundation::FieldType::ClickHere,
+                hint_text: Some("값".into()),
+                help_text: None,
+                name: Some("field".into()),
+                display_text: String::new(),
+            },
+            CharShapeIndex::new(0),
+        )],
+        ParaShapeIndex::new(0),
+    ));
+    doc.sections_mut()[0].paragraphs[0] = paragraph(label);
+    crate::HwpxEncoder::encode(&doc.validate().unwrap(), &decoded.style_store, &decoded.image_store)
+        .unwrap()
+}
+
 const HEADER: &str = "Contents/header.xml";
 fn scalar(base: &[u8]) -> Vec<u8> {
     replace(
@@ -34,6 +179,7 @@ fn succeeds(base: &[u8]) {
 }
 
 // 이것을 실패시키는 것: header scalar를 body paragraph0 손실로 취급하거나 전역 거부 유지.
+// 이것을 실패시키는 것: 구역/쪽 설정이 없는 입력의 배치 검사 생략.
 #[test]
 fn scalar_header_survives_with_original_warning() {
     let base = scalar(&carry_base());
@@ -47,16 +193,13 @@ fn scalar_header_survives_with_original_warning() {
     let first = &source[d.source_maps[0].paragraphs[0].outer.clone()];
     let plain = r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>첫 문단</hp:t></hp:run></hp:p>"#;
     let base = replace(&base, SECTION, first, plain);
-    let before = HwpxDecoder::decode(&base).unwrap();
-    let out = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(
-        &base,
-        &[ParagraphLocator { section: 0, index: 0 }],
-    )
-    .unwrap();
-    assert_eq!(out.decode_warnings, before.warnings);
     assert_eq!(
-        RawPackage::read(&out.value).unwrap().read_entry(HEADER).unwrap(),
-        RawPackage::read(&base).unwrap().read_entry(HEADER).unwrap()
+        HwpxStructuralEditor::delete_paragraphs(
+            &base,
+            &[ParagraphLocator { section: 0, index: 0 }]
+        )
+        .unwrap_err(),
+        original_error(&base)
     );
 }
 
@@ -71,19 +214,14 @@ fn inline_style_must_survive_the_deletion() {
     );
 }
 
-// 이것을 실패시키는 것: header-only 비선형 순서 근거 누락 또는 section 비선형까지 허용.
+// 이것을 실패시키는 것: section 결과 비트에 header 사용 비트를 OR하여 새 원인을 선택.
 #[test]
-fn nonlinear_order_requires_only_the_header() {
-    succeeds(&header_order(&carry_base()));
-    let base = replace(
-        &carry_base(),
-        "Contents/content.hpf",
-        "idref=\"section0\" linear=\"yes\"",
-        "idref=\"section0\" linear=\"no\"",
-    );
+fn nonlinear_header_keeps_its_own_cause() {
+    let base = header_order(&carry_base());
+    succeeds(&base);
     assert_eq!(
-        HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap_err(),
-        original_error(&base)
+        package_causes(&base),
+        [crate::decoder::preserved_loss::LossCause::HeaderOnlyNonlinearOrder]
     );
 }
 
@@ -110,23 +248,28 @@ fn nonlinear_order_with_unreadable_metadata_is_refused() {
             ),
         ),
     ] {
-        let base = header_order(&input);
-        succeeds(&base);
-        let broken = replace(
-            &base,
-            "Contents/content.hpf",
-            "<opf:title/>",
-            "<opf:title><![CDATA[x]]></opf:title>",
-        );
-        let decoded = HwpxDecoder::decode(&broken).unwrap();
-        assert_eq!(decoded.warnings, HwpxDecoder::decode(&base).unwrap().warnings);
-        assert!(!decoded.source_basis.as_ref().unwrap().losses.iter().any(|loss| {
-            loss.cause == crate::decoder::preserved_loss::LossCause::HeaderOnlyNonlinearOrder
-        }));
-        assert_eq!(
-            HwpxStructuralEditor::delete_paragraphs(&broken, &[TARGET]).unwrap_err(),
-            original_error(&broken)
-        );
+        for base in [header_order(&input), section_no(&input)] {
+            succeeds(&base);
+            let broken = replace(
+                &base,
+                "Contents/content.hpf",
+                "<opf:title/>",
+                "<opf:title><![CDATA[x]]></opf:title>",
+            );
+            let decoded = HwpxDecoder::decode(&broken).unwrap();
+            assert_eq!(decoded.warnings, HwpxDecoder::decode(&base).unwrap().warnings);
+            assert!(!decoded
+                .source_basis
+                .as_ref()
+                .unwrap()
+                .losses
+                .iter()
+                .any(|loss| { loss.cause.kind() == "package_reading_order" }));
+            assert_eq!(
+                HwpxStructuralEditor::delete_paragraphs(&broken, &[TARGET]).unwrap_err(),
+                original_error(&broken)
+            );
+        }
     }
 }
 
@@ -135,7 +278,7 @@ fn matrix(scale: &str) -> String {
         r#"<hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{scale}" e2="0" e3="0" e4="0" e5="{scale}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo>"#
     )
 }
-fn object(tag: &str, org: i32, shown: i32, scale: &str, tail: &str) -> String {
+pub(super) fn object(tag: &str, org: i32, shown: i32, scale: &str, tail: &str) -> String {
     format!(
         r#"<hp:{tag} id="9" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="7"><hp:offset x="0" y="0"/><hp:orgSz width="{org}" height="{org}"/><hp:curSz width="{shown}" height="{shown}"/>{}<hp:sz width="{shown}" widthRelTo="ABSOLUTE" height="{shown}" heightRelTo="ABSOLUTE" protect="0"/>{tail}</hp:{tag}>"#,
         matrix(scale)
@@ -144,7 +287,7 @@ fn object(tag: &str, org: i32, shown: i32, scale: &str, tail: &str) -> String {
 fn shape() -> String {
     object("rect", 1000, 1000, "2", "")
 }
-fn picture(scale: &str, tail: &str) -> String {
+pub(super) fn picture(scale: &str, tail: &str) -> String {
     object(
         "pic",
         1000,
@@ -190,6 +333,7 @@ fn all_drawn_extent_sites_preserve_surviving_objects() {
 }
 
 // 이것을 실패시키는 것: 같은 group_child_picture kind를 회전·뒤집기까지 허용하거나 appearance 근거 누락.
+// 이것을 실패시키는 것: 정적 glow 효과의 이름만으로 보존 삭제 거부.
 #[test]
 fn group_picture_appearance_and_transform_have_different_causes() {
     for pic in [
@@ -199,8 +343,8 @@ fn group_picture_appearance_and_transform_have_different_causes() {
     ] {
         let base = body_object(&carry_base(), "남음", &object("container", 1000, 1000, "1", &pic));
         assert_cause(&base, "group_child_picture");
-        succeeds(&base);
         let retried = body_object(&carry_base(), "남음", &group(&pic.replace("1000", "800")));
+        succeeds(&base);
         succeeds(&retried);
     }
     for transform in [
@@ -296,113 +440,122 @@ fn warning_text_and_header_default_path_do_not_authorize_loss() {
 #[test]
 fn incomplete_or_stale_private_evidence_is_refused() {
     use crate::decoder::preserved_loss::{LossCause, LossLocation};
-    for change in [
-        "missing",
-        "duplicate",
-        "extra-evidence",
-        "warning-part",
-        "relocate-part",
-        "index",
-        "kind",
-        "cause",
-        "part",
-        "digest",
-        "range",
-        "unrecorded",
-        "duplicate-node",
-        "extra",
-        "variant",
-        "package",
-    ] {
-        let base = body_object(&carry_base(), "남음", &shape());
-        let (mut d, p, _) = admit_delete(&base).unwrap();
-        let mut basis = d.source_basis.take().unwrap();
-        let evidence = &mut std::sync::Arc::make_mut(&mut basis).losses;
-        match change {
-            "missing" => evidence.clear(),
-            "duplicate" => evidence.push(evidence[0].clone()),
-            "extra-evidence" => {
-                let mut extra = evidence[0].clone();
-                extra.warning = usize::MAX;
-                evidence.push(extra);
-            }
-            "warning-part" | "relocate-part" => {
-                if let crate::DecodeWarning::ContentLost { part, .. } =
-                    &mut d.warnings[evidence[0].warning]
-                {
-                    *part = "Contents/absent.xml".into();
+    for nonlinear in [false, true] {
+        for change in [
+            "missing",
+            "duplicate",
+            "extra-evidence",
+            "warning-part",
+            "relocate-part",
+            "index",
+            "kind",
+            "cause",
+            "part",
+            "digest",
+            "range",
+            "unrecorded",
+            "duplicate-node",
+            "extra",
+            "variant",
+            "package",
+        ] {
+            let base = body_object(&carry_base(), "남음", &shape());
+            let base = if nonlinear { section_no(&base) } else { base };
+            let (mut d, p, _) = admit_delete(&base).unwrap();
+            let mut basis = d.source_basis.take().unwrap();
+            let evidence = &mut std::sync::Arc::make_mut(&mut basis).losses;
+            let body_index = evidence
+                .iter()
+                .position(|loss| matches!(loss.location, LossLocation::Body { .. }))
+                .unwrap();
+            match change {
+                "missing" => evidence.clear(),
+                "duplicate" => evidence.push(evidence[body_index].clone()),
+                "extra-evidence" => {
+                    let mut extra = evidence[body_index].clone();
+                    extra.warning = usize::MAX;
+                    evidence.push(extra);
                 }
-                if change == "relocate-part" {
-                    if let LossLocation::Body { part, .. } = &mut evidence[0].location {
+                "warning-part" | "relocate-part" => {
+                    if let crate::DecodeWarning::ContentLost { part, .. } =
+                        &mut d.warnings[evidence[body_index].warning]
+                    {
                         *part = "Contents/absent.xml".into();
                     }
+                    if change == "relocate-part" {
+                        if let LossLocation::Body { part, .. } = &mut evidence[body_index].location
+                        {
+                            *part = "Contents/absent.xml".into();
+                        }
+                    }
                 }
-            }
-            "index" => evidence[0].warning = usize::MAX,
-            "kind" => {
-                if let crate::DecodeWarning::ContentLost { kind, .. } =
-                    &mut d.warnings[evidence[0].warning]
-                {
-                    *kind = "unknown_element".into()
+                "index" => evidence[body_index].warning = usize::MAX,
+                "kind" => {
+                    if let crate::DecodeWarning::ContentLost { kind, .. } =
+                        &mut d.warnings[evidence[body_index].warning]
+                    {
+                        *kind = "unknown_element".into()
+                    }
                 }
-            }
-            "cause" => {
-                evidence[0].cause = LossCause::PerLanguageScalar;
-                if let crate::DecodeWarning::ContentLost { kind, .. } =
-                    &mut d.warnings[evidence[0].warning]
-                {
-                    *kind = "char_shape_per_language".into();
+                "cause" => {
+                    evidence[body_index].cause = LossCause::PerLanguageScalar;
+                    if let crate::DecodeWarning::ContentLost { kind, .. } =
+                        &mut d.warnings[evidence[body_index].warning]
+                    {
+                        *kind = "char_shape_per_language".into();
+                    }
                 }
-            }
-            "part" => {
-                if let LossLocation::Body { part, .. } = &mut evidence[0].location {
-                    *part = "Contents/missing.xml".into()
+                "part" => {
+                    if let LossLocation::Body { part, .. } = &mut evidence[body_index].location {
+                        *part = "Contents/missing.xml".into()
+                    }
                 }
-            }
-            "digest" => {
-                if let LossLocation::Body { digest, .. } = &mut evidence[0].location {
-                    digest[0] ^= 1
+                "digest" => {
+                    if let LossLocation::Body { digest, .. } = &mut evidence[body_index].location {
+                        digest[0] ^= 1
+                    }
                 }
-            }
-            "range" => {
-                if let LossLocation::Body { span, .. } = &mut evidence[0].location {
-                    span.end -= 1
+                "range" => {
+                    if let LossLocation::Body { span, .. } = &mut evidence[body_index].location {
+                        span.end -= 1
+                    }
                 }
-            }
-            "unrecorded" => d.source_maps.clear(),
-            "duplicate-node" => d.source_maps.push(d.source_maps[0].clone()),
-            "extra" => d.warnings.push(crate::DecodeWarning::ContentLost {
-                part: SECTION.into(),
-                path: Default::default(),
-                kind: "ole".into(),
-                reason: "opaque".into(),
-            }),
-            "variant" => {
-                d.warnings[evidence[0].warning] = crate::DecodeWarning::InvalidFieldBoundary {
+                "unrecorded" => d.source_maps.clear(),
+                "duplicate-node" => d.source_maps.push(d.source_maps[0].clone()),
+                "extra" => d.warnings.push(crate::DecodeWarning::ContentLost {
                     part: SECTION.into(),
-                    reason: "unrepresented field structure".into(),
+                    path: Default::default(),
+                    kind: "ole".into(),
+                    reason: "opaque".into(),
+                }),
+                "variant" => {
+                    d.warnings[evidence[body_index].warning] =
+                        crate::DecodeWarning::InvalidFieldBoundary {
+                            part: SECTION.into(),
+                            reason: "unrepresented field structure".into(),
+                        }
                 }
+                "package" => {}
+                _ => unreachable!(),
             }
-            "package" => {}
-            _ => unreachable!(),
+            d.source_basis = Some(basis);
+            let input = if change == "package" { carry_base() } else { base.clone() };
+            let original = HwpxDecoder::decode(&base).unwrap();
+            let facts = crate::derived_values::DerivedFacts::collect(&p, &original).unwrap();
+            let ordinals = [facts.body_ordinal(0, 1).unwrap()];
+            let effects = facts
+                .effects(&[crate::derived_values::DerivedEdit::Delete {
+                    section: 0,
+                    paragraphs: &ordinals,
+                }])
+                .unwrap();
+            assert!(
+                preserved_loss::check_candidates(&input, &p, &d)
+                    .and_then(|()| preserved_loss::check_locations(&d, &effects))
+                    .is_err(),
+                "{change}"
+            );
         }
-        d.source_basis = Some(basis);
-        let input = if change == "package" { carry_base() } else { base.clone() };
-        let original = HwpxDecoder::decode(&base).unwrap();
-        let facts = crate::derived_values::DerivedFacts::collect(&p, &original).unwrap();
-        let ordinals = [facts.body_ordinal(0, 1).unwrap()];
-        let effects = facts
-            .effects(&[crate::derived_values::DerivedEdit::Delete {
-                section: 0,
-                paragraphs: &ordinals,
-            }])
-            .unwrap();
-        assert!(
-            preserved_loss::check_candidates(&input, &p, &d)
-                .and_then(|()| preserved_loss::check_locations(&d, &effects))
-                .is_err(),
-            "{change}"
-        );
     }
 }
 
@@ -428,94 +581,105 @@ fn nested_group_warning_indices_follow_the_final_warning_order() {
 // 이것을 실패시키는 것: header-only를 선택 속성·script·중복/누락 참조까지 확대.
 #[test]
 fn nonlinear_header_requires_the_original_resolver_proofs() {
-    let good = header_order(&carry_base());
-    for (part, from, to) in [
-        ("Contents/content.hpf", "linear=\"no\"", "linear=\"maybe\""),
-        ("Contents/content.hpf", "idref=\"header\"", "idref=\"header\" future=\"1\""),
-        ("Contents/content.hpf", "<opf:spine>", "<opf:spine future=\"1\">"),
-        ("Contents/content.hpf", "id=\"header\"", "id=\"header\" future=\"1\""),
-        ("Contents/content.hpf", "</opf:spine>", "<opf:itemref idref=\"header\"/></opf:spine>"),
-        ("Contents/content.hpf", "<opf:itemref idref=\"section0\" linear=\"yes\"/>", ""),
-        ("META-INF/container.xml", "<ocf:rootfiles>", "<ocf:rootfiles future=\"1\">"),
+    for (good, section_ref) in [
+        (header_order(&carry_base()), "<opf:itemref idref=\"section0\" linear=\"yes\"/>"),
+        (
+            header_order(&section_no(&carry_base())),
+            "<opf:itemref idref=\"section0\" linear=\"no\"/>",
+        ),
     ] {
-        let base = replace(&good, part, from, to);
+        for (part, from, to) in [
+            ("Contents/content.hpf", "linear=\"no\"", "linear=\"maybe\""),
+            ("Contents/content.hpf", "idref=\"header\"", "idref=\"header\" future=\"1\""),
+            ("Contents/content.hpf", "<opf:spine>", "<opf:spine future=\"1\">"),
+            ("Contents/content.hpf", "id=\"header\"", "id=\"header\" future=\"1\""),
+            ("Contents/content.hpf", "</opf:spine>", "<opf:itemref idref=\"header\"/></opf:spine>"),
+            ("Contents/content.hpf", section_ref, ""),
+            ("META-INF/container.xml", "<ocf:rootfiles>", "<ocf:rootfiles future=\"1\">"),
+        ] {
+            let base = replace(&good, part, from, to);
+            assert_eq!(
+                HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap_err(),
+                original_error(&base),
+                "{to}"
+            );
+        }
+        let script = extra(&good, "Scripts/test.js", b"void 0;");
+        let script = replace(
+            &script,
+            "Contents/content.hpf",
+            "</opf:manifest>",
+            r#"<opf:item id="script" href="Scripts/test.js" media-type="application/x-javascript"/></opf:manifest>"#,
+        );
+        let script = replace(
+            &script,
+            "Contents/content.hpf",
+            "</opf:spine>",
+            r#"<opf:itemref idref="script"/></opf:spine>"#,
+        );
         assert_eq!(
-            HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap_err(),
-            original_error(&base),
-            "{to}"
+            HwpxStructuralEditor::delete_paragraphs(&script, &[TARGET]).unwrap_err(),
+            original_error(&script)
         );
     }
-    let script = extra(&good, "Scripts/test.js", b"void 0;");
-    let script = replace(
-        &script,
-        "Contents/content.hpf",
-        "</opf:manifest>",
-        r#"<opf:item id="script" href="Scripts/test.js" media-type="application/x-javascript"/></opf:manifest>"#,
-    );
-    let script = replace(
-        &script,
-        "Contents/content.hpf",
-        "</opf:spine>",
-        r#"<opf:itemref idref="script"/></opf:spine>"#,
-    );
-    assert_eq!(
-        HwpxStructuralEditor::delete_paragraphs(&script, &[TARGET]).unwrap_err(),
-        original_error(&script)
-    );
 }
 
 // 이것을 실패시키는 것: header 정의 ID·SHA·파트 또는 검증된 package section 순서 검사 생략.
 #[test]
 fn header_and_package_evidence_cannot_be_relocated() {
     use crate::decoder::preserved_loss::LossLocation;
-    for change in ["definition", "digest", "part", "sections", "package-part", "location", "absent"]
-    {
-        let base = if matches!(change, "sections" | "package-part") {
-            header_order(&carry_base())
-        } else {
-            scalar(&carry_base())
-        };
-        let (mut d, p, _) = admit_delete(&base).unwrap();
-        if change == "absent" {
-            d.source_basis = None;
-        } else {
-            let evidence =
-                &mut std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap()).losses[0];
-            match change {
-                "definition" => {
-                    if let LossLocation::Header { definition, .. } = &mut evidence.location {
-                        *definition = u32::MAX
+    for nonlinear in [false, true] {
+        for change in
+            ["definition", "digest", "part", "sections", "package-part", "location", "absent"]
+        {
+            let base = if matches!(change, "sections" | "package-part") {
+                header_order(&carry_base())
+            } else {
+                scalar(&carry_base())
+            };
+            let base = if nonlinear { section_no(&base) } else { base };
+            let (mut d, p, _) = admit_delete(&base).unwrap();
+            if change == "absent" {
+                d.source_basis = None;
+            } else {
+                let evidence =
+                    &mut std::sync::Arc::make_mut(d.source_basis.as_mut().unwrap()).losses[0];
+                match change {
+                    "definition" => {
+                        if let LossLocation::Header { definition, .. } = &mut evidence.location {
+                            *definition = u32::MAX
+                        }
                     }
-                }
-                "digest" => {
-                    if let LossLocation::Header { digest, .. } = &mut evidence.location {
-                        digest[0] ^= 1
+                    "digest" => {
+                        if let LossLocation::Header { digest, .. } = &mut evidence.location {
+                            digest[0] ^= 1
+                        }
                     }
-                }
-                "part" => {
-                    if let crate::DecodeWarning::ContentLost { part, .. } =
-                        &mut d.warnings[evidence.warning]
-                    {
-                        *part = SECTION.into()
+                    "part" => {
+                        if let crate::DecodeWarning::ContentLost { part, .. } =
+                            &mut d.warnings[evidence.warning]
+                        {
+                            *part = SECTION.into()
+                        }
                     }
-                }
-                "package-part" => {
-                    if let crate::DecodeWarning::ContentLost { part, .. } =
-                        &mut d.warnings[evidence.warning]
-                    {
-                        *part = SECTION.into();
+                    "package-part" => {
+                        if let crate::DecodeWarning::ContentLost { part, .. } =
+                            &mut d.warnings[evidence.warning]
+                        {
+                            *part = SECTION.into();
+                        }
                     }
-                }
-                "sections" => {
-                    if let LossLocation::Package { sections } = &mut evidence.location {
-                        sections.clear()
+                    "sections" => {
+                        if let LossLocation::Package { sections } = &mut evidence.location {
+                            sections.clear()
+                        }
                     }
+                    "location" => evidence.location = LossLocation::Package { sections: vec![] },
+                    _ => unreachable!(),
                 }
-                "location" => evidence.location = LossLocation::Package { sections: vec![] },
-                _ => unreachable!(),
             }
+            assert!(preserved_loss::check_candidates(&base, &p, &d).is_err(), "{change}");
         }
-        assert!(preserved_loss::check_candidates(&base, &p, &d).is_err(), "{change}");
     }
 }
 
@@ -538,50 +702,51 @@ fn final_checks_detect_corruption_hidden_by_the_same_decode_loss() {
                 ),
             )
         };
-        let d = HwpxDecoder::decode(&base).unwrap();
-        let output = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap();
-        let altered = if change == "header" {
-            replace(&output, HEADER, "latin=\"91\"", "latin=\"87\"")
-        } else {
-            replace(&output, SECTION, "width=\"42\"", "width=\"141\"")
-        };
-        let mut expected = d.document.clone();
-        expected.sections_mut()[0].paragraphs.remove(1);
-        // Core equality alone deliberately cannot see the corrupted property.
-        let expected_doc = HwpxDocument {
-            document: expected.clone(),
-            style_store: d.style_store.clone(),
-            image_store: d.image_store.clone(),
-            warnings: vec![],
-            source_maps: vec![],
-            source_basis: None,
-        };
-        self_verify(&altered, &expected_doc).unwrap();
-        let changes = crate::raw_package::OutputChanges {
-            rewritten: vec![SECTION.into()],
-            ..Default::default()
-        };
-        let section_change = SectionChange {
-            section: 0,
-            path: SECTION.into(),
-            original: xml(&base),
-            deleted: vec![1],
-            inserted: None,
-            ids: ParagraphIds::Preserve,
-            heights: vec![],
-        };
-        assert!(
-            finish_edit(
-                &base,
-                RawPackage::read(&altered).unwrap(),
-                &d,
-                expected,
-                &changes,
-                &[section_change]
-            )
-            .is_err(),
-            "{change}"
-        );
+        for base in [base.clone(), section_no(&base)] {
+            let d = HwpxDecoder::decode(&base).unwrap();
+            let output = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap();
+            let altered = if change == "header" {
+                replace(&output, HEADER, "latin=\"91\"", "latin=\"87\"")
+            } else {
+                replace(&output, SECTION, "width=\"42\"", "width=\"141\"")
+            };
+            let mut expected = d.document.clone();
+            expected.sections_mut()[0].paragraphs.remove(1);
+            // Core equality alone deliberately cannot see the corrupted property.
+            let expected_doc = HwpxDocument {
+                document: expected.clone(),
+                style_store: d.style_store.clone(),
+                image_store: d.image_store.clone(),
+                warnings: vec![],
+                source_maps: vec![],
+                source_basis: None,
+            };
+            self_verify(&altered, &expected_doc).unwrap();
+            let changes = crate::raw_package::OutputChanges {
+                rewritten: vec![SECTION.into()],
+                ..Default::default()
+            };
+            let section_change = SectionChange {
+                section: 0,
+                path: SECTION.into(),
+                original: xml(&base),
+                deleted: vec![1],
+                inserted: None,
+                ids: ParagraphIds::Preserve,
+            };
+            assert!(
+                finish_edit(
+                    &base,
+                    RawPackage::read(&altered).unwrap(),
+                    &d,
+                    expected,
+                    &changes,
+                    &[section_change]
+                )
+                .is_err(),
+                "{change}"
+            );
+        }
     }
 }
 
@@ -617,30 +782,39 @@ fn loss_scope_is_confined_to_preserving_delete() {
     assert_eq!(crate::derived_values::COLLECTIONS.with(std::cell::Cell::get), 1);
 }
 
-// 이것을 실패시키는 것: effects에서 삭제된 원본 범위의 생존 검사 또는 정확한 원본 outer 검사 생략.
+// 이것을 실패시키는 것: check_preserved_loss의 effect.survives(span) 검사 제거.
 #[test]
 fn source_loss_ranges_are_checked_against_original_effects() {
     use crate::decoder::preserved_loss::LossLocation;
     let base = body_object(&carry_base(), "가 &amp; &lt;나&gt;끝", &shape());
-    let d = HwpxDecoder::decode(&base).unwrap();
-    let p = RawPackage::read(&base).unwrap();
-    let facts = crate::derived_values::DerivedFacts::collect(&p, &d).unwrap();
-    let ordinals = [facts.body_ordinal(0, 1).unwrap()];
-    let effects = facts
-        .effects(&[crate::derived_values::DerivedEdit::Delete {
-            section: 0,
-            paragraphs: &ordinals,
-        }])
-        .unwrap();
-    let LossLocation::Body { span, digest, .. } =
-        &d.source_basis.as_ref().unwrap().losses[0].location
-    else {
-        panic!()
-    };
-    assert!(effects.check_preserved_loss(0, span, digest).is_err());
-    let untouched = facts.effects(&[]).unwrap();
-    untouched.check_preserved_loss(0, span, digest).unwrap();
-    assert!(untouched.check_preserved_loss(0, &(span.start..span.end - 1), digest).is_err());
+    for base in [base.clone(), section_no(&base)] {
+        let d = HwpxDecoder::decode(&base).unwrap();
+        let p = RawPackage::read(&base).unwrap();
+        let facts = crate::derived_values::DerivedFacts::collect(&p, &d).unwrap();
+        let ordinals = [facts.body_ordinal(0, 1).unwrap()];
+        let effects = facts
+            .effects(&[crate::derived_values::DerivedEdit::Delete {
+                section: 0,
+                paragraphs: &ordinals,
+            }])
+            .unwrap();
+        let LossLocation::Body { span, digest, .. } = &d
+            .source_basis
+            .as_ref()
+            .unwrap()
+            .losses
+            .iter()
+            .find(|loss| matches!(loss.location, LossLocation::Body { .. }))
+            .unwrap()
+            .location
+        else {
+            panic!()
+        };
+        assert!(effects.check_preserved_loss(0, span, digest).is_err());
+        let untouched = facts.effects(&[]).unwrap();
+        untouched.check_preserved_loss(0, span, digest).unwrap();
+        assert!(untouched.check_preserved_loss(0, &(span.start..span.end - 1), digest).is_err());
+    }
 }
 
 // 이것을 실패시키는 것: header 비선형 fallback의 section 순서 일치 검사 생략.
@@ -733,3 +907,127 @@ fn preservation_evidence_work_scales_with_losses_and_source_nodes() {
     assert_eq!(small.0 * 2, large.0);
     assert!(small.1 >= 160 && large.1 > small.1 && large.1 <= small.1 * 2 + 64);
 }
+
+fn outline_seed(sections: usize, definitions: usize) -> Vec<u8> {
+    use hwpforge_core::{NumberingDef, ParaHead};
+    use hwpforge_foundation::NumberFormatType;
+    let store = crate::style_store_for_preset("default").unwrap();
+    let mut value = serde_json::to_value(&store).unwrap();
+    assert_eq!(value["numberings"].as_array().unwrap().len(), store.numbering_count());
+    value["numberings"] = serde_json::to_value(
+        (0..definitions)
+            .map(|i| NumberingDef {
+                id: 40 + i as u32,
+                start: 1,
+                levels: (1..=10)
+                    .map(|level| ParaHead {
+                        start: 1,
+                        level,
+                        num_format: NumberFormatType::Digit,
+                        text: format!("^{}{}", level, [".", "가)", ")"][i]),
+                        checkable: false,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    value["bullets"] = serde_json::json!([{"id":1,"bullet_char":"•","checked_char":null,"use_image":false,"para_head":{"start":1,"level":1,"num_format":serde_json::to_value(NumberFormatType::Digit).unwrap(),"text":"","checkable":false}}]);
+    value["styles"][0]["name"] = "Plain".into();
+    value["styles"][0]["eng_name"] = "Plain".into();
+    let store: crate::HwpxStyleStore = serde_json::from_value(value).unwrap();
+    assert_eq!(store.numbering_count(), definitions);
+    let mut doc = Document::new();
+    for section in 0..sections {
+        doc.add_section(Section::with_paragraphs(
+            ["start", "delete", "survive"]
+                .map(|text| paragraph(&format!("{section} {text}")))
+                .to_vec(),
+            PageSettings::a4(),
+        ));
+    }
+    let base =
+        crate::HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let package = RawPackage::read(&base).unwrap();
+    let header = package.read_text_entry("Contents/header.xml").unwrap();
+    assert_eq!(header.matches("<hh:numbering ").count(), definitions);
+    if definitions >= 2 {
+        assert!(header.contains("^1."));
+        assert!(header.contains("^1가)"));
+    }
+    extra(&base, "Scripts/opaque.bin", b"preserved payload")
+}
+
+pub(super) fn outline_change_heading(
+    base: &[u8],
+    inherited: bool,
+    kind: &str,
+    level: u32,
+    reference: u32,
+) -> Vec<u8> {
+    let decoded = HwpxDecoder::decode(base).unwrap();
+    let package = RawPackage::read(base).unwrap();
+    let shape = decoded.style_store.para_shape(ParaShapeIndex::new(0)).unwrap().clone();
+    let index = decoded.style_store.para_shape_count();
+    let mut store = decoded.style_store.clone();
+    store.push_para_shape(shape);
+    let encoded = crate::HwpxEncoder::encode(
+        &decoded.document.clone().validate().unwrap(),
+        &store,
+        &decoded.image_store,
+    )
+    .unwrap();
+    let mut header =
+        RawPackage::read(&encoded).unwrap().read_text_entry("Contents/header.xml").unwrap();
+    let marker = format!("<hh:paraPr id=\"{index}\"");
+    let start = header.find(&marker).unwrap();
+    let end = start + header[start..].find("</hh:paraPr>").unwrap() + 12;
+    let fragment = &header[start..end];
+    let changed = fragment.replace(
+        "<hh:heading type=\"NONE\" idRef=\"0\" level=\"0\"",
+        &format!("<hh:heading type=\"{kind}\" idRef=\"{reference}\" level=\"{level}\""),
+    );
+    assert_ne!(fragment, changed);
+    header.replace_range(start..end, &changed);
+    let mut result = package;
+    if inherited {
+        let at = header.find("<hh:style ").unwrap();
+        let end = at + header[at..].find("/>").unwrap() + 2;
+        let style =
+            header[at..end].replace("paraPrIDRef=\"0\"", &format!("paraPrIDRef=\"{index}\""));
+        header.replace_range(at..end, &style);
+    } else {
+        let source = result.read_text_entry("Contents/section0.xml").unwrap();
+        let span = &decoded.source_maps[0].paragraphs[1].outer;
+        let changed =
+            source[span.clone()].replace("paraPrIDRef=\"0\"", &format!("paraPrIDRef=\"{index}\""));
+        result.replace_text_entry(
+            "Contents/section0.xml",
+            format!("{}{}{}", &source[..span.start], changed, &source[span.end..]),
+        );
+    }
+    result.replace_text_entry("Contents/header.xml", header);
+    result.write().unwrap()
+}
+
+fn package_causes(base: &[u8]) -> Vec<crate::decoder::preserved_loss::LossCause> {
+    HwpxDecoder::decode(base)
+        .unwrap()
+        .source_basis
+        .as_ref()
+        .unwrap()
+        .losses
+        .iter()
+        .filter(|loss| loss.cause.kind() == "package_reading_order")
+        .map(|loss| loss.cause)
+        .collect()
+}
+
+#[path = "preserved_loss_script_tests.rs"]
+mod script;
+
+#[path = "preserved_loss_outline_tests.rs"]
+mod outline;
+
+#[path = "preserved_loss_single_section_tests.rs"]
+mod single_section;

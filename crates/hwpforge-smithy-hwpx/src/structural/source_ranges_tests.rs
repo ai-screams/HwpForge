@@ -125,7 +125,6 @@ fn final_zip_rejects_semantically_invisible_extra_edit() {
             original: RawPackage::read(&base).unwrap().read_text_entry(path).unwrap(),
             deleted: vec![1],
             inserted: None,
-            heights: Vec::new(),
         }],
     );
     assert!(matches!(
@@ -188,7 +187,6 @@ fn final_checks_read_only_required_xml_with_large_binary() {
             original,
             deleted: vec![1],
             inserted: None,
-            heights: Vec::new(),
         }],
     )
     .unwrap();
@@ -257,169 +255,6 @@ fn generated_tables() -> Vec<u8> {
     let xml = xml.replace("</hp:p>", &format!("{CELL_CACHE}</hp:p>"));
     package.replace_text_entry(path, xml);
     package.write().unwrap()
-}
-
-fn prepare_height_delete(
-    base: &[u8],
-) -> Result<
-    (crate::HwpxDocument, RawPackage, hwpforge_core::Document, SectionChange),
-    StructuralEditError,
-> {
-    use crate::derived_values::{DerivedEdit, DerivedFacts};
-    let decoded = crate::HwpxDecoder::decode(base).map_err(verification_error)?;
-    let mut package = RawPackage::read(base).map_err(verification_error)?;
-    package.ensure_editable().map_err(verification_error)?;
-    let facts = DerivedFacts::collect(&package, &decoded).map_err(verification_error)?;
-    let paragraphs = [facts.body_ordinal(0, 1).map_err(verification_error)?];
-    let edits = [DerivedEdit::Delete { section: 0, paragraphs: &paragraphs }];
-    let effects = facts.effects(&edits).map_err(verification_error)?;
-    effects.check_derived_values().map_err(verification_error)?;
-    let heights = effects.collect_height_invalidations().map_err(verification_error)?;
-    let path = "Contents/section0.xml";
-    let original = package.read_text_entry(path).map_err(verification_error)?;
-    let change = SectionChange {
-        ids: super::super::ParagraphIds::Reindex,
-        section: 0,
-        path: path.into(),
-        original,
-        deleted: vec![1],
-        inserted: None,
-        heights,
-    };
-    let replacements = change.replacements(&decoded.source_maps[0])?;
-    let output =
-        crate::cache_flow::splice(&change.original, replacements).map_err(verification_error)?;
-    package.replace_text_entry(path, output);
-    let mut expected = decoded.document.clone();
-    expected.sections_mut()[0].paragraphs.remove(1);
-    Ok((decoded, package, expected, change))
-}
-
-fn apply_height_delete(base: &[u8]) -> Result<Vec<u8>, StructuralEditError> {
-    let (decoded, package, expected, change) = prepare_height_delete(base)?;
-    let allowed = crate::raw_package::OutputChanges {
-        rewritten: vec![change.path.clone()],
-        ..Default::default()
-    };
-    crate::structural::finish_edit(base, package, &decoded, expected, &allowed, &[change])
-}
-
-// 이것을 실패시키는 것: 승인 높이 누락/다른 표 선택/목록 역생성/최종 검증 생략.
-#[test]
-fn height_plan_is_shared_with_final_package_verification() {
-    let base = generated_tables();
-    assert!(apply_height_delete(&base).is_ok());
-    let (decoded, package, expected, change) = prepare_height_delete(&base).unwrap();
-    assert_eq!(change.heights.len(), 1);
-    let body_ordinal =
-        crate::derived_values::DerivedFacts::collect(&RawPackage::read(&base).unwrap(), &decoded)
-            .unwrap()
-            .body_ordinal(0, 2)
-            .unwrap();
-    let facts =
-        crate::derived_values::DerivedFacts::collect(&RawPackage::read(&base).unwrap(), &decoded)
-            .unwrap();
-    assert!(matches!(
-        facts.insertion_boundary(0, 3).unwrap(),
-        crate::derived_values::FlowBoundary::EndOfBody
-    ));
-    assert!(
-        matches!(facts.insertion_boundary(0,2).unwrap(),crate::derived_values::FlowBoundary::Before(p) if p==body_ordinal)
-    );
-    assert!(facts.body_ordinal(0, 3).is_err());
-    let allowed = crate::raw_package::OutputChanges {
-        rewritten: vec![change.path.clone()],
-        ..Default::default()
-    };
-    let output = crate::structural::finish_edit(
-        &base,
-        package,
-        &decoded,
-        expected.clone(),
-        &allowed,
-        &[change],
-    )
-    .unwrap();
-    let mut package = RawPackage::read(&output).unwrap();
-    let path = "Contents/section0.xml";
-    let good = package.read_text_entry(path).unwrap();
-    assert_eq!(good.matches("height=\"321\" heightRelTo=").count(), 1);
-    assert_eq!(good.matches("height=\"0\" heightRelTo=").count(), 1);
-    assert_eq!(good.matches(CELL_CACHE).count(), 3);
-    let (_, _, _, change) = prepare_height_delete(&base).unwrap();
-    let original_heights = change.heights.clone();
-    let mut missing = change;
-    missing.heights.clear();
-    assert!(verify_output(&output, &decoded, &[missing]).is_err());
-    let (_, _, _, change) = prepare_height_delete(&base).unwrap();
-    for tampered in [
-        good.replacen("height=\"321\" heightRelTo=", "height=\"0\" heightRelTo=", 1),
-        good.replacen("width=\"9000\"", "width=\"9001\"", 1),
-        good.replacen("noAdjust=\"0\"", "noAdjust=\"1\"", 1),
-        good.replacen("protect=\"0\"", "protect=\"1\"", 1),
-        format!("{good}<!--extra-->"),
-        good.replacen(CELL_CACHE, "", 1),
-    ] {
-        assert_ne!(tampered, good);
-        package.replace_text_entry(path, tampered);
-        let bytes = package.write().unwrap();
-        assert!(verify_output(&bytes, &decoded, std::slice::from_ref(&change)).is_err());
-    }
-    // Authorizations injected after collection must fail rather than be silently filtered.
-    let mut wrong_section = original_heights[0].clone();
-    wrong_section.section = 1;
-    let mut wrong_table = original_heights[0].clone();
-    wrong_table.table_start += 1;
-    let mut wrong_span = original_heights[0].clone();
-    wrong_span.value.start += 1;
-    for height in [wrong_section, wrong_table, wrong_span] {
-        assert!(crate::structural::structural_replacements(
-            0,
-            &change.original,
-            &decoded.source_maps[0],
-            &[1],
-            None,
-            &[height],
-            super::super::ParagraphIds::Reindex,
-        )
-        .is_err());
-    }
-    let inside_deleted = crate::structural::structural_replacements(
-        0,
-        &change.original,
-        &decoded.source_maps[0],
-        &[1, 2],
-        None,
-        &original_heights,
-        super::super::ParagraphIds::Reindex,
-    )
-    .unwrap();
-    assert!(crate::cache_flow::splice(&change.original, inside_deleted).is_err());
-    let mut duplicate = change.replacements(&decoded.source_maps[0]).unwrap();
-    duplicate.push((original_heights[0].value.clone(), "0".into()));
-    assert!(crate::cache_flow::splice(&change.original, duplicate).is_err());
-    let mut unsupported = RawPackage::read(&base).unwrap();
-    unsupported.replace_text_entry(
-        path,
-        change.original.replace("treatAsChar=\"0\"", "treatAsChar=\"1\""),
-    );
-    assert!(apply_height_delete(&unsupported.write().unwrap()).is_err());
-    let field = r#"<hp:ctrl><hp:fieldBegin id="999" type="UNSUPPORTED" dirty="0"/></hp:ctrl><hp:t>3</hp:t><hp:ctrl><hp:fieldEnd beginIDRef="999"/></hp:ctrl>"#;
-    unsupported.replace_text_entry(
-        path,
-        change.original.replacen("<hp:t>뒤</hp:t>", &format!("<hp:t>뒤</hp:t>{field}"), 1),
-    );
-    let bytes = unsupported.write().unwrap();
-    let decoded_unknown = crate::HwpxDecoder::decode(&bytes).unwrap();
-    crate::derived_values::DerivedFacts::collect(
-        &RawPackage::read(&bytes).unwrap(),
-        &decoded_unknown,
-    )
-    .unwrap();
-    assert!(apply_height_delete(&bytes).is_err());
-    let mut wrong_source = RawPackage::read(&base).unwrap();
-    wrong_source.replace_text_entry(path, change.original.replace("321", "322"));
-    assert!(crate::derived_values::DerivedFacts::collect(&wrong_source, &decoded).is_err());
 }
 
 // 이것을 실패시키는 것: 기존 공개 구조 편집/빈 요청에서 전역 파생값 원장을 수집.
@@ -526,44 +361,6 @@ fn source_map_keeps_digest_and_collect_rebuilds_elements() {
     let mut changed = package;
     changed.replace_text_entry("Contents/section0.xml", xml.replace("321", "322"));
     assert!(crate::derived_values::DerivedFacts::collect(&changed, &decoded).is_err());
-}
-
-// 이것을 실패시키는 것: 원문 높이 승인에서 decoder 표 범위/실제 원소 종류의 재대조 생략.
-#[test]
-fn height_authorizations_require_decoder_table_ranges() {
-    let base = generated_tables();
-    let (decoded, _, _, change) = prepare_height_delete(&base).unwrap();
-    let original = &change.original;
-    let mut map = decoded.source_maps[0].clone();
-    let at = original.rfind("뒤").unwrap();
-    let different = format!("{}더{}", &original[..at], &original[at..]);
-    let source = hwpforge_core::source_xml::XmlSource::read(&different).unwrap().1;
-    map.cache_flow = crate::cache_flow::ParagraphFlow::from_source(&source);
-    let mut replacements = Vec::new();
-    assert!(crate::derived_values::append_height_replacements(
-        original,
-        &map,
-        0,
-        &change.heights,
-        &mut replacements
-    )
-    .is_err());
-    assert!(replacements.is_empty());
-
-    // Equal-length element names keep every offset fixed, isolating ownership kind.
-    let picture = original.replace("hp:tbl", "hp:pic");
-    let mut map = decoded.source_maps[0].clone();
-    use sha2::Digest;
-    map.source_digest = sha2::Sha256::digest(picture.as_bytes()).into();
-    assert!(crate::derived_values::append_height_replacements(
-        &picture,
-        &map,
-        0,
-        &change.heights,
-        &mut replacements
-    )
-    .is_err());
-    assert!(replacements.is_empty());
 }
 
 // 이것을 실패시키는 것: BOM section의 fieldBegin 콜백 주소와 decoder 주소 불일치.

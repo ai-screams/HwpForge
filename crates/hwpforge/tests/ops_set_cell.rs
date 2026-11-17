@@ -1,5 +1,7 @@
 //! `ops::edit::set_cell` — the regenerating, grid-addressed cell edit.
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;
 
 #[path = "support/document.rs"]
 mod document;
@@ -291,7 +293,7 @@ fn a_non_document_input_is_a_codec_failure() {
 #[test]
 fn a_semantic_loss_on_re_encode_produces_no_bytes() {
     let err = set_cell(
-        &table_with_title_mark_note(),
+        &cell_package::two_text_runs(&table_with_title_mark_note(), "<hp:t>셀</hp:t>"),
         &SetCellOptions::default().with_table(0).with_at("0,0").with_text("새 값"),
     )
     .expect_err("a silent success here would ship a damaged document");
@@ -334,13 +336,8 @@ fn meta_carries_exactly_the_documented_keys() {
 /// the successful encode raised, rather than hard-coding an empty vector as
 /// it used to.
 ///
-/// The list is empty for every document reachable here, and that is a
-/// property of the encoder rather than of this wiring: the only non-semantic
-/// `EncodeWarning` is `LayoutCacheDropped`, which the encoder raises only
-/// when `EncodeOptions::emit_layout_cache` is set — an opt-in a
-/// preserve-first editor must never set. The forwarding itself is proven
-/// where the outcome can be built directly, in `smithy-hwpx`'s
-/// `encoder::tests::split_successful_encode`.
+/// A clean input without Preview has no input or edit diagnostics.
+/// Preview removal and text cleanup are also non-semantic edit diagnostics.
 #[test]
 fn a_successful_edit_reports_the_encoders_nonsemantic_warnings() {
     let out = set_cell(
@@ -373,4 +370,20 @@ fn decode_warnings_reach_the_set_cell_output() {
     let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
     assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
     assert_eq!(out.results.len(), 1, "the edit itself still happened");
+}
+
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod cell_package;
+
+// 이것을 실패시키는 것: 한 슬롯 칸을 재인코드해 편집 밖 각주를 잃기.
+#[test]
+fn set_cell_preserves_the_note_number_head() {
+    let base = table_with_title_mark_note();
+    let output =
+        set_cell(&base, &SetCellOptions::default().with_table(0).with_at("0,0").with_text("새 값"))
+            .unwrap();
+    cell_encoding::assert_cell_patch(&base, &output.bytes, 0, 0, "새 값");
+    let before = cell_package::section_xml(&base);
+    let after = cell_package::section_xml(&output.bytes);
+    assert_eq!(after, before.replace("<hp:t>셀</hp:t>", "<hp:t>새 값</hp:t>"));
 }

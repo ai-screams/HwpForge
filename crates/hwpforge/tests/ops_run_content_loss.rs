@@ -3,6 +3,10 @@
 //! editors that re-encode the decode refuse the document; the preserving
 //! editors still work on it.
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod cell_package;
 
 #[path = "support/document.rs"]
 mod document;
@@ -199,7 +203,7 @@ fn assert_rewriters_refuse(bytes: &[u8], kind: &str, label: &str) {
     let opts = RestyleOptions::default().with_preset("modern");
     for (surface, err) in [
         ("restyle", restyle(bytes, &opts).map(|_| ()).unwrap_err()),
-        ("set-cell", set_cell_once(bytes).unwrap_err()),
+        ("set-cell", set_cell_once(&two_run_target(bytes)).unwrap_err()),
         ("stamp", stamp_all(bytes).map(|_| ()).unwrap_err()),
     ] {
         assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{label} {surface}: {err}");
@@ -690,7 +694,14 @@ fn note_number_heads_with_unknown_content_are_kept_and_reported() {
         assert!(decode(&again).document == first, "({case}) fixed point");
         assert_eq!(part(&again, SECTION).matches(r#"numType="FOOTNOTE""#).count(), 1, "({case})");
         insert_one(bytes).unwrap_or_else(|e| panic!("({case}) insert-para: {e}"));
-        let err = set_cell_once(bytes).unwrap_err();
+        let preserved = set_cell(
+            bytes,
+            &SetCellOptions::default().with_table(0).with_at("0,1").with_text("쇠부리"),
+        )
+        .unwrap();
+        assert_eq!(kinds(&preserved.bytes), [*kind]);
+        cell_encoding::assert_cell_patch(bytes, &preserved.bytes, 0, 1, "쇠부리");
+        let err = set_cell_once(&two_run_target(bytes)).unwrap_err();
         assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "({case}) set-cell: {err}");
     }
 
@@ -717,4 +728,27 @@ fn note_number_heads_with_unknown_content_are_kept_and_reported() {
         assert!(doc == reference, "({case}) Core as before");
         insert_one(bytes).unwrap_or_else(|e| panic!("({case}) insert-para: {e}"));
     }
+}
+
+// 이것을 실패시키는 것: 한 슬롯 대상에도 입력 손실 거부를 적용하기.
+#[test]
+fn set_cell_preserves_unmodeled_run_content() {
+    let source = base(false);
+    let bytes = replace_marker(&source, "BODY", "<hp:t>BODY</hp:t><hp:imaginary/>");
+    let output = set_cell(
+        &bytes,
+        &SetCellOptions::default().with_table(0).with_at("0,1").with_text("쇠부리"),
+    )
+    .unwrap();
+    assert_eq!(kinds(&output.bytes), ["unknown_element"]);
+    cell_encoding::assert_cell_patch(&bytes, &output.bytes, 0, 1, "쇠부리");
+    assert!(output.warnings.iter().any(|w| w.info().code == "CONTENT_LOST"));
+    assert_eq!(
+        part(&output.bytes, SECTION),
+        part(&bytes, SECTION).replace("<hp:t/>", "<hp:t>쇠부리</hp:t>")
+    );
+}
+
+fn two_run_target(bytes: &[u8]) -> Vec<u8> {
+    cell_package::two_text_runs(bytes, "<hp:t/>")
 }

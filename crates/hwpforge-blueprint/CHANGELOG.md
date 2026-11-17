@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ListMarkerAlign`, `ListTextStart`, `ListMarkerLayout::new` 및 문단의 optional `list_marker`를 추가한다. 명시적 배치에서 `indent_left`는 후속 줄 시작 C, 부호 있는 `indent_first_line`은 F이며 번호 anchor는 C+F다. 거리는 정수 HwpUnit이며 0과 미지정을 구별한다. 목록 서식은 객체 전체를 상속하고 참조·범위를 출력 경계에서 다시 검증한다.
 
+## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.20.0...hwpforge-blueprint-v0.20.1) - 2026-11-16
+
+### Changed
+
+- 워크스페이스 버전을 맞춘다. 이 크레이트 자체의 구현 변경은 없다.
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.19.1...hwpforge-blueprint-v0.20.0) - 2026-11-07
 
 ### Changed

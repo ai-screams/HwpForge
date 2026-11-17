@@ -16,6 +16,7 @@ pub(super) struct TableLedger {
 pub(super) struct FlowTable {
     pub(super) outer: Range<usize>,
     pub(super) host: Option<usize>,
+    #[cfg(test)]
     pub(super) parent: Option<usize>,
     pub(super) boundary: usize,
 }
@@ -40,6 +41,7 @@ impl TableLedger {
                     ledger.tables.push(FlowTable {
                         outer: element.outer(),
                         host,
+                        #[cfg(test)]
                         parent: owner,
                         boundary,
                     });

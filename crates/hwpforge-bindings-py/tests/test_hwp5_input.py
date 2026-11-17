@@ -615,3 +615,13 @@ def test_save_clean_inputs_emit_no_warnings(tmp_path, kind):
         assert Document(data if kind == "hwp5" else hwpx).save(output) is None
     assert emitted == []
     assert output.read_bytes() == hwpx
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_set_cell_conversion_acceptance_keeps_address_errors(accept):
+    # 이것을 실패시키는 것: 없는 라벨을 첫 칸으로 보내 주소 오류를 우회하기.
+    with pytest.raises(HwpForgeError) as caught:
+        _hwpforge.set_cell(
+            source(True), table=0, right_of="없는 라벨", text="값", accept_conversion_loss=accept
+        )
+    assert caught.value.code == "CELL_NOT_FOUND"

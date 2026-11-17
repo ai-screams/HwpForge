@@ -554,25 +554,55 @@ fn counted_text_edit_gate_work_stays_linear() {
     assert!(large - medium <= 2 * (medium - small) + 8, "{small} -> {medium} -> {large}");
 }
 
-// 이것을 실패시키는 것: subList마다 부모 칸의 자식을 다시 세기, 중복 subList 승인.
+// 이것을 실패시키는 것: subList마다 부모 칸 자식 또는 바깥 목록 자식 재조회, 중복 subList 승인.
 #[test]
 fn counted_cell_sublist_uniqueness_work_stays_linear() {
-    let work = |n: usize| {
+    for nested in [false, true] {
+        let work = |n: usize| {
+            let sublist = "<subList textDirection='HORIZONTAL' lineWrap='BREAK'>";
+            let lists = format!("{sublist}{}</subList>", p("칸")).repeat(n);
+            let cell = if nested {
+                let cells = format!("<tc>{sublist}{}</subList></tc>", p("안")).repeat(n);
+                let inner = format!("<tbl><pos treatAsChar='1'/><tr>{cells}</tr></tbl>");
+                format!(
+                    "<tbl><pos treatAsChar='1'/><tr><tc>{sublist}{}</subList></tc></tr></tbl>",
+                    p(&inner)
+                )
+            } else {
+                format!("<tbl><pos treatAsChar='1'/><tr><tc>{lists}</tc></tr></tbl>")
+            };
+            crate::work::WORK.set(0);
+            let f = flow(&p(&cell));
+            let work = crate::work::WORK.get();
+            assert_eq!(
+                f.supported_owner[1..],
+                vec![nested || n == 1; if nested { n + 1 } else { n }]
+            );
+            work
+        };
+        work(1);
+        let small = work(128);
+        let medium = work(256);
+        let large = work(512);
+        assert!(small > 0, "the counted passes count their work");
+        assert!(large - medium <= 2 * (medium - small) + 8, "{small} -> {medium} -> {large}");
+    }
+    // 이것을 실패시키는 것: 중첩 칸의 안/밖 중복 subList 승인.
+    for outer_duplicate in [false, true] {
         let sublist = "<subList textDirection='HORIZONTAL' lineWrap='BREAK'>";
-        let lists = format!("{sublist}{}</subList>", p("칸")).repeat(n);
-        let cell = format!("<tbl><pos treatAsChar='1'/><tr><tc>{lists}</tc></tr></tbl>");
-        crate::work::WORK.set(0);
-        let f = flow(&p(&cell));
-        let work = crate::work::WORK.get();
-        assert_eq!(f.supported_owner[1..], vec![n == 1; n]);
-        work
-    };
-    work(1);
-    let small = work(128);
-    let medium = work(256);
-    let large = work(512);
-    assert!(small > 0, "the counted passes count their work");
-    assert!(large - medium <= 2 * (medium - small) + 8, "{small} -> {medium} -> {large}");
+        let extra = "<subList/>";
+        let inner = format!(
+            "<tbl><pos treatAsChar='1'/><tr><tc>{sublist}{}</subList>{}</tc></tr></tbl>",
+            p("안"),
+            if outer_duplicate { "" } else { extra }
+        );
+        let outer = format!(
+            "<tbl><pos treatAsChar='1'/><tr><tc>{sublist}{}</subList>{}</tc></tr></tbl>",
+            p(&inner),
+            if outer_duplicate { extra } else { "" }
+        );
+        assert!(!flow(&p(&outer)).supported_owner[2]);
+    }
 }
 
 /// If the inventory's field and the source lists disagree (the begin and
@@ -947,7 +977,7 @@ fn direct_cell_source_ownership_and_gates_are_required_even_with_keep() {
         ("<footNote><subList>", "</subList></footNote>", vec![0, 1, 2, 3]),
         ("<header><subList>", "</subList></header>", vec![1, 2]),
         ("<footer><subList>", "</subList></footer>", vec![1, 2]),
-        (table_open, "</subList></tc></tr></tbl>", vec![0, 1, 2, 3]),
+        (table_open, "</subList></tc></tr></tbl>", vec![]),
     ] {
         let inner = p(&format!("{table_open}{}</subList></tc></tr></tbl>", p("칸")));
         let f = flow(&format!("{}{}", p(&format!("{open}{inner}{close}")), p("뒤")));
@@ -960,6 +990,14 @@ fn direct_cell_source_ownership_and_gates_are_required_even_with_keep() {
             .collect();
         assert_eq!(actual, expected, "{open}");
     }
+    let deep = p(&format!("{table_open}{}</subList></tc></tr></tbl>", p("깊이 3")));
+    let inner = p(&format!("{table_open}{deep}</subList></tc></tr></tbl>"));
+    let f = flow(&format!(
+        "{}{}",
+        p(&format!("{table_open}{inner}</subList></tc></tr></tbl>")),
+        p("뒤")
+    ));
+    assert_eq!(f.caches_to_drop_for_text_edits([3], &[true; 5]), f.stale_caches([3]));
 }
 
 // 이것을 실패시키는 것: secPr만 보고 상위 p/run의 외래 namespace를 무시하는 한쪽 수집기.
@@ -980,5 +1018,106 @@ fn section_carrier_namespaces_are_part_of_both_collectors_evidence() {
             flow.section_evidence(&xml).is_some_and(|e| crate::line_keep::source_allows(&e, true)),
             expected
         );
+    }
+}
+
+// 이것을 실패시키는 것: 바깥 direct_cell_list 검사, 자기 유일성 또는 cell_flow_allows 생략.
+#[test]
+fn nested_owner_requires_both_cell_lists() {
+    let good = "textDirection='HORIZONTAL' lineWrap='BREAK'";
+    for (attrs, extra) in [
+        (good, ""),
+        ("lineWrap='BREAK'", ""),
+        ("textDirection='VERTICAL' lineWrap='BREAK'", ""),
+        ("textDirection='HORIZONTAL'", ""),
+        ("textDirection='HORIZONTAL' lineWrap='SQUEEZE'", ""),
+        (good, "<subList/>"),
+    ] {
+        for outer in [false, true] {
+            for section in [
+                "",
+                "<colPr colCount='2' sameSz='1'/>",
+                "<colPr colCount='2' sameSz='0'/>",
+                "<secPr textDirection='VERTICAL'/>",
+                "<rect><pos treatAsChar='0'/></rect>",
+            ] {
+                let inner_attrs = if outer { good } else { attrs };
+                let inner_extra = if outer { "" } else { extra };
+                let outer_attrs = if outer { attrs } else { good };
+                let outer_extra = if outer { extra } else { "" };
+                let inner_open =
+                    format!("<tbl><pos treatAsChar='1'/><tr><tc><subList {inner_attrs}>");
+                let outer_open =
+                    format!("<tbl><pos treatAsChar='1'/><tr><tc><subList {outer_attrs}>");
+                let close = "</tc></tr></tbl>";
+                let inner = format!(
+                    "{inner_open}{}{}</subList>{inner_extra}{close}",
+                    p("편집"),
+                    p("안 꼬리")
+                );
+                let outer_table = format!(
+                    "{outer_open}{}{}</subList>{outer_extra}{close}",
+                    p(&inner),
+                    p("밖 꼬리")
+                );
+                let f = flow(&format!("{}{}{}", p(section), p(&outer_table), p("뒤")));
+                let ranges = f.caches_to_drop_for_text_edits([3], &[true; 7]);
+                let allowed = attrs == good
+                    && extra.is_empty()
+                    && (section.is_empty() || section == "<colPr colCount='2' sameSz='1'/>");
+                assert_eq!(
+                    ranges,
+                    if allowed { vec![] } else { f.stale_caches([3]) },
+                    "outer={outer} {attrs} {extra} {section}"
+                );
+                if allowed {
+                    let mut proof = [true; 7];
+                    proof[3] = false;
+                    for changed in [[3, 4], [4, 3]] {
+                        assert_eq!(
+                            f.caches_to_drop_for_text_edits(changed, &proof),
+                            f.stale_caches([3])
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: subList 아닌 원소 승인, 자기 조상 검사 생략, 중첩 결과를 direct_cell_list에 OR하여 깊이 3 승인.
+#[test]
+fn nested_owner_requires_direct_runs_and_bounded_depth() {
+    let open =
+        "<tbl><pos treatAsChar='1'/><tr><tc><subList textDirection='HORIZONTAL' lineWrap='BREAK'>";
+    let close = "</subList></tc></tr></tbl>";
+    let other =
+        format!("<other textDirection='HORIZONTAL' lineWrap='BREAK'>{}</other>", p("목록 아님"));
+    let inner =
+        p(&format!("{open}{}{close}", p("정상"))).replace("</tc>", &format!("{other}</tc>"));
+    let f = flow(&p(&format!("{open}{inner}{close}")));
+    assert!(f.supported_owner[2]);
+    assert!(!f.supported_owner[3]);
+    assert_eq!(f.caches_to_drop_for_text_edits([3], &[true; 4]), f.stale_caches([3]));
+    for wrapped in [
+        p(&format!("<ctrl>{open}{}{close}</ctrl>", p("안"))),
+        p(&format!("{open}{}{close}", p("안")))
+            .replace("<run charPrIDRef='0'>", "")
+            .replace("</run>", ""),
+    ] {
+        let f = flow(&p(&format!("{open}{wrapped}{close}")));
+        assert!(!f.supported_owner[2]);
+        assert_eq!(f.caches_to_drop_for_text_edits([2], &[true; 3]), f.stale_caches([2]));
+    }
+    let deep = p(&format!("{open}{}{close}", p("깊이 3")));
+    let inner = p(&format!("{open}{}{deep}{close}", p("깊이 2")));
+    let f = flow(&format!("{}{}", p(&format!("{open}{inner}{close}")), p("뒤")));
+    assert!(f.supported_owner[2]);
+    assert!(!f.supported_owner[4]);
+    assert!(f.caches_to_drop_for_text_edits([2], &[true; 6]).is_empty());
+    assert_eq!(f.caches_to_drop_for_text_edits([4], &[true; 6]), f.stale_caches([4]));
+    // Internal changed order cannot change the failure closure or revive a proven tail.
+    for changed in [[4, 2], [2, 4]] {
+        assert_eq!(f.caches_to_drop_for_text_edits(changed, &[true; 6]), f.stale_caches([4]));
     }
 }

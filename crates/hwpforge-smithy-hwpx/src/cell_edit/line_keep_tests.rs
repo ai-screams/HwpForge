@@ -254,7 +254,18 @@ fn source_queries_and_probe_encodes_have_fixed_batch_cost() {
             let specs: Vec<_> =
                 (0..count).map(|table| CellSpec { table, ..specs()[0].clone() }).collect();
             COST.set((0, 0, 0, 0, 0));
-            let edited = HwpxCellEditor::set_cells(&bytes, &specs).unwrap();
+            // 이것을 실패시키는 것: 보존 가능한 공개 호출을 재인코드로 우회하기.
+            HwpxCellEditor::set_cells(&bytes, &specs).unwrap();
+            assert_eq!(COST.get(), (0, 0, 0, 0, 0));
+            COST.set((0, 0, 0, 0, 0));
+            let edited = super::set_cells_reencoded(
+                &bytes,
+                &specs,
+                HwpxDecoder::decode(&bytes).unwrap(),
+                RawPackage::read(&bytes).unwrap(),
+            )
+            .unwrap()
+            .value;
             let output = HwpxDecoder::decode(&edited.bytes).unwrap();
             // 이것을 실패시키는 것: 승인한 후보의 자기 캐시 복원 생략.
             assert!(tables_in_document(&output.document).iter().all(|entry| entry.table.rows[0]
@@ -311,7 +322,13 @@ fn no_candidates_match_the_existing_bytes_and_diagnostics() {
     let bytes = fixture();
     let mut specs = specs();
     specs[0].text = "A\u{1}".into();
-    let actual = HwpxCellEditor::set_cells_with_diagnostics(&bytes, &specs).unwrap();
+    let actual = super::set_cells_reencoded(
+        &bytes,
+        &specs,
+        HwpxDecoder::decode(&bytes).unwrap(),
+        RawPackage::read(&bytes).unwrap(),
+    )
+    .unwrap();
     let decoded = HwpxDecoder::decode(&bytes).unwrap();
     let baseline =
         crate::stamp::encode_hwpx(&decoded, crate::stamp::EncodePurpose::Admission).unwrap();
@@ -392,8 +409,35 @@ fn reversed_spine_keeps_the_untouched_sections_cache() {
     let mut edits = specs();
     edits[0].table = 1; // Original section0 is second in reading order and has no cache.
     let edited = HwpxCellEditor::set_cells(&input, &edits).unwrap();
+    let source = &decoded.document.sections()[1];
+    let metadata = crate::HwpxPatcher::export_section_preservation(&input, 1, source).unwrap();
+    let mut replacement = source.clone();
+    let table = replacement
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| &mut p.runs)
+        .find_map(|run| match &mut run.content {
+            RunContent::Table(table) => Some(table),
+            _ => None,
+        })
+        .unwrap();
+    table.rows[0].cells[0].paragraphs[0].runs[0].content = RunContent::Text(edits[0].text.clone());
+    let patched = crate::HwpxPatcher::patch_section_preserving(
+        &input,
+        1,
+        &replacement,
+        None,
+        Some(&metadata),
+    )
+    .unwrap();
+    RawPackage::verify_output(
+        &edited.bytes,
+        &patched,
+        &crate::raw_package::OutputChanges::default(),
+    )
+    .unwrap();
     let output = RawPackage::read(&edited.bytes).unwrap();
-    let tree = xml::Element::parse(&output.read_text_entry("Contents/section0.xml").unwrap());
+    let tree = xml::Element::parse(&output.read_text_entry("Contents/section1.xml").unwrap());
     assert_eq!(tree.descendants("hp:linesegarray").len(), 3);
     assert_eq!(tree.children[1].find("hp:t").text, "뒤");
 }
@@ -734,19 +778,15 @@ fn cell_and_splice_collect_the_same_source_evidence() {
         let patched_cell = patch_tree.find(tc).find(p);
         assert_eq!(patched_cell.children.iter().any(|c| c.name == cache), keep, "patch {from}");
         assert_eq!(patched_cell.find(t).text, "다");
-        // The existing carry fingerprint can still discard aliased source XML.
-        if to == "xmlns:alias=" {
-            continue;
-        }
         let edited = HwpxCellEditor::set_cells(&bytes, &specs()).unwrap();
         let output = RawPackage::read(&edited.bytes)
             .unwrap()
             .read_text_entry("Contents/section0.xml")
             .unwrap();
         let tree = xml::Element::parse(&output);
-        let cell = tree.find("hp:tc").find("hp:p");
-        assert_eq!(cell.children.iter().any(|c| c.name == "hp:linesegarray"), keep, "{from}");
-        assert_eq!(cell.find("hp:t").text, "다");
+        let cell = tree.find(tc).find(p);
+        assert_eq!(cell.children.iter().any(|c| c.name == cache), keep, "{from}");
+        assert_eq!(cell.find(t).text, "다");
     }
 }
 

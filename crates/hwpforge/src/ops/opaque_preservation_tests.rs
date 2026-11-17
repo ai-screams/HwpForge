@@ -253,12 +253,13 @@ fn opaque_gate_stamp() {
 // 이것을 실패시키는 것: set_cell 최종 게이트 호출 제거.
 #[test]
 fn opaque_gate_cell_edit() {
-    check_admission(|b| {
-        set_cell(
+    check_preserving(|b| {
+        let output = set_cell(
             b,
             &SetCellOptions::default().with_table(0).with_at("0,0").with_text("edited cell"),
-        )
-        .map(|o| o.bytes)
+        )?;
+        cell_encoding::assert_cell_patch(b, &output.bytes, 0, 0, "edited cell");
+        Ok(output.bytes)
     });
 }
 
@@ -301,3 +302,6 @@ fn opaque_gate_missing_and_no_opaque_fast_path() {
         ensure_opaque_carried(&input, &input).unwrap();
     }
 }
+
+#[path = "../../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;

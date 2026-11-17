@@ -29,6 +29,11 @@ pub(super) fn check_candidates(
     use sha2::Digest;
     let header_digest: [u8; 32] =
         sha2::Sha256::digest(package.read_entry(crate::encoder::package::HEADER_PART)?).into();
+    let mut section_paths = std::collections::HashMap::<String, usize>::new();
+    for section in 0..decoded.source_maps.len() {
+        *section_paths.entry(package.section_path(section)?).or_default() += 1;
+    }
+    let mut section_properties = std::collections::HashSet::new();
     for (index, warning) in decoded.warnings.iter().enumerate() {
         crate::work::tick();
         if !warning.is_content_loss() {
@@ -53,8 +58,28 @@ pub(super) fn check_candidates(
             ) => {
                 require(part == original)?;
             }
-            (LossCause::HeaderOnlyNonlinearOrder, LossLocation::Package { sections }) => {
+            (
+                LossCause::SectionOutlineSelection,
+                LossLocation::SectionProperty { part: original, span, .. },
+            ) => {
+                require(part == original)?;
+                // resolve_spine_with_mode rejects duplicate spine targets;
+                // PackageOrder::resolve falls back to unique ZIP paths. The count-2 defense
+                // is exercised by outline_duplicate_section_path_refused with
+                // only RawPackage's private resolved order changed.
+                require(section_paths.get(original) == Some(&1))?;
+                require(section_properties.insert((original, span.start, span.end)))?;
+            }
+            (
+                LossCause::HeaderOnlyNonlinearOrder
+                | LossCause::ScriptAuxiliaryOrder
+                | LossCause::SingleSectionNonlinearOrder,
+                LossLocation::Package { sections },
+            ) => {
                 require(part == "Contents/content.hpf / META-INF/container.xml")?;
+                if evidence.cause == LossCause::SingleSectionNonlinearOrder {
+                    require(sections.len() == 1)?;
+                }
                 require(
                     *sections
                         == (0..decoded.source_maps.len())
@@ -84,6 +109,35 @@ pub(super) fn check_locations(
             }
         })
         .peekable();
+    let properties: Vec<_> = basis
+        .losses
+        .iter()
+        .filter_map(|loss| match &loss.location {
+            LossLocation::SectionProperty { part, span, digest } => Some((part, span, digest)),
+            _ => None,
+        })
+        .collect();
+    if !properties.is_empty() {
+        let mut owners = std::collections::HashMap::<&str, std::collections::HashSet<usize>>::new();
+        for (section, map) in decoded.source_maps.iter().enumerate() {
+            for node in map.nodes() {
+                crate::work::tick();
+                if !node.part().is_empty() {
+                    owners.entry(node.part()).or_default().insert(section);
+                }
+            }
+        }
+        let locations = properties
+            .into_iter()
+            .map(|(part, span, digest)| {
+                let sections =
+                    owners.get(part.as_str()).ok_or_else(|| invalid("missing section owner"))?;
+                require(sections.len() == 1)?;
+                Ok((*sections.iter().next().unwrap(), span.clone(), *digest))
+            })
+            .collect::<HwpxResult<Vec<_>>>()?;
+        effects.check_section_outline_losses(decoded, &locations)?;
+    }
     // Header/package-only evidence needs no body location index.
     if body_losses.peek().is_none() {
         return Ok(());

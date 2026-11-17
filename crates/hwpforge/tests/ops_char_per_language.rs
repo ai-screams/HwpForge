@@ -1,9 +1,11 @@
 //! A `charPr` whose ratio differs between languages is lost content:
 //! the package decode reports it, and the editors that
-//! re-encode their input — restyle, set-cell, stamp — refuse it rather than
+//! re-encode their input refuse it rather than
 //! write the hangul ratio for every language. The input is a package this
 //! codec wrote (all three editors accept it), its header edited.
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;
 
 #[path = "support/document.rs"]
 mod document;
@@ -65,12 +67,35 @@ fn per_language_ratio_is_reported_and_refused_by_the_editors() {
         "{:?}",
         decoded.warnings
     );
+    // 이것을 실패시키는 것: 보존 가능한 칸에 재인코드 admission을 적용하기.
+    let output = cell(&lost).unwrap();
+    cell_encoding::assert_cell_patch(&lost, &output.bytes, 0, 1, "류한율");
+    assert!(output.warnings.iter().any(|w| w.info().code == "CONTENT_LOST"));
+    let mut original_zip = zip::ZipArchive::new(Cursor::new(&lost)).unwrap();
+    let mut output_zip = zip::ZipArchive::new(Cursor::new(&output.bytes)).unwrap();
+    let preserved_part = "Contents/header.xml";
+    let mut original = String::new();
+    let mut final_xml = String::new();
+    original_zip.by_name(preserved_part).unwrap().read_to_string(&mut original).unwrap();
+    output_zip.by_name(preserved_part).unwrap().read_to_string(&mut final_xml).unwrap();
+    assert_eq!(final_xml, original);
     for (surface, err) in [
         ("restyle", restyle(&lost, &opts).map(|_| ()).unwrap_err()),
-        ("set-cell", cell(&lost).map(|_| ()).unwrap_err()),
         ("stamp", stamp_all(&lost).map(|_| ()).unwrap_err()),
     ] {
         assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{surface}: {err}");
         assert!(err.to_string().contains("char_shape_per_language"), "{surface}: {err}");
     }
+}
+
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod cell_package;
+// 이것을 실패시키는 것: 범위 밖 여러 run 칸에서도 입력 손실을 허용하기.
+#[test]
+fn per_language_loss_is_still_refused_for_multiple_run_cells() {
+    let bytes = cell_package::two_text_runs(&with_latin_ratio_90(&editable()), "<hp:t/>");
+    let error =
+        set_cell(&bytes, &SetCellOptions::default().with_table(0).with_at("0,1").with_text("값"))
+            .unwrap_err();
+    assert_eq!(error.code(), OpsCode::InputNotRoundtripSafe);
 }

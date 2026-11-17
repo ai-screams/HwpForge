@@ -168,22 +168,16 @@ pub(super) fn check_markup(xml: &str, targets: &[Range<usize>]) -> Result<(), St
                     let (ns, _) = reader.resolver().resolve_element(e.name());
                     require(
                         name == "sec"
-                            && matches!(ns,ResolveResult::Bound(ns) if ns.as_ref()=="http://www.hancom.co.kr/hwpml/2011/section"),
+                            && matches!(ns,ResolveResult::Bound(ns) if ns.as_ref()==crate::wire_xml::SECTION_NS),
                     )?;
                 }
                 if selected {
                     let (ns, _) = reader.resolver().resolve_element(e.name());
                     require(
-                        matches!(ns,ResolveResult::Bound(ns) if ns.as_ref()=="http://www.hancom.co.kr/hwpml/2011/paragraph"),
+                        matches!(ns,ResolveResult::Bound(ns) if ns.as_ref()==crate::wire_xml::PARAGRAPH_NS),
                     )?;
                     let parent = stack.last().map(String::as_str).unwrap_or_default();
-                    require(matches!(
-                        (parent, name),
-                        ("sec", "p")
-                            | ("p", "run" | "linesegarray")
-                            | ("run", "t")
-                            | ("linesegarray", "lineseg")
-                    ))?;
+                    require(child_allowed(parent, name))?;
                     let mut false_flags = 0;
                     for a in e.attributes() {
                         let a = a.map_err(|_| invalid())?;
@@ -194,28 +188,7 @@ pub(super) fn check_markup(xml: &str, targets: &[Range<usize>]) -> Result<(), St
                         let value = a
                             .normalized_value(quick_xml::XmlVersion::Explicit1_0)
                             .map_err(|_| invalid())?;
-                        let allowed = match name {
-                            "p" => match key {
-                                "id" | "paraPrIDRef" | "styleIDRef" => true,
-                                "pageBreak" | "columnBreak" | "merged" => value == "0",
-                                _ => false,
-                            },
-                            "run" => key == "charPrIDRef",
-                            "lineseg" => matches!(
-                                key,
-                                "textpos"
-                                    | "vertpos"
-                                    | "vertsize"
-                                    | "textheight"
-                                    | "baseline"
-                                    | "spacing"
-                                    | "horzpos"
-                                    | "horzsize"
-                                    | "flags"
-                            ),
-                            _ => false,
-                        };
-                        require(allowed)?;
+                        require(attribute_allowed(name, key, &value))?;
                         if matches!(key, "pageBreak" | "columnBreak" | "merged") {
                             false_flags += 1;
                         }
@@ -245,4 +218,37 @@ pub(super) fn check_markup(xml: &str, targets: &[Range<usize>]) -> Result<(), St
         }
     }
     Ok(())
+}
+
+/// Allowed parent-child element pairs within the selected range.
+fn child_allowed(parent: &str, name: &str) -> bool {
+    matches!(
+        (parent, name),
+        ("sec", "p") | ("p", "run" | "linesegarray") | ("run", "t") | ("linesegarray", "lineseg")
+    )
+}
+
+/// Whether a selected element's attribute is allowed and meets its value condition.
+fn attribute_allowed(name: &str, key: &str, value: &str) -> bool {
+    match name {
+        "p" => match key {
+            "id" | "paraPrIDRef" | "styleIDRef" => true,
+            "pageBreak" | "columnBreak" | "merged" => value == "0",
+            _ => false,
+        },
+        "run" => key == "charPrIDRef",
+        "lineseg" => matches!(
+            key,
+            "textpos"
+                | "vertpos"
+                | "vertsize"
+                | "textheight"
+                | "baseline"
+                | "spacing"
+                | "horzpos"
+                | "horzsize"
+                | "flags"
+        ),
+        _ => false,
+    }
 }

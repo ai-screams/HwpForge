@@ -9,13 +9,13 @@ hwpforge outline template.hwpx --json     # headings, tables, fields
 hwpforge fields template.hwpx --json      # any fillable 누름틀?
 ```
 
-| The template has…                        | Route                                                   | Works on a 한컴-saved file?        |
-| ---------------------------------------- | ------------------------------------------------------- | ---------------------------------- |
-| fillable 누름틀                          | `fill --set name=value` (Recipe A)                      | yes                                |
-| text or table-cell placeholders          | `to-json --section N` → edit → `patch` (Recipe B)       | yes                                |
-| placeholders you want as reusable 누름틀 | `stamp` once, then `fill` ([stamp.md](stamp.md))        | no — refused                       |
-| empty cells you address by grid position | `set-cell` ([structural-edit.md](structural-edit.md))   | no — refused                       |
-| a heading that needs new body paragraphs | `from-json --base` (Recipe C), only on explicit request | lossy — drops 한컴 package entries |
+| The template has…                        | Route                                                   | Works on a 한컴-saved file?             |
+| ---------------------------------------- | ------------------------------------------------------- | --------------------------------------- |
+| fillable 누름틀                          | `fill --set name=value` (Recipe A)                      | yes                                     |
+| text or table-cell placeholders          | `to-json --section N` → edit → `patch` (Recipe B)       | yes                                     |
+| placeholders you want as reusable 누름틀 | `stamp` once, then `fill` ([stamp.md](stamp.md))        | no — refused                            |
+| empty cells you address by grid position | `set-cell` ([structural-edit.md](structural-edit.md))   | yes for supported single-Text-run cells |
+| a heading that needs new body paragraphs | `from-json --base` (Recipe C), only on explicit request | lossy — drops 한컴 package entries      |
 
 Most real templates were saved by 한컴, so Recipes A and B are the normal path. The full surface table is in [editing-workflow.md](editing-workflow.md).
 

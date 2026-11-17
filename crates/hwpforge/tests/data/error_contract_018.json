@@ -4353,6 +4353,12 @@
           "stage": "Decode",
           "occurrence": 3,
           "anchor": "원본 decode 뒤 패키지 무결성 거부"
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit/preserving.rs",
+          "function": "plan",
+          "stage": "Decode",
+          "occurrence": 1
         }
       ]
     },
@@ -4375,7 +4381,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "stage": "Admission",
           "occurrence": 1
         }
@@ -4400,7 +4406,7 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "stage": "Validation",
           "occurrence": 1
         }
@@ -4425,19 +4431,19 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "stage": "Encode",
           "occurrence": 1
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "stage": "Encode",
           "occurrence": 2
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "stage": "Encode",
           "occurrence": 3
         },
@@ -4507,6 +4513,30 @@
           "function": "RawPackage::verify_output_capped",
           "stage": "Verification",
           "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit/preserving.rs",
+          "function": "apply",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit/preserving.rs",
+          "function": "apply",
+          "stage": "Verification",
+          "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit/preserving.rs",
+          "function": "verify_cells",
+          "stage": "Verification",
+          "occurrence": 1
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit/preserving.rs",
+          "function": "verification",
+          "stage": "Verification",
+          "occurrence": 1
         }
       ]
     },
@@ -4528,13 +4558,13 @@
       "sites": [
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "variant": "CellEditError::Invariant",
           "occurrence": 1
         },
         {
           "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
-          "function": "HwpxCellEditor::set_cells_with_diagnostics",
+          "function": "set_cells_reencoded",
           "variant": "CellEditError::Invariant",
           "occurrence": 2
         },
@@ -4549,6 +4579,12 @@
           "function": "map_admission_error",
           "variant": "CellEditError::Invariant",
           "occurrence": 2
+        },
+        {
+          "file": "crates/hwpforge-smithy-hwpx/src/cell_edit/preserving.rs",
+          "function": "invariant",
+          "variant": "CellEditError::Invariant",
+          "occurrence": 1
         }
       ]
     },

@@ -337,3 +337,42 @@ fn set_cell_fifo_map_over_the_size_cap_reports_input_too_large() {
     assert_eq!(val["code"], "INPUT_TOO_LARGE", "{val}");
     assert!(!out.exists());
 }
+
+use super::errors::{cell_document as preserving_document, cell_package as preserving_package};
+
+// 이것을 실패시키는 것: CLI가 보존 편집의 Preview 경고를 버리기.
+#[test]
+fn set_cell_reports_preview_removal() {
+    let tmp = test_tmp();
+    let input = tmp.join("preview-input.hwpx");
+    let output = tmp.join("edited.hwpx");
+    let bytes = preserving_package::append_entry(
+        &preserving_document::editable(),
+        "Preview/PrvText.txt",
+        b"old",
+    );
+    std::fs::write(&input, bytes).unwrap();
+    let (value, _, exit) = run_json(&[
+        "set-cell",
+        input.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        "0,1",
+        "--text",
+        "새값",
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 0, "{value}");
+    assert_eq!(
+        value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["code"] == "PREVIEW_REMOVED")
+            .count(),
+        1
+    );
+    assert!(output.exists());
+}

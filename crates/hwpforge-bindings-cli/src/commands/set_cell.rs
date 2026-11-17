@@ -1,11 +1,13 @@
-//! Edit table cells by logical grid address (admission-gated).
+//! Edit table cells by logical grid address with original XML preservation.
 //!
 //! A cell is addressed by table ordinal (`--table`, matching `to-json`
 //! export order) plus either a grid coordinate (`--at r,c` — covered
 //! positions resolve to their merge anchor) or a label-relative direction
 //! (`--right-of` / `--below`, normalized exact match). Batches go through
-//! `--map` (JSON array of CellSpec). All-or-nothing behind the same
-//! fail-closed admission gate as `stamp`.
+//! `--map` (JSON array of CellSpec). A batch of supported direct body-table
+//! cells with one paragraph and one Text run preserves source outside text
+//! slots. Otherwise the whole batch uses existing admission and regeneration
+//! checks. Changed values remove existing Preview; errors produce no output.
 use crate::error::CliCode;
 use hwpforge_foundation::diagnostics::OpsCode;
 

@@ -327,6 +327,7 @@ fn admission_call_boundaries_and_error_precedence_are_exact() {
 }
 
 // 이것을 실패시키는 것: 원래 admission 오류 대신 내부 오류 반환 또는 어느 최종 검증이든 생략.
+// 이것을 실패시키는 것: delete-layout 체크포인트 제거.
 #[test]
 fn every_preserving_failure_restores_the_original_error() {
     for gate in [
@@ -339,7 +340,8 @@ fn every_preserving_failure_restores_the_original_error() {
         "derived-collect",
         "derived-effects",
         "derived-check",
-        "derived-heights",
+        "derived-heading",
+        "delete-layout",
         "splice",
         "preview-apply",
         "write",
@@ -358,7 +360,8 @@ fn every_preserving_failure_restores_the_original_error() {
     failures(&[]);
 }
 
-// 이것을 실패시키는 것: facts 중복 수집, check/height 순서 역전, admission 성공에 새 gate 적용.
+// 이것을 실패시키는 것: facts 중복 수집, admission 성공에 새 gate 적용.
+// 이것을 실패시키는 것: delete-layout 체크포인트 제거 또는 배치 검사를 파생 값 수집 뒤로 이동.
 #[test]
 fn collection_and_policy_are_scoped_to_preserving_delete() {
     failures(&[]);
@@ -372,10 +375,7 @@ fn collection_and_policy_are_scoped_to_preserving_delete() {
     crate::derived_values::COLLECTIONS.with(|c| c.set(0));
     HwpxStructuralEditor::delete_paragraphs(&carry_base(), &[TARGET]).unwrap();
     assert_eq!(crate::derived_values::COLLECTIONS.with(|c| c.get()), 1);
-    assert_eq!(
-        crate::derived_values::DECISIONS.with(|d| d.borrow().clone()),
-        ["collect", "check", "heights"]
-    );
+    assert_eq!(crate::derived_values::DECISIONS.with(|d| d.borrow().clone()), ["collect", "check"]);
     let v = visits();
     assert!(
         v.iter().position(|s| *s == "derived-collect").unwrap()
@@ -383,7 +383,20 @@ fn collection_and_policy_are_scoped_to_preserving_delete() {
     );
     assert!(
         v.iter().position(|s| *s == "derived-check").unwrap()
-            < v.iter().position(|s| *s == "derived-heights").unwrap()
+            < v.iter().position(|s| *s == "derived-heading").unwrap()
+    );
+    // 이것을 실패시키는 것: 원문만 읽는 배치 검사를 파생 값 수집 뒤나 splice 뒤로 이동.
+    assert!(
+        v.iter().position(|s| *s == "plain-source").unwrap()
+            < v.iter().position(|s| *s == "delete-layout").unwrap()
+    );
+    assert!(
+        v.iter().position(|s| *s == "delete-layout").unwrap()
+            < v.iter().position(|s| *s == "derived-collect").unwrap()
+    );
+    assert!(
+        v.iter().position(|s| *s == "derived-heading").unwrap()
+            < v.iter().position(|s| *s == "splice").unwrap()
     );
     failures(&[]);
     crate::derived_values::DECISIONS.with(|d| d.borrow_mut().clear());
@@ -529,7 +542,7 @@ fn table_base() -> Vec<u8> {
     extra(&pkg.write().unwrap(), "Scripts/opaque.bin", b"carry")
 }
 
-// 이것을 실패시키는 것: top index를 flow ordinal로 캐스팅, cache 없는 seed 제외, 셀 cache 삭제, 높이 미적용.
+// 이것을 실패시키는 것: 생존 문단 캐시 삭제 또는 표 높이 0 치환 복원.
 #[test]
 fn body_indices_resolve_across_nested_flows_and_keep_cell_caches() {
     for (adjust, cell_height, caches) in
@@ -556,67 +569,10 @@ fn body_indices_resolve_across_nested_flows_and_keep_cell_caches() {
         }
         let result = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap();
         let output = xml(&result);
-        assert_eq!(output.matches("height=\"321\" heightRelTo=").count(), 1);
-        assert_eq!(output.matches("height=\"0\" heightRelTo=").count(), 1);
-        assert_eq!(output.matches(CACHE).count(), 3); // preceding host and both surviving cells
+        assert_eq!(output.matches("height=\"321\" heightRelTo=").count(), 2);
+        assert_eq!(output.matches("height=\"0\" heightRelTo=").count(), 0);
+        assert_eq!(output.matches(CACHE).count(), 5); // both hosts and surviving cells
         assert!(output.contains("id=\"2\""));
-    }
-}
-
-// 이것을 실패시키는 것: 표 R 검사를 삭제하거나 원래 0인 미지원 표를 면제.
-#[test]
-fn unsupported_affected_table_returns_original_admission_error() {
-    for height in ["321", "0"] {
-        let base = replace(&table_base(), SECTION, "treatAsChar=\"0\"", "treatAsChar=\"1\"");
-        // Change both tables, including the following one.
-        let base = replace(&base, SECTION, "treatAsChar=\"0\"", "treatAsChar=\"1\"");
-        let base = if height == "0" {
-            let mut p = RawPackage::read(&base).unwrap();
-            p.replace_text_entry(
-                SECTION,
-                xml(&base).replace("height=\"321\" heightRelTo=", "height=\"0\" heightRelTo="),
-            );
-            p.write().unwrap()
-        } else {
-            base
-        };
-        assert_eq!(
-            HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap_err(),
-            original_error(&base)
-        );
-    }
-}
-
-// 이것을 실패시키는 것: 원문 삭제에 두 번째 표 gate/비분할 증명 추가, inline 행 누락 또는 축 OR 승인.
-#[test]
-fn observed_inline_profiles_work_through_public_delete() {
-    for (height, adjust, merged) in [("0", "0", false), ("4688", "0", true), ("2148", "1", true)] {
-        let base = table_base();
-        let original = xml(&base);
-        let source = references::source(&original).unwrap();
-        let table = source.elements().iter().filter(|e| e.name() == "tbl").nth(1).unwrap().outer();
-        let inline = crate::derived_values::tests::inline_table(height, adjust, merged)
-            .replace("<hp:run>칸</hp:run>", "<hp:run charPrIDRef='0'><hp:t>칸</hp:t></hp:run>");
-        let base = replace(&base, SECTION, &original[table], &inline);
-        let (d, p, _) = admit_delete(&base).unwrap();
-        delete_admitted(&base, &[TARGET], d, p, ParagraphIds::Preserve).unwrap();
-        let result = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap();
-        assert!(xml(&result).contains("height='0' heightRelTo='ABSOLUTE'"));
-        assert!(xml(&result).contains(&format!("height='{height}'/><hp:cellMargin")));
-        for changed in [
-            inline.replacen("repeatHeader='1'", "repeatHeader='0'", 1),
-            inline.replacen("rowCnt=", "unknown=", 1),
-            inline.replace(
-                &format!("height='{height}'/><hp:cellMargin"),
-                "height='4689'/><hp:cellMargin",
-            ),
-        ] {
-            let bad = replace(&base, SECTION, &inline, &changed);
-            assert_eq!(
-                HwpxStructuralEditor::delete_paragraphs(&bad, &[TARGET]).unwrap_err(),
-                original_error(&bad)
-            );
-        }
     }
 }
 
@@ -685,6 +641,7 @@ fn preserving_delete_removes_preview_and_keeps_existing_warning_channel() {
 }
 
 // 이것을 실패시키는 것: 한 구역만 처리, ID 없는 생존 문단 재작성, batch마다 facts 재수집.
+// 이것을 실패시키는 것: 복수 대상 허용 또는 생존 ID 재배정.
 #[test]
 fn multiple_sections_and_targets_keep_original_id_spellings() {
     let mut doc = Document::new();
@@ -704,33 +661,30 @@ fn multiple_sections_and_targets_keep_original_id_spellings() {
         base = replace(&replace(&base, path, "id=\"0\"", "id=\"0009\""), path, " id=\"2\"", "");
     }
     base = extra(&base, "Scripts/opaque.bin", b"carry");
-    crate::derived_values::COLLECTIONS.with(|c| c.set(0));
+    for targets in [
+        vec![TARGET, ParagraphLocator { section: 0, index: 3 }],
+        vec![TARGET, ParagraphLocator { section: 1, index: 1 }],
+    ] {
+        failures(&[]);
+        assert_eq!(
+            HwpxStructuralEditor::delete_paragraphs(&base, &targets).unwrap_err(),
+            original_error(&base)
+        );
+        // 이것을 실패시키는 것: 한 문단 검사를 원문 보존 검사들 뒤로 이동.
+        assert!(!visits().contains(&"input-loss"));
+    }
     let result = HwpxStructuralEditor::delete_paragraphs(
         &base,
-        &[
-            ParagraphLocator { section: 1, index: 3 },
-            TARGET,
-            ParagraphLocator { section: 0, index: 3 },
-            ParagraphLocator { section: 1, index: 1 },
-        ],
+        &[ParagraphLocator { section: 1, index: 1 }],
     )
     .unwrap();
-    assert_eq!(crate::derived_values::COLLECTIONS.with(|c| c.get()), 1);
-    for path in [SECTION, "Contents/section1.xml"] {
-        let p = RawPackage::read(&result).unwrap();
-        let x = p.read_text_entry(path).unwrap();
-        assert!(x.contains("id=\"0009\""));
-        assert!(!x.contains("삭제"));
-        assert!(x.contains("유지"));
-        let source = references::source(&x).unwrap();
-        let ids: Vec<_> = source
-            .elements()
-            .iter()
-            .filter(|e| e.name() == "p")
-            .map(|e| e.id_value().map(|r| x[r].to_owned()))
-            .collect();
-        assert_eq!(ids, [Some("0009".into()), None]);
-    }
+    let p = RawPackage::read(&result).unwrap();
+    assert_eq!(p.read_text_entry(SECTION).unwrap(), xml(&base));
+    let output = p.read_text_entry("Contents/section1.xml").unwrap();
+    assert!(output.contains("id=\"0009\""));
+    assert!(!output.contains("삭제1"));
+    assert!(output.contains("삭제2"));
+    assert!(!output.contains("id=\"2\""));
 }
 
 thread_local! {
@@ -771,7 +725,6 @@ fn final_bytes_and_declared_delta_are_independently_checked() {
         original: xml(&base),
         deleted: vec![TARGET.index],
         inserted: None,
-        heights: Vec::new(),
     };
     for kind in ["expected", "package", "source"] {
         let bytes = if kind == "package" {
@@ -810,7 +763,7 @@ fn preview_final_failure_restores_the_original_error() {
     assert_eq!(result.unwrap_err(), original);
 }
 
-// 이것을 실패시키는 것: footer TOTAL_PAGE를 면제하거나 본문 관측 형태를 거부.
+// 이것을 실패시키는 것: 본문 PAGE/TOTAL_PAGE 표시 허용 복원.
 #[test]
 fn total_page_recalculation_stays_scoped_to_observed_body_shape() {
     use hwpforge_core::{control::InlinePageKind, section::HeaderFooter, Control};
@@ -842,11 +795,7 @@ fn total_page_recalculation_stays_scoped_to_observed_body_shape() {
         let base = extra(&base, "Scripts/opaque.bin", b"carry");
         failures(&[]);
         let result = HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]);
-        if footer {
-            assert_eq!(result.unwrap_err(), original_error(&base));
-        } else {
-            assert!(result.is_ok());
-        }
+        assert_eq!(result.unwrap_err(), original_error(&base));
         assert!(visits().contains(&"derived-check"));
     }
 }
@@ -1011,3 +960,100 @@ fn batch_plain_source_work_scales_with_paragraphs_and_deletions() {
 
 #[path = "preserved_loss_tests.rs"]
 mod losses;
+
+// 이것을 실패시키는 것: 생존 줄 캐시 제거 또는 표 높이 0 치환 복원.
+#[test]
+fn equal_cell_margins_delete_preserves_source_bytes() {
+    let base = table_base();
+    let original = xml(&base);
+    let source = references::source(&original).unwrap();
+    let table = source.elements().iter().filter(|e| e.name() == "tbl").nth(1).unwrap().outer();
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    let host = &original[decoded.source_maps[0].paragraphs[2].outer.clone()];
+    let old = "<hp:cellMargin left='510' right='510' top='141' bottom='141'/>";
+    let equal = "<hp:cellMargin left='141' right='141' top='141' bottom='141'/>";
+    let mut a = crate::derived_values::tests::inline_six_column_table();
+    assert_eq!(a.matches(old).count(), 12);
+    a = a.replace(old, equal).replacen(equal, old, 1);
+    assert_eq!(a.matches(equal).count(), 11);
+    let mut b = crate::derived_values::tests::inline_six_column_table().replace("id='7'", "id='8'");
+    for (table, first_id) in [(&mut a, 100), (&mut b, 200)] {
+        *table = table
+            .replace("<hp:run>칸</hp:run>", "<hp:run charPrIDRef='0'><hp:t>칸</hp:t></hp:run>")
+            .replace("</hp:p>", &format!("{CACHE}</hp:p>"));
+        for id in first_id..first_id + 12 {
+            *table = table.replacen("<hp:p>", &format!("<hp:p id='{id}'>"), 1);
+        }
+        assert_eq!(table.matches("<hp:p id='").count(), 12);
+    }
+    let hosts = host.replace(&original[table.clone()], &a)
+        + &host.replace(&original[table], &b).replace("id=\"2\"", "id=\"900\"");
+    let base = replace(&base, SECTION, host, &hosts);
+    let base = extra(
+        &extra(&base, "Preview/PrvText.txt", b"old text"),
+        "Preview/PrvImage.png",
+        b"old image",
+    );
+    let text_ref = "<ocf:rootfile full-path='Preview/PrvText.txt' media-type='text/plain'/>";
+    let image_ref = "<ocf:rootfile full-path='Preview/PrvImage.png' media-type='image/png'/>";
+    // 한컴 저장본처럼 텍스트 Preview만 rootfile로 참조하고 이미지 payload는 ZIP에만 둔다.
+    let base = replace(
+        &base,
+        "META-INF/container.xml",
+        "</ocf:rootfiles>",
+        &format!("{text_ref}</ocf:rootfiles>"),
+    );
+    let before = RawPackage::read(&base).unwrap();
+    let container = before.read_text_entry("META-INF/container.xml").unwrap();
+    assert_eq!(container.matches(text_ref).count(), 1);
+    assert_eq!(container.matches(image_ref).count(), 0);
+    let mut expected_container = container.clone();
+    let text_ref_start = container.find(text_ref).unwrap();
+    expected_container.replace_range(text_ref_start..text_ref_start + text_ref.len(), "");
+
+    let original = xml(&base);
+    let source = references::source(&original).unwrap();
+    let elements = source.elements();
+    let top: Vec<_> = elements
+        .iter()
+        .filter(|e| e.name() == "p" && elements[e.parent()].name() == "sec")
+        .collect();
+    assert_eq!(top.len(), 5);
+    assert!(original[top[1].outer()].contains("<hp:t>삭제</hp:t>"));
+    let mut expected = original.clone();
+    expected.replace_range(top[1].outer(), "");
+    let expected_warnings = HwpxDecoder::decode(&base).unwrap().warnings;
+    assert!(matches!(
+        original_error(&base),
+        StructuralEditError::NotRoundTripSafe { .. }
+            | StructuralEditError::UncarriedZipEntries { .. }
+    ));
+    let result = HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&base, &[TARGET])
+        .expect("equal and mixed cell margins permit source-preserving delete");
+    assert_eq!(xml(&result.value), expected, "complete section splice");
+    assert_eq!(result.decode_warnings, expected_warnings);
+    assert_eq!(result.encode_warnings.len(), 1);
+    assert_eq!(result.encode_warnings[0].code(), "PREVIEW_REMOVED");
+    let after = RawPackage::read(&result.value).unwrap();
+    assert_eq!(after.read_text_entry("META-INF/container.xml").unwrap(), expected_container);
+    let before_paths: std::collections::BTreeSet<_> = before.entry_paths().collect();
+    let after_paths: std::collections::BTreeSet<_> = after.entry_paths().collect();
+    assert_eq!(
+        before_paths.difference(&after_paths).copied().collect::<Vec<_>>(),
+        ["Preview/PrvImage.png", "Preview/PrvText.txt"]
+    );
+    assert!(after_paths.difference(&before_paths).next().is_none());
+    let mut changed = Vec::new();
+    for path in before_paths.intersection(&after_paths).copied() {
+        if ["Contents/section0.xml", "META-INF/container.xml"].contains(&path) {
+            assert_ne!(before.read_entry(path).unwrap(), after.read_entry(path).unwrap());
+            changed.push(path);
+        } else {
+            assert_eq!(before.read_entry(path).unwrap(), after.read_entry(path).unwrap(), "{path}");
+        }
+    }
+    assert_eq!(changed, ["Contents/section0.xml", "META-INF/container.xml"]);
+}
+
+#[path = "delete_layout_tests.rs"]
+mod layout;

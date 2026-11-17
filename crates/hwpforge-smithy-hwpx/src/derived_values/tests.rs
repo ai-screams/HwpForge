@@ -1,14 +1,8 @@
 use super::*;
 
-// Single-decision fixtures keep the result and height assertions independent.
+// Build effects before checking stored results.
 fn check_derived_values(facts: &DerivedFacts<'_>, edits: &[DerivedEdit<'_>]) -> HwpxResult<()> {
     facts.effects(edits)?.check_derived_values()
-}
-fn collect_height_invalidations(
-    facts: &DerivedFacts<'_>,
-    edits: &[DerivedEdit<'_>],
-) -> HwpxResult<Vec<HeightInvalidation>> {
-    facts.effects(edits)?.collect_height_invalidations()
 }
 
 const NS: &str = "http://www.hancom.co.kr/hwpml/2011/paragraph";
@@ -89,30 +83,7 @@ fn sum_storage_sources_refuse_same_owner() {
         .is_err());
     }
 }
-// 이것을 실패시키는 것: 모든 표/미지 표를 무조건 승인하거나 영향 높이를 누락.
-#[test]
-fn deletion_zeroes_only_surviving_tail_table() {
-    let f = facts(&[section(&format!(
-        "{}{}{}",
-        p(&table("11", "앞")),
-        p("삭제"),
-        p(&table("22", "뒤"))
-    ))]);
-    let heights = collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(2)] }],
-    )
-    .unwrap();
-    assert_eq!(heights.len(), 1);
-    assert_eq!(&f.parts[0].xml[heights[0].value.clone()], "22");
-    // Inline eligibility also requires the observed dimensions, margins and complete cell layout.
-    let bad = facts(&[f.parts[0].xml.replace("treatAsChar='0'", "treatAsChar='1'")]);
-    assert!(collect_height_invalidations(
-        &bad,
-        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(2)] }]
-    )
-    .is_err());
-}
+
 // 이것을 실패시키는 것: 번호 종류 통합, num=0 누락, 삭제된 carrier 수 대신 count 순증만 비교.
 #[test]
 fn numbering_changes_are_kind_specific() {
@@ -137,11 +108,12 @@ fn total_page_carrier_removal_does_not_restart_object_numbers() {
         .unwrap();
 }
 // 이것을 실패시키는 것: TOTAL_PAGE를 모든 컨테이너로 확대 또는 관측 R을 삭제.
+// 이것을 실패시키는 것: 본문 PAGE/TOTAL_PAGE 표시 허용 복원.
 #[test]
 fn page_results_keep_observed_containers_only() {
     for (content, accepted) in [
-        (num("PAGE"), true),
-        (num("TOTAL_PAGE"), true),
+        (num("PAGE"), false),
+        (num("TOTAL_PAGE"), false),
         (
             format!(
                 "<hp:ctrl><hp:footer><hp:subList>{}</hp:subList></hp:footer></hp:ctrl>",
@@ -347,12 +319,6 @@ fn insertion_end_and_carrier_replacement_have_flow_effects() {
         &[DerivedEdit::Insert { section: 0, at: FlowBoundary::EndOfBody, fragment: &p("추가") }]
     )
     .is_err());
-    assert!(collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Insert { section: 0, at: FlowBoundary::EndOfBody, fragment: &p("추가") }]
-    )
-    .unwrap()
-    .is_empty());
 }
 
 fn try_part(xml: &str) -> HwpxResult<Part<'static>> {
@@ -462,7 +428,8 @@ fn page_format_and_footer_are_checked_separately() {
         .is_err());
     }
 }
-// 이것을 실패시키는 것: CROSSREF R을 번호/내용/위아래/다른 대상/원격 컨테이너로 확대, 삭제 책갈피 승인.
+// 이것을 실패시키는 것: 표시 글자 없는 쪽 참조에서 대상 생존·종류·경로·Command 검사 생략.
+// 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 허용 복원.
 #[test]
 fn bookmark_page_reference_requires_a_surviving_target() {
     let params = [
@@ -478,13 +445,25 @@ fn bookmark_page_reference_requires_a_surviving_target() {
         p("<hp:ctrl><hp:bookmark name='mark'/></hp:ctrl>"),
         p(&cross)
     ));
-    check_derived_values(
+    assert!(check_derived_values(
         &facts(std::slice::from_ref(&good)),
+        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
+    )
+    .is_err());
+    assert!(check_derived_values(
+        &facts(std::slice::from_ref(&good)),
+        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(1)] }]
+    )
+    .is_err());
+    // Without displayed text the flow rule does not apply, so the target checks decide.
+    let hidden = good.replace("<hp:t>3</hp:t>", "<hp:t></hp:t>");
+    check_derived_values(
+        &facts(std::slice::from_ref(&hidden)),
         &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
     )
     .unwrap();
     assert!(check_derived_values(
-        &facts(std::slice::from_ref(&good)),
+        &facts(std::slice::from_ref(&hidden)),
         &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(1)] }]
     )
     .is_err());
@@ -508,230 +487,33 @@ fn bookmark_page_reference_requires_a_surviving_target() {
         )
         .is_err());
     }
-}
-
-// 이것을 실패시키는 것: 재배치 프로필 축 생략, 누락을 기본값으로 보충, cellSz/다른 sz를 높이로 선택.
-#[test]
-fn height_profile_checks_each_observed_axis() {
-    let good = section(&format!("{}{}", p("삭제"), p(&table("&#50;2", "칸"))));
-    let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
-    let f = facts(std::slice::from_ref(&good));
-    assert_eq!(&good[collect_height_invalidations(&f, &edit).unwrap()[0].value.clone()], "&#50;2");
-    let variants = [
-        ("pageBreak='CELL'", "pageBreak='NONE'"),
-        ("pageBreak='CELL'", "pageBreak='TABLE'"),
-        ("textWrap='TOP_AND_BOTTOM'", "textWrap='SQUARE'"),
-        ("textFlow='BOTH_SIDES'", "textFlow='LEFT_ONLY'"),
-        ("repeatHeader='1'", "repeatHeader='0'"),
-        ("noAdjust='0'", "noAdjust='2'"),
-        ("heightRelTo='ABSOLUTE'", "heightRelTo='RELATIVE'"),
-        ("heightRelTo='ABSOLUTE'", ""),
-        ("treatAsChar='0'", "treatAsChar='1'"),
-        ("flowWithText='1'", "flowWithText='0'"),
-        ("affectLSpacing='0'", "affectLSpacing='1'"),
-        ("allowOverlap='0'", "allowOverlap='1'"),
-        ("holdAnchorAndSO='0'", "holdAnchorAndSO='1'"),
-        ("vertRelTo='PARA'", "vertRelTo='PAGE'"),
-        ("horzRelTo='COLUMN'", "horzRelTo='PARA'"),
-        ("vertAlign='TOP'", "vertAlign='CENTER'"),
-        ("horzAlign='LEFT'", "horzAlign='RIGHT'"),
-        ("vertOffset='0'", "vertOffset='1'"),
-        ("horzOffset='0'", "horzOffset='1'"),
-        ("colSpan='1'", "colSpan='2'"),
-        ("rowSpan='1'", "rowSpan='2'"),
-        ("textDirection='HORIZONTAL'", "textDirection='VERTICAL'"),
-        ("lineWrap='BREAK'", "lineWrap='SQUEEZE'"),
-        ("textWidth='0'", "textWidth='1'"),
-        ("textHeight='0'", "textHeight='1'"),
-        ("hasTextRef='0'", "hasTextRef='1'"),
-        ("hasNumRef='0'", "hasNumRef='1'"),
-        ("linkListIDRef='0'", "linkListIDRef='2'"),
-        ("linkListNextIDRef='0'", "linkListNextIDRef='2'"),
-        ("height='&#50;2'", "height='-1'"),
-        ("height='&#50;2'", "height='4294967296'"),
-        ("height='&#50;2'", "height='1' height='2'"),
-        ("height='0'", "height='2401'"),
-        ("height='0'", "height='2400'"),
-    ];
-    for (from, to) in variants {
-        let changed = good.replace(from, to);
-        let refused = try_part(&changed)
-            .and_then(|part| {
-                collect_height_invalidations(&DerivedFacts::from_parts(vec![part]), &edit)
-            })
-            .is_err();
-        assert!(refused, "{from} => {to}");
-    }
-    for changed in [
-        good.replace("<hp:sz", "<hp:sz height='1' heightRelTo='ABSOLUTE'/><hp:sz"),
-        good.replace("<hp:pos", "<hp:pos/><hp:pos"),
-        good.replace("<hp:sz", "<hp:pic><hp:sz height='100'/></hp:pic><hp:sz"),
+    for (label, changed) in [
+        ("number", hidden.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_NUMBER")),
+        ("contents", hidden.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_CONTENTS")),
+        ("updown", hidden.replace("OBJECT_TYPE_PAGE", "OBJECT_TYPE_UPDOWN")),
+        ("outline", hidden.replace("TARGET_BOOKMARK", "TARGET_OUTLINE")),
+        ("missing", hidden.replace("?mark;", "?missing;")),
+        ("other", hidden.replace("?mark;6;0;0;0;", "?other;0;0;0;0;")),
+        ("path", hidden.replace("'RefPath'>?mark;<", "'RefPath'>mark<")),
+        (
+            "duplicate",
+            hidden.replace(
+                "<hp:ctrl><hp:bookmark name='mark'/></hp:ctrl>",
+                "<hp:ctrl><hp:bookmark name='mark'/></hp:ctrl><hp:ctrl><hp:bookmark name='mark'/></hp:ctrl>",
+            ),
+        ),
     ] {
-        let f = facts(&[changed]);
-        let result = collect_height_invalidations(&f, &edit);
-        if f.parts[0].xml.contains("<hp:pic>") {
-            assert_eq!(&f.parts[0].xml[result.unwrap()[0].value.clone()], "&#50;2");
-        } else {
-            assert!(result.is_err());
-        }
-    }
-    for height in ["0", ""] {
-        let changed = if height.is_empty() {
-            good.replace("height='&#50;2'", "")
-        } else {
-            good.replace("height='&#50;2'", "height='0'")
-        };
-        assert!(collect_height_invalidations(&facts(&[changed]), &edit).unwrap().is_empty());
-    }
-    let no_adjust = good.replace("noAdjust='0'", "noAdjust='1'");
-    assert_eq!(
-        collect_height_invalidations(&facts(std::slice::from_ref(&no_adjust)), &edit)
-            .unwrap()
-            .len(),
-        1
-    );
-    assert!(collect_height_invalidations(
-        &facts(&[no_adjust.replace("height='0'", "height='2401'")]),
-        &edit
-    )
-    .is_err());
-    for lexical in [
-        good.replace("height='&#50;2'", "height=\"&#50;2\""),
-        good.replace("width='9000'", "width='9000' extra='quoted > value'"),
-    ] {
-        let f = facts(&[lexical]);
-        let h = collect_height_invalidations(&f, &edit).unwrap();
-        assert_eq!(&f.parts[0].xml[h[0].value.clone()], "&#50;2");
-    }
-    let fixed = good.replace("noAdjust='0'", "noAdjust='1'").replace("height='0'", "height='2400'");
-    assert_eq!(collect_height_invalidations(&facts(&[fixed]), &edit).unwrap().len(), 1);
-}
-// 이것을 실패시키는 것: 호스트/조상 표 전파 누락, header/footer 경계 제거, 삭제 안 표를 높이 목록에 남김.
-#[test]
-fn height_flow_includes_ancestors_and_respects_independent_hosts() {
-    let header = p(&format!(
-        "<hp:ctrl><hp:header><hp:subList>{}</hp:subList></hp:header></hp:ctrl>",
-        p(&table("10", "머리말"))
-    ));
-    let f = facts(&[section(&format!("{}{}{}", p("삭제"), header, p(&table("20", "뒤"))))]);
-    let heights = collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
-    )
-    .unwrap();
-    assert_eq!(heights.len(), 1);
-    assert_eq!(&f.parts[0].xml[heights[0].value.clone()], "20");
-    let f = facts(&[section(&format!("{}{}", p(&table("20", "삭제 표")), p("끝")))]);
-    assert!(collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }]
-    )
-    .unwrap()
-    .is_empty());
-    for container in ["footNote", "endNote", "memo"] {
-        let f = facts(&[section(&format!(
-            "{}{}",
-            p("삭제"),
-            p(&format!(
-                "<hp:ctrl><hp:{container}><hp:subList>{}</hp:subList></hp:{container}></hp:ctrl>",
-                p(&table("20", "안"))
-            ))
-        ))]);
-        assert!(collect_height_invalidations(
-            &f,
-            &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }]
-        )
-        .is_err());
-    }
-    let nested = table("20", &table("10", "안"));
-    let f = facts(&[section(&format!("{}{}", p("앞"), p(&nested)))]);
-    assert!(collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }]
-    )
-    .is_err());
-    let seeds = vec![false, false, false, true];
-    assert_eq!(f.parts[0].tables.affected_tables(&f.parts[0].flow, &seeds), [true, true]);
-}
-// 이것을 실패시키는 것: Before를 본문 인덱스로 해석, 끝 삽입을 마지막 중첩 문단 뒤 seed로 계산.
-#[test]
-fn insertion_boundaries_follow_original_body_flow() {
-    let f = facts(&[section(&format!(
-        "{}{}{}",
-        p(&table("10", "앞")),
-        p("사이"),
-        p(&table("20", "뒤"))
-    ))]);
-    for (boundary, expected) in [
-        (FlowBoundary::Before(FlowOrdinal(0)), 2),
-        (FlowBoundary::Before(FlowOrdinal(2)), 1),
-        (FlowBoundary::Before(FlowOrdinal(3)), 1),
-        (FlowBoundary::EndOfBody, 0),
-    ] {
-        assert_eq!(
-            collect_height_invalidations(
-                &f,
-                &[DerivedEdit::Insert { section: 0, at: boundary, fragment: &p("추가") }]
+        assert!(
+            check_derived_values(
+                &facts(&[changed]),
+                &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }],
             )
-            .unwrap()
-            .len(),
-            expected
+            .is_err(),
+            "{label}"
         );
     }
-    assert!(collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Insert {
-            section: 0,
-            at: FlowBoundary::Before(FlowOrdinal(1)),
-            fragment: &p("추가")
-        }]
-    )
-    .is_err());
 }
 
-// 이것을 실패시키는 것: 최종 캐시 목록으로 높이 영향 계산, 입증/self_owned/전역 fallback 생략.
-#[test]
-fn height_seeds_precede_the_plain_tail_cache_exception() {
-    let xml = section(&format!(
-        "{}{}{}{}",
-        p("<hp:secPr textDirection='HORIZONTAL'/><hp:t>입력</hp:t>"),
-        p(&table("10", "<hp:t>칸</hp:t>")),
-        p("<hp:t>본문</hp:t>"),
-        p(&table("20", "<hp:t>끝</hp:t>"))
-    ));
-    let mut f = facts(&[xml]);
-    let part = &mut f.parts[0];
-    part.flow.prove_text_tail(&part.source, &part.xml, &Default::default(), |_| None);
-    let n = part.flow.paragraph_count();
-    let proven = vec![true; n];
-    let changed = vec![true, false, true, false, false, false];
-    let seeds = part.flow.effective_text_seeds(&changed, &proven);
-    assert_eq!(seeds, vec![false; n]);
-    for fail in [0, 2] {
-        let mut proof = proven.clone();
-        proof[fail] = false;
-        let seeds = part.flow.effective_text_seeds(&changed, &proof);
-        assert!(seeds[fail]);
-        assert_eq!(part.tables.affected_tables(&part.flow, &seeds), [true, true]);
-        assert!(part.flow.caches_to_drop_for_text_edits([fail], &proof).is_empty());
-    }
-    let incompatible = section(&format!(
-        "{}{}",
-        p("<hp:secPr textDirection='HORIZONTAL'/><hp:colPr colCount='2' sameSz='0'/>"),
-        p("<hp:t>入力</hp:t>")
-    ));
-    let mut global = facts(&[incompatible]);
-    let global = &mut global.parts[0];
-    global.flow.prove_text_tail(&global.source, &global.xml, &Default::default(), |_| None);
-    assert_eq!(global.flow.effective_text_seeds(&[false, true], &[true, true]), [false, true]);
-    let fallback = facts(std::slice::from_ref(&part.xml));
-    assert_eq!(fallback.parts[0].flow.effective_text_seeds(&changed, &proven), changed);
-    let unowned=section(&p("<hp:secPr textDirection='HORIZONTAL'/><hp:ctrl><hp:footNote><hp:subList><hp:p><hp:run><hp:t>안</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl>"));
-    let mut f = facts(&[unowned]);
-    let part = &mut f.parts[0];
-    part.flow.prove_text_tail(&part.source, &part.xml, &Default::default(), |_| None);
-    assert!(part.flow.effective_text_seeds(&[false, true], &[true, true])[1]);
-}
 // 이것을 실패시키는 것: source/section/ordinal/proof/slot 불일치 또는 중복 요청 승인.
 #[test]
 fn invalid_edit_coordinates_return_errors() {
@@ -771,7 +553,6 @@ fn invalid_edit_coordinates_return_errors() {
         ],
     ] {
         assert!(check_derived_values(&f, &edits).is_err());
-        assert!(collect_height_invalidations(&f, &edits).is_err());
     }
     for span in [offset + 1..offset + 3, 0..usize::MAX, offset..offset] {
         let invalid_slots = [(span, "변경".into())];
@@ -787,7 +568,6 @@ fn invalid_edit_coordinates_return_errors() {
         .is_err());
     }
     assert!(check_derived_values(&f, &[]).is_ok());
-    assert!(collect_height_invalidations(&f, &[]).unwrap().is_empty());
 }
 // 이것을 실패시키는 것: 선필터 음성으로 별칭/반대 짝/차트/불명 namespace/DTD를 건너뜀.
 #[test]
@@ -842,12 +622,6 @@ fn independent_seeds_and_unhosted_tables_are_conservative() {
         seeds[f.parts[0].tables.tables[0].host.unwrap()] = true;
         assert_eq!(f.parts[0].tables.affected_tables(flow, &seeds), [true, false]);
     }
-    let f = facts(&[section(&format!("{}{}", p("삭제"), table("20", "소유 불명")))]);
-    assert!(collect_height_invalidations(
-        &f,
-        &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }]
-    )
-    .is_err());
 }
 // 이것을 실패시키는 것: 표 원문 주소 대신 같은 id의 첫 표를 소유자로 선택.
 #[test]
@@ -999,7 +773,7 @@ fn shared_collection_work_grows_with_source_size() {
         let edits = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
         let effects = f.effects(&edits).unwrap();
         effects.check_derived_values().unwrap();
-        assert_eq!(effects.collect_height_invalidations().unwrap().len(), n);
+
         assert_eq!(hwpforge_core::source_xml::source_work().0 - before.0, 1);
         crate::work::WORK.with(|w| w.get())
     };
@@ -1059,6 +833,7 @@ fn note_policy_work_scales_with_each_number_representation() {
 }
 
 // 이것을 실패시키는 것: Command의 wire 번호와 의미 parameter의 충돌을 R로 승인.
+// 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 허용 복원.
 #[test]
 fn cross_reference_command_agrees_with_typed_parameters() {
     let params = [
@@ -1074,23 +849,17 @@ fn cross_reference_command_agrees_with_typed_parameters() {
         p(&field("CROSSREF", &params, "3"))
     ));
     let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
-    check_derived_values(&facts(std::slice::from_ref(&good)), &edit).unwrap();
+    assert!(check_derived_values(&facts(std::slice::from_ref(&good)), &edit).is_err());
+    // Without displayed text the flow rule does not apply, so the command check decides.
+    let hidden = good.replace("<hp:t>3</hp:t>", "<hp:t></hp:t>");
+    check_derived_values(&facts(std::slice::from_ref(&hidden)), &edit).unwrap();
     for command in ["?mark;0;0;0;0;", "?mark;6;1;0;0;", "?mark;6;2;0;0;"] {
-        assert!(check_derived_values(&facts(&[good.replace("?mark;6;0;0;0;", command)]), &edit)
+        assert!(check_derived_values(&facts(&[hidden.replace("?mark;6;0;0;0;", command)]), &edit)
             .is_err());
     }
 }
 
-// 이것을 실패시키는 것: 끝 삽입의 seed 부재를 소유 불명 표의 무영향 증명으로 사용.
-#[test]
-fn end_insertion_requires_known_table_ownership() {
-    let f = facts(&[section(&format!("{}{}", p("본문"), table("20", "소유 불명")))]);
-    let edits =
-        [DerivedEdit::Insert { section: 0, at: FlowBoundary::EndOfBody, fragment: &p("추가") }];
-    check_derived_values(&f, &edits).unwrap();
-    assert!(collect_height_invalidations(&f, &edits).is_err());
-}
-// 이것을 실패시키는 것: 머리말/꼬리말/바탕쪽/각주/미주/메모 책갈피에 본문 page 참조 R을 전용.
+// 이것을 실패시키는 것: 흐름 변경 때 머리말/꼬리말/바탕쪽/각주/미주/메모 책갈피를 가리키는 쪽 참조 표시 허용.
 #[test]
 fn page_reference_targets_require_observed_body_flows() {
     let params = [
@@ -1174,7 +943,7 @@ fn page_recalculation_requires_registered_section_parts() {
 }
 
 // Synthetic XML with independently stated observed values; no saved application bytes.
-pub(crate) fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> String {
+fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> String {
     let rows = if merged { 3 } else { 2 };
     let horizontal = if merged { "PARA" } else { "COLUMN" };
     let mut xml = format!("<hp:tbl id='7' zOrder='0' numberingType='TABLE' textWrap='TOP_AND_BOTTOM' textFlow='BOTH_SIDES' lock='0' dropcapstyle='None' pageBreak='CELL' repeatHeader='1' rowCnt='{rows}' colCnt='3' cellSpacing='0' noAdjust='{no_adjust}'><hp:sz width='48189' widthRelTo='ABSOLUTE' height='10000' heightRelTo='ABSOLUTE' protect='0'/><hp:pos treatAsChar='1' affectLSpacing='0' flowWithText='1' allowOverlap='0' holdAnchorAndSO='0' vertRelTo='PARA' horzRelTo='{horizontal}' vertAlign='TOP' horzAlign='LEFT' vertOffset='0' horzOffset='0'/><hp:outMargin left='283' right='283' top='283' bottom='1000'/><hp:inMargin left='510' right='510' top='141' bottom='141'/>");
@@ -1196,188 +965,6 @@ pub(crate) fn inline_table(cell_height: &str, no_adjust: &str, merged: bool) -> 
     }
     xml.push_str("</hp:tbl>");
     xml
-}
-fn assert_inline_profile(cell_height: &str, no_adjust: &str, merged: bool) {
-    let good =
-        section(&format!("{}{}", p("삭제"), p(&inline_table(cell_height, no_adjust, merged))));
-    let edit = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
-    let f = facts(std::slice::from_ref(&good));
-    let heights = collect_height_invalidations(&f, &edit).unwrap();
-    assert_eq!(heights.len(), 1);
-    assert_eq!(&good[heights[0].value.clone()], "10000");
-    let horizontal = if merged { "PARA" } else { "COLUMN" };
-    let other_horizontal = if merged { "COLUMN" } else { "PARA" };
-    let opposite_adjust = if no_adjust == "0" { "1" } else { "0" };
-    let rows = if merged { "3" } else { "2" };
-    let mut variants = vec![
-        ("treatAsChar='1'".into(), "treatAsChar='2'".into()),
-        (format!("horzRelTo='{horizontal}'"), format!("horzRelTo='{other_horizontal}'")),
-        (format!("height='{cell_height}'"), "height='999'".into()),
-        (format!("noAdjust='{no_adjust}'"), format!("noAdjust='{opposite_adjust}'")),
-        (format!("rowCnt='{rows}'"), "rowCnt='4'".into()),
-        ("colCnt='3'".into(), "colCnt='4'".into()),
-        ("rowSpan='1'".into(), "rowSpan='2'".into()),
-        ("colSpan='1'".into(), "colSpan='2'".into()),
-        ("rowAddr='0'".into(), "rowAddr='1'".into()),
-        ("colAddr='0'".into(), "colAddr='1'".into()),
-        ("width='16063'".into(), "width='16064'".into()),
-        ("width='48189'".into(), "width='48190'".into()),
-        ("widthRelTo='ABSOLUTE'".into(), "widthRelTo='RELATIVE'".into()),
-        ("protect='0'".into(), "protect='1'".into()),
-        ("zOrder='0'".into(), "zOrder='1'".into()),
-        ("numberingType='TABLE'".into(), "numberingType='PICTURE'".into()),
-        ("lock='0'".into(), "lock='1'".into()),
-        ("dropcapstyle='None'".into(), "dropcapstyle='DoubleLine'".into()),
-        ("cellSpacing='0'".into(), "cellSpacing='1'".into()),
-        ("left='283'".into(), "left='284'".into()),
-        ("left='510'".into(), "left='511'".into()),
-        ("vertAlign='CENTER'".into(), "vertAlign='TOP'".into()),
-        ("header='0'".into(), "header='1'".into()),
-        ("hasMargin='0'".into(), "hasMargin='1'".into()),
-        ("editable='0'".into(), "editable='1'".into()),
-        ("dirty='0'".into(), "dirty='1'".into()),
-    ];
-    for (from, to) in [
-        ("pageBreak='CELL'", "pageBreak='NONE'"),
-        ("repeatHeader='1'", "repeatHeader='0'"),
-        ("textWrap='TOP_AND_BOTTOM'", "textWrap='SQUARE'"),
-        ("textFlow='BOTH_SIDES'", "textFlow='LEFT_ONLY'"),
-        ("heightRelTo='ABSOLUTE'", "heightRelTo='RELATIVE'"),
-        ("affectLSpacing='0'", "affectLSpacing='1'"),
-        ("flowWithText='1'", "flowWithText='0'"),
-        ("allowOverlap='0'", "allowOverlap='1'"),
-        ("holdAnchorAndSO='0'", "holdAnchorAndSO='1'"),
-        ("vertRelTo='PARA'", "vertRelTo='PAGE'"),
-        ("vertAlign='TOP'", "vertAlign='BOTTOM'"),
-        ("horzAlign='LEFT'", "horzAlign='RIGHT'"),
-        ("vertOffset='0'", "vertOffset='1'"),
-        ("horzOffset='0'", "horzOffset='1'"),
-        ("textDirection='HORIZONTAL'", "textDirection='VERTICAL'"),
-        ("lineWrap='BREAK'", "lineWrap='SQUEEZE'"),
-        ("textWidth='0'", "textWidth='1'"),
-        ("textHeight='0'", "textHeight='1'"),
-        ("hasTextRef='0'", "hasTextRef='1'"),
-        ("hasNumRef='0'", "hasNumRef='1'"),
-        ("linkListIDRef='0'", "linkListIDRef='1'"),
-        ("linkListNextIDRef='0'", "linkListNextIDRef='1'"),
-    ] {
-        variants.push((from.into(), to.into()));
-    }
-    if merged {
-        variants.push(("treatAsChar='1'".into(), "treatAsChar='0'".into()));
-        variants.push(("width='32126'".into(), "width='32127'".into()));
-    }
-    if !merged {
-        variants.push(("vertAlign='BOTTOM'".into(), "vertAlign='CENTER'".into()));
-    }
-    for (from, to) in variants {
-        let changed = good.replacen(&from, &to, 1);
-        assert_ne!(changed, good, "{from}");
-        assert!(collect_height_invalidations(&facts(&[changed]), &edit).is_err(), "{from} => {to}");
-    }
-    for element in ["outMargin", "inMargin", "cellMargin", "tc", "sz"] {
-        let start = good.find(&format!("<hp:{element} ")).unwrap();
-        let end = start + good[start..].find('>').unwrap() + 1;
-        let opening = &good[start..end];
-        let pairs = match element {
-            "outMargin" => {
-                vec![("left", "283"), ("right", "283"), ("top", "283"), ("bottom", "1000")]
-            }
-            "inMargin" | "cellMargin" => {
-                vec![("left", "510"), ("right", "510"), ("top", "141"), ("bottom", "141")]
-            }
-            "tc" => vec![
-                ("header", "0"),
-                ("hasMargin", "0"),
-                ("protect", "0"),
-                ("editable", "0"),
-                ("dirty", "0"),
-            ],
-            _ => vec![("width", "48189"), ("widthRelTo", "ABSOLUTE"), ("protect", "0")],
-        };
-        for (key, value) in pairs {
-            let changed_opening =
-                opening.replace(&format!("{key}='{value}'"), &format!("{key}='999'"));
-            assert_ne!(changed_opening, opening);
-            let changed = format!("{}{}{}", &good[..start], changed_opening, &good[end..]);
-            assert!(
-                collect_height_invalidations(&facts(&[changed]), &edit).is_err(),
-                "{element}@{key}"
-            );
-        }
-    }
-    // Swapping a 2x2 span with a singleton preserves span counts, but changes placement.
-    if merged {
-        let swapped = good
-            .replacen("rowSpan='2' colSpan='2'", "SWAPPED_SPAN", 1)
-            .replacen("rowSpan='1' colSpan='1'", "rowSpan='2' colSpan='2'", 1)
-            .replace("SWAPPED_SPAN", "rowSpan='1' colSpan='1'");
-        assert_ne!(swapped, good);
-        assert!(collect_height_invalidations(&facts(&[swapped]), &edit).is_err());
-    } else {
-        // Changing inline to floating lands on the established default-flow profile.
-        // Its variable dimensions and zero cell heights remain eligible.
-        let floating = good.replace("treatAsChar='1'", "treatAsChar='0'");
-        assert_eq!(collect_height_invalidations(&facts(&[floating]), &edit).unwrap().len(), 1);
-    }
-    let first_row_end = good.find("</hp:tr>").unwrap();
-    let cell_start = good[..first_row_end].rfind("<hp:tc ").unwrap();
-    let cell_end = cell_start + good[cell_start..].find("</hp:tc>").unwrap() + "</hp:tc>".len();
-    let cell = &good[cell_start..cell_end];
-    let moved = good.replacen(cell, "", 1).replacen(
-        "</hp:tr><hp:tr>",
-        &format!("</hp:tr><hp:tr>{cell}"),
-        1,
-    );
-    assert!(collect_height_invalidations(&facts(&[moved]), &edit).is_err());
-    let last_cell_start = good.rfind("<hp:tc ").unwrap();
-    let last_cell_end =
-        last_cell_start + good[last_cell_start..].find("</hp:tc>").unwrap() + "</hp:tc>".len();
-    let missing_cell = format!("{}{}", &good[..last_cell_start], &good[last_cell_end..]);
-    assert!(collect_height_invalidations(&facts(&[missing_cell]), &edit).is_err());
-    for name in ["tr", "tc"] {
-        let changed = good
-            .replace(
-                &format!("<hp:{name}"),
-                &format!("<foreign:{name} xmlns:foreign='urn:foreign'"),
-            )
-            .replace(&format!("</hp:{name}>"), &format!("</foreign:{name}>"));
-        // 이것을 실패시키는 것: foreign tr·tc가 프로필 판정 전 수집을 통과.
-        let alias = changed.replace("urn:foreign", NS);
-        assert_eq!(collect_height_invalidations(&facts(&[alias]), &edit).unwrap().len(), 1);
-        let source = XmlSource::read(&changed).unwrap().1;
-        let flow = ParagraphFlow::from_source(&source);
-        assert!(Part::read(Some(0), changed, source, flow, None).is_err());
-    }
-    for changed in [
-        good.replacen("</hp:tbl>", "<hp:pic/></hp:tbl>", 1),
-        good.replacen("</hp:tc>", "<hp:unknown/></hp:tc>", 1),
-        good.replacen("</hp:subList>", "<hp:tc/></hp:subList>", 1),
-        good.replacen("</hp:subList>", "<hp:subList/></hp:subList>", 1),
-        good.replacen("</hp:tr>", "<hp:tc/></hp:tr>", 1),
-        good.replacen("</hp:tbl>", "<hp:tr/></hp:tbl>", 1),
-        good.replacen("<hp:cellAddr", "<hp:cellAddr rowAddr='0' colAddr='0'/><hp:cellAddr", 1),
-        good.replacen("</hp:tbl>", "<hp:tc/></hp:tbl>", 1),
-        good.replacen("</hp:tbl>", "<hp:subList/></hp:tbl>", 1),
-    ] {
-        assert!(collect_height_invalidations(&facts(&[changed]), &edit).is_err());
-    }
-}
-
-// 이것을 실패시키는 것: inline zero-cell 프로필 누락, 단일 축 완화, 다른 행의 축을 섞어 승인.
-#[test]
-fn inline_zero_cell_table_requires_exact_shape() {
-    assert_inline_profile("0", "0", false);
-}
-// 이것을 실패시키는 것: 병합 최소 높이 프로필 누락, 병합 배치를 개수로만 검사, 치수/칸 규칙 완화.
-#[test]
-fn inline_merged_minimum_cells_require_exact_shape() {
-    assert_inline_profile("4688", "0", true);
-}
-// 이것을 실패시키는 것: 병합 고정 높이 프로필 누락, noAdjust와 cellSz를 서로 다른 행에서 조합.
-#[test]
-fn inline_merged_fixed_cells_require_exact_shape() {
-    assert_inline_profile("2148", "1", true);
 }
 
 // 이것을 실패시키는 것: 시작 주소 맵 대신 매 요청마다 선형 탐색, 맵의 id를 이웃 원소로 이동.
@@ -1406,7 +993,8 @@ fn source_address_lookups_scale_with_elements_and_requests() {
     assert!(small > 0 && large > small && large < small * 3, "{small} -> {large}");
 }
 
-// 이것을 실패시키는 것: autoNum이 없는 PAGE 참조에서 재시작 변경 검사 생략.
+// Delete always changes the flow, so a displayed page reference is refused with or without a restart.
+// 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 허용 복원.
 #[test]
 fn page_cross_reference_refuses_restart_removal() {
     let params = [
@@ -1416,7 +1004,7 @@ fn page_cross_reference_refuses_restart_removal() {
         ("Command", "?mark;6;0;0;0;"),
     ];
     for (carrier, accepted) in
-        [("<hp:ctrl><hp:newNum numType='PAGE' num='3'/></hp:ctrl>", false), ("삭제", true)]
+        [("<hp:ctrl><hp:newNum numType='PAGE' num='3'/></hp:ctrl>", false), ("삭제", false)]
     {
         let f = facts(&[section(&format!(
             "{}{}{}",
@@ -1434,7 +1022,6 @@ fn page_cross_reference_refuses_restart_removal() {
 // 이것을 실패시키는 것: Part 수집에서 tr·tc namespace 검사를 누락하거나 가변 치수/2400 정책 축소.
 #[test]
 fn table_rows_and_cells_require_paragraph_namespace() {
-    let edits = [DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(0)] }];
     let variable = table("20", "칸").replace("width='9000'", "width='12345'");
     let fixed = variable
         .replace("noAdjust='0'", "noAdjust='1'")
@@ -1450,17 +1037,14 @@ fn table_rows_and_cells_require_paragraph_namespace() {
     .enumerate()
     {
         let xml = section(&format!("{}{}", p("삭제"), p(&table)));
-        assert_eq!(
-            collect_height_invalidations(&facts(std::slice::from_ref(&xml)), &edits).unwrap().len(),
-            1
-        );
+        let _ = facts(std::slice::from_ref(&xml));
         for tag in ["tr", "tc"] {
             let foreign = xml
                 .replace(&format!("<hp:{tag}>"), &format!("<x:{tag} xmlns:x='urn:foreign'>"))
                 .replace(&format!("<hp:{tag} "), &format!("<x:{tag} xmlns:x='urn:foreign' "))
                 .replace(&format!("</hp:{tag}>"), &format!("</x:{tag}>"));
             let alias = foreign.replace("urn:foreign", NS);
-            assert_eq!(collect_height_invalidations(&facts(&[alias]), &edits).unwrap().len(), 1);
+            let _ = facts(&[alias]);
             let source = XmlSource::read(&foreign).unwrap().1;
             let flow = ParagraphFlow::from_source(&source);
             assert!(
@@ -1535,9 +1119,9 @@ fn note_cross_references_respect_target_section_numbering() {
                 }];
                 let effects = f.effects(&edits).unwrap();
                 let accepted = policy == "ON_SECTION" && deleted_section == 0;
-                let (&id, field) = f.parts[2].fields.iter().next().unwrap();
+                let (_, field) = f.parts[2].fields.iter().next().unwrap();
                 assert_eq!(
-                    crossref_unchanged(&effects, &f.parts[2], id, field).is_ok(),
+                    crossref_unchanged(&effects, field).is_ok(),
                     accepted,
                     "{note} {policy} {deleted_section}"
                 );
@@ -1565,10 +1149,7 @@ fn table_cell_evidence_requires_paragraph_namespace() {
             let flow = ParagraphFlow::from_source(&source);
             assert!(Part::read(Some(0), foreign.clone(), source, flow, None).is_err());
             let alias = foreign.replace("urn:foreign", NS);
-            let aliased = facts(&[alias]);
-            let part = &aliased.parts[0];
-            let table_id = part.source.elements().iter().position(|e| e.name() == "tbl").unwrap();
-            assert!(table_profiles::matches(part, table_id));
+            let _ = facts(&[alias]);
         }
     }
 }
@@ -1642,4 +1223,292 @@ fn shared_affected_tables_keep_structure_hosts_and_boundaries() {
         table("20", "칸")
     ))]);
     assert_eq!(independent.effects(&end).unwrap().affected_tables[&0].by_table, [false]);
+}
+
+// Synthetic table dimensions are stated directly in the fixture.
+pub(crate) fn inline_six_column_table() -> String {
+    let mut xml = "<hp:tbl id='7' zOrder='3' numberingType='TABLE' textWrap='TOP_AND_BOTTOM' textFlow='BOTH_SIDES' lock='0' dropcapstyle='None' pageBreak='CELL' repeatHeader='1' rowCnt='2' colCnt='6' cellSpacing='0' noAdjust='1'><hp:sz width='47816' widthRelTo='ABSOLUTE' height='3130' heightRelTo='ABSOLUTE' protect='0'/><hp:pos treatAsChar='1' affectLSpacing='0' flowWithText='1' allowOverlap='0' holdAnchorAndSO='0' vertRelTo='PARA' horzRelTo='PARA' vertAlign='TOP' horzAlign='LEFT' vertOffset='0' horzOffset='0'/><hp:outMargin left='283' right='283' top='283' bottom='283'/><hp:inMargin left='141' right='141' top='141' bottom='141'/>".to_owned();
+    for row in 0..2 {
+        xml.push_str("<hp:tr>");
+        for (column, width) in [7969, 7969, 7969, 7969, 7969, 7971].iter().enumerate() {
+            xml.push_str(&format!("<hp:tc header='0' hasMargin='0' protect='0' editable='0' dirty='0'><hp:subList textDirection='HORIZONTAL' lineWrap='BREAK' vertAlign='CENTER' textWidth='0' textHeight='0' hasTextRef='0' hasNumRef='0' linkListIDRef='0' linkListNextIDRef='0'>{}</hp:subList><hp:cellAddr rowAddr='{row}' colAddr='{column}'/><hp:cellSpan rowSpan='1' colSpan='1'/><hp:cellSz width='{width}' height='1565'/><hp:cellMargin left='510' right='510' top='141' bottom='141'/></hp:tc>", p("칸")));
+        }
+        xml.push_str("</hp:tr>");
+    }
+    xml.push_str("</hp:tbl>");
+    xml
+}
+
+// 이것을 실패시키는 것: wire 속성 누락을 0으로 대체, style_ref None 기본화, strict shape/style 참조 대조 생략.
+#[test]
+fn outline_heading_references_are_strict() {
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let store = crate::style_store_for_preset("default").unwrap();
+    let mut p = hwpforge_core::Paragraph::with_runs(
+        vec![hwpforge_core::Run::text("plain", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    p.style_ref = store.style_ref_at(0);
+    let tag=Tag::read("<hp:p xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' paraPrIDRef='0' styleIDRef='0'/>").unwrap();
+    check_outline_plain_heading(&store, &p, &tag).unwrap();
+    for attrs in [
+        "styleIDRef='0'",
+        "paraPrIDRef='0'",
+        "paraPrIDRef='bad' styleIDRef='0'",
+        "paraPrIDRef='0' styleIDRef='bad'",
+        "paraPrIDRef='4294967296' styleIDRef='0'",
+        "paraPrIDRef='0' styleIDRef='4294967296'",
+    ] {
+        let tag = Tag::read(&format!(
+            "<hp:p xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' {attrs}/>"
+        ))
+        .unwrap();
+        assert!(check_outline_plain_heading(&store, &p, &tag).is_err(), "{attrs}");
+    }
+    let mut absent = p.clone();
+    absent.style_ref = None;
+    assert!(check_outline_plain_heading(&store, &absent, &tag).is_err());
+    let mut different = p.clone();
+    different.para_shape_id = ParaShapeIndex::new(1);
+    assert!(check_outline_plain_heading(&store, &different, &tag).is_err());
+    let mut different = p.clone();
+    different.style_ref = store.style_ref_at(1);
+    assert!(check_outline_plain_heading(&store, &different, &tag).is_err());
+}
+
+// 이것을 실패시키는 것: 삭제 changed/deleted/본문 index 대응 또는 secPr 소유 paragraph 유일성 검사 생략.
+#[test]
+fn outline_deletion_effects_require_complete_original_ownership() {
+    use hwpforge_core::{
+        Document, ImageStore, NumberingDef, PageSettings, Paragraph, Run, Section,
+    };
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut store = crate::style_store_for_preset("default").unwrap();
+    store.push_numbering(NumberingDef::default_outline());
+    store.push_numbering(NumberingDef::default_outline());
+    let mut doc = Document::new();
+    for _ in 0..2 {
+        doc.add_section(Section::with_paragraphs(
+            (0..3)
+                .map(|_| {
+                    Paragraph::with_runs(
+                        vec![Run::text("plain", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )
+                })
+                .collect(),
+            PageSettings::a4(),
+        ));
+    }
+    let base =
+        crate::HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let mut package = crate::raw_package::RawPackage::read(&base).unwrap();
+    let xml = package
+        .read_text_entry("Contents/section1.xml")
+        .unwrap()
+        .replace("outlineShapeIDRef=\"1\"", "outlineShapeIDRef=\"2\"");
+    package.replace_text_entry("Contents/section1.xml", xml);
+    let base = package.write().unwrap();
+    let decoded = crate::HwpxDecoder::decode(&base).unwrap();
+    let facts = DerivedFacts::collect(&package, &decoded).unwrap();
+    let part = facts.parts.iter().find(|p| p.section == Some(1)).unwrap();
+    let id = crate::decoder::source_map::section_property_origin(&part.xml, &part.source).unwrap();
+    let span = part.source.element(id).unwrap().outer();
+    use sha2::Digest;
+    let locations =
+        [(1, span.clone(), <[u8; 32]>::from(sha2::Sha256::digest(&part.xml.as_bytes()[span])))];
+    let ordinals = [facts.body_ordinal(0, 1).unwrap()];
+    let edits = [DerivedEdit::Delete { section: 0, paragraphs: &ordinals }];
+    facts.effects(&edits).unwrap().check_section_outline_losses(&decoded, &locations).unwrap();
+    for change in [
+        "empty",
+        "changed-count",
+        "changed-ordinal",
+        "not-body",
+        "map-count",
+        "map-duplicate",
+        "property-owner",
+        "property-owner-duplicate",
+        "duplicate-location",
+    ] {
+        let mut decoded = crate::HwpxDecoder::decode(&base).unwrap();
+        match change {
+            "map-count" => {
+                decoded.source_maps[0].paragraphs.pop();
+            }
+            "map-duplicate" => {
+                decoded.source_maps[0].paragraphs[2] = decoded.source_maps[0].paragraphs[1].clone()
+            }
+            "property-owner" => {
+                decoded.source_maps[1].paragraphs.remove(0);
+            }
+            "property-owner-duplicate" => {
+                let p = decoded.source_maps[1].paragraphs[0].clone();
+                decoded.source_maps[1].paragraphs.push(p);
+            }
+            _ => {}
+        }
+        let facts = DerivedFacts::collect(&package, &decoded).unwrap();
+        let mut effects = facts.effects(&edits).unwrap();
+        let effect = effects.effects.get_mut(&0).unwrap();
+        match change {
+            "empty" => {
+                effect.deleted.clear();
+                effect.changed.clear();
+            }
+            "changed-count" => {
+                effect.changed.insert(2);
+            }
+            "changed-ordinal" => {
+                effect.changed.clear();
+                effect.changed.insert(2);
+            }
+            "not-body" => {
+                effect.deleted[0].end -= 1;
+            }
+            _ => {}
+        }
+        let claims = match change {
+            "duplicate-location" => vec![locations[0].clone(), locations[0].clone()],
+            _ => locations.to_vec(),
+        };
+        assert!(effects.check_section_outline_losses(&decoded, &claims).is_err(), "{change}");
+    }
+}
+
+// 이것을 실패시키는 것: 직접/스타일 shape를 생략하거나 para_list의 lossy None을 승인.
+#[test]
+fn outline_wire_heading_checks_are_independent() {
+    use crate::style_store::{HwpxParaShape, HwpxStyle};
+    use hwpforge_core::{NumberingDef, Paragraph, Run};
+    use hwpforge_foundation::{CharShapeIndex, HeadingType, ParaShapeIndex};
+    for inherited in [false, true] {
+        for (kind, level, reference) in [
+            (HeadingType::Number, 0, 1),
+            (HeadingType::Outline, 0, 1),
+            (HeadingType::Bullet, 0, 1),
+            (HeadingType::Number, 10, 1),
+            (HeadingType::Number, 0, 99),
+            (HeadingType::Outline, 10, 0),
+            (HeadingType::Bullet, 0, 99),
+        ] {
+            let mut store = crate::HwpxStyleStore::new();
+            store.push_numbering(NumberingDef::default_outline());
+            store.push_para_shape(HwpxParaShape::default());
+            let shape = HwpxParaShape {
+                heading_type: kind,
+                heading_level: level,
+                heading_id_ref: reference,
+                ..HwpxParaShape::default()
+            };
+            store.push_para_shape(shape);
+            let (direct, style) = match inherited {
+                false => (1, 0),
+                true => (0, 1),
+            };
+            store.push_style(HwpxStyle::new(70, "PARA", "Plain", "Plain", style, 0, 0, 1042, 0));
+            let mut paragraph = Paragraph::with_runs(
+                vec![Run::text("plain", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(direct),
+            );
+            paragraph.style_ref = store.style_ref_at(0);
+            assert!(paragraph.heading_level.is_none());
+            let tag=Tag::read(&format!("<hp:p xmlns:hp='http://www.hancom.co.kr/hwpml/2011/paragraph' paraPrIDRef='{direct}' styleIDRef='0'/>")).unwrap();
+            assert!(
+                check_outline_plain_heading(&store, &paragraph, &tag).is_err(),
+                "{inherited} {kind:?} {level} {reference}"
+            );
+        }
+    }
+}
+
+// 이것을 실패시키는 것: nested_cell_sublist 항상 false, 소유만으로 proof 생략, from_source-only 흐름의 seed 제거.
+// 이것을 실패시키는 것: 텍스트 변경의 영향 표 계산 제거.
+#[test]
+fn nested_seeds_and_derived_effects_agree() {
+    let xml = section(&format!(
+        "{}{}{}",
+        p("<hp:secPr textDirection='HORIZONTAL'/><hp:t>앞</hp:t>"),
+        p(&table("10", &table("20", "<hp:t>안</hp:t>"))),
+        p("<hp:t>뒤</hp:t>")
+    ));
+    let mut f = facts(&[xml]);
+    let part = &mut f.parts[0];
+    let changed = [false, false, false, true, false];
+    let proven = [true; 5];
+    assert_eq!(part.flow.effective_text_seeds(&changed, &proven), changed);
+    part.flow.prove_text_tail(&part.source, &part.xml, &Default::default(), |_| None);
+    for success in [true, false] {
+        let mut proof = proven;
+        proof[3] = success;
+        let seeds = part.flow.effective_text_seeds(&changed, &proof);
+        assert_eq!(seeds, if success { [false; 5] } else { changed });
+        assert_eq!(
+            part.flow.affected_paragraphs(&seeds),
+            if success { [false; 5] } else { [false, true, true, true, true] }
+        );
+        assert_eq!(part.tables.affected_tables(&part.flow, &seeds), [!success; 2]);
+    }
+    for success in [true, false] {
+        let mut proof = proven;
+        proof[3] = success;
+        let offset = f.parts[0].xml.find("안").unwrap();
+        let slots = [(offset..offset + "안".len(), "나".into())];
+        let edits = [DerivedEdit::Text {
+            section: 0,
+            changed: &[FlowOrdinal(3)],
+            proven: &proof,
+            slots: &slots,
+        }];
+        assert_eq!(f.effects(&edits).unwrap().affected_tables[&0].by_table, [!success; 2]);
+    }
+}
+
+// 이것을 실패시키는 것: note 정책 수집에서 중복 numbering의 첫 자식을 정책으로 선택.
+#[test]
+fn duplicate_note_numbering_is_unknown_before_public_decode() {
+    use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        ["처음", "삭제", "생존"]
+            .map(|text| {
+                Paragraph::with_runs(
+                    vec![Run::text(text, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )
+            })
+            .to_vec(),
+        PageSettings::a4(),
+    ));
+    let bytes = crate::HwpxEncoder::encode(
+        &doc.validate().unwrap(),
+        &crate::style_store_for_preset("default").unwrap(),
+        &ImageStore::new(),
+    )
+    .unwrap();
+    for note in ["footNote", "endNote"] {
+        let package = crate::raw_package::RawPackage::read(&bytes).unwrap();
+        let source =
+            std::str::from_utf8(package.read_entry("Contents/section0.xml").unwrap()).unwrap();
+        let start = source.find(&format!("<hp:{note}Pr>")).unwrap();
+        let end = source[start..].find(&format!("</hp:{note}Pr>")).unwrap()
+            + start
+            + format!("</hp:{note}Pr>").len();
+        let pr = &source[start..end];
+        let numbering_start = pr.find("<hp:numbering ").unwrap();
+        let numbering_end = pr[numbering_start..].find("/>").unwrap() + numbering_start + 2;
+        let numbering = &pr[numbering_start..numbering_end];
+        let duplicate = pr.replacen(numbering, &format!("{numbering}{numbering}"), 1);
+        let source = source.replacen(pr, &duplicate, 1).replacen("<hp:t>생존</hp:t>", &format!("<hp:ctrl><hp:{note} number='1'><hp:subList><hp:p><hp:run><hp:t>주석</hp:t></hp:run></hp:p></hp:subList></hp:{note}></hp:ctrl>"), 1);
+        let f = facts(std::slice::from_ref(&source));
+        assert!(
+            check_derived_values(
+                &f,
+                &[DerivedEdit::Delete { section: 0, paragraphs: &[FlowOrdinal(1)] }]
+            )
+            .is_err(),
+            "{note}"
+        );
+    }
 }

@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 문서의 배치 수치를 어떤 규칙으로 해석할지 나타내는 `LayoutProfile`을 더한다. 값은 기본값 `Hancom`과 `WordCompatible`이고 `#[non_exhaustive]`다. `Document::layout_profile()`로 읽고 `Document<Draft>::set_layout_profile()`로 정하며, `hwpforge_core::LayoutProfile`로 다시 공개한다. `WordCompatible`은 백분율 줄 간격을 글꼴의 자연 줄 높이에 대한 배수로 해석한다는 뜻을 담고, 스타일 수치나 문단·표 구조를 바꾸지 않는다. 문서 비교(`PartialEq`)에 프로필이 포함된다.
 - 문서 JSON에 `layout_profile` 필드(`"hancom"`, `"word_compatible"`)를 더한다. `Hancom`이면 필드를 쓰지 않아 기존 JSON 출력은 그대로다. 필드가 없으면 `Hancom`으로 읽고, 모르는 값은 거부한다. JSON schema에도 같은 필드가 들어간다.
 
+## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.20.0...hwpforge-core-v0.20.1) - 2026-11-16
+
+### Added
+
+- `XmlSource::digest`가 원문 XML의 SHA-256(원문을 토큰으로 나눌 때 이미 계산한 값)을 돌려준다. 편집 판정이 읽은 원문이 디코드할 때 기록한 원문과 같은 바이트인지 대조하는 데 쓴다. ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#341](https://github.com/ai-screams/HwpForge/pull/341))
+
 ## [0.20.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.19.1...hwpforge-core-v0.20.0) - 2026-11-07
 
 ### Added

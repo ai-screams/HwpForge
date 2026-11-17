@@ -1,4 +1,6 @@
 //! Re-encoded parts keep the caches of their own reading-order sections.
+#[path = "support/encoding.rs"]
+mod encoding;
 #[path = "support/package.rs"]
 mod package;
 #[path = "support/xml.rs"]
@@ -60,7 +62,7 @@ fn fixture(order: &[usize], mask: usize) -> Vec<u8> {
     package::splice_part(&bytes, "Contents/content.hpf", spine, &reordered)
 }
 
-fn check_matrix(edit: impl Fn(&[u8], usize) -> Vec<u8>) {
+fn check_matrix(preserving: bool, edit: impl Fn(&[u8], usize) -> Vec<u8>) {
     for order in [&[1, 0][..], &[2, 0, 1][..], &[1, 2, 0][..]] {
         for mask in 0..(1 << order.len()) {
             let input = fixture(order, mask);
@@ -69,7 +71,7 @@ fn check_matrix(edit: impl Fn(&[u8], usize) -> Vec<u8>) {
             for (section, &file) in order.iter().enumerate().filter(|(_, file)| **file != 0) {
                 let tree = xml::Element::parse(&package::part(
                     &output,
-                    &format!("Contents/section{section}.xml"),
+                    &format!("Contents/section{}.xml", if preserving { file } else { section }),
                 ));
                 assert_eq!(tree.children[1].find("hp:t").text, "뒤");
                 let lines = tree.descendants("hp:lineseg");
@@ -93,7 +95,7 @@ fn check_matrix(edit: impl Fn(&[u8], usize) -> Vec<u8>) {
 // 캐시 없는 구역은 0개, 있는 구역은 자기 vertpos를 단언한다.
 #[test]
 fn set_cell_keeps_caches_in_reading_order_without_cross_section_transfer() {
-    check_matrix(|input, section| {
+    check_matrix(true, |input, section| {
         let result = HwpxCellEditor::set_cells_with_diagnostics(
             input,
             &[CellSpec {
@@ -110,6 +112,7 @@ fn set_cell_keeps_caches_in_reading_order_without_cross_section_transfer() {
             panic!("table")
         };
         assert_eq!(table.rows[0].cells[0].paragraphs[0].text_content(), "다");
+        encoding::assert_cell_patch(input, &result.value.bytes, section, 0, "다");
         result.value.bytes
     });
 }
@@ -132,7 +135,7 @@ fn specs(input: &[u8]) -> Vec<StampSpec> {
 // 이것을 실패시키는 것: carry 원본을 출력 파일명으로 조회하거나 legacy stamp가 원본 대신 캐시 없는 baseline을 carry에 전달.
 #[test]
 fn stamp_keeps_caches_in_reading_order_without_cross_section_transfer() {
-    check_matrix(|input, _| {
+    check_matrix(false, |input, _| {
         let result = HwpxStamper::stamp_with_diagnostics(input, &specs(input)).unwrap();
         assert_eq!(
             hwpforge_smithy_hwpx::HwpxFiller::list_fields(&result.value.bytes).unwrap().len(),
@@ -145,7 +148,7 @@ fn stamp_keeps_caches_in_reading_order_without_cross_section_transfer() {
 // 이것을 실패시키는 것: carry 원본을 출력 파일명으로 조회하거나 v2 stamp가 원본 대신 캐시 없는 baseline을 carry에 전달.
 #[test]
 fn stamp_v2_keeps_caches_in_reading_order_without_cross_section_transfer() {
-    check_matrix(|input, _| {
+    check_matrix(false, |input, _| {
         let plan = HwpxStamper::plan_bytes_v2(input).unwrap();
         let request = StampRequestV2 {
             schema_version: 2,

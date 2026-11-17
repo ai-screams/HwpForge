@@ -8,13 +8,13 @@
 //! Hancom previews, they remove Preview and report PREVIEW_REMOVED.
 //! Unchanged content keeps the original. Document re-encoding, such as header
 //! normalization or style rewriting, and older whole-document JSON are outside
-//! this guarantee. `set_cell` is a
-//! **regenerating** edit — it rebuilds the package — and therefore runs
-//! behind an admission gate and refuses to emit bytes when the encode
-//! reports semantic loss (code `ENCODE_SEMANTIC_LOSS`). That refusal is
-//! implemented in `smithy-hwpx`
-//! ([`CellEditError::SemanticLoss`](hwpforge_smithy_hwpx::CellEditError::SemanticLoss)),
-//! not here.
+//! this guarantee. `set_cell` preserves supported direct body-table cells
+//! with one paragraph and one Text run, including an empty run. It retains
+//! paragraph/table properties and source outside the text slot. Changed values
+//! remove existing Preview; equal values preserve the original bytes. If any
+//! cell cannot be preserved, the whole file uses the existing admission and
+//! regeneration checks. An encode losing meaning returns `ENCODE_SEMANTIC_LOSS`.
+//! Address and verification failures produce no output.
 //!
 //! # Warnings
 //!
@@ -27,7 +27,7 @@
 //! | [`fill`] | the name-resolution decode | encode warnings, including cleaned values and `PREVIEW_REMOVED` |
 //! | [`insert_para`] | the admission decode | encode warnings, including cleaned texts and `PREVIEW_REMOVED` |
 //! | [`delete_para`] | the admission decode | encode warnings (including `PREVIEW_REMOVED`), then advisory scan (`INDEX_MARK_REMOVED`) |
-//! | [`set_cell`] | the admission decode | texts cleaned of forbidden characters, then the successful encode's non-semantic warnings |
+//! | [`set_cell`] | the input decode, once | text cleanup, successful edit diagnostics, then one Preview-removal warning if applicable |
 //!
 //! "Cleaned of forbidden characters" means the edit removed, from a value
 //! the caller gave, characters XML 1.0 cannot represent (the C0 controls
@@ -39,7 +39,7 @@
 //! the edit does not reach.
 //!
 //! Each operation reports **one** decode, even though several run. The
-//! preserving patcher behind [`fill`] re-decodes the base once per touched
+//! preserving patcher behind [`fill`] and supported [`set_cell`] edits re-decodes the base once per touched
 //! section, [`delete_para`]'s advisory scan decodes it again, and the
 //! admission gate decodes its own no-op re-encode: every one of those reads
 //! either the same input a second time or a package the caller never
@@ -318,8 +318,12 @@ pub struct SetCellMeta {
 
 /// Replaces the text of grid-addressed table cells, all-or-nothing.
 ///
-/// This is a regenerating edit: the whole package is rebuilt behind the
-/// admission gate, and an encode that loses meaning produces no bytes.
+/// Supported direct body-table cells with one paragraph and one Text run
+/// preserve original XML outside their text slots, including unmodeled source.
+/// A batch containing an unsupported cell uses the existing admission and
+/// regeneration checks for the whole file. Address and verification errors
+/// produce no bytes. Input diagnostics occur once; a preserved header is not
+/// repaired. Changed values remove existing Preview and its connections.
 ///
 /// # Errors
 ///

@@ -2,8 +2,7 @@ use super::*;
 use crate::error::CodecStage;
 use crate::test_support::xml;
 
-#[path = "../../tests/support/package.rs"]
-mod package_support;
+use crate::cell_edit::test_package as package_support;
 
 fn zip(entries: &[(&str, usize)]) -> Vec<u8> {
     super::tests::zeros_zip(entries)
@@ -395,9 +394,21 @@ fn structural_noops_return_unchecked_input() {
 
 // 이것을 실패시키는 것: set-cell 출력 검사 제거, 고정 part 선언 누락, writer의 고정 part 중복.
 #[test]
-fn set_cell_declares_only_reencoded_document_parts() {
+fn set_cell_declares_only_changed_parts() {
     use crate::cell_edit::{CellSpec, CellTarget, HwpxCellEditor};
     let base = editable_package();
+    let preserving = HwpxCellEditor::set_cells(
+        &base,
+        &[CellSpec {
+            table: 0,
+            target: CellTarget::At(hwpforge_core::table::grid::GridCoord::new(0, 0)),
+            text: "value".into(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(observed_changes(), changes(&["Contents/section0.xml"]));
+    assert_public_cell_patch(&base, &preserving.bytes);
+    let base = package_support::two_text_runs(&base, "<hp:t/>");
     HwpxCellEditor::set_cells(
         &base,
         &[CellSpec {
@@ -546,13 +557,22 @@ fn media_survives_real_editors_and_rejects_overwrite() {
             }
         };
         let declaration = observed_changes();
-        expect_reencoded(declaration.clone(), true);
+        if editor == 0 {
+            assert_public_cell_patch(&base, &output);
+            assert_eq!(declaration, changes(&["Contents/section0.xml"]));
+        } else {
+            expect_reencoded(declaration.clone(), true);
+        }
         RawPackage::verify_output(&base, &output, &declaration).unwrap();
         for path in
             ["Contents/masterpage0.xml", "Contents/masterpage1.xml", "Contents/masterpage2.xml"]
         {
             let rewritten = package_support::splice_part(&output, path, "watermark", "rebuilt");
-            RawPackage::verify_output(&base, &rewritten, &declaration).unwrap();
+            if editor == 0 {
+                rejects(&base, &rewritten, &declaration, "payload changed");
+            } else {
+                RawPackage::verify_output(&base, &rewritten, &declaration).unwrap();
+            }
         }
         for path in
             ["BinData/swatch.png", "BinData/ole1.ole", "Chart/chart1.xml", "Chart/chart2.xml"]
@@ -593,6 +613,20 @@ fn reencode_rejects_charts_referenced_out_of_name_order() {
     package.entries[first].bytes = chart;
     assert!(package.entries[first].bytes != package.entries[second].bytes);
     let base = package.write().unwrap();
+    let output = HwpxCellEditor::set_cells(
+        &base,
+        &[CellSpec {
+            table: 0,
+            target: CellTarget::At(hwpforge_core::table::grid::GridCoord::new(0, 0)),
+            text: "value".into(),
+        }],
+    )
+    .unwrap();
+    assert_public_cell_patch(&base, &output.bytes);
+    for part in ["Chart/chart1.xml", "Chart/chart2.xml"] {
+        assert_eq!(package_support::part(&output.bytes, part), package_support::part(&base, part));
+    }
+    let base = package_support::two_text_runs(&base, "<hp:t/>");
     let error = HwpxCellEditor::set_cells(
         &base,
         &[CellSpec {
@@ -605,4 +639,26 @@ fn reencode_rejects_charts_referenced_out_of_name_order() {
     let CellEditError::Codec(failure) = error else { panic!("{error:?}") };
     assert_eq!(failure.stage, CodecStage::Verification);
     assert!(failure.detail.contains("'Chart/chart1.xml': payload changed"), "{failure:?}");
+}
+
+fn assert_public_cell_patch(base: &[u8], output: &[u8]) {
+    let decoded = crate::HwpxDecoder::decode(base).unwrap();
+    let source = &decoded.document.sections()[0];
+    let metadata = crate::HwpxPatcher::export_section_preservation(base, 0, source).unwrap();
+    let mut replacement = source.clone();
+    let table = replacement
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| &mut p.runs)
+        .find_map(|run| match &mut run.content {
+            hwpforge_core::RunContent::Table(table) => Some(table),
+            _ => None,
+        })
+        .unwrap();
+    table.rows[0].cells[0].paragraphs[0].runs[0].content =
+        hwpforge_core::RunContent::Text("value".into());
+    let patched =
+        crate::HwpxPatcher::patch_section_preserving(base, 0, &replacement, None, Some(&metadata))
+            .unwrap();
+    assert_eq!(package_support::section_xml(output), package_support::section_xml(&patched));
 }

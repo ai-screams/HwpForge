@@ -1,4 +1,9 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod cell_package;
+
 #[path = "support/document.rs"]
 mod document;
 use document::text_para;
@@ -30,7 +35,16 @@ fn editable() -> Vec<u8> {
     let width = HwpUnit::new(8000).expect("width");
     let table = Table::new(vec![TableRow::new(vec![
         TableCell::new(vec![text_para("성명")], width),
-        TableCell::new(vec![text_para("")], width),
+        TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::text("A", CharShapeIndex::new(0)),
+                    Run::text("B", CharShapeIndex::new(1)),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            width,
+        ),
     ])]);
     let mut host = Paragraph::new(ParaShapeIndex::new(0));
     host.add_run(Run::table(table, CharShapeIndex::new(0)));
@@ -42,6 +56,9 @@ fn editable() -> Vec<u8> {
     doc.add_section(section);
     let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
     styles.push_char_shape(HwpxCharShape::default());
+    let mut second = HwpxCharShape::default();
+    second.bold = true;
+    styles.push_char_shape(second);
     styles.push_para_shape(HwpxParaShape::default());
     let bytes =
         HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
@@ -121,4 +138,26 @@ fn a_mixed_header_is_refused_by_the_editors() {
         assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{surface}: {err}");
         assert!(err.to_string().contains("begin_num"), "{surface}: {err}");
     }
+}
+
+// 이것을 실패시키는 것: 한 슬롯 칸도 재인코드하여 header의 0을 고치기.
+#[test]
+fn single_run_cell_keeps_the_original_header_and_repair_diagnostic() {
+    let source = editable();
+    let source = cell_package::splice(
+        &source,
+        "<hp:t>A</hp:t></hp:run><hp:run charPrIDRef=\"1\"><hp:t>B</hp:t>",
+        "<hp:t/>",
+    );
+    let zero = with_header_numbers(
+        &source,
+        r#"<hh:beginNum page="0" footnote="1" endnote="1" pic="0" tbl="0" equation="0"/>"#,
+    );
+    let output = edit_cell(&zero).unwrap();
+    cell_encoding::assert_cell_patch(&zero, &output.bytes, 0, 1, "류한율");
+    assert_eq!(
+        cell_package::part(&output.bytes, "Contents/header.xml"),
+        cell_package::part(&zero, "Contents/header.xml")
+    );
+    assert_eq!(output.warnings.iter().filter(|w| w.info().code == "BEGIN_NUM_REPAIRED").count(), 1);
 }

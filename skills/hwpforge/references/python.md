@@ -65,10 +65,10 @@ res.document.save("form.filled.hwpx")                  # new file
 try:
     Document.open("table.hwpx").set_cell(table=0, at="0,0", text="x")   # at is a "r,c" string; a tuple is a TypeError
 except HwpForgeError as e:
-    print(e.code)                                      # INPUT_ENTRIES_NOT_CARRIED on a 한컴-saved file
+    print(e.code)                                      # INPUT_ENTRIES_NOT_CARRIED outside the preserving subset
 ```
 
-Changing cell text on a 한컴-saved file goes through `export_section` → edit → `patch`:
+For cells outside the set_cell preserving subset, use `export_section` → edit → `patch`:
 
 ```python
 import json
@@ -105,6 +105,8 @@ Editing operations (`fill`, `patch`, `set_cell`, `insert_para`, `delete_para`, `
 | `templates()`, `schema(*, kind="document")`                                   | report                                                             |
 
 Python names some refusals differently from the CLI (for example `INPUT_ENTRIES_NOT_CARRIED` where the CLI says `INPUT_ENTRIES_NOT_CARRIED`) — see [errors.md](errors.md).
+
+When every requested cell is in a direct body table with one paragraph and one Text run (including an empty run), and its source location and header can be preserved, set-cell changes only its text slot. Paragraph and table properties and unmodeled source outside the slot survive. Changed values remove existing Preview and its connections with PREVIEW_REMOVED; unchanged values return the original bytes. Input diagnostics appear once and do not imply header repair. If any cell is outside this subset or the text splice is unsupported, the whole file uses the existing round-trip and package-preservation checks and re-encoding. Address errors and verification failures return errors.
 
 ## HWP5 input and loss acceptance
 

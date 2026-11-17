@@ -137,11 +137,11 @@ Reply in Korean, in this order:
 3. What was not checked (for example the visual check, coloured guide text, and any 알려진 한계 that applies).
 4. One line: the file was not changed; the main hwpforge skill can make the fixes.
 
-| Finding                                       | Fix path                                                                                                                  |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Unfilled 누름틀                               | `fill` with the value (main skill)                                                                                        |
-| Unchecked box, blank, guidance text           | edit the text: `to-json --section N` → `patch` (main skill), or in 한컴. Not `set-cell`: it refuses 한컴-saved files      |
-| Memo                                          | delete it in 한컴                                                                                                         |
-| Author, title, subject, description, keywords | change them in 한컴's 문서 정보, then re-save                                                                             |
-| Last saved by                                 | recorded when the file is saved, not typed by the user; ask whether that name may go out. Changing it is outside HwpForge |
-| Layout, visual check                          | open in 한컴 (or the PDF) and check pages and line breaks                                                                 |
+| Finding                                       | Fix path                                                                                                                                                      |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unfilled 누름틀                               | `fill` with the value (main skill)                                                                                                                            |
+| Unchecked box, blank, guidance text           | edit the text: `to-json --section N` → `patch` (main skill), or in 한컴. `set-cell` also supports direct body-table cells with one paragraph and one Text run |
+| Memo                                          | delete it in 한컴                                                                                                                                             |
+| Author, title, subject, description, keywords | change them in 한컴's 문서 정보, then re-save                                                                                                                 |
+| Last saved by                                 | recorded when the file is saved, not typed by the user; ask whether that name may go out. Changing it is outside HwpForge                                     |
+| Layout, visual check                          | open in 한컴 (or the PDF) and check pages and line breaks                                                                                                     |

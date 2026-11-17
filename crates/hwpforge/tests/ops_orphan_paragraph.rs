@@ -1,4 +1,6 @@
 #![cfg(feature = "ops-hwpx")]
+#[path = "../../hwpforge-smithy-hwpx/tests/support/encoding.rs"]
+mod cell_encoding;
 
 #[path = "support/document.rs"]
 mod document;
@@ -68,18 +70,18 @@ fn a_paragraph_with_content_outside_a_run_is_reported_lost() {
         let lost = lost_kinds(&bytes);
         assert_eq!(lost.len(), 1, "{label}: {lost:?}");
         assert!(lost[0].contains("paragraph_content"), "{label}: {lost:?}");
+        // 이것을 실패시키는 것: 한 슬롯 칸에도 재인코드 admission을 적용하기.
+        let output = set_cell(
+            &bytes,
+            &SetCellOptions::default().with_table(0).with_at("0,1").with_text("쇠부리"),
+        )
+        .unwrap();
+        assert!(output.warnings.iter().any(|w| w.info().code == "CONTENT_LOST"));
+        assert_eq!(lost_kinds(&output.bytes), lost);
+        cell_encoding::assert_cell_patch(&bytes, &output.bytes, 0, 1, "쇠부리");
         // The edit surfaces refuse it like any semantic loss.
         for (surface, err) in [
             ("restyle", restyle(&bytes, &opts).map(|_| ()).unwrap_err()),
-            (
-                "set-cell",
-                set_cell(
-                    &bytes,
-                    &SetCellOptions::default().with_table(0).with_at("0,1").with_text("쇠부리"),
-                )
-                .map(|_| ())
-                .unwrap_err(),
-            ),
             ("stamp", stamp_all(&bytes).map(|_| ()).unwrap_err()),
         ] {
             assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{label} {surface}: {err}");

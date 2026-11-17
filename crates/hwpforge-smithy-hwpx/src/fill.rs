@@ -1038,14 +1038,14 @@ mod tests {
             let own = xml[..at].matches("</hp:p>").count();
             let filled = fill_xml(&bytes, &[(name.as_str(), "값")])
                 .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
-            // 본문과 직접 칸만 한 줄 증거로 자기 캐시를 유지한다.
+            // 본문·직접 칸·본문 표 안 한 단계 중첩 칸은 한 줄 증거로 자기 캐시를 유지한다.
             // 다른 내부 문단은 기존 흐름 꼬리와 host 사슬 제거를 따른다.
             let left = caches(&filled);
-            // 이것을 실패시키는 것: 본문/직접 칸 후보 제외.
+            // 이것을 실패시키는 것: 본문/직접 칸/한 단계 중첩 칸 후보 제외.
             assert_eq!(
                 left.contains(&own),
-                name == "body" || name == "cell",
-                "{name}: only a proven body or direct-cell paragraph keeps its own cache: {left:?}"
+                matches!(name.as_str(), "body" | "cell" | "inner_cell"),
+                "{name}: only a proven body, direct-cell or one-level nested-cell paragraph keeps its own cache: {left:?}"
             );
             assert!(left.iter().all(|k| all.contains(k)), "{name}");
             if name != "body" {

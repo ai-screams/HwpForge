@@ -1,7 +1,8 @@
-//! Stored result freshness and table-height invalidations in original coordinates.
+//! Stored result freshness in original coordinates.
 //! Deliberately private: callers must first establish field/reference and admission safety.
 use crate::cache_flow::{source_start, ParagraphFlow};
 use crate::line_keep::{NamespaceBindings, Tag};
+use crate::wire_xml::{PARAGRAPH_NS, SECTION_NS};
 use crate::{HwpxError, HwpxResult};
 use hwpforge_core::source_xml::{XmlElement, XmlSource};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -34,12 +35,6 @@ pub(crate) enum DerivedEdit<'a> {
         proven: &'a [bool],
         slots: &'a [(Range<usize>, String)],
     },
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HeightInvalidation {
-    pub(crate) section: usize,
-    pub(crate) table_start: usize,
-    pub(crate) value: Range<usize>,
 }
 
 fn invalid() -> HwpxError {
@@ -216,19 +211,6 @@ impl<'a> DerivedFacts<'a> {
         let p = map.paragraphs.get(index).ok_or_else(invalid)?;
         part.ordinal_at(p.outer.start, true)
     }
-    #[allow(dead_code, reason = "insert retains its existing admission contract")]
-    pub(crate) fn insertion_boundary(
-        &self,
-        section: usize,
-        index: usize,
-    ) -> HwpxResult<FlowBoundary> {
-        let part = self.section(section)?;
-        let map = part.map.ok_or_else(invalid)?;
-        if index == map.paragraphs.len() {
-            return Ok(FlowBoundary::EndOfBody);
-        }
-        Ok(FlowBoundary::Before(self.body_ordinal(section, index)?))
-    }
 }
 
 impl<'a> Part<'a> {
@@ -272,90 +254,14 @@ impl<'a> Part<'a> {
             .collect();
         // Only decoder-validated sections with a bound root and no local-name
         // clues can avoid semantic collection. Unverified/aliased/rebound parts parse.
-        if map.is_some() && safe_negative(&xml) {
-            let tags = vec![Tag::default(); source.elements().len()];
-            return Ok(Self {
-                section,
-                xml,
-                source,
-                by_start,
-                flow,
-                tables,
-                tags,
-                note_policies: [NotePolicy::Unknown; 2],
-                fields: BTreeMap::new(),
-                map,
-                text_spans,
-            });
-        }
-        let elements = source.elements();
-        let mut tags = vec![Tag::default(); elements.len()];
-        let empty_bindings = Rc::new(NamespaceBindings::new());
-        let mut bindings = vec![empty_bindings; elements.len()];
-        for (id, e) in elements.iter().enumerate().skip(1) {
-            let outer = e.outer();
-            let end = e.inner().map_or(outer.end, |r| r.start);
-            let fragment = xml.get(outer.start..end).ok_or_else(invalid)?;
-            let start = source_start(&xml, e).ok_or_else(invalid)?;
-            let declares = start.attributes().try_fold(false, |declares, a| {
-                let a = a.map_err(|_| invalid())?;
-                Ok::<_, HwpxError>(
-                    declares || a.key.as_ref() == "xmlns" || a.key.as_ref().starts_with("xmlns:"),
-                )
-            })?;
-            let (mut tag, scope) = if declares {
-                let (tag, scope) = Tag::opening_with_bindings(fragment, &bindings[e.parent()])
-                    .ok_or_else(invalid)?;
-                (tag, Rc::new(scope))
-            } else {
-                (
-                    Tag::opening(fragment, &bindings[e.parent()]).ok_or_else(invalid)?,
-                    bindings[e.parent()].clone(),
-                )
-            };
-            let (prefix, _) =
-                e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
-            tag.name = if scope.get(prefix).map(AsRef::as_ref) == Some(namespace(e.name())) {
-                e.name().into()
-            } else {
-                format!("{{foreign}}{}", e.name())
-            };
-            tags[id] = tag;
-            bindings[id] = scope;
-            crate::work::tick();
-        }
-        let mut values = BTreeMap::new();
-        crate::structural::xml_values::scan_fields(&xml, |start, kind, params| {
-            require(values.insert(start, (kind.to_owned(), params.clone())).is_none())
-        })?;
-        let mut fields = BTreeMap::new();
-        let mut open: HashMap<(usize, String), usize> = HashMap::new();
-        let mut seen_fields = BTreeSet::new();
-        for (id, e) in elements.iter().enumerate().skip(1) {
-            if candidate(e.name()) {
-                // Namespace-less fragments and foreign lookalikes are never R evidence.
-                let (prefix, _) =
-                    e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
-                let uri = bindings[id].get(prefix).map(AsRef::as_ref);
-                require(uri == Some(namespace(e.name())))?;
-            }
-            if e.name() == "fieldBegin" {
-                let (kind, params) = values.remove(&e.outer().start).ok_or_else(invalid)?;
-                let key = (field_flow(elements, id), attr(&tags[id], "id")?.to_owned());
-                require(seen_fields.insert(key.clone()))?;
-                require(open.insert(key, id).is_none())?;
-                fields.insert(id, Field { kind, params, end: 0, display: false });
-            } else if e.name() == "fieldEnd" {
-                let key = (field_flow(elements, id), attr(&tags[id], "beginIDRef")?.to_owned());
-                let begin = open.remove(&key).ok_or_else(invalid)?;
-                let f = fields.get_mut(&begin).ok_or_else(invalid)?;
-                f.end = id;
-                f.display = elements[begin + 1..id]
-                    .iter()
-                    .any(|t| t.name() == "t" && t.inner().is_some_and(|r| !xml[r].is_empty()));
-            }
-        }
-        require(open.is_empty() && values.is_empty())?;
+        let negative = map.is_some() && safe_negative(&xml);
+        let (tags, fields) = if negative {
+            (vec![Tag::default(); source.elements().len()], BTreeMap::new())
+        } else {
+            let (tags, bindings) = resolve_tags(&xml, &source)?;
+            let fields = pair_fields(&xml, source.elements(), &tags, &bindings)?;
+            (tags, fields)
+        };
         let mut part = Self {
             section,
             xml,
@@ -369,7 +275,9 @@ impl<'a> Part<'a> {
             text_spans,
             note_policies: [NotePolicy::Unknown; 2],
         };
-        part.note_policies = part.collect_note_policies();
+        if !negative {
+            part.note_policies = part.collect_note_policies();
+        }
         Ok(part)
     }
     // Each part owns one policy per note kind; all stored number representations reuse it.
@@ -429,22 +337,6 @@ impl<'a> Part<'a> {
         names.reverse();
         Ok(names)
     }
-    fn body_bookmark_target(&self, id: usize) -> HwpxResult<()> {
-        require(self.section.is_some())?;
-        let mut at = id;
-        while at != 0 {
-            let element = &self.source.elements()[at];
-            let tag = &self.tags[at];
-            let independent = matches!(
-                element.name(),
-                "header" | "footer" | "masterPage" | "footNote" | "endNote" | "memo"
-            ) || element.name() == "fieldBegin"
-                && tag.attrs.get("type").is_some_and(|kind| kind == "MEMO");
-            require(!independent && tag.name == element.name())?;
-            at = element.parent();
-        }
-        Ok(())
-    }
     fn one_child(&self, id: usize, name: &str) -> HwpxResult<usize> {
         let matches: Vec<_> = self.source.elements()[id]
             .children()
@@ -456,6 +348,87 @@ impl<'a> Part<'a> {
         require(self.tags[matches[0]].name == name)?;
         Ok(matches[0])
     }
+}
+fn resolve_tags(
+    xml: &str,
+    source: &XmlSource,
+) -> HwpxResult<(Vec<Tag>, Vec<Rc<NamespaceBindings>>)> {
+    let elements = source.elements();
+    let mut tags = vec![Tag::default(); elements.len()];
+    let empty_bindings = Rc::new(NamespaceBindings::new());
+    let mut bindings = vec![empty_bindings; elements.len()];
+    for (id, e) in elements.iter().enumerate().skip(1) {
+        let outer = e.outer();
+        let end = e.inner().map_or(outer.end, |r| r.start);
+        let fragment = xml.get(outer.start..end).ok_or_else(invalid)?;
+        let start = source_start(xml, e).ok_or_else(invalid)?;
+        let declares = start.attributes().try_fold(false, |declares, a| {
+            let a = a.map_err(|_| invalid())?;
+            Ok::<_, HwpxError>(
+                declares || a.key.as_ref() == "xmlns" || a.key.as_ref().starts_with("xmlns:"),
+            )
+        })?;
+        let (mut tag, scope) = if declares {
+            let (tag, scope) =
+                Tag::opening_with_bindings(fragment, &bindings[e.parent()]).ok_or_else(invalid)?;
+            (tag, Rc::new(scope))
+        } else {
+            (
+                Tag::opening(fragment, &bindings[e.parent()]).ok_or_else(invalid)?,
+                bindings[e.parent()].clone(),
+            )
+        };
+        let (prefix, _) = e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
+        tag.name = if scope.get(prefix).map(AsRef::as_ref) == Some(namespace(e.name())) {
+            e.name().into()
+        } else {
+            format!("{{foreign}}{}", e.name())
+        };
+        tags[id] = tag;
+        bindings[id] = scope;
+        crate::work::tick();
+    }
+    Ok((tags, bindings))
+}
+fn pair_fields(
+    xml: &str,
+    elements: &[XmlElement],
+    tags: &[Tag],
+    bindings: &[Rc<NamespaceBindings>],
+) -> HwpxResult<BTreeMap<usize, Field>> {
+    let mut values = BTreeMap::new();
+    crate::structural::xml_values::scan_fields(xml, |start, kind, params| {
+        require(values.insert(start, (kind.to_owned(), params.clone())).is_none())
+    })?;
+    let mut fields = BTreeMap::new();
+    let mut open: HashMap<(usize, String), usize> = HashMap::new();
+    let mut seen_fields = BTreeSet::new();
+    for (id, e) in elements.iter().enumerate().skip(1) {
+        if candidate(e.name()) {
+            // Namespace-less fragments and foreign lookalikes are never R evidence.
+            let (prefix, _) =
+                e.qualified_name().split_once(':').unwrap_or(("", e.qualified_name()));
+            let uri = bindings[id].get(prefix).map(AsRef::as_ref);
+            require(uri == Some(namespace(e.name())))?;
+        }
+        if e.name() == "fieldBegin" {
+            let (kind, params) = values.remove(&e.outer().start).ok_or_else(invalid)?;
+            let key = (field_flow(elements, id), attr(&tags[id], "id")?.to_owned());
+            require(seen_fields.insert(key.clone()))?;
+            require(open.insert(key, id).is_none())?;
+            fields.insert(id, Field { kind, params, end: 0, display: false });
+        } else if e.name() == "fieldEnd" {
+            let key = (field_flow(elements, id), attr(&tags[id], "beginIDRef")?.to_owned());
+            let begin = open.remove(&key).ok_or_else(invalid)?;
+            let f = fields.get_mut(&begin).ok_or_else(invalid)?;
+            f.end = id;
+            f.display = elements[begin + 1..id]
+                .iter()
+                .any(|t| t.name() == "t" && t.inner().is_some_and(|r| !xml[r].is_empty()));
+        }
+    }
+    require(open.is_empty() && values.is_empty())?;
+    Ok(fields)
 }
 fn safe_negative(xml: &str) -> bool {
     let Some((root, scope)) = Tag::opening_with_bindings(xml, &Default::default()) else {
@@ -474,7 +447,7 @@ fn safe_negative(xml: &str) -> bool {
             _ => return false,
         }
     }
-    let bound = scope.values().any(|v| v.as_ref() == "http://www.hancom.co.kr/hwpml/2011/section");
+    let bound = scope.values().any(|v| v.as_ref() == SECTION_NS);
     root.name == "sec"
         && bound
         && !xml.contains("<!")
@@ -498,11 +471,11 @@ fn safe_negative(xml: &str) -> bool {
 }
 fn namespace(name: &str) -> &str {
     if name == "sec" {
-        "http://www.hancom.co.kr/hwpml/2011/section"
+        SECTION_NS
     } else if matches!(name, "numCache" | "strCache") {
         "http://schemas.openxmlformats.org/drawingml/2006/chart"
     } else {
-        "http://www.hancom.co.kr/hwpml/2011/paragraph"
+        PARAGRAPH_NS
     }
 }
 fn candidate(name: &str) -> bool {
@@ -556,7 +529,6 @@ fn field_flow(elements: &[XmlElement], mut id: usize) -> usize {
 }
 
 mod table_ledger;
-mod table_profiles;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -766,6 +738,7 @@ pub(crate) struct DerivedEffects<'facts, 'source> {
 }
 
 struct AffectedTables {
+    #[cfg(test)]
     by_table: Vec<bool>,
     // Sorted starts with prefix maximum ends also cover nested table ranges.
     starts_and_max_ends: Vec<(usize, usize)>,
@@ -787,7 +760,11 @@ impl AffectedTables {
             max_end = max_end.max(*end);
             *end = max_end;
         }
-        Self { by_table, starts_and_max_ends }
+        Self {
+            #[cfg(test)]
+            by_table,
+            starts_and_max_ends,
+        }
     }
 
     fn overlaps(&self, span: &Range<usize>) -> bool {
@@ -819,7 +796,109 @@ impl<'source> DerivedFacts<'source> {
         Ok(DerivedEffects { facts: self, effects, affected_tables, flow, kinds, page_restart })
     }
 }
+#[cfg(test)]
+thread_local! {pub(crate) static OUTLINE_BATCHES: std::cell::Cell<usize> = const {std::cell::Cell::new(0)};}
+
 impl DerivedEffects<'_, '_> {
+    /// Selection loss is safe only outside every edited section, with a wholly plain deletion batch.
+    pub(crate) fn check_section_outline_losses(
+        &self,
+        decoded: &crate::HwpxDocument,
+        locations: &[(usize, Range<usize>, [u8; 32])],
+    ) -> HwpxResult<()> {
+        #[cfg(test)]
+        OUTLINE_BATCHES.with(|count| count.set(count.get() + 1));
+        use crate::decoder::source_map::section_property_origin;
+        use sha2::Digest;
+        let parts: HashMap<_, _> = self
+            .facts
+            .parts
+            .iter()
+            .filter_map(|part| {
+                crate::work::tick();
+                part.section.map(|section| (section, part))
+            })
+            .collect();
+        let mut seen = BTreeSet::new();
+        for (section, span, digest) in locations {
+            require(seen.insert(section))?;
+            require(!self.effects.contains_key(section))?;
+            let part = parts.get(section).ok_or_else(invalid)?;
+            let id = part.element_at(span.start)?;
+            let element = &part.source.elements()[id];
+            require(element.outer() == *span)?;
+            require(
+                <[u8; 32]>::from(sha2::Sha256::digest(
+                    part.xml.as_bytes().get(span.clone()).ok_or_else(invalid)?,
+                )) == *digest,
+            )?;
+            crate::work::tick_n(part.source.elements().len());
+            require(section_property_origin(&part.xml, &part.source) == Some(id))?;
+            let owner = part
+                .source
+                .element(element.parent())
+                .and_then(|run| part.source.element(run.parent()))
+                .ok_or_else(invalid)?;
+            let map = part.map.ok_or_else(invalid)?;
+            require(
+                map.paragraphs
+                    .iter()
+                    .filter(|p| {
+                        crate::work::tick();
+                        p.outer == owner.outer()
+                    })
+                    .count()
+                    == 1,
+            )?;
+        }
+        // Intentional second heading check: outline-loss acceptance stays sound on its own,
+        // even though every preserving delete runs the same check again afterwards.
+        self.check_deleted_plain_headings(decoded)
+    }
+
+    pub(crate) fn check_deleted_plain_headings(
+        &self,
+        decoded: &crate::HwpxDocument,
+    ) -> HwpxResult<()> {
+        use crate::decoder::source_map::original_opening;
+        let parts: HashMap<_, _> = self
+            .facts
+            .parts
+            .iter()
+            .filter_map(|part| part.section.map(|section| (section, part)))
+            .collect();
+        // Match original body paragraph ranges to Core indices once per edited section.
+        for (&section, effect) in &self.effects {
+            let part = parts.get(&section).ok_or_else(invalid)?;
+            let map = part.map.ok_or_else(invalid)?;
+            let paragraphs =
+                &decoded.document.sections().get(section).ok_or_else(invalid)?.paragraphs;
+            require(map.paragraphs.len() == paragraphs.len())?;
+            let mut indices = HashMap::new();
+            for (index, paragraph) in map.paragraphs.iter().enumerate() {
+                crate::work::tick();
+                require(
+                    indices.insert((paragraph.outer.start, paragraph.outer.end), index).is_none(),
+                )?;
+            }
+            require(!effect.deleted.is_empty())?;
+            require(effect.deleted.len() == effect.changed.len())?;
+            for span in &effect.deleted {
+                crate::work::tick();
+                let index = *indices.get(&(span.start, span.end)).ok_or_else(invalid)?;
+                let ordinal = part.ordinal_at(span.start, true)?;
+                require(effect.changed.contains(&ordinal.0))?;
+                let element = &part.source.elements()[part.element_at(span.start)?];
+                let root = part.source.element(element.parent()).ok_or_else(invalid)?;
+                require(root.parent() == 0)?;
+                let (_, scope) = original_opening(&part.xml, root, &NamespaceBindings::new())
+                    .ok_or_else(invalid)?;
+                let (tag, _) = original_opening(&part.xml, element, &scope).ok_or_else(invalid)?;
+                check_outline_plain_heading(&decoded.style_store, &paragraphs[index], &tag)?;
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn check_preserved_loss(
         &self,
         section: usize,
@@ -925,10 +1004,11 @@ impl DerivedEffects<'_, '_> {
 fn page_r(part: &Part<'_>, id: usize, kind: &str) -> HwpxResult<()> {
     require(part.section.is_some())?;
     let path = part.body_path(id)?;
-    let body = path == ["sec", "p", "run", "ctrl", "autoNum"];
     let footer =
         path == ["sec", "p", "run", "ctrl", "footer", "subList", "p", "run", "ctrl", "autoNum"];
-    require(body || kind == "PAGE" && footer)?;
+    // A move to another page can change digit count while the line cache survives.
+    // 이것을 실패시키는 것: 흐름 변경 때 본문 PAGE/TOTAL_PAGE 표시 허용.
+    require(kind == "PAGE" && footer)?;
     let format = part.one_child(id, "autoNumFormat")?;
     exact(
         &part.tags[format],
@@ -1012,7 +1092,7 @@ fn field_unchanged(
             }
             Ok(())
         }
-        "CROSSREF" => crossref_unchanged(changes, part, id, f),
+        "CROSSREF" => crossref_unchanged(changes, f),
         _ => Err(invalid()),
     }
 }
@@ -1059,12 +1139,7 @@ fn local_sum(params: &BTreeMap<String, String>) -> HwpxResult<bool> {
     }
     Ok(cell(a) && cell(b))
 }
-fn crossref_unchanged(
-    changes: &DerivedEffects<'_, '_>,
-    part: &Part<'_>,
-    id: usize,
-    f: &Field,
-) -> HwpxResult<()> {
+fn crossref_unchanged(changes: &DerivedEffects<'_, '_>, f: &Field) -> HwpxResult<()> {
     let facts = changes.facts;
     let effects = &changes.effects;
     use hwpforge_core::control::RefTarget;
@@ -1130,12 +1205,9 @@ fn crossref_unchanged(
             if !changes.flow {
                 return Ok(());
             }
-            require(part.section.is_some())?;
-            target_part.body_bookmark_target(target_id)?;
-            require(
-                matches!(kind, RefType::Bookmark)
-                    && part.body_path(id)? == ["sec", "p", "run", "ctrl", "fieldBegin"],
-            )
+            // A page move can change the displayed digit count in a cached body line.
+            // 이것을 실패시키는 것: 흐름 변경 때 본문 쪽 참조 표시 허용.
+            Err(invalid())
         }
         "OBJECT_TYPE_NUMBER" => {
             let number_kind = match kind {
@@ -1163,144 +1235,32 @@ fn crossref_unchanged(
     }
 }
 
-impl DerivedEffects<'_, '_> {
-    pub(crate) fn collect_height_invalidations(&self) -> HwpxResult<Vec<HeightInvalidation>> {
-        #[cfg(test)]
-        DECISIONS.with(|d| d.borrow_mut().push("heights"));
-        let facts = self.facts;
-        let effects = &self.effects;
-        let mut heights = Vec::new();
-        for (&section, effect) in effects {
-            let part = facts.section(section)?;
-            let affected = &self.affected_tables[&section].by_table;
-            for (table, record) in part.tables.tables.iter().enumerate() {
-                let survives = effect.survives(&record.outer)?;
-                if survives && affected[table] {
-                    if let Some(height) = height_for_table(part, table)? {
-                        heights.push(height);
-                    }
-                }
-            }
-        }
-        Ok(heights)
-    }
-}
-
-fn height_for_table(part: &Part<'_>, table: usize) -> HwpxResult<Option<HeightInvalidation>> {
-    let record = part.tables.tables.get(table).ok_or_else(invalid)?;
-    require(record.parent.is_none() && record.boundary == 0)?;
-    let id = part.element_at(record.outer.start)?;
-    require(part.body_path(id)? == ["sec", "p", "run", "tbl"])?;
-    require(table_profiles::matches(part, id))?;
-    let sz = part.one_child(id, "sz")?;
-    let elements = part.source.elements();
-    let start = source_start(&part.xml, &elements[sz]).ok_or_else(invalid)?;
-    let mut height = None;
-    for a in start.attributes() {
-        let a = a.map_err(|_| invalid())?;
-        if a.key.as_ref() == "height" {
-            let number = a
-                .normalized_value(quick_xml::XmlVersion::Explicit1_0)
-                .map_err(|_| invalid())?
-                .parse::<u32>()
-                .map_err(|_| invalid())?;
-            let std::borrow::Cow::Borrowed(raw) = a.value else {
-                return Err(invalid());
-            };
-            let offset = (raw.as_ptr() as usize)
-                .checked_sub(part.xml.as_ptr() as usize)
-                .ok_or_else(invalid)?;
-            let range = offset..offset.checked_add(raw.len()).ok_or_else(invalid)?;
-            require(
-                range.start >= elements[sz].outer().start
-                    && range.end <= elements[sz].outer().end
-                    && part.xml.get(range.clone()) == Some(raw),
-            )?;
-            require(height.replace((number, range)).is_none())?;
-        }
-    }
-    let Some((number, value)) = height else {
-        return Ok(None);
-    };
-    if number == 0 {
-        return Ok(None);
-    }
-    Ok(Some(HeightInvalidation {
-        section: part.section.ok_or_else(invalid)?,
-        table_start: elements[id].outer().start,
-        value,
-    }))
-}
-
-/// Revalidate independently supplied authorizations before adding them to either plan.
-pub(crate) fn append_height_replacements(
-    xml: &str,
-    map: &crate::decoder::source_map::SourceMap,
-    section: usize,
-    heights: &[HeightInvalidation],
-    edits: &mut Vec<(Range<usize>, String)>,
+fn check_outline_plain_heading(
+    store: &crate::HwpxStyleStore,
+    paragraph: &hwpforge_core::Paragraph,
+    tag: &Tag,
 ) -> HwpxResult<()> {
-    if heights.is_empty() {
-        return Ok(());
+    use hwpforge_core::StyleLookup;
+    use hwpforge_foundation::{HeadingType, ParaShapeIndex};
+    let id = |name: &str| -> HwpxResult<u32> {
+        tag.attrs.get(name).ok_or_else(invalid)?.parse().map_err(|_| invalid())
+    };
+    let direct = ParaShapeIndex::new(id("paraPrIDRef")? as usize);
+    require(paragraph.para_shape_id == direct)?;
+    let position = id("styleIDRef")? as usize;
+    let reference = paragraph.style_ref.ok_or_else(invalid)?;
+    require(store.style_position(reference)? == position)?;
+    let style = store.style(position)?;
+    require(style.style_type == "PARA")?;
+    for shape in [
+        store.para_shape(direct)?,
+        store.para_shape(ParaShapeIndex::new(style.para_pr_id_ref as usize))?,
+    ] {
+        require(matches!(
+            (shape.heading_type, store.para_list_ref(shape)),
+            (HeadingType::None, Ok(None))
+        ))?;
     }
-    let source = XmlSource::read(xml).map_err(|_| invalid())?.1;
-    require(*source.digest() == map.source_digest)?;
-    let by_start: HashMap<_, _> = source
-        .elements()
-        .iter()
-        .enumerate()
-        .skip(1)
-        .map(|(id, e)| {
-            crate::work::tick();
-            (e.outer().start, id)
-        })
-        .collect();
-    let ledger = table_ledger::TableLedger::from_source(&source, &map.cache_flow)?;
-    let tables: HashMap<_, _> = ledger
-        .tables
-        .iter()
-        .map(|t| {
-            crate::work::tick();
-            (t.outer.start, &t.outer)
-        })
-        .collect();
-    for height in heights {
-        crate::work::tick();
-        require(height.section == section)?;
-        let outer = tables.get(&height.table_start).ok_or_else(invalid)?;
-        let id = by_start.get(&height.table_start).ok_or_else(invalid)?;
-        let table = &source.elements()[*id];
-        require(table.name() == "tbl" && table.outer() == **outer)?;
-        let sizes: Vec<_> = table
-            .children()
-            .iter()
-            .map(|&i| &source.elements()[i])
-            .filter(|e| e.name() == "sz")
-            .collect();
-        require(sizes.len() == 1)?;
-        let start = source_start(xml, sizes[0]).ok_or_else(invalid)?;
-        let mut matched = false;
-        for a in start.attributes() {
-            let a = a.map_err(|_| invalid())?;
-            if a.key.as_ref() == "height" {
-                let normalized = a
-                    .normalized_value(quick_xml::XmlVersion::Explicit1_0)
-                    .map_err(|_| invalid())?;
-                let std::borrow::Cow::Borrowed(raw) = a.value else {
-                    return Err(invalid());
-                };
-                let offset = (raw.as_ptr() as usize)
-                    .checked_sub(xml.as_ptr() as usize)
-                    .ok_or_else(invalid)?;
-                require(
-                    height.value == (offset..offset + raw.len())
-                        && normalized.parse::<u32>().is_ok_and(|n| n > 0),
-                )?;
-                matched = true;
-            }
-        }
-        require(matched)?;
-        edits.push((height.value.clone(), "0".into()));
-    }
-    Ok(())
+    require(paragraph.heading_level.is_none())?;
+    require(store.style_heading_level(reference).is_none())
 }
