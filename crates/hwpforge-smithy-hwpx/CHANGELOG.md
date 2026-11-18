@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 원본을 보존하는 편집(`HwpxEncoder::encode_with_base`, `from-json --base`, 스탬핑, 구조 편집)이 base와 조판 프로필이 다른 문서를 거부한다. 오류는 기존 `InvalidStructure`(`/layout_profile`) 또는 `NotRoundTripSafe`(`diff_path`가 `/layout_profile`)다. base 없이 인코드할 때 디코드한 문서의 프로필을 바꾸면 줄 조판 캐시를 쓰지 않는다.
 - `patch`·`fill`·`set-cell`이 줄 조판 캐시를 남길 때 쓰는 한 줄 폭 입증을 `Hancom` 프로필이면서 호환 설정이 한컴 표준인 문서로 제한한다. Word 호환 문서와 호환 설정이 표준과 다른 문서는 이 입증으로 캐시를 남기지 않는다.
 
+### Fixed
+
+- import bridge에서 base 없이 직접 인코드하는 WordCompatible 본문·표 칸의 Cambria·Calibri Percentage 줄 간격을 비례 보정한다. 대상은 ASCII 인쇄 문자와 내용이 있는 내부 개행으로 제한하며 en dash·굽은 따옴표는 제외한다. 원래 배수 상태는 JSON으로 전달하지 않고 base 인코드에서 무시하므로 재인코드·편집은 출력 간격을 유지한다. 보정 때문에 요청된 줄 캐시를 억제하면 기존 캐시 폐기 경고로 보고한다.
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.0...hwpforge-smithy-hwpx-v0.20.1) - 2026-11-16
 
 한컴오피스가 저장한 HWPX의 `delete-para`와 `set-cell`을 원문 XML을 그대로 두는 방식으로 열고, 줄 조판 캐시를 남기는 범위를 바로잡은 릴리스다. 새로 거부되는 입력과 달라지는 출력은 "업그레이드 주의"에 모았다.

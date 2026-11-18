@@ -542,6 +542,33 @@ impl Resolver {
                 result
             };
             p.end_char_shape = Some(result.id);
+            if let Some(last) = p
+                .runs
+                .iter()
+                .rev()
+                .find(|run| run.content.as_text().is_some_and(|text| !text.is_empty()))
+            {
+                let text = &self.registry.char_shapes[last.char_shape_id.get()];
+                let mark = &self.registry.char_shapes[result.id.get()];
+                if (
+                    &text.font,
+                    &text.font_latin,
+                    &text.font_east_asian,
+                    text.size,
+                    text.bold,
+                    text.italic,
+                ) != (
+                    &mark.font,
+                    &mark.font_latin,
+                    &mark.font_east_asian,
+                    mark.size,
+                    mark.bold,
+                    mark.italic,
+                ) {
+                    warn(w, part, "pPr/rPr", Kind::ValueApproximated, "paragraph_mark_line_height", "retain_spacing",
+                        "Paragraph text and end mark use different effective fonts, size, or face; line height is retained")?;
+                }
+            }
             format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
             // An unresolved explicit mark makes the entire height unverified.
             if !exact && measure_height {

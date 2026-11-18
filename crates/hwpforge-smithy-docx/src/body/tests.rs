@@ -346,6 +346,7 @@ fn formatting_breaks_attributes_and_values_have_explicit_losses() {
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "omit", 1),
             ("DOCX_VALUE_APPROXIMATED", "unsupported_value", "preserve_source", 1),
             ("DOCX_ATTRIBUTE_OMITTED", "unsupported_attribute", "ignore", 1),
+            ("DOCX_VALUE_APPROXIMATED", "paragraph_mark_line_height", "retain_spacing", 1),
             ("DOCX_LIST_REFERENCE_LOST", "list_reference", "omit", 1),
         ]
     );

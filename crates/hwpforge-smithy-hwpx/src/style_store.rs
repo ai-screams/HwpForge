@@ -1201,6 +1201,10 @@ pub struct HwpxStyleStore {
     // Character references here are store-local, rebound once by the registry bridge.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) list_marker_layouts: BTreeMap<u32, ListMarkerLayout>,
+    // Original percentages exist only between an import bridge and direct output.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub(crate) imported_percentages: BTreeMap<u32, f64>,
 }
 
 #[derive(Deserialize)]
@@ -1244,6 +1248,7 @@ impl<'de> Deserialize<'de> for HwpxStyleStore {
             tabs: wire.tabs,
             header_fidelity: wire.header_fidelity,
             list_marker_layouts: wire.list_marker_layouts,
+            imported_percentages: BTreeMap::new(),
             style_positions: std::sync::Arc::new(wire.style_positions),
             style_references: Default::default(),
         };
@@ -1439,7 +1444,22 @@ impl HwpxStyleStore {
                         .into(),
             });
         }
-        build_store_from_registry_with(registry, style_set, ListHeadPolicy::PreserveEffective)
+        let mut built =
+            build_store_from_registry_with(registry, style_set, ListHeadPolicy::PreserveEffective)?;
+        for (shape, position) in registry.para_shapes.iter().zip(&built.para_shape_map) {
+            let original = shape.line_spacing_value;
+            if shape.line_spacing_type == LineSpacingType::Percentage
+                && original > 0.
+                && original.round() <= f64::from(i32::MAX)
+            {
+                let position =
+                    u32::try_from(position.get()).map_err(|_| HwpxError::InvalidStructure {
+                        detail: "paragraph shape position overflow".into(),
+                    })?;
+                built.store.imported_percentages.insert(position, original);
+            }
+        }
+        Ok(built)
     }
 
     // ── Fonts ────────────────────────────────────────────────────

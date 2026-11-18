@@ -1296,6 +1296,16 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
+        // A base already represents output spacing. Clear import state before
+        // list preparation and the full-store no-op equality check.
+        let mut base_store;
+        let style_store = if style_store.imported_percentages.is_empty() {
+            style_store
+        } else {
+            base_store = style_store.clone();
+            base_store.imported_percentages.clear();
+            &base_store
+        };
         let (marker_store, marker_warnings) =
             crate::list_marker_layout::prepare(document, style_store)?;
         let style_store = marker_store.as_ref();
@@ -1482,6 +1492,7 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         crate::HwpxDecoder::verify_document_source(document)?;
+        let requested_layout_cache = options.emit_layout_cache;
         let has_marker_requests = !style_store.list_marker_layouts.is_empty();
         let options =
             if has_marker_requests { options.with_emit_layout_cache(false) } else { options };
@@ -1498,7 +1509,14 @@ impl HwpxEncoder {
         references.validate(style_store, true)?;
         let border_ids = 1..=style_store.border_fill_count() as u32;
         crate::header_references::HeaderReferences::validate_body_borders(document, border_ids)?;
+        let (spacing_store, projection) = crate::word_line_spacing::prepare(document, style_store)?;
+        let suppress_spacing_cache = projection.is_some() && requested_layout_cache;
+        let options =
+            if projection.is_some() { options.with_emit_layout_cache(false) } else { options };
+        let style_store = spacing_store.as_ref();
         let mut context = section::DocumentEncodeContext::for_document(document, image_store);
+        context.spacing_projection = projection;
+        context.suppress_spacing_cache = suppress_spacing_cache;
         context.references = Some(references);
         context.list_ledger = list_numbering::ListLedger::new(style_store)?;
         // Core already follows the decoder's manifest-resolved spine order.
@@ -1549,6 +1567,9 @@ impl HwpxEncoder {
                 origins::finish_part(part, xml)?;
             }
             section_results.push(result);
+        }
+        if let Some(projection) = &context.spacing_projection {
+            projection.finish()?;
         }
         let marker_output;
         let style_store = if let Some(ledger) = context.list_ledger.take() {

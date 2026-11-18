@@ -1812,3 +1812,6 @@ mod table_horizontal_placement_tests;
 
 #[cfg(test)]
 mod nested_table_width_tests;
+
+#[cfg(test)]
+mod paragraph_mark_tests;

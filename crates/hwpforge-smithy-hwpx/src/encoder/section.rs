@@ -205,6 +205,8 @@ pub(crate) struct SectionEncodeResult {
 /// One context per document, shared by every body and nested encoder.
 /// Part/path scopes change; asset collections and allocators never reset.
 pub(crate) struct DocumentEncodeContext {
+    pub(super) spacing_projection: Option<crate::word_line_spacing::Projection>,
+    pub(super) suppress_spacing_cache: bool,
     pub(super) list_ledger: Option<super::list_numbering::ListLedger>,
     pub(crate) references: Option<crate::header_references::HeaderReferences>,
     pub(crate) charts: Vec<(String, String)>,
@@ -254,6 +256,8 @@ impl DocumentEncodeContext {
     pub(crate) fn new(section_index: usize) -> Self {
         Self {
             references: None,
+            spacing_projection: None,
+            suppress_spacing_cache: false,
             list_ledger: None,
             charts: Vec::new(),
             embedded_oles: Vec::new(),
@@ -1044,7 +1048,14 @@ fn build_paragraph(
     // canonicalization 으로 첫 lineseg 는 native 불변식(항상 0)을 따른다.
     // 실패(축약점 모호·inadmissible 방출 등) = 캐시 미방출 + 경고.
     let drops_before = sink.warnings.len();
-    let linesegarray = if options.emit_layout_cache {
+    let linesegarray = if !options.emit_layout_cache && sink.suppress_spacing_cache {
+        if para.layout_cache.is_some() {
+            sink.cache_dropped(
+                "Layout cache omitted because imported line spacing was projected".into(),
+            );
+        }
+        None
+    } else if options.emit_layout_cache {
         match &para.layout_cache {
             None => None,
             Some(cache) => match ledger.finish() {
@@ -1134,7 +1145,8 @@ fn build_paragraph(
     // (`EncodeOptions::mark_dropped_caches`) — the wire holds no diagnostic.
     // 이것을 실패시키는 것: 표지 삭제(`an_untouched_cache_the_encoder_cannot_place_is_reported`).
     let linesegarray = match linesegarray {
-        None if options.mark_dropped_caches
+        None if !sink.suppress_spacing_cache
+            && options.mark_dropped_caches
             && para.layout_cache.is_some()
             && sink.warnings.len() > drops_before =>
         {
@@ -1168,6 +1180,14 @@ fn build_paragraph(
         runs.push(end_run);
     }
 
+    // Resolve against original definitions before consulting generated IDs.
+    let original_para_id = sink.output_id("paraPr", para.para_shape_id.get())?;
+    let in_body = crate::word_line_spacing::body_scope(&sink.path);
+    let para_pr_id_ref = if let Some(projection) = &mut sink.spacing_projection {
+        projection.output_id(para, in_body)?.unwrap_or(original_para_id)
+    } else {
+        original_para_id
+    };
     Ok(HxParagraph {
         list_marker: if let Some(ledger) = &mut sink.list_ledger {
             ledger.record(para, &sink.path)?
@@ -1177,7 +1197,7 @@ fn build_paragraph(
         origin: super::origins::record(&sink.path),
         source_origin: 0,
         id: format!("{para_idx}"),
-        para_pr_id_ref: sink.output_id("paraPr", para.para_shape_id.get())?,
+        para_pr_id_ref,
         style_id_ref: if let Some(style) = para.style_ref {
             sink.output_id("style", style.get())?
         } else {
@@ -1224,7 +1244,7 @@ fn build_runs(
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
 
-    for run in runs {
+    for (run_index, run) in runs.iter().enumerate() {
         // 첫 문단이 control run(NewNumber/PageHiding 등)
         // 으로 시작하면 secPr 가 둘째 run 으로 밀려 한컴 계약(secPr = 첫
         // 문단의 첫 run)을 깬다 — 전용 carrier run 을 index 0 에 먼저
@@ -1323,7 +1343,16 @@ fn build_runs(
             }
             RunContent::Table(t) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Table);
-                tables.push(build_table(t, hyperlink_entries, options, sink)?);
+                // New cache-drop diagnostics identify the containing table run.
+                // Keep the established diagnostic paths on unprojected output.
+                if sink.suppress_spacing_cache {
+                    sink.enter(crate::decoder::PathSeg::Run(run_index));
+                }
+                let table = build_table(t, hyperlink_entries, options, sink);
+                if sink.suppress_spacing_cache {
+                    sink.leave();
+                }
+                tables.push(table?);
             }
             RunContent::Image(img) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Picture);

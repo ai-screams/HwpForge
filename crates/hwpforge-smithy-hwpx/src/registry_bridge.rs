@@ -203,6 +203,12 @@ impl HwpxRegistryBridge {
     /// cannot be distinguished from local IDs with the same numeric value.
     /// Existing constructors retain their raw border-reference semantics.
     ///
+    /// Unlike the general bridge, this retains original percentage spacing in
+    /// nonserialized import state. Direct encoding without a base can project
+    /// eligible ASCII Cambria/Calibri body and table-cell paragraphs under the
+    /// WordCompatible profile. JSON round trips discard this state; encoding
+    /// with a base ignores it and preserves the current output spacing.
+    ///
     /// # Errors
     /// Returns an error for invalid registry references, unsupported character
     /// or paragraph border references, or overflowing diagnostic counts.
