@@ -397,7 +397,7 @@ fn delete_admitted(
         edit_checkpoint!("input-loss");
         preserved_loss::check_candidates(base, &package, &d0).map_err(verification_error)?;
         edit_checkpoint!("header");
-        if d0.requires_header_normalization() {
+        if d0.header_blocks_preserving_delete() {
             return Err(StructuralEditError::Invariant {
                 detail: "header normalization required".into(),
             });
@@ -602,6 +602,9 @@ impl HwpxStructuralEditor {
     /// only that paragraph, retaining surviving line caches, table heights, IDs
     /// and unrelated parts. Preview is removed. Documents whose line widths may
     /// depend on position retain their original admission error.
+    /// A header that differs only by older Hancom direct paragraph-measure or tab
+    /// definitions does not block this path; the header stays byte-for-byte, and
+    /// decoding may still report `PARAGRAPH_MEASURE_NORMALIZED`.
     ///
     /// Pipeline: input admission gate → per-target rejection scan
     /// (reference / hard-break) → declared-delta build + `validate()` →
@@ -660,6 +663,9 @@ impl HwpxStructuralEditor {
     /// removed; surviving line caches, table heights, IDs and unrelated parts remain
     /// unchanged. Preview is removed. Documents whose line widths may depend on
     /// position retain their original admission error.
+    /// A header that differs only by older Hancom direct paragraph-measure or tab
+    /// definitions does not block this path; the header stays byte-for-byte, and
+    /// decoding may still report `PARAGRAPH_MEASURE_NORMALIZED`.
     /// Any failure in that path returns the original admission error.
     ///
     /// # Errors

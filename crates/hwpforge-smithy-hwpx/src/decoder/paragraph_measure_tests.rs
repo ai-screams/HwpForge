@@ -327,8 +327,10 @@ fn measure_normalization_compares_encoder_payloads() {
     use crate::schema::header::{HxHead, HxSwitch, HxSwitchCase, HxSwitchDefault};
     let mut store = HwpxStyleStore::new();
     store.push_para_shape(HwpxParaShape::default());
+    store.push_para_shape(HwpxParaShape::default());
     let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
+    assert!(!parse_header(&xml).unwrap().blocks_preserving_delete);
     for change in [
         "direct-margin",
         "direct-line",
@@ -341,6 +343,16 @@ fn measure_normalization_compares_encoder_payloads() {
         "unit",
         "split",
         "unrelated",
+        "direct-both",
+        "direct-unrelated",
+        "direct-no-line",
+        "direct-no-margin",
+        "direct-first-conflict",
+        "conflict-first-direct",
+        "renumbered",
+        "renumbered-direct",
+        "next-style",
+        "invalid-output",
     ] {
         let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
         let para = &mut head.ref_list.as_mut().unwrap().para_properties.as_mut().unwrap().items[0];
@@ -397,7 +409,61 @@ fn measure_normalization_compares_encoder_payloads() {
                     default: None,
                 },
             ),
+            "direct-both"
+            | "direct-unrelated"
+            | "direct-no-line"
+            | "direct-no-margin"
+            | "direct-first-conflict"
+            | "conflict-first-direct"
+            | "renumbered-direct"
+            | "invalid-output" => {
+                let default = sw.default.take().unwrap();
+                para.margin = default.margin;
+                para.line_spacing = default.line_spacing;
+                para.switches.clear();
+                if change == "direct-unrelated" {
+                    para.switches.push(HxSwitch {
+                        cases: vec![HxSwitchCase {
+                            required_namespace: "http://www.hancom.co.kr/hwpml/2016/paragraph"
+                                .into(),
+                            margin: None,
+                            line_spacing: None,
+                        }],
+                        default: Some(HxSwitchDefault { margin: None, line_spacing: None }),
+                    });
+                }
+                if change == "direct-no-line" {
+                    para.line_spacing = None;
+                }
+                if change == "direct-no-margin" {
+                    para.margin = None;
+                }
+                if change == "invalid-output" {
+                    let line = para.line_spacing.as_mut().unwrap();
+                    line.spacing_type = "FIXED".into();
+                    line.value = 2001;
+                    line.unit = "HWPUNIT".into();
+                }
+            }
+            "renumbered" | "next-style" => {}
             _ => unreachable!(),
+        }
+        let refs = head.ref_list.as_mut().unwrap();
+        if matches!(change, "direct-first-conflict" | "conflict-first-direct") {
+            let paras = &mut refs.para_properties.as_mut().unwrap().items;
+            paras[1].switches[0].default.as_mut().unwrap().line_spacing.as_mut().unwrap().value =
+                170;
+            if change == "conflict-first-direct" {
+                paras.swap(0, 1);
+                paras[0].id = 0;
+                paras[1].id = 1;
+            }
+        }
+        if matches!(change, "renumbered" | "renumbered-direct") {
+            refs.para_properties.as_mut().unwrap().items[0].id = 7;
+        }
+        if change == "next-style" {
+            refs.styles.as_mut().unwrap().items[0].next_style_id_ref = 99;
         }
         #[allow(clippy::disallowed_methods)] // Normalize the serialized test header below.
         let xml = quick_xml::se::to_string(&head).unwrap();
@@ -408,6 +474,19 @@ fn measure_normalization_compares_encoder_payloads() {
             !matches!(change, "split" | "unrelated"),
             "{change}"
         );
+        // 이것을 실패시키는 것: 차단 상수화, 첫 허용 꼴에서 반환,
+        // 직접 꼴을 switches.is_empty()로 제한, 두 치수 중 하나 요구 삭제,
+        // renumbered·nextStyle 복구·출력 검증 실패 허용.
+        assert_eq!(
+            parsed.blocks_preserving_delete,
+            !matches!(change, "split" | "unrelated" | "direct-both" | "direct-unrelated"),
+            "{change}"
+        );
+        if change == "invalid-output" {
+            let shape = parsed.style_store.para_shape(ParaShapeIndex::new(0)).unwrap();
+            assert_eq!(shape.line_spacing, 2001);
+            assert!(crate::paragraph_measure::validate_measure_output(&parsed.style_store).is_err());
+        }
     }
 }
 
@@ -429,13 +508,39 @@ fn tab_normalization_compares_encoder_payloads() {
     });
     let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
     assert!(!parse_header(&xml).unwrap().requires_header_normalization);
-    for change in ["direct", "empty", "case-only", "default-only", "value", "unit", "count"] {
+    assert!(!parse_header(&xml).unwrap().blocks_preserving_delete);
+    for change in [
+        "direct",
+        "direct-tab-conflict",
+        "zero-tab-conflict",
+        "empty",
+        "case-only",
+        "default-only",
+        "value",
+        "unit",
+        "count",
+        "zero-char",
+        "zero-with-exact",
+        "nonzero-char",
+        "zero-default-nonzero-case",
+        "zero-char-case",
+        "zero-value",
+        "zero-unit",
+        "zero-type",
+        "zero-leader",
+        "zero-count",
+        "zero-mixed",
+        "zero-case",
+        "zero-two-cases",
+        "zero-two-switches",
+        "direct-para-tab-conflict",
+    ] {
         let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
         // the sole explicit definition occupies position 0, irrespective of id=3.
         let tab = &mut head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items[0];
         let sw = &mut tab.switches[0];
         match change {
-            "direct" => {
+            "direct" | "direct-tab-conflict" => {
                 tab.items = sw.default.take().unwrap().items;
                 tab.switches.clear();
             }
@@ -448,13 +553,101 @@ fn tab_normalization_compares_encoder_payloads() {
             "value" => sw.default.as_mut().unwrap().items[0].pos = 2000,
             "unit" => sw.default.as_mut().unwrap().items[0].unit = "HWPUNIT".into(),
             "count" => sw.default.as_mut().unwrap().items.clear(),
+            "zero-tab-conflict" | "zero-char" | "zero-char-case" | "zero-with-exact"
+            | "zero-value" | "zero-unit" | "zero-type" | "zero-leader" | "zero-count"
+            | "zero-mixed" | "zero-case" | "zero-two-cases" | "zero-two-switches" => {
+                sw.cases[0].items[0].pos = 0;
+                // A physical zero also has packed position zero; CHAR zero packs to one.
+                if change != "zero-char-case" {
+                    sw.cases[0].items[0].unit = "HWPUNIT".into();
+                }
+                let default = sw.default.as_mut().unwrap();
+                default.items[0].pos = 0;
+                default.items[0].unit = "CHAR".into();
+                match change {
+                    "zero-value" => default.items[0].pos = 2,
+                    "zero-unit" => default.items[0].unit = "UNKNOWN".into(),
+                    "zero-type" => default.items[0].tab_type = "RIGHT".into(),
+                    "zero-leader" => default.items[0].leader = "DOT".into(),
+                    "zero-count" => default.items.push(default.items[0].clone()),
+                    "zero-mixed" | "zero-with-exact" => {
+                        let case_item = sw.cases[0].items[0].clone();
+                        sw.cases[0].items.push(case_item);
+                        sw.cases[0].items[1].pos = 1000;
+                        sw.cases[0].items[1].unit = "CHAR".into();
+                        default.items.push(default.items[0].clone());
+                        default.items[1].pos = 2001;
+                        default.items[1].unit.clear();
+                        if change == "zero-mixed" {
+                            default.items[1].pos = 2000;
+                        }
+                    }
+                    "zero-case" => {
+                        sw.cases[0].required_namespace = "urn:unknown".into();
+                        default.items[0].unit.clear();
+                    }
+                    "zero-two-cases" => sw.cases.push(sw.cases[0].clone()),
+                    _ => {}
+                }
+                if change == "zero-two-switches" {
+                    tab.switches.push(crate::schema::header::HxTabSwitch {
+                        cases: Vec::new(),
+                        default: None,
+                    });
+                }
+            }
+            "nonzero-char" => sw.default.as_mut().unwrap().items[0].unit = "CHAR".into(),
+            "zero-default-nonzero-case" => {
+                let default = sw.default.as_mut().unwrap();
+                default.items[0].pos = 0;
+                default.items[0].unit = "CHAR".into();
+            }
+            "direct-para-tab-conflict" => {
+                sw.default.as_mut().unwrap().items[0].pos = 2000;
+                head.ref_list.as_mut().unwrap().para_properties = Some(crate::schema::header::HxParaProperties {
+                    item_cnt: 1,
+                    items: vec![crate::decoder::xml_from_str(&format!("<paraPr id=\"0\">{}<lineSpacing type=\"PERCENT\" value=\"160\" unit=\"HWPUNIT\"/></paraPr>", margin(18000, "HWPUNIT"))).unwrap()],
+                });
+            }
             _ => unreachable!(),
+        }
+        if matches!(change, "direct-tab-conflict" | "zero-tab-conflict") {
+            let mut other: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
+            let mut other =
+                other.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items.remove(0);
+            // The encoder supplements built-in tab positions 1 and 2.
+            other.id = 3;
+            other.switches[0].default.as_mut().unwrap().items[0].pos = 2000;
+            let tabs = head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap();
+            tabs.items.push(other);
+            tabs.item_cnt = 4;
         }
         #[allow(clippy::disallowed_methods)] // Normalize the serialized test header below.
         let xml = quick_xml::se::to_string(&head).unwrap();
         let parsed =
             parse_header(&crate::wire_xml::normalize_attr_control_whitespace(&xml)).unwrap();
+        if change == "direct-para-tab-conflict" {
+            assert_eq!(
+                parsed.style_store.para_shape(ParaShapeIndex::new(0)).unwrap().margin_left,
+                ParagraphMeasure::from_hwp_unit(HwpUnit::new(9000).unwrap())
+            );
+        }
+        if change == "zero-default-nonzero-case" {
+            assert_eq!(
+                parsed.style_store.iter_tabs().next().unwrap().stops[0].position,
+                ParagraphMeasure::from_char_count(CharCount::from_ticks(1000))
+            );
+        }
         assert!(parsed.requires_header_normalization, "{change}");
+        // 이것을 실패시키는 것: 기존 normalize를 차단 bool로 대체, empty switch 허용,
+        // pos == 0 삭제, 모든 항목 대신 하나만 검사, switch·case·default 개수·단위·정렬·leader 검사 삭제,
+        // 기대 default의 위치 0 요구 삭제(zero-default-nonzero-case, zero-char-case),
+        // 문단 또는 탭의 첫 허용 꼴에서 반환하여 뒤 충돌을 건너뛰기.
+        assert_eq!(
+            parsed.blocks_preserving_delete,
+            !matches!(change, "direct" | "zero-char" | "zero-with-exact"),
+            "{change}"
+        );
     }
 }
 

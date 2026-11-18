@@ -417,6 +417,8 @@ fn source_guards_use_loss_classification_and_header_flag() {
             });
         } else {
             d.source_basis = None;
+            // 이것을 실패시키는 것: basis 부재를 삭제 허용으로 분류.
+            assert!(d.header_blocks_preserving_delete());
         }
         assert!(
             delete_admitted(&base, &[TARGET], d, p, ParagraphIds::Preserve).is_err(),
@@ -1057,3 +1059,208 @@ fn equal_cell_margins_delete_preserves_source_bytes() {
 
 #[path = "delete_layout_tests.rs"]
 mod layout;
+
+fn edit_header(base: &[u8], edit: impl FnOnce(&mut crate::schema::header::HxHead)) -> Vec<u8> {
+    let mut package = RawPackage::read(base).unwrap();
+    let source = package.read_text_entry("Contents/header.xml").unwrap();
+    let mut head = crate::decoder::xml_from_str(&source).unwrap();
+    edit(&mut head);
+    #[allow(clippy::disallowed_methods)] // Attribute whitespace is normalized below.
+    let source = quick_xml::se::to_string(&head).unwrap();
+    // The schema serializer omits namespace declarations; retain a bound root.
+    let source = source
+        .replacen("<head ", &format!("<hh:head{} ", crate::encoder::package::XMLNS_DECLS), 1)
+        .replace("</head>", "</hh:head>");
+    package.replace_text_entry(
+        "Contents/header.xml",
+        crate::wire_xml::normalize_attr_control_whitespace(&source).into_owned(),
+    );
+    package.write().unwrap()
+}
+fn direct_header(head: &mut crate::schema::header::HxHead) {
+    let refs = head.ref_list.as_mut().unwrap();
+    for para in &mut refs.para_properties.as_mut().unwrap().items {
+        let default = para.switches[0].default.take().unwrap();
+        para.margin = default.margin;
+        para.line_spacing = default.line_spacing;
+        para.switches.clear();
+    }
+    for tab in &mut refs.tab_properties.as_mut().unwrap().items {
+        if let Some(sw) = tab.switches.first_mut() {
+            tab.items = sw.default.take().unwrap().items;
+            tab.switches.clear();
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 차단 항상 true, SourceBasis에 true 전달, Preserve에서 header 정규화.
+#[test]
+fn legacy_header_preserve_delete_keeps_payload_and_survivors() {
+    let base = edit_header(&carry_base(), direct_header);
+    let mut package = RawPackage::read(&base).unwrap();
+    package.replace_text_entry(SECTION, xml(&base).replace("</hp:p>", &format!("{CACHE}</hp:p>")));
+    let base = package.write().unwrap();
+    let d = HwpxDecoder::decode(&base).unwrap();
+    assert!(d.requires_header_normalization());
+    assert!(!d.header_blocks_preserving_delete());
+    let span = d.source_maps[0].paragraphs[1].outer.clone();
+    let original = xml(&base);
+    let expected = format!("{}{}", &original[..span.start], &original[span.end..]);
+    let package = RawPackage::read(&base).unwrap();
+    let result = delete_admitted(&base, &[TARGET], d, package, ParagraphIds::Preserve).unwrap();
+    assert_eq!(xml(&result.value), expected);
+    FINAL_CHANGES.with(|c| assert_eq!(c.borrow().rewritten, [SECTION]));
+    assert_eq!(
+        RawPackage::read(&result.value).unwrap().read_entry("Contents/header.xml").unwrap(),
+        RawPackage::read(&base).unwrap().read_entry("Contents/header.xml").unwrap()
+    );
+    let after = HwpxDecoder::decode(&result.value).unwrap();
+    assert_eq!(
+        after.document.sections()[0]
+            .paragraphs
+            .iter()
+            .map(Paragraph::text_content)
+            .collect::<Vec<_>>(),
+        ["처음", "남음"]
+    );
+    let tree = crate::test_support::xml::Element::parse(&expected);
+    let paragraphs: Vec<_> = tree.children.iter().filter(|e| e.name == "hp:p").collect();
+    assert_eq!(paragraphs.iter().map(|p| p.attr("id")).collect::<Vec<_>>(), [Some("0"), Some("2")]);
+    for p in paragraphs {
+        let line = p.child("hp:linesegarray").child("hp:lineseg");
+        assert_eq!(line.attr("vertpos"), Some("99"));
+        assert_eq!(line.attr("horzsize"), Some("9000"));
+        assert_eq!(line.attr("flags"), Some("393216"));
+    }
+}
+
+// 이것을 실패시키는 것: 차단 항상 true, SourceBasis true 전달, Preserve에서 header 정규화.
+#[test]
+fn legacy_header_public_delete_preserves_header_after_carry_failure() {
+    let base = edit_header(&carry_base(), direct_header);
+    assert!(matches!(original_error(&base), StructuralEditError::UncarriedZipEntries { .. }));
+    failures(&[]);
+    let expected_warnings = HwpxDecoder::decode(&base).unwrap().warnings;
+    let result =
+        HwpxStructuralEditor::delete_paragraphs_with_codec_diagnostics(&base, &[TARGET]).unwrap();
+    assert!(visits().contains(&"header"));
+    assert_eq!(result.decode_warnings, expected_warnings);
+    assert_eq!(
+        RawPackage::read(&result.value).unwrap().read_entry("Contents/header.xml").unwrap(),
+        RawPackage::read(&base).unwrap().read_entry("Contents/header.xml").unwrap()
+    );
+    FINAL_CHANGES.with(|c| assert_eq!(c.borrow().rewritten, [SECTION]));
+    assert_eq!(HwpxStructuralEditor::delete_paragraphs(&base, &[TARGET]).unwrap(), result.value);
+}
+
+// 이것을 실패시키는 것: 차단 항상 false 또는 SourceBasis에 false 전달,
+// 출력 검증 실패 뒤 기대 payload를 생성하거나 header 검사 전에 admission에 의존.
+#[test]
+fn legacy_header_preserve_delete_blocks_renumbered_and_invalid_output() {
+    for form in ["renumbered", "renumbered-direct", "invalid-output"] {
+        let base = if form == "renumbered" {
+            carry_base()
+        } else {
+            edit_header(&carry_base(), direct_header)
+        };
+        let base = if form == "invalid-output" {
+            edit_header(&base, |head| {
+                let line = head.ref_list.as_mut().unwrap().para_properties.as_mut().unwrap().items
+                    [0]
+                .line_spacing
+                .as_mut()
+                .unwrap();
+                line.spacing_type = "FIXED".into();
+                line.value = 2001;
+                line.unit = "HWPUNIT".into();
+            })
+        } else {
+            let mut package = RawPackage::read(&base).unwrap();
+            let header = package.read_text_entry("Contents/header.xml").unwrap();
+            assert!(header.contains("<hh:charPr id=\"0\""));
+            package.replace_text_entry(
+                "Contents/header.xml",
+                header.replace("<hh:charPr id=\"0\"", "<hh:charPr id=\"7\""),
+            );
+            package.write().unwrap()
+        };
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        assert!(decoded.header_blocks_preserving_delete(), "{form}");
+        failures(&[]);
+        let error = delete_admitted(
+            &base,
+            &[TARGET],
+            decoded,
+            RawPackage::read(&base).unwrap(),
+            ParagraphIds::Preserve,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            StructuralEditError::Invariant { detail: "header normalization required".into() },
+            "{form}"
+        );
+        assert_eq!(visits(), ["input-loss", "header"]);
+    }
+}
+
+// 이것을 실패시키는 것: 기존 normalize bool을 새 삭제 차단 bool로 대체.
+#[test]
+fn legacy_header_other_consumers_still_normalize() {
+    let base = edit_header(&generated(), direct_header);
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    assert!(decoded.requires_header_normalization());
+    assert!(!decoded.header_blocks_preserving_delete());
+    assert!(!crate::layout_edit::unchanged(
+        &decoded,
+        &decoded.document.clone().validate().unwrap(),
+        &decoded.style_store,
+        &decoded.image_store
+    )
+    .unwrap());
+    let section = &decoded.document.sections()[0];
+    let preservation = crate::HwpxPatcher::export_section_preservation(&base, 0, section).unwrap();
+    let patched =
+        crate::HwpxPatcher::patch_section_preserving(&base, 0, section, None, Some(&preservation))
+            .unwrap();
+    let reindexed = delete_admitted(
+        &base,
+        &[TARGET],
+        decoded,
+        RawPackage::read(&base).unwrap(),
+        ParagraphIds::Reindex,
+    )
+    .unwrap()
+    .value;
+    let inserted = HwpxStructuralEditor::insert_paragraphs(
+        &base,
+        TARGET,
+        InsertPosition::After,
+        &["추가".into()],
+    )
+    .unwrap();
+    let original_package = RawPackage::read(&base).unwrap();
+    let original_header = original_package.read_entry("Contents/header.xml").unwrap();
+    for output in [patched, reindexed, inserted] {
+        let package = RawPackage::read(&output).unwrap();
+        assert_ne!(package.read_entry("Contents/header.xml").unwrap(), original_header);
+        let header = package.read_text_entry("Contents/header.xml").unwrap();
+        let tree = crate::test_support::xml::Element::parse(&header);
+        for para in tree.descendants("hh:paraPr") {
+            assert!(para
+                .children
+                .iter()
+                .all(|e| e.name != "hh:margin" && e.name != "hh:lineSpacing"));
+            let sw = para.child("hp:switch");
+            assert_eq!(
+                sw.child("hp:case").attr("hp:required-namespace"),
+                Some("http://www.hancom.co.kr/hwpml/2016/HwpUnitChar")
+            );
+            assert_eq!(
+                sw.child("hp:default").child("hh:lineSpacing").attr("unit"),
+                Some("HWPUNIT")
+            );
+        }
+        assert!(!HwpxDecoder::decode(&output).unwrap().requires_header_normalization());
+    }
+}

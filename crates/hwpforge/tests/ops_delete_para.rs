@@ -9,6 +9,8 @@ mod fixtures;
 use fixtures::warning_fixture;
 #[path = "support/json.rs"]
 mod json;
+#[path = "../../hwpforge-smithy-hwpx/tests/support/package.rs"]
+mod package;
 use hwpforge::core::control::Control;
 use hwpforge::core::run::Run;
 use hwpforge::core::{Document, PageSettings, Section};
@@ -219,4 +221,48 @@ fn preserving_delete_matches_codec_bytes_and_preview_warning() {
         ["PREVIEW_REMOVED"]
     );
     assert_eq!(texts(&out.bytes), ["첫째", "셋째", "넷째"]);
+}
+
+// 이것을 실패시키는 것: 직접 문단 치수를 ops에서 거부하거나 header를 재인코드하기.
+#[test]
+fn direct_header_delete_matches_editor_bytes_and_preserves_header() {
+    use hwpforge::hwpx::{HwpxStructuralEditor, ParagraphLocator};
+    const HEADER: &str = "Contents/header.xml";
+    // The generated paragraph shape has zero margins and 160% line spacing.
+    const DIRECT_MEASURES: &str = concat!(
+        "<hh:margin>",
+        "<hc:intent value=\"0\" unit=\"HWPUNIT\"/>",
+        "<hc:left value=\"0\" unit=\"HWPUNIT\"/>",
+        "<hc:right value=\"0\" unit=\"HWPUNIT\"/>",
+        "<hc:prev value=\"0\" unit=\"HWPUNIT\"/>",
+        "<hc:next value=\"0\" unit=\"HWPUNIT\"/>",
+        "</hh:margin>",
+        "<hh:lineSpacing type=\"PERCENT\" value=\"160\" unit=\"HWPUNIT\"/>",
+    );
+    let generated = four_paragraphs();
+    let header = package::part(&generated, HEADER);
+    assert_eq!(header.matches("<hh:paraPr ").count(), 1);
+    let para_start = header.find("<hh:paraPr ").unwrap();
+    let para_end = para_start + header[para_start..].find("</hh:paraPr>").unwrap();
+    let para = &header[para_start..para_end];
+    let start = para.find("<hp:switch>").unwrap();
+    let end = para.find("</hp:switch>").unwrap() + "</hp:switch>".len();
+    assert_eq!(para.matches("<hp:switch>").count(), 1);
+    assert!(para[start..end].contains(&format!("<hp:default>{DIRECT_MEASURES}</hp:default>")));
+    let base = package::splice_part(&generated, HEADER, &para[start..end], DIRECT_MEASURES);
+    let base = package::append_entry(&base, "Scripts/opaque.bin", b"keep");
+    let input_header = package::part(&base, HEADER);
+    assert!(input_header.contains(DIRECT_MEASURES));
+
+    let editor = HwpxStructuralEditor::delete_paragraphs(
+        &base,
+        &[ParagraphLocator { section: 0, index: 1 }],
+    )
+    .unwrap();
+    let out = delete_para(&base, &DeleteParaOptions::default().with_indexes(vec![1])).unwrap();
+    assert_eq!(out.bytes, editor);
+    assert_eq!(package::part(&out.bytes, HEADER).as_bytes(), input_header.as_bytes());
+    assert_eq!(texts(&out.bytes), ["첫째", "셋째", "넷째"]);
+    assert_eq!(out.deleted, 1);
+    assert_eq!(package::part(&out.bytes, "Scripts/opaque.bin"), "keep");
 }
