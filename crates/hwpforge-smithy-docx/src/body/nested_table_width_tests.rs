@@ -153,6 +153,32 @@ fn nested_table_width_inherited_declarations_are_settled_once() {
     }
 }
 
+// 이것을 실패시키는 것: tblLayout별 컨테이너 축소, 폭에 따른 최소 행 높이 재계산.
+#[test]
+fn nested_table_width_layout_and_minimum_height_are_independent() {
+    for layout in ["fixed", "autofit"] {
+        for (column, width) in [(850, 8500), (1701, 17010)] {
+            let input = inner("auto", "0", &grid(column, column), "")
+                .replace("</w:tblPr>", &format!("<w:tblLayout w:type='{layout}'/></w:tblPr>"))
+                .replace("<w:tr>", "<w:tr><w:trPr><w:trHeight w:val='800' w:hRule='atLeast'/></w:trPr>")
+                .replace("<w:p/>", "<w:p><w:r><w:rPr><w:rFonts w:ascii='Cambria'/><w:sz w:val='22'/></w:rPr><w:t>A long ASCII line which may wrap in a narrow cell</w:t></w:r></w:p>");
+            let decoded = decode(&input, true);
+            let ts = tables(&decoded);
+            assert_eq!(ts[1].width.unwrap().as_i32(), width);
+            assert_eq!(ts[1].rows[0].height.unwrap().as_i32(), 4000);
+        }
+    }
+}
+// 이것을 실패시키는 것: grid 합계 범위 검사나 셀 내용 폭 검사를 우회하여 유효한 표로 수락.
+#[test]
+fn nested_table_width_overflow_and_nonpositive_content_fail_closed() {
+    for g in [grid(10000001, 10000001), grid(216, 216), grid(100, 100)] {
+        let input = inner("auto", "0", &g, "");
+        let body = format!("<w:tbl><w:tblPr><w:tblW w:w='2268'/></w:tblPr><w:tblGrid><w:gridCol w:w='2268'/></w:tblGrid><w:tr><w:tc>{input}</w:tc></w:tr></w:tbl>");
+        assert!(decode_docx(&package(&body, &[])).is_err());
+    }
+}
+
 // 이것을 실패시키는 것: 목록의 저장된 경고 위치를 소비하기 전에 폭 진단 슬롯을 제거/병합.
 #[test]
 fn nested_table_width_diagnostics_do_not_move_deferred_list_warnings() {

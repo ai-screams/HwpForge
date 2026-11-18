@@ -463,3 +463,189 @@ fn word_line_spacing_mixed_field_is_not_text_only() {
     p.runs.push(Run::control(hwpforge_core::Control::field("value"), p.runs[0].char_shape_id));
     assert_eq!(values(&encode(d, &s).bytes), [100]);
 }
+
+fn assert_latin(bytes: &[u8], text: &str, family: &str) {
+    let h = xml::Element::parse(&package::part(bytes, "Contents/header.xml"));
+    let s = xml::Element::parse(&package::part(bytes, "Contents/section0.xml"));
+    let run = s
+        .descendants("hp:run")
+        .into_iter()
+        .find(|r| r.descendants("hp:t").iter().any(|t| t.text == text))
+        .unwrap();
+    let c = h
+        .descendants("hh:charPr")
+        .into_iter()
+        .find(|c| c.attr("id") == run.attr("charPrIDRef"))
+        .unwrap()
+        .child("hh:fontRef");
+    for (slot, lang, expected) in [("latin", "LATIN", family), ("hangul", "HANGUL", "맑은 고딕")]
+    {
+        let group = h
+            .descendants("hh:fontface")
+            .into_iter()
+            .find(|f| f.attr("lang") == Some(lang))
+            .unwrap();
+        let face = group.children.iter().find(|f| f.attr("id") == c.attr(slot)).unwrap();
+        assert_eq!(face.attr("face"), Some(expected));
+    }
+}
+fn paragraph_count(bytes: &[u8]) -> usize {
+    xml::Element::parse(&package::part(bytes, "Contents/header.xml")).descendants("hh:paraPr").len()
+}
+fn table_fixture(family: &str, text: &str) -> Vec<u8> {
+    use hwpforge_core::{Table, TableCell, TableRow};
+    let (mut d, s) = fixture(family, 1100, 100., text);
+    let p = d.sections()[0].paragraphs[0].clone();
+    let id = p.runs[0].char_shape_id;
+    let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+        vec![p.clone()],
+        HwpUnit::new(10000).unwrap(),
+    )])]);
+    d.sections_mut()[0].paragraphs =
+        vec![Paragraph::with_runs(vec![Run::table(table, id)], p.para_shape_id)];
+    encode(d, &s).bytes
+}
+// 이것을 실패시키는 것: 디코드/JSON에서 원래 배수 재생성, 숫자87/85 재보정, 매번 파생 정의 추가.
+#[test]
+fn projected_spacing_edits_reencoding_and_json_keep_output_percentages() {
+    use hwpforge_smithy_hwpx::HwpxDecoder;
+    for (family, expected) in [("Cambria", 87), ("Calibri", 85)] {
+        let mut bytes = table_fixture(family, "ASCII");
+        let count = paragraph_count(&bytes);
+        for _ in 0..2 {
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            let store: HwpxStyleStore =
+                serde_json::from_value(serde_json::to_value(&decoded.style_store).unwrap())
+                    .unwrap();
+            assert_eq!(store, decoded.style_store);
+            bytes = HwpxEncoder::encode(
+                &decoded.document.validate().unwrap(),
+                &store,
+                &decoded.image_store,
+            )
+            .unwrap();
+            assert_eq!(values(&bytes), [100, expected]);
+            assert_eq!(paragraph_count(&bytes), count);
+            assert_latin(&bytes, "ASCII", family);
+        }
+    }
+}
+// 이것을 실패시키는 것: set-cell/patch에서 문자에 따른 보정 또는 역보정, LATIN 참조 소실.
+#[test]
+fn projected_spacing_edits_cell_and_patch_preserve_spacing_and_latin_fonts() {
+    use hwpforge_core::{table::grid::GridCoord, RunContent};
+    use hwpforge_smithy_hwpx::{
+        cell_edit::{CellSpec, CellTarget, HwpxCellEditor},
+        HwpxDecoder, HwpxPatcher,
+    };
+    for (family, source, replacement, expected) in [
+        ("Cambria", "날짜", "2026-11-18", 100),
+        ("Cambria", "ASCII", "한글", 87),
+        ("Calibri", "ASCII", "한글", 85),
+        ("Cambria", "ASCII", "2026-11-18", 87),
+    ] {
+        let base = table_fixture(family, source);
+        let count = paragraph_count(&base);
+        let set = HwpxCellEditor::set_cells(
+            &base,
+            &[CellSpec {
+                table: 0,
+                target: CellTarget::At(GridCoord::new(0, 0)),
+                text: replacement.into(),
+            }],
+        )
+        .unwrap()
+        .bytes;
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        let mut section = decoded.document.sections()[0].clone();
+        let preservation = HwpxPatcher::export_section_preservation(&base, 0, &section).unwrap();
+        let RunContent::Table(table) = &mut section.paragraphs[0].runs[0].content else {
+            panic!("table")
+        };
+        table.rows[0].cells[0].paragraphs[0].runs[0].content = RunContent::Text(replacement.into());
+        let patched = HwpxPatcher::patch_section_preserving(
+            &base,
+            0,
+            &section,
+            Some(&decoded.style_store),
+            Some(&preservation),
+        )
+        .unwrap();
+        for output in [set, patched] {
+            assert_eq!(values(&output), [100, expected]);
+            assert_eq!(paragraph_count(&output), count);
+            assert_latin(&output, replacement, family);
+        }
+    }
+}
+// 이것을 실패시키는 것: 누름틀 fill/stamper 출력에서 간격 재보정 또는 한글 입력의 LATIN family 제거.
+#[test]
+fn projected_spacing_edits_fill_and_stamper_keep_dates_and_projected_values() {
+    use hwpforge_core::table::grid::GridCoord;
+    use hwpforge_smithy_hwpx::{
+        cell_edit::{CellSpec, CellTarget, HwpxCellEditor},
+        stamp::{CellStampAction, CellStampSpec, HwpxStamper, StampRequestV2},
+        HwpxFiller,
+    };
+    use std::collections::BTreeMap;
+    // Cell stamping creates the Korean hint in its original mixed-script shape.
+    let empty = table_fixture("Cambria", "");
+    let plan = HwpxStamper::plan_bytes_v2(&empty).unwrap();
+    let request = StampRequestV2 {
+        schema_version: 2,
+        source_sha256: plan.source_sha256,
+        text: vec![],
+        cells: vec![CellStampSpec {
+            table: 0,
+            at: GridCoord::new(0, 0),
+            label: None,
+            action: CellStampAction::Field { name: "date".into(), hint: "날짜".into() },
+        }],
+    };
+    let stamped = HwpxStamper::stamp_v2(&empty, &request).unwrap().bytes;
+    assert_latin(&stamped, "날짜", "Cambria");
+    assert_eq!(values(&stamped), [100, 100]);
+    let filled =
+        HwpxFiller::fill(&stamped, &BTreeMap::from([("date".into(), "2026-11-18".into())]))
+            .unwrap()
+            .bytes;
+    assert_eq!(values(&filled), [100, 100]);
+    assert_eq!(paragraph_count(&filled), paragraph_count(&empty));
+    assert_latin(&filled, "2026-11-18", "Cambria");
+    for (family, expected) in [("Cambria", 87), ("Calibri", 85)] {
+        let base = table_fixture(family, "ASCII");
+        let blank = HwpxCellEditor::set_cells(
+            &base,
+            &[CellSpec {
+                table: 0,
+                target: CellTarget::At(GridCoord::new(0, 0)),
+                text: String::new(),
+            }],
+        )
+        .unwrap()
+        .bytes;
+        let plan = HwpxStamper::plan_bytes_v2(&blank).unwrap();
+        let request = StampRequestV2 {
+            schema_version: 2,
+            source_sha256: plan.source_sha256,
+            text: vec![],
+            cells: vec![CellStampSpec {
+                table: 0,
+                at: GridCoord::new(0, 0),
+                label: None,
+                action: CellStampAction::Field { name: "date".into(), hint: "날짜".into() },
+            }],
+        };
+        let field_base = HwpxStamper::stamp_v2(&blank, &request).unwrap().bytes;
+        assert_eq!(values(&field_base), [100, expected]);
+        assert_eq!(paragraph_count(&field_base), paragraph_count(&base));
+        assert_latin(&field_base, "날짜", family);
+        let out =
+            HwpxFiller::fill(&field_base, &BTreeMap::from([("date".into(), "2026-11-18".into())]))
+                .unwrap()
+                .bytes;
+        assert_eq!(values(&out), [100, expected]);
+        assert_eq!(paragraph_count(&out), paragraph_count(&base));
+        assert_latin(&out, "2026-11-18", family);
+    }
+}
