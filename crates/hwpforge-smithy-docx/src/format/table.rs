@@ -9,11 +9,22 @@ pub(crate) struct TableProperties {
     // Source widths in HwpUnit, independent of the approximated output strokes.
     pub(crate) border_widths: [Option<i32>; 6],
     pub(crate) width: Option<Option<i32>>,
+    pub(crate) indent: Option<i32>,
+    pub(crate) alignment: Option<TableAlignment>,
+    pub(crate) bidi: Option<bool>,
     pub(crate) margins: [Option<i32>; 4],
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TableAlignment {
+    Left,
+    Center,
+    Right,
+    Unsupported,
 }
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum TableProperty {
     Root,
+    CellRoot,
     Borders,
     Margins,
     Leaf,
@@ -35,6 +46,15 @@ impl TableProperties {
                 *a = b;
             }
         }
+        if other.indent.is_some() {
+            self.indent = other.indent;
+        }
+        if other.alignment.is_some() {
+            self.alignment = other.alignment;
+        }
+        if other.bidi.is_some() {
+            self.bidi = other.bidi;
+        }
         if other.width.is_some() {
             self.width = other.width;
         }
@@ -50,15 +70,44 @@ impl TableProperties {
         if e.namespace_id != W_NS.0 {
             return omitted(part, at, w);
         }
-        attributes(e, part, at, w)?;
+        attributes(e, matches!(state, TableProperty::Root), part, at, w)?;
         match (state, e.name.as_str()) {
-            (TableProperty::Root, "tblBorders" | "tcBorders") => Ok(TableProperty::Borders),
-            (TableProperty::Root, "tblCellMar" | "tcMar") => Ok(TableProperty::Margins),
-            (TableProperty::Root, "tblW" | "tcW") => {
+            (TableProperty::Root | TableProperty::CellRoot, "tblBorders" | "tcBorders") => {
+                Ok(TableProperty::Borders)
+            }
+            (TableProperty::Root | TableProperty::CellRoot, "tblCellMar" | "tcMar") => {
+                Ok(TableProperty::Margins)
+            }
+            (TableProperty::Root | TableProperty::CellRoot, "tblW" | "tcW") => {
                 self.width = Some(width(e, part, at, w)?);
                 Ok(TableProperty::Leaf)
             }
-            (TableProperty::Root, "shd") => {
+            (TableProperty::Root, "tblInd") => {
+                if !matches!(attr(e, "type"), None | Some("dxa")) {
+                    return omitted(part, at, w);
+                }
+                let value = attr(e, "w")
+                    .ok_or_else(|| DocxError::invalid(part, at, "missing table indent"))?;
+                self.indent = Some(
+                    super::units::length(value, 5, -HwpUnit::MAX_VALUE)
+                        .map_err(|reason| DocxError::invalid(part, at, reason))?,
+                );
+                Ok(TableProperty::Leaf)
+            }
+            (TableProperty::Root, "jc") => {
+                self.alignment = Some(match attr(e, "val") {
+                    Some("left" | "start") => TableAlignment::Left,
+                    Some("center") => TableAlignment::Center,
+                    Some("right" | "end") => TableAlignment::Right,
+                    _ => TableAlignment::Unsupported,
+                });
+                Ok(TableProperty::Leaf)
+            }
+            (TableProperty::Root, "bidiVisual") => {
+                self.bidi = boolean(e, "val", Some(true), part, at, w)?;
+                Ok(TableProperty::Leaf)
+            }
+            (TableProperty::Root | TableProperty::CellRoot, "shd") => {
                 warn(
                     w,
                     part,
@@ -130,7 +179,9 @@ impl TableProperties {
                 }
             }
             // Layout algorithm and look masks cannot change the supported uniform style.
-            (TableProperty::Root, "tblLayout" | "tblLook") => omitted(part, at, w),
+            (TableProperty::Root | TableProperty::CellRoot, "tblLayout" | "tblLook") => {
+                omitted(part, at, w)
+            }
             _ => omitted(part, at, w),
         }
     }
@@ -196,6 +247,7 @@ fn omitted(part: &str, at: &str, w: &mut Vec<DocxWarning>) -> Result<TableProper
 // Attribute names are finite; input strings never become diagnostic keys.
 pub(crate) fn attributes(
     e: &Element,
+    table_root: bool,
     part: &str,
     at: &str,
     w: &mut Vec<DocxWarning>,
@@ -203,6 +255,7 @@ pub(crate) fn attributes(
     let known: &[&str] = match e.name.as_str() {
         "tblW" | "tcW" | "tblInd" => &["w", "type"],
         "gridCol" => &["w"],
+        "jc" | "bidiVisual" if table_root => &["val"],
         "gridBefore" | "gridAfter" | "gridSpan" | "vMerge" | "vAlign" | "tblStyle" => &["val"],
         "trHeight" => &["val", "hRule"],
         "left" | "right" | "top" | "bottom" | "insideH" | "insideV" => {

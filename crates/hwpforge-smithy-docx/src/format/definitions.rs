@@ -415,7 +415,7 @@ impl Definitions {
                                 }
                                 (Frame::CellProperties, "shd") => {
                                     table::TableProperties::default().read(
-                                        table::TableProperty::Root,
+                                        table::TableProperty::CellRoot,
                                         &e,
                                         part,
                                         "shd",

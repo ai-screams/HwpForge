@@ -86,6 +86,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
     let mut valid_roots = HashMap::new();
     let mut default_tab_stop = None;
     let mut balance_space_width = false;
+    let mut compatibility = Compatibility::default();
     // Moving the relationships avoids cloning all input strings or borrowing the
     // package through a read. Shared ZIP targets are scanned only once.
     let mut relationships = std::mem::take(&mut package.relationships);
@@ -166,6 +167,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
             if relation.kind == RelationshipKind::Settings {
                 default_tab_stop = scanned.2;
                 balance_space_width = scanned.3;
+                compatibility = scanned.4;
             }
             scanned.1
         };
@@ -212,12 +214,20 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
         &mut warnings,
         &mut resolver,
         &relations,
+        compatibility.mode,
     )?;
     resolver.finalize_numbering(
         &mut sections.iter_mut().map(|s| &mut s.core).collect::<Vec<_>>(),
         &main,
         &mut warnings,
     )?;
+    let has_table = sections.iter().any(|s| {
+        s.core
+            .paragraphs
+            .iter()
+            .any(|p| p.runs.iter().any(|r| matches!(r.content, RunContent::Table(_))))
+    });
+    compatibility.diagnose(has_table, &main, &mut warnings)?;
     let registry = resolver.registry;
     let mut document = Document::new();
     document.set_layout_profile(hwpforge_core::LayoutProfile::WordCompatible);
@@ -286,6 +296,44 @@ fn object_loss(element: &Element) -> Option<&'static str> {
         "sym" => "symbol_character",
         _ => return None,
     })
+}
+
+#[derive(Default)]
+struct Compatibility {
+    mode: Option<i32>,
+    declarations: usize,
+}
+impl Compatibility {
+    fn read(&mut self, element: &Element) {
+        self.declarations += 1;
+        if attr(element, "uri") != Some("http://schemas.microsoft.com/office/word") {
+            return;
+        }
+        if let Some(value) = attr(element, "val").and_then(|v| v.parse().ok()) {
+            self.mode = Some(value);
+        }
+    }
+    fn diagnose(&self, has_table: bool, part: &str, warnings: &mut Vec<DocxWarning>) -> Result<()> {
+        let supported = matches!(self.mode, Some(14 | 15));
+        let diagnostic =
+            if self.declarations == 0 { has_table } else { self.declarations > 1 || !supported };
+        if diagnostic {
+            record(
+                warnings,
+                Kind::ValueApproximated,
+                "table_compatibility_mode",
+                if supported { "use_last_valid" } else { "retain_placement" },
+                || {
+                    (
+                        Some(part),
+                        Some("compatibilityMode"),
+                        "Missing, unsupported, invalid or duplicate table compatibility mode",
+                    )
+                },
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -367,6 +415,7 @@ struct Body<'a> {
     root_matches: bool,
     default_tab_stop: Option<i32>,
     balance_space_width: bool,
+    compatibility: Compatibility,
     body_seen: bool,
     final_section_seen: bool,
     stack: Vec<Frame>,
@@ -406,6 +455,8 @@ struct Body<'a> {
     warnings: &'a mut Vec<DocxWarning>,
 }
 
+type ScanResult = (Vec<DecodedSection>, bool, Option<i32>, bool, Compatibility);
+
 fn scan(
     bytes: &[u8],
     part: &str,
@@ -413,7 +464,7 @@ fn scan(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<(Vec<DecodedSection>, bool, Option<i32>, bool)> {
+) -> Result<ScanResult> {
     scan_inner(bytes, part, root, main, budget, warnings, None)
 }
 fn scan_formatted(
@@ -423,8 +474,18 @@ fn scan_formatted(
     warnings: &mut Vec<DocxWarning>,
     resolver: &mut Resolver,
     relations: &Relations,
+    mode: Option<i32>,
 ) -> Result<Vec<DecodedSection>> {
-    Ok(scan_inner(bytes, part, "document", true, budget, warnings, Some((resolver, relations)))?.0)
+    Ok(scan_inner(
+        bytes,
+        part,
+        "document",
+        true,
+        budget,
+        warnings,
+        Some((resolver, relations, mode)),
+    )?
+    .0)
 }
 fn scan_inner(
     bytes: &[u8],
@@ -433,9 +494,10 @@ fn scan_inner(
     main: bool,
     budget: &mut TextBudget,
     warnings: &mut Vec<DocxWarning>,
-    resources: Option<(&mut Resolver, &Relations)>,
-) -> Result<(Vec<DecodedSection>, bool, Option<i32>, bool)> {
-    let (resolver, relations) = resources.map_or((None, None), |(r, i)| (Some(r), Some(i)));
+    resources: Option<(&mut Resolver, &Relations, Option<i32>)>,
+) -> Result<ScanResult> {
+    let (resolver, relations, mode) =
+        resources.map_or((None, None, None), |(r, i, m)| (Some(r), Some(i), m));
     let mut body = Body {
         tables: table::Tables::default(),
         part,
@@ -444,6 +506,7 @@ fn scan_inner(
         root_matches: false,
         default_tab_stop: None,
         balance_space_width: false,
+        compatibility: Compatibility { mode, ..Compatibility::default() },
         body_seen: false,
         final_section_seen: false,
         stack: Vec::new(),
@@ -494,7 +557,13 @@ fn scan_inner(
     if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
         body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
     }
-    Ok((body.sections, body.root_matches, body.default_tab_stop, body.balance_space_width))
+    Ok((
+        body.sections,
+        body.root_matches,
+        body.default_tab_stop,
+        body.balance_space_width,
+        body.compatibility,
+    ))
 }
 
 impl Body<'_> {
@@ -617,7 +686,11 @@ impl Body<'_> {
                     }
                 } else if let Some(parent) = self.stack.last_mut() {
                     if let Node::Compatibility { omitted } = &mut parent.node {
-                        if w && element.name == "balanceSingleByteDoubleByteWidth" {
+                        if w && element.name == "compatSetting"
+                            && attr(&element, "name") == Some("compatibilityMode")
+                        {
+                            self.compatibility.read(&element);
+                        } else if w && element.name == "balanceSingleByteDoubleByteWidth" {
                             self.balance_space_width = crate::format::boolean(
                                 &element,
                                 "val",
@@ -1657,7 +1730,7 @@ impl Body<'_> {
         match frame.node {
             Node::Table => self.finish_table(&frame.location)?,
             Node::TableCell => self.finish_cell(&frame.location)?,
-            Node::CellProperties(crate::format::table::TableProperty::Root) => {
+            Node::CellProperties(crate::format::table::TableProperty::CellRoot) => {
                 self.prepare_cell_content()?
             }
             Node::Run => {
@@ -1725,3 +1798,6 @@ mod table_tests;
 
 #[cfg(test)]
 mod auto_spacing_tests;
+
+#[cfg(test)]
+mod table_horizontal_placement_tests;

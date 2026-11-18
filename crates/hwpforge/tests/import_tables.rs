@@ -130,7 +130,13 @@ fn cell_height_and_alignment_reach_hwpx() {
             "<w:tbl><w:tblPr><w:tblW w:type='dxa' w:w='2000'/></w:tblPr><w:tblGrid><w:gridCol w:w='500'/><w:gridCol w:w='500'/><w:gridCol w:w='500'/><w:gridCol w:w='500'/></w:tblGrid><w:tr>{row_pr}{cells}</w:tr></w:tbl>{section}"
         ), ""))
         .unwrap();
-        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        // 이것을 실패시키는 것: 최상위 표의 모드 누락 경고 제거.
+        assert_eq!(result.warnings.len(), 1);
+        let hwpforge::ops::OpsWarning::Docx(warning) = &result.warnings[0] else {
+            panic!("DOCX mode warning required")
+        };
+        assert_eq!(warning.loss(), "table_compatibility_mode");
+        assert_eq!(warning.count(), 1);
         let (_, section) = trees(result.bytes);
         for (cell, align) in
             section.descendants("hp:tc").iter().zip(["TOP", "TOP", "CENTER", "BOTTOM"])

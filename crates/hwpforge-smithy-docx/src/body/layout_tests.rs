@@ -189,6 +189,7 @@ fn indexed(body: &str) -> (Vec<super::DecodedSection>, super::Relations) {
         &mut warnings,
         &mut resolver,
         &relations,
+        None,
     )
     .unwrap();
     (sections, relations)
@@ -342,6 +343,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         root_matches: true,
         default_tab_stop: None,
         balance_space_width: false,
+        compatibility: Compatibility::default(),
         body_seen: true,
         final_section_seen: false,
         stack: vec![],

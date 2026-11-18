@@ -646,7 +646,7 @@ fn structured_wrappers_preserve_table_coordinates_and_text() {
         ] {
             let d = structure(&at_table_level(level, |s| format!("{open}{s}{close}")));
             assert_pair(&d);
-            assert_eq!(d.warnings.len(), 1, "{level}: {:?}", d.warnings);
+            assert_eq!(warnings_without_missing_mode(&d), 1, "{level}: {:?}", d.warnings);
             assert_eq!(d.warnings[0].loss(), loss);
             assert_eq!(d.warnings[0].count(), if loss == "structured_wrapper" { 2 } else { 1 });
         }
@@ -655,7 +655,7 @@ fn structured_wrappers_preserve_table_coordinates_and_text() {
         format!("<w:sdt><w:sdtContent><w:customXml>{s}</w:customXml></w:sdtContent></w:sdt>")
     }));
     assert_pair(&d);
-    assert_eq!(d.warnings.len(), 2);
+    assert_eq!(warnings_without_missing_mode(&d), 2);
 }
 // 이것을 실패시키는 것: 범위 표식을 표 속성/내용 손실로 경고하거나 뒤 셀을 차단.
 #[test]
@@ -666,7 +666,7 @@ fn range_markers_at_table_levels_are_silent() {
                 format!("<w:{marker} w:id='1'/>{s}<w:{marker} w:id='1'/>")
             }));
             assert_pair(&d);
-            assert!(d.warnings.is_empty(), "{level}/{marker}: {:?}", d.warnings);
+            assert!(warnings_without_missing_mode(&d) == 0, "{level}/{marker}: {:?}", d.warnings);
         }
     }
     let d = structure(&fixed_table(&format!(
@@ -675,7 +675,7 @@ fn range_markers_at_table_levels_are_silent() {
         cell("", "B")
     )));
     assert_pair(&d);
-    assert!(d.warnings.is_empty());
+    assert!(warnings_without_missing_mode(&d) == 0);
 }
 // 이것을 실패시키는 것: 본문과 달리 이동 변경 추적 범위를 표 안에서 허용.
 #[test]
@@ -704,7 +704,7 @@ fn table_exceptions_and_unknown_children_report_content_loss() {
                 format!("<w:{element}><w:tblBorders><w:left w:val='single'/></w:tblBorders><w:tblCellMar><w:left w:w='10'/></w:tblCellMar><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:{element}>{s}")
             }));
             assert_pair(&d);
-            assert_eq!(d.warnings.len(), 1);
+            assert_eq!(warnings_without_missing_mode(&d), 1);
             assert_eq!(
                 (d.warnings[0].code(), d.warnings[0].loss(), d.warnings[0].count()),
                 (code, loss, 1)
@@ -734,7 +734,7 @@ fn optional_row_height_is_silent_for_auto_and_validates_explicit_values() {
             cell("", "B")
         )));
         assert_pair(&d);
-        assert!(d.warnings.is_empty(), "{:?}", d.warnings);
+        assert!(warnings_without_missing_mode(&d) == 0, "{:?}", d.warnings);
     }
     for height in ["oops", "-1", "20000001"] {
         for rule in ["", " w:hRule='auto'", " w:hRule='atLeast'", " w:hRule='exact'"] {
@@ -818,7 +818,7 @@ fn border_spacing_and_theme_have_one_loss_diagnostic() {
         ));
         let d = structure(&body);
         assert_pair(&d);
-        assert_eq!(d.warnings.len(), count, "{extra}: {:?}", d.warnings);
+        assert_eq!(warnings_without_missing_mode(&d), count, "{extra}: {:?}", d.warnings);
         if count != 0 {
             assert_eq!(d.warnings[0].code(), "DOCX_TABLE_BORDER_APPROXIMATED");
             assert_eq!(d.warnings[0].count(), 1);
@@ -1269,7 +1269,7 @@ fn row_height_rules_keep_content_minima_and_exact_approximation() {
     };
     let baseline = decode("");
     assert_eq!(tables(&baseline)[0].rows[0].height.unwrap().as_i32(), 1902);
-    assert!(baseline.warnings.is_empty(), "{:?}", baseline.warnings);
+    assert!(warnings_without_missing_mode(&baseline) == 0, "{:?}", baseline.warnings);
     for (rule, value, expected, warnings) in [
         (" w:hRule='auto'", " w:val='2000'", 1902, 0),
         (" w:hRule='auto'", "", 1902, 0),
@@ -1286,7 +1286,7 @@ fn row_height_rules_keep_content_minima_and_exact_approximation() {
     ] {
         let d = decode(&format!("<w:trPr><w:trHeight{value}{rule}/></w:trPr>"));
         assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), expected, "{rule}/{value}");
-        assert_eq!(d.warnings.len(), warnings, "{rule}/{value}: {:?}", d.warnings);
+        assert_eq!(warnings_without_missing_mode(&d), warnings, "{rule}/{value}: {:?}", d.warnings);
         if warnings > 0 {
             assert_eq!(
                 (d.warnings[0].code(), d.warnings[0].loss(), d.warnings[0].action()),
@@ -1905,4 +1905,13 @@ fn exact_boundaries_keep_literal_stroke_placement() {
             expected
         );
     }
+}
+
+// 이것을 실패시키는 것: 모드 누락 경고 제거 또는 문서당 여러 번 기록.
+fn warnings_without_missing_mode(d: &DocxDecoded) -> usize {
+    let last = d.warnings.last().unwrap();
+    assert_eq!(last.loss(), "table_compatibility_mode");
+    assert_eq!(last.count(), 1);
+    assert_eq!(last.action(), "retain_placement");
+    d.warnings.len() - 1
 }

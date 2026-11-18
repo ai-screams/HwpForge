@@ -214,7 +214,13 @@ impl Body<'_> {
         if !matches!(parent, Node::TableProperties(_) | Node::CellProperties(_))
             || matches!(e.name.as_str(), "gridSpan" | "vMerge" | "tblStyle")
         {
-            properties::attributes(e, self.part, &at, self.warnings)?;
+            properties::attributes(
+                e,
+                matches!(parent, Node::TableProperties(TableProperty::Root)),
+                self.part,
+                &at,
+                self.warnings,
+            )?;
         }
         let source = self
             .tables
@@ -340,7 +346,7 @@ impl Body<'_> {
                     self.warnings,
                 )?)
             }
-            (Node::CellProperties(TableProperty::Root), "vAlign") => {
+            (Node::CellProperties(TableProperty::CellRoot), "vAlign") => {
                 source.cell.as_mut().unwrap().vertical_align = match attr(e, "val") {
                     Some("top") => Some(TableVerticalAlign::Top),
                     Some("center") => Some(TableVerticalAlign::Center),
@@ -363,12 +369,12 @@ impl Body<'_> {
                     }
                 };
             }
-            (Node::CellProperties(TableProperty::Root), "gridSpan") => {
+            (Node::CellProperties(TableProperty::CellRoot), "gridSpan") => {
                 source.cell.as_mut().unwrap().span = integer(e, 1, self.part, &at)?
                     .try_into()
                     .map_err(|_| DocxError::invalid(self.part, &at, "column span exceeds u16"))?;
             }
-            (Node::CellProperties(TableProperty::Root), "vMerge") => {
+            (Node::CellProperties(TableProperty::CellRoot), "vMerge") => {
                 source.cell.as_mut().unwrap().merge = match attr(e, "val") {
                     Some("restart") => Merge::Restart,
                     None | Some("continue") => Merge::Continue,
@@ -421,7 +427,7 @@ impl Body<'_> {
                 "cell properties require a cell",
             ));
         }
-        frame.node = Node::CellProperties(TableProperty::Root);
+        frame.node = Node::CellProperties(TableProperty::CellRoot);
         Ok(())
     }
     pub(super) fn prepare_cell_content(&mut self) -> Result<()> {
@@ -561,6 +567,15 @@ impl Body<'_> {
             self.part,
             at,
         )?;
+        let placement = horizontal_placement(
+            &effective,
+            &source.rows,
+            self.compatibility.mode,
+            self.tables.inside(),
+            self.part,
+            &source.at,
+            self.warnings,
+        )?;
         let (mut table, plan) = assemble(
             source.at,
             (source.grid, source.grid_present, &budget),
@@ -570,6 +585,7 @@ impl Body<'_> {
             self.part,
             self.warnings,
         )?;
+        table.placement = placement;
         // A real empty paragraph supplies canonical styles to synthesized cells and table holders.
         self.empty_container_paragraph(at, false)?;
         let holder = self.paragraphs.last_mut().unwrap();
@@ -661,6 +677,92 @@ impl AssemblyBudget {
         Ok(Self { width, fillers, paragraphs, runs })
     }
 }
+fn horizontal_placement(
+    properties: &TableProperties,
+    rows: &[Row],
+    mode: Option<i32>,
+    nested: bool,
+    part: &str,
+    at: &Location,
+    warnings: &mut Vec<DocxWarning>,
+) -> Result<Option<hwpforge_core::placement::ObjectPlacement>> {
+    use hwpforge_core::placement::{HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+    use properties::TableAlignment;
+    if !matches!(mode, Some(14 | 15)) {
+        return Ok(None);
+    }
+    let alignment = properties.alignment.unwrap_or(TableAlignment::Left);
+    let indent = properties.indent.unwrap_or(0);
+    let mut diagnostic = |loss, action, message| {
+        record(warnings, Kind::TablePositionApproximated, loss, action, || {
+            (Some(part), Some(at), message)
+        })
+    };
+    if nested
+        && (matches!(alignment, TableAlignment::Center | TableAlignment::Right) || indent != 0)
+    {
+        diagnostic(
+            "nested_table_placement",
+            "retain_placement",
+            "Nested table alignment or indent retains the existing placement",
+        )?;
+        return Ok(None);
+    }
+    if properties.bidi == Some(true) || alignment == TableAlignment::Unsupported {
+        diagnostic(
+            "table_alignment_direction",
+            "retain_placement",
+            "Unsupported table alignment or direction retains the existing placement",
+        )?;
+        return Ok(None);
+    }
+    if nested {
+        return Ok(None);
+    }
+    let align = match alignment {
+        TableAlignment::Left => HorzAlign::Left,
+        TableAlignment::Center => HorzAlign::Center,
+        TableAlignment::Right => HorzAlign::Right,
+        TableAlignment::Unsupported => unreachable!(),
+    };
+    if align == HorzAlign::Right && indent != 0 {
+        diagnostic(
+            "table_indent_alignment",
+            "ignore_indent",
+            "Right aligned table ignores nonzero indent",
+        )?;
+    }
+    let legacy_margin = if mode == Some(14) && align != HorzAlign::Center {
+        if let Some(cell) = rows.first().and_then(|r| r.cells.first()).filter(|c| c.col == 0) {
+            cell.properties.margins[0].unwrap_or_else(|| margin(properties.margins).left.as_i32())
+        } else {
+            diagnostic(
+                "table_legacy_margin",
+                "retain_alignment",
+                "First original cell is unavailable; legacy margin adjustment omitted",
+            )?;
+            0
+        }
+    } else {
+        0
+    };
+    let offset = match align {
+        HorzAlign::Left => indent.checked_sub(legacy_margin),
+        HorzAlign::Right => Some(-legacy_margin),
+        _ => Some(0),
+    }
+    .and_then(|v| HwpUnit::new(v).ok())
+    .ok_or_else(|| DocxError::invalid(part, at, "table offset overflow"))?;
+    let default = ObjectPlacement::new(
+        ObjectTextWrap::TopAndBottom,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Column,
+    )
+    .with_flow_with_text(true);
+    let placement = default.clone().with_horz_align(align).with_horz_offset(offset);
+    Ok((placement != default).then_some(placement))
+}
+
 fn assemble(
     at: Location,
     grid: (Vec<Option<i32>>, bool, &AssemblyBudget),

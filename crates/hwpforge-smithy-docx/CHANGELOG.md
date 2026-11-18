@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 확인된 Word 호환 모드의 표 맞춤·들여쓰기·첫 칸 왼쪽 여백 배치를 보존하며, 모드 미지원에는 기존 배치와 진단을 유지한다. 모드 누락은 최상위 표가 있는 문서에서 한 번 진단한다.
+
 - 표 앞뒤와 표 칸 안에 이어지는 Word 번호 목록의 값을 보존한다. 표를 품은 문단과 칸의 출력 순서에 맞춰 필요한 번호 정의를 나누고 `list_numbering_split`으로 알린다. 나뉜 구간의 시작값은 고정되므로 앞 구간의 항목 삽입·삭제가 뒤 구간에 자동 전파되지 않는다.
 
 - Word 목록의 공유 카운터, 수준별 첫 시작값 덮어쓰기와 재시작을 보존한다. 십진 자기 번호의 생략되거나 0인 시작값은 고정 리터럴 표식으로 가져오며, 필요한 경우 시작값이 고정된 번호 정의로 나누고 `DOCX_VALUE_APPROXIMATED`의 `list_numbering_split`으로 알린다.

@@ -314,6 +314,7 @@ fn definition_limit_is_checked_only_after_body_parsing() {
             &mut warnings,
             &mut resolver,
             &super::Relations::default(),
+            None,
         );
         assert_eq!(resolver.registry.numberings.len(), 16384);
         if malformed {
