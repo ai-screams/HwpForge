@@ -48,8 +48,42 @@ impl WidthPlan {
         if container <= 0 {
             return Err(error());
         }
-        let width = self.width.unwrap_or(container).min(container);
-        let mut approximate = self.width.is_none() || self.width.is_some_and(|v| v > container);
+        let preserve_grid = self.nested
+            && matches!(
+                self.width_kind,
+                properties::WidthKind::Unspecified
+                    | properties::WidthKind::Dxa
+                    | properties::WidthKind::Auto
+                    | properties::WidthKind::Nil
+            )
+            && self.columns.iter().all(Option::is_some);
+        let width = if preserve_grid {
+            self.columns
+                .iter()
+                .try_fold(0_i32, |sum, v| sum.checked_add(v.unwrap()))
+                .filter(|v| *v <= HwpUnit::MAX_VALUE)
+                .ok_or_else(error)?
+        } else {
+            self.width.unwrap_or(container).min(container)
+        };
+        if let Some(diagnostic) = &self.width_diagnostic {
+            if preserve_grid {
+                diagnostic.grid.set(true);
+            } else {
+                diagnostic.container.set(true);
+            }
+        }
+        if preserve_grid && self.width.is_some_and(|v| v != width) {
+            record(w, Kind::TableWidthApproximated, "table_width_conflict", "use_grid", || {
+                (
+                    Some(part),
+                    Some(&self.at),
+                    "Explicit table width differs from preserved table grid widths",
+                )
+            })?;
+        }
+        let mut approximate =
+            !preserve_grid && (self.width.is_none() || self.width.is_some_and(|v| v > container));
         let mut weights: Vec<_> =
             self.columns.iter().map(|v| v.map(|n| Fraction::new(i128::from(n), 1))).collect();
         // A declared grid wins every conflicting cell preference. Where the grid
@@ -136,7 +170,15 @@ impl WidthPlan {
         }
         if approximate {
             record(w, Kind::TableWidthApproximated, "table_width", "fit_columns", || {
-                (Some(part),Some(&self.at),"Table/column widths use container proportions and final-column rounding remainder")
+                (
+                    Some(part),
+                    Some(&self.at),
+                    if preserve_grid {
+                        "Cell width preferences differ from preserved table grid widths"
+                    } else {
+                        "Table/column widths use container proportions and final-column rounding remainder"
+                    },
+                )
             })?;
         }
         Ok(())

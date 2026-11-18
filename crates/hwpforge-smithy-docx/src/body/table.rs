@@ -68,6 +68,9 @@ pub(super) struct WidthPlan {
     at: Location,
     columns: Vec<Option<i32>>,
     width: Option<i32>,
+    width_kind: properties::WidthKind,
+    width_diagnostic: Option<Rc<properties::WidthDiagnostic>>,
+    nested: bool,
     cells: Vec<CellWidth>,
 }
 struct CellWidth {
@@ -84,6 +87,7 @@ pub(super) struct Tables {
     stack: Vec<Source>,
     pub(super) pending: Vec<(usize, WidthPlan)>,
     positions: usize,
+    pub(super) width_diagnostics: Vec<Rc<properties::WidthDiagnostic>>,
 }
 impl Tables {
     pub(super) fn measures_paragraph(&self) -> bool {
@@ -338,13 +342,13 @@ impl Body<'_> {
                 source.style = style;
             }
             (Node::TableProperties(state), _) => {
-                next = Node::TableProperties(source.properties.read(
+                next = Node::TableProperties(source.properties.read_and_collect(
                     *state,
                     e,
-                    self.part,
-                    &at,
+                    (self.part, &at),
                     self.warnings,
-                )?)
+                    &mut self.tables.width_diagnostics,
+                )?);
             }
             (Node::CellProperties(TableProperty::CellRoot), "vAlign") => {
                 source.cell.as_mut().unwrap().vertical_align = match attr(e, "val") {
@@ -576,7 +580,7 @@ impl Body<'_> {
             &source.at,
             self.warnings,
         )?;
-        let (mut table, plan) = assemble(
+        let (mut table, mut plan) = assemble(
             source.at,
             (source.grid, source.grid_present, &budget),
             effective,
@@ -586,6 +590,7 @@ impl Body<'_> {
             self.warnings,
         )?;
         table.placement = placement;
+        plan.nested = self.tables.inside();
         // A real empty paragraph supplies canonical styles to synthesized cells and table holders.
         self.empty_container_paragraph(at, false)?;
         let holder = self.paragraphs.last_mut().unwrap();
@@ -1024,7 +1029,18 @@ fn assemble(
     }
     // Resolve adjacent faces before interning, with no output-format numbers here.
     borders::apply(&mut table, &grid, &overrides, properties.borders, registry, (part, &at), w)?;
-    Ok((table, WidthPlan { at, columns, width: properties.width.flatten(), cells: plans }))
+    Ok((
+        table,
+        WidthPlan {
+            at,
+            columns,
+            width: properties.width.flatten(),
+            width_kind: properties.width_kind,
+            width_diagnostic: properties.width_diagnostic,
+            nested: false,
+            cells: plans,
+        },
+    ))
 }
 fn push_filler(
     cells: &mut Vec<TableCell>,

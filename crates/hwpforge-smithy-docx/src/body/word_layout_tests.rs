@@ -158,7 +158,7 @@ fn nested_anchors_move_only_after_width_plans_inside_their_cell() {
         let cell = &outer.rows[0].cells[0];
         assert_eq!(cell.paragraphs.len(), 1);
         let nested = table_run(&cell.paragraphs[0].runs[0]);
-        assert_eq!(nested.width.unwrap().as_i32(), 9000);
+        assert_eq!(nested.width.unwrap().as_i32(), 5000);
         assert_eq!(
             cell.paragraphs[0].runs[1].content.as_text(),
             Some(if following.is_empty() { "" } else { "inside" })

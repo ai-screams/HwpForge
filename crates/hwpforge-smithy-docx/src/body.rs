@@ -221,6 +221,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DocxDecoded> {
         &main,
         &mut warnings,
     )?;
+    crate::format::finish_table_width_warnings(&mut warnings);
     let has_table = sections.iter().any(|s| {
         s.core
             .paragraphs
@@ -556,6 +557,13 @@ fn scan_inner(
     }
     if main && (!body.paragraphs.is_empty() || !body.final_section_seen) {
         body.close_section(Layout::default(), Location { name: Rc::from("body"), ordinal: 0 })?;
+    }
+    if let Some(resolver) = &body.resolver {
+        crate::format::prepare_table_width_warnings(
+            resolver,
+            &body.tables.width_diagnostics,
+            body.warnings,
+        );
     }
     Ok((
         body.sections,
@@ -1801,3 +1809,6 @@ mod auto_spacing_tests;
 
 #[cfg(test)]
 mod table_horizontal_placement_tests;
+
+#[cfg(test)]
+mod nested_table_width_tests;

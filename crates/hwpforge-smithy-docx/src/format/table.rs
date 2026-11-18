@@ -3,16 +3,56 @@ use super::*;
 use hwpforge_foundation::HwpUnit;
 
 // left, right, top, bottom, insideH, insideV. None means inherit, not no line.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TableProperties {
     pub(crate) borders: [Option<bool>; 6],
     // Source widths in HwpUnit, independent of the approximated output strokes.
     pub(crate) border_widths: [Option<i32>; 6],
     pub(crate) width: Option<Option<i32>>,
+    pub(crate) width_kind: WidthKind,
+    pub(crate) width_diagnostic: Option<Rc<WidthDiagnostic>>,
+    pub(crate) width_diagnostics: Vec<Rc<WidthDiagnostic>>,
     pub(crate) indent: Option<i32>,
     pub(crate) alignment: Option<TableAlignment>,
     pub(crate) bidi: Option<bool>,
     pub(crate) margins: [Option<i32>; 4],
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WidthKind {
+    #[default]
+    Unspecified,
+    Dxa,
+    Auto,
+    Nil,
+    Pct,
+    Unknown,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WidthDiagnostic {
+    warning_index: usize,
+    pub(crate) grid: std::cell::Cell<bool>,
+    pub(crate) container: std::cell::Cell<bool>,
+}
+pub(crate) fn prepare_width_diagnostics<'a>(
+    diagnostics: impl IntoIterator<Item = &'a Rc<WidthDiagnostic>>,
+    warnings: &mut [DocxWarning],
+) {
+    // Numbering has saved positions in this vector. Keep every source slot
+    // until its existing finalizer has inserted and merged delayed warnings.
+    let decisions: std::collections::BTreeMap<_, _> = diagnostics
+        .into_iter()
+        .map(|d| (d.warning_index, !d.grid.get() || d.container.get()))
+        .collect();
+    for (index, warning) in warnings.iter_mut().enumerate() {
+        if let Some(retain) = decisions.get(&index) {
+            if let DocxWarning::TableWidthApproximated { action, .. } = warning {
+                *action = if *retain { "use_container" } else { "discard_table_width" };
+            }
+        }
+    }
+}
+pub(crate) fn finish_width_diagnostics(warnings: &mut Vec<DocxWarning>) {
+    warnings.retain(|warning| warning.action() != "discard_table_width");
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TableAlignment {
@@ -57,7 +97,23 @@ impl TableProperties {
         }
         if other.width.is_some() {
             self.width = other.width;
+            self.width_kind = other.width_kind;
+            self.width_diagnostic = other.width_diagnostic.clone();
         }
+    }
+    // Direct tables are transient; transfer every declaration to the document owner
+    // as part of reading it. Style definitions retain their own declaration list.
+    pub(crate) fn read_and_collect(
+        &mut self,
+        state: TableProperty,
+        e: &Element,
+        source: (&str, &str),
+        w: &mut Vec<DocxWarning>,
+        diagnostics: &mut Vec<Rc<WidthDiagnostic>>,
+    ) -> Result<TableProperty> {
+        let state = self.read(state, e, source.0, source.1, w)?;
+        diagnostics.append(&mut self.width_diagnostics);
+        Ok(state)
     }
     pub(crate) fn read(
         &mut self,
@@ -78,7 +134,38 @@ impl TableProperties {
             (TableProperty::Root | TableProperty::CellRoot, "tblCellMar" | "tcMar") => {
                 Ok(TableProperty::Margins)
             }
-            (TableProperty::Root | TableProperty::CellRoot, "tblW" | "tcW") => {
+            // Only table roots own deferred width decisions. Cell roots use width()
+            // below, so they cannot create a declaration without a collector.
+            (TableProperty::Root, "tblW") => {
+                self.width_kind = match attr(e, "type") {
+                    None | Some("dxa") => WidthKind::Dxa,
+                    Some("auto") => WidthKind::Auto,
+                    Some("nil") => WidthKind::Nil,
+                    Some("pct") => WidthKind::Pct,
+                    _ => WidthKind::Unknown,
+                };
+                self.width_diagnostic = None;
+                self.width = Some(if matches!(self.width_kind, WidthKind::Auto | WidthKind::Nil) {
+                    let diagnostic = Rc::new(WidthDiagnostic {
+                        warning_index: w.len(),
+                        grid: false.into(),
+                        container: false.into(),
+                    });
+                    let mut pending = Vec::new();
+                    warn(&mut pending, part, at, Kind::TableWidthApproximated,
+                        "table_width", "pending_table_width",
+                        "Relative or automatic width uses the container and known column proportions")?;
+                    w.extend(pending);
+                    self.width_diagnostics.push(diagnostic.clone());
+                    self.width_diagnostic = Some(diagnostic);
+                    None
+                } else {
+                    width(e, part, at, w)?
+                });
+                Ok(TableProperty::Leaf)
+            }
+            (TableProperty::CellRoot, "tblW")
+            | (TableProperty::Root | TableProperty::CellRoot, "tcW") => {
                 self.width = Some(width(e, part, at, w)?);
                 Ok(TableProperty::Leaf)
             }

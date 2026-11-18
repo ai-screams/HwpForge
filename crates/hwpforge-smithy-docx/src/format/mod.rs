@@ -256,6 +256,28 @@ fn apply(
     Ok(())
 }
 
+// Definitions own source declarations; inherited copies share only their use decisions.
+pub(crate) fn prepare_table_width_warnings(
+    resolver: &Resolver,
+    direct: &[Rc<table::WidthDiagnostic>],
+    warnings: &mut [DocxWarning],
+) {
+    table::prepare_width_diagnostics(
+        resolver
+            .definitions
+            .styles
+            .iter()
+            .flatten()
+            .flat_map(|style| &style.table.width_diagnostics)
+            .chain(direct),
+        warnings,
+    );
+}
+
+pub(crate) fn finish_table_width_warnings(warnings: &mut Vec<DocxWarning>) {
+    table::finish_width_diagnostics(warnings);
+}
+
 #[cfg(test)]
 mod structural_dimension_tests {
     use super::*;
