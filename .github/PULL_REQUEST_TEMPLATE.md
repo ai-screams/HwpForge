@@ -12,7 +12,7 @@
 
 ## Checklist
 
-- [ ] `make ci` passes (fmt + clippy + test + deny + lint)
+- [ ] `make ci` passes (fixture-policy + fmt + clippy + test + examples + deny + lint)
 - [ ] Tests added or updated for the change
 - [ ] Public API changes are documented (`rustdoc`)
 - [ ] Doc changes verified with `mdbook build` (if applicable)

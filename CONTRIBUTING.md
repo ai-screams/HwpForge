@@ -54,7 +54,7 @@ This prevents duplicated effort and ensures the change aligns with the project d
 ### Essential commands
 
 ```bash
-make ci          # Fast local check: fmt + clippy + test + deny + lint-md (alias of ci-fast)
+make ci          # Fast local check: fixture-policy + fmt + clippy + test + examples + deny + lint-md (alias of ci-fast)
 make ci-full     # The above plus coverage and MSRV
 make py-all      # Python bindings: lint + types + Rust/Python tests + coverage
 make test        # cargo nextest run (parallel, all features)
@@ -67,7 +67,7 @@ mdbook build     # Build the project book (mdBook 0.4 line — see below)
 
 **Always run `make ci` before pushing.** It uses the same flags CI does, so it catches what
 bare `cargo clippy` or `cargo fmt --check` would miss. It is not, however, the whole pipeline:
-`make ci` is the five fast lanes, and CI additionally runs Coverage, MSRV, Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
+`make ci` is the seven fast lanes, and CI additionally runs Coverage, MSRV, Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
 `make py-all` as well, and `mdbook build` if you touched docs.
 
 `mdbook build` needs the **mdBook 0.4 line**: CI pins mdBook 0.4.52 with mdbook-admonish 1.20.0

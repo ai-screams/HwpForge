@@ -39,6 +39,7 @@ This enables:
 - Shared integration-test helpers live in `crates/<crate>/tests/support/<concern>.rs`, included with `#[path = "support/<concern>.rs"] mod <concern>;`. Reuse them before adding a helper.
 - CLI integration tests are one binary split by command: `crates/hwpforge-bindings-cli/tests/cli_integration/<command>.rs`.
 - Generated `.hwpx` inputs must be reproducible from `crates/*/examples` (see `crates/hwpforge-smithy-hwpx/tests/generated_inputs.rs`).
+- Every example must run with no arguments and exit 0: `make run-examples` runs each one in an empty temp folder (CI does the same). An example that needs arguments or outside inputs goes in `SKIP` of `scripts/run_examples.py` with the reason.
 - Assert output XML through the parsed tree in `crates/hwpforge-smithy-hwpx/tests/support/xml.rs` (`Element`: exact attribute values, child order), not `contains`. Expected wire values stay literal; never reference the encoder constants.
 
 ---
@@ -46,7 +47,7 @@ This enables:
 ## Development Commands
 
 ```bash
-make ci               # required before push — alias of ci-fast (fixture-policy, fmt, clippy, test, deny, lint-md; same flags as CI)
+make ci               # required before push — alias of ci-fast (fixture-policy, fmt, clippy, test, run-examples, deny, lint-md; same flags as CI)
 make ci-full          # the above + coverage + MSRV (before a release or a large change)
 make py-all           # Python bindings (lint, types, Rust/Python tests, coverage)
 make site-check       # docs site build + post-processing (same path as CI Docs Build; needs mdBook 0.4)
@@ -56,7 +57,7 @@ cargo clippy -p <crate> --all-targets -- -D warnings   # pre-check the crates yo
 bacon / bacon test    # watch mode
 ```
 
-`make ci` is the six fast lanes, not all of CI. CI also runs Coverage, MSRV, Docs Build, Python (including release-only tests) and Workflow Lint.
+`make ci` is the seven fast lanes, not all of CI. CI also runs Coverage, MSRV, Docs Build, Python (including release-only tests) and Workflow Lint.
 
 ---
 

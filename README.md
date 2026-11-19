@@ -582,7 +582,7 @@ flowchart LR
 ### ⚒️ 명령어
 
 ```bash
-make ci          # 빠른 로컬 검증 — fmt + clippy + test + deny + lint-md (ci-fast 별칭)
+make ci          # 빠른 로컬 검증 — fixture-policy + fmt + clippy + test + 예제 실행 + deny + lint-md (ci-fast 별칭)
 make ci-full     # 위에 coverage + MSRV 추가 (릴리스·큰 변경 전)
 make py-all      # Python 바인딩 검사 (lint + 타입 + Rust/Python 테스트 + coverage)
 make test        # cargo nextest run
@@ -592,7 +592,7 @@ make doc         # rustdoc 생성 (브라우저에서 열림)
 make cov         # coverage 리포트 (90% gate)
 ```
 
-`make ci`는 CI 전체가 아니라 그중 빠른 다섯 레인입니다. CI는 여기에 Coverage·MSRV·Docs Build·Python·Workflow Lint를 더 돌립니다. 릴리스나 큰 변경 전에는 `make ci-full`과 `make py-all`을, 문서를 고쳤다면 `mdbook build`를 함께 돌리세요.
+`make ci`는 CI 전체가 아니라 그중 빠른 일곱 레인입니다. CI는 여기에 Coverage·MSRV·Docs Build·Python·Workflow Lint를 더 돌립니다. 릴리스나 큰 변경 전에는 `make ci-full`과 `make py-all`을, 문서를 고쳤다면 `mdbook build`를 함께 돌리세요.
 
 > **빌드 가속 (선택)**: `sccache`가 PATH에 있으면 `make` 타깃이 자동으로 컴파일
 > 캐시로 사용합니다(없으면 그대로 동작 — 아무것도 깨지지 않음). 반복 `make ci`가

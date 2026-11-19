@@ -1,7 +1,8 @@
 //! HWPX → Markdown 변환 예제.
 //!
-//! 각 HWPX 파일을 Lossy(읽기용 GFM)와 Lossless(보존 범위 확인용 HTML) 두 가지
-//! 마크다운으로 변환합니다.
+//! 레포에 있는 쇼케이스 HWPX 파일을 Lossy(읽기용 GFM)와 Lossless(보존 범위 확인용 HTML)
+//! 두 가지 마크다운으로 변환합니다. 입력은 실행한 폴더와 상관없이 레포에서 읽고,
+//! 출력은 실행한 폴더의 `temp/hwpx_md_convert/hwpx2md/`에 씁니다.
 //!
 //! Usage: cargo run -p hwpforge-smithy-md --example hwpx_md_convert
 
@@ -11,6 +12,17 @@ use std::path::Path;
 
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
 use hwpforge_smithy_md::MdEncoder;
+
+/// 변환할 문서: 이름과 레포 루트 기준 경로.
+const TARGETS: [(&str, &str); 2] = [
+    ("01_text", "examples/showcase/features/feature_isolation/01_text.hwpx"),
+    (
+        "hwpx_complete_guide",
+        "examples/showcase/guides/hwpx_complete_guide/hwpx_complete_guide.hwpx",
+    ),
+];
+
+const OUT_DIR: &str = "temp/hwpx_md_convert/hwpx2md";
 
 fn write_extracted_images(output_root: &Path, images: &std::collections::HashMap<String, Vec<u8>>) {
     for (rel_path, data) in images {
@@ -22,12 +34,12 @@ fn write_extracted_images(output_root: &Path, images: &std::collections::HashMap
     }
 }
 
-fn convert(name: &str) {
-    let input_path = format!("examples/{name}.hwpx");
-    let output_root = Path::new("examples/hwpx2md");
+fn convert(name: &str, input: &str) {
+    let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(input);
+    let output_root = Path::new(OUT_DIR);
 
     // ── 1. HWPX 디코딩 ──────────────────────────────────────────
-    let hwpx_bytes = fs::read(&input_path).unwrap_or_else(|e| panic!("read {input_path}: {e}"));
+    let hwpx_bytes = fs::read(&input_path).unwrap_or_else(|e| panic!("read {input}: {e}"));
     let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("decode hwpx");
     let validated = decoded.document.validate().expect("validate document");
     let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
@@ -43,7 +55,8 @@ fn convert(name: &str) {
     write_extracted_images(output_root, &styled.images);
 
     println!(
-        "  {input_path} → hwpx2md/{name}.md (styled, {} bytes, {} lines, {} images)",
+        "  {input} → {} (styled, {} bytes, {} lines, {} images)",
+        styled_path.display(),
         styled.markdown.len(),
         styled.markdown.lines().count(),
         styled.images.len()
@@ -57,29 +70,28 @@ fn convert(name: &str) {
             fs::write(&lossless_path, &lossless_md).expect("write lossless md");
 
             println!(
-                "  {input_path} → hwpx2md/{name}.lossless.md (lossless, {} bytes, {} lines)",
+                "  {input} → {} (lossless, {} bytes, {} lines)",
+                lossless_path.display(),
                 lossless_md.len(),
                 lossless_md.lines().count()
             );
         }
         Err(e) => {
-            println!("  {input_path} → lossless 건너뜀 ({e})");
+            println!("  {input} → lossless 건너뜀 ({e})");
         }
     }
 }
 
 fn main() {
-    let targets = ["01_text", "hwpx_complete_guide"];
-
-    fs::create_dir_all("examples/hwpx2md").expect("create hwpx2md dir");
+    fs::create_dir_all(OUT_DIR).expect("create hwpx2md dir");
 
     println!("=== HwpForge HWPX → Markdown Convert ===\n");
 
-    for name in &targets {
+    for (name, input) in TARGETS {
         println!("[{name}]");
-        convert(name);
+        convert(name, input);
         println!();
     }
 
-    println!("=== {} files processed ({} outputs) ===", targets.len(), targets.len() * 2);
+    println!("=== {} files processed ({} outputs) ===", TARGETS.len(), TARGETS.len() * 2);
 }
