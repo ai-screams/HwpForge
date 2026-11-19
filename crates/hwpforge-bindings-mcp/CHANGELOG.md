@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.20.1...hwpforge-bindings-mcp-v0.20.2) - 2026-11-19
+
+### Added
+
+- *(hwpx)* [#143] keep legacy direct header definitions in source-preserving deletes ([#359](https://github.com/ai-screams/HwpForge/pull/359))
+
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.20.0...hwpforge-bindings-mcp-v0.20.1) - 2026-11-16
 
 ### Changed
