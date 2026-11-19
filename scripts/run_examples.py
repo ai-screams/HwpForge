@@ -44,8 +44,6 @@ SKIP = {
     "roundtrip_save": "needs input and output path arguments",
     "merged_cells": "writes a test fixture; tests/generated_inputs.rs checks its output",
     "page_and_picture": "writes test fixtures; tests/generated_inputs.rs checks their output",
-    "hwpx_json_roundtrip": "reads its inputs from examples/*.hwpx, which no longer exist",
-    "hwpx_md_convert": "reads its inputs from examples/*.hwpx, which no longer exist",
 }
 
 # Repository folders that examples read relative to the working directory,
