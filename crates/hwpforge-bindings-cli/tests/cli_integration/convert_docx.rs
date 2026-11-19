@@ -400,3 +400,30 @@ fn markdown_font_space_retains_hancom_defaults() {
         assert_eq!(shape.attr("useFontSpace"), Some("0"));
     }
 }
+
+// 이것을 실패시키는 것: ImportMeta 경고의 context 소실, count를 1로 초기화, 첫 표 run 위치 누락.
+#[test]
+fn table_border_space_warning_keeps_typed_import_context() {
+    let tmp = test_tmp();
+    let input = tmp.join("spacing.docx");
+    let output = tmp.join("spacing.hwpx");
+    std::fs::write(
+        &input,
+        docx::package_with_defaults(&docx::border_space_table(3, false).repeat(2), ""),
+    )
+    .unwrap();
+    let (value, stderr, code) =
+        run_json(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{value} {stderr}");
+    let ws: Vec<_> = value["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|w| w["code"] == "TABLE_BORDER_SPACE_APPROXIMATED")
+        .collect();
+    assert_eq!(ws.len(), 1);
+    assert_eq!(
+        ws[0]["context"],
+        serde_json::json!({"format":"hwpx","stage":"encode","location":"section[0].para[0].run[0]","loss":"table_border_space","action":"project_unverified","count":2})
+    );
+}

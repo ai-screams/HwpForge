@@ -516,3 +516,68 @@ fn protected_field_refusal_is_a_typed_fallback() {
     assert!(apply(&base, &decoded, &package, plan).unwrap().is_none());
     assert_eq!(crate::patch::PRESERVING_SPLICES.get(), 0);
 }
+
+// 이것을 실패시키는 것: 보존 경로를 재인코드로 바꿈, 두 shape 칸의 fallback 생략, 편집 때 테두리 몫 재가산.
+#[test]
+fn projected_cell_margins_survive_preserving_and_reencoded_edits() {
+    use crate::test_support::xml::Element;
+    use hwpforge_core::{table::TableMargin, LayoutProfile};
+    for two_shapes in [false, true] {
+        let mut styles = crate::HwpxStyleStore::with_default_fonts("함초롬돋움");
+        styles.push_char_shape(crate::HwpxCharShape::default());
+        let bold = crate::HwpxCharShape { bold: true, ..Default::default() };
+        let other = styles.push_char_shape(bold);
+        styles.push_para_shape(crate::HwpxParaShape::default());
+        let border =
+            styles.push_border_fill(crate::style_store::HwpxBorderFill::default_table_border());
+        styles.imported_border_widths.insert(border, [Some(50); 4]);
+        let mut p = para("원본");
+        if two_shapes {
+            p.runs = vec![Run::text("원", CharShapeIndex::new(0)), Run::text("본", other)];
+        }
+        let m = TableMargin {
+            left: HwpUnit::new(540).unwrap(),
+            right: HwpUnit::new(540).unwrap(),
+            top: HwpUnit::ZERO,
+            bottom: HwpUnit::ZERO,
+        };
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![p],
+            HwpUnit::new(10000).unwrap(),
+        )])])
+        .with_border_fill_id(border)
+        .with_in_margin(m);
+        let mut d = Document::new();
+        d.set_layout_profile(LayoutProfile::WordCompatible);
+        d.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let base =
+            HwpxEncoder::encode(&d.validate().unwrap(), &styles, &ImageStore::new()).unwrap();
+        reset();
+        let out = HwpxCellEditor::set_cells(
+            &base,
+            &[CellSpec {
+                table: 0,
+                target: CellTarget::At(GridCoord::new(0, 0)),
+                text: "새값".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(CELL_REENCODE_CALLS.get(), usize::from(two_shapes));
+        let tree = Element::parse(&test_package::part(&out.bytes, "Contents/section0.xml"));
+        let margin = tree.descendants("hp:cellMargin")[0];
+        assert_eq!(
+            ["left", "right", "top", "bottom"].map(|key| margin.attr(key).unwrap()),
+            ["565", "515", "50", "50"]
+        );
+        let d = HwpxDecoder::decode(&out.bytes).unwrap();
+        let mut values = vec![];
+        d.document.for_each_table(|t| values.push(t.rows[0].cells[0].paragraphs[0].text_content()));
+        assert_eq!(values, ["새값"]);
+    }
+}

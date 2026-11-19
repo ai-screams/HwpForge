@@ -854,3 +854,24 @@ def _cell_admission_input(data: bytes) -> bytes:
         for name, payload in parts.items():
             target.writestr(name, payload)
     return output.getvalue()
+
+
+# 이것을 실패시키는 것: 공통 경고 context의 위치/횟수 또는 import 보고서 필드 계약 제거.
+def test_table_border_space_warning_uses_existing_report_shape() -> None:
+    context = {
+        "format": "hwpx",
+        "stage": "encode",
+        "location": "section[0].para[2].run[1]",
+        "loss": "table_border_space",
+        "action": "retain_margins",
+        "count": 2,
+    }
+    warning = {
+        "code": "TABLE_BORDER_SPACE_APPROXIMATED",
+        "message": "Table margins retained",
+        "context": context,
+    }
+    _keys_match_stub({"sections": 1, "paragraphs": 1, "warnings": [warning]}, "ImportReport")
+    _keys_match_stub(warning, "WarningInfo")
+    _keys_match_stub(context, "WarningContext")
+    assert isinstance(context["count"], int)

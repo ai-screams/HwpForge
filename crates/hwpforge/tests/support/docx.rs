@@ -93,3 +93,13 @@ pub fn package_with_numbering_and_settings(
     write!(output,"<w:numbering xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>{numbering}</w:numbering>").unwrap();
     output.finish().unwrap().into_inner()
 }
+
+/// A single source-bordered cell with ordinary Word margins.
+#[allow(dead_code)]
+pub fn border_space_table(size: u32, exact: bool) -> String {
+    let borders = ["left", "right", "top", "bottom", "insideH", "insideV"]
+        .map(|side| format!("<w:{side} w:val='single' w:sz='{size}'/>"))
+        .join("");
+    let row = if exact { "<w:trPr><w:trHeight w:val='600' w:hRule='exact'/></w:trPr>" } else { "" };
+    format!("<w:tbl><w:tblPr><w:tblBorders>{borders}</w:tblBorders><w:tblCellMar><w:left w:w='108'/><w:right w:w='108'/><w:top w:w='0'/><w:bottom w:w='0'/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w='2000'/></w:tblGrid><w:tr>{row}<w:tc><w:p><w:r><w:t>ASCII</w:t></w:r></w:p></w:tc></w:tr></w:tbl>")
+}

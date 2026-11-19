@@ -126,4 +126,46 @@ mod tests {
             }
         });
     }
+    // 이것을 실패시키는 것: 새 경고 typed context/count 누락 또는 Python 정수가 아닌 count.
+    #[test]
+    fn table_border_space_warning_reaches_python_metadata() {
+        use hwpforge::hwpx::{EncodeWarning, ParagraphPath, PathSeg};
+        for count in [1, 2] {
+            let info =
+                hwpforge::ops::OpsWarning::Encode(EncodeWarning::TableBorderSpaceApproximated {
+                    path: ParagraphPath(vec![
+                        PathSeg::Section(0),
+                        PathSeg::BodyParagraph(2),
+                        PathSeg::Run(1),
+                    ]),
+                    reason: "negative_right_margin",
+                    count,
+                })
+                .info();
+            Python::initialize();
+            Python::attach(|py| {
+                let value = meta(py, &info).unwrap();
+                let context = value.get_item("context").unwrap();
+                assert_eq!(
+                    context.get_item("location").unwrap().extract::<String>().unwrap(),
+                    "section[0].para[2].run[1]"
+                );
+                assert_eq!(
+                    context.get_item("action").unwrap().extract::<String>().unwrap(),
+                    "retain_margins"
+                );
+                assert_eq!(
+                    context.get_item("loss").unwrap().extract::<String>().unwrap(),
+                    "table_border_space"
+                );
+                if count == 1 {
+                    assert!(context.get_item("count").is_err());
+                } else {
+                    let c = context.get_item("count").unwrap();
+                    assert!(c.is_instance_of::<pyo3::types::PyInt>());
+                    assert_eq!(c.extract::<u64>().unwrap(), 2);
+                }
+            });
+        }
+    }
 }
