@@ -67,7 +67,9 @@ enum Frame {
     Style(StyleKey),
     Table(StyleKey),
     TableProperties(StyleKey, table::TableProperty),
-    CellProperties,
+    CellProperties(StyleKey),
+    RowProperties(StyleKey),
+    TableLeaf(StyleKey),
     Properties(Owner, bool),
     NumPr(Owner),
     NumberTabs(Owner),
@@ -86,6 +88,18 @@ enum Frame {
     Section,
 }
 impl Definitions {
+    fn omit_table_format(&mut self, frame: Frame) {
+        if let Frame::Style(key)
+        | Frame::Table(key)
+        | Frame::CellProperties(key)
+        | Frame::RowProperties(key)
+        | Frame::TableLeaf(key)
+        | Frame::TableProperties(key, _) = frame
+        {
+            self.styles[key.0].as_mut().unwrap().table.space_uncertainty.omit_format();
+        }
+    }
+
     fn marker_level_mut(&mut self, owner: Owner) -> Option<&mut super::lists::Level> {
         match owner {
             Owner::Abstract(id, level) => self.abstracts.get_mut(&id)?.get_mut(&level),
@@ -380,6 +394,9 @@ impl Definitions {
                                             })?;
                                         style.parent = parent;
                                         if parent.is_none() {
+                                            // 빠진 부모의 서식은 상속에서 사라지므로 원본 불확정이다.
+                                            // 표는 표 스타일만 고르므로 다른 종류의 기록은 쓰이지 않는다.
+                                            style.table.space_uncertainty.omit_format();
                                             warn(
                                                 warnings,
                                                 part,
@@ -410,11 +427,21 @@ impl Definitions {
                                 (Frame::Style(key), "tblPr") => {
                                     Frame::TableProperties(key, table::TableProperty::Root)
                                 }
-                                (Frame::Style(_) | Frame::Table(_), "tcPr") => {
-                                    Frame::CellProperties
+                                (Frame::Style(key) | Frame::Table(key), "tcPr") => {
+                                    Frame::CellProperties(key)
                                 }
-                                (Frame::CellProperties, "shd") => {
-                                    table::TableProperties::default().read(
+                                (Frame::Style(key) | Frame::Table(key), "trPr") => {
+                                    Frame::RowProperties(key)
+                                }
+                                (Frame::RowProperties(key), _)
+                                    if table::child_admission("styleTrPr", &e)
+                                        == table::Admission::Neutral =>
+                                {
+                                    definition_warning(&e, part, root, "child subtree", warnings)?;
+                                    Frame::TableLeaf(key)
+                                }
+                                (Frame::CellProperties(key), "shd") => {
+                                    self.styles[key.0].as_mut().unwrap().table.read(
                                         table::TableProperty::CellRoot,
                                         &e,
                                         part,
@@ -422,6 +449,9 @@ impl Definitions {
                                         warnings,
                                     )?;
                                     diagnosed = true;
+                                    Frame::TableProperties(key, table::TableProperty::Leaf)
+                                }
+                                (Frame::CellProperties(_), _) | (Frame::Table(_), "tblPr") => {
                                     Frame::Ignored
                                 }
                                 (Frame::TableProperties(key, state), _) => {
@@ -853,6 +883,18 @@ impl Definitions {
                     }
                     if matches {
                         if matches!(frame, Frame::Ignored) {
+                            // Consult the same vocabulary before the subtree loses its owner.
+                            let context = match parent {
+                                Frame::Style(_) => "style",
+                                Frame::Table(_) => "tblStylePr",
+                                Frame::CellProperties(_) => "styleTcPr",
+                                Frame::RowProperties(_) => "styleTrPr",
+                                Frame::TableProperties(_, state) => state.vocabulary_parent(),
+                                _ => "leaf",
+                            };
+                            if table::child_admission(context, &e) != table::Admission::Neutral {
+                                self.omit_table_format(parent);
+                            }
                             if !diagnosed
                                 && !matches!(
                                     parent,
@@ -864,8 +906,8 @@ impl Definitions {
                             {
                                 definition_warning(&e, part, root, "child subtree", warnings)?;
                             }
-                        } else {
-                            definition_attributes(frame, &e, part, root, warnings)?;
+                        } else if definition_attributes(frame, &e, part, root, warnings)? {
+                            self.omit_table_format(frame);
                         }
                     }
                     stack.push(frame);
@@ -917,18 +959,18 @@ fn definition_attributes(
     part: &str,
     root: &str,
     warnings: &mut Vec<DocxWarning>,
-) -> Result<()> {
+) -> Result<bool> {
     let (consumed, ignored): (&[&str], &[&str]) = match frame {
         Frame::Root if root == "theme" => (&[], &["name"]), // Display label only.
         Frame::Root
         | Frame::Defaults
         | Frame::DefaultRun
         | Frame::DefaultPara
-        | Frame::CellProperties
         | Frame::ThemeElements
         | Frame::Family(_, _) => (&[], &[]),
         Frame::Style(_) => (&["type", "styleId", "default"], &["customStyle"]), // Authoring provenance only.
-        Frame::Table(_) => (&["type"], &[]),
+        Frame::Table(_) | Frame::CellProperties(_) | Frame::RowProperties(_) => (&[], &[]),
+        Frame::TableLeaf(_) => return table::attributes(e, "style", part, &e.name, warnings),
         Frame::Abstract(_) => (&["abstractNumId"], &[]),
         Frame::Number(_) => (&["numId"], &[]),
         Frame::Override { .. } => (&["ilvl"], &[]),
@@ -957,14 +999,25 @@ fn definition_attributes(
         | Frame::Property(_)
         | Frame::Properties(_, _)
         | Frame::NumPr(_)
-        | Frame::Section
-        | Frame::TableProperties(_, _) => return Ok(()), // Property reader or subtree loss already accounts for these.
+        | Frame::Section => return Ok(false), // Property reader or subtree loss already accounts for these.
+        Frame::TableProperties(_, table::TableProperty::Root) => {
+            return table::attributes(e, "style", part, &e.name, warnings);
+        }
+        Frame::TableProperties(_, _) => return Ok(false),
     };
+    let mut omitted = false;
     let namespace = if root == "theme" { xml::NamespaceId::NONE } else { W_NS.0 };
+    let table_owner =
+        matches!(frame, Frame::Table(_) | Frame::CellProperties(_) | Frame::RowProperties(_));
     for (ns, key, _) in &e.attributes {
-        if *ns != namespace
-            || !(consumed.contains(&key.as_str()) || ignored.contains(&key.as_str()))
-        {
+        let unsupported = if table_owner {
+            table::attribute_admission(e, "style", *ns, key).0 == table::Admission::Defer
+        } else {
+            *ns != namespace
+                || !(consumed.contains(&key.as_str()) || ignored.contains(&key.as_str()))
+        };
+        if unsupported {
+            omitted = true;
             definition_warning(e, part, root, format_args!("attribute '{}'", key), warnings)?;
         }
     }
@@ -997,7 +1050,7 @@ fn definition_attributes(
     for key in flags {
         properties::boolean(e, key, None, part, &e.name, warnings)?;
     }
-    Ok(())
+    Ok(omitted)
 }
 fn definition_warning(
     e: &Element,

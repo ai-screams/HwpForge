@@ -1,58 +1,101 @@
 use super::*;
 use hwpforge_blueprint::registry::StyleRegistry;
 
-/// Word's horizontal strokes contribute once per row boundary, before merging
-/// removes continuation cells. Cell strokes take precedence over table strokes;
-/// an absent stroke yields to a visible neighbor. Different columns use the max.
-pub(super) fn row_heights(rows: &[Row], width: usize, base: &TableProperties) -> Vec<i64> {
-    let mut previous = vec![(0, false); width];
+/// One source-boundary resolution feeds both row minima and admitted face widths.
+pub(super) struct SourceSpace {
+    pub(super) heights: Vec<i64>,
+    faces: Vec<[i32; 4]>,
+    cols: usize,
+}
+fn resolve(a: (i32, bool), b: (i32, bool)) -> i32 {
+    match (a, b) {
+        ((0, _), (b, _)) => b,
+        ((a, _), (0, _)) => a,
+        ((a, true), (_, false)) => a,
+        ((_, false), (b, true)) => b,
+        ((a, _), (b, _)) => a.max(b),
+    }
+}
+pub(super) fn source_space(rows: &[Row], width: usize, base: &TableProperties) -> SourceSpace {
+    let mut faces = vec![[0; 4]; rows.len() * width];
     let mut heights = Vec::with_capacity(rows.len());
+    let mut previous = vec![(0, false); width];
     for (ri, row) in rows.iter().enumerate() {
-        let top = base.border_widths[if ri == 0 { 2 } else { 4 }].unwrap_or(0);
-        let bottom = base.border_widths[if ri + 1 == rows.len() { 3 } else { 4 }].unwrap_or(0);
-        // Positions not covered by a source cell have no source stroke.
-        let mut tops = vec![(0, false); width];
-        let mut bottoms = vec![(0, false); width];
+        let mut sides = vec![[(0, false); 4]; width];
         for cell in &row.cells {
-            let range = cell.col..cell.col + usize::from(cell.span);
-            for (side, inherited, faces) in [(2, top, &mut tops), (3, bottom, &mut bottoms)] {
+            let end = cell.col + usize::from(cell.span);
+            for (side, base_side) in
+                [(2, if ri == 0 { 2 } else { 4 }), (3, if ri + 1 == rows.len() { 3 } else { 4 })]
+            {
                 let value = cell.properties.border_widths[side];
-                faces[range.clone()].fill((value.unwrap_or(inherited), value.is_some()));
+                for position in &mut sides[cell.col..end] {
+                    position[side] = (
+                        value.unwrap_or(base.border_widths[base_side].unwrap_or(0)),
+                        value.is_some(),
+                    );
+                }
+            }
+            for (side, col, base_side) in [
+                (0, cell.col, if cell.col == 0 { 0 } else { 5 }),
+                (1, end - 1, if end == width { 1 } else { 5 }),
+            ] {
+                let value = cell.properties.border_widths[side];
+                sides[col][side] =
+                    (value.unwrap_or(base.border_widths[base_side].unwrap_or(0)), value.is_some());
             }
             if cell.continuation {
-                // Only an actual merge loses its internal face; orphan vMerge
-                // continuations remain ordinary cells with their top stroke.
-                tops[range.clone()].fill((0, false));
-                previous[range].fill((0, false));
+                for col in cell.col..end {
+                    sides[col][2] = (0, false);
+                    previous[col] = (0, false);
+                }
             }
         }
-        let stroke = tops
-            .into_iter()
-            .zip(&previous)
-            .map(|(top, &bottom)| match (top, bottom) {
-                // An explicit none still yields to a visible neighbor, even an
-                // inherited one. This keeps the existing height approximation;
-                // output border appearance is resolved separately in apply().
-                ((0, _), (b, _)) => b,
-                ((t, _), (0, _)) => t,
-                ((t, true), (_, false)) => t,
-                ((_, false), (b, true)) => b,
-                ((t, _), (b, _)) => t.max(b),
-            })
-            .max()
-            .unwrap_or(0);
-        let bottom = if ri + 1 == rows.len() {
-            bottoms.iter().map(|(width, _)| *width).max().unwrap_or(0)
-        } else {
-            0
-        };
-        // Each source width is bounded; use i64 until the row height is checked.
-        heights.push(i64::from(stroke) + i64::from(bottom));
-        previous = bottoms;
+        for col in 0..width {
+            let top = resolve(sides[col][2], previous[col]);
+            faces[ri * width + col][2] = top;
+            faces[ri * width + col][3] = sides[col][3].0;
+            if ri > 0 {
+                faces[(ri - 1) * width + col][3] = top;
+            }
+            faces[ri * width + col][0] = sides[col][0].0;
+            faces[ri * width + col][1] = sides[col][1].0;
+            if col > 0 {
+                let value = resolve(sides[col - 1][1], sides[col][0]);
+                faces[ri * width + col - 1][1] = value;
+                faces[ri * width + col][0] = value;
+            }
+        }
+        let top = faces[ri * width..(ri + 1) * width].iter().map(|s| s[2]).max().unwrap_or(0);
+        let bottom =
+            if ri + 1 == rows.len() { sides.iter().map(|s| s[3].0).max().unwrap_or(0) } else { 0 };
+        heights.push(i64::from(top) + i64::from(bottom));
+        previous = sides.iter().map(|s| s[3]).collect();
     }
-    heights
+    SourceSpace { heights, faces, cols: width }
+}
+impl SourceSpace {
+    fn anchor_widths(&self, c: &hwpforge_core::table::grid::GridCell) -> Option<[i32; 4]> {
+        let r = c.anchor.row as usize;
+        let col = c.anchor.col as usize;
+        let re = r + usize::from(c.row_span);
+        let ce = col + usize::from(c.col_span);
+        let mut values = [0; 4];
+        for (side, slots) in [
+            (0, (r..re).map(|r| r * self.cols + col).collect::<Vec<_>>()),
+            (1, (r..re).map(|r| r * self.cols + ce - 1).collect()),
+            (2, (col..ce).map(|col| r * self.cols + col).collect()),
+            (3, (col..ce).map(|col| (re - 1) * self.cols + col).collect()),
+        ] {
+            values[side] = self.faces[*slots.first()?][side];
+            if slots.iter().any(|i| self.faces[*i][side] != values[side]) {
+                return None;
+            }
+        }
+        Some(values)
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply(
     table: &mut Table,
     grid: &TableGrid,
@@ -61,6 +104,9 @@ pub(super) fn apply(
     registry: &mut StyleRegistry,
     location: (&str, &Location),
     w: &mut Vec<DocxWarning>,
+    space: &SourceSpace,
+    base_widths: &[Option<i32>; 6],
+    admission: Option<&'static str>,
 ) -> Result<()> {
     let (part, at) = location;
     let (rows, cols) = grid.dimensions();
@@ -114,13 +160,48 @@ pub(super) fn apply(
             (Some(part), Some(at), "Conflicting touching faces use no border on both sides")
         })?;
     }
-    for (i, c) in anchors.iter().enumerate() {
-        let mut values = [false; 4];
-        for (side, value) in values.iter_mut().enumerate() {
-            *value = faces[root(i * 4 + side, &mut parents)];
+    let visual: Vec<[bool; 4]> = (0..anchors.len())
+        .map(|i| std::array::from_fn(|side| faces[root(i * 4 + side, &mut parents)]))
+        .collect();
+    let widths: Option<Vec<[i32; 4]>> = anchors.iter().map(|c| space.anchor_widths(c)).collect();
+    let representable = widths.as_ref().is_some_and(|widths| {
+        visual.iter().zip(widths).all(|(v, w)| v.iter().zip(w).all(|(v, w)| *v == (*w > 0)))
+    });
+    let reason = admission.or((!representable).then_some("unrepresentable_source_face"));
+    if let Some(reason) = reason {
+        record(w, Kind::TableBorderApproximated, "table_border_space", "retain_margins", || {
+            (Some(part), Some(at), format!("Table border space source admission failed ({reason}); existing cell margins are retained"))
+        })?;
+    } else if let Some(widths) = &widths {
+        let mut actual = vec![0_i64; rows];
+        for (c, w) in anchors.iter().zip(widths) {
+            let row = c.anchor.row as usize;
+            actual[row] = actual[row].max(i64::from(w[2]));
         }
-        table.rows[c.row_idx].cells[c.cell_idx].border_fill_id =
-            Some(register(values, registry, part, at)?);
+        let bottom = anchors
+            .iter()
+            .zip(widths)
+            .filter(|(c, _)| c.anchor.row as usize + usize::from(c.row_span) == rows)
+            .map(|(_, w)| i64::from(w[3]))
+            .max()
+            .unwrap_or(0);
+        actual[rows - 1] += bottom;
+        if actual != space.heights {
+            return Err(DocxError::invalid(
+                part,
+                at,
+                "Admitted border faces disagree with source row space",
+            ));
+        }
+    }
+    for (i, c) in anchors.iter().enumerate() {
+        table.rows[c.row_idx].cells[c.cell_idx].border_fill_id = Some(register(
+            visual[i],
+            if reason.is_none() { widths.as_ref().map(|w| w[i]) } else { None },
+            registry,
+            part,
+            at,
+        )?);
     }
     table.border_fill_id = Some(register(
         [
@@ -129,6 +210,7 @@ pub(super) fn apply(
             base[2].unwrap_or(false),
             base[3].unwrap_or(false),
         ],
+        reason.is_none().then(|| std::array::from_fn(|i| base_widths[i].unwrap_or(0))),
         registry,
         part,
         at,
@@ -165,20 +247,80 @@ fn join(
 }
 fn register(
     values: [bool; 4],
+    widths: Option<[i32; 4]>,
     registry: &mut StyleRegistry,
     part: &str,
     at: &Location,
 ) -> Result<u32> {
     let mut border = Border::default();
-    for (side, solid) in [&mut border.left, &mut border.right, &mut border.top, &mut border.bottom]
-        .into_iter()
-        .zip(values)
+    for (index, (side, solid)) in
+        [&mut border.left, &mut border.right, &mut border.top, &mut border.bottom]
+            .into_iter()
+            .zip(values)
+            .enumerate()
     {
         if solid {
             side.line_type = BorderLineType::Solid;
+            side.width = widths
+                .map(|w| HwpUnit::new(w[index]))
+                .transpose()
+                .map_err(|e| DocxError::invalid(part, at, e.to_string()))?;
         }
     }
     registry
         .register_border_fill(BorderFill { border, fill: Fill::default() })
         .map_err(|e| DocxError::invalid(part, at, e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // 이것을 실패시키는 것: 행마다 위/아래 양쪽 비용 부과, 내부/마지막 경계 누락, 열별 비용 합산.
+    #[test]
+    fn source_row_budgets_share_the_resolved_boundary_costs() {
+        let rows = (0..2)
+            .map(|_| Row {
+                cells: vec![
+                    Cell { span: 1, ..Cell::default() },
+                    Cell { col: 1, span: 1, ..Cell::default() },
+                ],
+                ..Row::default()
+            })
+            .collect::<Vec<_>>();
+        for (top, inside, bottom, expected) in
+            [(50, 50, 50, [50, 100]), (150, 50, 150, [150, 200]), (50, 0, 50, [50, 50])]
+        {
+            let base = TableProperties {
+                border_widths: [None, None, Some(top), Some(bottom), Some(inside), None],
+                ..TableProperties::default()
+            };
+            assert_eq!(source_space(&rows, 2, &base).heights, expected);
+        }
+    }
+    // 이것을 실패시키는 것: 수용된 면과 원본 행 예산의 불일치를 성공으로 낮춤.
+    #[test]
+    fn admitted_faces_must_reproduce_the_source_row_budget() {
+        let mut table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![],
+            HwpUnit::new(100).unwrap(),
+        )])]);
+        let grid = TableGrid::from_table(&table).unwrap();
+        let space = SourceSpace { heights: vec![999], faces: vec![[50; 4]], cols: 1 };
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        let at = Location { name: Rc::from("tbl"), ordinal: 1 };
+        assert!(apply(
+            &mut table,
+            &grid,
+            &[[None; 6]],
+            [Some(true); 6],
+            &mut registry,
+            ("body", &at),
+            &mut vec![],
+            &space,
+            &[Some(50); 6],
+            None
+        )
+        .is_err());
+        assert!(registry.border_fill(1).is_none());
+    }
 }

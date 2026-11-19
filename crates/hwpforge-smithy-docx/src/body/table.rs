@@ -90,6 +90,16 @@ pub(super) struct Tables {
     pub(super) width_diagnostics: Vec<Rc<properties::WidthDiagnostic>>,
 }
 impl Tables {
+    pub(super) fn unsupported_space_format(&mut self) {
+        if let Some(source) = self.stack.last_mut() {
+            source.properties.space_uncertainty.omit_format();
+        }
+    }
+    pub(super) fn observe_child(&mut self, parent: &str, e: &Element) {
+        if properties::child_admission(parent, e) == properties::Admission::Defer {
+            self.unsupported_space_format();
+        }
+    }
     pub(super) fn measures_paragraph(&self) -> bool {
         self.stack.last().and_then(|t| t.cell.as_ref()).is_some()
     }
@@ -192,6 +202,28 @@ impl Body<'_> {
     fn structural_parent(stack: &[Frame]) -> Option<&Node> {
         stack.iter().rev().find(|frame| !frame.passes_content).map(|frame| &frame.node)
     }
+    // Unknown children at structural boundaries may contain table formatting.
+    // Inside a cell paragraph or an omitted object they are content, not its owner's format.
+    pub(super) fn omit_structural_table_child(&mut self, e: &Element) {
+        let parent = match Self::structural_parent(&self.stack) {
+            Some(Node::Table) => "tbl",
+            Some(Node::TableRow) => "tr",
+            _ => return,
+        };
+        self.tables.observe_child(parent, e);
+    }
+    pub(super) fn table_container_attributes(&mut self, e: &Element, frame: &Frame) -> Result<()> {
+        if properties::attributes(
+            e,
+            "container",
+            self.part,
+            &frame.location.to_string(),
+            self.warnings,
+        )? {
+            self.tables.unsupported_space_format();
+        }
+        Ok(())
+    }
     pub(super) fn table_element(&mut self, e: &Element, frame: &mut Frame) -> Result<bool> {
         let Some(parent) = Self::structural_parent(&self.stack) else { return Ok(false) };
         // Content wrappers, range markers and unknown content share the body path.
@@ -208,23 +240,31 @@ impl Body<'_> {
                 | Node::TableProperties(_)
                 | Node::CellProperties(_)
                 | Node::RowProperties
+                | Node::TableLeaf
         ) {
             return Ok(false);
         }
         let at = frame.location.to_string();
+        let vocabulary_parent = match parent {
+            Node::Table => "tbl",
+            Node::TableRow => "tr",
+            Node::TableGrid => "tblGrid",
+            Node::RowProperties => "trPr",
+            Node::TableProperties(state) | Node::CellProperties(state) => state.vocabulary_parent(),
+            _ => "leaf",
+        };
+        self.tables.observe_child(vocabulary_parent, e);
         if e.namespace_id != W_NS.0 {
             return Ok(false);
         }
         if !matches!(parent, Node::TableProperties(_) | Node::CellProperties(_))
-            || matches!(e.name.as_str(), "gridSpan" | "vMerge" | "tblStyle")
+            || matches!(e.name.as_str(), "gridSpan" | "vMerge" | "tblStyle" | "vAlign")
         {
-            properties::attributes(
-                e,
-                matches!(parent, Node::TableProperties(TableProperty::Root)),
-                self.part,
-                &at,
-                self.warnings,
-            )?;
+            let omitted =
+                properties::attributes(e, vocabulary_parent, self.part, &at, self.warnings)?;
+            if omitted {
+                self.tables.unsupported_space_format();
+            }
         }
         let source = self
             .tables
@@ -319,6 +359,9 @@ impl Body<'_> {
                     && row.exact_at.is_none()
                     && (row.height.is_none() || !matches!(rule, None | Some("atLeast")))
                 {
+                    if !matches!(rule, None | Some("exact" | "atLeast" | "auto")) {
+                        source.properties.space_uncertainty.omit_format();
+                    }
                     self.warn(
                         Kind::ContentLost,
                         &frame.location,
@@ -334,11 +377,16 @@ impl Body<'_> {
                         self.resolver.as_ref().unwrap().definitions.style_key(v, self.part, &at)
                     })
                     .transpose()?;
-                let (style, _) = self.resolver.as_ref().unwrap().table_properties(
+                let (style, resolved) = self.resolver.as_ref().unwrap().table_properties(
                     key,
                     self.part,
                     self.warnings,
                 )?;
+                // 모르는 스타일 ID 가 기본 스타일로 바뀐 뒤에도 선택 원본의 불확정을 표에 남긴다.
+                source.properties.space_uncertainty.merge(resolved.space_uncertainty);
+                if key.is_none() {
+                    source.properties.space_uncertainty.omit_format();
+                }
                 source.style = style;
             }
             (Node::TableProperties(state), _) => {
@@ -356,6 +404,16 @@ impl Body<'_> {
                     Some("center") => Some(TableVerticalAlign::Center),
                     Some("bottom") => Some(TableVerticalAlign::Bottom),
                     _ => {
+                        // Distributed alignment only moves content within the same cell budget.
+                        if attr(e, "val") != Some("both") {
+                            source
+                                .cell
+                                .as_mut()
+                                .unwrap()
+                                .properties
+                                .space_uncertainty
+                                .omit_format();
+                        }
                         record(
                             self.warnings,
                             Kind::UnsupportedValue,
@@ -392,6 +450,8 @@ impl Body<'_> {
                 };
             }
             (Node::CellProperties(TableProperty::Borders), "insideH" | "insideV") => {
+                source.cell.as_mut().unwrap().properties.space_uncertainty.border |=
+                    properties::unsupported_border(e, None);
                 self.warn(
                     Kind::TableBorderApproximated,
                     &frame.location,
@@ -420,7 +480,8 @@ impl Body<'_> {
             }
         }
         frame.node = next;
-        frame.blocked = matches!(frame.node, Node::TableLeaf);
+        // Keep property leaves in the formatting context: an unexpected child
+        // must reach the default omission path, never the body content parser.
         Ok(true)
     }
     pub(super) fn begin_cell_properties(&mut self, frame: &mut Frame) -> Result<()> {
@@ -572,7 +633,7 @@ impl Body<'_> {
             at,
         )?;
         let placement = horizontal_placement(
-            &effective,
+            &mut effective,
             &source.rows,
             self.compatibility.mode,
             self.tables.inside(),
@@ -683,7 +744,7 @@ impl AssemblyBudget {
     }
 }
 fn horizontal_placement(
-    properties: &TableProperties,
+    properties: &mut TableProperties,
     rows: &[Row],
     mode: Option<i32>,
     nested: bool,
@@ -693,19 +754,22 @@ fn horizontal_placement(
 ) -> Result<Option<hwpforge_core::placement::ObjectPlacement>> {
     use hwpforge_core::placement::{HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
     use properties::TableAlignment;
+    let alignment = properties.alignment.unwrap_or(TableAlignment::Left);
+    let indent = properties.indent.unwrap_or(0);
+    let unsupported_nested = nested
+        && (matches!(alignment, TableAlignment::Center | TableAlignment::Right) || indent != 0);
+    if unsupported_nested {
+        properties.space_uncertainty.omit_format();
+    }
     if !matches!(mode, Some(14 | 15)) {
         return Ok(None);
     }
-    let alignment = properties.alignment.unwrap_or(TableAlignment::Left);
-    let indent = properties.indent.unwrap_or(0);
     let mut diagnostic = |loss, action, message| {
         record(warnings, Kind::TablePositionApproximated, loss, action, || {
             (Some(part), Some(at), message)
         })
     };
-    if nested
-        && (matches!(alignment, TableAlignment::Center | TableAlignment::Right) || indent != 0)
-    {
+    if unsupported_nested {
         diagnostic(
             "nested_table_placement",
             "retain_placement",
@@ -741,6 +805,7 @@ fn horizontal_placement(
         if let Some(cell) = rows.first().and_then(|r| r.cells.first()).filter(|c| c.col == 0) {
             cell.properties.margins[0].unwrap_or_else(|| margin(properties.margins).left.as_i32())
         } else {
+            properties.space_uncertainty.omit_format();
             diagnostic(
                 "table_legacy_margin",
                 "retain_alignment",
@@ -807,7 +872,21 @@ fn assemble(
             })?;
         }
     }
-    let border_heights = borders::row_heights(&rows, width, &properties);
+    let mut uncertainty = properties.space_uncertainty;
+    for cell in rows.iter().flat_map(|r| &r.cells) {
+        uncertainty.merge(cell.properties.space_uncertainty);
+    }
+    let admission = if rows.iter().any(|r| r.exact_at.is_some()) {
+        Some("exact_row")
+    } else if uncertainty.format {
+        Some("unsupported_source_format")
+    } else if uncertainty.border {
+        Some("unsupported_source_border")
+    } else {
+        None
+    };
+    let space = borders::source_space(&rows, width, &properties);
+    let border_heights = &space.heights;
     let mut output: Vec<TableRow> = Vec::with_capacity(nrows);
     let mut expected = Vec::new();
     let mut plans = Vec::new();
@@ -1028,7 +1107,18 @@ fn assemble(
         ));
     }
     // Resolve adjacent faces before interning, with no output-format numbers here.
-    borders::apply(&mut table, &grid, &overrides, properties.borders, registry, (part, &at), w)?;
+    borders::apply(
+        &mut table,
+        &grid,
+        &overrides,
+        properties.borders,
+        registry,
+        (part, &at),
+        w,
+        &space,
+        &properties.border_widths,
+        admission,
+    )?;
     Ok((
         table,
         WidthPlan {

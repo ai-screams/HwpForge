@@ -768,6 +768,7 @@ impl Body<'_> {
                         }
                     } else {
                         frame.blocked = true;
+                        self.omit_structural_table_child(&element);
                     }
                 }
             }
@@ -814,6 +815,7 @@ impl Body<'_> {
                     frame.passes_content = true;
                 }
                 _ => {
+                    self.omit_structural_table_child(element);
                     frame.blocked = true;
                     self.warn(
                         Kind::ContentOmitted,
@@ -851,11 +853,13 @@ impl Body<'_> {
                         frame.blocked = true;
                     } else {
                         self.begin_table(frame)?;
+                        self.table_container_attributes(element, frame)?;
                     }
                     return Ok(());
                 }
                 "tcPr" => {
                     self.begin_cell_properties(frame)?;
+                    self.table_container_attributes(element, frame)?;
                     return Ok(());
                 }
                 "p" => {
@@ -1021,6 +1025,8 @@ impl Body<'_> {
                     frame.blocked = true;
                 }
                 "tblPrEx" => {
+                    // Explicit table exceptions keep their schema meaning even in a misplaced cell.
+                    self.tables.observe_child("tr", element);
                     self.warn(
                         Kind::ContentLost,
                         location,
@@ -1032,6 +1038,9 @@ impl Body<'_> {
                 }
                 name => {
                     let loss = object_loss(element).unwrap_or("unknown_element");
+                    if loss == "unknown_element" {
+                        self.omit_structural_table_child(element);
+                    }
                     self.warn(
                         Kind::ContentOmitted,
                         location,
@@ -1044,6 +1053,7 @@ impl Body<'_> {
                 }
             }
         } else {
+            self.omit_structural_table_child(element);
             self.warn(
                 Kind::ContentOmitted,
                 location,
@@ -1801,6 +1811,8 @@ mod list_tests;
 #[cfg(test)]
 mod list_table_tests;
 
+#[cfg(test)]
+mod table_border_space_tests;
 #[cfg(test)]
 mod table_tests;
 

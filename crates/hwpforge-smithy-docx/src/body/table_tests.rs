@@ -704,7 +704,11 @@ fn table_exceptions_and_unknown_children_report_content_loss() {
                 format!("<w:{element}><w:tblBorders><w:left w:val='single'/></w:tblBorders><w:tblCellMar><w:left w:w='10'/></w:tblCellMar><w:p><w:r><w:t>hidden</w:t></w:r></w:p></w:{element}>{s}")
             }));
             assert_pair(&d);
-            assert_eq!(warnings_without_missing_mode(&d), 1);
+            // Structural unknowns may hide formatting; unknown cell children are content.
+            assert_eq!(
+                warnings_without_missing_mode(&d),
+                1 + usize::from(element == "tblPrEx" || level != "tc")
+            );
             assert_eq!(
                 (d.warnings[0].code(), d.warnings[0].loss(), d.warnings[0].count()),
                 (code, loss, 1)
@@ -818,7 +822,14 @@ fn border_spacing_and_theme_have_one_loss_diagnostic() {
         ));
         let d = structure(&body);
         assert_pair(&d);
-        assert_eq!(warnings_without_missing_mode(&d), count, "{extra}: {:?}", d.warnings);
+        assert_eq!(
+            // Missing source size adds one admission warning independently of paint/spacing loss.
+            warnings_without_missing_mode(&d) - 1,
+            count,
+            "{extra}: {:?}",
+            d.warnings
+        );
+        assert_eq!(d.warnings.iter().filter(|w| w.loss() == "table_border_space").count(), 1);
         if count != 0 {
             assert_eq!(d.warnings[0].code(), "DOCX_TABLE_BORDER_APPROXIMATED");
             assert_eq!(d.warnings[0].count(), 1);
@@ -1280,7 +1291,7 @@ fn row_height_rules_keep_content_minima_and_exact_approximation() {
         ("", " w:val='2000'", 10000, 0),
         ("", "", 1902, 1),
         ("", " w:val='0'", 1902, 0),
-        (" w:hRule='exact'", " w:val='2000'", 10000, 1),
+        (" w:hRule='exact'", " w:val='2000'", 10000, 2),
         (" w:hRule='exact'", "", 1902, 1),
         (" w:hRule='exact'", " w:val='0'", 1902, 1),
     ] {

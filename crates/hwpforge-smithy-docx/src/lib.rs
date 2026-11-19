@@ -30,7 +30,11 @@ pub use warning::DocxWarning;
 pub struct DocxDecoded {
     /// Body fragments grouped by source sections with normalized page geometry.
     pub document: Document<Draft>,
-    /// Interned effective character/paragraph shapes and original named paragraph styles.
+    /// Interned effective styles and registry-local borders. Source-admitted tables include
+    /// original positive solid border widths. Tables whose source formatting cannot be admitted,
+    /// including a table with any positive exact row height, omit widths and report DocxWarning.
+    /// Omitted width is not zero. These widths describe source space costs and do not promise
+    /// matching HWPX stroke thickness.
     pub registry: StyleRegistry,
     /// Empty until image import is supported.
     pub image_store: ImageStore,

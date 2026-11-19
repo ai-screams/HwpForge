@@ -121,6 +121,9 @@ pub(crate) const M_NS: (NamespaceId, &str) =
 pub(crate) const A_NS: (NamespaceId, &str) =
     (NamespaceId(9), "http://schemas.openxmlformats.org/drawingml/2006/main");
 
+pub(crate) const W14_NS: (NamespaceId, &str) =
+    (NamespaceId(10), "http://schemas.microsoft.com/office/word/2010/wordml");
+
 // Hash only on registration, then verify exact content within that hash bucket.
 // Keeping the hash as the map key also avoids rehashing long URIs as the map grows.
 struct Namespaces {
@@ -133,11 +136,13 @@ struct Namespaces {
 impl Default for Namespaces {
     fn default() -> Self {
         let hasher = RandomState::new();
-        let uris: Vec<Rc<str>> =
-            ["", XML_NS, XMLNS_NS, REL_NS.1, TYPE_NS.1, W_NS.1, R_NS.1, MC_NS.1, M_NS.1, A_NS.1]
-                .into_iter()
-                .map(Rc::from)
-                .collect();
+        let uris: Vec<Rc<str>> = [
+            "", XML_NS, XMLNS_NS, REL_NS.1, TYPE_NS.1, W_NS.1, R_NS.1, MC_NS.1, M_NS.1, A_NS.1,
+            W14_NS.1,
+        ]
+        .into_iter()
+        .map(Rc::from)
+        .collect();
         let mut by_hash: HashMap<u64, Vec<NamespaceId>> = HashMap::new();
         for (index, uri) in uris.iter().enumerate() {
             by_hash.entry(hasher.hash_one(uri.as_ref())).or_default().push(NamespaceId(index));

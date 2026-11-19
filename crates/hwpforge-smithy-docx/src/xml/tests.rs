@@ -404,7 +404,7 @@ fn long_namespace_is_shared_with_linear_comparisons() {
         if let XmlEvent::Start(element) = event {
             for (namespace, _, _) in element.attributes {
                 if namespace != NamespaceId::NONE {
-                    assert_eq!(namespace, NamespaceId(10));
+                    assert_eq!(namespace, NamespaceId(11));
                     count += 1;
                 }
             }
@@ -468,11 +468,11 @@ fn namespace_hash_collisions_verify_content() {
     let mut budget = TextBudget::default();
     let hash = namespaces.hasher.hash_one("urn:shared-a");
     for (uri, expected) in [
-        ("urn:shared-a", NamespaceId(10)),
-        ("urn:shared-b", NamespaceId(11)),
-        ("urn:shared-a", NamespaceId(10)),
-        ("short", NamespaceId(12)),
-        ("urn:shared-b", NamespaceId(11)),
+        ("urn:shared-a", NamespaceId(11)),
+        ("urn:shared-b", NamespaceId(12)),
+        ("urn:shared-a", NamespaceId(11)),
+        ("short", NamespaceId(13)),
+        ("urn:shared-b", NamespaceId(12)),
     ] {
         assert_eq!(
             namespaces.register_hashed("test.xml", "a", uri.into(), hash, &mut budget).unwrap(),
@@ -480,7 +480,7 @@ fn namespace_hash_collisions_verify_content() {
         );
     }
     assert_eq!(budget.namespace_comparison_bytes, 48);
-    assert_eq!(namespaces.uris.len(), 13);
+    assert_eq!(namespaces.uris.len(), 14);
 }
 
 // 이것을 실패시키는 것: prefix 조회를 활성 binding 선형 검색으로 되돌림, End에서 전체 binding 제거,
@@ -497,7 +497,7 @@ fn prefix_lookup_is_independent_of_active_bindings() {
         for _ in 0..1_000 {
             assert_eq!(
                 namespaces.resolve("test.xml", "a", QName("outer:a"), false, &mut budget).unwrap(),
-                NamespaceId(10)
+                NamespaceId(11)
             );
         }
         assert_eq!(budget.prefix_lookups, 1_000);
@@ -524,7 +524,7 @@ fn prefix_lookup_is_independent_of_active_bindings() {
         namespaces.pop();
     }
     assert_eq!(namespaces.bindings.len(), 1);
-    assert_eq!(namespaces.lookup("outer", &mut budget), Some(NamespaceId(10)));
+    assert_eq!(namespaces.lookup("outer", &mut budget), Some(NamespaceId(11)));
     namespaces.pop();
     assert_eq!(namespaces.bindings.len(), 0);
     assert_eq!(namespaces.levels.len(), 0);
@@ -582,7 +582,7 @@ fn empty_named_namespace_is_rejected_at_declaration() {
         },
     )
     .unwrap();
-    assert_eq!(ids, [NamespaceId(10), NamespaceId(0), NamespaceId(10)]);
+    assert_eq!(ids, [NamespaceId(11), NamespaceId(0), NamespaceId(11)]);
 }
 
 // 이것을 실패시키는 것: namespace 스코프 pop/기본 namespace/빈 재선언/예약 prefix 규칙 변경.

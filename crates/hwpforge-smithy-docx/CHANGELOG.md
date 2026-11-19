@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DocxDecoded.registry includes original positive solid border widths with explicit source sizes in the supported range for source-admitted tables. Tables with positive exact rows, unsupported source formatting or boundaries that cannot be represented by four sides omit widths and report the existing DOCX table-border warning. Source uncertainty follows the selected style inheritance chain, including unhandled row formatting, and table/row/cell properties. Omitted internal cell borders retain unsupported source attributes in the admission decision. Unsupported direction, placement values, unknown measurement/layout values and unresolved style links defer admission even when later properties override them. Pagination-only options and ignored header-cell associations do not affect admission. Known preferred-width approximations, vertical content alignment and background paint retain admission. Core cell margins and row minima remain source values. Width-bearing and widthless definitions with the same appearance are distinct.
+
 - 번호 글꼴의 첫 줄 높이 증가를 기존 Word 글꼴 metrics와 줄 간격 규칙으로 계산해 문단 앞 간격에 더한다. 표 셀의 최소 높이에는 목록 문단마다 이 증가분을 한 번씩 포함한다. 고정 줄 간격과 metrics 미지원 글꼴은 기존 간격을 유지한다. 양수 첫 줄 들여쓰기·폭 0 칸처럼 배치가 미지원인 목록도 높이 보정과 `list_marker_script`·`list_marker_line_height` 진단을 적용하되 출력에 쓰이지 않는 번호 글자 모양은 등록하지 않는다.
 
 - 단일·이중 바이트 폭 균형 호환 설정이 켜진 DOCX는 모든 글자 모양에서 반각 공백을 사용하고, 꺼지거나 생략되면 글꼴 공백 폭을 유지한다.

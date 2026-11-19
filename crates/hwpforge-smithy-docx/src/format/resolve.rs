@@ -241,6 +241,7 @@ impl Resolver {
                 table = self.inherited_tables[&parent].clone();
                 height = h + 1;
             } else {
+                table.space_uncertainty.omit_format();
                 warn(
                     warnings,
                     &s.part,
@@ -344,8 +345,14 @@ impl Resolver {
     ) -> Result<(Option<StyleKey>, table::TableProperties)> {
         let key = id.or(self.default_table);
         let valid = self.style(key, StyleKind::Table, part, w)?.is_some();
+        let selected = key;
         let key = if valid { key } else { self.default_table };
-        Ok((key, key.and_then(|k| self.inherited_tables.get(&k)).cloned().unwrap_or_default()))
+        let mut properties =
+            key.and_then(|k| self.inherited_tables.get(&k)).cloned().unwrap_or_default();
+        if selected.is_some() && !valid {
+            properties.space_uncertainty.omit_format();
+        }
+        Ok((key, properties))
     }
     fn context(
         &self,
