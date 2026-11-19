@@ -20,7 +20,7 @@
 //! (CharShapeIndex, ParaShapeIndex). Fonts are deduplicated: two styles
 //! using "한컴바탕" share a single FontIndex.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use indexmap::IndexMap;
 use schemars::JsonSchema;
@@ -121,6 +121,8 @@ pub struct StyleRegistry {
     style_display_names: IndexMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     border_fills: Vec<BorderFill>,
+    #[serde(skip)]
+    border_positions: HashMap<[Option<i32>; 4], u32>,
 }
 
 // Schemars follows serde's try_from for the deserialize contract. Keep the
@@ -155,7 +157,7 @@ impl TryFrom<StyleRegistryWire> for StyleRegistry {
     type Error = BlueprintError;
 
     fn try_from(wire: StyleRegistryWire) -> BlueprintResult<Self> {
-        let registry = Self {
+        let mut registry = Self {
             fonts: wire.fonts,
             char_shapes: wire.char_shapes,
             para_shapes: wire.para_shapes,
@@ -166,10 +168,12 @@ impl TryFrom<StyleRegistryWire> for StyleRegistry {
             style_entries: wire.style_entries,
             style_display_names: wire.style_display_names,
             border_fills: wire.border_fills,
+            border_positions: HashMap::new(),
         };
         for (index, value) in registry.border_fills.iter().enumerate() {
             validate_border_fill(value)?;
-            if registry.border_fills[..index].contains(value) {
+            let id = checked_border_id(index)?;
+            if registry.border_positions.insert(border_key(value), id).is_some() {
                 return Err(FoundationError::InvalidField {
                     field: "border_fills".into(),
                     reason: "duplicate border definition would change reference identity".into(),
@@ -212,24 +216,25 @@ fn style_positions(entries: &IndexMap<String, StyleEntry>) -> BTreeMap<StyleIden
 }
 
 impl StyleRegistry {
-    /// Registers a four-sided border definition and returns its one-based local reference.
-    ///
-    /// Each side must use `None` or `Solid`, with unspecified width and color.
-    /// The fill must equal [`Fill::default`]. These restrictions allow exactly
-    /// sixteen definitions. Equal definitions reuse their existing reference.
-    /// Pass the registry and its document together to the import bridge; the
-    /// reference is not an HWPX store position.
+    /// Registers a four-sided border definition and returns its one-based registry-local reference.
+    /// None sides require unspecified width. Solid sides accept unspecified width or a positive
+    /// HwpUnit width. Colors must be unspecified and the fill must equal Fill::default().
+    /// Equal definitions, including widths, reuse their first reference. The sixteen widthless
+    /// None/Solid combinations and positive-width definitions use insertion-ordered references.
+    /// Pass the registry and its document together to the import bridge.
     ///
     /// # Errors
-    /// Returns [`FoundationError::InvalidField`] for any other definition.
-    /// A failed registration leaves the registry unchanged.
+    /// Invalid values or reference overflow return an error and leave the registry unchanged.
     pub fn register_border_fill(&mut self, value: BorderFill) -> Result<u32, FoundationError> {
         validate_border_fill(&value)?;
-        if let Some(index) = self.border_fills.iter().position(|existing| *existing == value) {
-            return Ok(index as u32 + 1);
+        let key = border_key(&value);
+        if let Some(&id) = self.border_positions.get(&key) {
+            return Ok(id);
         }
+        let id = checked_border_id(self.border_fills.len())?;
         self.border_fills.push(value);
-        Ok(self.border_fills.len() as u32)
+        self.border_positions.insert(key, id);
+        Ok(id)
     }
 
     /// Looks up a one-based registry-local border definition.
@@ -336,6 +341,7 @@ impl StyleRegistry {
             style_positions: BTreeMap::new(),
             style_display_names: IndexMap::new(),
             border_fills: Vec::new(),
+            border_positions: HashMap::new(),
         }
     }
 
@@ -414,6 +420,7 @@ impl StyleRegistry {
             style_entries,
             style_display_names: IndexMap::new(),
             border_fills: Vec::new(),
+            border_positions: HashMap::new(),
         };
         validate_marker_references(&registry)?;
         Ok(registry)
@@ -729,17 +736,37 @@ fn validate_tab_reference(
     })
 }
 
+fn checked_border_id(index: usize) -> Result<u32, FoundationError> {
+    u32::try_from(index).ok().and_then(|id| id.checked_add(1)).ok_or_else(|| {
+        FoundationError::InvalidField {
+            field: "border_fills".into(),
+            reason: "border reference overflow".into(),
+        }
+    })
+}
+
+fn border_key(value: &BorderFill) -> [Option<i32>; 4] {
+    let b = &value.border;
+    [b.left, b.right, b.top, b.bottom].map(|side| match side.line_type {
+        BorderLineType::None => None,
+        _ => Some(side.width.map_or(0, |width| width.as_i32())),
+    })
+}
+
 fn validate_border_fill(value: &BorderFill) -> Result<(), FoundationError> {
     let border = &value.border;
     if [border.left, border.right, border.top, border.bottom].iter().any(|side| {
         !matches!(side.line_type, BorderLineType::None | BorderLineType::Solid)
-            || side.width.is_some()
+            || match side.line_type {
+                BorderLineType::None => side.width.is_some(),
+                _ => side.width.is_some_and(|width| width.as_i32() <= 0),
+            }
             || side.color.is_some()
     }) || value.fill != Fill::default()
     {
         return Err(FoundationError::InvalidField {
             field: "border_fills".into(),
-            reason: "only None/Solid sides without width, color or fill are supported".into(),
+            reason: "only None sides without width and Solid sides with unspecified or positive width, without color or fill, are supported".into(),
         });
     }
     Ok(())
@@ -1673,5 +1700,18 @@ styles:
                 .is_ok());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod border_id_tests {
+    use super::*;
+    // 이것을 실패시키는 것: checked 변환을 잘리는 cast로 바꾸거나 ID 증가의 overflow를 허용.
+    #[test]
+    fn border_reference_overflow_is_checked_before_insertion() {
+        assert_eq!(checked_border_id(0).unwrap(), 1);
+        assert_eq!(checked_border_id(u32::MAX as usize - 1).unwrap(), u32::MAX);
+        assert!(checked_border_id(u32::MAX as usize).is_err());
+        assert!(checked_border_id(usize::MAX).is_err());
     }
 }

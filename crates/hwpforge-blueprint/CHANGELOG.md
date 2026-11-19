@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Registry-local border definitions support None sides with unspecified width and Solid sides with unspecified or positive source widths. Width participates in definition identity. Registration and JSON validation preserve insertion order, one-based reference identity and atomic failure through an internal deduplication index. Colors are unspecified and fills use Fill::default().
+
 - 문단의 optional `east_asian_auto_spacing`(`EastAsianAutoSpacing { latin, digit }`, `EastAsianAutoSpacing::new`)을 추가한다. 한글과 영문·숫자 사이 자동 간격의 사용 여부를 두 값 한 묶음으로 지정하고 상속하며, 생략하면 출력 형식의 원본 보존 또는 조판 프로필 기본값을 따른다.
 
 - 공유 목록 정의가 충돌하면 인코더가 문서 방문 순서상 첫 사용처의 유효 서식과 상대 margin 이동량을 선택하고 의미 손실을 보고할 수 있다. 미지정과 명시적 0의 구별을 유지한다.

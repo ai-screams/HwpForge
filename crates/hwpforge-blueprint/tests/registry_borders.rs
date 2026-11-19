@@ -120,3 +120,43 @@ fn every_nondefault_fill_and_line_is_rejected() {
     }
     assert!(registry.border_fill(1).is_none());
 }
+
+// 이것을 실패시키는 것: 양수 Solid 폭 거부, 폭을 뺀 정의 식별성, 복원 색인 누락.
+#[test]
+fn positive_widths_keep_identity_across_restore() {
+    let mut registry = StyleRegistry::with_fonts(vec![]);
+    let widthless = definition(15);
+    assert_eq!(registry.register_border_fill(widthless.clone()).unwrap(), 1);
+    for (index, width) in [1, 38, 50, 75, 150, 100_000_000].into_iter().enumerate() {
+        let mut value = widthless.clone();
+        value.border.left.width = Some(HwpUnit::new(width).unwrap());
+        assert_eq!(registry.register_border_fill(value.clone()).unwrap(), index as u32 + 2);
+        assert_eq!(registry.register_border_fill(value).unwrap(), index as u32 + 2);
+    }
+    let mut restored: StyleRegistry =
+        serde_json::from_value(serde_json::to_value(&registry).unwrap()).unwrap();
+    assert_eq!(restored, registry);
+    assert_eq!(restored.register_border_fill(widthless).unwrap(), 1);
+    for width in [0, -1] {
+        let before = restored.clone();
+        let mut invalid = definition(15);
+        invalid.border.bottom.width = Some(HwpUnit::new(width).unwrap());
+        assert!(restored.register_border_fill(invalid).is_err());
+        assert_eq!(restored, before);
+    }
+}
+
+// 이것을 실패시키는 것: 양수 폭 거부 또는 JSON 복원에서 폭 정의를 합침.
+#[test]
+fn ten_thousand_width_definitions_register_and_restore() {
+    let mut registry = StyleRegistry::with_fonts(vec![]);
+    for width in 1..=10_000 {
+        let mut value = definition(1);
+        value.border.left.width = Some(HwpUnit::new(width).unwrap());
+        assert_eq!(registry.register_border_fill(value).unwrap(), width as u32);
+    }
+    let restored: StyleRegistry =
+        serde_json::from_value(serde_json::to_value(&registry).unwrap()).unwrap();
+    assert_eq!(restored, registry);
+    assert_eq!(restored.border_fill(10_000).unwrap().border.left.width.unwrap().as_i32(), 10_000);
+}
