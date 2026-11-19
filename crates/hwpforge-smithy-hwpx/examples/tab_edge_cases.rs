@@ -55,6 +55,12 @@ fn build_style_store() -> HwpxStyleStore {
     title.bold = true;
     store.push_char_shape(title);
 
+    // Tab definitions are numbered by push order, so the three built-in
+    // definitions come first and the custom ones below land on IDs 3–7.
+    for tab in TabDef::defaults() {
+        store.push_tab(tab);
+    }
+
     store.push_tab(TabDef {
         id: 3,
         auto_tab_left: false,

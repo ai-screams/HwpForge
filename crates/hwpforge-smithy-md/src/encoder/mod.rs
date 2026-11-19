@@ -148,7 +148,8 @@ pub enum MdWarning {
     /// plain paragraphs, their text and order kept, their marker, number,
     /// check state and depth lost. Once per kind in a document.
     ListDefinitionMissing {
-        /// The kind of item: a task item is a checkable [`ListItemKind::Bullet`].
+        /// The kind of item: a task item is a checkable
+        /// [`ListItemKind::Bullet`](hwpforge_core::ListItemKind::Bullet).
         kind: hwpforge_core::ListItemKind,
         /// Whether the item is a task item.
         checkable: bool,

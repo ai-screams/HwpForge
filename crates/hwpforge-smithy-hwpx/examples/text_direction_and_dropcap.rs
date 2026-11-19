@@ -22,7 +22,9 @@ use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     CharShapeIndex, DropCapStyle, HwpUnit, ParaShapeIndex, TextDirection, VerticalAlign,
 };
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{
+    HwpxBorderFill, HwpxCharShape, HwpxParaShape, HwpxStyleStore,
+};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 // ── Style indices ──────────────────────────────────────────────
@@ -42,8 +44,12 @@ fn p_border(text: &str) -> Paragraph {
 
 fn build_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    // 이것을 실패시키는 것: 글자에서 참조하는 borderFill 3 정의 제거(실제 example 실행).
-    store.push_border_fill(hwpforge_smithy_hwpx::style_store::HwpxBorderFill::default_table_border());
+    // Border fills are numbered by push order (1-based): 1 = page border,
+    // 2 = character background (the default charPr reference), 3 = the solid
+    // border that CS 1 below references.
+    store.push_border_fill(HwpxBorderFill::default_page_border());
+    store.push_border_fill(HwpxBorderFill::default_char_background());
+    store.push_border_fill(HwpxBorderFill::default_table_border());
 
     // CS 0: normal (10pt, black)
     store.push_char_shape(HwpxCharShape::default());
