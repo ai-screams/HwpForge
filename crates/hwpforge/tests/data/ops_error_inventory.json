@@ -1103,6 +1103,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "TableBorderSpaceApproximated",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "ListNumberingSplit",
           "shape": "struct",
           "cfg": [],

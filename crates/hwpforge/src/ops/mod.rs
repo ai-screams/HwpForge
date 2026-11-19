@@ -919,6 +919,22 @@ impl OpsWarning {
             Self::LegacyParagraphMeasures { message } => {
                 WarningInfo::new("LEGACY_PARAGRAPH_MEASURES", message)
             }
+            Self::Encode(
+                w @ EncodeWarning::TableBorderSpaceApproximated { path, reason, count },
+            ) => {
+                let action = if *reason == "unverified_uniform_width" {
+                    "project_unverified"
+                } else {
+                    "retain_margins"
+                };
+                let mut context =
+                    WarningContext::new("hwpx", WarningStage::Encode, "table_border_space", action);
+                context.location = Some(path.to_string());
+                context.count = *count;
+                let mut info = WarningInfo::new(w.code(), w.to_string());
+                info.context = Some(context);
+                info
+            }
             Self::Encode(w) => WarningInfo::new(encode_warning_code(w), w.to_string()),
             Self::Decode(w) => WarningInfo::new(decode_warning_code(w), decode_warning_message(w)),
             Self::Structural(w) => WarningInfo::new(structural_warning_code(w), w.to_string()),

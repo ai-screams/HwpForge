@@ -359,6 +359,8 @@ const WARNING_MAPPING: Table = &[
     (
         "EncodeWarning",
         &[
+            // 이것을 실패시키는 것: 표 테두리 공간 경고의 명시적 인벤토리 매핑 제거.
+            ("TableBorderSpaceApproximated", "TABLE_BORDER_SPACE_APPROXIMATED"),
             // 이것을 실패시키는 것: 분리 경고의 전용 코드 매핑 제거.
             ("ListNumberingSplit", "LIST_NUMBERING_SPLIT"),
             ("PreviewRemoved", "PREVIEW_REMOVED"),
@@ -884,6 +886,19 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
     all.insert(
         "EncodeWarning",
         vec![
+            // 이것을 실패시키는 것: 표 테두리 공간 경고 표본 제거.
+            (
+                "TableBorderSpaceApproximated",
+                OpsWarning::Encode(EncodeWarning::TableBorderSpaceApproximated {
+                    path: ParagraphPath(vec![
+                        PathSeg::Section(0),
+                        PathSeg::BodyParagraph(0),
+                        PathSeg::Run(0),
+                    ]),
+                    reason: "negative_right_margin",
+                    count: 2,
+                }),
+            ),
             // 이것을 실패시키는 것: 분리 경고 표본 제거.
             (
                 "ListNumberingSplit",
@@ -1378,7 +1393,19 @@ fn constructed_warnings_produce_the_mapped_code() {
         for (variant, warning) in built {
             let expected = table.iter().find(|(name, _)| name == variant).unwrap().1;
             let info = warning.info();
-            if !matches!(*enum_name, "DocxWarning" | "RegistryBridgeWarning") {
+            // 이것을 실패시키는 것: 새 경고의 typed context/count를 누락하거나 기존 경고 shape를 바꿈.
+            if let OpsWarning::Encode(EncodeWarning::TableBorderSpaceApproximated {
+                path,
+                count,
+                ..
+            }) = warning
+            {
+                let context = info.context.as_ref().expect("table spacing context");
+                assert_eq!(context.format, "hwpx");
+                assert_eq!(context.location.as_deref(), Some(path.to_string().as_str()));
+                assert_eq!(context.count, *count);
+                assert_eq!(context.action, "retain_margins");
+            } else if !matches!(*enum_name, "DocxWarning" | "RegistryBridgeWarning") {
                 assert!(info.context.is_none());
             }
             assert_eq!(info.code, expected, "{enum_name}::{variant}");

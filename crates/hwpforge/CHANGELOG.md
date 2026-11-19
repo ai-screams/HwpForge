@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- TableBorderSpaceApproximated is exposed through OpsWarning::Encode with hwpx/encode context, loss/action derived from the warning kind and reason, first table location and table count. CLI JSON and shared Python metadata preserve this context without reaggregation.
+
 - DOCX 변환에서 공유 번호 카운터와 복합·법률식 표식을 보존하고, 번호 정의 분리와 남은 번호 근사 진단을 변환 결과에 전달한다.
 
 - 변환 결과에 목록 출력 정의 분리 경고 `LIST_NUMBERING_SPLIT`을 전달합니다. 이 경고만으로 의미 손실 거부가 발생하지 않습니다.
