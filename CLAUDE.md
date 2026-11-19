@@ -57,7 +57,7 @@ cargo clippy -p <crate> --all-targets -- -D warnings   # pre-check the crates yo
 bacon / bacon test    # watch mode
 ```
 
-`make ci` is the seven fast lanes, not all of CI. CI also runs Coverage, MSRV, Docs Build, Python (including release-only tests) and Workflow Lint.
+`make ci` is only the fast lanes listed above, not all of CI. CI also runs Coverage, MSRV, Docs Build, Python (including release-only tests) and Workflow Lint.
 
 ---
 
