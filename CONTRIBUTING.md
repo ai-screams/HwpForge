@@ -67,7 +67,7 @@ mdbook build     # Build the project book (mdBook 0.4 line — see below)
 
 **Always run `make ci` before pushing.** It uses the same flags CI does, so it catches what
 bare `cargo clippy` or `cargo fmt --check` would miss. It is not, however, the whole pipeline:
-`make ci` is the seven fast lanes, and CI additionally runs Coverage, MSRV, Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
+`make ci` is only the fast lanes listed above, and CI additionally runs Coverage, MSRV, Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
 `make py-all` as well, and `mdbook build` if you touched docs.
 
 `mdbook build` needs the **mdBook 0.4 line**: CI pins mdBook 0.4.52 with mdbook-admonish 1.20.0
@@ -123,7 +123,7 @@ Keep it minimal.
 1. Run `make ci` — it must pass. For a large change, `make ci-full` and `make py-all` too.
 2. If you changed docs, verify with `mdbook build` (mdBook 0.4 line — `make install-tools`).
 3. If you added a public API, ensure rustdoc is complete.
-4. If your change affects roundtrip (decode/encode), add a golden test with a real HWPX file.
+4. If your change affects roundtrip (decode/encode), add a golden test. Its input must be reproducible from an example in the repository (see [Golden tests](#1-golden-tests-most-important)).
 
 ## Commit Conventions
 
@@ -201,8 +201,9 @@ HwpForge uses a 3-tier testing strategy:
 
 ### 1. Golden tests (most important)
 
-Real HWPX/HWP5 files from Hancom 한글.
-Load → Save → Load → assert equality.
+The HWPX golden tests (`crates/hwpforge-smithy-hwpx/tests/golden.rs`) read inputs written by HwpForge's own encoder from the examples in `crates/hwpforge-smithy-hwpx/examples/`, and `generated_inputs.rs` checks that each committed input is byte-identical to its example's output. The decode tests check what an input decodes to. The round-trip tests decode an input, validate and encode it, decode the result again and compare the two decodes; `assert_roundtrip` in the same file lists what is compared.
+
+Do not commit documents saved by Hancom Office or other apps; `make fixture-policy` checks the tracked files for them. A new input needs an example or code in the repository that reproduces it.
 
 ```bash
 cargo test --test golden

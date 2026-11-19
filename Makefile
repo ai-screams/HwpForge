@@ -41,7 +41,7 @@ help:
 	@echo "  make msrv-pdf         MSRV check for the 1.92 crates + fuzz smoke"
 	@echo ""
 	@echo "Fixture policy / skill:"
-	@echo "  make fixture-policy        Check committed document metadata"
+	@echo "  make fixture-policy        Reject tracked documents saved by other apps"
 	@echo "  make skill-test            Smoke-test the documented skill workflows"
 	@echo ""
 	@echo "Python bindings (uv):"

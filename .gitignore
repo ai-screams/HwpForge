@@ -487,3 +487,41 @@ temp/
 
 # uv lockfile — untracked, same policy as Cargo.lock (CI resolves latest deps)
 uv.lock
+
+# Documents saved by other applications (Office, OpenDocument, Hancom). Encoder output .hwpx
+# is tracked, so it is not listed. `.dot` is left out because Graphviz uses that name; `.pot` is
+# already ignored above as a gettext template. scripts/check_fixture_policy.py also rejects the
+# binary formats among these by their file signature when one is added with --force or renamed.
+*.doc
+*.docx
+*.docm
+*.dotx
+*.dotm
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.xlt
+*.xltx
+*.xltm
+*.ppt
+*.pptx
+*.pptm
+*.pps
+*.ppsx
+*.ppsm
+*.potx
+*.potm
+*.odt
+*.ods
+*.odp
+*.rtf
+*.pdf
+*.hwp
+*.hwt
+*.hwtx
+*.hml
+*.owpml
+*.bak
+# Office lock files next to an open document
+~$*

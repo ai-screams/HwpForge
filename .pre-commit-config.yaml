@@ -1,7 +1,7 @@
 # Pre-commit hooks for HwpForge
 #
 # Pre-commit: MD lint/format + file hygiene + cargo fmt + clippy.
-# Pre-push: full `make ci` (fmt + clippy + test + deny + lint).
+# Pre-push: `make ci` (fixture-policy + fmt + clippy + test + examples + deny + lint-md).
 #
 # Install: brew install dprint pre-commit && npm install -g markdownlint-cli2
 # Activate: pre-commit install && pre-commit install --hook-type pre-push
@@ -39,7 +39,7 @@ repos:
         pass_filenames: false
         types: [rust]
 
-  # ── Pre-push: full CI pipeline ─────────────────────────
+  # ── Pre-push: make ci (fast lanes, not all of CI) ──────
       - id: make-ci
         name: make ci (pre-push)
         entry: make ci
