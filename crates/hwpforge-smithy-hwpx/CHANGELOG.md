@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The import bridge projects eligible Word table-border space into output cell margins using the current table structure. Stroke thickness, table offsets, column widths and pagination policy are unchanged. Tables with nonzero cell spacing or cell-zone definitions retain their margins. Import state is not serialized, is absent after HWPX decoding, and is ignored by base encoding. Repeated encoding does not accumulate spacing.
+
+- EncodeWarning::TableBorderSpaceApproximated { path, reason, count } reports retained table margins or projection with an unmeasured uniform border width. It is a non-semantic warning grouped by reason per encode, with the first affected table location and the affected table count.
+
 - 항목별 번호·글머리표 표현을 보존하기 위해 출력 정의를 나누면 `EncodeWarning::ListNumberingSplit`(`LIST_NUMBERING_SPLIT`)을 제공합니다. 현재 번호와 표현은 보존되므로 의미 손실로 분류하지 않습니다.
 
 - 디코드가 `header.xml`의 `compatibleDocument`에서 조판 프로필을 읽어 `Document::layout_profile()`에 싣는다. 원본이 없는 `WordCompatible` 문서에는 Word 호환 플래그 묶음을 쓴다.

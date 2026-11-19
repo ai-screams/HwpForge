@@ -545,6 +545,15 @@ pub mod warning_samples {
     pub fn encode() -> Vec<EncodeWarning> {
         let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
         let samples = vec![
+            EncodeWarning::TableBorderSpaceApproximated {
+                path: ParagraphPath(vec![
+                    PathSeg::Section(0),
+                    PathSeg::BodyParagraph(0),
+                    PathSeg::Run(0),
+                ]),
+                reason: "negative_right_margin",
+                count: 1,
+            },
             EncodeWarning::ListNumberingSplit {
                 kind: hwpforge_foundation::HeadingType::Number,
                 definition_id: 1,
@@ -599,7 +608,8 @@ pub mod warning_samples {
                 | EncodeWarning::PackageIdConflict { .. }
                 | EncodeWarning::ImageReferenceUnresolved { .. }
                 | EncodeWarning::PreviewRemoved { .. }
-                | EncodeWarning::ObjectIdConflict { .. } => {}
+                | EncodeWarning::ObjectIdConflict { .. }
+                | EncodeWarning::TableBorderSpaceApproximated { .. } => {}
             }
         }
         samples

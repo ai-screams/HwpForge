@@ -8,6 +8,9 @@ pub(super) fn build_table(
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTable> {
+    if let Some(projection) = &mut sink.table_projection {
+        projection.begin_table(&sink.projection_path)?;
+    }
     // Diagnostic slot before the cells (document order).
     let id_slot = super::super::object_ids::reserve();
 
@@ -212,6 +215,7 @@ fn build_table_row(
                 cell,
                 TableCellBuildContext {
                     col_idx: col_addr,
+                    cell_idx: i,
                     row_idx,
                     row_is_header,
                     row_height: row_fallback_height,
@@ -237,6 +241,7 @@ fn build_table_row(
 #[derive(Clone, Copy)]
 struct TableCellBuildContext {
     col_idx: u32,
+    cell_idx: usize,
     row_idx: u32,
     row_is_header: bool,
     row_height: Option<HwpUnit>,
@@ -251,10 +256,16 @@ fn build_table_cell(
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTableCell> {
+    let projected_margin = if let Some(projection) = &mut sink.table_projection {
+        let path = &sink.projection_path[..sink.projection_path.len() - 1];
+        projection.margin(path, (ctx.row_idx as usize, ctx.cell_idx))?
+    } else {
+        None
+    };
     Ok(HxTableCell {
         name: String::new(),
         header: u32::from(cell.effective_header(ctx.row_is_header)),
-        has_margin: u32::from(cell.margin.is_some()),
+        has_margin: u32::from(projected_margin.is_some() || cell.margin.is_some()),
         protect: 0,
         editable: 0,
         dirty: 0,
@@ -293,7 +304,8 @@ fn build_table_cell(
         // 이것을 실패시키는 것: 휴면 값을 쓰지 않기
         // (`dormant_cell_margins_round_trip`).
         cell_margin: Some(
-            cell.margin
+            projected_margin
+                .or(cell.margin)
                 .or(cell.dormant_margin)
                 .or(ctx.table_in_margin)
                 .map(encode_table_margin)

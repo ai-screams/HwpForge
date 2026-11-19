@@ -61,6 +61,7 @@ pub(super) fn build_masterpage_entries(
                 crate::decoder::PathSeg::MasterPage(idx),
             ],
         );
+        let saved_projection_path = std::mem::replace(&mut sink.projection_path, sink.path.clone());
         let saved_part =
             std::mem::replace(&mut sink.part, crate::encoder::package::masterpage_part_name(idx));
         sink.in_master_page = true;
@@ -137,6 +138,7 @@ pub(super) fn build_masterpage_entries(
         };
         sink.warnings.extend(crate::encoder::forbidden_char_warnings(&part, sites));
         sink.path = saved_path;
+        sink.projection_path = saved_projection_path;
         sink.part = saved_part;
         sink.in_master_page = false;
         sink.dropped_caches = saved_caches;

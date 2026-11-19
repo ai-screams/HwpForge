@@ -410,6 +410,21 @@ use self::section::encode_section_with_note_counters;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
+    /// Imported table border space could not be projected, or uses an unmeasured uniform width.
+    /// This changes layout approximation only and is not semantic loss.
+    /// `outside_scope` covers direct import-bridge callers with a non-WordCompatible
+    /// profile or tables outside body/table-cell ancestry. The DOCX importer does
+    /// not currently import header or footnote tables into this path.
+    /// The reason determines whether existing margins are retained or an unmeasured
+    /// uniform width is projected. Warnings are grouped by reason per encode.
+    TableBorderSpaceApproximated {
+        /// First affected table: the existing path ends at its containing Run segment.
+        path: crate::decoder::ParagraphPath,
+        /// Encoder-owned reason identifier; never source text or an identifier from the document.
+        reason: &'static str,
+        /// Number of affected tables in this document and reason group; starts at one.
+        count: u64,
+    },
     /// Output definitions were split to preserve per-item marker presentation.
     /// Current values and presentation are preserved. Later segments use fixed
     /// starts, so editing an earlier segment does not renumber later segments.
@@ -586,6 +601,7 @@ impl EncodeWarning {
     /// | [`Self::ImageReferenceUnresolved`] | 예 | 그림·채우기가 가리키는 자산이 패키지에 없다 |
     /// | [`Self::XmlForbiddenCharsRemoved`] | 아니오 | XML 이 담을 수 없는 문자만 지운다 (#198) |
     /// | [`Self::ObjectIdConflict`] | 아니오 | 입력의 id 를 그대로 쓴다 — 모호함은 입력에 이미 있었고 이 인코드가 잃는 것은 없다 |
+    /// | [`Self::TableBorderSpaceApproximated`] | No | Table-border layout approximation is retained or reported; document text, numbering and controls are not removed. |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
     /// # `LayoutCacheDropped` 가 비-의미 손상인 이유
@@ -616,6 +632,7 @@ impl EncodeWarning {
             Self::ListNumberingSplit { .. }
             | Self::PreviewRemoved { .. }
             | Self::UnclosedFieldBoundary { .. }
+            | Self::TableBorderSpaceApproximated { .. }
             | Self::LayoutCacheDropped { .. }
             | Self::XmlForbiddenCharsRemoved { .. }
             | Self::ObjectIdConflict { .. } => false,
@@ -644,6 +661,7 @@ impl EncodeWarning {
             Self::ListNumberingSplit { .. } => "LIST_NUMBERING_SPLIT",
             Self::PreviewRemoved { .. } => "PREVIEW_REMOVED",
             Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
+            Self::TableBorderSpaceApproximated { .. } => "TABLE_BORDER_SPACE_APPROXIMATED",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
             Self::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
@@ -679,6 +697,7 @@ impl EncodeWarning {
     pub fn part(&self) -> Option<&str> {
         match self {
             Self::PreviewRemoved { .. }
+            | Self::TableBorderSpaceApproximated { .. }
             | Self::LayoutCacheDropped { .. }
             | Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
@@ -721,7 +740,8 @@ impl EncodeWarning {
                 }
             )),
             Self::PreviewRemoved { .. } => None,
-            Self::LayoutCacheDropped { path, .. }
+            Self::TableBorderSpaceApproximated { path, .. }
+            | Self::LayoutCacheDropped { path, .. }
             | Self::NoteHeadSkipped { path, .. }
             | Self::TitleMarkSkipped { path, .. }
             | Self::NoteRestartIgnored { path, .. } => Some(path.to_string()),
@@ -764,6 +784,24 @@ impl EncodeWarning {
             }
             Self::UnclosedFieldBoundary { reason, .. } => {
                 format!("unclosed source field: {reason}")
+            }
+            Self::TableBorderSpaceApproximated { reason, count, .. } => {
+                let first = match *reason {
+                    "outside_scope" => "Table border space was not projected because the table is outside WordCompatible body or body-cell scope.",
+                    "size_protected" => "Table border space was not projected because the table size is protected.",
+                    "nonzero_cell_spacing" => "Table border space was not projected because the table has nonzero cell spacing.",
+                    "cell_zones" => "Table border space was not projected because the table has cell-zone border definitions.",
+                    "incomplete_widths" => "Table border space was not projected because some effective border widths are unknown.",
+                    "inconsistent_edges" => "Table border space was not projected because adjoining border widths are inconsistent.",
+                    "missing_margins" => "Table border space was not projected because effective source cell margins are unavailable.",
+                    "unverified_mixed_widths" => "Table border space was not projected because the mixed border widths are outside the measured set.",
+                    "later_left_wider" => "Table border space was not projected because a later left border is wider than the first cell's left border.",
+                    "negative_right_margin" => "Table border space was not projected because it would make a right cell margin negative.",
+                    "unverified_uniform_width" => "Table border space was projected using a uniform width outside the measured set.",
+                    _ => "Table border space could not be projected for an unspecified reason.",
+                };
+                let retained = if *reason == "unverified_uniform_width" { "" } else { " Existing cell margins were retained." };
+                format!("{first}{retained} Affected tables: {count}. Only the first location is shown.")
             }
             Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
             Self::NoteHeadSkipped { reason, .. } => format!("note number head skipped: {reason}"),
@@ -839,6 +877,9 @@ impl std::fmt::Display for EncodeWarning {
                 write!(f, "{}: {}", self.location().expect("list location"), self.message())
             }
             Self::PreviewRemoved { .. } => f.write_str(&self.message()),
+            Self::TableBorderSpaceApproximated { path, .. } => {
+                write!(f, "{path}: {}", self.message())
+            }
             Self::LayoutCacheDropped { path, reason } => {
                 write!(f, "layout cache dropped at {path}: {reason}")
             }
@@ -964,6 +1005,7 @@ mod is_semantic_loss_tests {
                 "OBJECT_ID_CONFLICT",
                 "PACKAGE_ID_CONFLICT",
                 "PREVIEW_REMOVED",
+                "TABLE_BORDER_SPACE_APPROXIMATED",
                 "TITLE_MARK_SKIPPED",
                 "UNCLOSED_FIELD_BOUNDARY",
                 "XML_FORBIDDEN_CHARS_REMOVED",
@@ -1037,6 +1079,7 @@ mod is_semantic_loss_tests {
                     EncodeWarning::ObjectIdConflict { id, .. } => id.to_string(),
                     EncodeWarning::PreviewRemoved { parts } => parts.join(", "),
                     EncodeWarning::ListNumberingSplit { .. } => "list definition split".into(),
+                    EncodeWarning::TableBorderSpaceApproximated { reason, .. } => (*reason).into(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -1299,11 +1342,14 @@ impl HwpxEncoder {
         // A base already represents output spacing. Clear import state before
         // list preparation and the full-store no-op equality check.
         let mut base_store;
-        let style_store = if style_store.imported_percentages.is_empty() {
+        let style_store = if style_store.imported_percentages.is_empty()
+            && style_store.imported_border_widths.is_empty()
+        {
             style_store
         } else {
             base_store = style_store.clone();
             base_store.imported_percentages.clear();
+            base_store.imported_border_widths.clear();
             &base_store
         };
         let (marker_store, marker_warnings) =
@@ -1510,11 +1556,19 @@ impl HwpxEncoder {
         let border_ids = 1..=style_store.border_fill_count() as u32;
         crate::header_references::HeaderReferences::validate_body_borders(document, border_ids)?;
         let (spacing_store, projection) = crate::word_line_spacing::prepare(document, style_store)?;
-        let suppress_spacing_cache = projection.is_some() && requested_layout_cache;
-        let options =
-            if projection.is_some() { options.with_emit_layout_cache(false) } else { options };
+        let table_projection = crate::word_table_border_space::prepare(document, style_store)?;
+        let table_changed = table_projection.changed;
+        let suppress_spacing_cache =
+            (projection.is_some() || table_changed) && requested_layout_cache;
+        let options = if projection.is_some() || table_changed {
+            options.with_emit_layout_cache(false)
+        } else {
+            options
+        };
         let style_store = spacing_store.as_ref();
         let mut context = section::DocumentEncodeContext::for_document(document, image_store);
+        context.table_projection = Some(table_projection);
+        context.table_spacing_changed = table_changed;
         context.spacing_projection = projection;
         context.suppress_spacing_cache = suppress_spacing_cache;
         context.references = Some(references);
@@ -1543,6 +1597,9 @@ impl HwpxEncoder {
                     }
                 })
                 .collect();
+        if let Some(projection) = &mut context.table_projection {
+            context.warnings.append(&mut projection.warnings);
+        }
         let section_warning_start = context.warnings.len();
         // All parts share one document asset/diagnostic context.
         let mut section_results = Vec::with_capacity(sections.len());
@@ -1569,6 +1626,9 @@ impl HwpxEncoder {
             section_results.push(result);
         }
         if let Some(projection) = &context.spacing_projection {
+            projection.finish()?;
+        }
+        if let Some(projection) = &context.table_projection {
             projection.finish()?;
         }
         let marker_output;

@@ -209,6 +209,19 @@ impl HwpxRegistryBridge {
     /// WordCompatible profile. JSON round trips discard this state; encoding
     /// with a base ignores it and preserves the current output spacing.
     ///
+    /// Original border widths are retained in nonserialized import state. Without a base,
+    /// WordCompatible body tables and tables nested in body cells project eligible border space
+    /// into output cell margins. Eligibility is checked against the current structure on each
+    /// encode. Ineligible candidates, including tables with nonzero cell spacing or cell-zone
+    /// definitions, keep existing margins and report TableBorderSpaceApproximated; unmeasured
+    /// uniform widths are projected with an advisory. The outside_scope reason covers direct
+    /// bridge callers outside WordCompatible body/table-cell scope. Initial registry rebind
+    /// rejects cell-zone references; encoding also checks zones added after rebind or supplied
+    /// with already valid store references. No source-only exact-row or style information is
+    /// inferred. HWPX decode and style-store JSON round trips discard this state; registry JSON
+    /// preserves widths. Base encoding ignores import state. Core margins, stroke thickness,
+    /// table offsets, column widths and pagination policy are unchanged.
+    ///
     /// # Errors
     /// Returns an error for invalid registry references, unsupported character
     /// or paragraph border references, or overflowing diagnostic counts.
@@ -235,7 +248,18 @@ impl HwpxRegistryBridge {
                     target.line_type = "NONE".into();
                 }
             }
-            border_fill_map.push(store.push_border_fill(fill));
+            let widths =
+                [&value.border.left, &value.border.right, &value.border.top, &value.border.bottom]
+                    .map(|side| {
+                        if side.line_type == hwpforge_foundation::BorderLineType::None {
+                            Some(0)
+                        } else {
+                            side.width.map(|width| width.as_i32())
+                        }
+                    });
+            let store_id = store.push_border_fill(fill);
+            store.imported_border_widths.insert(store_id, widths);
+            border_fill_map.push(store_id);
             id += 1;
         }
         Ok(crate::WithBridgeWarnings {

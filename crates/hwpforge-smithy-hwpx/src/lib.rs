@@ -56,6 +56,7 @@ pub mod decoder;
 pub mod default_styles;
 mod depth;
 mod word_line_spacing;
+mod word_table_border_space;
 // Original-source deletion checks here the stored values its edit could leave stale.
 mod derived_values;
 pub mod diagnostics;

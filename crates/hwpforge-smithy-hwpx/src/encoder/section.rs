@@ -205,6 +205,9 @@ pub(crate) struct SectionEncodeResult {
 /// One context per document, shared by every body and nested encoder.
 /// Part/path scopes change; asset collections and allocators never reset.
 pub(crate) struct DocumentEncodeContext {
+    projection_path: Vec<crate::PathSeg>,
+    pub(super) table_projection: Option<crate::word_table_border_space::Projection>,
+    pub(super) table_spacing_changed: bool,
     pub(super) spacing_projection: Option<crate::word_line_spacing::Projection>,
     pub(super) suppress_spacing_cache: bool,
     pub(super) list_ledger: Option<super::list_numbering::ListLedger>,
@@ -256,7 +259,10 @@ impl DocumentEncodeContext {
     pub(crate) fn new(section_index: usize) -> Self {
         Self {
             references: None,
+            projection_path: vec![crate::PathSeg::Section(section_index)],
             spacing_projection: None,
+            table_projection: None,
+            table_spacing_changed: false,
             suppress_spacing_cache: false,
             list_ledger: None,
             charts: Vec::new(),
@@ -319,6 +325,7 @@ impl DocumentEncodeContext {
 
     pub(crate) fn begin_section(&mut self, section_index: usize) {
         self.path = vec![crate::decoder::PathSeg::Section(section_index)];
+        self.projection_path = self.path.clone();
         self.part = super::package::section_part_name(section_index);
         self.in_master_page = false;
     }
@@ -359,16 +366,29 @@ impl DocumentEncodeContext {
     }
 
     pub(crate) fn enter(&mut self, seg: crate::decoder::PathSeg) {
+        self.projection_path.push(seg);
         self.path.push(seg);
     }
 
     pub(crate) fn leave(&mut self) {
+        self.projection_path.pop();
         self.path.pop();
     }
 
     fn cache_dropped(&mut self, reason: String) {
         self.warnings.push(super::EncodeWarning::LayoutCacheDropped {
             path: crate::decoder::ParagraphPath(self.path.clone()),
+            reason,
+        });
+    }
+
+    // Preserve established line-spacing diagnostic paths. New table-only cache
+    // drops use the canonical paragraph path without changing other warnings.
+    fn projected_cache_dropped(&mut self, reason: String) {
+        let path =
+            if self.spacing_projection.is_some() { &self.path } else { &self.projection_path };
+        self.warnings.push(super::EncodeWarning::LayoutCacheDropped {
+            path: crate::decoder::ParagraphPath(path.clone()),
             reason,
         });
     }
@@ -1049,10 +1069,12 @@ fn build_paragraph(
     // 실패(축약점 모호·inadmissible 방출 등) = 캐시 미방출 + 경고.
     let drops_before = sink.warnings.len();
     let linesegarray = if !options.emit_layout_cache && sink.suppress_spacing_cache {
-        if para.layout_cache.is_some() {
-            sink.cache_dropped(
-                "Layout cache omitted because imported line spacing was projected".into(),
-            );
+        if para.layout_cache.as_ref().is_some_and(|cache| !cache.lines.is_empty()) {
+            sink.projected_cache_dropped(if sink.table_spacing_changed {
+                "Layout cache omitted because imported table border space was projected".into()
+            } else {
+                "Layout cache omitted because imported line spacing was projected".into()
+            });
         }
         None
     } else if options.emit_layout_cache {
@@ -1244,7 +1266,9 @@ fn build_runs(
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
 
+    let paragraph_projection_path = sink.projection_path.clone();
     for (run_index, run) in runs.iter().enumerate() {
+        sink.projection_path = paragraph_projection_path.clone();
         // 첫 문단이 control run(NewNumber/PageHiding 등)
         // 으로 시작하면 secPr 가 둘째 run 으로 밀려 한컴 계약(secPr = 첫
         // 문단의 첫 run)을 깬다 — 전용 carrier run 을 index 0 에 먼저
@@ -1310,6 +1334,8 @@ fn build_runs(
         let mut dutmals: Vec<HxDutmal> = Vec::new();
         let mut composes: Vec<HxCompose> = Vec::new();
 
+        let run_path = crate::word_table_border_space::table_key(&sink.projection_path, run_index);
+        let saved_projection_path = std::mem::replace(&mut sink.projection_path, run_path);
         match &run.content {
             RunContent::Text(s) => {
                 ledger.mixed_text(s);
@@ -1343,14 +1369,16 @@ fn build_runs(
             }
             RunContent::Table(t) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Table);
-                // New cache-drop diagnostics identify the containing table run.
-                // Keep the established diagnostic paths on unprojected output.
-                if sink.suppress_spacing_cache {
-                    sink.enter(crate::decoder::PathSeg::Run(run_index));
+                // Line-spacing diagnostics keep their established run scopes.
+                // Border-space keys and new cache paths are independent of this scope.
+                let diagnostic_run =
+                    sink.spacing_projection.is_some() && sink.suppress_spacing_cache;
+                if diagnostic_run {
+                    sink.path.push(crate::decoder::PathSeg::Run(run_index));
                 }
                 let table = build_table(t, hyperlink_entries, options, sink);
-                if sink.suppress_spacing_cache {
-                    sink.leave();
+                if diagnostic_run {
+                    sink.path.pop();
                 }
                 tables.push(table?);
             }
@@ -1997,6 +2025,7 @@ fn build_runs(
             }
         }
 
+        sink.projection_path = saved_projection_path;
         result.push(HxRun {
             origin: 0,
             char_pr_id_ref,
@@ -2092,6 +2121,7 @@ fn build_runs(
         }
     }
 
+    sink.projection_path = paragraph_projection_path;
     Ok(result)
 }
 
@@ -2593,7 +2623,7 @@ const DEFAULT_OUT_MARGIN: HxTableMargin =
     HxTableMargin { left: 283, right: 283, top: 283, bottom: 283 };
 
 /// `borderFillIDRef` for table cells (matches header.xml borderFill id=3).
-const TABLE_BORDER_FILL_ID: u32 = 3;
+pub(crate) const TABLE_BORDER_FILL_ID: u32 = 3;
 
 // ── Linesegarray placeholder ─────────────────────────────────────
 
