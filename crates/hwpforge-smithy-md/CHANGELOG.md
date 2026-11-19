@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.20.1...hwpforge-smithy-md-v0.20.2) - 2026-11-19
+
+### Fixed
+
+- *(hwpx)* register built-in definitions in the tab and dropcap examples ([#361](https://github.com/ai-screams/HwpForge/pull/361))
+
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.20.0...hwpforge-smithy-md-v0.20.1) - 2026-11-16
 
 ### Changed

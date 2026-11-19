@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.1...hwpforge-smithy-hwpx-v0.20.2) - 2026-11-19
+
+### Added
+
+- *(hwpx)* [#143] keep legacy direct header definitions in source-preserving deletes ([#359](https://github.com/ai-screams/HwpForge/pull/359))
+
+
+### Fixed
+
+- *(hwpx)* register built-in definitions in the tab and dropcap examples ([#361](https://github.com/ai-screams/HwpForge/pull/361))
+
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.0...hwpforge-smithy-hwpx-v0.20.1) - 2026-11-16
 
 한컴오피스가 저장한 HWPX의 `delete-para`와 `set-cell`을 원문 XML을 그대로 두는 방식으로 열고, 줄 조판 캐시를 남기는 범위를 바로잡은 릴리스다. 새로 거부되는 입력과 달라지는 출력은 "업그레이드 주의"에 모았다.

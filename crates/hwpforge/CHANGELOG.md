@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/v0.20.1...v0.20.2) - 2026-11-19
+
+### Added
+
+- *(hwpx)* [#143] keep legacy direct header definitions in source-preserving deletes ([#359](https://github.com/ai-screams/HwpForge/pull/359))
+
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/v0.20.0...v0.20.1) - 2026-11-16
 
 한컴오피스가 저장한 HWPX에서 `delete_para`와 `set_cell`이 열리는 릴리스다. 조건과 거부 규칙은 `hwpforge-smithy-hwpx`를 따른다.
