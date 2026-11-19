@@ -206,6 +206,13 @@ jobs:
         run: >-
           cargo nextest run --workspace --all-features --profile ci
           --exclude hwpforge-bindings-py
+      - name: Run examples (each in an empty temp folder)
+        # clippy 는 예제를 컴파일만 하고 실행하지 않는다. 빌드는 되지만 실행하면
+        # 실패하는 예제(정의 없는 참조를 인코더가 거부, 옮겨진 입력 파일)를 여기서
+        # 잡는다. 위 단계와 같은 프로필(test)·기능·제외 목록으로 빌드해 컴파일된
+        # 의존성을 다시 쓴다.
+        # 건너뛰는 예제와 이유는 scripts/run_examples.py 의 SKIP.
+        run: make run-examples
 
   coverage:
     name: "Verify › Coverage (≥ 90%)"

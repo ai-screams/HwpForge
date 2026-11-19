@@ -1,4 +1,4 @@
-.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc site-check cov deny machete msrv msrv-pdf ci ci-fast ci-full clean fixture-policy skill-test py-dev py-test py-cov py-lint py-check py-rust-test py-all
+.PHONY: help install-tools check check-features test test-ci run-examples clippy fmt fmt-fix lint-md lint-md-fix doc site-check cov deny machete msrv msrv-pdf ci ci-fast ci-full clean fixture-policy skill-test py-dev py-test py-cov py-lint py-check py-rust-test py-all
 
 MDBOOK_VERSION ?= 0.4.52
 MDBOOK_ADMONISH_VERSION ?= 1.20.0
@@ -26,6 +26,7 @@ help:
 	@echo "  make check-features   Cargo check every hwpforge feature combination"
 	@echo "  make test             Run tests (cargo-nextest, workspace minus bindings-py)"
 	@echo "  make test-ci          Run tests with CI profile (nextest + junit)"
+	@echo "  make run-examples     Run every example in an empty temp folder"
 	@echo "  make clippy           Run clippy linter (workspace)"
 	@echo "  make fmt              Check code formatting (rustfmt)"
 	@echo "  make fmt-fix          Fix code formatting (rustfmt)"
@@ -53,7 +54,7 @@ help:
 	@echo "  make py-all           py-lint -> py-check -> py-rust-test -> py-test -> py-cov"
 	@echo ""
 	@echo "CI:"
-	@echo "  make ci-fast          Fast CI checks (fmt/clippy/test/deny/lint-md)"
+	@echo "  make ci-fast          Fast CI checks (fixture-policy/fmt/clippy/test/run-examples/deny/lint-md)"
 	@echo "  make ci-full          Full CI checks (+coverage/msrv/msrv-pdf)"
 	@echo "  make ci               Alias of ci-fast"
 	@echo ""
@@ -126,6 +127,11 @@ test:
 test-ci:
 	cargo nextest run --workspace --all-features --profile ci \
 	  --exclude hwpforge-bindings-py
+
+# clippy compiles the examples but does not run them; this runs each one and
+# fails on a non-zero exit (skip list and reasons: scripts/run_examples.py).
+run-examples:
+	python3 scripts/run_examples.py
 
 clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -227,7 +233,7 @@ py-rust-test:
 py-all: py-lint py-check py-rust-test py-test py-cov
 	@echo "✅ Python binding checks passed!"
 
-ci-fast: fixture-policy fmt clippy test deny lint-md
+ci-fast: fixture-policy fmt clippy test run-examples deny lint-md
 	@echo "✅ Fast CI checks passed!"
 
 ci-full: ci-fast cov msrv msrv-pdf
