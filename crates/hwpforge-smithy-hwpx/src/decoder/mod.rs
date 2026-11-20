@@ -545,6 +545,7 @@ pub mod warning_samples {
     pub fn encode() -> Vec<EncodeWarning> {
         let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
         let samples = vec![
+            EncodeWarning::ParagraphEndMarkReplaced { path: path(), count: 1 },
             EncodeWarning::TableBorderSpaceApproximated {
                 path: ParagraphPath(vec![
                     PathSeg::Section(0),
@@ -597,7 +598,8 @@ pub mod warning_samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
             // 그때 위 표본에도 하나를 더한다.
             match sample {
-                EncodeWarning::ListNumberingSplit { .. }
+                EncodeWarning::ParagraphEndMarkReplaced { .. }
+                | EncodeWarning::ListNumberingSplit { .. }
                 | EncodeWarning::UnclosedFieldBoundary { .. }
                 | EncodeWarning::LayoutCacheDropped { .. }
                 | EncodeWarning::NoteHeadSkipped { .. }

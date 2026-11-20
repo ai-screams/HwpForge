@@ -222,6 +222,20 @@ impl HwpxRegistryBridge {
     /// preserves widths. Base encoding ignores import state. Core margins, stroke thickness,
     /// table offsets, column widths and pagination policy are unchanged.
     ///
+    /// This explicit import bridge enables nonserialized output projections when encoding a
+    /// WordCompatible document without a base; it does not verify DOCX provenance. Eligible
+    /// paragraphs in every emitted container replace an oversized paragraph-end mark with the
+    /// final text run's existing character shape. Numbered, bulleted and outline paragraphs,
+    /// empty paragraphs, trailing empty lines and ambiguous endings retain their source marks.
+    /// Equal-size marks permit eligible Latin percentage-spacing correction when they use the
+    /// body's Latin font family. Smaller marks with matching fonts and conservative layout
+    /// attributes on the final nonempty text run also permit it, including bold or italic
+    /// differences.
+    /// Core retains the source mark, while the HWPX output
+    /// loses its original editing formatting and reports ParagraphEndMarkReplaced. Line-spacing
+    /// eligibility uses the mark actually emitted. Repeated encoding does not accumulate changes.
+    /// HWPX decoding and style-store JSON round trips discard import state; base encoding ignores it.
+    ///
     /// # Errors
     /// Returns an error for invalid registry references, unsupported character
     /// or paragraph border references, or overflowing diagnostic counts.
@@ -233,6 +247,7 @@ impl HwpxRegistryBridge {
     ) -> HwpxResult<crate::WithBridgeWarnings<Self>> {
         let RegistryStoreBuild { mut store, char_shape_map, para_shape_map, warnings } =
             HwpxStyleStore::from_registry_import_mappings(registry, style_set)?;
+        store.imported_paragraph_marks = true;
         let mut border_fill_map = Vec::new();
         let mut id = 1;
         while let Some(value) = registry.border_fill(id) {

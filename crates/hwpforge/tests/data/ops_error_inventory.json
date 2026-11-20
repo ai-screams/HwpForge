@@ -1103,6 +1103,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "ParagraphEndMarkReplaced",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "TableBorderSpaceApproximated",
           "shape": "struct",
           "cfg": [],

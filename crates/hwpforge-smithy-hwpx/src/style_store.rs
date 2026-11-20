@@ -1207,6 +1207,9 @@ pub struct HwpxStyleStore {
     pub(crate) imported_percentages: BTreeMap<u32, f64>,
     #[serde(skip)]
     #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub(crate) imported_paragraph_marks: bool,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schemars", schemars(skip))]
     pub(crate) imported_border_widths: BTreeMap<u32, [Option<i32>; 4]>,
 }
 
@@ -1252,6 +1255,7 @@ impl<'de> Deserialize<'de> for HwpxStyleStore {
             header_fidelity: wire.header_fidelity,
             list_marker_layouts: wire.list_marker_layouts,
             imported_percentages: BTreeMap::new(),
+            imported_paragraph_marks: false,
             imported_border_widths: BTreeMap::new(),
             style_positions: std::sync::Arc::new(wire.style_positions),
             style_references: Default::default(),

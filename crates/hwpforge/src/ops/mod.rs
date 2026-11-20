@@ -54,7 +54,13 @@
 //!
 //! `ops-hwpx` gives the HWPX-only operations, `ops-md` adds the Markdown
 //! ones, and `ops` remains an alias for `ops-md`. `ops-docx` independently
-//! adds DOCX import to the HWPX backend.
+//! adds DOCX import to the HWPX backend. Imported numbered, bulleted and outline paragraphs
+//! retain their source paragraph-end formatting in HWPX output. Equal-size end marks permit
+//! eligible Latin percentage-spacing correction when they use the body's Latin font family.
+//! Smaller end marks retain their formatting and also permit it when their fonts and
+//! conservative layout attributes match the final nonempty text run. Eligible oversized marks
+//! on other paragraphs are replaced only in output and reported through
+//! [`OpsWarning::Encode`]; Core keeps the source mark.
 
 const UNCARRIED_ENTRIES_HINT: &str = "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요. 기존 한컴 미리보기가 있던 문서에서 patch·fill로 내용을 실제로 바꾸면 미리보기(Preview)를 지우고 PREVIEW_REMOVED 경고를 냅니다. 한컴에서 다시 저장하면 미리보기가 다시 만들어집니다. 머리글 정규화 등 문서 재인코드가 필요한 경우는 이 보장 밖입니다.";
 
@@ -929,6 +935,19 @@ impl OpsWarning {
                 };
                 let mut context =
                     WarningContext::new("hwpx", WarningStage::Encode, "table_border_space", action);
+                context.location = Some(path.to_string());
+                context.count = *count;
+                let mut info = WarningInfo::new(w.code(), w.to_string());
+                info.context = Some(context);
+                info
+            }
+            Self::Encode(w @ EncodeWarning::ParagraphEndMarkReplaced { path, count }) => {
+                let mut context = WarningContext::new(
+                    "hwpx",
+                    WarningStage::Encode,
+                    "paragraph_end_mark_formatting",
+                    "replace_with_text_formatting",
+                );
                 context.location = Some(path.to_string());
                 context.count = *count;
                 let mut info = WarningInfo::new(w.code(), w.to_string());

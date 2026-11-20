@@ -204,7 +204,8 @@ pub(crate) struct SectionEncodeResult {
 /// 인코드 경고 sink + 현재 문단 경로 (디코더 `DecodeCtx` 대칭).
 /// One context per document, shared by every body and nested encoder.
 /// Part/path scopes change; asset collections and allocators never reset.
-pub(crate) struct DocumentEncodeContext {
+pub(crate) struct DocumentEncodeContext<'a> {
+    pub(super) paragraph_mark_projection: Option<crate::word_paragraph_mark::Projection<'a>>,
     projection_path: Vec<crate::PathSeg>,
     pub(super) table_projection: Option<crate::word_table_border_space::Projection>,
     pub(super) table_spacing_changed: bool,
@@ -234,7 +235,7 @@ pub(crate) struct DocumentEncodeContext {
     in_master_page: bool,
 }
 
-impl DocumentEncodeContext {
+impl DocumentEncodeContext<'_> {
     pub(super) fn with_list_scope<T>(
         &mut self,
         scope: super::list_numbering::ListScope,
@@ -261,6 +262,7 @@ impl DocumentEncodeContext {
             references: None,
             projection_path: vec![crate::PathSeg::Section(section_index)],
             spacing_projection: None,
+            paragraph_mark_projection: None,
             table_projection: None,
             table_spacing_changed: false,
             suppress_spacing_cache: false,
@@ -998,6 +1000,12 @@ fn build_paragraph(
     injected: Vec<hwpforge_core::layout::WireTokenKind>,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxParagraph> {
+    // Record before descendants so the first affected location follows builder entry order.
+    let output_end = if let Some(projection) = &mut sink.paragraph_mark_projection {
+        projection.output_id(para, &sink.projection_path)?
+    } else {
+        para.end_char_shape
+    };
     let mut ledger = EncoderLedger::new(injected, inject_sec_pr && page_settings.is_some());
     let mut runs = build_runs(
         &para.runs,
@@ -1072,8 +1080,10 @@ fn build_paragraph(
         if para.layout_cache.as_ref().is_some_and(|cache| !cache.lines.is_empty()) {
             sink.projected_cache_dropped(if sink.table_spacing_changed {
                 "Layout cache omitted because imported table border space was projected".into()
-            } else {
+            } else if sink.spacing_projection.is_some() {
                 "Layout cache omitted because imported line spacing was projected".into()
+            } else {
+                "Layout cache omitted because imported paragraph-end formatting was replaced".into()
             });
         }
         None
@@ -1196,7 +1206,7 @@ fn build_paragraph(
     // The paragraph-end mark's char shape is an empty last
     // run, as Hancom writes it. 이것을 실패시키는 것: 이 run 을 쓰지 않기
     // (`end_mark_run_round_trips`).
-    if let Some(end) = para.end_char_shape {
+    if let Some(end) = output_end {
         let mut end_run = note_head_run(sink.output_id("charPr", end.get())?, HxCtrl::default());
         end_run.ctrls.clear();
         runs.push(end_run);
@@ -1681,6 +1691,14 @@ fn build_runs(
                     }
                     Control::FieldBoundary { boundary } => {
                         use hwpforge_core::control::FieldBoundary;
+                        if !field_boundary_is_encodable(boundary) {
+                            sink.content_lost(
+                                "field_boundary",
+                                "unsupported field boundary parameter".into(),
+                            );
+                            ledger.mark_cache_inadmissible("unsupported field boundary");
+                            continue;
+                        }
                         let annotation_xml = match boundary {
                             FieldBoundary::Start(start) => start
                                 .annotation
@@ -1700,12 +1718,10 @@ fn build_runs(
                         let Some(real_xml) =
                             build_field_boundary_xml(boundary, &annotation_xml, char_pr_id_ref)
                         else {
-                            sink.content_lost(
-                                "field_boundary",
-                                "unsupported field boundary parameter".into(),
-                            );
-                            ledger.mark_cache_inadmissible("unsupported field boundary");
-                            continue;
+                            // The same builder accepted this boundary before annotation encoding.
+                            return Err(HwpxError::InvalidStructure {
+                                detail: "Accepted field boundary failed XML construction".into(),
+                            });
                         };
                         ledger.token(match boundary {
                             FieldBoundary::Start(_) => {
@@ -2639,6 +2655,13 @@ const DEFAULT_HORZ_SIZE: i32 = 42520;
 // ── 한글 compatibility: secPr enrichment ────────────────────────
 
 // ── Header/Footer/PageNumber injection ──────────────────────────
+
+// Use the writer's acceptance rule before visiting children that would be discarded.
+pub(crate) fn field_boundary_is_encodable(
+    boundary: &hwpforge_core::control::FieldBoundary,
+) -> bool {
+    build_field_boundary_xml(boundary, "", 0).is_some()
+}
 
 #[cfg(test)]
 mod tests {

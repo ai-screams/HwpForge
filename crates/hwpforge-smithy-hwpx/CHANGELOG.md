@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Explicit import-bridge encoding of WordCompatible documents replaces eligible oversized paragraph-end marks with the final text run's existing character shape in every emitted paragraph container. Numbered, bulleted and outline paragraphs, empty or ambiguous endings, and differences that do not require size replacement retain their source marks. EncodeWarning::ParagraphEndMarkReplaced { path, count } reports the loss of original output editing formatting. Latin percentage-spacing eligibility uses the emitted mark. Equal-size marks qualify when they use the body's Latin font family; smaller marks also qualify when their fonts and conservative layout attributes match the final nonempty text run, including bold or italic differences. Actual output changes suppress requested layout caches through the existing document-wide policy. Import state is not serialized and is ignored by base encoding.
+
 - The import bridge projects eligible Word table-border space into output cell margins using the current table structure. Stroke thickness, table offsets, column widths and pagination policy are unchanged. Tables with nonzero cell spacing or cell-zone definitions retain their margins. Import state is not serialized, is absent after HWPX decoding, and is ignored by base encoding. Repeated encoding does not accumulate spacing.
 
 - EncodeWarning::TableBorderSpaceApproximated { path, reason, count } reports retained table margins or projection with an unmeasured uniform border width. It is a non-semantic warning grouped by reason per encode, with the first affected table location and the affected table count.
@@ -33,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- import bridge에서 base 없이 직접 인코드하는 WordCompatible 본문·표 칸의 Cambria·Calibri Percentage 줄 간격을 비례 보정한다. 대상은 ASCII 인쇄 문자와 내용이 있는 내부 개행으로 제한하며 en dash·굽은 따옴표는 제외한다. 원래 배수 상태는 JSON으로 전달하지 않고 base 인코드에서 무시하므로 재인코드·편집은 출력 간격을 유지한다. 보정 때문에 요청된 줄 캐시를 억제하면 기존 캐시 폐기 경고로 보고한다.
+- import bridge에서 base 없이 직접 인코드하는 WordCompatible 본문·표 칸의 Cambria·Calibri Percentage 줄 간격을 비례 보정한다. 대상은 ASCII 인쇄 문자와 내용이 있는 내부 개행으로 제한하며 en dash·굽은 따옴표는 제외한다. 자격은 실제 출력 끝 표시로 판단하며 같은 크기 끝 표시는 본문과 Latin 글꼴이 같으면 보정을 막지 않는다. 작은 끝 표시는 마지막 비빈 본문 run과 전 언어 칸 글꼴·보수 배치 속성이 같으면 굵게·기울임 차이와 관계없이 보정을 막지 않는다. 번호·글머리표·개요 문단은 끝 표시 원본을 유지한다. 원래 배수 상태는 JSON으로 전달하지 않고 base 인코드에서 무시하므로 재인코드·편집은 출력 간격을 유지한다. 보정 때문에 요청된 줄 캐시를 억제하면 기존 캐시 폐기 경고로 보고한다.
 
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.0...hwpforge-smithy-hwpx-v0.20.1) - 2026-11-16
 

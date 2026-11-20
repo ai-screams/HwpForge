@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DOCX import exposes ParagraphEndMarkReplaced through OpsWarning::Encode with hwpx/encode context, the first affected paragraph and the affected paragraph count. CLI JSON and shared Python metadata preserve the diagnostic. Core retains the source paragraph-end formatting even when HWPX output replaces it. Numbered, bulleted and outline paragraphs retain their source end marks in output. Equal-size end marks do not block eligible Latin percentage-spacing correction when they use the body's Latin font family. Smaller end marks are also retained and do not block it when their fonts and conservative layout attributes match the final nonempty text run.
+
 - TableBorderSpaceApproximated is exposed through OpsWarning::Encode with hwpx/encode context, loss/action derived from the warning kind and reason, first table location and table count. CLI JSON and shared Python metadata preserve this context without reaggregation.
 
 - DOCX 변환에서 공유 번호 카운터와 복합·법률식 표식을 보존하고, 번호 정의 분리와 남은 번호 근사 진단을 변환 결과에 전달한다.

@@ -350,8 +350,8 @@ impl Visitor<'_> {
                 }
             }
             Control::FieldBoundary {
-                boundary: hwpforge_core::control::FieldBoundary::Start(start),
-            } => {
+                boundary: boundary @ hwpforge_core::control::FieldBoundary::Start(start),
+            } if crate::encoder::section::field_boundary_is_encodable(boundary) => {
                 if let Some(content) = &start.annotation {
                     path.push(PathSeg::Memo);
                     self.paragraphs(content, path, false)?;

@@ -360,6 +360,7 @@ const WARNING_MAPPING: Table = &[
         "EncodeWarning",
         &[
             // 이것을 실패시키는 것: 표 테두리 공간 경고의 명시적 인벤토리 매핑 제거.
+            ("ParagraphEndMarkReplaced", "PARAGRAPH_END_MARK_REPLACED"),
             ("TableBorderSpaceApproximated", "TABLE_BORDER_SPACE_APPROXIMATED"),
             // 이것을 실패시키는 것: 분리 경고의 전용 코드 매핑 제거.
             ("ListNumberingSplit", "LIST_NUMBERING_SPLIT"),
@@ -888,6 +889,13 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
         vec![
             // 이것을 실패시키는 것: 표 테두리 공간 경고 표본 제거.
             (
+                "ParagraphEndMarkReplaced",
+                OpsWarning::Encode(EncodeWarning::ParagraphEndMarkReplaced {
+                    path: path(),
+                    count: 1,
+                }),
+            ),
+            (
                 "TableBorderSpaceApproximated",
                 OpsWarning::Encode(EncodeWarning::TableBorderSpaceApproximated {
                     path: ParagraphPath(vec![
@@ -1405,6 +1413,16 @@ fn constructed_warnings_produce_the_mapped_code() {
                 assert_eq!(context.location.as_deref(), Some(path.to_string().as_str()));
                 assert_eq!(context.count, *count);
                 assert_eq!(context.action, "retain_margins");
+            } else if let OpsWarning::Encode(EncodeWarning::ParagraphEndMarkReplaced {
+                path,
+                count,
+            }) = warning
+            {
+                let context = info.context.as_ref().unwrap();
+                assert_eq!(context.format, "hwpx");
+                assert_eq!(context.location, Some(path.to_string()));
+                assert_eq!(context.count, *count);
+                assert_eq!(context.action, "replace_with_text_formatting");
             } else if !matches!(*enum_name, "DocxWarning" | "RegistryBridgeWarning") {
                 assert!(info.context.is_none());
             }
@@ -1465,6 +1483,10 @@ fn encode_warning_samples_keep_old_output_and_never_fall_back() {
     for warning in warning_samples::encode() {
         let info = OpsWarning::Encode(warning.clone()).info();
         let (code, message) = match &warning {
+            EncodeWarning::ParagraphEndMarkReplaced { .. } => (
+                "PARAGRAPH_END_MARK_REPLACED",
+                "section[0].para[0]: Imported paragraph-end formatting was replaced with the final text run's formatting to avoid increasing line height. The original paragraph-end formatting is not recoverable from this HWPX output. Affected paragraphs: 1. Only the first location is shown.".to_string(),
+            ),
             EncodeWarning::LayoutCacheDropped { .. } => (
                 "LAYOUT_CACHE_DROPPED",
                 "layout cache dropped at section[0].para[0]: sample".to_string(),

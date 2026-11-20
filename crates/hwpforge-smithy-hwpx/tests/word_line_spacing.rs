@@ -133,7 +133,7 @@ fn word_line_spacing_rejects_non_ascii_and_empty_lines() {
         }
     }
 }
-// 이것을 실패시키는 것: 크기/family/높이 효과/끝 face 검사 제거, run별 개행 판정 또는 face 혼합 제외.
+// 이것을 실패시키는 것: 크기/family/높이 효과/끝 크기 검사 제거, 출력 끝 대신 원본 mark 조회, face 제외 복구.
 #[test]
 fn word_line_spacing_run_and_end_mark_boundaries() {
     for case in 0..12 {
@@ -175,7 +175,7 @@ fn word_line_spacing_run_and_end_mark_boundaries() {
         }
         assert_eq!(
             values(&encode(d, &s).bytes),
-            [if [7, 8, 11].contains(&case) { 87 } else { 100 }],
+            [if [5, 6, 7, 8, 10, 11].contains(&case) { 87 } else { 100 }],
             "case {case}"
         );
     }
@@ -647,5 +647,249 @@ fn projected_spacing_edits_fill_and_stamper_keep_dates_and_projected_values() {
         assert_eq!(values(&out), [100, expected]);
         assert_eq!(paragraph_count(&out), paragraph_count(&base));
         assert_latin(&out, "2026-11-18", family);
+    }
+}
+
+// 이것을 실패시키는 것: 출력 끝 대신 원본 mark로 자격 검사, 작은/face 차이를 다시 제외, mark 검사 삭제.
+#[test]
+fn emitted_marks_determine_percentage_spacing_without_losing_retained_marks() {
+    for (family, percent, expected) in
+        [("Cambria", 100., 87), ("Calibri", 100., 85), ("Cambria", 108., 94), ("Calibri", 108., 91)]
+    {
+        for (size, bold, italic, replaced) in [
+            (2000, false, false, true),
+            (1100, true, false, false),
+            (1100, false, true, false),
+            (1100, true, true, false),
+            (900, false, false, false),
+        ] {
+            let (mut d, mut s) = fixture(family, 1100, percent, "A");
+            let p = &mut d.sections_mut()[0].paragraphs[0];
+            let mut c = s.char_shape(p.runs[0].char_shape_id).unwrap().clone();
+            c.height = HwpUnit::new(size).unwrap();
+            c.bold = bold;
+            c.italic = italic;
+            p.end_char_shape = Some(s.push_char_shape(c));
+            let original = p.end_char_shape;
+            let o = encode(d, &s);
+            assert_eq!(values(&o.bytes), [expected]);
+            assert_eq!(
+                o.warnings.iter().filter(|w| w.code() == "PARAGRAPH_END_MARK_REPLACED").count(),
+                usize::from(replaced)
+            );
+            let t = xml::Element::parse(&package::part(&o.bytes, "Contents/section0.xml"));
+            let p = t.descendants("hp:p")[0];
+            let last = p.children.iter().rev().find(|r| r.name == "hp:run").unwrap();
+            if !replaced {
+                assert_eq!(last.attr("charPrIDRef").unwrap(), original.unwrap().get().to_string());
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 번호/글머리표/개요 끝 표시를 치환하거나 새 경고에 셈, 번호 없는 대조군까지 제외.
+#[test]
+fn list_marks_retain_oversized_end_runs_without_spacing_projection() {
+    use hwpforge_foundation::HeadingType;
+    for kind in [HeadingType::Number, HeadingType::Bullet, HeadingType::Outline, HeadingType::None]
+    {
+        let (mut d, mut s) = fixture("Cambria", 1100, 100., "ASCII");
+        let p = &mut d.sections_mut()[0].paragraphs[0];
+        let body_id = p.runs[0].char_shape_id;
+        let mut mark = s.char_shape(body_id).unwrap().clone();
+        mark.height = HwpUnit::new(2000).unwrap();
+        let id = s.push_char_shape(mark);
+        p.end_char_shape = Some(id);
+        s.para_shape_mut(p.para_shape_id).unwrap().heading_type = kind;
+        let out = encode(d, &s);
+        let listed = kind != HeadingType::None;
+        assert_eq!(values(&out.bytes), [if listed { 100 } else { 87 }], "{kind:?}");
+        let t = xml::Element::parse(&package::part(&out.bytes, "Contents/section0.xml"));
+        let last =
+            t.descendants("hp:p")[0].children.iter().rev().find(|r| r.name == "hp:run").unwrap();
+        assert_eq!(
+            last.attr("charPrIDRef"),
+            Some(if listed { id.get().to_string() } else { body_id.get().to_string() }.as_str()),
+            "{kind:?}"
+        );
+        assert_eq!(
+            out.warnings.iter().filter(|w| w.code() == "PARAGRAPH_END_MARK_REPLACED").count(),
+            usize::from(!listed),
+            "{kind:?}"
+        );
+        let h = xml::Element::parse(&package::part(&out.bytes, "Contents/header.xml"));
+        let id = t.descendants("hp:p")[0].attr("paraPrIDRef").unwrap();
+        let heading = h
+            .descendants("hh:paraPr")
+            .into_iter()
+            .find(|p| p.attr("id") == Some(id))
+            .unwrap()
+            .descendants("hh:heading")[0];
+        assert_eq!(heading.attr("type"), Some(kind.to_hwpx_str()));
+    }
+}
+
+// 이것을 실패시키는 것: 작은 끝 표시의 전 언어 글꼴/보수 배치 비교 누락, 큰 원본 표시 허용,
+// 마지막 비빈 본문 대신 첫 본문 또는 모든 본문과 비교.
+#[test]
+fn retained_smaller_marks_require_all_fonts_and_conservative_geometry() {
+    use hwpforge_foundation::*;
+    use hwpforge_smithy_hwpx::HwpxCharShape;
+    type Change = fn(&mut HwpxCharShape);
+    let cases: &[(&str, Change)] = &[
+        ("same", |_| {}),
+        ("hangul", |c| c.font_ref.hangul = FontIndex::new(0)),
+        ("latin", |c| c.font_ref.latin = FontIndex::new(0)),
+        ("latin_alias", |c| c.font_ref.latin = FontIndex::new(2)),
+        ("hanja", |c| c.font_ref.hanja = FontIndex::new(0)),
+        ("japanese", |c| c.font_ref.japanese = FontIndex::new(0)),
+        ("other", |c| c.font_ref.other = FontIndex::new(0)),
+        ("symbol", |c| c.font_ref.symbol = FontIndex::new(0)),
+        ("user", |c| c.font_ref.user = FontIndex::new(0)),
+        ("vertical", |c| c.vertical_position = VerticalPosition::Superscript),
+        ("relative", |c| c.rel_sz = 99),
+        ("offset", |c| c.char_offset = 1),
+        ("outline", |c| c.outline_type = OutlineType::Solid),
+        ("shadow", |c| c.shadow = CharShadow::new(ShadowType::Drop)),
+        ("emboss", |c| c.emboss_type = EmbossType::Emboss),
+        ("engrave", |c| c.engrave_type = EngraveType::Engrave),
+        ("emphasis", |c| c.emphasis = EmphasisType::DotAbove),
+        ("ratio", |c| c.ratio = 101),
+        ("spacing", |c| c.spacing = 1),
+        ("kerning", |c| c.use_kerning = !c.use_kerning),
+        ("font_space", |c| c.use_font_space = !c.use_font_space),
+        ("border", |c| c.border_fill_id = Some(3)),
+        ("large", |c| {
+            c.height = HwpUnit::new(2000).unwrap();
+            c.text_color = Color::RED;
+        }),
+    ];
+    for (name, change) in cases {
+        for change_body in [false, true] {
+            let (mut d, mut s) =
+                fixture("Cambria", 1100, 100., if *name == "large" { "ASCII " } else { "ASCII" });
+            s.push_font(hwpforge_smithy_hwpx::HwpxFont::new(2, "Cambria", "LATIN"));
+            let p = &mut d.sections_mut()[0].paragraphs[0];
+            let body_id = p.runs[0].char_shape_id;
+            // All seven slots start at Cambria, distinct from the alternate face.
+            let fonts = &mut s.char_shape_mut(body_id).unwrap().font_ref;
+            for slot in [
+                &mut fonts.hangul,
+                &mut fonts.latin,
+                &mut fonts.hanja,
+                &mut fonts.japanese,
+                &mut fonts.other,
+                &mut fonts.symbol,
+                &mut fonts.user,
+            ] {
+                *slot = FontIndex::new(1);
+            }
+            let mut mark = s.char_shape(body_id).unwrap().clone();
+            mark.height = HwpUnit::new(900).unwrap();
+            if change_body {
+                let mut body = s.char_shape(body_id).unwrap().clone();
+                change(&mut body);
+                p.runs[0].char_shape_id = s.push_char_shape(body);
+                p.runs.push(Run::text("second", body_id));
+            } else {
+                change(&mut mark);
+            }
+            let mark_id = s.push_char_shape(mark);
+            p.end_char_shape = Some(mark_id);
+            let out = encode(d, &s);
+            let eligible = *name == "same"
+                || (change_body
+                    && !matches!(*name, "latin" | "vertical" | "relative" | "offset" | "large"));
+            assert_eq!(
+                values(&out.bytes),
+                [if eligible { 87 } else { 100 }],
+                "{name}/{change_body}"
+            );
+            let t = xml::Element::parse(&package::part(&out.bytes, "Contents/section0.xml"));
+            let last = t.descendants("hp:p")[0]
+                .children
+                .iter()
+                .rev()
+                .find(|r| r.name == "hp:run")
+                .unwrap();
+            assert_eq!(last.attr("charPrIDRef").unwrap(), mark_id.get().to_string());
+            assert_eq!(
+                out.warnings.iter().filter(|w| w.code() == "PARAGRAPH_END_MARK_REPLACED").count(),
+                0
+            );
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 같은 크기 끝 표시에 전 언어 글꼴/보수 배치 비교를 요구하거나 Latin family 검사를 삭제.
+#[test]
+fn equal_size_marks_keep_latin_spacing_eligibility() {
+    use hwpforge_foundation::FontIndex;
+    for change in ["hangul", "spacing", "latin"] {
+        let (mut d, mut s) = fixture("Cambria", 1100, 100., "ASCII");
+        s.push_font(hwpforge_smithy_hwpx::HwpxFont::new(2, "Calibri", "LATIN"));
+        let p = &mut d.sections_mut()[0].paragraphs[0];
+        let mut mark = s.char_shape(p.runs[0].char_shape_id).unwrap().clone();
+        match change {
+            "hangul" => mark.font_ref.hangul = FontIndex::new(1),
+            "spacing" => mark.spacing = 1,
+            "latin" => mark.font_ref.latin = FontIndex::new(2),
+            _ => unreachable!(),
+        }
+        let mark_id = s.push_char_shape(mark);
+        p.end_char_shape = Some(mark_id);
+        let out = encode(d, &s);
+        // round(100 * 2401 / 2754) = 87, independently of unused font slots or spacing.
+        assert_eq!(values(&out.bytes), [if change == "latin" { 100 } else { 87 }], "{change}");
+        let t = xml::Element::parse(&package::part(&out.bytes, "Contents/section0.xml"));
+        let last =
+            t.descendants("hp:p")[0].children.iter().rev().find(|r| r.name == "hp:run").unwrap();
+        assert_eq!(last.attr("charPrIDRef").unwrap(), mark_id.get().to_string());
+        assert!(!out.warnings.iter().any(|w| w.code() == "PARAGRAPH_END_MARK_REPLACED"));
+    }
+}
+
+// 이것을 실패시키는 것: 본문 내부의 한글 칸/자간 차이로 끝 표시가 있는 문단만 자격에서 제외,
+// 작은 끝 표시를 첫 본문이나 빈 마지막 run과 비교, 큰 표시 치환 뒤 원본 표시로 자격 검사.
+#[test]
+fn mixed_body_geometry_keeps_spacing_with_absent_retained_and_replaced_marks() {
+    use hwpforge_foundation::FontIndex;
+    for change_font in [true, false] {
+        for mark_height in [None, Some(1100), Some(900), Some(2000)] {
+            let (mut d, mut s) = fixture("Cambria", 1100, 100., "first");
+            let p = &mut d.sections_mut()[0].paragraphs[0];
+            let first_id = p.runs[0].char_shape_id;
+            let mut body = s.char_shape(first_id).unwrap().clone();
+            if change_font {
+                body.font_ref.hangul = FontIndex::new(1);
+            } else {
+                body.spacing = 1;
+            }
+            let body_id = s.push_char_shape(body.clone());
+            p.runs.push(Run::text("second", body_id));
+            p.runs.push(Run::text("", first_id));
+            let mark_id = mark_height.map(|height| {
+                body.height = HwpUnit::new(height).unwrap();
+                s.push_char_shape(body)
+            });
+            p.end_char_shape = mark_id;
+            let out = encode(d, &s);
+            // Both body runs are Cambria 11pt: round(100 * 2401 / 2754) = 87.
+            assert_eq!(values(&out.bytes), [87], "{change_font}/{mark_height:?}");
+            let replaced = mark_height == Some(2000);
+            assert_eq!(
+                out.warnings.iter().filter(|w| w.code() == "PARAGRAPH_END_MARK_REPLACED").count(),
+                usize::from(replaced)
+            );
+            let t = xml::Element::parse(&package::part(&out.bytes, "Contents/section0.xml"));
+            let last = t.descendants("hp:p")[0]
+                .children
+                .iter()
+                .rev()
+                .find(|r| r.name == "hp:run")
+                .unwrap();
+            let expected = if replaced { body_id } else { mark_id.unwrap_or(first_id) };
+            assert_eq!(last.attr("charPrIDRef").unwrap(), expected.get().to_string());
+        }
     }
 }

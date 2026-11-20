@@ -55,7 +55,8 @@ fn candidate(
         return None;
     }
     let mut first = None;
-    let mut last = None;
+    let mut last_body = None;
+
     let mut text = String::new();
     for run in &p.runs {
         let RunContent::Text(value) = &run.content else {
@@ -70,21 +71,26 @@ fn candidate(
             return None;
         }
         first = Some(identity);
-        last = Some(shape);
+        last_body = Some(shape);
+
         text.push_str(value);
     }
-    let (family, _) = first?;
+    let (family, body_height) = first?;
     if !text.chars().all(|c| (' '..='~').contains(&c) || c == '\n')
         || text.split('\n').any(|line| line.trim_matches(' ').is_empty())
     {
         return None;
     }
-    if let Some(id) = p.end_char_shape {
+    if let Some(id) = crate::word_paragraph_mark::output_end_char_shape(p, store, profile).ok()? {
         let mark = store.char_shape(id).ok()?;
-        let last = last?;
-        if Some(text_shape(store, mark)?) != first
-            || mark.bold != last.bold
-            || mark.italic != last.italic
+        let (mark_family, mark_height) = text_shape(store, mark)?;
+        if mark_family != family
+            || mark_height > body_height
+            // After the common text_shape checks, equal-size marks require a matching Latin
+            // family. Only smaller marks additionally require conservative compatibility
+            // with the final nonempty text run.
+            || (mark_height < body_height
+                && !crate::word_paragraph_mark::compatible(last_body?, mark))
         {
             return None;
         }

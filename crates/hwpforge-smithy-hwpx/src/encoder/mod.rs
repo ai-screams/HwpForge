@@ -410,6 +410,17 @@ use self::section::encode_section_with_note_counters;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
+    /// Imported paragraph-end formatting was replaced in HWPX output to avoid
+    /// increasing the height of a line containing text. The source formatting
+    /// remains in Core but cannot be recovered from the output paragraph.
+    /// This is semantic loss. One warning per encode reports the first affected
+    /// paragraph and the total number of replaced paragraph-end marks.
+    ParagraphEndMarkReplaced {
+        /// Canonical path of the first paragraph whose output mark was replaced.
+        path: crate::decoder::ParagraphPath,
+        /// Number of paragraphs whose output mark was replaced; starts at one.
+        count: u64,
+    },
     /// Imported table border space could not be projected, or uses an unmeasured uniform width.
     /// This changes layout approximation only and is not semantic loss.
     /// `outside_scope` covers direct import-bridge callers with a non-WordCompatible
@@ -601,6 +612,7 @@ impl EncodeWarning {
     /// | [`Self::ImageReferenceUnresolved`] | 예 | 그림·채우기가 가리키는 자산이 패키지에 없다 |
     /// | [`Self::XmlForbiddenCharsRemoved`] | 아니오 | XML 이 담을 수 없는 문자만 지운다 (#198) |
     /// | [`Self::ObjectIdConflict`] | 아니오 | 입력의 id 를 그대로 쓴다 — 모호함은 입력에 이미 있었고 이 인코드가 잃는 것은 없다 |
+    /// | [`Self::ParagraphEndMarkReplaced`] | Yes | Original paragraph-end editing formatting is absent from the output. |
     /// | [`Self::TableBorderSpaceApproximated`] | No | Table-border layout approximation is retained or reported; document text, numbering and controls are not removed. |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
@@ -628,7 +640,8 @@ impl EncodeWarning {
             | Self::NoteRestartIgnored { .. }
             | Self::ContentLost { .. }
             | Self::PackageIdConflict { .. }
-            | Self::ImageReferenceUnresolved { .. } => true,
+            | Self::ImageReferenceUnresolved { .. }
+            | Self::ParagraphEndMarkReplaced { .. } => true,
             Self::ListNumberingSplit { .. }
             | Self::PreviewRemoved { .. }
             | Self::UnclosedFieldBoundary { .. }
@@ -661,6 +674,7 @@ impl EncodeWarning {
             Self::ListNumberingSplit { .. } => "LIST_NUMBERING_SPLIT",
             Self::PreviewRemoved { .. } => "PREVIEW_REMOVED",
             Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
+            Self::ParagraphEndMarkReplaced { .. } => "PARAGRAPH_END_MARK_REPLACED",
             Self::TableBorderSpaceApproximated { .. } => "TABLE_BORDER_SPACE_APPROXIMATED",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
@@ -697,6 +711,7 @@ impl EncodeWarning {
     pub fn part(&self) -> Option<&str> {
         match self {
             Self::PreviewRemoved { .. }
+            | Self::ParagraphEndMarkReplaced { .. }
             | Self::TableBorderSpaceApproximated { .. }
             | Self::LayoutCacheDropped { .. }
             | Self::NoteHeadSkipped { .. }
@@ -741,6 +756,7 @@ impl EncodeWarning {
             )),
             Self::PreviewRemoved { .. } => None,
             Self::TableBorderSpaceApproximated { path, .. }
+            | Self::ParagraphEndMarkReplaced { path, .. }
             | Self::LayoutCacheDropped { path, .. }
             | Self::NoteHeadSkipped { path, .. }
             | Self::TitleMarkSkipped { path, .. }
@@ -785,6 +801,9 @@ impl EncodeWarning {
             Self::UnclosedFieldBoundary { reason, .. } => {
                 format!("unclosed source field: {reason}")
             }
+            Self::ParagraphEndMarkReplaced { count, .. } => format!(
+                "Imported paragraph-end formatting was replaced with the final text run's formatting to avoid increasing line height. The original paragraph-end formatting is not recoverable from this HWPX output. Affected paragraphs: {count}. Only the first location is shown."
+            ),
             Self::TableBorderSpaceApproximated { reason, count, .. } => {
                 let first = match *reason {
                     "outside_scope" => "Table border space was not projected because the table is outside WordCompatible body or body-cell scope.",
@@ -877,7 +896,8 @@ impl std::fmt::Display for EncodeWarning {
                 write!(f, "{}: {}", self.location().expect("list location"), self.message())
             }
             Self::PreviewRemoved { .. } => f.write_str(&self.message()),
-            Self::TableBorderSpaceApproximated { path, .. } => {
+            Self::TableBorderSpaceApproximated { path, .. }
+            | Self::ParagraphEndMarkReplaced { path, .. } => {
                 write!(f, "{path}: {}", self.message())
             }
             Self::LayoutCacheDropped { path, reason } => {
@@ -1004,6 +1024,7 @@ mod is_semantic_loss_tests {
                 "NOTE_RESTART_IGNORED",
                 "OBJECT_ID_CONFLICT",
                 "PACKAGE_ID_CONFLICT",
+                "PARAGRAPH_END_MARK_REPLACED",
                 "PREVIEW_REMOVED",
                 "TABLE_BORDER_SPACE_APPROXIMATED",
                 "TITLE_MARK_SKIPPED",
@@ -1080,6 +1101,7 @@ mod is_semantic_loss_tests {
                     EncodeWarning::PreviewRemoved { parts } => parts.join(", "),
                     EncodeWarning::ListNumberingSplit { .. } => "list definition split".into(),
                     EncodeWarning::TableBorderSpaceApproximated { reason, .. } => (*reason).into(),
+                    EncodeWarning::ParagraphEndMarkReplaced { .. } => w.message(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -1344,12 +1366,14 @@ impl HwpxEncoder {
         let mut base_store;
         let style_store = if style_store.imported_percentages.is_empty()
             && style_store.imported_border_widths.is_empty()
+            && !style_store.imported_paragraph_marks
         {
             style_store
         } else {
             base_store = style_store.clone();
             base_store.imported_percentages.clear();
             base_store.imported_border_widths.clear();
+            base_store.imported_paragraph_marks = false;
             &base_store
         };
         let (marker_store, marker_warnings) =
@@ -1458,6 +1482,9 @@ impl HwpxEncoder {
     /// 등 의미 경고)을 **폐기한다**. 사용자-노출 write 표면은 반드시
     /// [`Self::encode_with_diagnostics`] 로 경고를 표면화할 것 — CLI/MCP
     /// `convert`·`from-json`·`restyle` 이 그 경로다.
+    /// ParagraphEndMarkReplaced is a semantic warning and is discarded by this convenience API.
+    /// Use encode_with_diagnostics to receive it. The existing error behavior for requested
+    /// layout-cache drops is unchanged.
     pub fn encode(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
@@ -1474,6 +1501,9 @@ impl HwpxEncoder {
     /// [`Self::encode`] 와 동일하게 의미 [`EncodeWarning`] 은 **폐기**된다
     /// (`emit_layout_cache` 요청 중 캐시 드롭만 오류로 승격) — 경고 보존
     /// 경로는 [`Self::encode_with_diagnostics`].
+    /// ParagraphEndMarkReplaced is a semantic warning and is discarded by this convenience API.
+    /// Use encode_with_diagnostics to receive it. The existing error behavior for requested
+    /// layout-cache drops is unchanged.
     pub fn encode_with_options(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
@@ -1558,9 +1588,11 @@ impl HwpxEncoder {
         let (spacing_store, projection) = crate::word_line_spacing::prepare(document, style_store)?;
         let table_projection = crate::word_table_border_space::prepare(document, style_store)?;
         let table_changed = table_projection.changed;
+        let paragraph_mark_projection = crate::word_paragraph_mark::prepare(document, style_store)?;
+        let mark_changed = paragraph_mark_projection.changed();
         let suppress_spacing_cache =
-            (projection.is_some() || table_changed) && requested_layout_cache;
-        let options = if projection.is_some() || table_changed {
+            (projection.is_some() || table_changed || mark_changed) && requested_layout_cache;
+        let options = if projection.is_some() || table_changed || mark_changed {
             options.with_emit_layout_cache(false)
         } else {
             options
@@ -1568,6 +1600,7 @@ impl HwpxEncoder {
         let style_store = spacing_store.as_ref();
         let mut context = section::DocumentEncodeContext::for_document(document, image_store);
         context.table_projection = Some(table_projection);
+        context.paragraph_mark_projection = Some(paragraph_mark_projection);
         context.table_spacing_changed = table_changed;
         context.spacing_projection = projection;
         context.suppress_spacing_cache = suppress_spacing_cache;
@@ -1626,6 +1659,9 @@ impl HwpxEncoder {
             section_results.push(result);
         }
         if let Some(projection) = &context.spacing_projection {
+            projection.finish()?;
+        }
+        if let Some(projection) = &context.paragraph_mark_projection {
             projection.finish()?;
         }
         if let Some(projection) = &context.table_projection {
@@ -1815,6 +1851,10 @@ impl HwpxEncoder {
             &embedded_oles,
         )?;
         context.warnings.extend(package_warnings);
+        if let Some(warning) = context.paragraph_mark_projection.as_ref().and_then(|p| p.warning())
+        {
+            context.warnings.push(warning);
+        }
         Ok((EncodeOutcome { bytes, warnings: context.warnings }, dropped_caches))
     }
 

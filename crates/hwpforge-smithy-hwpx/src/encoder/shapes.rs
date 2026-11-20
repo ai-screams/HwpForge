@@ -2549,7 +2549,7 @@ mod tests {
         assert!(kinds.contains(&"shape_emission"), "{:?}", sink.warnings);
     }
 
-    fn encode_group(group: &Control) -> (String, DocumentEncodeContext) {
+    fn encode_group(group: &Control) -> (String, DocumentEncodeContext<'static>) {
         let mut sink = DocumentEncodeContext::new(0);
         let xml =
             encode_group_to_xml(group, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)

@@ -100,6 +100,7 @@ const AUDITED: &[Audited] = &[
         enum_name: "EncodeWarning",
         table: &[
             ("TableBorderSpaceApproximated", "TABLE_BORDER_SPACE_APPROXIMATED"),
+            ("ParagraphEndMarkReplaced", "PARAGRAPH_END_MARK_REPLACED"),
             ("ListNumberingSplit", "LIST_NUMBERING_SPLIT"),
             ("PreviewRemoved", "PREVIEW_REMOVED"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
