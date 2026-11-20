@@ -268,15 +268,24 @@ fn page_break_before_excludes_contextual_but_natural_implicit_style_still_matche
     assert_eq!(gaps(&d), [(200, 0), (0, 800)]);
 }
 
-// 이것을 실패시키는 것: 글꼴이 누락된 명시적 끝 서식을 무시하고 알려진 run만 환산.
+// 이것을 실패시키는 것: 글자가 있는 마지막 줄에 끝 표시 높이를 다시 가산.
 #[test]
-fn unresolved_explicit_mark_keeps_source_spacing_with_existing_font_warning() {
-    for (rule, line, expected) in [("auto", 276, 115.0), ("atLeast", 360, 3600.0)] {
+fn unresolved_explicit_mark_does_not_poison_text_height() {
+    for (rule, line, expected) in [("auto", 276, 115.0), ("atLeast", 360, 3804.0)] {
         let d = read("", &format!("<w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='{rule}'/><w:rPr><w:sz w:val='40'/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t></w:r></w:p>"));
         assert_eq!(shapes(&d)[0].line_spacing_value, expected);
         assert_eq!(loss(&d, "font_family"), 1);
         assert_eq!(loss(&d, "unknown_font_line_height"), 0);
     }
+}
+
+// 이것을 실패시키는 것: 빈 마지막 줄의 미해결 끝 표시를 높이에서 제외하거나 가산을 생략.
+#[test]
+fn unresolved_explicit_mark_on_empty_last_line_keeps_source_spacing() {
+    let d = read("", "<w:p><w:pPr><w:spacing w:line='360' w:lineRule='atLeast'/><w:rPr><w:sz w:val='40'/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t><w:br/></w:r></w:p>");
+    assert_eq!(shapes(&d)[0].line_spacing_value, 3600.0);
+    assert_eq!(loss(&d, "font_family"), 1);
+    assert_eq!(loss(&d, "unknown_font_line_height"), 0);
 }
 
 // 이것을 실패시키는 것: 한쪽 contextual이면 상대 간격 그대로 유지, 합산 후 차감, 0 아래로 차감.

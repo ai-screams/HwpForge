@@ -46,6 +46,7 @@ pub struct DocxDecoded {
 ///
 /// Reads each selected WordprocessingML part once, sharing XML text limits.
 /// Resolves theme fonts and styles before body text; never fetches external relationships.
+/// Core retains source paragraph-end formatting, including formatting used by list markers.
 ///
 /// # Errors
 ///

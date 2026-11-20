@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- DocxDecoded.registry includes original positive solid border widths with explicit source sizes in the supported range for source-admitted tables. Tables with positive exact rows, unsupported source formatting or boundaries that cannot be represented by four sides omit widths and report the existing DOCX table-border warning. Source uncertainty follows the selected style inheritance chain, including unhandled row formatting, and table/row/cell properties. Omitted internal cell borders retain unsupported source attributes in the admission decision. Unsupported direction, placement values, unknown measurement/layout values and unresolved style links defer admission even when later properties override them. Pagination-only options and ignored header-cell associations do not affect admission. Known preferred-width approximations, vertical content alignment and background paint retain admission. Core cell margins and row minima remain source values. Width-bearing and widthless definitions with the same appearance are distinct.
+- DocxDecoded.registry includes original positive solid border widths with explicit source sizes in the supported range for source-admitted tables. Tables with positive exact rows, unsupported source formatting or boundaries that cannot be represented by four sides omit widths and report the existing DOCX table-border warning. Source uncertainty follows the selected style inheritance chain, including unhandled row formatting, and table/row/cell properties. Omitted internal cell borders retain unsupported source attributes in the admission decision. Unsupported direction, placement values, unknown measurement/layout values and unresolved style links defer admission even when later properties override them. Pagination-only options and ignored header-cell associations do not affect admission. Known preferred-width approximations, vertical content alignment and background paint retain admission. Core cell margins remain source values; row minima use the Word content-height calculation and the existing border budget. Width-bearing and widthless definitions with the same appearance are distinct.
 
 - 번호 글꼴의 첫 줄 높이 증가를 기존 Word 글꼴 metrics와 줄 간격 규칙으로 계산해 문단 앞 간격에 더한다. 표 셀의 최소 높이에는 목록 문단마다 이 증가분을 한 번씩 포함한다. 고정 줄 간격과 metrics 미지원 글꼴은 기존 간격을 유지한다. 양수 첫 줄 들여쓰기·폭 0 칸처럼 배치가 미지원인 목록도 높이 보정과 `list_marker_script`·`list_marker_line_height` 진단을 적용하되 출력에 쓰이지 않는 번호 글자 모양은 등록하지 않는다.
 
@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- 본문과 명시 문단 끝 표시의 유효 글꼴·크기·굵게·기울임 차이를 진단한다. 원본 끝 표시와 간격은 유지한다.
+- Cell content minima and atLeast spacing exclude the paragraph-end mark from a final line containing text. Empty paragraphs and trailing empty lines retain their existing mark-height calculation. Core retains source paragraph-end formatting, including formatting used by list markers. The paragraph-mark diagnostic describes source-format preservation rather than promising unchanged line height.
 
 - 미지 폭 종류와 pct의 기존 근사를 유지하고, 완전한 grid를 가진 중첩 dxa·auto·nil 및 폭 미지정 표의 원본 열 너비를 유지한다. 실제 grid를 사용하는 경우 컨테이너 근사 진단을 내지 않는다.
 

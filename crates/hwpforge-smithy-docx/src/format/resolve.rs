@@ -446,6 +446,7 @@ impl Resolver {
         let mut line_used = false;
         let mut line_format = None;
         let mut minimum_height = 0_i32;
+        let mut final_line_has_text = false;
         let mut east = false;
         let empty = p.runs.iter().all(|run| run.content.as_text().is_none_or(str::is_empty));
         let last_run = p.runs.len().saturating_sub(1);
@@ -489,6 +490,19 @@ impl Resolver {
                 if has_latin || (!has_east && !empty_east) {
                     self.add_height(&mut height, result, false, part, w)?;
                 }
+            }
+            // Track the source logical tail even when only atLeast is measured.
+            // Unknown objects keep the conservative source-height calculation.
+            if let Some(text) = run.content.as_text() {
+                for c in text.chars() {
+                    if matches!(c, '\n' | '\r') {
+                        final_line_has_text = false;
+                    } else if !c.is_whitespace() && !c.is_control() {
+                        final_line_has_text = true;
+                    }
+                }
+            } else {
+                final_line_has_text = false;
             }
             if measure_lines && index < fragment_end {
                 line_format = Some(result);
@@ -572,13 +586,13 @@ impl Resolver {
                     mark.bold,
                     mark.italic,
                 ) {
-                    warn(w, part, "pPr/rPr", Kind::ValueApproximated, "paragraph_mark_line_height", "retain_spacing",
-                        "Paragraph text and end mark use different effective fonts, size, or face; line height is retained")?;
+                    warn(w, part, "pPr/rPr", Kind::ValueApproximated, "paragraph_mark_line_height", "preserve_end_mark",
+                        "Paragraph text and end mark use different effective fonts, size, or face; the source end-mark formatting is preserved in Core.")?;
                 }
             }
             format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
-            // An unresolved explicit mark makes the entire height unverified.
-            if !exact && measure_height {
+            // Only empty or uncertain final lines retain the mark height.
+            if !exact && measure_height && !final_line_has_text {
                 east |= empty && result.line_fonts[1].is_some();
                 self.add_height(&mut height, result, east, part, w)?;
                 if measure_lines && fragment_end == p.runs.len() {
