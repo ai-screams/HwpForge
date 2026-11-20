@@ -427,3 +427,28 @@ fn table_border_space_warning_keeps_typed_import_context() {
         serde_json::json!({"format":"hwpx","stage":"encode","location":"section[0].para[0].run[0]","loss":"table_border_space","action":"project_unverified","count":2})
     );
 }
+
+// 이것을 실패시키는 것: import 경고를 CLI에서 재집계하거나 typed context/count를 버림.
+#[test]
+fn oversized_paragraph_marks_report_semantic_loss_in_json() {
+    let tmp = test_tmp();
+    let input = tmp.join("input.docx");
+    let output = tmp.join("out.hwpx");
+    let font = "<w:rFonts w:ascii='Cambria' w:hAnsi='Cambria' w:eastAsia='Cambria'/>";
+    let p=format!("<w:p><w:pPr><w:rPr>{font}<w:sz w:val='40'/></w:rPr></w:pPr><w:r><w:rPr>{font}<w:sz w:val='22'/></w:rPr><w:t>A</w:t></w:r></w:p>");
+    std::fs::write(&input, docx::package_with_defaults(&p.repeat(2), "")).unwrap();
+    let (v, stderr, code) =
+        run_json(&["convert-docx", input.to_str().unwrap(), "-o", output.to_str().unwrap()]);
+    assert_eq!(code, 0, "{v} {stderr}");
+    let w = v["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["code"] == "PARAGRAPH_END_MARK_REPLACED")
+        .unwrap();
+    assert_eq!(
+        w["context"],
+        serde_json::json!({"format":"hwpx","stage":"encode","location":"section[0].para[0]","loss":"paragraph_end_mark_formatting","action":"replace_with_text_formatting","count":2})
+    );
+    assert!(output.exists());
+}

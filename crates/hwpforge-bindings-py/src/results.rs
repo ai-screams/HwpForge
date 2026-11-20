@@ -168,4 +168,44 @@ mod tests {
             });
         }
     }
+    // 이것을 실패시키는 것: typed 표시 손실 context/count를 누락하거나 정수 대신 문자열로 전달.
+    #[test]
+    fn paragraph_mark_warning_reaches_python_metadata() {
+        use hwpforge::hwpx::{EncodeWarning, ParagraphPath, PathSeg};
+        Python::initialize();
+        for count in [1, 2] {
+            let info = hwpforge::ops::OpsWarning::Encode(EncodeWarning::ParagraphEndMarkReplaced {
+                path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(3)]),
+                count,
+            })
+            .info();
+            Python::attach(|py| {
+                let value = meta(py, &info).unwrap();
+                let context = value.get_item("context").unwrap();
+                assert_eq!(
+                    value.get_item("code").unwrap().extract::<String>().unwrap(),
+                    "PARAGRAPH_END_MARK_REPLACED"
+                );
+                assert_eq!(
+                    context.get_item("location").unwrap().extract::<String>().unwrap(),
+                    "section[0].para[3]"
+                );
+                assert_eq!(
+                    context.get_item("loss").unwrap().extract::<String>().unwrap(),
+                    "paragraph_end_mark_formatting"
+                );
+                assert_eq!(
+                    context.get_item("action").unwrap().extract::<String>().unwrap(),
+                    "replace_with_text_formatting"
+                );
+                if count == 1 {
+                    assert!(context.get_item("count").is_err());
+                } else {
+                    let count = context.get_item("count").unwrap();
+                    assert!(count.is_instance_of::<pyo3::types::PyInt>());
+                    assert_eq!(count.extract::<u64>().unwrap(), 2);
+                }
+            });
+        }
+    }
 }
