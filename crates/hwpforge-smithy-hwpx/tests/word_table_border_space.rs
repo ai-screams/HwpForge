@@ -844,3 +844,149 @@ fn auxiliary_container_tables_are_prepared_and_emitted_with_identical_keys() {
         assert_eq!(encode(&d, &s).bytes, out.bytes);
     }
 }
+
+// 이것을 실패시키는 것: 문단 끝 치환을 표 테두리 투영 성공에 종속시킴.
+#[test]
+fn paragraph_marks_project_even_when_border_space_is_deferred() {
+    for exact in [false, true] {
+        let mut r = registry();
+        let mut mark = r.char_shapes[0].clone();
+        mark.size = unit(2000);
+        r.char_shapes.push(mark);
+        let id = r.register_border_fill(definition([Some(50); 4])).unwrap();
+        let mut t = table(1, 1, id, margin(540, 540, 0, 0));
+        t.frame.size_protect = exact;
+        t.rows[0].cells[0].paragraphs[0].end_char_shape = Some(CharShapeIndex::new(1));
+        let (d, s) = rebound(t, &r);
+        let o = encode(&d.validate().unwrap(), &s);
+        let w: Vec<_> = o
+            .warnings
+            .iter()
+            .filter_map(|w| {
+                if let hwpforge_smithy_hwpx::EncodeWarning::ParagraphEndMarkReplaced {
+                    count, ..
+                } = w
+                {
+                    Some(*count)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(w, [1]);
+        assert_eq!(
+            margins(&o.bytes),
+            if exact { vec![[540, 540, 0, 0]] } else { vec![[565, 515, 50, 50]] }
+        );
+        let d = HwpxDecoder::decode(&o.bytes).unwrap();
+        let p = &d.document.sections()[0].paragraphs[0];
+        let hwpforge_core::RunContent::Table(t) = &p.runs[0].content else { panic!("table") };
+        let p = &t.rows[0].cells[0].paragraphs[0];
+        assert_eq!(p.end_char_shape, Some(p.runs[0].char_shape_id));
+    }
+}
+
+// 이것을 실패시키는 것: 투영 원인마다 캐시 경고를 중복하거나 빈 캐시/요청 안 한 캐시도 폐기 경고.
+#[test]
+fn combined_projections_drop_each_requested_nonempty_cache_once() {
+    use hwpforge_core::layout::{LayoutCache, LineSeg};
+    for emit in [false, true] {
+        for nonempty in [false, true] {
+            let mut r=serde_json::from_value::<StyleRegistry>(serde_json::json!({"fonts":["Cambria"],"char_shapes":[],"para_shapes":[],"style_entries":{}})).unwrap();
+            let mut body = hwpforge_blueprint::style::PartialCharShape::default();
+            body.font = Some("Cambria".into());
+            body.size = Some(unit(1100));
+            r.char_shapes.push(body.resolve("body").unwrap());
+            let mut mark = r.char_shapes[0].clone();
+            mark.size = unit(2000);
+            r.char_shapes.push(mark);
+            let mut p = hwpforge_blueprint::style::ParaShape::default();
+            p.line_spacing_value = 100.;
+            r.para_shapes.push(p);
+            let id = r.register_border_fill(definition([Some(50); 4])).unwrap();
+            let mut t = table(1, 1, id, margin(540, 540, 0, 0));
+            let p = &mut t.rows[0].cells[0].paragraphs[0];
+            p.end_char_shape = Some(CharShapeIndex::new(1));
+            let mut line = LineSeg::default();
+            line.vertsize = 1100;
+            line.textheight = 1100;
+            line.horzsize = 10000;
+            let cache = LayoutCache::new(if nonempty { vec![line] } else { vec![] });
+            p.layout_cache = Some(cache.clone());
+            let (mut d, s) = rebound(t, &r);
+            d.sections_mut()[0].paragraphs[0].layout_cache = Some(cache);
+            let o = HwpxEncoder::encode_with_diagnostics(
+                &d.validate().unwrap(),
+                &s,
+                &ImageStore::new(),
+                EncodeOptions::default().with_emit_layout_cache(emit),
+            )
+            .unwrap();
+            let drops: Vec<_> =
+                o.warnings.iter().filter(|w| w.code() == "LAYOUT_CACHE_DROPPED").collect();
+            assert_eq!(drops.len(), if emit && nonempty { 2 } else { 0 });
+            let unique: std::collections::HashSet<_> = drops.iter().map(|w| w.location()).collect();
+            assert_eq!(unique.len(), drops.len());
+            let t = section(&o.bytes);
+            assert_eq!(t.descendants("hp:linesegarray").len(), 0);
+            assert_eq!(t.descendants("hp:lineSegArray").len(), 0);
+            assert_eq!(t.descendants("hp:layoutCacheDropped").len(), 0);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 필드 builder에서 버리는 annotation 표를 테두리 준비 순회에 포함.
+#[test]
+fn omitted_field_annotations_do_not_prepare_border_candidates() {
+    use hwpforge_core::control::{Control, FieldBoundary, FieldParameter, FieldStart};
+    let mut r = registry();
+    let id = r.register_border_fill(definition([Some(50); 4])).unwrap();
+    let t = table(1, 1, id, margin(540, 540, 0, 0));
+    let mut start = FieldStart::default();
+    start.id = "field".into();
+    start.kind = "MEMO".into();
+    start.parameter_name = None;
+    start.parameters.push(FieldParameter::String {
+        name: "item".into(),
+        value: "value".into(),
+        xml_space: String::new(),
+    });
+    start.annotation = Some(vec![containing(t.clone())]);
+    let mut d = draft(t);
+    d.sections_mut()[0].paragraphs = vec![Paragraph::with_runs(
+        vec![
+            Run::control(
+                Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) },
+                CharShapeIndex::new(0),
+            ),
+            Run::control(
+                Control::FieldBoundary {
+                    boundary: FieldBoundary::End {
+                        begin_id: "field".into(),
+                        field_id: String::new(),
+                    },
+                },
+                CharShapeIndex::new(0),
+            ),
+        ],
+        ParaShapeIndex::new(0),
+    )];
+    let b = HwpxRegistryBridge::from_registry_for_import(&r, Default::default()).unwrap().value;
+    let d = b.rebind_draft_document(d).unwrap().validate().unwrap();
+    let s = b.into_style_store();
+    let o =
+        HwpxEncoder::encode_with_diagnostics(&d, &s, &ImageStore::new(), EncodeOptions::default());
+    assert!(o.is_ok());
+    let o = o.unwrap();
+    assert!(o.warnings.iter().any(|w| w.code() == "CONTENT_LOST"));
+    assert_eq!(
+        o.warnings
+            .iter()
+            .filter(|w| matches!(
+                w.code(),
+                "TABLE_BORDER_SPACE_APPROXIMATED" | "PARAGRAPH_END_MARK_REPLACED"
+            ))
+            .count(),
+        0
+    );
+}
