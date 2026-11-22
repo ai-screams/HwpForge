@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.20.1...hwpforge-bindings-mcp-v0.20.2) - 2026-11-23
+
+### Changed
+
+- `hwpforge_delete_para`의 원문 보존 삭제가 옛 한컴의 직접 문단 치수·탭 정의 꼴 header를 가진 HWPX를 받는다. header는 입력 바이트 그대로 남고 `PARAGRAPH_MEASURE_NORMALIZED` 경고는 나올 수 있다. 도구 설명에 이 점을 더했다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#359](https://github.com/ai-screams/HwpForge/pull/359))
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.20.0...hwpforge-bindings-mcp-v0.20.1) - 2026-11-16
 
 ### Changed

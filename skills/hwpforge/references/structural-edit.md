@@ -59,7 +59,7 @@ On a round-trip-safe input, deleting a paragraph that holds an index mark succee
 
 ## Reading the diff of a paragraph edit
 
-Source-preserving deletion retains surviving caches, so `diff` can match the unchanged suffix and report only the removed paragraph. A header that differs only by older Hancom direct paragraph-measure or tab definitions does not block this path; the header stays byte-for-byte, and decoding may still report `PARAGRAPH_MEASURE_NORMALIZED`.
+Source-preserving deletion retains surviving caches, so `diff` can match the unchanged suffix and report only the removed paragraph. With hwpforge 0.20.2 or later, a header that differs only by older Hancom direct paragraph-measure or tab definitions does not block this path; the header stays byte-for-byte, and decoding may still report `PARAGRAPH_MEASURE_NORMALIZED`.
 
 `diff` first strips the paragraphs that are identical at the start and at the end of the section, then compares the remaining middle by position. Paragraphs compare equal only when their layout cache is equal too, so the report depends on the input (for example, insert after paragraph 1 and delete paragraph 2 in `tests/fixtures/structural/plain_paragraphs.hwpx`; cached input can produce a different diff):
 

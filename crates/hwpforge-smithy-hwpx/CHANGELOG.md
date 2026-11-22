@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.1...hwpforge-smithy-hwpx-v0.20.2) - 2026-11-23
+
+한컴오피스가 저장한 HWPX의 원문 보존 `delete-para`가 옛 한컴의 header 꼴을 받는 릴리스다. 새 공개 API, 오류, 경고는 없다.
+
+### Added
+
+- 원문 보존 삭제가 `header.xml`이 아래 세 꼴로만 인코더 꼴과 다른 문서를 받는다. 문단 여백과 줄 간격이 둘 다 `hp:switch` 없이 직접 있는 문단 모양, `hp:switch` 없이 직접 있는 탭 항목, 위치 0인 탭에서 default 항목의 단위가 `CHAR`인 꼴이다. 다른 삭제 검사를 모두 통과해야 하고, 출력의 `header.xml`은 입력 바이트 그대로다. 정의 번호를 다시 매겨야 하는 문서, 문단 치수 출력 검증에 실패하는 문서, 그 밖의 차이가 있는 문서는 전처럼 처음의 admission 오류로 거부한다. 일반 삭제, `insert-para`, `set-cell`, `patch` 등 다른 경로의 header 판정은 바뀌지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#359](https://github.com/ai-screams/HwpForge/pull/359))
+
+### Fixed
+
+- 예제 `tab_edge_cases`와 `text_direction_and_dropcap`이 정의되지 않은 탭·테두리 번호를 참조해 실행 중 panic하던 문제를 고쳤다. 기본 정의를 먼저 넣는다 ([#361](https://github.com/ai-screams/HwpForge/pull/361))
+- 예제 `hwpx_json_roundtrip`이 없어진 입력 경로 때문에 panic하던 문제를 고쳤다. 저장소 체크아웃의 쇼케이스 파일을 읽고 실행한 폴더의 `temp/hwpx_json_roundtrip/`에 쓴다 ([#362](https://github.com/ai-screams/HwpForge/pull/362))
+
+### 업그레이드 주의
+
+- 위 세 꼴 때문에 0.20.1이 거부하던 `delete-para` 요청이 성공할 수 있다. 이때도 입력을 읽으며 나온 `PARAGRAPH_MEASURE_NORMALIZED` 경고는 그대로 돌려주지만, header는 다시 쓰지 않는다.
+
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.0...hwpforge-smithy-hwpx-v0.20.1) - 2026-11-16
 
 한컴오피스가 저장한 HWPX의 `delete-para`와 `set-cell`을 원문 XML을 그대로 두는 방식으로 열고, 줄 조판 캐시를 남기는 범위를 바로잡은 릴리스다. 새로 거부되는 입력과 달라지는 출력은 "업그레이드 주의"에 모았다.
