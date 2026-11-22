@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.20.2](https://github.com/ai-screams/HwpForge/compare/v0.20.1...v0.20.2) - 2026-11-22
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/v0.20.1...v0.20.2) - 2026-11-23
 
 ### Added
 
-- *(hwpx)* [#143] keep legacy direct header definitions in source-preserving deletes ([#359](https://github.com/ai-screams/HwpForge/pull/359))
+- `ops::delete_para`의 원문 보존 삭제가 옛 한컴의 직접 문단 치수·탭 정의 꼴 header를 가진 HWPX를 받는다. header는 입력 바이트 그대로 남는다. 허용하는 꼴과 거부 규칙은 `hwpforge-smithy-hwpx`를 따르며, 공개 시그니처는 바뀌지 않는다 ([#143](https://github.com/ai-screams/HwpForge/issues/143), [#359](https://github.com/ai-screams/HwpForge/pull/359))
 
+### 업그레이드 주의
+
+- 0.20.1이 admission 오류로 거부하던 일부 `delete_para` 요청이 성공하고, `PARAGRAPH_MEASURE_NORMALIZED` 같은 입력 경고를 함께 돌려줄 수 있다.
 
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/v0.20.0...v0.20.1) - 2026-11-16
 

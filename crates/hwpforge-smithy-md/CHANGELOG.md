@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.20.1...hwpforge-smithy-md-v0.20.2) - 2026-11-22
+## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.20.1...hwpforge-smithy-md-v0.20.2) - 2026-11-23
 
 ### Fixed
 
-- *(hwpx)* register built-in definitions in the tab and dropcap examples ([#361](https://github.com/ai-screams/HwpForge/pull/361))
-
+- `MdWarning::ListDefinitionMissing` 문서의 `ListItemKind::Bullet` 링크가 끊겨 있던 것을 고쳤다 ([#361](https://github.com/ai-screams/HwpForge/pull/361))
+- 예제 `hwpx_md_convert`가 없어진 입력 경로 때문에 panic하던 문제를 고쳤다. 저장소 체크아웃의 쇼케이스 파일을 읽고 실행한 폴더의 `temp/hwpx_md_convert/hwpx2md/`에 쓴다 ([#362](https://github.com/ai-screams/HwpForge/pull/362))
 
 ## [0.20.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.20.0...hwpforge-smithy-md-v0.20.1) - 2026-11-16
 
