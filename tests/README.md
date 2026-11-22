@@ -15,4 +15,5 @@ assets shared by those tests:
 - `images/`: image assets and rendering expectations.
 
 Before changing an input, check its consumers and preserve their error and
-warning contracts. Run `make fixture-policy` to check binary document metadata.
+warning contracts. Run `make fixture-policy` to check tracked files for document
+extensions and file signatures.

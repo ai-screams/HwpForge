@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Binary documents saved by other applications are not committed; only encoder output .hwpx and text inputs are."""
+"""Documents saved by other applications are not committed; only encoder output .hwpx and text inputs are.
+
+Each tracked path is judged once, in this order. An input listed in EXCEPTIONS is skipped. A .hwpx is rejected
+unless its version.xml can be read and its appVersion starts with 12.0.0.0. Any other file is rejected when its
+extension is .hwp, .pdf or .hml, or when it starts with the signature of an OLE compound file (.hwp, .doc, .xls,
+.ppt), a ZIP package (.docx, .xlsx, .pptx, .odt), a PDF or an RTF file, whatever its name; the signature check
+does not follow symlinks and does not count a file it cannot read. Documents saved in a text format such as
+Word XML or flat ODF are not detected."""
 
 from __future__ import annotations
 
@@ -20,6 +27,37 @@ EXCEPTIONS = {
         "hwp5-dangling-table-border-fill.hwp",
     )
 }
+# .hwp also covers HWP 3.x files, which are not OLE; .hml is Hancom's XML text format.
+DOCUMENT_SUFFIXES = {".hwp", ".hwpx", ".pdf", ".hml"}
+SIGNATURES = {
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1": "OLE compound file",
+    b"PK\x03\x04": "ZIP package",
+    b"PK\x05\x06": "ZIP package",
+    b"PK\x07\x08": "ZIP package",
+    b"%PDF-": "PDF",
+    b"{\\rtf": "RTF",
+}
+HOW_TO_FIX = (
+    "make the input reproducible from code in the repository, "
+    "or list it in EXCEPTIONS in scripts/check_fixture_policy.py with the reason"
+)
+
+
+def signature(file: Path) -> str | None:
+    # 이것을 실패시키는 것: 심볼릭 링크를 따라가 대상 내용으로 판정하기(git 은 링크만 저장한다).
+    if file.is_symlink():
+        return None
+    try:
+        with file.open("rb") as handle:
+            head = handle.read(8)
+    except OSError:
+        # 이것을 실패시키는 것: 폴더(하위 모듈)나 디스크에 없는 추적 경로에서 예외로 멈추기.
+        return None
+    for magic, kind in SIGNATURES.items():
+        # 이것을 실패시키는 것: 파일 맨 앞이 아닌 곳의 서명까지 문서로 보기.
+        if head.startswith(magic):
+            return kind
+    return None
 
 
 def check(
@@ -31,13 +69,18 @@ def check(
         if path not in paths or not (root / path).is_file():
             violations.append(f"{path}: stale exception ({exceptions[path]})")
     for path in sorted(paths):
-        suffix = Path(path).suffix.lower()
-        # 이것을 실패시키는 것: 텍스트 입력까지 검사하거나 예외를 거부하기.
-        if suffix not in {".hwp", ".hwpx", ".pdf"} or path in exceptions:
+        # 이것을 실패시키는 것: 예외를 거부하거나, 예외 건너뛰기를 확장자·서명 검사 뒤로 옮기기.
+        if path in exceptions:
             continue
-        # 이것을 실패시키는 것: .hwp 또는 .pdf 허용.
+        suffix = Path(path).suffix.lower()
         if suffix != ".hwpx":
-            violations.append(f"{path}: binary document format is not permitted")
+            kind = signature(root / path)
+            # 이것을 실패시키는 것: .hwp·.pdf·.hml 허용, 또는 서명 검사를 빼서 이름만 바꾼 문서 허용.
+            if suffix in DOCUMENT_SUFFIXES or kind:
+                found = kind or f"{suffix} file"
+                violations.append(
+                    f"{path}: document format ({found}) is not permitted; {HOW_TO_FIX}"
+                )
             continue
         try:
             with zipfile.ZipFile(root / path) as package:
