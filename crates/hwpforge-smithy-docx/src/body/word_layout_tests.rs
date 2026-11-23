@@ -168,8 +168,8 @@ fn nested_anchors_move_only_after_width_plans_inside_their_cell() {
 }
 
 #[test]
-fn minimum_spacing_and_cell_height_still_diagnose_metric_approximations() {
-    // 이것을 실패시키는 것: auto 경고 정리와 함께 atLeast/셀 메트릭 근사까지 삭제.
+fn single_font_extrema_do_not_claim_mixed_metrics() {
+    // 이것을 실패시키는 것: 글꼴별 확장 전에 극값을 합성하여 단일 글꼴이 정하는 줄에도 mixed 경고.
     for cell in [false, true] {
         let paragraph = p(if cell { "<w:spacing w:line='240'/>" } else { "<w:spacing w:line='0' w:lineRule='atLeast'/>" }, "A가").replace("<w:r>", "<w:r><w:rPr><w:rFonts w:ascii='Calibri' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr>");
         let body = if cell {
@@ -184,7 +184,7 @@ fn minimum_spacing_and_cell_height_still_diagnose_metric_approximations() {
                 .filter(|w| w.loss() == "mixed_font_line_height")
                 .map(|w| w.count())
                 .sum::<u64>(),
-            1
+            0
         );
         if cell {
             assert_eq!(
@@ -192,7 +192,7 @@ fn minimum_spacing_and_cell_height_still_diagnose_metric_approximations() {
                     .height
                     .unwrap()
                     .as_i32(),
-                1940
+                1902
             );
         } else {
             let p = &d.document.sections()[0].paragraphs[0];

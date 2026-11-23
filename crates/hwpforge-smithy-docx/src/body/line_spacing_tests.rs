@@ -321,6 +321,10 @@ fn auto_spacing_does_not_claim_mixed_metric_approximation() {
             assert_eq!(loss(&d, "mixed_font_line_height"), warnings);
         }
     }
+    // Even a measured composite with different sizes does not activate body-auto diagnostics.
+    let d = read("", "<w:p><w:r><w:rPr><w:rFonts w:ascii='Cambria' w:eastAsia='Cambria'/><w:sz w:val='32'/></w:rPr><w:t>A</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>가</w:t></w:r></w:p>");
+    assert_eq!(shapes(&d)[0].line_spacing_value, 100.0);
+    assert_eq!(loss(&d, "mixed_font_line_height"), 0);
 }
 
 // 이것을 실패시키는 것: auto 간격을 글꼴 메트릭으로 환산하거나 사용하지 않는 근사 경고 출력.

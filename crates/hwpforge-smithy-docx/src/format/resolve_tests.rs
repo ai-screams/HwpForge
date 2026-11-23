@@ -171,7 +171,8 @@ fn combination_cache_counts_and_font_storage_are_bounded() {
     for _ in 0..100 {
         p.add_run(hwpforge_core::Run::text("A", id));
     }
-    r.finish((&mut p, &[], None), None, &Delta::default(), None, "body", &mut vec![]).unwrap();
+    r.finish((&mut p, &[], None, &[], &[]), None, &Delta::default(), None, "body", &mut vec![])
+        .unwrap();
     assert_eq!(r.combinations_built, 1);
     r.owned_font_bytes = 64 * 1024 * 1024;
     let font = r.definitions.fonts.intern("another font", "test", "font").unwrap();
@@ -291,7 +292,7 @@ fn shared_identifiers_do_not_scale_with_references() {
             let mut p = Paragraph::new(ParaShapeIndex::new(0));
             p.add_run(hwpforge_core::Run::text("A", input));
             r.finish(
-                (&mut p, &[], None),
+                (&mut p, &[], None, &[], &[]),
                 None,
                 &Delta::default(),
                 Some((&delta, None)),
@@ -327,8 +328,15 @@ fn shared_identifiers_do_not_scale_with_references() {
             p.add_run(hwpforge_core::Run::text("A", input));
             let mut direct = Delta::default();
             direct.para.left = Some(i);
-            r.finish((&mut p, &[], None), None, &direct, Some((&delta, None)), "body", &mut vec![])
-                .unwrap();
+            r.finish(
+                (&mut p, &[], None, &[], &[]),
+                None,
+                &direct,
+                Some((&delta, None)),
+                "body",
+                &mut vec![],
+            )
+            .unwrap();
         }
         assert_eq!(r.copied_font_bytes - initial.4, 0);
         assert_eq!(r.registry.char_shape_count(), 1);
@@ -375,7 +383,14 @@ fn context_and_combination_limits_precede_allocation() {
         r.contexts.insert((d, CharDelta::default()), i as usize);
     }
     assert!(matches!(
-        r.finish((&mut make(), &[], None), None, &Delta::default(), None, "body", &mut vec![]),
+        r.finish(
+            (&mut make(), &[], None, &[], &[]),
+            None,
+            &Delta::default(),
+            None,
+            "body",
+            &mut vec![]
+        ),
         Err(DocxError::Limit { resource: "format contexts", observed: 262145, limit: 262144, .. })
     ));
     r.contexts.clear();
@@ -384,7 +399,14 @@ fn context_and_combination_limits_precede_allocation() {
         r.combinations.insert((i + 1, 0), c);
     }
     assert!(matches!(
-        r.finish((&mut make(), &[], None), None, &Delta::default(), None, "body", &mut vec![]),
+        r.finish(
+            (&mut make(), &[], None, &[], &[]),
+            None,
+            &Delta::default(),
+            None,
+            "body",
+            &mut vec![]
+        ),
         Err(DocxError::Limit {
             resource: "format combinations",
             observed: 262145,
@@ -398,7 +420,7 @@ fn context_and_combination_limits_precede_allocation() {
     }
     assert!(matches!(
         r.finish(
-            (&mut make(), &[], None),
+            (&mut make(), &[], None, &[], &[]),
             None,
             &Delta::default(),
             Some((&Delta::default(), None)),
@@ -415,7 +437,7 @@ fn context_and_combination_limits_precede_allocation() {
     r.marks.insert((0, 0), c);
     assert!(r
         .finish(
-            (&mut make(), &[], None),
+            (&mut make(), &[], None, &[], &[]),
             None,
             &Delta::default(),
             Some((&Delta::default(), None)),
@@ -489,7 +511,7 @@ fn styled_marks_cache_character_resolution_and_keep_direct_precedence() {
         let mut p = Paragraph::new(ParaShapeIndex::new(0));
         p.add_run(hwpforge_core::Run::text("A", input));
         r.finish(
-            (&mut p, &[], None),
+            (&mut p, &[], None, &[], &[]),
             None,
             &direct,
             Some((&mark, Some(style))),
@@ -524,7 +546,7 @@ fn character_cache_context_keeps_direct_delta_for_runs_and_marks() {
         let mut p = Paragraph::new(ParaShapeIndex::new(0));
         p.add_run(hwpforge_core::Run::text("A", input));
         r.finish(
-            (&mut p, &[], None),
+            (&mut p, &[], None, &[], &[]),
             None,
             delta,
             Some((&empty, Some(style))),
@@ -840,6 +862,70 @@ fn nominal_compound_counts_share_source_digits_with_measured_ratios() {
     let widths = decimal_template_widths("(^1)", 0, |_| Some(99)).unwrap();
     assert_eq!(widths.count, Some(4));
     assert_eq!(widths.ratio, None);
+}
+
+// 이것을 실패시키는 것: 대응 불가능한 생략 위치를 무시하거나 바이트 경계를 확인하지 않음.
+#[test]
+fn omitted_content_positions_must_address_retained_run_boundaries() {
+    for position in [(1, 0), (0, 5), (0, 1)] {
+        let mut resolver = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
+        let input = resolver.run_input(Delta::default(), None).unwrap();
+        let mut p = Paragraph::new(ParaShapeIndex::new(0));
+        p.add_run(hwpforge_core::Run::text("가\n", input));
+        let result = resolver.finish(
+            (&mut p, &[], None, &[], &[position]),
+            None,
+            &Delta::default(),
+            None,
+            "body",
+            &mut vec![],
+        );
+        assert!(matches!(result, Err(DocxError::Invalid { .. })), "{position:?}");
+    }
+    for (offset, expected) in [(0, true), (1, false)] {
+        let mut resolver = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
+        let input = resolver.run_input(Delta::default(), None).unwrap();
+        let mut p = Paragraph::new(ParaShapeIndex::new(0));
+        p.add_run(hwpforge_core::Run::table(hwpforge_core::Table::new(vec![]), input));
+        let result = resolver.finish(
+            (&mut p, &[], None, &[], &[(0, offset)]),
+            None,
+            &Delta::default(),
+            None,
+            "body",
+            &mut vec![],
+        );
+        assert_eq!(result.is_ok(), expected, "object offset {offset}");
+    }
+}
+
+// 이것을 실패시키는 것: 알려진 줄의 A/D를 잃거나 미등록 기여가 있는 줄의 부분 극값을 완전한 메트릭으로 노출.
+#[test]
+fn logical_line_results_keep_components_and_unknown_status() {
+    let mut line = LogicalLine::default();
+    line.height.add_body(1100, line_height::metrics("Cambria"), None);
+    let mut output = CellLines::default();
+    line.finish(&ParaDelta::default(), Some(&mut output), "body").unwrap();
+    assert_eq!(output.metrics[0], (1045.21484375, 244.384765625, true, 1290));
+    line.height.add_body(2000, line_height::metrics("맑은 고딕"), None);
+    line.height.add_body(1100, None, None);
+    line.finish(&ParaDelta::default(), Some(&mut output), "body").unwrap();
+    assert_eq!(output.metrics[1], (0.0, 0.0, false, 2000));
+}
+
+// 이것을 실패시키는 것: 높이 합 한도 검사를 모든 줄의 결과 저장 뒤로 미루거나 실패한 줄을 먼저 저장.
+#[test]
+fn logical_line_rejects_overflow_before_recording_the_second_result() {
+    let para = ParaDelta { line: Some(12_000_000), line_rule: Some(1), ..Default::default() };
+    let mut line = LogicalLine::default();
+    let mut output = CellLines::default();
+    line.finish(&para, Some(&mut output), "body").unwrap();
+    assert_eq!(output.metrics, vec![(0.0, 0.0, false, 60_000_000)]);
+    assert_eq!(output.height, 60_000_000);
+    let result = line.finish(&para, Some(&mut output), "body");
+    assert!(matches!(result, Err(DocxError::Invalid { .. })));
+    assert_eq!(output.metrics, vec![(0.0, 0.0, false, 60_000_000)]);
+    assert_eq!(output.height, 60_000_000);
 }
 
 // 이것을 실패시키는 것: 미등록 글꼴 진단이 출력 최소 간격을 바꿨다고 서술.

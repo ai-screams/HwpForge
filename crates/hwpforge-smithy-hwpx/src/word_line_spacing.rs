@@ -1,4 +1,6 @@
 //! Output-only projection of imported percentage spacing for measured Latin faces.
+//! The correction is calibrated to the font versions measured with Hancom on macOS.
+//! With other font versions, it can make lines narrower than Word's line spacing.
 use crate::{HwpxCharShape, HwpxError, HwpxResult, HwpxStyleStore, PathSeg};
 use hwpforge_core::{Document, LayoutProfile, Paragraph, RunContent, Validated};
 use hwpforge_foundation::{HeadingType, LineSpacingType, ParaShapeIndex, VerticalPosition};

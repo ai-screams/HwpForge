@@ -371,3 +371,53 @@ fn unsupported_marker_layout_measures_without_registering_shape() {
         }
     }
 }
+
+// 이것을 실패시키는 것: 본문 확장 메트릭을 raw 번호 경로에 적용하거나 높이 차를 ascent 차로 교체.
+#[test]
+fn marker_height_keeps_raw_metrics_for_larger_markers() {
+    for (font, line, expected) in [
+        ("맑은 고딕", 240, ["665", "1330"]),
+        ("맑은 고딕", 276, ["765", "1530"]),
+        ("Cambria", 240, ["586", "1172"]),
+        ("Cambria", 276, ["674", "1348"]),
+    ] {
+        check(
+            32,
+            font,
+            &format!("<w:spacing w:line='{line}'/>"),
+            expected,
+            Some("approximate_space_before"),
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 번호 본문 기준을 원본 끝 표시 대신 첫 글자 run으로 교체.
+#[test]
+fn marker_layout_keeps_source_mark_reference() {
+    use std::io::{Cursor, Read, Write};
+    for (mark, expected, action) in
+        [(32, ["0", "0"], None), (18, ["931", "1862"], Some("approximate_space_before"))]
+    {
+        let source = input(32, "맑은 고딕", "<w:spacing w:line='240'/>", &[22]);
+        let mut source = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..source.len() {
+            let mut f = source.by_index(i).unwrap();
+            let name = f.name().unwrap().to_string();
+            let mut content = String::new();
+            f.read_to_string(&mut content).unwrap();
+            if name == "body.xml" {
+                let end = content.find("</w:pPr>").unwrap();
+                content = format!(
+                    "{}{}",
+                    content[..end]
+                        .replace("<w:sz w:val='22'/>", &format!("<w:sz w:val='{mark}'/>")),
+                    &content[end..]
+                );
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            out.write_all(content.as_bytes()).unwrap();
+        }
+        check_input(&out.finish().unwrap().into_inner(), expected, action);
+    }
+}

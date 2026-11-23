@@ -1173,7 +1173,7 @@ fn object_omission_and_structural_content_loss_are_distinct() {
 #[test]
 fn first_line_empty_mark_script_and_unknown_metrics() {
     for (paragraph, expected) in [
-        (height_paragraph("auto",240,22,"ABC"),1463),
+        (height_paragraph("auto",240,22,"ABC"),1902),
         (height_paragraph("auto",240,24,"한글"),2075),
         (height_paragraph("auto",240,22,"</w:t><w:br/><w:t>한글"),3804),
         (height_paragraph("auto",240,22,""),1902),
@@ -1546,11 +1546,11 @@ fn cell_minimum_reuses_effective_autospacing_edges() {
 #[test]
 fn forced_lines_sum_each_existing_word_height() {
     for br in ["<w:br/>", "<w:br w:type='textWrapping'/>", "<w:cr/>"] {
-        for (texts, expected) in [(["가", "나", "다"], 5706), (["A", "B", "C"], 4389)] {
+        for (texts, expected) in [(["가", "나", "다"], 5706), (["A", "B", "C"], 5706)] {
             let text = texts.join(&format!("</w:t>{br}<w:t>"));
             let p = height_paragraph("auto", 240, 22, &text);
             let d = read("", &small_table("", &height_cell("", &p)));
-            // Existing metrics: Korean 1902 × 3; Latin 1463 × 3.
+            // Existing metrics: Korean 1902 × 3; Latin 1902 × 3.
             assert_eq!(tables(&d)[0].rows[0].height.unwrap().as_i32(), expected, "{br}/{text}");
         }
     }
@@ -1574,7 +1574,7 @@ fn forced_lines_use_their_own_run_sizes() {
 #[test]
 fn forced_lines_include_trailing_empty_line_format() {
     for (p, expected) in [
-        (height_paragraph("auto", 240, 22, "A</w:t><w:br/><w:t>"), 3365),
+        (height_paragraph("auto", 240, 22, "A</w:t><w:br/><w:t>"), 3804),
         (height_paragraph("auto", 240, 22, "한</w:t><w:br/><w:t>"), 3804),
         (height_paragraph("auto", 240, 22, "한</w:t><w:br/><w:t>").replace(
             "<w:pPr>",
@@ -1594,7 +1594,7 @@ fn forced_lines_include_trailing_empty_line_format() {
 #[test]
 fn forced_lines_stop_at_page_and_column_first_fragment() {
     for br in ["page", "column"] {
-        for (text, expected) in [("A", 1463), ("한", 1902)] {
+        for (text, expected) in [("A", 1902), ("한", 1902)] {
             let p = height_paragraph(
                 "auto",
                 240,
@@ -1925,4 +1925,12 @@ fn warnings_without_missing_mode(d: &DocxDecoded) -> usize {
     assert_eq!(last.count(), 1);
     assert_eq!(last.action(), "retain_placement");
     d.warnings.len() - 1
+}
+
+// 이것을 실패시키는 것: 논리 줄 합의 범위 오류를 성공/0 또는 포화값으로 바꿈.
+#[test]
+fn logical_line_sum_rejects_out_of_range_height() {
+    let paragraph = height_paragraph("exact", 12_000_000, 22, "A</w:t><w:br/><w:t>B");
+    let body = format!("<w:tbl><w:tr>{}</w:tr></w:tbl>", height_cell("", &paragraph));
+    assert!(decode_docx(&package(&body, &[])).is_err());
 }

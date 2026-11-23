@@ -368,7 +368,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
         run: Some((String::new(), true)),
         run_diagnosed: false,
         run_split: false,
-        diagnose_runs: vec![],
+        run_evidence: vec![],
         resolver: Some(&mut resolver),
         direct_para: Delta::default(),
         direct_run: Delta::default(),
@@ -404,7 +404,7 @@ fn fragment_and_empty_section_growth_use_document_limits() {
     body.paragraph = Some(Paragraph::new(ParaShapeIndex::new(0)));
     body.breaks.clear();
     body.split_at = None;
-    body.diagnose_runs.clear();
+    body.run_evidence.clear();
     body.boundary_input = None;
     body.split(false, &at).unwrap();
     body.ensure_fragment_run(&at).unwrap();

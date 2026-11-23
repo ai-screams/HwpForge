@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Paragraph atLeast spacing preserves the source minimum. Cell content minima exclude the paragraph-end mark from a final line containing text. Empty paragraphs and trailing empty lines retain their existing mark-height calculation. Core retains source paragraph-end formatting, including formatting used by list markers. The paragraph-mark diagnostic describes source-format preservation rather than promising unchanged line height.
+- Cell content minima use logical lines across run boundaries, combining each font's ascent and descent contributions before taking their maxima. Malgun Gothic contributes its expanded height even on Latin-only lines. Measured empty-line fonts use the supplying run or paragraph mark's output Latin font; unmeasured empty-line fonts retain their existing selection and fallback. Paragraph atLeast spacing preserves the source minimum. Populated lines exclude paragraph-end marks from their height, while empty final lines remain. Core retains source paragraph-end formatting, and numbering-marker layout is unchanged.
 
 - 미지 폭 종류와 pct의 기존 근사를 유지하고, 완전한 grid를 가진 중첩 dxa·auto·nil 및 폭 미지정 표의 원본 열 너비를 유지한다. 실제 grid를 사용하는 경우 컨테이너 근사 진단을 내지 않는다.
 

@@ -7,6 +7,7 @@ pub(super) struct Metrics {
     upm: u16,
     ascent: u16,
     descent: u16,
+    expansion: [bool; 2],
 }
 
 pub(super) fn metrics(name: &str) -> Option<Metrics> {
@@ -32,7 +33,12 @@ pub(super) fn metrics(name: &str) -> Option<Metrics> {
         "Cambria" => (2048, 1946, 455),
         _ => return None,
     };
-    Some(Metrics { upm, ascent, descent })
+    let expansion = match name {
+        "맑은 고딕" | "Malgun Gothic" => [true, true],
+        "Cambria" | "Calibri" => [false, false],
+        _ => [false, true],
+    };
+    Some(Metrics { upm, ascent, descent, expansion })
 }
 
 pub(super) fn east_asian(c: char) -> bool {
@@ -50,37 +56,66 @@ pub(super) fn physical_spacing(hwp_units: f64) -> f64 {
 
 #[derive(Clone, Default)]
 pub(super) struct Height {
-    ascent: f64,
-    descent: f64,
+    // Candidates without/with an East Asian character on the logical line.
+    ascent: [f64; 2],
+    descent: [f64; 2],
     size: i32,
-    max_single: f64,
+    max_single: [f64; 2],
     different_sizes: bool,
     unknown: bool,
 }
 impl Height {
+    // Numbering keeps raw metrics and its existing whole-height difference.
     pub(super) fn add(&mut self, size: i32, metrics: Option<Metrics>) {
+        self.add_contribution(size, metrics, [false, false]);
+    }
+    pub(super) fn add_body(
+        &mut self,
+        size: i32,
+        metrics: Option<Metrics>,
+        legacy_expansion: Option<bool>,
+    ) {
+        let expansion = legacy_expansion.map_or_else(
+            || metrics.map_or([false, false], |m| m.expansion),
+            |expand| [expand, expand],
+        );
+        self.add_contribution(size, metrics, expansion);
+    }
+    fn add_contribution(&mut self, size: i32, metrics: Option<Metrics>, expansion: [bool; 2]) {
         self.different_sizes |= self.size != 0 && self.size != size;
         self.size = self.size.max(size);
         let Some(m) = metrics else {
             self.unknown = true;
             return;
         };
-        let ascent = f64::from(size) * f64::from(m.ascent) / f64::from(m.upm);
-        let descent = f64::from(size) * f64::from(m.descent) / f64::from(m.upm);
-        self.ascent = self.ascent.max(ascent);
-        self.descent = self.descent.max(descent);
-        self.max_single = self.max_single.max(ascent + descent);
+        let a = f64::from(size) * f64::from(m.ascent) / f64::from(m.upm);
+        let d = f64::from(size) * f64::from(m.descent) / f64::from(m.upm);
+        for (index, expand) in expansion.into_iter().enumerate() {
+            let extra = if expand { 0.15 * (a + d) } else { 0.0 };
+            let ascent = a + extra;
+            let descent = d + extra;
+            self.ascent[index] = self.ascent[index].max(ascent);
+            self.descent[index] = self.descent[index].max(descent);
+            self.max_single[index] = self.max_single[index].max(ascent + descent);
+        }
     }
-    pub(super) fn mixed(&self) -> bool {
-        // A single face supplying both extrema needs no mixed-font warning,
-        // including ties and aliases. Only a composite height exceeds every
-        // individual height; size variation still approximates line breaking.
-        self.different_sizes || self.ascent + self.descent > self.max_single
+    pub(super) fn mixed(&self, east: bool) -> bool {
+        let index = usize::from(east);
+        self.different_sizes || self.ascent[index] + self.descent[index] > self.max_single[index]
+    }
+    pub(super) fn components(&self, east: bool) -> (f64, f64, bool) {
+        if self.unknown || self.size == 0 {
+            (0.0, 0.0, false)
+        } else {
+            let index = usize::from(east);
+            (self.ascent[index], self.descent[index], true)
+        }
     }
     fn natural(&self, east: bool) -> f64 {
-        (self.ascent + self.descent) * if east { 1.3 } else { 1.0 }
+        let index = usize::from(east);
+        self.ascent[index] + self.descent[index]
     }
-    // Word line advance is shared by paragraph spacing projection and cell minima.
+    // Word line advance is used by cell minima and the raw numbering calculation.
     fn word_spacing(&self, p: &ParaDelta, east: bool) -> f64 {
         let rule = if p.line.is_none() { 0 } else { p.line_rule.unwrap_or(0) };
         let line = f64::from(p.line.unwrap_or(240));

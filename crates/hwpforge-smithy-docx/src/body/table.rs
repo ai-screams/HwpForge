@@ -597,7 +597,7 @@ impl Body<'_> {
         self.mark = None;
         self.mark_style = None;
         self.breaks.clear();
-        self.diagnose_runs.clear();
+        self.run_evidence.clear();
         self.run_diagnosed = false;
         self.boundary_input = None;
         self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(usize::MAX)));

@@ -408,6 +408,13 @@ struct TrailingBreak {
     split_at: (Location, usize, usize),
 }
 
+#[derive(PartialEq, Eq)]
+enum RunEvidence {
+    Format(bool),
+    // Retained run/byte coordinates; only the resolver maps these to logical lines.
+    Omitted((usize, usize)),
+}
+
 struct Body<'a> {
     tables: table::Tables,
     part: &'a str,
@@ -443,7 +450,8 @@ struct Body<'a> {
     run: Option<(String, bool)>,
     run_diagnosed: bool,
     run_split: bool,
-    diagnose_runs: Vec<bool>,
+    // Source formatting and omitted-content evidence share paragraph lifetime.
+    run_evidence: Vec<RunEvidence>,
     resolver: Option<&'a mut Resolver>,
     direct_para: Delta,
     direct_run: Delta,
@@ -532,7 +540,7 @@ fn scan_inner(
         run: None,
         run_diagnosed: false,
         run_split: false,
-        diagnose_runs: Vec::new(),
+        run_evidence: Vec::new(),
         resolver,
         direct_para: Delta::default(),
         direct_run: Delta::default(),
@@ -589,6 +597,30 @@ impl Body<'_> {
     }
     fn visible(&self) -> bool {
         self.fields.iter().all(|f| f.result)
+    }
+    fn omit_line_content(&mut self) {
+        if !self.visible()
+            || self.tables.discard()
+            || self.stack.last().is_some_and(|frame| frame.properties)
+        {
+            return;
+        }
+        let Some(paragraph) = &self.paragraph else { return };
+        let start = self.breaks.last().map_or(0, |b| b.0);
+        let position =
+            if let Some((text, _)) = self.run.as_ref().filter(|(text, _)| !text.is_empty()) {
+                (paragraph.runs.len(), text.len())
+            } else if paragraph.runs.len() > start {
+                let index = paragraph.runs.len() - 1;
+                (index, paragraph.runs[index].content.as_text().map_or(0, str::len))
+            } else {
+                // The existing fragment fallback or next retained run owns this boundary.
+                (paragraph.runs.len(), 0)
+            };
+        let run_evidence = RunEvidence::Omitted(position);
+        if self.run_evidence.last() != Some(&run_evidence) {
+            self.run_evidence.push(run_evidence);
+        }
     }
     fn start(&mut self, element: Element) -> Result<()> {
         self.ordinal += 1;
@@ -816,6 +848,7 @@ impl Body<'_> {
                 }
                 _ => {
                     self.omit_structural_table_child(element);
+                    self.omit_line_content();
                     frame.blocked = true;
                     self.warn(
                         Kind::ContentOmitted,
@@ -827,6 +860,7 @@ impl Body<'_> {
                 }
             }
         } else if element.namespace_id == M_NS.0 {
+            self.omit_line_content();
             self.warn(
                 Kind::ContentOmitted,
                 location,
@@ -890,7 +924,7 @@ impl Body<'_> {
                         self.stack.last().is_some_and(|f| matches!(f.node, Node::Body));
                     self.breaks.clear();
                     self.split_at = None;
-                    self.diagnose_runs.clear();
+                    self.run_evidence.clear();
                     self.run_diagnosed = false;
                     self.boundary_input = None;
                     self.direct_para = Delta::default();
@@ -933,13 +967,16 @@ impl Body<'_> {
                         self.split(attribute(element, W_NS.0, "type") == Some("column"), location)?;
                     }
                     None | Some("textWrapping") => self.append("\n", location)?,
-                    Some(_) => self.warn(
-                        Kind::ValueApproximated,
-                        location,
-                        || "Unknown break type discarded",
-                        "unsupported_value",
-                        "omit",
-                    )?,
+                    Some(_) => {
+                        self.omit_line_content();
+                        self.warn(
+                            Kind::ValueApproximated,
+                            location,
+                            || "Unknown break type discarded",
+                            "unsupported_value",
+                            "omit",
+                        )?;
+                    }
                 },
                 "noBreakHyphen" => self.append("\u{2011}", location)?,
                 "softHyphen" => self.append("\u{00ad}", location)?,
@@ -1037,6 +1074,7 @@ impl Body<'_> {
                     frame.blocked = true;
                 }
                 name => {
+                    self.omit_line_content();
                     let loss = object_loss(element).unwrap_or("unknown_element");
                     if loss == "unknown_element" {
                         self.omit_structural_table_child(element);
@@ -1054,6 +1092,7 @@ impl Body<'_> {
             }
         } else {
             self.omit_structural_table_child(element);
+            self.omit_line_content();
             self.warn(
                 Kind::ContentOmitted,
                 location,
@@ -1166,6 +1205,7 @@ impl Body<'_> {
             }
             self.append(&text, &location)?;
         } else if !text.trim().is_empty() {
+            self.omit_line_content();
             self.warn(
                 Kind::ContentLost,
                 &location,
@@ -1209,7 +1249,8 @@ impl Body<'_> {
             .last()
             .filter(|f| f.simple == simple)
             .ok_or_else(|| DocxError::invalid(self.part, location, "unmatched field end"))?;
-        if !field.has_result {
+        let missing = !field.has_result;
+        if missing {
             let first = field.location.clone();
             self.warn(
                 Kind::FieldResultMissing,
@@ -1220,6 +1261,9 @@ impl Body<'_> {
             )?;
         }
         self.fields.pop();
+        if missing {
+            self.omit_line_content();
+        }
         Ok(())
     }
     fn field_char(&mut self, kind: Option<&str>, location: &Location) -> Result<()> {
@@ -1261,7 +1305,7 @@ impl Body<'_> {
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "p", "missing paragraph"))?
             .add_run(Run::text(text, id));
-        self.diagnose_runs.push(!self.run_diagnosed);
+        self.run_evidence.push(RunEvidence::Format(!self.run_diagnosed));
         self.run_diagnosed = true;
         Ok(())
     }
@@ -1318,12 +1362,22 @@ impl Body<'_> {
         }
         let fragment_end = (measure_first && self.tables.measures_paragraph())
             .then(|| self.breaks.first().map_or(paragraph.runs.len(), |b| b.0));
+        let fragments: Vec<_> = self.breaks.iter().map(|b| b.0).collect();
+        let run_evidence = std::mem::take(&mut self.run_evidence);
+        let mut diagnose = Vec::new();
+        let mut omitted = Vec::new();
+        for item in run_evidence {
+            match item {
+                RunEvidence::Format(value) => diagnose.push(value),
+                RunEvidence::Omitted(position) => omitted.push(position),
+            }
+        }
         let (mut base, minimum_lines_height, number) = self
             .resolver
             .as_mut()
             .ok_or_else(|| DocxError::invalid(self.part, "body", "missing resolver"))?
             .finish(
-                (&mut paragraph, &self.diagnose_runs, fragment_end),
+                (&mut paragraph, &diagnose, fragment_end, &fragments, &omitted),
                 self.paragraph_style,
                 &self.direct_para,
                 self.mark.as_ref().map(|d| (d, self.mark_style)),
@@ -1544,7 +1598,7 @@ impl Body<'_> {
             if let Some((id, diagnose)) = self.boundary_input {
                 self.runs = admit_count(self.part, at, "runs", self.runs, MAX_RUNS)?;
                 self.paragraph.as_mut().unwrap().add_run(Run::text("", id));
-                self.diagnose_runs.push(diagnose);
+                self.run_evidence.push(RunEvidence::Format(diagnose));
                 self.run_diagnosed = true;
                 self.boundary_input = Some((id, false));
             } else {
@@ -1571,7 +1625,7 @@ impl Body<'_> {
             self.mark = None;
             self.mark_style = None;
             self.breaks.clear();
-            self.diagnose_runs.clear();
+            self.run_evidence.clear();
             self.run_diagnosed = false;
             self.boundary_input = None;
             self.paragraph = Some(Paragraph::new(ParaShapeIndex::new(usize::MAX)));
@@ -1778,13 +1832,16 @@ impl Body<'_> {
                 }
             }
             Node::SimpleField => self.finish_field(true, &frame.location)?,
-            Node::Alternate { fallback: false } if !frame.blocked => self.warn(
-                Kind::ContentOmitted,
-                &frame.location,
-                || "AlternateContent has no Fallback; content excluded",
-                "alternate_content",
-                "omit",
-            )?,
+            Node::Alternate { fallback: false } if !frame.blocked => {
+                self.omit_line_content();
+                self.warn(
+                    Kind::ContentOmitted,
+                    &frame.location,
+                    || "AlternateContent has no Fallback; content excluded",
+                    "alternate_content",
+                    "omit",
+                )?;
+            }
             _ => {}
         }
         Ok(())

@@ -186,3 +186,51 @@ fn minimum_spacing_preserves_source_in_referenced_xml_shapes() {
         }
     }
 }
+
+// 이것을 실패시키는 것: 쪽/단 fragment 경계 전달 누락, 칸 밖 atLeast 진단 삭제, 원본 간격 선투영.
+#[test]
+fn fragment_diagnostics_keep_source_minimum_in_xml() {
+    for (separator, mixed, paragraphs) in
+        [("", 1, 1), ("<w:br w:type='page'/>", 0, 3), ("<w:br w:type='column'/>", 0, 3)]
+    {
+        let runs: String = [(22, "A"), (32, "B"), (40, "C")].into_iter().enumerate().map(|(i, (size, text))| format!("<w:r><w:rPr><w:rFonts w:ascii='Cambria' w:hAnsi='Cambria' w:eastAsia='Cambria'/><w:sz w:val='{size}'/></w:rPr>{}<w:t>{text}</w:t></w:r>", if i == 0 { "" } else { separator })).collect();
+        let bytes = docx::package(&format!(
+            "<w:p><w:pPr><w:spacing w:line='160' w:lineRule='atLeast'/></w:pPr>{runs}</w:p>"
+        ));
+        let source = hwpforge::docx::decode_docx(&bytes).unwrap();
+        assert_eq!(
+            source
+                .warnings
+                .iter()
+                .filter(|w| w.loss() == "mixed_font_line_height")
+                .map(|w| w.count())
+                .sum::<u64>(),
+            mixed
+        );
+        for section in source.document.sections() {
+            for p in &section.paragraphs {
+                assert_eq!(
+                    source.registry.para_shapes[p.para_shape_id.get()].line_spacing_value,
+                    1600.0
+                );
+            }
+        }
+        let result = convert_docx(&bytes).unwrap();
+        let header = tree(&result.bytes, "Contents/header.xml");
+        let section = tree(&result.bytes, "Contents/section0.xml");
+        let ps: Vec<_> = section.children.iter().filter(|p| p.name == "hp:p").collect();
+        assert_eq!(ps.len(), paragraphs);
+        for p in ps {
+            let shape = header
+                .descendants("hh:paraPr")
+                .into_iter()
+                .find(|s| s.attr("id") == p.attr("paraPrIDRef"))
+                .unwrap();
+            for (branch, expected) in [("hp:case", "800"), ("hp:default", "1600")] {
+                let spacing = shape.child("hp:switch").child(branch).child("hh:lineSpacing");
+                assert_eq!(spacing.attr("type"), Some("AT_LEAST"));
+                assert_eq!(spacing.attr("value"), Some(expected));
+            }
+        }
+    }
+}

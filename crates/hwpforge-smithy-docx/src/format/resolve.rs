@@ -63,6 +63,50 @@ struct CharResult {
     size: i32,
 }
 
+type ParagraphInput<'a> =
+    (&'a mut Paragraph, &'a [bool], Option<usize>, &'a [usize], &'a [(usize, usize)]);
+
+type LogicalMetrics = (f64, f64, bool, i32);
+
+#[derive(Default)]
+struct CellLines {
+    metrics: Vec<LogicalMetrics>,
+    height: i32,
+}
+
+#[derive(Default)]
+struct LogicalLine {
+    height: line_height::Height,
+    east: bool,
+    has_scalar: bool,
+    has_text: bool,
+    uncertain: bool,
+    supplier: Option<CharResult>,
+}
+impl LogicalLine {
+    fn finish(
+        &mut self,
+        para: &ParaDelta,
+        output: Option<&mut CellLines>,
+        part: &str,
+    ) -> Result<bool> {
+        let mixed = self.height.mixed(self.east);
+        if let Some(output) = output {
+            let (a, d, known) = self.height.components(self.east);
+            let height = self.height.word_line(para, self.east)?;
+            let total = output
+                .height
+                .checked_add(height)
+                .filter(|h| *h <= HwpUnit::MAX_VALUE)
+                .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?;
+            output.metrics.push((a, d, known, height));
+            output.height = total;
+        }
+        *self = Self::default();
+        Ok(mixed)
+    }
+}
+
 pub(crate) struct Resolver {
     pub(crate) definitions: Definitions,
     pub(crate) registry: StyleRegistry,
@@ -403,16 +447,28 @@ impl Resolver {
     }
     pub(crate) fn finish(
         &mut self,
-        paragraph: (&mut Paragraph, &[bool], Option<usize>),
+        paragraph: ParagraphInput<'_>,
         style: Option<StyleKey>,
         direct: &Delta,
         mark: Option<(&Delta, Option<StyleKey>)>,
         part: &str,
         w: &mut Vec<DocxWarning>,
     ) -> Result<(Delta, i32, Option<usize>)> {
-        let (p, diagnose, fragment_end) = paragraph;
-        let measure_lines = fragment_end.is_some();
-        let fragment_end = fragment_end.unwrap_or(0);
+        let (p, diagnose, measure_end, fragment_boundaries, omitted_positions) = paragraph;
+        let measure_lines = measure_end.is_some();
+        for &(run, offset) in omitted_positions {
+            let valid = p.runs.get(run).is_some_and(|run| {
+                run.content.as_text().map_or(offset == 0, |text| text.is_char_boundary(offset))
+            });
+            if !valid {
+                return Err(DocxError::invalid(part, "p", "invalid omitted content position"));
+            }
+        }
+        let mut omitted = omitted_positions.to_vec();
+        omitted.sort_unstable();
+        omitted.dedup();
+        let mut omitted = omitted.into_iter().peekable();
+        let mut fragments = fragment_boundaries.iter().copied().peekable();
         let style = style.or(self.default_paragraph);
         let mut base = self.context(self.table_style, style, direct, part, w)?;
         p.style_ref = style.as_ref().and_then(|s| self.named.get(s)).copied();
@@ -430,18 +486,12 @@ impl Resolver {
             next
         };
         let exact = base.para.line.is_some() && base.para.line_rule == Some(1);
-        let project_minimum = base.para.line.is_some() && base.para.line_rule == Some(2);
-        let measure_height = project_minimum || measure_lines;
-        let mut height = line_height::Height::default();
-        let mut line_height = line_height::Height::default();
-        let mut line_east = false;
-        let mut line_used = false;
-        let mut line_format = None;
-        let mut minimum_height = 0_i32;
-        let mut final_line_has_text = false;
-        let mut east = false;
-        let empty = p.runs.iter().all(|run| run.content.as_text().is_none_or(str::is_empty));
-        let last_run = p.runs.len().saturating_sub(1);
+        let diagnose_minimum = base.para.line.is_some() && base.para.line_rule == Some(2);
+        let measure_height = diagnose_minimum || measure_lines;
+        let mut line = LogicalLine::default();
+        let mut measured = measure_lines.then(CellLines::default);
+        let mut record = measure_lines;
+        let mut mixed = false;
         for (index, run) in p.runs.iter_mut().enumerate() {
             let diagnose = diagnose.get(index).copied().unwrap_or(true);
             let input_id = run.char_shape_id.get();
@@ -463,70 +513,57 @@ impl Resolver {
                 result
             };
             run.char_shape_id = result.id;
-            // Empty source/boundary runs diagnose formatting but cannot supply
-            // script evidence in a nonempty paragraph. For an empty paragraph,
-            // only its explicit mark or final effective run supplies the height.
-            let empty_mark = empty && mark.is_none() && index == last_run;
-            if !exact
-                && measure_height
-                && (empty_mark || run.content.as_text().is_some_and(|t| !t.is_empty()))
-            {
+            if measure_height {
+                line.supplier = Some(result);
+                if run.content.as_text().is_none() {
+                    line.uncertain = true;
+                    line.has_text = false;
+                }
                 let text = run.content.as_text().unwrap_or("");
-                let has_east = text.chars().any(line_height::east_asian);
-                let has_latin = text.chars().any(|c| !line_height::east_asian(c));
-                let empty_east = empty_mark && result.line_fonts[1].is_some();
-                east |= has_east || empty_east;
-                if has_east || empty_east {
-                    self.add_height(&mut height, result, true, part, w)?;
-                }
-                if has_latin || (!has_east && !empty_east) {
-                    self.add_height(&mut height, result, false, part, w)?;
-                }
-            }
-            // Track the source logical tail even when only atLeast is measured.
-            // Unknown objects keep the conservative source-height calculation.
-            if let Some(text) = run.content.as_text() {
-                for c in text.chars() {
-                    if matches!(c, '\n' | '\r') {
-                        final_line_has_text = false;
-                    } else if !c.is_whitespace() && !c.is_control() {
-                        final_line_has_text = true;
+                for (offset, c) in text.char_indices() {
+                    if omitted.peek() == Some(&(index, offset)) {
+                        line.uncertain = true;
+                        omitted.next();
                     }
-                }
-            } else {
-                final_line_has_text = false;
-            }
-            if measure_lines && index < fragment_end {
-                line_format = Some(result);
-                let text = run.content.as_text().unwrap_or("");
-                let mut segments = text.split('\n').peekable();
-                while let Some(text) = segments.next() {
-                    let ended = segments.peek().is_some();
-                    if !exact && (!text.is_empty() || ended) {
-                        let has_east = text.chars().any(line_height::east_asian);
-                        let empty_east = text.is_empty() && result.line_fonts[1].is_some();
-                        line_east |= has_east || empty_east;
-                        if has_east || empty_east {
-                            self.add_height(&mut line_height, result, true, part, w)?;
+                    if c == '\n' {
+                        if !exact && !line.has_scalar {
+                            self.add_line_supplier(&mut line, result, part, w)?;
                         }
-                        if text.chars().any(|c| !line_height::east_asian(c))
-                            || (!has_east && !empty_east)
-                        {
-                            self.add_height(&mut line_height, result, false, part, w)?;
+                        mixed |= line.finish(
+                            &base.para,
+                            if record { measured.as_mut() } else { None },
+                            part,
+                        )?;
+                        line.supplier = Some(result);
+                    } else {
+                        line.has_scalar = true;
+                        if c == '\r' {
+                            line.has_text = false;
+                        } else if !c.is_whitespace() && !c.is_control() {
+                            line.has_text = true;
                         }
-                        line_used = true;
+                        let east = line_height::east_asian(c);
+                        line.east |= east;
+                        if !exact {
+                            self.add_line_height(&mut line, (result, east, None), part, w)?;
+                        }
                     }
-                    if ended {
-                        minimum_height = minimum_height
-                            .checked_add(line_height.word_line(&base.para, line_east)?)
-                            .filter(|h| *h <= HwpUnit::MAX_VALUE)
-                            .ok_or_else(|| {
-                                DocxError::invalid(part, "p", "cell line height overflow")
-                            })?;
-                        line_height = line_height::Height::default();
-                        line_east = false;
-                        line_used = false;
+                }
+                if omitted.peek() == Some(&(index, text.len())) {
+                    line.uncertain = true;
+                    omitted.next();
+                }
+                if fragments.peek() == Some(&(index + 1)) {
+                    fragments.next();
+                    if !exact && !line.has_text {
+                        self.add_line_supplier(&mut line, result, part, w)?;
                     }
+                    mixed |= line.finish(
+                        &base.para,
+                        if record { measured.as_mut() } else { None },
+                        part,
+                    )?;
+                    record = false;
                 }
             }
             if diagnose {
@@ -535,6 +572,7 @@ impl Resolver {
         }
         // Without pPr/rPr the final effective run already supplies the mark's
         // height. Do not invent a separate default-font mark above that run.
+        let mut end_supplier = None;
         if let Some((mark, style)) = mark {
             let delta = self.run_input(mark.clone(), style)?.get();
             let key = (context, delta);
@@ -583,20 +621,20 @@ impl Resolver {
                 }
             }
             format_warnings(result.missing, result.collapsed, part, "rPr", w)?;
-            // Only empty or uncertain final lines retain the mark height.
-            if !exact && measure_height && !final_line_has_text {
-                east |= empty && result.line_fonts[1].is_some();
-                self.add_height(&mut height, result, east, part, w)?;
-                if measure_lines && fragment_end == p.runs.len() {
-                    line_east |= !line_used && result.line_fonts[1].is_some();
-                    self.add_height(&mut line_height, result, line_east, part, w)?;
-                    line_used = true;
+            end_supplier = Some(result);
+        }
+        if measure_height {
+            if !exact && !line.has_text {
+                if let Some(supplier) = end_supplier.or(line.supplier) {
+                    self.add_line_supplier(&mut line, supplier, part, w)?;
                 }
             }
+            mixed |=
+                line.finish(&base.para, if record { measured.as_mut() } else { None }, part)?;
         }
-        if !exact && measure_height && height.mixed() {
+        if !exact && measure_height && mixed {
             warn(w, part, "pPr", Kind::ValueApproximated, "mixed_font_line_height",
-                "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
+                "approximate", "Logical-line ascent/descent maxima approximate mixed fonts or sizes without width-dependent line breaking")?;
         }
         let observed =
             self.lists.observe(&self.definitions, &mut self.registry, &base.para, part, w)?;
@@ -612,21 +650,15 @@ impl Resolver {
         }
         base.para.projected_marker =
             self.marker_layout(&mut base, direct, mark, number, part, w)?;
-        if measure_lines {
-            // A trailing empty line uses the paragraph mark, or the final effective
-            // run at this boundary. Page/column breaks exclude all later fragments.
-            if !exact && !line_used {
-                if let Some(result) = line_format {
-                    line_east = result.line_fonts[1].is_some();
-                    self.add_height(&mut line_height, result, line_east, part, w)?;
-                }
-            }
-            minimum_height = minimum_height
-                .checked_add(line_height.word_line(&base.para, line_east)?)
-                .and_then(|h| h.checked_add(base.para.projected_marker_before))
+        let minimum_height = if let Some(lines) = measured {
+            lines
+                .height
+                .checked_add(base.para.projected_marker_before)
                 .filter(|h| *h <= HwpUnit::MAX_VALUE)
-                .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?;
-        }
+                .ok_or_else(|| DocxError::invalid(part, "p", "cell line height overflow"))?
+        } else {
+            0
+        };
         Ok((base, minimum_height, number))
     }
     fn marker_layout(
@@ -915,15 +947,40 @@ impl Resolver {
     pub(crate) fn paragraph_style(&self, style: Option<StyleKey>) -> Option<StyleKey> {
         style.or(self.default_paragraph)
     }
-    fn add_height(
+    fn add_line_supplier(
         &mut self,
-        height: &mut line_height::Height,
+        line: &mut LogicalLine,
         c: CharResult,
-        east: bool,
         part: &str,
         w: &mut Vec<DocxWarning>,
     ) -> Result<()> {
-        self.add_font_height(height, c.size, c.line_fonts, east, part, w)
+        let measured_empty = !line.has_scalar
+            && !line.uncertain
+            && c.line_fonts[0].is_some_and(|key| {
+                matches!(
+                    self.definitions.fonts.name(key),
+                    "Cambria" | "Calibri" | "맑은 고딕" | "Malgun Gothic"
+                )
+            });
+        if measured_empty {
+            self.add_line_height(line, (c, false, None), part, w)
+        } else {
+            // Unmeasured empty lines and uncertain tails retain source slot/grid policy.
+            let east = line.east || (!line.has_scalar && c.line_fonts[1].is_some());
+            self.add_line_height(line, (c, east, Some(east)), part, w)
+        }
+    }
+    fn add_line_height(
+        &mut self,
+        line: &mut LogicalLine,
+        contribution: (CharResult, bool, Option<bool>),
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<()> {
+        let (c, east, legacy_expansion) = contribution;
+        let metrics = self.font_metrics(c.line_fonts, east, part, w)?;
+        line.height.add_body(c.size, metrics, legacy_expansion);
+        Ok(())
     }
     fn add_font_height(
         &mut self,
@@ -934,6 +991,17 @@ impl Resolver {
         part: &str,
         w: &mut Vec<DocxWarning>,
     ) -> Result<()> {
+        let metrics = self.font_metrics(fonts, east, part, w)?;
+        height.add(size, metrics);
+        Ok(())
+    }
+    fn font_metrics(
+        &mut self,
+        fonts: [Option<FontKey>; 2],
+        east: bool,
+        part: &str,
+        w: &mut Vec<DocxWarning>,
+    ) -> Result<Option<line_height::Metrics>> {
         let key = if east { fonts[1].or(fonts[0]) } else { fonts[0].or(fonts[1]) };
         let metrics = key.and_then(|key| self.definitions.fonts.metrics(key));
         if let Some(key) = key.filter(|_| metrics.is_none()) {
@@ -942,8 +1010,7 @@ impl Resolver {
                     "retain_spacing", format_args!("Unknown natural line metrics for '{}'; line-height measurement uses fallback metrics", self.definitions.fonts.name(key)))?;
             }
         }
-        height.add(size, metrics);
-        Ok(())
+        Ok(metrics)
     }
     pub(crate) fn spacing_before(paragraph: &Delta) -> i32 {
         paragraph.para.before.unwrap_or(0)
