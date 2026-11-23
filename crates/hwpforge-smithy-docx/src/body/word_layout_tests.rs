@@ -44,7 +44,7 @@ fn imported_profile_and_auto_multipliers_agree_with_named_styles() {
     }
     for (rule, line, kind, expected) in [
         ("exact", 400, LineSpacingType::Fixed, 4000.0),
-        ("atLeast", 360, LineSpacingType::AtLeast, 3804.0),
+        ("atLeast", 360, LineSpacingType::AtLeast, 3600.0),
     ] {
         let d = read(
             DEFAULTS,
@@ -196,7 +196,7 @@ fn minimum_spacing_and_cell_height_still_diagnose_metric_approximations() {
             );
         } else {
             let p = &d.document.sections()[0].paragraphs[0];
-            assert_eq!(d.registry.para_shapes[p.para_shape_id.get()].line_spacing_value, 3880.0);
+            assert_eq!(d.registry.para_shapes[p.para_shape_id.get()].line_spacing_value, 0.0);
         }
     }
 }

@@ -334,7 +334,7 @@ fn page_default_warnings() -> [serde_json::Value; 2] {
 // 이것을 실패시키는 것: DOCX 물리 줄 높이를 HwpUnit으로 전달해 HWPX case에서 다시 반감.
 #[test]
 fn physical_line_spacing_survives_hwpx_encoding() {
-    for (rule, line, expected) in [("exact", 400, 4000), ("atLeast", 360, 3804)] {
+    for (rule, line, expected) in [("exact", 400, 4000), ("atLeast", 360, 3600)] {
         let output = convert_docx(&docx::package(&format!("<w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='{rule}'/></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t></w:r></w:p>"))).unwrap();
         let decoded = hwpforge::hwpx::HwpxDecoder::decode(&output.bytes).unwrap();
         let p = &decoded.document.sections()[0].paragraphs[0];

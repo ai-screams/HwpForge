@@ -110,8 +110,6 @@ impl CharDelta {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ParaDelta {
     pub(crate) contextual: Option<bool>,
-    // Projection cache only; raw line stays unchanged for inherited contexts.
-    projected_line: Option<u64>,
     // First-line marker growth survives source spacing collapse and page starts.
     // Counted once per source paragraph in the cell minimum.
     projected_marker_before: i32,

@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Cell content minima and atLeast spacing exclude the paragraph-end mark from a final line containing text. Empty paragraphs and trailing empty lines retain their existing mark-height calculation. Core retains source paragraph-end formatting, including formatting used by list markers. The paragraph-mark diagnostic describes source-format preservation rather than promising unchanged line height.
+- Paragraph atLeast spacing preserves the source minimum. Cell content minima exclude the paragraph-end mark from a final line containing text. Empty paragraphs and trailing empty lines retain their existing mark-height calculation. Core retains source paragraph-end formatting, including formatting used by list markers. The paragraph-mark diagnostic describes source-format preservation rather than promising unchanged line height.
 
 - 미지 폭 종류와 pct의 기존 근사를 유지하고, 완전한 grid를 가진 중첩 dxa·auto·nil 및 폭 미지정 표의 원본 열 너비를 유지한다. 실제 grid를 사용하는 경우 컨테이너 근사 진단을 내지 않는다.
 

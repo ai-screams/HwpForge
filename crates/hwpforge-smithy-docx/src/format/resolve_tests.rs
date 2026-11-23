@@ -320,7 +320,7 @@ fn shared_identifiers_do_not_scale_with_references() {
         assert_eq!(key_bytes(&font_key), 8);
         assert_eq!(key_bytes(&r.default_paragraph.unwrap()), 8);
         // Marker layout and its first-line spacing projection have fixed-size keys.
-        assert_eq!(key_bytes(&delta), 324);
+        assert_eq!(key_bytes(&delta), 316);
         for i in 0..16 {
             let input = r.run_input(delta.clone(), None).unwrap();
             let mut p = Paragraph::new(ParaShapeIndex::new(0));
@@ -840,4 +840,23 @@ fn nominal_compound_counts_share_source_digits_with_measured_ratios() {
     let widths = decimal_template_widths("(^1)", 0, |_| Some(99)).unwrap();
     assert_eq!(widths.count, Some(4));
     assert_eq!(widths.ratio, None);
+}
+
+// 이것을 실패시키는 것: 미등록 글꼴 진단이 출력 최소 간격을 바꿨다고 서술.
+#[test]
+fn unknown_metrics_warning_describes_line_height_measurement() {
+    let mut resolver = Resolver::new(Definitions::default(), false, &mut vec![]).unwrap();
+    let font = resolver.definitions.fonts.intern("Unknown", "body", "font").unwrap();
+    let mut warnings = Vec::new();
+    let mut height = line_height::Height::default();
+    resolver
+        .add_font_height(&mut height, 1100, [Some(font), None], false, "body", &mut warnings)
+        .unwrap();
+    let DocxWarning::ValueApproximated { reason, .. } = &warnings[0] else {
+        panic!("expected font metric approximation");
+    };
+    assert_eq!(
+        reason,
+        "Unknown natural line metrics for 'Unknown'; line-height measurement uses fallback metrics"
+    );
 }

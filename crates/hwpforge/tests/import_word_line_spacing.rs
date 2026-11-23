@@ -123,3 +123,66 @@ fn import_word_line_spacing_keeps_fonts_runs_and_named_styles() {
         }
     }
 }
+
+// 이것을 실패시키는 것: 문단/명명 스타일을 자연 최소값으로 올리거나 물리 간격의 두 분기 단위를 바꿈.
+#[test]
+fn minimum_spacing_preserves_source_in_referenced_xml_shapes() {
+    for (line, case_value, default_value) in
+        [(0, "0", "0"), (160, "800", "1600"), (360, "1800", "3600")]
+    {
+        let body = format!("<w:p><w:pPr><w:pStyle w:val='minimum'/></w:pPr></w:p><w:p><w:pPr><w:pStyle w:val='minimum'/></w:pPr><w:r><w:t>A</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='atLeast'/></w:pPr><w:r><w:t>A</w:t></w:r></w:p>");
+        let source = docx::package_with_defaults(&body, "");
+        let mut source = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..source.len() {
+            let mut f = source.by_index(i).unwrap();
+            let name = f.name().unwrap().to_string();
+            let mut content = String::new();
+            f.read_to_string(&mut content).unwrap();
+            if name == "styles.xml" {
+                content = content.replace("</w:styles>", &format!("<w:style w:type='paragraph' w:styleId='minimum'><w:name w:val='Minimum'/><w:pPr><w:spacing w:line='{line}' w:lineRule='atLeast'/></w:pPr></w:style></w:styles>"));
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            out.write_all(content.as_bytes()).unwrap();
+        }
+        let result = convert_docx(&out.finish().unwrap().into_inner()).unwrap();
+        let header = tree(&result.bytes, "Contents/header.xml");
+        let section = tree(&result.bytes, "Contents/section0.xml");
+        let refs: Vec<_> = section
+            .children
+            .iter()
+            .filter(|p| p.name == "hp:p")
+            .map(|p| p.attr("paraPrIDRef").unwrap())
+            .chain(
+                header
+                    .descendants("hh:style")
+                    .into_iter()
+                    .filter(|s| {
+                        s.attr("id")
+                            == section
+                                .children
+                                .iter()
+                                .find(|p| p.name == "hp:p")
+                                .unwrap()
+                                .attr("styleIDRef")
+                    })
+                    .map(|s| s.attr("paraPrIDRef").unwrap()),
+            )
+            .collect();
+        assert_eq!(refs.len(), 4);
+        for reference in refs {
+            let shape = header
+                .descendants("hh:paraPr")
+                .into_iter()
+                .find(|p| p.attr("id") == Some(reference))
+                .unwrap();
+            let switch = shape.child("hp:switch");
+            assert_eq!(switch.children.len(), 2);
+            for (branch, expected) in [("hp:case", case_value), ("hp:default", default_value)] {
+                let spacing = switch.child(branch).child("hh:lineSpacing");
+                assert_eq!(spacing.attr("type"), Some("AT_LEAST"));
+                assert_eq!(spacing.attr("value"), Some(expected));
+            }
+        }
+    }
+}

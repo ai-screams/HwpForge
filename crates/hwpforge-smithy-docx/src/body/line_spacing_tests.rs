@@ -22,7 +22,7 @@ fn loss(d: &DocxDecoded, name: &str) -> u64 {
     d.warnings.iter().filter(|w| w.loss() == name).map(|w| w.count()).sum()
 }
 
-// 이것을 실패시키는 것: auto 배수에 자연 높이 재적용, 물리 간격의 ×2 누락, 최소 자연 높이 누락.
+// 이것을 실패시키는 것: auto 배수에 자연 높이 재적용, 물리 간격의 ×2 누락, 원본 최소값 대신 자연 높이 투영.
 #[test]
 fn measured_line_height_contracts() {
     for (font, size, rule, line, kind, value) in [
@@ -30,7 +30,7 @@ fn measured_line_height_contracts() {
         ("Malgun Gothic", 20, "auto", 240, LineSpacingType::Percentage, 100.0),
         ("바탕", 22, "auto", 360, LineSpacingType::Percentage, 150.0),
         ("굴림", 24, "exact", 400, LineSpacingType::Fixed, 4000.0),
-        ("맑은 고딕", 22, "atLeast", 360, LineSpacingType::AtLeast, 3804.0),
+        ("맑은 고딕", 22, "atLeast", 360, LineSpacingType::AtLeast, 3600.0),
         ("맑은 고딕", 22, "atLeast", 600, LineSpacingType::AtLeast, 6000.0),
     ] {
         let d = read(&defaults(font, size), &format!("<w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='{rule}'/></w:pPr><w:r><w:t>한글</w:t></w:r></w:p>"));
@@ -266,26 +266,6 @@ fn page_break_before_excludes_contextual_but_natural_implicit_style_still_matche
         "<w:p><w:pPr><w:contextualSpacing/><w:spacing w:before='40' w:after='160'/></w:pPr></w:p>";
     let d = read("", &p.repeat(2));
     assert_eq!(gaps(&d), [(200, 0), (0, 800)]);
-}
-
-// 이것을 실패시키는 것: 글자가 있는 마지막 줄에 끝 표시 높이를 다시 가산.
-#[test]
-fn unresolved_explicit_mark_does_not_poison_text_height() {
-    for (rule, line, expected) in [("auto", 276, 115.0), ("atLeast", 360, 3804.0)] {
-        let d = read("", &format!("<w:p><w:pPr><w:spacing w:line='{line}' w:lineRule='{rule}'/><w:rPr><w:sz w:val='40'/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t></w:r></w:p>"));
-        assert_eq!(shapes(&d)[0].line_spacing_value, expected);
-        assert_eq!(loss(&d, "font_family"), 1);
-        assert_eq!(loss(&d, "unknown_font_line_height"), 0);
-    }
-}
-
-// 이것을 실패시키는 것: 빈 마지막 줄의 미해결 끝 표시를 높이에서 제외하거나 가산을 생략.
-#[test]
-fn unresolved_explicit_mark_on_empty_last_line_keeps_source_spacing() {
-    let d = read("", "<w:p><w:pPr><w:spacing w:line='360' w:lineRule='atLeast'/><w:rPr><w:sz w:val='40'/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii='맑은 고딕' w:eastAsia='맑은 고딕'/><w:sz w:val='22'/></w:rPr><w:t>한글</w:t><w:br/></w:r></w:p>");
-    assert_eq!(shapes(&d)[0].line_spacing_value, 3600.0);
-    assert_eq!(loss(&d, "font_family"), 1);
-    assert_eq!(loss(&d, "unknown_font_line_height"), 0);
 }
 
 // 이것을 실패시키는 것: 한쪽 contextual이면 상대 간격 그대로 유지, 합산 후 차감, 0 아래로 차감.
@@ -581,5 +561,31 @@ fn leading_break_discards_before_on_every_fragment_before_interning() {
     for content in ["<w:t xml:space='preserve'> </w:t>", "<w:br/>"] {
         let d = read("", &format!("<w:p><w:pPr><w:spacing w:before='240'/></w:pPr><w:r>{content}<w:br w:type='page'/><w:t>B</w:t></w:r></w:p>"));
         assert_eq!(gaps(&d), [(1200, 0), (0, 0)]);
+    }
+}
+
+// 이것을 실패시키는 것: 실제 문단 또는 명명 스타일의 자연 높이로 원본 최소값을 올림.
+#[test]
+fn minimum_spacing_preserves_source_values_in_styles_and_paragraphs() {
+    for (line, expected) in [(0, 0.0), (160, 1600.0), (360, 3600.0)] {
+        let styles = format!("{}<w:style w:type='paragraph' w:styleId='minimum'><w:pPr><w:spacing w:line='{line}' w:lineRule='atLeast'/></w:pPr></w:style><w:style w:type='paragraph' w:styleId='inherited'><w:basedOn w:val='minimum'/></w:style>", defaults("맑은 고딕", 40));
+        for contents in ["", "<w:r><w:t>A</w:t></w:r>"] {
+            let d = read(
+                &styles,
+                &format!("<w:p><w:pPr><w:pStyle w:val='inherited'/></w:pPr>{contents}</w:p>"),
+            );
+            let shape = shapes(&d)[0];
+            assert_eq!(
+                (shape.line_spacing_type, shape.line_spacing_value),
+                (LineSpacingType::AtLeast, expected)
+            );
+            for entry in d.registry.style_entries().values() {
+                let shape = &d.registry.para_shapes[entry.para_shape_id.get()];
+                assert_eq!(
+                    (shape.line_spacing_type, shape.line_spacing_value),
+                    (LineSpacingType::AtLeast, expected)
+                );
+            }
+        }
     }
 }

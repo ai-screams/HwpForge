@@ -287,7 +287,7 @@ fn physical_spacing_uses_both_referenced_hwpx_branches() {
         .collect();
     assert_eq!(
         actual,
-        [("FIXED", "2000", "FIXED", "4000"), ("AT_LEAST", "1902", "AT_LEAST", "3804")]
+        [("FIXED", "2000", "FIXED", "4000"), ("AT_LEAST", "1800", "AT_LEAST", "3600")]
     );
 }
 

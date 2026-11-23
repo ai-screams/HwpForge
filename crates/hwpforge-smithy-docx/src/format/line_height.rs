@@ -119,17 +119,4 @@ impl Height {
             .map(|h| h.as_i32())
             .map_err(|e| DocxError::invalid("#format", "spacing", e.to_string()))
     }
-    pub(super) fn project(&self, p: &ParaDelta, east: bool) -> Result<Option<u64>> {
-        if self.unknown || self.size == 0 {
-            return Ok(None);
-        }
-        let spacing = self.word_spacing(p, east);
-        let rule = if p.line.is_none() { 0 } else { p.line_rule.unwrap_or(0) };
-        let value = if rule == 2 {
-            physical_spacing(spacing.round())
-        } else {
-            spacing * 100.0 / f64::from(self.size)
-        };
-        Ok(Some(units::canonical_float(value)?.to_bits()))
-    }
 }

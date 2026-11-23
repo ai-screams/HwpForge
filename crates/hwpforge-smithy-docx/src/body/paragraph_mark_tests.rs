@@ -110,21 +110,6 @@ fn populated_lines_exclude_mark_and_empty_lines_keep_source_height() {
         }
     }
 }
-// 이것을 실패시키는 것: 마지막 논리 줄 추적을 measure_lines 안에서만 실행하거나 끝 표시를 height.project에서 전부 제외.
-#[test]
-fn minimum_spacing_tracks_tail_without_cell_measurement() {
-    for (tail, values) in [("", [2580., 2580.]), ("</w:t><w:br/><w:t>", [2580., 4690.])] {
-        for (size, expected) in [22, 40].into_iter().zip(values) {
-            let p = marked_paragraph(tail, size, "<w:spacing w:line='160' w:lineRule='atLeast'/>");
-            let styles = mark_styles("Cambria");
-            let d = decode_docx(&package(&p, &[("styles", "styles.xml", &styles)])).unwrap();
-            let p = &d.document.sections()[0].paragraphs[0];
-            let shape = &d.registry.para_shapes[p.para_shape_id.get()];
-            assert_eq!(shape.line_spacing_type, hwpforge_foundation::LineSpacingType::AtLeast);
-            assert_eq!(shape.line_spacing_value, expected, "{tail}/{size}");
-        }
-    }
-}
 // 이것을 실패시키는 것: 조각 끝 조건 제거로 뒤 조각 끝20이 첫 빈 줄의 본문11 fallback을 대체.
 #[test]
 fn fragment_minimum_does_not_borrow_later_mark() {

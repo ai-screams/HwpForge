@@ -179,17 +179,9 @@ impl Resolver {
                 r.default_paragraph = Some(id);
             }
             let (part, at, name) = (s.part.clone(), s.at.clone(), s.name.clone());
-            let mut effective = r.context(None, Some(id), &Delta::default(), &part, warnings)?;
+            let effective = r.context(None, Some(id), &Delta::default(), &part, warnings)?;
             let c =
                 r.character(&effective, &Delta::default(), &RunInput::default(), &part, warnings)?;
-            if effective.para.line.is_some() && effective.para.line_rule == Some(2) {
-                // Definitions have no text: use the empty paragraph mark policy.
-                // Body paragraphs instead select script slots from actual characters.
-                let east = c.line_fonts[1].is_some();
-                let mut height = line_height::Height::default();
-                r.add_height(&mut height, c, east, &part, warnings)?;
-                effective.para.projected_line = height.project(&effective.para, east)?;
-            }
             let p = r.para_shape(&effective)?;
             format_warnings(
                 c.missing | para_missing(&effective.para),
@@ -602,9 +594,6 @@ impl Resolver {
                 }
             }
         }
-        if project_minimum {
-            base.para.projected_line = height.project(&base.para, east)?;
-        }
         if !exact && measure_height && height.mixed() {
             warn(w, part, "pPr", Kind::ValueApproximated, "mixed_font_line_height",
                 "approximate", "Paragraph-wide ascent/descent maxima approximate mixed fonts or sizes without line breaking")?;
@@ -950,7 +939,7 @@ impl Resolver {
         if let Some(key) = key.filter(|_| metrics.is_none()) {
             if self.unknown_metrics.insert(key) {
                 warn(w, part, "rFonts", Kind::ValueApproximated, "unknown_font_line_height",
-                    "retain_spacing", format_args!("Unknown natural line metrics for '{}'; cell minimum or specified minimum uses fallback metrics", self.definitions.fonts.name(key)))?;
+                    "retain_spacing", format_args!("Unknown natural line metrics for '{}'; line-height measurement uses fallback metrics", self.definitions.fonts.name(key)))?;
             }
         }
         height.add(size, metrics);
@@ -1163,9 +1152,7 @@ impl Resolver {
             _ => LineSpacingType::Percentage,
         };
         shape.line_spacing_value =
-            units::canonical_float(if let Some(value) = p.projected_line {
-                f64::from_bits(value)
-            } else if rule == 0 {
+            units::canonical_float(if rule == 0 {
                 f64::from(p.line.unwrap_or(240)) * 100.0 / 240.0
             } else {
                 line_height::physical_spacing(f64::from(
