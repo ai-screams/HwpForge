@@ -191,7 +191,7 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
       - name: Install nextest
-        uses: taiki-e/install-action@v2.90.4
+        uses: taiki-e/install-action@v2.90.7
         with:
           tool: cargo-nextest
       - name: cargo nextest run (all features, ci profile)
@@ -232,7 +232,7 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
       - name: Install coverage tools
-        uses: taiki-e/install-action@v2.90.4
+        uses: taiki-e/install-action@v2.90.7
         with:
           tool: cargo-nextest,cargo-llvm-cov
       - name: cargo llvm-cov (fail-under-lines ${{ env.COVERAGE_THRESHOLD }}%)
@@ -271,7 +271,7 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.90.4
+        uses: taiki-e/install-action@v2.90.7
         with:
           tool: cargo-deny
       - name: cargo deny check
@@ -456,7 +456,7 @@ jobs:
             echo "::endgroup::"
           done
       - name: Install nextest
-        uses: taiki-e/install-action@v2.90.4
+        uses: taiki-e/install-action@v2.90.7
         with:
           tool: cargo-nextest
       - name: cargo nextest (bindings-py Rust unit tests)
