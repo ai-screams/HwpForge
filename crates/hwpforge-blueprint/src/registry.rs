@@ -49,9 +49,17 @@ pub struct StyleEntry {
     pub para_shape_id: ParaShapeIndex,
     /// Index into the font collection (deduplicated).
     pub font_id: FontIndex,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) next_style: Option<StyleRef>,
 }
 
 impl StyleEntry {
+    /// Returns the style a new paragraph receives at the end of this one.
+    /// `None` means this style itself.
+    pub fn next_style(&self) -> Option<StyleRef> {
+        self.next_style
+    }
+
     /// Returns the document-scoped identity of this entry.
     pub fn style_ref(&self) -> StyleRef {
         self.style_ref
@@ -106,10 +114,18 @@ pub struct StyleRegistry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bullets: Vec<BulletDef>,
     /// Mapping from style name to its indices (insertion-order preserved).
-    style_entries: IndexMap<String, StyleEntry>,
+    pub(crate) style_entries: IndexMap<String, StyleEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) body_style: Option<StyleRef>,
 }
 
 impl StyleRegistry {
+    /// Returns the style for continuing body text.
+    /// Present in registries built from templates or assigned Markdown roles.
+    pub fn body_style(&self) -> Option<StyleRef> {
+        self.body_style
+    }
+
     /// Returns registered entries in insertion order.
     pub fn style_entries(&self) -> &IndexMap<String, StyleEntry> {
         &self.style_entries
@@ -128,8 +144,11 @@ impl StyleRegistry {
             .style_entries
             .get(&name)
             .map_or(StyleRef::new(self.style_entries.len()), |entry| entry.style_ref);
-        self.style_entries
-            .insert(name, StyleEntry { style_ref, char_shape_id, para_shape_id, font_id });
+        let next_style = self.style_entries.get(&name).and_then(|entry| entry.next_style);
+        self.style_entries.insert(
+            name,
+            StyleEntry { style_ref, char_shape_id, para_shape_id, font_id, next_style },
+        );
         Ok(style_ref)
     }
 
@@ -147,6 +166,7 @@ impl StyleRegistry {
             numberings: vec![],
             bullets: vec![],
             style_entries: IndexMap::new(),
+            body_style: None,
         }
     }
 
@@ -157,6 +177,9 @@ impl StyleRegistry {
     /// 2. Resolve each PartialStyle → CharShape + ParaShape
     /// 3. Deduplicate fonts
     /// 4. Allocate sequential indices
+    /// 5. Record body and heading next styles using Markdown role selection
+    ///
+    /// Resolve inheritance before calling this method for an extending template.
     ///
     /// # Errors
     ///
@@ -214,7 +237,8 @@ impl StyleRegistry {
             validate_mapping_references(md, &style_entries)?;
         }
 
-        Ok(StyleRegistry {
+        let names = crate::markdown::select_names(template, &std::collections::HashSet::new())?;
+        let mut registry = StyleRegistry {
             fonts,
             char_shapes,
             para_shapes,
@@ -222,7 +246,10 @@ impl StyleRegistry {
             numberings,
             bullets,
             style_entries,
-        })
+            body_style: None,
+        };
+        crate::markdown::mark_text_roles(&mut registry, &names);
+        Ok(registry)
     }
 
     /// Looks up a style by name.
@@ -332,7 +359,13 @@ fn build_style_entry(
     let para_shape_id = ParaShapeIndex::new(ctx.para_shapes.len());
     ctx.para_shapes.push(para_shape);
 
-    Ok(StyleEntry { style_ref: StyleRef::new(0), char_shape_id, para_shape_id, font_id })
+    Ok(StyleEntry {
+        style_ref: StyleRef::new(0),
+        char_shape_id,
+        para_shape_id,
+        font_id,
+        next_style: None,
+    })
 }
 
 fn resolve_char_shape(
@@ -837,6 +870,7 @@ mod tests {
             char_shape_id: CharShapeIndex::new(3),
             para_shape_id: ParaShapeIndex::new(7),
             font_id: FontIndex::new(1),
+            next_style: None,
         };
 
         let json = serde_json::to_string(&entry).unwrap();
