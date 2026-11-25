@@ -889,7 +889,8 @@ impl HwpxBorderFill {
 /// ```
 ///
 /// The caller resolves the Batang slot against the registered fonts. Dotum
-/// uses slot 0; the fixture's Batang slot is 1 when a second font exists.
+/// uses slot 0; Batang follows the body character shape when a body is known.
+/// Without a body, Batang uses slot 1 when a second font exists, otherwise 0.
 pub(crate) fn default_char_shapes_modern(batang: FontIndex) -> [HwpxCharShape; 7] {
     let dotum = FontIndex::new(0); // 함초롬돋움
 
@@ -1382,9 +1383,10 @@ impl HwpxStyleStore {
     /// - [`Modern`][HancomStyleSet::Modern] — 22 styles (한글 2022+)
     /// - [`Latest`][HancomStyleSet::Latest] — 23 styles (한글 2025+)
     ///
-    /// Default character shapes use the template's sole font when only one is
-    /// registered, or 함초롬바탕 when no fonts are registered. With two or more
-    /// fonts, the existing default font slots (0 and 1) are preserved.
+    /// Built-in text character shapes use the body style's font slot when the
+    /// registry identifies a body style. Otherwise the existing default slots
+    /// (0 and, when available, 1) are preserved. An empty registry uses 함초롬바탕.
+    /// Template styles continue with their recorded next style, or themselves.
     ///
     /// Mapping:
     /// - `registry.fonts` → [`HwpxFont`] (copied to all 7 language groups)
@@ -1851,11 +1853,35 @@ fn apply_list_marker_widths(
     Ok(())
 }
 
+fn registry_font_index(registry: &StyleRegistry, font: &str) -> FontIndex {
+    registry
+        .fonts
+        .iter()
+        .position(|f| f.as_str() == font)
+        .map(FontIndex::new)
+        .unwrap_or(FontIndex::new(0))
+}
+
 fn build_store_from_registry_with(
     registry: &StyleRegistry,
     style_set: HancomStyleSet,
 ) -> HwpxResult<RegistryStoreBuild> {
     let mut store = HwpxStyleStore { style_set, ..HwpxStyleStore::default() };
+    let registry_count = registry.style_count();
+    let mut registry_positions = vec![usize::MAX; registry_count];
+    for (position, entry) in registry.style_entries().values().enumerate() {
+        let reference = entry.style_ref().get();
+        if reference >= registry_count || registry_positions[reference] != usize::MAX {
+            return Err(crate::paragraph_measure::invalid("invalid registry style identity"));
+        }
+        registry_positions[reference] = position;
+    }
+    let style_position = |reference: StyleRef| {
+        registry_positions
+            .get(reference.get())
+            .copied()
+            .ok_or_else(|| crate::paragraph_measure::invalid("invalid registry style identity"))
+    };
 
     let has_fonts = !registry.fonts.is_empty();
     let default_font = if has_fonts { registry.fonts[0].as_str() } else { "함초롬바탕" };
@@ -1889,10 +1915,22 @@ fn build_store_from_registry_with(
         }
     }
 
-    // Preserve the existing 0/1 slots for multi-font templates and presets.
-    // A single-font template (or the empty registry's 함초롬바탕 fallback)
-    // uses its only registered font for both default families, in every language.
-    let batang = FontIndex::new(usize::from(registry.fonts.len() > 1));
+    // Built-in text uses the same font lookup as the body character shape.
+    // Registries without a body retain their existing default family slots.
+    let batang = if let Some(reference) = registry.body_style() {
+        let position = style_position(reference)?;
+        let entry = registry.style_entries().get_index(position).unwrap().1;
+        let shape = registry.char_shapes.get(entry.char_shape_id.get()).ok_or(
+            HwpxError::IndexOutOfBounds {
+                kind: "registry char_shape",
+                index: entry.char_shape_id.get() as u32,
+                max: registry.char_shapes.len() as u32,
+            },
+        )?;
+        registry_font_index(registry, &shape.font)
+    } else {
+        FontIndex::new(usize::from(registry.fonts.len() > 1))
+    };
     for cs in default_char_shapes_modern(batang) {
         store.push_char_shape(cs);
     }
@@ -1902,12 +1940,7 @@ fn build_store_from_registry_with(
 
     let mut char_shape_map = Vec::with_capacity(registry.char_shapes.len());
     for cs in &registry.char_shapes {
-        let font_idx = registry
-            .fonts
-            .iter()
-            .position(|f| f.as_str() == cs.font)
-            .map(FontIndex::new)
-            .unwrap_or(FontIndex::new(0));
+        let font_idx = registry_font_index(registry, &cs.font);
         let font_ref = HwpxFontRef {
             hangul: font_idx,
             latin: font_idx,
@@ -2036,24 +2069,17 @@ fn build_store_from_registry_with(
             eng_name: name.clone(),
             para_pr_id_ref: para_shape_id.get() as u32,
             char_pr_id_ref: char_shape_id.get() as u32,
-            next_style_id_ref: 0,
+            next_style_id_ref: match entry.next_style() {
+                Some(reference) => (style_offset + style_position(reference)?) as u32,
+                None => (style_offset + i) as u32,
+            },
             lang_id: 1042,
             lock_form: 0,
         });
     }
 
-    let registry_count = registry.style_count();
-    let mut positions = vec![usize::MAX; store.styles.len()];
-    for (position, entry) in registry.style_entries().values().enumerate() {
-        let reference = entry.style_ref().get();
-        if reference >= registry_count || positions[reference] != usize::MAX {
-            return Err(crate::paragraph_measure::invalid("invalid registry style identity"));
-        }
-        positions[reference] = style_offset + position;
-    }
-    for position in 0..style_offset {
-        positions[registry_count + position] = position;
-    }
+    let mut positions: Vec<_> = registry_positions.iter().map(|p| style_offset + p).collect();
+    positions.extend(0..style_offset);
     store.style_positions = std::sync::Arc::new(positions);
     store.rebuild_style_references()?;
     Ok(RegistryStoreBuild { store, char_shape_map, para_shape_map })
