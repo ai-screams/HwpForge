@@ -1154,3 +1154,148 @@ fn an_item_and_its_continuation_start_at_the_same_place() {
     };
     assert_eq!(left("이어짐") - left("하나"), 2 * char_height);
 }
+
+// 이것을 실패시키는 것: 미지정 다음 스타일을 0으로 출력.
+#[test]
+fn markdown_output_styles_name_their_next_style() {
+    let md = "# 제목\n\n본문[^1]\n\n- 항목\n\n1. 번호\n\n> 인용\n\n[^1]: 각주\n";
+    for (set, count, body, next) in [
+        (
+            HancomStyleSet::Classic,
+            53,
+            "18",
+            ["22", "23", "24", "28", "29", "30", "49", "50", "51", "52"],
+        ),
+        (
+            HancomStyleSet::Modern,
+            57,
+            "22",
+            ["26", "27", "28", "32", "33", "34", "53", "54", "55", "56"],
+        ),
+        (
+            HancomStyleSet::Latest,
+            58,
+            "23",
+            ["27", "28", "29", "33", "34", "35", "54", "55", "56", "57"],
+        ),
+    ] {
+        let bytes = wire(md, &builtin_default().unwrap(), set);
+        let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+        let styles = nodes(&header, "hh:style");
+        assert_eq!(styles.len(), count);
+        let find = |name: &str| *styles.iter().find(|s| s.attr("name") == Some(name)).unwrap();
+        assert_eq!(find("body").attr("nextStyleIDRef"), Some(body));
+        for name in ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"] {
+            assert_eq!(find(name).attr("nextStyleIDRef"), Some(body), "{name}");
+        }
+        for (name, next) in [
+            "code",
+            "blockquote",
+            "list_item",
+            "numbered_item",
+            "check_item",
+            "__hwpforge_md_list_continuation_level_0",
+            "__hwpforge_md_code_continuation_level_9",
+            "__hwpforge_md_list_plain",
+            "__hwpforge_md_footnote",
+            "__hwpforge_md_endnote",
+        ]
+        .into_iter()
+        .zip(next)
+        {
+            assert_eq!(find(name).attr("nextStyleIDRef"), Some(next), "{name}");
+        }
+    }
+    let bytes = wire("본문\n", &builtin_default().unwrap(), HancomStyleSet::Modern);
+    let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+    let styles = nodes(&header, "hh:style");
+    assert_eq!(styles.len(), 57);
+    for (name, next) in [("__hwpforge_md_footnote", "55"), ("__hwpforge_md_endnote", "56")] {
+        assert_eq!(
+            styles.iter().find(|s| s.attr("name") == Some(name)).unwrap().attr("nextStyleIDRef"),
+            Some(next)
+        );
+    }
+}
+
+// 이것을 실패시키는 것: 바탕 칸을 글꼴 수로 결정해 코드 글꼴로 되돌리기.
+#[test]
+fn builtin_text_styles_follow_the_template_body_font() {
+    for template in [builtin_default().unwrap(), builtin_gov_proposal().unwrap()] {
+        for set in [HancomStyleSet::Classic, HancomStyleSet::Modern, HancomStyleSet::Latest] {
+            let bytes = wire("본문\n\n```\ncode\n```\n", &template, set);
+            let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+            let shapes = nodes(&header, "hh:charPr");
+            for index in [0, 3] {
+                assert_eq!(shapes[index].child("hh:fontRef").attr("hangul"), Some("0"));
+            }
+            let groups = nodes(&header, "hh:fontface");
+            let group = groups.iter().find(|g| g.attr("lang") == Some("HANGUL")).unwrap();
+            for (id, face) in [("0", "한컴바탕"), ("1", "D2Coding")] {
+                assert_eq!(
+                    group.children.iter().find(|f| f.attr("id") == Some(id)).unwrap().attr("face"),
+                    Some(face)
+                );
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 바탕 칸을 글꼴 수로 결정해 추가 문단을 코드 울타리에 합치기.
+#[test]
+fn a_paragraph_added_in_the_builtin_normal_style_reads_back_as_text() {
+    use hwpforge_core::{Paragraph, Run};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    let bytes =
+        wire("본문\n\n```\ncode\n```\n", &builtin_default().unwrap(), HancomStyleSet::Modern);
+    let mut decoded = HwpxDecoder::decode(&bytes).unwrap();
+    for (text, shape) in [("새 문단", 0), ("작은 글 문단", 3)] {
+        decoded.document.sections_mut()[0].paragraphs.push(Paragraph::with_runs(
+            vec![Run::text(text, CharShapeIndex::new(shape))],
+            ParaShapeIndex::new(0),
+        ));
+    }
+    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let styled = MdEncoder::encode_styled(&decoded.document.validate().unwrap(), &lookup);
+    let mut inside = false;
+    let mut fences = 0;
+    let mut found = [false; 3];
+    for line in styled.markdown.lines() {
+        if line.starts_with("```") {
+            inside = !inside;
+            fences += 1;
+        }
+        for (index, text) in ["새 문단", "작은 글 문단", "code"].into_iter().enumerate() {
+            if line.contains(text) {
+                found[index] = true;
+                assert_eq!(inside, index == 2, "{text}: {line}");
+            }
+        }
+    }
+    assert_eq!(found, [true; 3]);
+    assert_eq!(fences, 2);
+}
+
+// 이것을 실패시키는 것: 각주·미주 예약 이름의 Blueprint 사본 또는 Markdown 생산자 이름 변경.
+#[test]
+fn template_note_styles_shared_with_headings_name_themselves_as_next() {
+    let template = Template::from_yaml("meta:\n  name: shared_notes\nstyles:\n  body:\n    char_shape: { font: 한컴바탕, size: 10pt }\n  __hwpforge_md_footnote:\n    char_shape: { font: 한컴바탕, size: 9pt }\n  __hwpforge_md_endnote:\n    char_shape: { font: 한컴바탕, size: 9pt }\nmarkdown_mapping:\n  heading1: __hwpforge_md_footnote\n  heading2: __hwpforge_md_endnote\n").unwrap();
+    let bytes = wire(
+        "# 제목\n\n본문[^1][^e1]\n\n[^1]: 각주\n\n[^e1]: 미주\n",
+        &template,
+        HancomStyleSet::Modern,
+    );
+    let header = Element::parse(&part(&bytes, "Contents/header.xml"));
+    let styles = nodes(&header, "hh:style");
+    assert_eq!(styles.len(), 46);
+    assert_eq!(styles[22].attr("name"), Some("body"));
+    for (position, name, next) in
+        [(23, "__hwpforge_md_footnote", "23"), (24, "__hwpforge_md_endnote", "24")]
+    {
+        assert_eq!(styles[position].attr("name"), Some(name));
+        assert_eq!(styles[position].attr("nextStyleIDRef"), Some(next));
+    }
+    let section = Element::parse(&part(&bytes, "Contents/section0.xml"));
+    assert_eq!(section.find("hp:footNote").find("hp:p").attr("styleIDRef"), Some("23"));
+    assert_eq!(section.find("hp:endNote").find("hp:p").attr("styleIDRef"), Some("24"));
+}

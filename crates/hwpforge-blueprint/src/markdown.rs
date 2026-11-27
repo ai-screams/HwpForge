@@ -16,6 +16,9 @@ const LIST_CONTINUATION_STYLE_PREFIX: &str = "__hwpforge_md_list_continuation_le
 const CODE_CONTINUATION_STYLE_PREFIX: &str = "__hwpforge_md_code_continuation_level_";
 /// The list item paragraph of a kind the template defines no list for.
 const LIST_PLAIN_STYLE_NAME: &str = "__hwpforge_md_list_plain";
+// Must match the names the Markdown converter uses for note paragraphs.
+const FOOTNOTE_STYLE_NAME: &str = "__hwpforge_md_footnote";
+const ENDNOTE_STYLE_NAME: &str = "__hwpforge_md_endnote";
 
 /// The width of a list marker and the gap after it, in points, added to the
 /// left margin of an item's continuation paragraphs. Hancom starts an item's
@@ -111,6 +114,10 @@ pub(crate) fn select_names(
 /// Returns paragraph shapes for H1–H6 and conflicting (level, style name) pairs. Shared roles and explicit list
 /// definitions retain their entry shapes; exclusive unlisted headings receive
 /// a fresh shape. The original paragraph shapes are never modified.
+/// On success, records the body style and the next style of headings. Reapplying
+/// roles replaces these values, including values read from JSON; identical roles
+/// keep these values identical. Shared heading shapes can still be added again.
+/// On error, body and next styles remain unchanged.
 /// Returns an error for missing roles, unknown names, or missing paragraph shapes.
 pub fn apply_markdown_heading_levels(
     registry: &mut StyleRegistry,
@@ -187,6 +194,7 @@ pub fn apply_markdown_heading_levels(
         }
         shapes[index] = id;
     }
+    mark_text_roles(registry, names);
     Ok((shapes, conflicts))
 }
 
@@ -214,6 +222,47 @@ pub fn parse_code_continuation_style_name(name: &str) -> Option<u8> {
 fn parse_level(name: &str, prefix: &str) -> Option<u8> {
     let level = name.strip_prefix(prefix)?.parse::<u8>().ok()?;
     (level <= ParagraphListRef::MAX_LEVEL).then_some(level)
+}
+
+pub(crate) fn mark_text_roles(registry: &mut StyleRegistry, names: &MarkdownMapping) {
+    for entry in registry.style_entries.values_mut() {
+        entry.next_style = None;
+    }
+    let body = registry.get_style(names.body.as_deref().unwrap()).unwrap().style_ref();
+    registry.body_style = Some(body);
+    for name in [
+        &names.heading1,
+        &names.heading2,
+        &names.heading3,
+        &names.heading4,
+        &names.heading5,
+        &names.heading6,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !continues_with_itself(name, names) {
+            registry.style_entries.get_mut(name).unwrap().next_style = Some(body);
+        }
+    }
+}
+
+fn continues_with_itself(name: &str, names: &MarkdownMapping) -> bool {
+    [
+        &names.body,
+        &names.code,
+        &names.blockquote,
+        &names.list_item,
+        &names.numbered_item,
+        &names.check_item,
+    ]
+    .iter()
+    .any(|role| role.as_deref() == Some(name))
+        || parse_list_continuation_style_name(name)
+            .is_some_and(|level| list_continuation_style_name(level) == name)
+        || parse_code_continuation_style_name(name)
+            .is_some_and(|level| code_continuation_style_name(level) == name)
+        || [LIST_PLAIN_STYLE_NAME, FOOTNOTE_STYLE_NAME, ENDNOTE_STYLE_NAME].contains(&name)
 }
 
 /// The paragraph styles of Markdown list items, one per level (0 to 9),
@@ -1017,6 +1066,351 @@ mod tests {
                 matches!(error, BlueprintError::InvalidMappingReference { mapping_field, style_name }
                 if mapping_field == "heading1" && style_name == name.unwrap_or_default())
             );
+        }
+    }
+
+    fn text_template(names: &[&str]) -> Template {
+        let mut yaml = "meta:\n  name: text_roles\nstyles:\n".to_string();
+        for name in names {
+            yaml.push_str(&format!(
+                "  {name}:\n    char_shape: {{ font: 한컴바탕, size: 10pt }}\n"
+            ));
+        }
+        Template::from_yaml(&yaml).unwrap()
+    }
+
+    // 이것을 실패시키는 것: 예약 이름 검사 삭제, 모든 이름을 이어지는 글로 판정,
+    // 예약 접두사 전체 허용, 수준 상한 없이 숫자 허용, 생성 이름 왕복 비교 생략.
+    #[test]
+    fn a_reserved_style_shared_with_a_heading_continues_with_itself() {
+        let reserved = [
+            "__hwpforge_md_footnote",
+            "__hwpforge_md_endnote",
+            "__hwpforge_md_list_continuation_level_0",
+            "__hwpforge_md_code_continuation_level_0",
+            "__hwpforge_md_list_plain",
+        ];
+        let mut template = text_template(&[
+            "body",
+            reserved[0],
+            reserved[1],
+            reserved[2],
+            reserved[3],
+            reserved[4],
+            "heading6",
+        ]);
+        template.markdown_mapping = Some(MarkdownMapping {
+            heading1: Some(reserved[0].into()),
+            heading2: Some(reserved[1].into()),
+            heading3: Some(reserved[2].into()),
+            heading4: Some(reserved[3].into()),
+            heading5: Some(reserved[4].into()),
+            ..Default::default()
+        });
+        for registry in
+            [StyleRegistry::from_template(&template).unwrap(), derived(&template, &[]).unwrap().0]
+        {
+            let body = registry.get_style("body").unwrap().style_ref();
+            assert_eq!(registry.body_style(), Some(body));
+            for name in reserved {
+                assert_eq!(registry.get_style(name).unwrap().next_style(), None, "{name}");
+            }
+            assert_eq!(registry.get_style("heading6").unwrap().next_style(), Some(body));
+            assert_eq!(registry.get_style("body").unwrap().next_style(), None);
+        }
+        let mut template =
+            text_template(&["body", "__hwpforge_md_x", "__hwpforge_md_list_continuation_level_10"]);
+        template.markdown_mapping = Some(MarkdownMapping {
+            heading1: Some("__hwpforge_md_x".into()),
+            heading2: Some("__hwpforge_md_list_continuation_level_10".into()),
+            ..Default::default()
+        });
+        for registry in
+            [StyleRegistry::from_template(&template).unwrap(), derived(&template, &[]).unwrap().0]
+        {
+            let body = registry.get_style("body").unwrap().style_ref();
+            for name in ["__hwpforge_md_x", "__hwpforge_md_list_continuation_level_10"] {
+                assert_eq!(registry.get_style(name).unwrap().next_style(), Some(body), "{name}");
+            }
+        }
+        let names = resolve_markdown_style_names(&template).unwrap();
+        for name in
+            ["__hwpforge_md_list_continuation_level_9", "__hwpforge_md_code_continuation_level_9"]
+        {
+            assert!(continues_with_itself(name, &names), "{name}");
+        }
+        for name in [
+            "__hwpforge_md_list_continuation_level_07",
+            "__hwpforge_md_code_continuation_level_10",
+            "__hwpforge_md_list_plain_2",
+            "__hwpforge_md_footnote_x",
+            "__hwpforge_md_",
+        ] {
+            assert!(!continues_with_itself(name, &names), "{name}");
+        }
+    }
+
+    // 이것을 실패시키는 것: 제목을 셋으로 줄이기, 이어지는 역할에도 다음 본문을 지정하기.
+    #[test]
+    fn heading_roles_continue_with_the_body_style() {
+        for (template, others) in [
+            (builtin_default().unwrap(), vec![]),
+            (builtin_gov_proposal().unwrap(), vec![builtin_default().unwrap()]),
+        ] {
+            let (registry, _) = derived(&template, &others).unwrap();
+            let body = registry.get_style("body").unwrap().style_ref();
+            assert_eq!(registry.body_style(), Some(body));
+            for level in 1..=6 {
+                assert_eq!(
+                    registry.get_style(&format!("heading{level}")).unwrap().next_style(),
+                    Some(body),
+                    "heading{level}"
+                );
+            }
+            for name in [
+                "body",
+                "code",
+                "blockquote",
+                "list_item",
+                "numbered_item",
+                "check_item",
+                "__hwpforge_md_list_plain",
+            ] {
+                assert_eq!(registry.get_style(name).unwrap().next_style(), None, "{name}");
+            }
+            for level in 0..10 {
+                for name in
+                    [list_continuation_style_name(level), code_continuation_style_name(level)]
+                {
+                    assert_eq!(registry.get_style(&name).unwrap().next_style(), None, "{name}");
+                }
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: 이어지는 역할 여섯의 공유 검사 삭제.
+    #[test]
+    fn a_heading_role_sharing_a_text_style_continues_with_itself() {
+        let single = text_template(&["body"]);
+        let mut shared = text_template(&["body", "list_item"]);
+        shared.markdown_mapping =
+            Some(MarkdownMapping { heading1: Some("list_item".into()), ..Default::default() });
+        for (template, name) in [(single, "body"), (shared, "list_item")] {
+            let (registry, _) = derived(&template, &[]).unwrap();
+            assert_eq!(registry.get_style(name).unwrap().next_style(), None);
+            assert_eq!(
+                registry.body_style(),
+                Some(registry.get_style("body").unwrap().style_ref())
+            );
+        }
+    }
+
+    // 이것을 실패시키는 것: 같은 이름 재등록에서 다음 스타일을 None으로 초기화.
+    #[test]
+    fn registering_a_name_again_keeps_its_next_style() {
+        let (mut registry, _) = derived(&builtin_default().unwrap(), &[]).unwrap();
+        let entry = *registry.get_style("heading1").unwrap();
+        registry
+            .register_style(
+                "heading1".into(),
+                entry.char_shape_id,
+                entry.para_shape_id,
+                entry.font_id,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.get_style("heading1").unwrap().next_style(),
+            Some(registry.get_style("body").unwrap().style_ref())
+        );
+        assert_eq!(registry.get_style("heading1").unwrap().style_ref(), entry.style_ref());
+    }
+
+    // 이것을 실패시키는 것: None 필드 직렬화 생략 삭제, 역할 필드에 serde(skip) 적용.
+    #[test]
+    fn the_registry_serializes_text_roles_only_when_set() {
+        let template = text_template(&["text"]);
+        let mut registry = StyleRegistry::with_fonts(vec![hwpforge_foundation::FontId::new(
+            "한컴바탕".to_string(),
+        )
+        .unwrap()]);
+        registry
+            .char_shapes
+            .push(template.styles["text"].char_shape.as_ref().unwrap().resolve("text").unwrap());
+        registry.para_shapes.push(ParaShape::default());
+        registry
+            .register_style(
+                "text".into(),
+                hwpforge_foundation::CharShapeIndex::new(0),
+                ParaShapeIndex::new(0),
+                hwpforge_foundation::FontIndex::new(0),
+            )
+            .unwrap();
+        let old_json = r##"{"fonts":["한컴바탕"],"char_shapes":[{"font":"한컴바탕","size":"10pt","bold":false,"italic":false,"color":"#000000","underline_type":"None","underline_shape":"Solid","strikeout_shape":"None","outline":"None","shadow":{"kind":"None","color":"#C0C0C0","offset_x":10,"offset_y":10},"emboss":"None","engrave":"None","vertical_position":"Normal","emphasis":"None","ratio":100,"spacing":0,"rel_sz":100,"offset":0,"use_kerning":false,"use_font_space":false}],"para_shapes":[{"alignment":"Left","line_spacing_type":"Percentage","line_spacing_value":0.0,"space_before":"0pt","space_after":"0pt","indent_left":"0pt","indent_right":"0pt","indent_first_line":"0pt","break_type":"None","keep_with_next":false,"keep_lines_together":false,"widow_orphan":false,"tab_def_id":0}],"style_entries":{"text":{"style_ref":0,"char_shape_id":0,"para_shape_id":0,"font_id":0}}}"##;
+        assert_eq!(serde_json::to_string(&registry).unwrap(), old_json);
+        let old: StyleRegistry = serde_json::from_str(old_json).unwrap();
+        assert_eq!(old.body_style(), None);
+        assert_eq!(old.get_style("text").unwrap().next_style(), None);
+        let (registry, _) = derived(&builtin_default().unwrap(), &[]).unwrap();
+        let json = serde_json::to_string(&registry).unwrap();
+        assert_eq!(serde_json::from_str::<StyleRegistry>(&json).unwrap(), registry);
+        let value = serde_json::to_value(&registry).unwrap();
+        assert!(value.get("body_style").is_some());
+        assert!(value["style_entries"]["heading1"].get("next_style").is_some());
+    }
+
+    // 이것을 실패시키는 것: 템플릿 역할 표시 생략, 본문 이름 대신 첫 스타일 사용,
+    // body 이름을 명시 매핑보다 우선하기, 템플릿 호출에서 제목 역할 생략.
+    #[test]
+    fn a_template_registry_reads_roles_as_markdown_does() {
+        let default = builtin_default().unwrap();
+        let fallback = text_template(&["title", "mono", "text"]);
+        let mut mapped = text_template(&["body", "alt", "heading1"]);
+        mapped.markdown_mapping =
+            Some(MarkdownMapping { body: Some("alt".into()), ..Default::default() });
+        let conventional = text_template(&["title", "body", "heading1"]);
+        for (template, expected, next_styles) in [
+            (
+                default,
+                "body",
+                &[
+                    ("body", None),
+                    ("heading1", Some("body")),
+                    ("heading2", Some("body")),
+                    ("heading3", Some("body")),
+                    ("code", None),
+                    ("blockquote", None),
+                    ("list_item", None),
+                    ("heading4", Some("body")),
+                    ("heading5", Some("body")),
+                    ("heading6", Some("body")),
+                    ("numbered_item", None),
+                    ("check_item", None),
+                ][..],
+            ),
+            (fallback, "title", &[("title", None), ("mono", None), ("text", None)][..]),
+            (mapped, "alt", &[("body", None), ("alt", None), ("heading1", Some("alt"))][..]),
+            (
+                conventional,
+                "body",
+                &[("title", None), ("body", None), ("heading1", Some("body"))][..],
+            ),
+        ] {
+            let registry = StyleRegistry::from_template(&template).unwrap();
+            let body = registry.get_style(expected).unwrap().style_ref();
+            assert_eq!(registry.body_style(), Some(body), "{expected}");
+            let names = resolve_markdown_style_names(&template).unwrap();
+            assert_eq!(
+                registry.body_style(),
+                Some(registry.get_style(names.body.as_deref().unwrap()).unwrap().style_ref())
+            );
+            assert_eq!(registry.style_entries().len(), next_styles.len());
+            for (name, next) in next_styles {
+                assert_eq!(
+                    registry.get_style(name).unwrap().next_style(),
+                    next.map(|next| registry.get_style(next).unwrap().style_ref()),
+                    "{name}"
+                );
+            }
+        }
+        assert_eq!(StyleRegistry::with_fonts(vec![]).body_style(), None);
+    }
+
+    // 이것을 실패시키는 것: 전용 제목만 또는 개요 문단 모양인 제목만 다음 본문 지정.
+    #[test]
+    fn a_heading_style_shared_by_several_levels_continues_with_body() {
+        let mut template = builtin_default().unwrap();
+        for name in ["heading4", "heading5", "heading6"] {
+            template.styles.shift_remove(name);
+        }
+        let mapping = template.markdown_mapping.as_mut().unwrap();
+        mapping.heading4 = None;
+        mapping.heading5 = None;
+        mapping.heading6 = None;
+        let (registry, _) = derived(&template, &[]).unwrap();
+        let entry = registry.get_style("heading3").unwrap();
+        assert_eq!(registry.para_shape(entry.para_shape_id).unwrap().list, None);
+        assert_eq!(entry.next_style(), Some(registry.get_style("body").unwrap().style_ref()));
+    }
+
+    // 이것을 실패시키는 것: 목록 없는 제목만 다음 본문 지정.
+    #[test]
+    fn a_heading_style_with_its_own_list_continues_with_body() {
+        let mut template = builtin_default().unwrap();
+        template.styles.get_mut("heading3").unwrap().para_shape.as_mut().unwrap().list =
+            Some(crate::style::PartialParagraphListRef::Number { numbering_id: 1, level: 0 });
+        let resolved = resolve_template(&template, &HashMap::new()).unwrap();
+        let mut registry = StyleRegistry::from_template(&resolved).unwrap();
+        let (_, conflicts) = apply_markdown_heading_levels(
+            &mut registry,
+            resolved.markdown_mapping.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert!(conflicts.contains(&(3, "heading3".into())));
+        assert_eq!(
+            registry.get_style("heading3").unwrap().next_style(),
+            Some(registry.get_style("body").unwrap().style_ref())
+        );
+    }
+
+    // 이것을 실패시키는 것: 역할 재적용에서 이전 다음 스타일 초기화 삭제.
+    #[test]
+    fn applying_another_mapping_replaces_the_previous_roles() {
+        let template = text_template(&["body", "alt", "heading1", "list_item"]);
+        let mut names = resolve_markdown_style_names(&template).unwrap();
+        let mut registry = StyleRegistry::from_template(&template).unwrap();
+        apply_markdown_heading_levels(&mut registry, &names).unwrap();
+        names.body = Some("alt".into());
+        names.heading1 = Some("alt".into());
+        names.list_item = Some("heading1".into());
+        apply_markdown_heading_levels(&mut registry, &names).unwrap();
+        let alt = registry.get_style("alt").unwrap().style_ref();
+        assert_eq!(registry.body_style(), Some(alt));
+        assert_eq!(registry.get_style("heading1").unwrap().next_style(), None);
+        assert_eq!(registry.get_style("alt").unwrap().next_style(), None);
+        let before: Vec<_> =
+            registry.style_entries().values().map(StyleEntry::next_style).collect();
+        apply_markdown_heading_levels(&mut registry, &names).unwrap();
+        assert_eq!(registry.body_style(), Some(alt));
+        assert_eq!(
+            registry.style_entries().values().map(StyleEntry::next_style).collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    // 이것을 실패시키는 것: 템플릿 호출에서만 제목 4–6 역할 표시 생략.
+    #[test]
+    fn applying_markdown_roles_after_from_template_changes_no_role() {
+        for (template, others) in [
+            (builtin_default().unwrap(), vec![]),
+            (builtin_gov_proposal().unwrap(), vec![builtin_default().unwrap()]),
+            (text_template(&["title", "mono", "text"]), vec![]),
+        ] {
+            let provider: HashMap<String, Template> =
+                others.iter().map(|t| (t.meta.name.clone(), t.clone())).collect();
+            let resolved = resolve_template(&template, &provider).unwrap();
+            let before = StyleRegistry::from_template(&resolved).unwrap();
+            let mut after = before.clone();
+            apply_markdown_heading_levels(&mut after, resolved.markdown_mapping.as_ref().unwrap())
+                .unwrap();
+            assert_eq!(before.body_style(), after.body_style());
+            for (name, entry) in before.style_entries() {
+                assert_eq!(
+                    entry.next_style(),
+                    after.get_style(name).unwrap().next_style(),
+                    "{name}"
+                );
+            }
+            if others.is_empty() {
+                let raw = StyleRegistry::from_template(&template).unwrap();
+                assert_eq!(raw.body_style(), before.body_style());
+                for (name, entry) in raw.style_entries() {
+                    assert_eq!(
+                        entry.next_style(),
+                        before.get_style(name).unwrap().next_style(),
+                        "{name}"
+                    );
+                }
+            }
         }
     }
 }

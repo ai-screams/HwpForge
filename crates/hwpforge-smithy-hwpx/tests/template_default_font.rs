@@ -137,16 +137,16 @@ fn empty_registry_defaults_encode_with_hancom_font() {
     }
 }
 
-/// 이것을 실패시키는 것: 글꼴이 둘일 때도 기본 바탕 글꼴을 ID 0으로 변경.
+/// 이것을 실패시키는 것: 바탕 칸을 글꼴 수로 정해 1로 되돌리기.
 #[test]
-fn multiple_font_templates_keep_default_font_positions() {
+fn multiple_font_templates_use_the_body_font_for_built_in_text_styles() {
     for fonts in [&["한컴바탕", "맑은 고딕"][..], &["한컴바탕", "맑은 고딕", "돋움"][..]]
     {
         let registry = registry(fonts);
         let faces: Vec<_> = registry.fonts.iter().map(|f| f.as_str()).collect();
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let header = assert_fonts(&encode_header(document(0, 0), &store), &faces);
-        for (shape, expected) in header.refs.chars.shapes.iter().zip([1, 0, 0, 1, 0, 0, 0]) {
+        for (shape, expected) in header.refs.chars.shapes.iter().zip([0, 0, 0, 0, 0, 0, 0]) {
             assert!(shape.fonts.values().all(|&id| id == expected), "charPr {}", shape.id);
         }
     }

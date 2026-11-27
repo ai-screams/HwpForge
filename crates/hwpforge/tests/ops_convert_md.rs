@@ -239,12 +239,9 @@ fn every_builtin_preset_produces_the_font_it_declares() {
     // `decode_with_default` resolves has a different base font of its own.
     // One loop, `preset.font` only: no name is special-cased here.
     //
-    // The check reads the *actual body run's* char shape, not a fixed
-    // index: the encoded store's char shape 0 belongs to Hancom's own
-    // built-in default style set (unrelated to this template), not to the
-    // "body" style our registry resolved — only the run the Markdown
-    // itself produced is guaranteed to carry the style this preset swap
-    // touched.
+    // Read the actual body run's character shape to check the preset swap.
+    // Built-in text character shapes also follow the resolved body font;
+    // their sizes and other formatting still come from the default style set.
     use hwpforge::core::StyleLookup;
 
     for preset in hwpforge::hwpx::builtin_presets() {
@@ -725,4 +722,32 @@ fn pictures(paragraphs: &[hwpforge::core::Paragraph]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+// 이것을 실패시키는 것: 바탕 칸을 글꼴 수로 결정해 코드 글꼴로 되돌리기.
+#[test]
+fn builtin_text_styles_take_each_presets_font() {
+    use hwpforge::core::StyleLookup;
+    use hwpforge::foundation::CharShapeIndex;
+    for (preset, font) in [
+        ("default", "함초롬돋움"),
+        ("modern", "맑은 고딕"),
+        ("classic", "바탕"),
+        ("latest", "함초롬바탕"),
+    ] {
+        let out = convert_md(
+            "본문\n\n```\ncode\n```\n",
+            None,
+            &ConvertMdOptions::default().with_preset(preset),
+        )
+        .unwrap();
+        let decoded = HwpxDecoder::decode(&out.bytes).unwrap();
+        for index in [0, 3] {
+            assert_eq!(
+                decoded.style_store.char_font_name(CharShapeIndex::new(index)),
+                Some(font),
+                "{preset} char shape {index}"
+            );
+        }
+    }
 }
