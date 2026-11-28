@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3](https://github.com/ai-screams/HwpForge/compare/v0.20.2...v0.20.3) - 2026-11-28
+
+### Fixed
+
+- *(hwpx)* use the template body font for built-in styles and set next styles ([#367](https://github.com/ai-screams/HwpForge/pull/367))
+
+
 ## [0.20.2](https://github.com/ai-screams/HwpForge/compare/v0.20.1...v0.20.2) - 2026-11-23
 
 ### Added

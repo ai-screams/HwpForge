@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.20.2...hwpforge-blueprint-v0.20.3) - 2026-11-28
+
+### Fixed
+
+- *(hwpx)* use the template body font for built-in styles and set next styles ([#367](https://github.com/ai-screams/HwpForge/pull/367))
+
+
 ## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.20.1...hwpforge-blueprint-v0.20.2) - 2026-11-23
 
 ### Changed

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.2...hwpforge-smithy-hwpx-v0.20.3) - 2026-11-28
+
+### Fixed
+
+- *(hwpx)* use the template body font for built-in styles and set next styles ([#367](https://github.com/ai-screams/HwpForge/pull/367))
+
+
 ## [0.20.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.20.1...hwpforge-smithy-hwpx-v0.20.2) - 2026-11-23
 
 한컴오피스가 저장한 HWPX의 원문 보존 `delete-para`가 옛 한컴의 header 꼴을 받는 릴리스다. 새 공개 API, 오류, 경고는 없다.
